@@ -24,13 +24,8 @@ pub(super) enum Role {
     Stop {
         previous: u16,
         next: u16,
-        owners: u16,
     },
-    ReachedStop {
-        known: u16,
-        waiting: u16,
-        owners: u16,
-    },
+    ReachedStop,
     Header {
         first_waiter: u16,
         last_waiter: u16,
@@ -45,7 +40,6 @@ pub(in crate::performance) struct Cell {
     pub(super) next_waiter: Option<u16>,
     pub(super) previous_waiter: Option<u16>,
     pub(super) accepted: bool,
-    pub(super) velocity_prefix: wave::Prefix,
 }
 #[derive(Default)]
 pub(super) struct Channels {
@@ -71,9 +65,6 @@ impl Source {
         let wave = &mut self.channels.waves[channel];
         if wave.wire.index == NONE {
             wave.wire = reference;
-        }
-        if wave.prelude == 0 && wave::transaction(header.event) {
-            wave.prelude = header.serial;
         }
         if let Some(tail) = previous {
             let mut prior = self.pending.at(usize::from(tail.index)).unwrap();
@@ -132,16 +123,13 @@ impl Source {
         };
         let wave = &self.channels.waves[channel];
         if matches!(pending.channel.role, Role::Header { .. }) {
-            let before_onset = self
-                .pending
-                .at(usize::from(wave.first))
-                .is_none_or(|onset| onset.serial > pending.serial);
-            let neutral = matches!(pending.event, Event::Midi { data: [status, 64 | 66 | 69, value], .. } if status & 0xf0 == 0xb0 && value < 64);
-            if wave.setup.index != NONE
-                || wave.wire.serial != pending.serial
-                || !(before_onset
-                    || wave.shift.is_some() && (neutral || self.established_channel(channel)))
-            {
+            // A shared channel control keeps its own input+D schedule. It is
+            // not addressed to any one note, so a pending onset on this channel
+            // does not hold it: the control emits, and its effect on a note
+            // that has not sounded yet waits with that note as its own Work
+            // child and emits after it. Controls still keep their order among
+            // themselves, which is a real same-source dependency.
+            if wave.wire.serial != pending.serial {
                 return false;
             }
             if !self.charge(usize::from(pending.work_count)) {
@@ -150,6 +138,8 @@ impl Source {
             let mut child = pending.work_head;
             while child != NONE {
                 let cell = self.work.at(child);
+                // An addressed effect on a note that HAS sounded waits behind
+                // that note's own earlier pending events — rule one, per note.
                 if cell.phase & work::DONE == 0
                     && self.lives.at(cell.life).is_some_and(|life| {
                         life.sounded && life.terminal.is_none() && life.ready_head != child
@@ -236,7 +226,6 @@ impl Source {
     }
     pub(super) fn record_channel_terminals(
         &mut self,
-        parent: u16,
         pending: Pending,
         wire_sequence: u64,
         actual: i64,
@@ -267,12 +256,8 @@ impl Source {
                 };
                 let active_slot = self.active.iter().position(|index| *index == target.life);
                 let mut fact = self.record(terminal, target.life, pending.input, actual);
-                fact.outcome = Outcome::channel(
-                    wire_sequence,
-                    if choke { 120 } else { 123 },
-                    target.life,
-                    OutputOrigin { parent },
-                );
+                fact.outcome =
+                    Outcome::channel(wire_sequence, if choke { 120 } else { 123 }, target.life);
                 self.journal
                     .push(fact)
                     .unwrap_or_else(|_| unreachable!("prepared whole channel outcome group"));
@@ -296,13 +281,10 @@ impl Source {
         }
     }
     pub(super) fn channel_done(&mut self, position: usize, pending: Pending) {
-        if let Some(channel) = pending.event.channel() {
-            self.drop_prefix(pending.channel.velocity_prefix, usize::from(channel));
-        }
         if let Role::Onset { previous, next } = pending.channel.role {
             self.unlink_onset(pending, previous, next);
         }
-        if let Role::Stop { previous, next, .. } = pending.channel.role {
+        if let Role::Stop { previous, next } = pending.channel.role {
             self.unlink_stop(previous, next);
             return;
         }
@@ -335,7 +317,6 @@ impl Source {
             return;
         };
         let channel = usize::from(pending.event.channel_control().unwrap());
-        self.fold_channel_header(pending);
         if self.channels.waves[channel].wire.serial == pending.serial {
             self.channels.waves[channel].wire = self.pending_reference(next_header);
         }

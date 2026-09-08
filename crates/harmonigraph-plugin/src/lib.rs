@@ -797,8 +797,8 @@ impl ClapPlugin for Harmonigraph {
     fn clap_performance_input(
         &mut self,
         input: nice_plug::wrapper::clap::configuration::OwnedInput,
-    ) -> nice_plug::wrapper::clap::performance::Consumption {
-        self.aggregation.as_mut().unwrap().direct.input(input)
+    ) {
+        self.aggregation.as_mut().unwrap().direct.input(input);
     }
     fn clap_performance_input_boundary(&mut self) {
         self.aggregation.as_mut().unwrap().input_boundary();

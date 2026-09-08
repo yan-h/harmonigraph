@@ -26,30 +26,22 @@ impl Source {
                 self.fault(STORAGE_FAULT);
                 return false;
             }
-            if !self.charge(1) {
-                return false;
-            }
             let position = self.enqueue_cell(Event::Participation(value), NONE, sample, false);
             self.pending.seal(position);
             self.finish_work(position, NONE);
         }
         self.participating = value;
-        self.baseline_needed = true;
         true
     }
 
-    pub(super) fn capture_stop(&mut self, sample: i64) -> api::Consumption {
+    pub(super) fn capture_stop(&mut self, sample: i64) {
         if self.pending.free() == 0 || self.next_event == u64::MAX {
             self.fault(STORAGE_FAULT);
-            return api::Consumption::Pending;
-        }
-        if !self.charge(64) {
-            return api::Consumption::Pending;
+            return;
         }
         let position = self.enqueue_cell(Event::Stop, NONE, sample, false);
         let mut pending = self.pending.at(position).unwrap();
-        pending.channel.role =
-            channel::Role::Stop { previous: self.stops.tail, next: NONE, owners: u16::MAX };
+        pending.channel.role = channel::Role::Stop { previous: self.stops.tail, next: NONE };
         self.pending.set(position, pending);
         if self.stops.tail == NONE {
             self.stops.head = position as u16;
@@ -62,7 +54,6 @@ impl Source {
             self.pending.set(usize::from(self.stops.tail), tail);
         }
         self.stops.tail = position as u16;
-        self.capture_stop_prefixes(position);
         // Later original input cannot address a lifetime from before Stop.
         // This changes input bindings, not actual sounding state or output debt.
         for index in &mut self.active {
@@ -72,7 +63,6 @@ impl Source {
             }
         }
         self.pending.seal(position);
-        api::Consumption::Consumed
     }
 
     pub(super) fn next_stop_sample(&self) -> Option<i64> {
@@ -96,28 +86,13 @@ impl Source {
             self.stops.emergency_start = self.stops.emergency_start.max(offset);
             self.cancel_unsounded_through(pending.serial);
             self.stops.reached = pending.serial;
-            let mut known = 0u16;
-            let mut waiting = 0u16;
-            for (channel, state) in self.state.channels().iter().enumerate() {
-                if state.controller_valid[1] & (1 << 24) != 0 {
-                    known |= 1 << channel;
-                    if state.controllers[88] != 0 {
-                        waiting |= 1 << channel;
-                    }
-                }
-            }
-            let channel::Role::Stop { previous, next, owners } = pending.channel.role else {
+            let channel::Role::Stop { previous, next } = pending.channel.role else {
                 unreachable!()
             };
-            // The reached marker stops scheduling even while association pins
-            // retain its exact boundary result for later consumers.
             self.unlink_stop(previous, next);
             let mut reached = self.pending.at(position).unwrap();
-            reached.channel.role = channel::Role::ReachedStop { known, waiting, owners };
+            reached.channel.role = channel::Role::ReachedStop;
             self.pending.set(position, reached);
-            for channel in 0..16 {
-                self.settle_wave_prefix(channel);
-            }
             self.arm_release_debt();
             self.finish_work(position, NONE);
             self.cancel_slice();

@@ -26,8 +26,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[path = "attachment_tests.rs"]
 mod attachment_tests;
-#[path = "capture_tests.rs"]
-mod capture_tests;
 #[path = "channel_wave_tests.rs"]
 mod channel_wave_tests;
 #[path = "ordinary_progress_tests.rs"]
@@ -405,10 +403,6 @@ impl Device {
     }
     fn run(&self, raw: i64, events: Vec<Input>, reject_kind: Option<u16>) -> Sink {
         self.run_select(raw, events, reject_kind, None)
-    }
-    fn run_scripted(&self, raw: i64, events: Vec<Input>, acceptance: Vec<bool>) -> Sink {
-        ACCEPTANCE_SCRIPT.with(|script| *script.borrow_mut() = acceptance);
-        self.run(raw, events, None)
     }
     fn run_select(
         &self,
@@ -1311,17 +1305,13 @@ fn duplicate_after_adoption_retains_old_release_then_adopts_new_incarnation() {
         new_phrase.extend(source.run(block * 64, vec![], None).values);
         hub.run(block * 64, vec![], None);
     }
-    assert_eq!(
-        new_phrase.len(),
-        5,
-        "known setup and new-side phrase survive two-owner detach and rematch"
-    );
-    for (index, cc) in [64, 66, 69].into_iter().enumerate() {
-        assert_eq!(new_phrase[index], (0, Event::Midi { port: 0, data: [0xb1, cc, 0], flags: 0 }));
-    }
-    assert!(matches!(new_phrase[3].1, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 22, .. }));
-    assert!(matches!(new_phrase[4].1, Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 22, .. }));
-    assert_eq!(new_phrase[4].0 - new_phrase[3].0, 20);
+    // The new-side phrase survives the two-owner detach and rematch. The three
+    // known channel controls are NOT reissued: with the wave's controller
+    // history gone, a note meets the receiver's current controller state.
+    assert_eq!(new_phrase.len(), 2, "the new-side phrase survives two-owner detach and rematch");
+    assert!(matches!(new_phrase[0].1, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 22, .. }));
+    assert!(matches!(new_phrase[1].1, Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 22, .. }));
+    assert_eq!(new_phrase[1].0 - new_phrase[0].0, 20);
     let records = capture.drain_canonical();
     let identities: std::collections::BTreeSet<_> = records
         .iter()
@@ -1341,8 +1331,11 @@ fn duplicate_after_adoption_retains_old_release_then_adopts_new_incarnation() {
     );
 }
 
+/// Ambiguity is a pairing change, and a pairing change is a reset boundary.
+/// The old contract kept the phrase alive across it and needed an explicit
+/// recovery to retire the lease; #712 replaced that with this reset.
 #[test]
-fn pairing_changes_retain_pre_cut_unsounded_ownership_without_an_explicit_reset() {
+fn an_ambiguous_pairing_resets_the_tune_and_settles_the_old_lease() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::aggregation(false);
@@ -1366,20 +1359,19 @@ fn pairing_changes_retain_pre_cut_unsounded_ownership_without_an_explicit_reset(
     hub.run(128, vec![], None);
     let duplicate = Device::aggregation(false);
     duplicate.configure(uuid, true);
+    // Two candidate Hubs withdraw this lease, and the withdrawal reset
+    // cancels the onset that was still waiting for output budget and
+    // terminates the voice already forwarded.
+    let mut released = 0;
     for block in 3..=6 {
         let output = source.run(block * 64, vec![], None);
-        assert!(output.values.is_empty());
+        released += output.values.iter().filter(|(_, event)| event.release()).count();
+        assert!(output.values.iter().all(|(_, event)| event.attack().is_none()));
         hub.run(block * 64, vec![], None);
-        let retained = source.source_snapshot();
-        assert_eq!(retained.faults, 0);
-        assert_eq!(retained.local_pending, 1, "ambiguity is no cancellation authority");
-        assert_eq!(retained.old_obligations, 1);
-        assert_eq!(retained.lives, 2);
+        assert_eq!(source.source_snapshot().faults, 0, "an ordinary reset is not a fault");
     }
-    // Explicit recovery is a real cancellation boundary and can retire the
-    // old lease once its actual held release and disposition are retained.
-    let shared = source.shared();
-    shared.apply(shared.value().routing, true).unwrap();
+    assert_eq!(released, 1, "the forwarded voice is terminated, the unsounded onset is not");
+    // No explicit recovery: the reset alone settles the old lease.
     drop(duplicate);
     for block in 7..=18 {
         source.run(block * 64, vec![], None);
@@ -1388,7 +1380,7 @@ fn pairing_changes_retain_pre_cut_unsounded_ownership_without_an_explicit_reset(
         hub.main();
     }
     assert_eq!(source.source_snapshot().pending, 0);
-    assert_eq!(source.source_snapshot().held, 0);
+    assert_eq!(source.source_snapshot().local_pending, 0);
 }
 
 #[test]
@@ -1433,47 +1425,6 @@ fn ordinary_hub_adoption_preserves_fault_inhibition_until_explicit_settled_reset
         source.run(1088, vec![note(2, 0, 62, 3, true), note(2, 0, 62, 23, false)], None);
     assert_eq!(recovered.values.len(), 2, "explicit settled reset restores forwarding");
     assert_eq!(recovered.values[1].0 - recovered.values[0].0, 20);
-}
-
-#[test]
-fn held_baseline_precedes_later_release_even_when_hub_drains_after_both_callbacks() {
-    let _scope = crate::test_scope::enter();
-    use harmonigraph_take::{CanonicalRecord, NoteKind};
-    let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
-    hub.configure(uuid, true);
-    hub.activate();
-    let mut source = Device::aggregation(true);
-    source.configure(uuid, true);
-    source.activate();
-    source.run(0, vec![], None);
-    hub.run(0, vec![], None);
-    source.run(64, vec![note(31, 2, 60, 5, true)], None);
-    hub.run(64, vec![], None);
-    source.run(128, vec![source.participation(false, 0), expression(31, 0.3333333333333, 7)], None);
-    source.run(192, vec![note(31, 2, 60, 9, false)], None);
-    hub.run(128, vec![], None);
-    source.run(256, vec![], None);
-    hub.run(192, vec![], None);
-    source.run(320, vec![], None);
-    hub.run(256, vec![], None);
-    let records = capture.drain_canonical();
-    let snapshot = records
-        .iter()
-        .position(|record| matches!(record, CanonicalRecord::Baseline(b) if !b.participating))
-        .unwrap();
-    let released = records.iter().position(|record| matches!(record, CanonicalRecord::Delta(d) if matches!(d.event.kind, NoteKind::Off))).unwrap();
-    assert!(snapshot < released, "the <=C snapshot must not resurrect state after a later release");
-    let CanonicalRecord::Baseline(frame) = &records[snapshot] else { unreachable!() };
-    let frame = frame.baseline().unwrap();
-    assert_eq!(frame.voices().len(), 1);
-    assert_eq!(frame.voices()[0].player_tuning, 0.3333333333333);
-    assert_eq!(frame.voices()[0].onset.unwrap().sample, 69);
-    let mut tracker = harmonigraph_core::NoteTracker::default();
-    for record in records {
-        record.apply(&mut tracker).unwrap();
-    }
-    assert_eq!(tracker.held_count(), 0);
 }
 
 #[test]
@@ -1818,7 +1769,10 @@ fn attached_reset_disposes_more_than_one_manifest_window_without_baseline_substi
         accepted, 128,
         "the source's 64 terminal-but-unacknowledged reservations remain charged"
     );
-    assert_eq!(source.source_snapshot().pending, 8192);
+    // All 8,192 inputs were captured; the 128 that actually sounded released
+    // their envelopes as soon as their copies were sent, so what stays is
+    // exactly the unsounded remainder.
+    assert_eq!(source.source_snapshot().pending, 8064);
     assert_eq!(source.source_snapshot().local_pending, 8064);
     let shared = source.shared();
     shared.apply(shared.value().routing, true).unwrap();
@@ -2526,19 +2480,9 @@ fn measured_ordinary_storage_and_actual_factory_allocation_increments() {
     super::capture::print_test_memory_layout();
     use super::{protocol as wire, slots::Slots};
     use std::mem::size_of;
-    println!(
-        "LEDGER inventory [record,chunk,single_slot,read_guard,write_guard] {:?}",
-        [
-            size_of::<wire::RequestInventory>(),
-            size_of::<wire::InventoryChunk>(),
-            size_of::<Slots<wire::InventoryChunk, 1>>(),
-            size_of::<super::slots::ReadGuard<wire::InventoryChunk, 1>>(),
-            size_of::<super::slots::OwnedReservation<wire::InventoryChunk, 1>>()
-        ]
-    );
-    println!("LEDGER protocol [intent,reply,output,control,baseline,source_control,session_control,hub_bank] {:?}",
+    println!("LEDGER protocol [intent,reply,output,control,source_control,session_control,hub_bank] {:?}",
         [size_of::<wire::Intent>(), size_of::<wire::Reply>(), size_of::<wire::OutputDelta>(),
-         size_of::<wire::Control>(), size_of::<wire::Baseline>(), size_of::<wire::SourceControl>(),
+         size_of::<wire::Control>(), size_of::<wire::SourceControl>(),
          size_of::<wire::SessionControl>(), size_of::<wire::HubBank>()]);
     println!("LEDGER setup [shared,update,update_slots,source_bridge,hub_bridge,registry,global_once_mutex] {:?}",
         [size_of::<setup::Shared>(), size_of::<setup::Update>(), size_of::<Slots<setup::Update>>(),
@@ -2753,6 +2697,8 @@ fn all_retired_peers_drain_a_full_actual_reply_window_without_a_live_callback() 
             .as_ref()
             .unwrap()
             .bank
+            .as_ref()
+            .unwrap()
             .rows[0]
             .replies
             .slots()),
@@ -2769,10 +2715,6 @@ fn all_retired_peers_drain_a_full_actual_reply_window_without_a_live_callback() 
 #[test]
 fn observed_callback_cost_at_empty_and_full_session_state() {
     let _scope = crate::test_scope::enter();
-    if std::env::var_os("HARMONIGRAPH_REPLAY_REHEARSAL").is_some() {
-        channel_wave_tests::observe_replay_callbacks(true);
-        return;
-    }
     fn report(name: &str, mut times: Vec<u128>) {
         times.sort_unstable();
         let mean = times.iter().sum::<u128>() as f64 / times.len() as f64;
@@ -2856,7 +2798,6 @@ fn observed_callback_cost_at_empty_and_full_session_state() {
     assert_eq!(session.credits.load(Ordering::Acquire), 0);
     sources.clear();
     drop(hub);
-    channel_wave_tests::observe_replay_callbacks(false);
 }
 
 #[test]
@@ -3041,7 +2982,11 @@ fn blocked_older_attack_does_not_hold_completed_nonhead_cells_past_8192_events()
         }
         hub.run(block * 64, vec![], None);
     }
-    assert!(physical_high_water > 4096 && physical_high_water < 8192);
+    // 9,600 events pass through 8,192 cells without exhausting them. Under the
+    // copied transport an envelope is released as soon as its copy is sent and
+    // its own work settles, so only the blocked attack is ever retained; there
+    // is no retirement round trip left for completed cells to queue behind.
+    assert_eq!(physical_high_water, 1, "only the blocked attack is retained");
     let release = target.run(51 * 64, vec![note(1, 0, 60, 7, false)], None);
     assert_eq!(release.values.len(), 1);
     assert_eq!(release.values[0].0, 7);
@@ -3174,21 +3119,19 @@ fn channel_references_leave_all_8192_original_event_slots_available() {
             port_index: 0,
             data: [0xb0, 1, (block % 128) as u8],
         });
-        assert!(source.run(block * 64, vec![cc], None).values.is_empty());
+        // A shared channel control is addressed to no one note, so it keeps
+        // its own schedule past the unadmitted attacks on its channel. Its
+        // effect on each of them stays owned as that control's Work child.
+        assert_eq!(source.run(block * 64, vec![cc], None).values.len(), 1);
     }
+    // Expressions addressed to a note that has not sounded wait with it, so
+    // they fill the remaining event slots without consuming a reference and
+    // without emitting.
     let mut remaining = 7617;
     let mut block = 512;
     while remaining != 0 {
         let count = remaining.min(1024);
-        let events = (0..count)
-            .map(|_| {
-                Input::Midi(clap_event_midi {
-                    header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 0),
-                    port_index: 0,
-                    data: [0xf8, 0, 0],
-                })
-            })
-            .collect();
+        let events = (0..count).map(|_| expression(1, 0.25, 0)).collect();
         assert!(source.run(block * 64, events, None).values.is_empty());
         remaining -= count;
         block += 1;
@@ -3210,7 +3153,7 @@ fn channel_references_leave_all_8192_original_event_slots_available() {
 }
 
 #[test]
-fn channel_reference_exhaustion_preserves_the_original_unconsumed_event() {
+fn channel_reference_exhaustion_faults_without_advancing_the_input_cut() {
     let _scope = crate::test_scope::enter();
     let mut source = Device::aggregation(true);
     source.configure(SavedUuid::default(), true);
@@ -3222,7 +3165,7 @@ fn channel_reference_exhaustion_preserves_the_original_unconsumed_event() {
             port_index: 0,
             data: [0xb0, 1, (block % 128) as u8],
         });
-        assert!(source.run(block * 64, vec![cc], None).values.is_empty());
+        assert_eq!(source.run(block * 64, vec![cc], None).values.len(), 1);
     }
     let before = source.source_snapshot();
     assert_eq!(
@@ -3234,7 +3177,17 @@ fn channel_reference_exhaustion_preserves_the_original_unconsumed_event() {
         port_index: 0,
         data: [0xb0, 7, 23],
     });
-    assert!(source.run(513 * 64, vec![cc], None).values.is_empty());
+    // The shared controls emitted rather than waiting behind the unadmitted
+    // attacks, so this channel now has accepted controller state; the fault's
+    // emergency cleanup is that neutral reset, not new input.
+    let refused = source.run(513 * 64, vec![cc], None).values;
+    assert_eq!(refused.len(), 3);
+    assert!(refused.iter().all(|(_, event)| {
+        matches!(event, Event::Midi { data, .. } if data[0] == 0xb0 && matches!(data[1], 64 | 66 | 69))
+    }));
+    // The wrapper no longer retains a refused value for a later callback, so
+    // the latched fault IS the report. What must not move is this Source's own
+    // input cut: nothing was enqueued, so nothing may be counted as captured.
     let after = source.source_snapshot();
     assert_eq!((after.pending, after.references, after.input_cut), (576, 32768, 576));
     assert_ne!(after.faults & source::REFERENCE_FAULT, 0);
@@ -3497,27 +3450,28 @@ fn all_sixteen_retired_sources_dispose_full_event_reference_and_intent_owners_wi
                 port_index: 0,
                 data: [0xb0, 1, (block % 128) as u8],
             });
-            assert!(source.run(block * 64, vec![cc], None).values.is_empty());
+            // A shared channel control is not addressed to any one note, so it
+            // keeps its own schedule past the blocked attacks on its channel —
+            // and so does everything queued behind it.
+            assert_eq!(source.run(block * 64, vec![cc], None).values.len(), 1);
         }
-        let mut remaining = 8192 - source.source_snapshot().pending;
+        // Fill the rest of the owned event storage with releases that match no
+        // held note, so nothing here creates output: the Hub is not running,
+        // and an accepted-output journal that filled first would fault before
+        // the event storage did. What retains these envelopes is that their
+        // copies cannot leave — once the intent ring is full nothing more is
+        // published and every later capture stays owned.
         let mut block = 515;
-        while remaining != 0 {
-            let count = remaining.min(1024);
-            let events = (0..count)
-                .map(|_| {
-                    Input::Midi(clap_event_midi {
-                        header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 0),
-                        port_index: 0,
-                        data: [0xf8, 0, 0],
-                    })
-                })
-                .collect();
-            assert!(source.run(block * 64, events, None).values.is_empty());
+        while source.source_snapshot().pending < 8192 {
+            let count = (8192 - source.source_snapshot().pending).min(1024);
+            let events =
+                (0..count).map(|index| note(9000 + index as i32, 0, 60, 0, false)).collect();
+            source.run(block * 64, events, None);
             block += 1;
-            remaining -= count;
+            assert!(block < 4096, "fixture must actually fill the owned event storage");
         }
         for _ in 0..1024 {
-            assert!(source.run(block * 64, vec![], None).values.is_empty());
+            source.run(block * 64, vec![], None);
             block += 1;
         }
         let snapshot = source.source_snapshot();
@@ -3695,91 +3649,11 @@ fn destroyed_frozen_configuration_drains_more_than_a_full_source_output_window()
 }
 
 #[test]
-fn destroyed_frozen_configuration_disposes_a_later_baseline_without_output() {
-    let _scope = crate::test_scope::enter();
-    if std::env::var_os("HARMONIGRAPH_FROZEN_BASELINE_CHILD").is_none() {
-        assert!(std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "performance::tests::destroyed_frozen_configuration_disposes_a_later_baseline_without_output", "--nocapture", "--test-threads=1"])
-            .env("HARMONIGRAPH_FROZEN_BASELINE_CHILD", "1").status().unwrap().success());
-        return;
-    }
-    let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
-    hub.configure(uuid, true);
-    hub.activate();
-    let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::aggregation(true);
-    source.configure(uuid, true);
-    source.activate();
-    source.run(0, vec![], None);
-    hub.run(0, vec![], None);
-    capture.arm();
-    assert_eq!(
-        source.run(64, vec![note(1, 0, 60, 0, true), note(1, 0, 60, 23, false)], None).values.len(),
-        2
-    );
-    hub.run(64, vec![], None);
-    let directory =
-        std::env::temp_dir().join(format!("harmonigraph-frozen-baseline-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
-    let path = directory.join("record.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
-    assert!(source.run(128, vec![source.participation(false, 0)], None).values.is_empty());
-    assert_eq!(source.source_snapshot().sequence, 2);
-    let wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    let mailbox = wrapper.configuration_handle().unwrap();
-    for value in 690..707 {
-        mailbox
-            .submit(crate::configuration::packet(
-                harmonigraph_core::configuration::ConfigEdit::axis(1, value * 1_000_000),
-            ))
-            .unwrap();
-    }
-    hub.run(128, vec![], None);
-    assert!(mailbox.visible().1);
-    assert_eq!(
-        wrapper.test_inspect_plugin(|plugin| plugin
-            .configuration
-            .as_ref()
-            .unwrap()
-            .recording
-            .prefix),
-        128
-    );
-    let row = wrapper
-        .test_inspect_plugin(|plugin| plugin.aggregation.as_ref().unwrap().test_row_retirement(0));
-    assert_eq!(row, (2,2,0,Some((2,191))), "the actual snapshot is later than frozen configuration and has no output delta to extend the drain extent");
-    drop(mailbox);
-    drop(hub);
-    drop(source);
-    writer.drain(&mut capture);
-    let counts = registry::global().lock().unwrap().test_counts();
-    assert_eq!(counts, (0, 0, 0));
-    assert_eq!(session.credits.load(Ordering::Acquire), 0);
-    assert!(writer.current_pass().is_none());
-    let take = harmonigraph_take::Take::read(&path).unwrap();
-    assert!(take.incomplete.is_some());
-    assert_eq!(
-        take.events
-            .iter()
-            .filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(_)))
-            .count(),
-        2
-    );
-    assert!(take.events.iter().any(|record| matches!(record, harmonigraph_take::CanonicalRecord::Baseline(frame) if !frame.participating && (frame.t - 191.0 / 48000.0).abs() < 1e-12)));
-    std::fs::remove_dir_all(directory).unwrap();
-}
-
-#[test]
-fn destroyed_frozen_configuration_drains_a_baseline_between_large_output_prefixes() {
+fn destroyed_frozen_configuration_drains_output_beyond_the_frozen_prefix() {
     let _scope = crate::test_scope::enter();
     if std::env::var_os("HARMONIGRAPH_FROZEN_MIXED_CHILD").is_none() {
         assert!(std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "performance::tests::destroyed_frozen_configuration_drains_a_baseline_between_large_output_prefixes", "--nocapture", "--test-threads=1"])
+            .args(["--exact", "performance::tests::destroyed_frozen_configuration_drains_output_beyond_the_frozen_prefix", "--nocapture", "--test-threads=1"])
             .env("HARMONIGRAPH_FROZEN_MIXED_CHILD", "1").status().unwrap().success());
         return;
     }
@@ -3813,7 +3687,6 @@ fn destroyed_frozen_configuration_drains_a_baseline_between_large_output_prefixe
         400
     );
     assert_eq!(source.run(768, vec![note(1, 0, 60, 0, false)], None).values.len(), 1);
-    assert_eq!(source.source_snapshot().baseline_cut, Some(3601));
     let snapshot = source.source_snapshot();
     assert_eq!((snapshot.sequence, snapshot.journal), (4002, 4001));
     let wrapper = unsafe {
@@ -3840,9 +3713,6 @@ fn destroyed_frozen_configuration_drains_a_baseline_between_large_output_prefixe
             .prefix),
         128
     );
-    let row = wrapper
-        .test_inspect_plugin(|plugin| plugin.aggregation.as_ref().unwrap().test_row_retirement(0));
-    assert_eq!(row.3, Some((3601, 703)));
     drop(mailbox);
     drop(hub);
     drop(source);
@@ -3871,7 +3741,7 @@ fn destroyed_frozen_configuration_drains_a_baseline_between_large_output_prefixe
 fn destroyed_frozen_configuration_drains_full_ordinary_and_emergency_journals() {
     let _scope = crate::test_scope::enter();
     if std::env::var_os("HARMONIGRAPH_FROZEN_EMERGENCY_CHILD").is_none() {
-        for order in ["baseline", "withdrawn"] {
+        for order in ["attached", "withdrawn"] {
             assert!(std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "performance::tests::destroyed_frozen_configuration_drains_full_ordinary_and_emergency_journals", "--nocapture", "--test-threads=1"])
             .env("HARMONIGRAPH_FROZEN_EMERGENCY_CHILD", order).status().unwrap().success());
@@ -3926,7 +3796,7 @@ fn destroyed_frozen_configuration_drains_full_ordinary_and_emergency_journals() 
         480
     );
     assert_eq!(source.source_snapshot().journal, 4096);
-    let freeze = |hub: &mut Device, expected_baseline| {
+    let freeze = |hub: &mut Device| {
         let wrapper = unsafe {
             &*((*hub.plugin)
                 .plugin_data
@@ -3950,14 +3820,10 @@ fn destroyed_frozen_configuration_drains_full_ordinary_and_emergency_journals() 
                 .prefix),
             128
         );
-        let row = wrapper.test_inspect_plugin(|plugin| {
-            plugin.aggregation.as_ref().unwrap().test_row_retirement(0)
-        });
-        assert_eq!(row.3, expected_baseline);
     };
     let mut hub = Some(hub);
     if withdrawn {
-        freeze(hub.as_mut().unwrap(), None);
+        freeze(hub.as_mut().unwrap());
         drop(hub.take());
     }
     let emergency = source.run(640, vec![midi([0xf8, 0, 0])], None);
@@ -3965,8 +3831,8 @@ fn destroyed_frozen_configuration_drains_full_ordinary_and_emergency_journals() 
     assert_eq!(emergency.values.iter().filter(|(_, e)| e.release()).count(), 32);
     let snapshot = source.source_snapshot();
     assert_eq!(
-        (snapshot.sequence, snapshot.journal, snapshot.emergency, snapshot.baseline_cut),
-        (4163, if withdrawn { 3584 } else { 4096 }, 35, (!withdrawn).then_some(4163))
+        (snapshot.sequence, snapshot.journal, snapshot.emergency),
+        (4163, if withdrawn { 3584 } else { 4096 }, 35)
     );
     assert!(snapshot.transfer_cut < snapshot.sequence);
     assert_ne!(
@@ -3974,7 +3840,7 @@ fn destroyed_frozen_configuration_drains_full_ordinary_and_emergency_journals() 
         0
     );
     if let Some(hub) = hub.as_mut() {
-        freeze(hub, Some((4163, 703)));
+        freeze(hub);
     }
     drop(hub);
     drop(source);
@@ -4637,7 +4503,7 @@ fn final_sequence_terminal_is_retained_once_and_acknowledged_in_mapped_and_seale
 }
 
 #[test]
-fn full_normal_attempt_lane_keeps_all_voice_pedal_and_prefix_emergency_attempts_available() {
+fn full_normal_attempt_lane_keeps_all_voice_and_pedal_emergency_attempts_available() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::aggregation(false);
@@ -4659,24 +4525,17 @@ fn full_normal_attempt_lane_keeps_all_voice_pedal_and_prefix_emergency_attempts_
         })
         .collect();
     initial.extend((0..64).map(|id| note(id + 1, (id / 4) as i16, (60 + id % 4) as i16, 1, true)));
-    initial.extend((0..16).map(|channel| {
-        Input::Midi(clap_event_midi {
-            header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 2),
-            port_index: 0,
-            data: [0xb0 | channel, 88, 37],
-        })
-    }));
-    assert_eq!(source.run(64, initial, None).values.len(), 96);
+    assert_eq!(source.run(64, initial, None).values.len(), 80);
     hub.run(64, vec![], None);
     assert_eq!(session.credits.load(Ordering::Acquire), 64);
     assert!(source.source_snapshot().pedals_held);
     let events = (0..512).map(|index| expression(index % 64 + 1, 0.125, 0)).collect();
     let wire = source.run_select(128, events, None, Some(512));
     assert_eq!(
-        wire.attempts, 640,
-        "512 actual normal attempts plus64 voice,48 pedal and16 prefix emergency attempts"
+        wire.attempts, 624,
+        "512 actual normal attempts plus64 voice and48 pedal emergency attempts"
     );
-    assert_eq!(wire.values.len(), 639);
+    assert_eq!(wire.values.len(), 623);
     assert_eq!(
         wire.values.iter().filter(|(_, event)| matches!(event, Event::Expression { .. })).count(),
         511
@@ -4702,17 +4561,10 @@ fn full_normal_attempt_lane_keeps_all_voice_pedal_and_prefix_emergency_attempts_
     assert_eq!(snapshot.faults, source::OUTPUT_FAULT);
     assert_eq!(snapshot.journal, 511);
     assert_eq!(
-        snapshot.emergency, 128,
+        snapshot.emergency, 112,
         "actual accepted emergency facts use their separate retained journal"
     );
     assert!(!snapshot.pedals_held);
-    assert_eq!(snapshot.velocity_prefix, [Some(0); 16]);
-    assert!(
-        wire.values[511..527]
-            .iter()
-            .all(|(_, event)| matches!(event, Event::Midi { data: [_, 88, 0], .. })),
-        "all16 repairs precede the emergency voices"
-    );
     assert_eq!(
         session.credits.load(Ordering::Acquire),
         64,
@@ -4731,10 +4583,10 @@ fn full_normal_attempt_lane_keeps_all_voice_pedal_and_prefix_emergency_attempts_
     });
     let extra = source.run_status(192, vec![malformed], None, None, 64, true);
     assert_eq!(extra.attempts, 0);
-    assert_eq!(source.source_snapshot().emergency, 128);
+    assert_eq!(source.source_snapshot().emergency, 112);
     assert_eq!(source.source_snapshot().faults, source::OUTPUT_FAULT | source::INPUT_FAULT);
     assert_eq!(source.run(256, vec![], None).attempts, 0);
-    assert_eq!(source.source_snapshot().emergency, 128);
+    assert_eq!(source.source_snapshot().emergency, 112);
     let mut remaining_resets = 0;
     for block in 2..=16 {
         hub.run(block * 64, vec![], None);
@@ -4745,86 +4597,6 @@ fn full_normal_attempt_lane_keeps_all_voice_pedal_and_prefix_emergency_attempts_
     assert_eq!(source.source_snapshot().emergency, 0);
 }
 
-#[test]
-fn mixed_generation_wildcard_parent_retains_only_the_old_childs_acknowledgement_obligation() {
-    let _scope = crate::test_scope::enter();
-    let uuid = SavedUuid::default();
-    let mut hub = Device::aggregation(false);
-    hub.configure(uuid, true);
-    hub.activate();
-    let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::aggregation(true);
-    source.configure(uuid, true);
-    source.activate();
-    source.run(0, vec![], None);
-    hub.run(0, vec![], None);
-    assert_eq!(source.run(64, vec![note(1, 0, 60, 0, true)], None).values.len(), 1);
-    hub.run(64, vec![], None);
-    let shared = source.shared();
-    let setup::Routing::Source(mut next) = shared.value().routing else { unreachable!() };
-    next.selected = Some(SavedUuid::default());
-    shared.apply(setup::Routing::Source(next), false).unwrap();
-    source.run(128, vec![], None);
-    // Established expressions remain responsive through a younger lease wait.
-    // Exhaust the real normal output allowance to retain the wildcard's old
-    // child for the cancellation/acknowledgement path this fixture measures.
-    let mut input: Vec<_> = (0..512).map(|_| expression(1, 0.125, 0)).collect();
-    input.extend([note(2, 0, 64, 0, true), expression(-1, 0.234567890123, 1)]);
-    let earlier = source.run(192, input, None);
-    assert_eq!(earlier.values.len(), 512);
-    assert!(earlier
-        .values
-        .iter()
-        .all(|(_, event)| matches!(event, Event::Expression { id: 1, value: 0.125, .. })));
-    let captured = source.source_snapshot();
-    assert_eq!((captured.local_pending, captured.references, captured.input_cut), (2, 2, 515));
-    assert_eq!(
-        (captured.obligations, captured.old_obligations),
-        (3, 1),
-        "one original wildcard captured both lease generations"
-    );
-    shared.apply(shared.value().routing, true).unwrap();
-    let released = source.run(256, vec![], None);
-    assert_eq!(released.values.iter().filter(|(_, event)| event.release()).count(), 1);
-    assert!(released.values.iter().all(|(_, event)| event.attack().is_none()));
-    assert!(source.run(320, vec![], None).values.is_empty());
-    // Cancellation scans the 512 locally completed but remotely pinned
-    // originals before reaching the two-generation wildcard. Hub stays paused.
-    assert!(source.run(384, vec![], None).values.is_empty());
-    assert!(source.run(448, vec![], None).values.is_empty());
-    let waiting = source.source_snapshot();
-    assert_eq!((waiting.local_pending, waiting.references, waiting.manifest), (1, 2, 1));
-    assert_eq!((waiting.obligations,waiting.old_obligations),(1,1),"the new-generation child settled locally; only the original lease's disposition still owns the parent");
-    assert_eq!(
-        session.credits.load(Ordering::Acquire),
-        1,
-        "current empty state cannot acknowledge actual old output"
-    );
-    for block in 2..=24 {
-        hub.run(block * 64, vec![], None);
-        assert!(source
-            .run((block + 6) * 64, vec![], None)
-            .values
-            .iter()
-            .all(|(_, event)| event.attack().is_none()));
-        source.main();
-        hub.main();
-    }
-    let settled = source.source_snapshot();
-    assert_eq!(
-        (
-            settled.pending,
-            settled.references,
-            settled.manifest,
-            settled.obligations,
-            settled.old_obligations
-        ),
-        (0, 0, 0, 0, 0)
-    );
-    assert_eq!(session.credits.load(Ordering::Acquire), 0);
-}
-
-#[cfg(debug_assertions)]
 #[test]
 fn defensive_old_child_completion_cannot_consume_the_reused_parents_live_permit() {
     let _scope = crate::test_scope::enter();
@@ -4858,7 +4630,10 @@ fn defensive_old_child_completion_cannot_consume_the_reused_parents_live_permit(
             matches!(wire.values[1].1,Event::Note {kind:CLAP_EVENT_NOTE_ON,id:new,..} if new==id)
         );
         assert_eq!(source.source_snapshot().local_pending, 0);
-        assert_eq!((source.source_snapshot().pending, source.source_snapshot().references), (1, 1));
+        // Both slots are free again the moment their copies are sent, which is
+        // what makes the next retrigger reuse exactly this parent and child —
+        // the reuse the defensive injections above are aimed at.
+        assert_eq!((source.source_snapshot().pending, source.source_snapshot().references), (0, 0));
         hub.run(block * 64, vec![], None);
     }
     wrapper.test_with_plugin(|plugin| plugin.source.as_ref().unwrap().test_finish_replay());

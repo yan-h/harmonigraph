@@ -141,14 +141,10 @@ pub trait ClapPlugin: Plugin {
         output: &mut performance::Output<'_>,
     ) {
     }
-    /// Acknowledge only after retaining the exact value/provenance. Pending keeps
-    /// the shared input cell, without repeating configuration observation.
-    fn clap_performance_input(
-        &mut self,
-        input: configuration::OwnedInput,
-    ) -> performance::Consumption {
-        performance::Consumption::Pending
-    }
+    /// Delivered exactly once, with its exact value and provenance. The
+    /// wrapper does not retain it afterwards: bounded local storage and an
+    /// explicit overflow fault are the plugin's own business.
+    fn clap_performance_input(&mut self, input: configuration::OwnedInput) {}
     /// Every value captured before this boundary has been delivered exactly
     /// once. A nonautomatable prepared setup may now cut FUTURE input without
     /// overtaking an older retained wrapper cell.

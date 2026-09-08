@@ -100,12 +100,6 @@ pub struct Block {
     pub transport: Option<clap_event_transport>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Consumption {
-    Consumed,
-    Pending,
-}
-
 /// Opaque caller identity. It must identify a unique staging attempt, including
 /// retries, and contain no pointer or allocation whose lifetime ends on audio.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -121,11 +115,10 @@ pub enum Lane {
 enum Events {
     Single(InputValue),
     Pair { first: InputValue, second: InputValue },
-    VelocityOnset { port: u16, data: [u8; 3], flags: u32, note: InputValue, tuning: InputValue },
 }
 
-/// A single event or one of two narrowly validated pairs: note-on/tuning or
-/// CC88/raw MIDI consumer. Staging validates the enclosing output interval.
+/// A single event or the one narrowly validated pair, note-on/tuning.
+/// Staging validates the enclosing output interval.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Group {
     pub token: Token,
@@ -142,60 +135,11 @@ pub enum StageError {
 }
 
 impl Group {
-    /// Reconcile a known velocity prefix immediately before its raw MIDI
-    /// consumer under one caller permit, retaining each independent host result.
-    pub fn velocity_note(
-        token: Token,
-        time: u32,
-        prefix: InputValue,
-        note: InputValue,
-    ) -> Result<Self, StageError> {
-        let matching = matches!((prefix, note),
-            (InputValue::Midi { port: pp, data: [ps, 88, value], .. },
-             InputValue::Midi { port: np, data: [ns, key, velocity], .. })
-                if pp == np && ps & 0xf0 == 0xb0 && ps & 15 == ns & 15
-                    && matches!(ns & 0xf0, 0x80 | 0x90)
-                    && value < 128 && key < 128 && velocity < 128);
-        if !matching {
-            return Err(StageError::Invalid);
-        }
-        Ok(Self { token, lane: Lane::Normal, time, events: Events::Pair { first: prefix, second: note } })
-    }
-
-    pub fn velocity_prefix(&self) -> Option<InputValue> {
-        match self.events {
-            Events::Pair { first: prefix @ InputValue::Midi { data: [status, 88, _], .. }, .. }
-                if status & 0xf0 == 0xb0 => Some(prefix),
-            Events::VelocityOnset { port, data, flags, .. } => Some(InputValue::Midi { port, data, flags }),
-            _ => None,
-        }
-    }
-
     pub fn initial_tuning(&self) -> Option<InputValue> {
         match self.events {
-            Events::Pair { second: tuning @ InputValue::Expression { expression: CLAP_NOTE_EXPRESSION_TUNING, .. }, .. }
-            | Events::VelocityOnset { tuning, .. } => Some(tuning),
+            Events::Pair { second: tuning @ InputValue::Expression { expression: CLAP_NOTE_EXPRESSION_TUNING, .. }, .. } => Some(tuning),
             _ => None,
         }
-    }
-
-    /// A raw MIDI onset can need its captured CC88 immediately before the
-    /// consumer and per-note tuning immediately after it. The small prefix is
-    /// stored compactly; the complete group still fits its 256-byte reservation.
-    pub fn tuned_onset(
-        token: Token,
-        time: u32,
-        prefix: Option<InputValue>,
-        note: InputValue,
-        tuning: InputValue,
-    ) -> Result<Self, StageError> {
-        let mut group = Self::onset(token, time, note, tuning)?;
-        if let Some(prefix) = prefix {
-            Self::velocity_note(token, time, prefix, note)?;
-            let InputValue::Midi { port, data, flags } = prefix else { unreachable!() };
-            group.events = Events::VelocityOnset { port, data, flags, note, tuning };
-        }
-        Ok(group)
     }
 
     pub fn single(
@@ -245,7 +189,6 @@ impl Group {
         match self.events {
             Events::Single(_) => 1,
             Events::Pair { .. } => 2,
-            Events::VelocityOnset { .. } => 3,
         }
     }
 
@@ -254,9 +197,6 @@ impl Group {
             (Events::Single(e), 0)
             | (Events::Pair { first: e, .. }, 0)
             | (Events::Pair { second: e, .. }, 1) => Some(e),
-            (Events::VelocityOnset { port, data, flags, .. }, 0) => Some(InputValue::Midi { port, data, flags }),
-            (Events::VelocityOnset { note, .. }, 1) => Some(note),
-            (Events::VelocityOnset { tuning, .. }, 2) => Some(tuning),
             _ => None,
         }
     }
@@ -459,27 +399,44 @@ impl Output<'_> {
     }
 
     pub fn stage(&mut self, group: Group) -> Result<(), StageError> {
+        self.stage_all(std::slice::from_ref(&group))
+    }
+
+    /// Admit the whole run or none of it. A caller whose emissions must all
+    /// land in this callback proves the run fits before the first group is
+    /// admitted, so nothing staged between them -- output, parameters or
+    /// notifications -- can take credits the rest of the run still needs. No
+    /// reservation outlives the call, so there is nothing to leak or to
+    /// misattribute across a host round trip. Equal times keep the run's own
+    /// order, since the ready heap breaks that tie by admission order.
+    pub fn stage_all(&mut self, groups: &[Group]) -> Result<(), StageError> {
         let s = &mut self.scheduler;
-        if group.time < s.summary.cursor || group.time >= s.frames {
-            return Err(StageError::Invalid);
-        }
-        let (reserved, limit) = match group.lane {
-            Lane::Normal => {
-                if s.inhibited {
-                    return Err(StageError::Inhibited);
-                }
-                (&mut s.normal_reserved, NORMAL_OUTPUT_ATTEMPTS)
+        let (mut normal, mut emergency) = (0, 0);
+        for group in groups {
+            if group.time < s.summary.cursor || group.time >= s.frames {
+                return Err(StageError::Invalid);
             }
-            Lane::Emergency => (&mut s.emergency_reserved, EMERGENCY_OUTPUT_ATTEMPTS),
-        };
-        if *reserved + group.event_count() > limit {
+            match group.lane {
+                Lane::Normal => {
+                    if s.inhibited {
+                        return Err(StageError::Inhibited);
+                    }
+                    normal += group.event_count();
+                }
+                Lane::Emergency => emergency += group.event_count(),
+            }
+        }
+        if s.normal_reserved + normal > NORMAL_OUTPUT_ATTEMPTS
+            || s.emergency_reserved + emergency > EMERGENCY_OUTPUT_ATTEMPTS
+            || s.used_cells + groups.len() > OUTPUT_CELLS
+        {
             return Err(StageError::Full);
         }
-        if s.used_cells == OUTPUT_CELLS {
-            return Err(StageError::Full);
+        s.normal_reserved += normal;
+        s.emergency_reserved += emergency;
+        for group in groups {
+            self.scheduler.insert(*group);
         }
-        *reserved += group.event_count();
-        s.insert(group);
         Ok(())
     }
 }

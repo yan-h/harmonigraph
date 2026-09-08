@@ -71,1312 +71,6 @@ fn tuning_parameter(hub: &Device, cents: f32, time: u32) -> Input {
     })
 }
 
-fn production_recovery_with_two_pending_gestures() -> (Device, [Device; 3]) {
-    let uuid = SavedUuid::default();
-    let calibration = Calibration { offset: 0 };
-    let mut hub = Device::new(false);
-    hub.configure_format(uuid, true, calibration);
-    hub.activate_format(44100.0, 512);
-    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
-    let sources: [Device; 3] = std::array::from_fn(|index| {
-        let mut source = Device::new(true);
-        source.configure_format(
-            uuid,
-            true,
-            Calibration { offset: if index == 1 { 64 } else { 0 } },
-        );
-        source.activate_format(44100.0, 512);
-        source
-    });
-    // Initial enrollment waits for the Hub's first real audio progress.
-    let mut setup = [0; 3];
-    for raw in [0, 512, 1024, 1536] {
-        for (index, source) in sources.iter().enumerate() {
-            let input = if raw == 0 {
-                (0..2)
-                    .flat_map(|channel| {
-                        [64, 66, 69].map(move |cc| raw_midi([0xb0 | channel, cc, 0], 0))
-                    })
-                    .collect()
-            } else {
-                vec![]
-            };
-            setup[index] += source.run_format(raw, input, None, None, 512).values.len();
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    assert_eq!(setup, [6; 3], "both channels' original neutral setup is accepted");
-    for raw in [2048, 2560] {
-        for index in [1, 0, 2] {
-            let input = match (raw, index) {
-                (2048, 1) => vec![note(2, 0, 64, 448, true)],
-                (2048, 0) => vec![note(1, 0, 60, 0, true)],
-                (2560, 0) => vec![note(4, 1, 66, 400, true), note(4, 1, 66, 420, false)],
-                _ => vec![],
-            };
-            sources[index].run_format(raw, input, None, None, 512);
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    assert!(
-        inspect_source(&sources[0], |source| {
-            source.state.voices().any(|voice| voice.host_note_id == 1)
-        }),
-        "A's original onset is already sounding before the pending successors"
-    );
-    let late = sources[1].run_format(
-        3072,
-        vec![note(5, 1, 71, 400, true), note(5, 1, 71, 420, false)],
-        None,
-        None,
-        512,
-    );
-    assert!(late
-        .values
-        .iter()
-        .any(|(time, event)| *time == 0 && event.attack().is_some_and(|(id, ..)| id == 2)));
-    hub.run_format(3072, vec![], None, None, 512);
-    assert!(inspect_hub(&hub, |hub| hub.test_recovery_identity()).0);
-    for index in [0, 2] {
-        assert!(sources[index].run_format(3072, vec![], None, None, 512).values.is_empty());
-    }
-    (hub, sources)
-}
-
-fn drain_production_recovery_sources(
-    hub: &Device,
-    sources: &[Device; 3],
-    mut raw: i64,
-    mut c_raw: i64,
-) {
-    for step in 0..160 {
-        raw += 512;
-        for (index, source) in sources.iter().enumerate() {
-            let source_raw = if index == 2 {
-                c_raw += 512;
-                c_raw
-            } else {
-                raw
-            };
-            let input = if step == 0 && source.source_snapshot().held != 0 {
-                vec![note(index as i32 + 1, 0, if index == 0 { 60 } else { 64 }, 0, false)]
-            } else {
-                vec![]
-            };
-            let output = source.run_format(source_raw, input, None, None, 512);
-            assert!(!output.values.iter().any(|(_, event)| event.attack().is_some()));
-            assert_eq!(source.source_snapshot().faults, 0);
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-        if sources.iter().all(|source| {
-            let state = source.source_snapshot();
-            state.held == 0 && state.pending == 0 && state.captures == 0
-        }) && !inspect_hub(hub, |hub| hub.test_recovery_identity()).0
-        {
-            return;
-        }
-    }
-    panic!("accepted releases and owned evidence did not settle");
-}
-
-#[test]
-fn production_received_divergence_recloses_already_resumed_successor() {
-    let _scope = crate::test_scope::enter();
-    let (hub, sources) = production_recovery_with_two_pending_gestures();
-    let shared: Vec<_> = sources
-        .iter()
-        .map(|source| {
-            inspect_source(source, |source| {
-                let offer = source.offer.as_ref().unwrap();
-                offer.session.rows[usize::from(offer.lease.slot - 1)].clone()
-            })
-        })
-        .collect();
-    let mut raw = 3072;
-    let mut c_raw = raw;
-    let mut hold_c = false;
-    for _ in 0..160 {
-        raw += 512;
-        for (index, source) in sources.iter().enumerate() {
-            if index != 2 || !hold_c {
-                if index == 2 {
-                    c_raw = raw;
-                }
-                assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
-            }
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-        shared[2].to_source.take_repair_if(|reply| {
-            hold_c |= matches!(reply, protocol::Reply::InventoryComplete { .. });
-            false // Leave the real completion in its single repair cell.
-        });
-        if hold_c
-            && shared[..2]
-                .iter()
-                .all(|row| row.emission_gate.load(Ordering::Acquire) & source::CLOSED == 0)
-        {
-            break;
-        }
-    }
-    assert!(hold_c);
-    assert!(inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("phase=Resume"));
-    for row in &shared[..2] {
-        assert_eq!(row.emission_gate.load(Ordering::Acquire) & source::CLOSED, 0);
-    }
-    let before = inspect_hub(&hub, |hub| hub.test_recovery_identity());
-    assert!(before.0 && before.2.is_none(), "{before:?}");
-    raw += 512;
-    let output = sources[0].run_format(raw, vec![], None, None, 512);
-    assert!(
-        output.values.iter().any(|(_, event)| event.attack().is_some_and(|(id, ..)| id == 4)),
-        "{:?}",
-        output.values
-    );
-    hub.run_format(raw, vec![], None, None, 512);
-    let continuation = inspect_hub(&hub, |hub| hub.test_recovery_identity());
-    assert!(
-        continuation.0 && continuation.1 == before.1 && continuation.2.is_some(),
-        "{continuation:?}"
-    );
-    assert_eq!(
-        shared[1].emission_gate.load(Ordering::Acquire) & source::CLOSED,
-        source::CLOSED,
-        "received lateness closes B before stalled canonical publication can apply A"
-    );
-    assert!(sources[1].run_format(raw, vec![], None, None, 512).values.is_empty());
-    let mut successor = Vec::new();
-    for _ in 0..160 {
-        raw += 512;
-        for (index, source) in sources.iter().enumerate() {
-            let source_raw = if index == 2 {
-                c_raw += 512;
-                c_raw
-            } else {
-                raw
-            };
-            let output = source.run_format(source_raw, vec![], None, None, 512);
-            if index == 1 {
-                successor.extend(
-                    output.values.into_iter().map(|(time, event)| (raw + i64::from(time), event)),
-                );
-            }
-            assert_eq!(source.source_snapshot().faults, 0);
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-        if successor.iter().any(|(_, event)| event.release())
-            && !inspect_hub(&hub, |hub| hub.test_recovery_identity()).0
-        {
-            break;
-        }
-    }
-    assert_eq!(successor.len(), 3, "{successor:?}");
-    assert!(successor[0].1.attack().is_some_and(|(id, ..)| id == 5));
-    assert!(matches!(successor[1].1, Event::Expression { id: 5, .. }));
-    assert!(successor[2].1.release());
-    assert_eq!((successor[1].0, successor[2].0), (successor[0].0, successor[0].0 + 20));
-    drain_production_recovery_sources(&hub, &sources, raw, c_raw);
-    drop(sources);
-    drop(hub);
-    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
-}
-
-#[test]
-fn production_stop_baseline_holds_recovery_until_known_release_applies() {
-    let _scope = crate::test_scope::enter();
-    let (hub, sources) = production_recovery_with_two_pending_gestures();
-    let mut raw = 3072;
-    let Input::Transport(playing) = transport(0, 120.0) else { unreachable!() };
-    for _ in 0..160 {
-        raw += 512;
-        for source in &sources {
-            assert!(source
-                .run_callback(raw, vec![], (None, None), (512, false), Some(playing))
-                .values
-                .is_empty());
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-        if inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("phase=Rebuild") {
-            break;
-        }
-    }
-    assert!(inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("phase=Rebuild"));
-    let before = inspect_hub(&hub, |hub| hub.test_recovery_output_cuts(1));
-    assert_eq!(before.0, before.1);
-    let Input::Transport(mut stopped) = transport(0, 120.0) else { unreachable!() };
-    stopped.flags &= !CLAP_TRANSPORT_IS_PLAYING;
-    let mut c_raw = raw;
-    raw += 512;
-    assert!(sources[0].run_format(raw, vec![], None, None, 512).values.is_empty());
-    let release = sources[1].run_callback(raw, vec![], (None, None), (512, false), Some(stopped));
-    assert!(release.values.iter().any(|(time, event)| *time == 0 && event.release()));
-    // C's last interval ends exactly at this release: its missing next callback
-    // holds the canonical frontier while collection already owns the output.
-    hub.run_format(raw, vec![], None, None, 512);
-    let received = inspect_hub(&hub, |hub| hub.test_recovery_output_cuts(1));
-    assert!(received.0 > before.0 && received.1 == before.1, "{before:?} -> {received:?}");
-    for _ in 0..16 {
-        raw += 512;
-        for (index, source) in sources[..2].iter().enumerate() {
-            assert!(source
-                .run_callback(
-                    raw,
-                    vec![],
-                    (None, None),
-                    (512, false),
-                    Some(if index == 1 { stopped } else { playing })
-                )
-                .values
-                .is_empty());
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    assert!(
-        inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("phase=Rebuild"),
-        "known accepted release must apply before copying factual state: {}",
-        inspect_hub(&hub, |hub| hub.test_recovery_progress())
-    );
-    assert!(received.2, "Stop's pending baseline protects the received release cut");
-    let mut successor = Vec::new();
-    for _ in 0..160 {
-        raw += 512;
-        for (index, source) in sources.iter().enumerate() {
-            let source_raw = if index == 2 {
-                c_raw += 512;
-                c_raw
-            } else {
-                raw
-            };
-            let output = source.run_callback(
-                source_raw,
-                vec![],
-                (None, None),
-                (512, false),
-                Some(if index == 1 { stopped } else { playing }),
-            );
-            if index == 0 {
-                successor.extend(
-                    output.values.into_iter().map(|(time, event)| (raw + i64::from(time), event)),
-                );
-            } else {
-                assert!(
-                    !output
-                        .values
-                        .iter()
-                        .any(|(_, event)| event.attack().is_some_and(|(id, ..)| id == 5)),
-                    "Stop's old pending onset stays canceled"
-                );
-            }
-            assert_eq!(source.source_snapshot().faults, 0);
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-        if successor.iter().any(|(_, event)| event.release())
-            && !inspect_hub(&hub, |hub| hub.test_recovery_identity()).0
-        {
-            break;
-        }
-    }
-    assert_eq!(successor.len(), 3, "{successor:?}");
-    assert!(successor[0].1.attack().is_some_and(|(id, ..)| id == 4));
-    assert!(
-        matches!(successor[1].1, Event::Expression { id: 4, value: 0.09776245, .. }),
-        "the released B voice is absent from A's replay context: {successor:?}"
-    );
-    assert!(successor[2].1.release());
-    assert_eq!((successor[1].0, successor[2].0), (successor[0].0, successor[0].0 + 20));
-    drain_production_recovery_sources(&hub, &sources, raw, c_raw);
-    drop(sources);
-    drop(hub);
-    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
-}
-
-#[test]
-fn production_late_output_automatically_redecides_bound_successor_and_keeps_held_pitch() {
-    let _scope = crate::test_scope::enter();
-    let uuid = SavedUuid::default();
-    let calibration = Calibration { offset: 0 };
-    let mut hub = Device::new(false);
-    hub.configure_format(uuid, true, calibration);
-    hub.activate_format(44100.0, 512);
-    let sources: [Device; 3] = std::array::from_fn(|index| {
-        let mut source = Device::new(true);
-        source.configure_format(
-            uuid,
-            true,
-            Calibration { offset: if index == 1 { 64 } else { 0 } },
-        );
-        source.activate_format(44100.0, 512);
-        source
-    });
-    // Initial enrollment waits for the Hub's first real audio progress.
-    for raw in [0, 512, 1024, 1536] {
-        for source in &sources {
-            let inputs = if raw == 0 {
-                [64, 66, 69].map(|cc| raw_midi([0xb0, cc, 0], 0)).into()
-            } else {
-                vec![]
-            };
-            source.run_format(raw, inputs, None, None, 512);
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    // B's raw2496 maps to2560. In B,A,C,Hub order its raw3008 deadline
-    // is missed, while the three initial notes remain held for recovery.
-    let mut actual: [Vec<(i64, Event)>; 3] = std::array::from_fn(|_| Vec::new());
-    for raw in [2048, 2560] {
-        for index in [1, 0, 2] {
-            let inputs = match (raw, index) {
-                (2048, 1) => vec![note(2, 0, 64, 448, true)],
-                (2048, 0) => vec![note(1, 0, 60, 0, true)],
-                (2048, 2) => vec![note(3, 0, 67, 0, true)],
-                (2560, 2) => vec![
-                    note(4, 1, 69, 400, true),
-                    expression(4, 0.125, 410),
-                    note(4, 1, 69, 420, false),
-                ],
-                _ => vec![],
-            };
-            let sink = sources[index].run_format(raw, inputs, None, None, 512);
-            actual[index].extend(
-                sink.values.into_iter().map(|(time, event)| (raw + i64::from(time), event)),
-            );
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    let request = inspect_source(&sources[2], |source| source.test_capture(5).unwrap());
-    let prior = inspect_hub(&hub, |hub| hub.test_plan_binding(2, request.life).unwrap());
-    assert_eq!(prior.decision, 4, "the successor is bound before accepted divergence");
-    for index in [1, 0] {
-        let sink = sources[index].run_format(3072, vec![], None, None, 512);
-        actual[index]
-            .extend(sink.values.into_iter().map(|(time, event)| (3072 + i64::from(time), event)));
-    }
-    assert_eq!(actual[1][0].0, 3072, "B is exactly64 samples late");
-    assert_eq!(actual.iter().map(Vec::len).sum::<usize>(), 6);
-    hub.run_format(3072, vec![], None, None, 512);
-    assert!(
-        inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("active=true"),
-        "accepted addressed lateness starts the production protocol without a test request"
-    );
-    assert!(
-        sources[2].run_format(3072, vec![], None, None, 512).values.is_empty(),
-        "the bound successor cannot claim its old generation after known divergence"
-    );
-    let held: Vec<_> = sources
-        .iter()
-        .map(|source| {
-            inspect_source(source, |source| {
-                source.state.voices().next().unwrap().frozen_offset_microcents
-            })
-        })
-        .collect();
-    let mut rebound = None;
-    let mut raw = 3072;
-    for iteration in 0..320 {
-        raw += 512;
-        for (index, source) in sources.iter().enumerate() {
-            let input =
-                if iteration == 0 && index == 0 { vec![note(1, 0, 60, 7, false)] } else { vec![] };
-            let output = source.run_format(raw, input, None, None, 512);
-            if output.values.iter().any(|(_, event)| event.attack().is_some_and(|(id, ..)| id == 4))
-            {
-                rebound = inspect_source(source, |source| source.test_assignment(request.life));
-            }
-            actual[index].extend(
-                output.values.into_iter().map(|(time, event)| (raw + i64::from(time), event)),
-            );
-            assert_eq!(source.source_snapshot().faults, 0);
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-        if actual[2]
-            .iter()
-            .any(|(_, event)| matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 4, .. }))
-            && !inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("active=true")
-        {
-            break;
-        }
-    }
-    let rebound = rebound.expect("retained successor actually sounds");
-    assert!(rebound.decision > prior.decision && rebound.emission > prior.emission);
-    assert_eq!(rebound.configuration, prior.configuration);
-    let gesture: Vec<_> = actual[2]
-        .iter()
-        .filter(|(_, event)| match event {
-            Event::Note { id, .. } | Event::Expression { id, .. } => *id == 4,
-            _ => false,
-        })
-        .collect();
-    assert_eq!(gesture.len(), 4);
-    let onset = gesture[0].0;
-    assert!(gesture[0].1.attack().is_some());
-    let Event::Expression { value: tuning, .. } = gesture[1].1 else { panic!("initial tuning") };
-    let Event::Expression { value: expressed, .. } = gesture[2].1 else {
-        panic!("player expression")
-    };
-    assert_eq!((gesture[1].0, gesture[2].0, gesture[3].0), (onset, onset + 10, onset + 20));
-    assert_eq!(expressed, tuning, "incoming bend cannot change Tune's assigned pitch");
-    assert!(gesture[3].1.release());
-    assert_eq!(actual[0].len(), 3);
-    assert!(actual[0][2].1.release());
-    assert_eq!(
-        actual[0][2].0,
-        3584 + 7 + 512,
-        "an established release remains responsive while another Source's onset is fenced"
-    );
-    assert!(actual[0][2].0 < onset);
-    println!(
-        "AUTOMATIC successor onset={onset}, original due=3472, decision={}, emission={}",
-        rebound.decision, rebound.emission
-    );
-    let settled = inspect_hub(&hub, |hub| hub.test_recovery_identity());
-    assert!(!settled.0 && settled.2.is_none(), "{settled:?}");
-    for _ in 0..4 {
-        raw += 512;
-        for (index, source) in sources.iter().enumerate() {
-            assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
-            if index == 0 {
-                assert_eq!(source.source_snapshot().held, 0);
-            } else {
-                assert_eq!(
-                    inspect_source(source, |source| source
-                        .state
-                        .voices()
-                        .next()
-                        .unwrap()
-                        .frozen_offset_microcents),
-                    held[index]
-                );
-            }
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-        assert_eq!(
-            inspect_hub(&hub, |hub| hub.test_recovery_identity()),
-            settled,
-            "unchanged callbacks do not restart a consumed divergence"
-        );
-    }
-    let observation = |playing: bool, beat: i64| {
-        let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
-        value.flags |= CLAP_TRANSPORT_HAS_BEATS_TIMELINE;
-        value.song_pos_beats = beat * (1i64 << 31);
-        if !playing {
-            value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
-        }
-        value
-    };
-    // A song-position loop wrap changes neither the raw clock nor held pitch.
-    // Capture another bound onset at that wrap, then Stop before its deadline.
-    for (step, beat) in [16, 0].into_iter().enumerate() {
-        raw += 512;
-        for (index, source) in sources.iter().enumerate() {
-            let input =
-                if step == 1 && index == 1 { vec![note(5, 2, 72, 400, true)] } else { vec![] };
-            assert!(source
-                .run_callback(raw, input, (None, None), (512, false), Some(observation(true, beat)))
-                .values
-                .is_empty());
-            assert_eq!(source.source_snapshot().held, usize::from(index != 0));
-            assert_eq!(source.source_snapshot().faults, 0);
-        }
-        hub.run_callback(raw, vec![], (None, None), (512, false), Some(observation(true, beat)));
-    }
-    let pending = inspect_source(&sources[1], |source| source.test_capture(5).unwrap());
-    assert!(inspect_hub(&hub, |hub| hub.test_plan_binding(1, pending.life)).is_some());
-    raw += 512;
-    let stop_raw = raw;
-    let mut stopped_output = Vec::new();
-    for (index, source) in sources.iter().enumerate() {
-        let input = if index == 1 {
-            vec![note(6, 0, 74, 20, true), expression(6, 0.25, 30), note(6, 0, 74, 40, false)]
-        } else {
-            vec![]
-        };
-        let output = source.run_callback(
-            raw,
-            input,
-            (None, None),
-            (512, false),
-            Some(observation(false, 0)),
-        );
-        assert!(
-            index == 0
-                || output.values.iter().any(|(offset, event)| *offset == 0 && event.release()),
-            "Stop releases the late held voice without its accumulated delay"
-        );
-        stopped_output.extend(
-            output.values.into_iter().map(|(offset, event)| (raw + i64::from(offset), event)),
-        );
-    }
-    hub.run_callback(raw, vec![], (None, None), (512, false), Some(observation(false, 0)));
-    for _ in 0..160 {
-        raw += 512;
-        for source in &sources {
-            let output = source.run_callback(
-                raw,
-                vec![],
-                (None, None),
-                (512, false),
-                Some(observation(false, 0)),
-            );
-            assert_eq!(source.source_snapshot().faults, 0);
-            stopped_output.extend(
-                output.values.into_iter().map(|(offset, event)| (raw + i64::from(offset), event)),
-            );
-        }
-        hub.run_callback(raw, vec![], (None, None), (512, false), Some(observation(false, 0)));
-        if sources.iter().all(|source| {
-            let state = source.source_snapshot();
-            state.held == 0 && state.captures == 0 && state.pending == 0
-        }) {
-            break;
-        }
-    }
-    let fresh: Vec<_> = stopped_output
-        .iter()
-        .filter(|(_, event)| match event {
-            Event::Note { id, .. } | Event::Expression { id, .. } => *id == 6,
-            _ => false,
-        })
-        .collect();
-    assert_eq!(fresh.len(), 4, "the same Source's new stopped-live phrase completes once");
-    assert!(fresh[0].0 >= stop_raw + 20 + 512 && fresh[0].1.attack().is_some());
-    assert_eq!(
-        (fresh[1].0, fresh[2].0, fresh[3].0),
-        (fresh[0].0, fresh[0].0 + 10, fresh[0].0 + 20)
-    );
-    let Event::Expression { value: initial, .. } = fresh[1].1 else { panic!("initial tuning") };
-    let Event::Expression { value: player, .. } = fresh[2].1 else { panic!("player expression") };
-    assert_eq!(player, initial, "incoming bend cannot change Tune's assigned pitch");
-    assert!(fresh[3].1.release());
-    assert!(
-        !stopped_output.iter().any(|(_, event)| event.attack().is_some_and(|(id, ..)| id == 5)),
-        "Stop cancels the bound old onset"
-    );
-    raw += 512;
-    let idle_input = raw;
-    let mut idle_output = Vec::new();
-    for step in 0..8 {
-        for (index, source) in sources.iter().enumerate() {
-            let input = if step == 0 && index == 1 {
-                vec![note(7, 0, 76, 7, true), expression(7, 0.125, 17), note(7, 0, 76, 27, false)]
-            } else {
-                vec![]
-            };
-            let output = source.run_callback(
-                raw,
-                input,
-                (None, None),
-                (512, false),
-                Some(observation(false, 0)),
-            );
-            idle_output.extend(
-                output.values.into_iter().map(|(offset, event)| (raw + i64::from(offset), event)),
-            );
-            assert_eq!(source.source_snapshot().faults, 0);
-        }
-        hub.run_callback(raw, vec![], (None, None), (512, false), Some(observation(false, 0)));
-        raw += 512;
-    }
-    assert_eq!(
-        idle_output.len(),
-        4,
-        "{idle_output:?}; {:?}; {}",
-        sources[1].source_snapshot(),
-        inspect_hub(&hub, |hub| hub.test_recovery_progress())
-    );
-    assert_eq!(
-        idle_output.iter().map(|(sample, _)| *sample).collect::<Vec<_>>(),
-        [idle_input + 519, idle_input + 519, idle_input + 529, idle_input + 539],
-        "the previously late Source returns to exact input+512 after accepted neutral idle"
-    );
-    drop(sources);
-    drop(hub);
-    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
-}
-
-#[test]
-fn production_hub_recovery_replays_unsounded_originals_with_copied_configuration_and_duration() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
-    source.run_format(1536, vec![note(7, 0, 62, 0, true)], None, None, 512);
-    hub.run_format(1536, vec![], None, None, 512);
-    source.run_format(2048, vec![], None, None, 512);
-    hub.run_format(2048, vec![], None, None, 512);
-    let held = inspect_source(&source, |source| *source.state.voices().next().unwrap());
-    assert_eq!(held.frozen_offset_microcents, 3_910_034);
-    source.run_format(
-        2560,
-        vec![note(8, 1, 64, 0, true), note(8, 1, 64, 20, false)],
-        None,
-        None,
-        512,
-    );
-    hub.run_format(2560, vec![], None, None, 512);
-    let request = inspect_source(&source, |source| source.test_capture(2).unwrap());
-    let prior = inspect_hub(&hub, |hub| hub.test_plan_binding(0, request.life).unwrap());
-    assert_eq!(prior.decision, 2);
-    let wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    wrapper
-        .test_with_plugin(|plugin| plugin.aggregation.as_mut().unwrap().test_request_recovery(2));
-    let mut actual = Vec::new();
-    let mut resumed_binding = None;
-    let mut raw = 2560;
-    for iteration in 0..160 {
-        raw += 512;
-        let input = if iteration == 1 { vec![note(9, 2, 67, 0, true)] } else { vec![] };
-        let sink = source.run_format(raw, input, None, None, 512);
-        for (time, event) in sink.values {
-            if event.attack().is_some_and(|(id, ..)| id == 8) {
-                resumed_binding =
-                    inspect_source(&source, |source| source.test_assignment(request.life));
-            }
-            actual.push((raw + i64::from(time), event));
-        }
-        let input = if iteration == 0 { vec![tuning_parameter(&hub, 680.0, 0)] } else { vec![] };
-        hub.run_format(raw, input, None, None, 512);
-        if actual.iter().filter(|(_, event)| event.attack().is_some()).count() == 2
-            && actual.iter().any(|(_, event)| {
-                event.release() && matches!(event, event::Event::Note { id: 8, .. })
-            })
-        {
-            break;
-        }
-    }
-    let ons: Vec<_> = actual.iter().filter(|(_, event)| event.attack().is_some()).collect();
-    assert_eq!(
-        ons.len(),
-        2,
-        "{}; source {:?}",
-        inspect_hub(&hub, |hub| hub.test_recovery_progress()),
-        source.source_snapshot()
-    );
-    assert_eq!(ons.iter().map(|(_, event)| event.attack().unwrap().0).collect::<Vec<_>>(), [8, 9]);
-    let on =
-        actual.iter().find(|(_, event)| event.attack().is_some_and(|(id, ..)| id == 8)).unwrap().0;
-    let off = actual
-        .iter()
-        .find(|(_, event)| event.release() && matches!(event, event::Event::Note { id: 8, .. }))
-        .unwrap()
-        .0;
-    assert_eq!(off - on, 20, "retained original duration follows the accepted onset shift");
-    let rebound = resumed_binding.unwrap();
-    assert!(rebound.decision > prior.decision && rebound.emission > prior.emission);
-    assert_eq!(rebound.configuration, prior.configuration);
-    assert_eq!(rebound.correction, 7_820_068);
-    let later = inspect_source(&source, |source| {
-        source.state.voices().find(|voice| voice.lifetime == 3).unwrap().assignment.unwrap()
-    });
-    assert!(later.revision > prior.configuration.revision);
-    assert_ne!(
-        later.tuning, prior.configuration.tuning,
-        "post-fence input binds the later configuration at its original input time"
-    );
-    assert_eq!(
-        inspect_source(&source, |source| source
-            .state
-            .voices()
-            .find(|voice| voice.lifetime == held.lifetime)
-            .unwrap()
-            .frozen_offset_microcents),
-        held.frozen_offset_microcents
-    );
-    assert_eq!(source.source_snapshot().faults, 0);
-    raw += 512;
-    source.run_format(
-        raw,
-        vec![note(7, 0, 62, 0, false), note(9, 2, 67, 0, false)],
-        None,
-        None,
-        512,
-    );
-    hub.run_format(raw, vec![], None, None, 512);
-    for _ in 0..160 {
-        raw += 512;
-        source.run_format(raw, vec![], None, None, 512);
-        hub.run_format(raw, vec![], None, None, 512);
-        if source.source_snapshot().held == 0 && source.source_snapshot().captures == 0 {
-            break;
-        }
-    }
-    assert_eq!(source.source_snapshot().held, 0);
-    drop(source);
-    drop(hub);
-    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
-}
-
-#[test]
-fn production_cancellation_survives_inventory_order_and_a_copied_replay_status() {
-    let _scope = crate::test_scope::enter();
-    // Unbound cancellation before/after the actual Retained inventory, then a
-    // bound cancellation after its incomplete status has already been copied.
-    for scenario in 0..3 {
-        let (hub, source) = production_pair();
-        let bound = scenario == 2;
-        let first = if bound { note(40, 0, 60, 0, true) } else { raw_midi([0xf8, 0, 0], 0) };
-        source.run_format(1536, vec![first], None, None, 512);
-        hub.run_format(1536, vec![], None, None, 512);
-        if bound {
-            inspect_source(&source, |source| {
-                source.offer.as_ref().unwrap().session.rows[0]
-                    .emission_gate
-                    .fetch_or(source::CLOSED, Ordering::AcqRel)
-            });
-        }
-        let output = source.run_format(
-            2048,
-            if bound { vec![] } else { vec![note(40, 0, 60, 0, true)] },
-            None,
-            None,
-            512,
-        );
-        assert!(!output.values.iter().any(|(_, event)| event.attack().is_some()));
-        let serial = if bound { 1 } else { 2 };
-        let capture = inspect_source(&source, |source| source.test_capture(serial).unwrap());
-        let wrapper = unsafe {
-            &*((*hub.plugin)
-                .plugin_data
-                .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-        };
-        if bound {
-            hub.run_format(2048, vec![], None, None, 512);
-            assert_ne!(
-                inspect_source(&source, |source| source
-                    .test_assignment(capture.life)
-                    .unwrap()
-                    .decision),
-                0
-            );
-        }
-        wrapper.test_with_plugin(|plugin| {
-            plugin.aggregation.as_mut().unwrap().test_request_recovery(1)
-        });
-        if !bound {
-            hub.run_format(2048, vec![], None, None, 512);
-        }
-        let source_wrapper = unsafe {
-            &*((*source.plugin)
-                .plugin_data
-                .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
-        };
-        let cancel = || {
-            source_wrapper.test_with_plugin(|plugin| {
-                plugin.source.as_mut().unwrap().test_cancel_before_receive()
-            })
-        };
-        let mut raw = 2048;
-        loop {
-            raw += 512;
-            assert!(!source
-                .run_format(raw, vec![], None, None, 512)
-                .values
-                .iter()
-                .any(|(_, event)| event.attack().is_some()));
-            let published = inspect_source(&source, |source| source.test_recovery_state().2) == 1;
-            if !bound && published {
-                if scenario == 0 {
-                    cancel();
-                }
-                hub.run_format(raw, vec![], None, None, 512);
-                if scenario == 1 {
-                    cancel();
-                }
-                break;
-            }
-            hub.run_format(raw, vec![], None, None, 512);
-            if bound
-                && inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("phase=Rebuild")
-            {
-                assert_eq!(
-                    inspect_hub(&hub, |hub| hub.test_plan_state(0, capture.life)),
-                    Some((false, true, true))
-                );
-                cancel();
-                break;
-            }
-            assert!(
-                raw < 65536,
-                "scenario {scenario}: {}",
-                inspect_hub(&hub, |hub| hub.test_recovery_progress())
-            );
-        }
-        assert!(
-            source.source_snapshot().manifest != 0,
-            "the real original-On disposition is pending"
-        );
-        for _ in 0..160 {
-            raw += 512;
-            assert!(
-                !source
-                    .run_format(raw, vec![], None, None, 512)
-                    .values
-                    .iter()
-                    .any(|(_, event)| event.attack().is_some()),
-                "canceled On was resurrected in scenario {scenario}"
-            );
-            hub.run_format(raw, vec![], None, None, 512);
-            if source.source_snapshot().captures == 0
-                && source.source_snapshot().lives == 0
-                && inspect_hub(&hub, |hub| hub.test_plan_state(0, capture.life)).is_none()
-            {
-                break;
-            }
-        }
-        assert_eq!(
-            (source.source_snapshot().captures, source.source_snapshot().lives),
-            (0, 0),
-            "scenario {scenario}: {}",
-            inspect_hub(&hub, |hub| hub.test_recovery_progress())
-        );
-        assert!(inspect_hub(&hub, |hub| hub.test_plan_state(0, capture.life)).is_none());
-        raw += 512;
-        source.run_format(raw, vec![note(41, 0, 62, 0, true)], None, None, 512);
-        assert_eq!(
-            inspect_source(&source, |source| source.test_capture(serial + 1).unwrap().life),
-            capture.life,
-            "the actual Life index is reused after the canceled identity retires"
-        );
-        hub.run_format(raw, vec![], None, None, 512);
-        let mut ons = 0;
-        for _ in 0..8 {
-            raw += 512;
-            ons += source
-                .run_format(raw, vec![], None, None, 512)
-                .values
-                .iter()
-                .filter(|(_, event)| event.attack().is_some_and(|(id, ..)| id == 41))
-                .count();
-            hub.run_format(raw, vec![], None, None, 512);
-        }
-        assert_eq!(ons, 1, "reused Life can receive a new valid binding in scenario {scenario}");
-        raw += 512;
-        source.run_format(raw, vec![note(41, 0, 62, 0, false)], None, None, 512);
-        hub.run_format(raw, vec![], None, None, 512);
-        for _ in 0..8 {
-            raw += 512;
-            source.run_format(raw, vec![], None, None, 512);
-            hub.run_format(raw, vec![], None, None, 512);
-        }
-        assert_eq!(source.source_snapshot().faults, 0);
-        drop(source);
-        drop(hub);
-        assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
-    }
-}
-
-#[test]
-fn production_joined_owners_finish_an_active_chunked_recovery_without_new_output() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    let input = (0..65).map(|_| note(7, 0, 60, 0, true)).collect();
-    assert!(source.run_format(1536, input, None, None, 512).values.is_empty());
-    hub.run_format(1536, vec![], None, None, 512);
-    assert_eq!(source.source_snapshot().lives, 65);
-    let wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    wrapper
-        .test_with_plugin(|plugin| plugin.aggregation.as_mut().unwrap().test_request_recovery(1));
-    hub.run_format(2048, vec![], None, None, 512);
-    assert!(inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("active=true"));
-    assert!(source.run_format(2048, vec![], None, None, 512).values.is_empty());
-    let mut raw = 2048;
-    while !inspect_source(&source, |source| source.test_recovery_state().0) {
-        raw += 512;
-        assert!(raw < 8192, "the crossed status response must yield the fence cell");
-        assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    assert_eq!(source.source_snapshot().faults, 0);
-    assert_eq!(
-        inspect_source(&source, |source| {
-            let (active, total, ..) = source.test_recovery_state();
-            (active, total)
-        }),
-        (true, 65),
-        "the fixed lifetime inventory actually requires two chunks before both callbacks join"
-    );
-    drop(source);
-    drop(hub);
-    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0),
-        "joined pumps finish both inventory chunks, their acknowledgements, request pins and capture/plan retirements");
-}
-
-#[test]
-fn production_recovery_rejects_a_stored_committed_off_binding_after_reopen() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    source.run_format(
-        1536,
-        vec![source.participation(false, 0), note(70, 0, 60, 1, true)],
-        None,
-        None,
-        512,
-    );
-    hub.run_format(1536, vec![], None, None, 512);
-    let capture = inspect_source(&source, |source| source.test_capture(2).unwrap());
-    assert!(!capture.adaptive);
-    let (lease, shared) = inspect_source(&source, |source| {
-        let offer = source.offer.as_ref().unwrap();
-        (offer.lease, offer.session.rows[0].clone())
-    });
-    let generation =
-        shared.emission_gate.fetch_or(source::CLOSED, Ordering::AcqRel) & !source::GATE_FLAGS;
-    assert!(source.run_format(2048, vec![], None, None, 512).values.is_empty());
-    hub.run_format(2048, vec![], None, None, 512);
-    let prior = inspect_source(&source, |source| source.test_assignment(capture.life).unwrap());
-    assert_eq!((prior.decision, prior.emission, prior.correction), (1, generation, 0));
-    let key = inspect_hub(&hub, |hub| {
-        hub.test_capture_keys(1).into_iter().find(|key| key.serial == 2).unwrap()
-    });
-    let fence = protocol::Fence {
-        lease,
-        epoch: source.source_snapshot().epoch,
-        transaction: 1,
-        generation,
-        from_decision: 1,
-        terminal: false,
-    };
-    let wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    let send = |reply| {
-        wrapper.test_with_plugin(|plugin| {
-            plugin.aggregation.as_mut().unwrap().offer.as_mut().unwrap().bank.rows[0]
-                .replies
-                .push(reply)
-                .unwrap();
-        })
-    };
-    send(protocol::Reply::Fence(fence));
-    let mut raw = 2048;
-    let mut acknowledged = false;
-    let chunk = loop {
-        raw += 512;
-        assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
-        if let Some(protocol::Control::RevokeAck {
-            fence: found,
-            input_cut: 2,
-            output_cut: 0,
-            ..
-        }) = shared
-            .to_hub
-            .take_repair_if(|control| matches!(control, protocol::Control::RevokeAck { .. }))
-        {
-            assert_eq!(found, fence);
-            acknowledged = true;
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-        if let Some(chunk) = shared.inventory.read_owned() {
-            break chunk;
-        }
-        assert!(raw < 32768);
-    };
-    assert!(acknowledged);
-    assert_eq!((chunk.value().total, chunk.value().count), (1, 1));
-    let record = chunk.value().records[0].unwrap();
-    assert_eq!(record.outcome, protocol::RequestOutcome::Retained);
-    assert_eq!(record.decision, prior.decision);
-    drop(chunk);
-    send(protocol::Reply::InventoryComplete { fence, input_cut: 2, total: 1, chunks: 1 });
-    assert_eq!(
-        shared.emission_gate.compare_exchange(
-            generation | source::CLOSED,
-            generation + 4,
-            Ordering::AcqRel,
-            Ordering::Acquire
-        ),
-        Ok(generation | source::CLOSED)
-    );
-    send(protocol::Reply::RecoveryComplete {
-        fence,
-        generation: generation + 4,
-        boundary: raw + 512,
-    });
-    send(protocol::Reply::Assignment {
-        key,
-        life: capture.life,
-        lifetime: capture.life_serial,
-        binding: prior,
-    });
-    send(protocol::Reply::CohortCommitted { lease, epoch: fence.epoch, through: prior.decision });
-    for _ in 0..6 {
-        raw += 512;
-        assert!(
-            source.run_format(raw, vec![], None, None, 512).values.is_empty(),
-            "neither the stored Off binding nor delayed old replies regain emission after reopen"
-        );
-    }
-    assert!(!inspect_source(&source, |source| source.test_recovery_state().0));
-    assert_eq!(
-        inspect_source(&source, |source| source.test_assignment(capture.life).unwrap().decision),
-        prior.decision
-    );
-    assert_eq!(
-        (
-            source.source_snapshot().held,
-            source.source_snapshot().captures,
-            source.source_snapshot().faults
-        ),
-        (0, 1, 0)
-    );
-    drop(source);
-    drop(hub);
-    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
-}
-
-#[test]
-fn production_revoke_inventory_keeps_a_lifetime_after_its_on_capture_and_plan_retire() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    source.run_format(1536, vec![note(7, 0, 60, 0, true)], None, None, 512);
-    hub.run_format(1536, vec![], None, None, 512);
-    let mut raw = 1536;
-    for _ in 0..16 {
-        raw += 512;
-        source.run_format(raw, vec![], None, None, 512);
-        hub.run_format(raw, vec![], None, None, 512);
-        if source.source_snapshot().captures == 0 {
-            break;
-        }
-    }
-    assert_eq!((source.source_snapshot().held, source.source_snapshot().captures), (1, 0));
-    let bound = inspect_source(&source, |source| *source.state.voices().next().unwrap());
-    let (lease, shared) = inspect_source(&source, |source| {
-        let offer = source.offer.as_ref().unwrap();
-        (offer.lease, offer.session.rows[0].clone())
-    });
-    let generation =
-        shared.emission_gate.fetch_or(source::CLOSED, Ordering::AcqRel) & !source::GATE_FLAGS;
-    let fence = protocol::Fence {
-        lease,
-        epoch: source.source_snapshot().epoch,
-        transaction: 1,
-        generation,
-        from_decision: 1,
-        terminal: false,
-    };
-    let wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    let send = |reply| {
-        wrapper.test_with_plugin(|plugin| {
-            plugin.aggregation.as_mut().unwrap().offer.as_mut().unwrap().bank.rows[0]
-                .replies
-                .push(reply)
-                .unwrap();
-        })
-    };
-    send(protocol::Reply::Fence(fence));
-    raw += 512;
-    source.run_format(raw, vec![note(7, 0, 60, 0, false)], None, None, 512);
-    let ack = shared.to_hub.take_repair_if(|_| true).unwrap();
-    assert!(
-        matches!(ack, protocol::Control::RevokeAck { fence: found, input_cut: 1, output_cut: 2, .. } if found == fence)
-    );
-    hub.run_format(raw, vec![], None, None, 512);
-    let mut releases = 0;
-    let chunk = loop {
-        if let Some(chunk) = shared.inventory.read_owned() {
-            break chunk;
-        }
-        raw += 512;
-        releases += source
-            .run_format(raw, vec![], None, None, 512)
-            .values
-            .iter()
-            .filter(|(_, event)| event.release())
-            .count();
-        hub.run_format(raw, vec![], None, None, 512);
-        assert!(raw < 32768);
-    };
-    assert_eq!(releases, 1, "essential release runs while attack emission is fenced");
-    assert_eq!(
-        (
-            source.source_snapshot().held,
-            source.source_snapshot().captures,
-            source.source_snapshot().lives
-        ),
-        (0, 0, 1)
-    );
-    assert_eq!((chunk.value().total, chunk.value().count, chunk.value().lifetime_cut), (1, 1, 1));
-    let request = chunk.value().records[0].unwrap();
-    assert_eq!(request.outcome, protocol::RequestOutcome::Accepted);
-    assert_eq!(request.lifetime, bound.lifetime);
-    assert_eq!(request.on_serial, 1);
-    assert_ne!(request.decision, 0);
-    assert_eq!(Some(request.configuration), bound.assignment);
-    drop(chunk);
-    send(protocol::Reply::InventoryComplete { fence, input_cut: 1, total: 1, chunks: 1 });
-    assert_eq!(
-        shared.emission_gate.compare_exchange(
-            generation | source::CLOSED,
-            generation + 4,
-            Ordering::AcqRel,
-            Ordering::Acquire
-        ),
-        Ok(generation | source::CLOSED)
-    );
-    send(protocol::Reply::RecoveryComplete { fence, generation: generation + 4, boundary: raw });
-    for _ in 0..34 {
-        raw += 512;
-        source.run_format(raw, vec![], None, None, 512);
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    assert_eq!(
-        (
-            source.source_snapshot().held,
-            source.source_snapshot().lives,
-            source.source_snapshot().faults
-        ),
-        (0, 0, 0)
-    );
-}
-
-#[test]
-fn production_revoke_inventory_chunks_sixty_five_requests_while_capture_window_is_full() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    let wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    wrapper.test_with_plugin(|plugin| plugin.aggregation.as_mut().unwrap().test_pause_captures());
-    let events = (0..65)
-        .map(|_| note(7, 0, 60, 0, true))
-        .chain((0..1100).map(|_| expression(7, 0.5, 1)))
-        .collect();
-    source.run_format(1536, events, None, None, 512);
-    hub.run_format(1536, vec![], None, None, 512);
-    let mut raw = 1536;
-    for _ in 0..16 {
-        raw += 512;
-        source.run_format(raw, vec![], None, None, 512);
-        hub.run_format(raw, vec![], None, None, 512);
-        if inspect_hub(&hub, |hub| hub.test_capture_phases(1).0) == 1024 {
-            break;
-        }
-    }
-    assert_eq!(inspect_hub(&hub, |hub| hub.test_capture_phases(1)), (1024, 0));
-    assert_eq!(source.source_snapshot().input_cut, 1165);
-    let epoch = source.source_snapshot().epoch;
-    let (lease, shared) = inspect_source(&source, |source| {
-        let offer = source.offer.as_ref().unwrap();
-        (offer.lease, offer.session.rows[0].clone())
-    });
-    let generation =
-        shared.emission_gate.fetch_or(source::CLOSED, Ordering::AcqRel) & !source::GATE_FLAGS;
-    let fence = protocol::Fence {
-        lease,
-        epoch,
-        transaction: 1,
-        generation,
-        from_decision: 1,
-        terminal: false,
-    };
-    let send = |reply| {
-        wrapper.test_with_plugin(|plugin| {
-            plugin.aggregation.as_mut().unwrap().offer.as_mut().unwrap().bank.rows[0]
-                .replies
-                .push(reply)
-                .unwrap();
-        })
-    };
-    send(protocol::Reply::Fence(fence));
-    raw += 512;
-    source.run_format(raw, vec![note(7, 0, 60, 0, true)], None, None, 512);
-    let ack = shared
-        .to_hub
-        .take_repair_if(|_| true)
-        .expect("completion boundary publishes its independent ACK");
-    assert!(
-        matches!(ack, protocol::Control::RevokeAck { fence: found, input_cut: 1165, output_cut: 0, .. } if found == fence)
-    );
-    let first = loop {
-        if let Some(chunk) = shared.inventory.read_owned() {
-            break chunk;
-        }
-        raw += 512;
-        assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
-        assert!(inspect_source(&source, |source| source.test_recovery_state().3) <= 256);
-        assert!(raw < 32768);
-    };
-    assert_eq!(
-        (first.value().sequence, first.value().total, first.value().first, first.value().count),
-        (0, 65, 0, 64)
-    );
-    assert_eq!(first.value().input_cut, 1165);
-    assert_eq!(first.value().output_cut, 0);
-    assert_eq!(first.value().fence, fence);
-    assert_ne!(first.value().arena, 0);
-    for (index, record) in first.value().records.iter().flatten().enumerate() {
-        assert_eq!(record.lifetime, index as u64 + 1);
-        assert_eq!(record.outcome, protocol::RequestOutcome::Retained);
-        assert_eq!(record.on_serial, index as u64 + 1);
-        assert_eq!(record.decision, 0);
-    }
-    for _ in 0..3 {
-        raw += 512;
-        source.run_format(raw, vec![], None, None, 512);
-        assert_eq!(inspect_source(&source, |source| source.test_recovery_state().2), 1);
-        assert_eq!(
-            first.value().records[63].unwrap().lifetime,
-            64,
-            "Reading retains the original chunk through callbacks"
-        );
-    }
-    drop(first);
-    raw += 512;
-    source.run_format(raw, vec![], None, None, 512);
-    let second =
-        shared.inventory.read_owned().expect("releasing the first chunk permits its successor");
-    assert_eq!((second.value().sequence, second.value().first, second.value().count), (1, 64, 1));
-    assert_eq!(second.value().records[0].unwrap().lifetime, 65);
-    assert!(second.value().records[1..].iter().all(Option::is_none));
-    drop(second);
-    send(protocol::Reply::RecoveryComplete { fence, generation: generation + 4, boundary: raw });
-    raw += 512;
-    source.run_format(raw, vec![], None, None, 512);
-    assert!(
-        inspect_source(&source, |source| source.test_recovery_state().0),
-        "generation alone cannot acknowledge the inventory"
-    );
-    send(protocol::Reply::InventoryComplete { fence, input_cut: 1165, total: 65, chunks: 2 });
-    assert_eq!(
-        shared.emission_gate.compare_exchange(
-            generation | source::CLOSED,
-            generation + 4,
-            Ordering::AcqRel,
-            Ordering::Acquire
-        ),
-        Ok(generation | source::CLOSED)
-    );
-    send(protocol::Reply::RecoveryComplete { fence, generation: generation + 4, boundary: raw });
-    raw += 512;
-    source.run_format(raw, vec![], None, None, 512);
-    assert!(!inspect_source(&source, |source| source.test_recovery_state().0));
-    assert_eq!(source.source_snapshot().faults, 0);
-    assert_eq!(
-        inspect_hub(&hub, |hub| hub.test_capture_phases(1)),
-        (1024, 0),
-        "inventory never requires the blocked Capture suffix"
-    );
-    drop(shared);
-    drop(source);
-    drop(hub);
-    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
-}
-
 #[test]
 fn production_missing_source_interval_retains_128_configuration_markers_then_contains_129() {
     let _scope = crate::test_scope::enter();
@@ -1646,11 +340,16 @@ fn production_unmatched_originals_settle_without_hiding_independent_clock() {
         )
         .values;
     assert_eq!(source.source_snapshot().input_cut, 4);
-    for serial in 1..=4 {
-        let original = inspect_source(&source, |source| source.test_capture(serial).unwrap());
-        assert_eq!(original.work_count, 0);
-        assert!(original.remote_pending, "every original was captured before retirement");
+    // All four were copied to the Hub. The three that matched no note own no
+    // work and owe no output, so their envelopes settle inside this callback;
+    // only the forwarded clock still waits for its own output at input+D.
+    for serial in 1..=3 {
+        assert!(inspect_source(&source, |source| source.test_capture(serial)).is_none());
     }
+    let clock = inspect_source(&source, |source| source.test_capture(4).unwrap());
+    assert_eq!(clock.work_count, 0);
+    assert!(clock.published, "every original was copied to the Hub");
+    assert_eq!(source.source_snapshot().pending, 1);
     hub.run_format(1536, vec![], None, None, 512);
     for raw in (2048..8192).step_by(512) {
         output.extend(source.run_format(raw, vec![], None, None, 512).values);
@@ -1661,7 +360,7 @@ fn production_unmatched_originals_settle_without_hiding_independent_clock() {
     assert_eq!(source.source_snapshot().captures, 0);
     assert_eq!(source.source_snapshot().obligations, 0);
     assert_eq!(source.source_snapshot().faults, 0);
-    assert_eq!(inspect_hub(&hub, |hub| hub.test_capture_phases(1)), (0, 0));
+    assert!(inspect_hub(&hub, |hub| hub.test_inputs(1).is_empty()));
 }
 
 #[test]
@@ -1800,106 +499,6 @@ fn production_dense_sixty_four_onsets_publish_one_complete_cohort() {
 }
 
 #[test]
-fn production_capture_status_retires_a_full_window_behind_younger_actual_output() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    source.run_format(1536, vec![note(7, 0, 64, 0, true)], None, None, 512);
-    hub.run_format(1536, vec![], None, None, 512);
-    let onset = source.run_format(2048, vec![], None, None, 512);
-    assert_eq!(onset.values.iter().filter(|(_, event)| event.attack().is_some()).count(), 1);
-    hub.run_format(2048, vec![], None, None, 512);
-    source.run_format(2560, vec![], None, None, 512);
-    hub.run_format(2560, vec![], None, None, 512);
-    let mut older = vec![note(11, 1, 60, 0, true)];
-    older.extend((0..1023).map(|_| expression(11, 0.25, 0)));
-    source.run_format(3072, older, None, None, 512);
-    hub.run_format(3072, vec![], None, None, 512);
-    let mut b_reports = 0;
-    let mut a_onsets = 0;
-    let mut a_sample = None;
-    let mut raw = 3072;
-    for block in 0..16 {
-        raw += 512;
-        let events = if block < 6 {
-            (0..384).map(|offset| expression(7, 0.5, offset)).collect()
-        } else {
-            vec![]
-        };
-        let output = source.run_format(raw, events, None, None, 512);
-        b_reports += output
-            .values
-            .iter()
-            .filter(|(_, event)| matches!(event, Event::Expression { id: 7, .. }))
-            .count();
-        a_onsets += output
-            .values
-            .iter()
-            .filter(|(_, event)| {
-                matches!(event, Event::Note { id: 11, kind: CLAP_EVENT_NOTE_ON, .. })
-            })
-            .count();
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    assert_eq!(
-        b_reports, 2304,
-        "younger actual output exceeds the entire 2048-cell owned output window"
-    );
-    assert_eq!(a_onsets, 0, "the older cohort still owns its bounded structural cursor");
-    assert_eq!(inspect_hub(&hub, |hub| hub.test_capture_phases(1)), (1024, 0));
-    assert!(source.source_snapshot().captures > 1024);
-    assert!(
-        inspect_hub(&hub, |hub| hub.service_position().1[0]) >= 2306,
-        "canonical B publication proceeds while its own capture remains behind full A ingress"
-    );
-    for _ in 0..8192 {
-        raw += 512;
-        let output = source.run_format(raw, vec![], None, None, 512);
-        a_onsets += output
-            .values
-            .iter()
-            .filter(|(_, event)| {
-                matches!(event, Event::Note { id: 11, kind: CLAP_EVENT_NOTE_ON, .. })
-            })
-            .count();
-        if let Some((offset, _)) = output.values.iter().find(|(_, event)| {
-            matches!(event, Event::Note { id: 11, kind: CLAP_EVENT_NOTE_ON, .. })
-        }) {
-            a_sample = Some(raw + i64::from(*offset));
-        }
-        assert!(
-            !output.values.iter().any(|(_, event)| matches!(
-                event,
-                Event::Note { id: 7, kind: CLAP_EVENT_NOTE_ON, .. }
-            )),
-            "accepted B is never replayed because its capture arrived later"
-        );
-        hub.run_format(raw, vec![], None, None, 512);
-        if source.source_snapshot().captures == 0 {
-            break;
-        }
-    }
-    assert_eq!(a_onsets, 1);
-    assert_eq!(source.source_snapshot().captures, 0);
-    assert_eq!(source.source_snapshot().faults, 0);
-    raw += 512;
-    let release_due = raw + a_sample.unwrap() - 3072;
-    source.run_format(
-        raw,
-        vec![note(7, 0, 64, 0, false), note(11, 1, 60, 0, false)],
-        None,
-        None,
-        512,
-    );
-    hub.run_format(raw, vec![], None, None, 512);
-    while raw < release_due + 2048 {
-        raw += 512;
-        source.run_format(raw, vec![], None, None, 512);
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    assert_eq!(source.source_snapshot().held, 0);
-}
-
-#[test]
 fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reapplication() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
@@ -1920,6 +519,9 @@ fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reappli
     run(1536, vec![note(69, 0, 59, 0, true)], None);
     hub.run_format(1536, vec![], None, None, 512);
     run(2048, vec![note(70, 0, 61, 0, true)], None);
+    // Read each classification in its own capturing callback: an envelope is
+    // released as soon as its copy is sent and its own work has settled.
+    assert!(inspect_source(&source, |source| source.test_capture(2).unwrap().adaptive));
     hub.run_format(2048, vec![], None, None, 512);
     unsafe {
         context.raw_begin_set_parameter(param);
@@ -1931,7 +533,6 @@ fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reappli
         vec![note(71, 0, 62, 0, true), source.participation(true, 1), note(72, 0, 64, 2, true)],
         Some(CLAP_EVENT_PARAM_VALUE),
     );
-    assert!(inspect_source(&source, |source| source.test_capture(2).unwrap().adaptive));
     assert!(!inspect_source(&source, |source| source.test_capture(4).unwrap().adaptive));
     assert!(inspect_source(&source, |source| source.test_capture(6).unwrap().adaptive));
     hub.run_format(2560, vec![], None, None, 512);
@@ -1986,75 +587,6 @@ fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reappli
     assert_eq!(source.source_snapshot().held, 0);
     assert_eq!(source.source_snapshot().faults, 0);
     drop(context);
-}
-
-#[test]
-fn production_crossed_status_query_and_disposition_free_each_others_reply_lane() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    let hub_wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    let source_wrapper = unsafe {
-        &*((*source.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
-    };
-    hub_wrapper
-        .test_with_plugin(|plugin| plugin.aggregation.as_mut().unwrap().test_pause_captures());
-    source.run_format(1536, vec![note(7, 0, 60, 0, true)], None, None, 512);
-    hub.run_format(1536, vec![], None, None, 512);
-    let shared =
-        inspect_source(&source, |source| source.offer.as_ref().unwrap().session.rows[0].clone());
-    source_wrapper
-        .test_with_plugin(|plugin| plugin.source.as_mut().unwrap().test_cancel_before_receive());
-    let mut query = None;
-    shared.to_source.take_repair_if(|reply| {
-        if let protocol::Reply::CaptureStatusQuery(key) = reply {
-            query = Some(key);
-        }
-        false
-    });
-    let key = query.expect("Hub query owns the reserved return cell");
-    let mut disposition = false;
-    shared.to_hub.take_repair_if(|control| {
-        disposition = matches!(control, protocol::Control::Disposition { .. });
-        false
-    });
-    assert!(disposition, "Source cancellation simultaneously owns the reserved request cell");
-    assert_eq!(source.source_snapshot().manifest, 1);
-    source.run_format(2048, vec![], None, None, 512);
-    assert!(
-        shared.to_source.reserve_repair().is_some(),
-        "Source retains only the key and frees the crossed ACK cell"
-    );
-    assert_eq!(
-        source.source_snapshot().manifest,
-        1,
-        "a full response cell retains the exact pending query"
-    );
-    hub.run_format(2048, vec![], None, None, 512);
-    source.run_format(2560, vec![], None, None, 512);
-    assert_eq!(source.source_snapshot().manifest, 0);
-    let mut completed = false;
-    shared.to_hub.take_repair_if(|control| {
-        completed = matches!(control, protocol::Control::CaptureStatus { key: found,
-            status: Some(protocol::CaptureStatus { output_cut: 0, work_done: 0, inline_done: true }) } if found == key);
-        false
-    });
-    assert!(completed, "the response snapshots completion after the exact cancellation ACK");
-    hub.run_format(2560, vec![], None, None, 512);
-    assert!(inspect_source(&source, |source| source.test_capture(1).unwrap().remote_pending));
-    drop(shared);
-    drop(source);
-    drop(hub);
-    assert_eq!(
-        registry::global().lock().unwrap().test_counts(),
-        (0, 0, 0),
-        "real joined-owner pumps complete the retained capture"
-    );
 }
 
 #[test]
@@ -2178,63 +710,649 @@ fn production_missing_assignment_retains_one_late_onset_and_fixed_latency() {
 }
 
 #[test]
-fn production_full_capture_window_consumes_following_completeness_without_eviction() {
+fn production_late_onset_keeps_its_duration_and_shifts_only_its_own_release() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    // The Hub runs a callback behind, so this onset cannot emit at input+D and
+    // waits with rule one. It lands 512 samples late.
+    assert!(source
+        .run_format(1536, vec![note(7, 0, 60, 0, true)], None, None, 512)
+        .values
+        .is_empty());
+    assert!(source.run_format(2048, vec![], None, None, 512).values.is_empty());
+    hub.run_format(1536, vec![], None, None, 512);
+    let late = source.run_format(2560, vec![], None, None, 512);
+    assert!(late.values[0].1.attack().is_some());
+    assert_eq!(late.values[0].0, 0, "one whole callback past input+D");
+    hub.run_format(2048, vec![], None, None, 512);
+    assert!(source.run_format(3072, vec![], None, None, 512).values.is_empty());
+    hub.run_format(2560, vec![], None, None, 512);
+    // The note's own release carries the same extra shift, so the sounding
+    // duration is the played duration. Two unrelated events sit behind it in
+    // the same callback and neither inherits its lateness: a shared channel
+    // control, which leaves through `schedule_channels`, and a raw MIDI clock,
+    // which has no channel and only `schedule_pending` can carry.
+    assert!(source
+        .run_format(
+            3584,
+            vec![note(7, 0, 60, 0, false), raw_midi([0xb0, 11, 90], 0), raw_midi([0xf8, 0, 0], 1)],
+            None,
+            None,
+            512
+        )
+        .values
+        .is_empty());
+    hub.run_format(3072, vec![], None, None, 512);
+    let control = source.run_format(4096, vec![], None, None, 512);
+    assert_eq!(
+        control.values.len(),
+        2,
+        "neither is held to the note's shift: {:?}",
+        control.values
+    );
+    assert!(control.values.iter().any(
+        |(time, event)| *time == 0 && matches!(event, Event::Midi { data: [0xb0, 11, 90], .. })
+    ));
+    assert!(
+        control
+            .values
+            .iter()
+            .any(|(time, event)| *time == 1
+                && matches!(event, Event::Midi { data: [0xf8, 0, 0], .. }))
+    );
+    hub.run_format(3584, vec![], None, None, 512);
+    let release = source.run_format(4608, vec![], None, None, 512);
+    assert_eq!(release.values.len(), 1, "{:?}", release.values);
+    assert_eq!(release.values[0].0, 0);
+    assert!(release.values[0].1.release());
+    // Input 1536..3584 played; output 2560..4608 sounded.
+    assert_eq!(4608 - 2560, 3584 - 1536);
+    assert_eq!(source.source_snapshot().faults, 0);
+    hub.run_format(4096, vec![], None, None, 512);
+}
+
+#[test]
+fn an_unpaired_tune_retires_its_own_accepted_output_rather_than_filling_its_journal() {
+    let _scope = crate::test_scope::enter();
+    let mut source = Device::new(true);
+    source.activate_format(44100.0, 512);
+    // No Hub exists at all, so nothing can ever send `OutputRetained` and
+    // `transfer` never looks at the journal. Forward more raw controls than
+    // the 4,096-entry journal holds: with #718 open this latches
+    // STORAGE_FAULT and the journal never empties.
+    let mut emitted = 0;
+    for block in 0..12i64 {
+        let controls =
+            (0..400u32).map(|index| raw_midi([0xb0, 1, 64], index % 512)).collect::<Vec<_>>();
+        emitted += source.run_format(block * 512, controls, None, None, 512).values.len();
+    }
+    assert!(
+        emitted > super::protocol::OUTCOME_JOURNAL,
+        "the fixture reaches past one journal: {emitted}"
+    );
+    let settled = source.source_snapshot();
+    assert_eq!(settled.faults, 0, "an unpaired Tune's own output is not an overflow");
+    assert_eq!(settled.journal, 0, "it acknowledges what only it can acknowledge");
+}
+
+#[test]
+fn an_unpaired_hub_allocates_nothing_for_tuning_and_pairing_allocates_one_row() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let calibration = Calibration { offset: 0 };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
+    for raw in [0, 512] {
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_plan_ledger_bytes()),
+        0,
+        "a Harmonigraph with no paired Tune allocates no plan ledger"
+    );
+    assert!(
+        inspect_hub(&hub, |hub| hub.offer.as_ref().unwrap().bank.is_none()),
+        "nor any of the sixteen ring triples"
+    );
     let mut source = Device::new(true);
     source.configure_format(uuid, true, calibration);
     source.activate_format(44100.0, 512);
-    for raw in [0, 512, 1024] {
+    for raw in [1024, 1536] {
         source.run_format(raw, vec![], None, None, 512);
         hub.run_format(raw, vec![], None, None, 512);
     }
-    let events = (0..1024)
-        .map(|index| {
-            Input::Midi(clap_event_midi {
-                header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 0),
-                port_index: 0,
-                data: [0xa0, (index % 128) as u8, 37],
-            })
-        })
-        .collect();
-    source.run_format(1536, events, None, None, 512);
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_plan_ledger_bytes()),
+        hub::Hub::test_plan_row_bytes(),
+        "pairing one Tune allocates exactly that Tune's row"
+    );
+    assert!(inspect_hub(&hub, |hub| hub.offer.as_ref().unwrap().bank.is_some()));
+}
+
+#[test]
+fn production_same_key_retrigger_chokes_its_predecessor_at_the_moment_of_emission() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    // Rule two: a replacement onset on the same channel and key force-releases
+    // the note it displaces at the moment the replacement is EMITTED -- not at
+    // its input, not on the predecessor's schedule, and not left to the
+    // receiving instrument. Both halves of that are exercised here.
+    source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
     hub.run_format(1536, vec![], None, None, 512);
-    let mut full_before_proof = false;
-    let mut committed = false;
-    // The real 1024-node graph retains its structural-work cursor over many
-    // callbacks; this fixture does not enlarge the 4096-unit grant.
-    for block in 4..1028 {
-        let raw = block * 512;
+    let sounding = source.run_format(2048, vec![], None, None, 512);
+    assert!(matches!(sounding.values[0].1, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 1, .. }));
+    hub.run_format(2048, vec![], None, None, 512);
+    assert!(inspect_hub(&hub, |hub| hub.test_voice(0, 1)).is_some());
+    // First ordering: the Hub has not answered the replacement by input+D. The
+    // key keeps sounding rather than going silent between the two.
+    source.run_format(2560, vec![note(2, 0, 60, 0, true)], None, None, 512);
+    assert!(
+        source.run_format(3072, vec![], None, None, 512).values.is_empty(),
+        "an unanswered replacement does not get to choke its predecessor"
+    );
+    hub.run_format(2560, vec![], None, None, 512);
+    let retrigger = source.run_format(3584, vec![], None, None, 512);
+    assert_eq!(retrigger.values.len(), 3, "{:?}", retrigger.values);
+    assert!(retrigger.values.iter().all(|(time, _)| *time == 0));
+    assert!(
+        matches!(
+            retrigger.values[0].1,
+            Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, key: 60, channel: 0, .. }
+        ),
+        "the predecessor's choke precedes its replacement: {:?}",
+        retrigger.values
+    );
+    assert!(matches!(
+        retrigger.values[1].1,
+        Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 2, key: 60, channel: 0, .. }
+    ));
+    hub.run_format(3072, vec![], None, None, 512);
+    hub.run_format(3584, vec![], None, None, 512);
+    assert!(inspect_hub(&hub, |hub| hub.test_voice(0, 1)).is_none(), "the displaced note ended");
+    assert!(inspect_hub(&hub, |hub| hub.test_voice(0, 2)).is_some());
+    // Second ordering: note 2 sounded a whole callback late and carries that
+    // shift, and its own replacement is answered in time. The choke rides the
+    // replacement's schedule, so an otherwise ready replacement is not delayed
+    // by how late the note it displaces was.
+    source.run_format(4096, vec![note(3, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(4096, vec![], None, None, 512);
+    let replaced = source.run_format(4608, vec![], None, None, 512);
+    assert_eq!(replaced.values.len(), 3, "at the replacement's input+D: {:?}", replaced.values);
+    assert!(replaced.values.iter().all(|(time, _)| *time == 0));
+    assert!(matches!(
+        replaced.values[0].1,
+        Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 2, key: 60, .. }
+    ));
+    assert!(matches!(
+        replaced.values[1].1,
+        Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 3, key: 60, .. }
+    ));
+    hub.run_format(4608, vec![], None, None, 512);
+    source.run_format(5120, vec![note(3, 0, 60, 0, false)], None, None, 512);
+    hub.run_format(5120, vec![], None, None, 512);
+    assert!(source.run_format(5632, vec![], None, None, 512).values[0].1.release());
+    for raw in [6144, 6656] {
+        hub.run_format(raw - 512, vec![], None, None, 512);
+        source.run_format(raw, vec![], None, None, 512);
+    }
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "one key, three lives");
+}
+
+#[test]
+fn production_a_lifetime_born_and_ended_at_one_sample_leaves_no_tuning_context() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    // Release-first ordering applies a lifetime's terminal before its own
+    // onset whenever both fall on one sample, so no later record can remove
+    // the voice that onset would insert. Two gestures reach that: a key struck
+    // and lifted at one sample, and a same-key onset repeated at one sample,
+    // whose predecessor's choke shares the replacement's sample.
+    let mut input = vec![note(1, 0, 60, 0, true), note(1, 0, 60, 0, false)];
+    for id in 2..10 {
+        input.push(note(id, 0, 64, 0, true));
+    }
+    source.run_format(1536, input, None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        vec![(1, 9)],
+        "only the one note still standing at the end of the sample"
+    );
+    // The survivor's own release clears the last of it.
+    source.run_format(2048, vec![note(9, 0, 64, 0, false)], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    assert_eq!(inspect_hub(&hub, |hub| hub.test_context()), vec![], "nothing outlives the phrase");
+    for raw in [2560, 3072, 3584] {
         source.run_format(raw, vec![], None, None, 512);
         hub.run_format(raw, vec![], None, None, 512);
-        let (counts, (coverage, _, active, finalized)) = inspect_hub(&hub, |hub| {
-            (hub.test_capture_phases(1), hub.test_input_sequence_progress())
-        });
-        if counts.0 == 1024
-            && coverage.is_none_or(|(coverage, cut)| coverage.through <= 1536 || cut < 1024)
-        {
-            assert!(!active, "no complete graph before its input proof");
-        }
-        full_before_proof |= inspect_hub(&hub, |hub| hub.full_input_control_seen);
-        if finalized.is_some_and(|through| through > 1536) {
-            assert!(
-                full_before_proof,
-                "fixture reached the real full owned window before consuming its following proof"
-            );
-            committed = true;
-        }
-        assert_eq!(source.source_snapshot().faults, 0);
-        if committed && counts == (0, 0) && source.source_snapshot().captures == 0 {
-            break;
-        }
     }
-    assert!(full_before_proof && committed);
-    assert_eq!(inspect_hub(&hub, |hub| hub.test_capture_phases(1)), (0, 0));
-    assert_eq!(source.source_snapshot().captures, 0);
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
+    // A transport Stop is the third such ending, and the only one that is not
+    // addressed to a lifetime. It sorts into the release-first half like any
+    // other, so the onset it ends is still ahead of it in the pass.
+    let stopped = {
+        let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+        value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        Input::Transport(value)
+    };
+    source.run_format(4096, vec![], None, None, 512);
+    hub.run_format(
+        4096,
+        vec![transport(0, 120.0), note(1, 0, 60, 0, true), stopped],
+        None,
+        None,
+        512,
+    );
+    for raw in [4608, 5120] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        vec![],
+        "the Stop's own sample carries the onset it ends"
+    );
+}
+
+#[test]
+fn production_stop_cancels_the_pending_attack_and_releases_the_forwarded_voice() {
+    let _scope = crate::test_scope::enter();
+    let stopped = || {
+        let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+        value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        Input::Transport(value)
+    };
+    let (hub, source) = production_pair();
+    // Four notes, each ending by a different route: note 1 is assigned and
+    // forwarded downstream, note 3 is assigned but one callback short of
+    // sounding, note 2 is still waiting for its assignment, and note 4 is held
+    // on the Hub's own DIRECT input, which is assigned nothing and forwarded
+    // whole.
+    source.run_format(1536, vec![transport(0, 120.0), note(1, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(1536, vec![transport(0, 120.0), note(4, 0, 72, 0, true)], None, None, 512);
+    let sounding = source.run_format(2048, vec![note(3, 0, 67, 0, true)], None, None, 512);
+    assert!(matches!(sounding.values[0].1, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 1, .. }));
+    hub.run_format(2048, vec![], None, None, 512);
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        vec![(1, 1), (0, 1), (1, 2)],
+        "note 3 is assigned before the Stop, and note 2 has not been played yet"
+    );
+    let stop = source.run_format(2560, vec![note(2, 0, 64, 0, true), stopped()], None, None, 512);
+    assert_eq!(source.source_snapshot().local_pending, 2, "neither note 2 nor note 3 sounded");
+    assert!(
+        stop.values.iter().any(|(time, event)| *time == 0
+            && matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, key: 60, .. })),
+        "the forwarded voice is terminated, not merely forgotten: {:?}",
+        stop.values
+    );
+    for controller in [64, 66, 69] {
+        assert!(stop.values.iter().any(|(_, event)| matches!(
+            event,
+            Event::Midi { data: [0xb0, value, 0], .. } if *value == controller
+        )));
+    }
+    assert!(!stop.values.iter().any(|(_, event)| event.attack().is_some()));
+    // The same Stop reaches the Hub's own transport, and note 4 leaves by the
+    // one route DIRECT has: its emergency release goes straight to the host,
+    // never becoming an `OutputDelta`, and it has no plan to cancel.
+    let direct = hub.run_format(2560, vec![stopped()], None, None, 512);
+    assert!(
+        direct.values.iter().any(|(_, event)| matches!(
+            event,
+            Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 4, key: 72, .. }
+        )),
+        "the DIRECT voice is terminated too: {:?}",
+        direct.values
+    );
+    // The Hub answers note 2 only after the Stop. Neither that assignment nor
+    // note 3's, which arrived before it, may resurrect a canceled attack.
+    for raw in [3072, 3584, 4096, 4608] {
+        assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
+    for lifetime in 1..=3 {
+        assert!(inspect_hub(&hub, |hub| hub.test_voice(0, lifetime)).is_none());
+    }
+    // The factual row is not the whole of it: the emergency release reaches the
+    // Hub as accepted output rather than as an addressed Terminal record, and
+    // the cancellation only marks a plan, so both notes can survive in the
+    // table the policy actually scores against. DIRECT reaches neither of those
+    // two routes at all, so its Stop capture is what has to end note 4 here.
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        vec![],
+        "neither the released voice nor the canceled attack stays in tuning context"
+    );
+}
+
+#[test]
+fn production_a_congested_callback_chokes_a_predecessor_only_with_its_replacement() {
+    let _scope = crate::test_scope::enter();
+    let clocks = || (0..510).map(|_| raw_midi([0xf8, 0, 0], 0)).collect::<Vec<_>>();
+    let musical = |sink: &Sink| {
+        sink.values
+            .iter()
+            .filter(|(_, event)| !matches!(event, Event::Midi { data: [0xf8, ..], .. }))
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    let (hub, source) = production_pair();
+    // Note 1 sounds first, so the retrigger below owes it a forced release.
+    source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    assert_eq!(source.run_format(2048, vec![], None, None, 512).values.len(), 2);
+    hub.run_format(2048, vec![], None, None, 512);
+    let mut input = vec![note(2, 0, 60, 0, true)];
+    input.extend(clocks());
+    source.run_format(2560, input, None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    // Every callback from here carries another 510 raw MIDI clocks, so
+    // whichever one the Hub's answer lets the retrigger take is saturated:
+    // its choke, onset and tuning are three events against the two those 510
+    // leave of the callback's 512. Which callback that is depends on how long
+    // the Hub takes with the copied input, and is not what this measures.
+    let mut raw = 3072;
+    let congested = loop {
+        assert!(raw < 8192, "the retrigger never emitted");
+        let out = source.run_format(raw, clocks(), None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+        if !musical(&out).is_empty() {
+            break out;
+        }
+    };
+    // The choke stages first, out of the indexed release scan; the
+    // replacement's own onset stages a host round trip later, out of
+    // `complete`, with the whole raw stream having had its turn at the same
+    // credits in between. Rule two: without room for the onset the predecessor
+    // is not choked at all, so the two either ride together or neither goes.
+    assert!(
+        matches!(
+            musical(&congested)[..],
+            [
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, key: 60, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 2, key: 60, .. }),
+                (0, Event::Expression { kind: 2, id: 2, .. }),
+            ]
+        ),
+        "the choke rides out with the replacement it is for: {:?}",
+        musical(&congested)
+    );
+    assert_eq!(congested.values.len(), 512, "the callback's credits are spent, not exceeded");
+    // The Hub's own DIRECT input reaches the same staging with no round trip in
+    // the way and a one-event onset group, so 511 clocks are what saturate its
+    // callback rather than 510. The rule and the reservation are the same.
+    source.run_format(raw, vec![], None, None, 512);
+    hub.run_format(raw, vec![note(3, 0, 72, 0, true)], None, None, 512);
+    raw += 512;
+    source.run_format(raw, vec![], None, None, 512);
+    let mut retrigger = vec![note(4, 0, 72, 0, true)];
+    retrigger.extend((0..511).map(|_| raw_midi([0xf8, 0, 0], 0)));
+    let saturated = hub.run_format(raw, retrigger, None, None, 512);
+    assert!(
+        matches!(
+            musical(&saturated)[..],
+            [
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 3, key: 72, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 4, key: 72, .. }),
+            ]
+        ),
+        "DIRECT pairs them the same way: {:?}",
+        musical(&saturated)
+    );
+    assert_eq!(saturated.values.len(), 512, "and spends its credits the same way");
+    raw += 512;
+    source.run_format(raw, vec![note(2, 0, 60, 0, false)], None, None, 512);
+    hub.run_format(raw, vec![note(4, 0, 72, 0, false)], None, None, 512);
+    for _ in 0..8 {
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
+}
+
+#[test]
+fn production_two_replacements_in_one_callback_each_keep_the_output_their_own_onset_needs() {
+    let _scope = crate::test_scope::enter();
+    let clocks = |count| (0..count).map(|_| raw_midi([0xf8, 0, 0], 0)).collect::<Vec<_>>();
+    let musical = |sink: &Sink| {
+        sink.values
+            .iter()
+            .filter(|(_, event)| !matches!(event, Event::Midi { data: [0xf8, ..], .. }))
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    let (hub, source) = production_pair();
+    // Two sounding notes, so the two retriggers below each owe a forced release.
+    source.run_format(
+        1536,
+        vec![note(1, 0, 60, 0, true), note(2, 0, 72, 0, true)],
+        None,
+        None,
+        512,
+    );
+    hub.run_format(1536, vec![], None, None, 512);
+    assert_eq!(source.run_format(2048, vec![], None, None, 512).values.len(), 4);
+    hub.run_format(2048, vec![], None, None, 512);
+    let mut input = vec![note(3, 0, 60, 0, true), note(4, 0, 72, 0, true)];
+    input.extend(clocks(510));
+    source.run_format(2560, input, None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    // Both retriggers are answered together, so both land in one callback that
+    // another 510 raw MIDI clocks are already claiming. Six musical events
+    // against 512 credits is the whole point: two chokes, two onsets and two
+    // tunings, and nothing may come between a choke and the onset it is for.
+    // Which callback the Hub's answer lets them take is not what this measures.
+    let mut raw = 3072;
+    let congested = loop {
+        assert!(raw < 8192, "the retriggers never emitted");
+        let out = source.run_format(raw, clocks(510), None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+        if !musical(&out).is_empty() {
+            break out;
+        }
+    };
+    // Rule two is not divisible, and it is not divisible per replacement
+    // either: one pair's admission cannot spend what the other pair's onset
+    // still needs, so the credits that give way are the ordinary stream's.
+    assert!(
+        matches!(
+            musical(&congested)[..],
+            [
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, key: 60, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 3, key: 60, .. }),
+                (0, Event::Expression { kind: 2, id: 3, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 2, key: 72, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 4, key: 72, .. }),
+                (0, Event::Expression { kind: 2, id: 4, .. }),
+            ]
+        ),
+        "each choke rides out with its own replacement: {:?}",
+        musical(&congested)
+    );
+    assert_eq!(congested.values.len(), 512, "the callback's credits are spent, not exceeded");
+    // The Hub's own DIRECT input reaches the same staging with one-event onset
+    // groups, so its two pairs are four events rather than six.
+    source.run_format(raw, vec![], None, None, 512);
+    hub.run_format(raw, vec![note(5, 0, 48, 0, true), note(6, 0, 55, 0, true)], None, None, 512);
+    raw += 512;
+    source.run_format(raw, vec![], None, None, 512);
+    let mut retrigger = vec![note(7, 0, 48, 0, true), note(8, 0, 55, 0, true)];
+    retrigger.extend(clocks(510));
+    let saturated = hub.run_format(raw, retrigger, None, None, 512);
+    assert!(
+        matches!(
+            musical(&saturated)[..],
+            [
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 5, key: 48, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 7, key: 48, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 6, key: 55, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 8, key: 55, .. }),
+            ]
+        ),
+        "DIRECT keeps both pairs whole the same way: {:?}",
+        musical(&saturated)
+    );
+    assert_eq!(saturated.values.len(), 512, "and spends its credits the same way");
+    raw += 512;
+    source.run_format(
+        raw,
+        vec![note(3, 0, 60, 0, false), note(4, 0, 72, 0, false)],
+        None,
+        None,
+        512,
+    );
+    hub.run_format(raw, vec![note(7, 0, 48, 0, false), note(8, 0, 55, 0, false)], None, None, 512);
+    for _ in 0..8 {
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
+}
+
+#[test]
+fn production_all_sound_off_owes_each_voice_a_physical_note_off_and_all_notes_off_does_not() {
+    let _scope = crate::test_scope::enter();
+    for cc in [120u8, 123] {
+        let (hub, source) = production_pair();
+        source.run_format(
+            1536,
+            vec![note(1, 0, 60, 0, true), note(2, 0, 64, 0, true)],
+            None,
+            None,
+            512,
+        );
+        hub.run_format(1536, vec![], None, None, 512);
+        assert_eq!(source.run_format(2048, vec![], None, None, 512).values.len(), 4);
+        hub.run_format(2048, vec![], None, None, 512);
+        source.run_format(2560, vec![raw_midi([0xb0, cc, 0], 0)], None, None, 512);
+        hub.run_format(2560, vec![], None, None, 512);
+        // Both terminations end both notes for the Hub. Only All Sound Off
+        // leaves each voice a physical Note-Off still owed downstream.
+        let terminal = source.run_format(3072, vec![], None, None, 512);
+        assert_eq!(terminal.values.len(), 1, "CC{cc} has one wire effect: {:?}", terminal.values);
+        assert!(
+            matches!(terminal.values[0].1, Event::Midi { data: [0xb0, value, 0], .. } if value == cc)
+        );
+        hub.run_format(3072, vec![], None, None, 512);
+        assert_eq!(source.source_snapshot().note_off_owed, if cc == 120 { 2 } else { 0 });
+        assert!((1..=2).all(|life| inspect_hub(&hub, |hub| hub.test_voice(0, life)).is_none()));
+        // A replacement on one of those keys pays that voice's owed Off first,
+        // as a Note-Off rather than the choke an ordinary retrigger sends.
+        source.run_format(3584, vec![note(3, 0, 60, 0, true)], None, None, 512);
+        hub.run_format(3584, vec![], None, None, 512);
+        let retrigger = source.run_format(4096, vec![], None, None, 512);
+        assert_eq!(retrigger.values.len(), 2 + usize::from(cc == 120), "{:?}", retrigger.values);
+        if cc == 120 {
+            assert!(matches!(
+                retrigger.values[0].1,
+                Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 1, key: 60, channel: 0, .. }
+            ));
+        }
+        assert!(retrigger.values[usize::from(cc == 120)].1.attack().is_some());
+        hub.run_format(4096, vec![], None, None, 512);
+        // The untouched key still owes its Off, and its own release pays it.
+        source.run_format(
+            4608,
+            vec![note(3, 0, 60, 0, false), note(2, 0, 64, 0, false)],
+            None,
+            None,
+            512,
+        );
+        hub.run_format(4608, vec![], None, None, 512);
+        let last = source.run_format(5120, vec![], None, None, 512);
+        assert_eq!(
+            last.values.iter().filter(|(_, event)| event.release()).count(),
+            1 + usize::from(cc == 120),
+            "{:?}",
+            last.values
+        );
+        hub.run_format(5120, vec![], None, None, 512);
+        for raw in [5632, 6144] {
+            source.run_format(raw, vec![], None, None, 512);
+            hub.run_format(raw, vec![], None, None, 512);
+        }
+        let settled = source.source_snapshot();
+        assert_eq!((settled.held, settled.note_off_owed, settled.faults), (0, 0, 0), "{settled:?}");
+    }
+}
+
+#[test]
+fn production_unaddressed_control_behind_a_late_attack_keeps_its_own_schedule() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    // One callback carries an onset and, behind it, an unaddressed raw MIDI
+    // clock. The Hub is not run, so no assignment can come back and the onset
+    // waits — rule one holds it with its own note. The clock is addressed to
+    // no note, so it keeps its own input+D schedule rather than waiting
+    // behind the oldest pending attack.
+    assert!(source
+        .run_format(1536, vec![note(7, 0, 60, 0, true), raw_midi([0xf8, 0, 0], 1)], None, None, 512)
+        .values
+        .is_empty());
+    let late = source.run_format(2048, vec![], None, None, 512);
+    assert_eq!(late.values.len(), 1, "only the clock, and it is not held back");
+    assert_eq!(late.values[0].0, 1, "at its own input+D, not the attack's");
+    assert!(matches!(late.values[0].1, Event::Midi { data: [0xf8, 0, 0], .. }));
+    assert_eq!(source.source_snapshot().faults, 0);
+    // The attack keeps its place in its own order once its assignment lands.
+    hub.run_format(1536, vec![], None, None, 512);
+    let attack = source.run_format(2560, vec![], None, None, 512);
+    assert!(attack.values[0].1.attack().is_some());
+}
+
+#[test]
+fn production_a_broadcast_release_waiting_on_one_target_still_lets_the_clock_through() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    // Note 1 sounds. Note 2 is captured a callback later and left unanswered,
+    // so it is still unsounded when one release addresses them both.
+    source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    assert!(source.run_format(2048, vec![note(2, 0, 64, 0, true)], None, None, 512).values[0]
+        .1
+        .attack()
+        .is_some());
+    // A release addressed to every note on the channel owns a child per target
+    // and no life of its own, so the refusal that holds it belongs to one child
+    // and not to the envelope.
+    assert!(source
+        .run_format(2560, vec![note(-1, 0, -1, 0, false),], None, None, 512)
+        .values
+        .is_empty());
+    // Note 1's share leaves here. Note 2's is still owed, and a raw MIDI clock
+    // captured now falls behind an envelope that can only refuse from here on.
+    let first = source.run_format(3072, vec![raw_midi([0xf8, 0, 0], 1)], None, None, 512);
+    assert_eq!(first.values.len(), 1, "{:?}", first.values);
+    assert!(matches!(first.values[0], (0, Event::Note { kind: CLAP_EVENT_NOTE_OFF, key: 60, .. })));
+    let clock = source.run_format(3584, vec![], None, None, 512);
+    assert_eq!(
+        clock.values.len(),
+        1,
+        "the clock does not inherit note 2's wait: {:?}",
+        clock.values
+    );
+    assert_eq!(clock.values[0].0, 1, "at its own input+D");
+    assert!(matches!(clock.values[0].1, Event::Midi { data: [0xf8, 0, 0], .. }));
+    // Note 2's share of that release is still owed, and settles once the Hub
+    // answers it.
+    for raw in [4096, 4608, 5120, 5632, 6144, 6656] {
+        hub.run_format(raw - 2048, vec![], None, None, 512);
+        source.run_format(raw, vec![], None, None, 512);
+    }
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
 }
 
 #[test]
@@ -2559,80 +1677,6 @@ fn production_partial_onset_preserves_actual_pitch_debt_and_take_fault() {
 }
 
 #[test]
-fn production_canceled_unsent_assignment_settles_with_a_full_reply_ring() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    source.run_format(1536, vec![note(99, 0, 60, 0, true)], None, None, 512);
-    let capture = inspect_source(&source, |source| source.test_capture(1).unwrap());
-    let hub_wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    let fill_replies = || {
-        hub_wrapper.test_with_plugin(|plugin| {
-            let hub = plugin.aggregation.as_mut().unwrap();
-            let replies = &mut hub.offer.as_mut().unwrap().bank.rows[0].replies;
-            while replies.slots() != 0 {
-                replies
-                    .push(protocol::Reply::PlanRetired {
-                        incarnation: 0,
-                        epoch: 0,
-                        life: 0,
-                        lifetime: 0,
-                        decision: 0,
-                    })
-                    .unwrap();
-            }
-        })
-    };
-    fill_replies();
-    hub.run_format(1536, vec![], None, None, 512);
-    assert_eq!(
-        inspect_hub(&hub, |hub| hub.test_cohort_delivery().1),
-        1,
-        "real current-cohort assignment could not enqueue"
-    );
-    let source_wrapper = unsafe {
-        &*((*source.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
-    };
-    source_wrapper
-        .test_with_plugin(|plugin| plugin.source.as_mut().unwrap().test_cancel_before_receive());
-    hub_wrapper
-        .test_with_plugin(|plugin| plugin.aggregation.as_mut().unwrap().test_request_recovery(1));
-    // Consume the crossed Hub status query without stealing its response;
-    // cancellation cannot be received until that repair ACK cell is free.
-    source.run_format(2048, vec![], None, None, 512);
-    fill_replies();
-    hub.run_format(2048, vec![], None, None, 512);
-    assert_eq!(
-        inspect_hub(&hub, |hub| hub.offer.as_ref().unwrap().bank.rows[0].replies.slots()),
-        0
-    );
-    assert_eq!(
-        inspect_hub(&hub, |hub| hub.test_cohort_delivery().1),
-        0,
-        "cancellation pays unsent exactly once despite identity reader and full reply ring"
-    );
-    assert!(inspect_hub(&hub, |hub| hub.test_plan_state(0, capture.life)).unwrap().0);
-    for raw in (2560..100_352).step_by(512) {
-        assert!(!source
-            .run_format(raw, vec![], None, None, 512)
-            .values
-            .iter()
-            .any(|(_, event)| event.attack().is_some()));
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    assert_eq!((source.source_snapshot().captures, source.source_snapshot().lives), (0, 0));
-    assert!(inspect_hub(&hub, |hub| hub.test_plan_state(0, capture.life)).is_none());
-    drop(source);
-    drop(hub);
-    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
-}
-
-#[test]
 fn production_unpayable_cohort_debt_faults_instead_of_panicking() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
@@ -2646,7 +1690,7 @@ fn production_unpayable_cohort_debt_faults_instead_of_panicking() {
     // the assignment is minted and owed but cannot enqueue.
     hub_wrapper.test_with_plugin(|plugin| {
         let hub = plugin.aggregation.as_mut().unwrap();
-        let replies = &mut hub.offer.as_mut().unwrap().bank.rows[0].replies;
+        let replies = &mut hub.offer.as_mut().unwrap().bank.as_mut().unwrap().rows[0].replies;
         while replies.slots() != 0 {
             replies
                 .push(protocol::Reply::PlanRetired {
@@ -2686,138 +1730,6 @@ fn production_unpayable_cohort_debt_faults_instead_of_panicking() {
     );
     drop(source);
     drop(hub);
-}
-
-#[test]
-fn production_terminal_partial_output_finishes_transaction_before_release_or_reset() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    source.run_format(1536, vec![note(7, 0, 60, 0, true)], None, None, 512);
-    hub.run_format(1536, vec![], None, None, 512);
-    let mut acceptance = vec![false; 640];
-    acceptance[0] = true;
-    ACCEPTANCE_SCRIPT.with(|script| *script.borrow_mut() = acceptance);
-    let output = source.run_format(2048, vec![], None, None, 512);
-    assert_eq!(output.values.len(), 1);
-    assert!(output.values[0].1.attack().is_some());
-    assert!(output.rejected.iter().any(|(_, event)| event.release()));
-    hub.run_format(2048, vec![], None, None, 512);
-    let mut raw = 2048;
-    for _ in 0..160 {
-        raw += 512;
-        let output =
-            source.run_format(raw, vec![note(8, 0, 62, 0, true)], Some(u16::MAX), None, 512);
-        assert!(output.values.is_empty());
-        hub.run_format(raw, vec![], None, None, 512);
-        if !inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("active=true")
-            && !inspect_source(&source, |source| source.test_recovery_state().0)
-        {
-            break;
-        }
-    }
-    assert!(
-        !inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("active=true"),
-        "{}",
-        inspect_hub(&hub, |hub| hub.test_recovery_progress())
-    );
-    assert!(!inspect_source(&source, |source| source.test_recovery_state().0));
-    assert_eq!(source.source_snapshot().held, 1, "CLOSED is not accepted physical termination");
-    assert_ne!(source.source_snapshot().faults & source::OUTPUT_FAULT, 0);
-    let session = inspect_source(&source, |source| source.offer.as_ref().unwrap().session.clone());
-    let gate = session.rows[0].emission_gate.load(Ordering::Acquire);
-    assert_eq!(gate & source::GATE_FLAGS, source::CLOSED);
-    assert_ne!(
-        session.faults.load(Ordering::Acquire) & source::OUTPUT_FAULT,
-        0,
-        "enrolled contributor escalates"
-    );
-    for _ in 0..3 {
-        raw += 512;
-        source.run_format(raw, vec![], Some(u16::MAX), None, 512);
-        hub.run_format(raw, vec![], None, None, 512);
-        assert_eq!(
-            session.rows[0].emission_gate.load(Ordering::Acquire),
-            gate,
-            "rejected emergency retries do not restart the completed transaction"
-        );
-    }
-    raw += 512;
-    let output = source.run_format(raw, vec![], None, None, 512);
-    assert_eq!(output.values.iter().filter(|(_, event)| event.release()).count(), 1);
-    assert!(
-        output.values.iter().all(|(offset, _)| *offset == 0),
-        "essential repair ignores accumulated stream delay"
-    );
-    hub.run_format(raw, vec![], None, None, 512);
-    for _ in 0..80 {
-        raw += 512;
-        source.run_format(raw, vec![], None, None, 512);
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    assert_eq!(
-        (
-            source.source_snapshot().held,
-            source.source_snapshot().captures,
-            source.source_snapshot().lives
-        ),
-        (0, 0, 0)
-    );
-    assert_ne!(source.source_snapshot().faults & source::OUTPUT_FAULT, 0);
-    let source_setup = source.shared();
-    let hub_setup = hub.shared();
-    source_setup.apply(source_setup.value().routing, true).unwrap();
-    hub_setup.apply(hub_setup.value().routing, true).unwrap();
-    assert_ne!(source.source_snapshot().faults, 0, "a Reset request is not fresh coverage");
-    for _ in 0..256 {
-        raw += 512;
-        source.run_format(raw, vec![], None, None, 512);
-        hub.run_format(raw, vec![], None, None, 512);
-        source.main();
-        hub.main();
-        if source.source_snapshot().faults == 0 {
-            break;
-        }
-    }
-    assert_eq!(
-        source.source_snapshot().faults,
-        0,
-        "{:?} source={} hub={}",
-        source.source_snapshot(),
-        inspect_source(&source, |s| s.test_reset_progress()),
-        inspect_hub(&hub, |h| h.test_reset_progress())
-    );
-    assert_eq!(session.faults.load(Ordering::Acquire), 0);
-    assert_eq!(inspect_hub(&hub, |hub| hub.test_terminal_scope()), (false, 0));
-    raw += 512;
-    let fresh = source.run_format(
-        raw,
-        vec![note(19, 0, 67, 0, true), expression(19, 0.25, 10), note(19, 0, 67, 20, false)],
-        None,
-        None,
-        512,
-    );
-    let mut accepted = fresh.values;
-    hub.run_format(raw, vec![], None, None, 512);
-    for _ in 0..160 {
-        raw += 512;
-        accepted.extend(source.run_format(raw, vec![], None, None, 512).values);
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    assert_eq!(accepted.len(), 4, "new admission opens after explicit valid Reset");
-    assert!(accepted[0].1.attack().is_some());
-    assert!(accepted[3].1.release());
-    assert_eq!(
-        (
-            source.source_snapshot().held,
-            source.source_snapshot().pending,
-            source.source_snapshot().faults
-        ),
-        (0, 0, 0)
-    );
-    drop(source);
-    drop(hub);
-    drop(session);
-    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
 }
 
 #[test]
@@ -2962,276 +1874,6 @@ fn production_fifteen_note_mixed_offsets_preserve_gestures_without_terminal_late
 }
 
 #[test]
-fn production_terminal_nonmember_fault_preserves_the_healthy_frozen_cohort() {
-    let _scope = crate::test_scope::enter();
-    for overlap_ordinary in [false, true] {
-        let (hub, source) = production_pair();
-        let uuid = match hub.shared().value().routing {
-            setup::Routing::Hub(value) => value.uuid,
-            _ => unreachable!(),
-        };
-        let calibration = Calibration { offset: 0 };
-        source.run_format(
-            1536,
-            (0..64).map(|id| note(id, 0, id as i16, 0, true)).collect(),
-            None,
-            None,
-            512,
-        );
-        let capture = inspect_source(&source, |source| source.test_capture(1).unwrap());
-        let wrapper = unsafe {
-            &*((*hub.plugin)
-                .plugin_data
-                .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-        };
-        let fill = || {
-            wrapper.test_with_plugin(|plugin| {
-                let replies =
-                    &mut plugin.aggregation.as_mut().unwrap().offer.as_mut().unwrap().bank.rows[0]
-                        .replies;
-                while replies.slots() != 0 {
-                    replies
-                        .push(protocol::Reply::PlanRetired {
-                            incarnation: 0,
-                            epoch: 0,
-                            life: 0,
-                            lifetime: 0,
-                            decision: 0,
-                        })
-                        .unwrap();
-                }
-            })
-        };
-        fill();
-        hub.run_format(1536, vec![], None, None, 512);
-        let mut raw = 1536;
-        while inspect_hub(&hub, |hub| hub.test_plan_state(0, capture.life)).is_none() {
-            raw += 512;
-            assert!(raw < 8192);
-            assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
-            fill();
-            hub.run_format(raw, vec![], None, None, 512);
-        }
-        assert!(inspect_hub(&hub, |hub| hub.test_plan_state(0, capture.life)).unwrap().1);
-        assert!(inspect_hub(&hub, |hub| hub.test_input_sequence_progress().2
-            || hub.test_cohort_delivery().3));
-        assert_ne!(inspect_hub(&hub, |hub| hub.test_cohort_delivery().1), 0);
-        if overlap_ordinary {
-            wrapper.test_with_plugin(|plugin| {
-                plugin.aggregation.as_mut().unwrap().test_request_recovery(1)
-            });
-            assert!(inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("active=true"));
-        }
-        let mut late = Device::new(true);
-        late.configure_format(uuid, true, calibration);
-        late.activate_format(44100.0, 512);
-        // Actual wrapper input inspection failure on a newly adopted, not enrolled
-        // Source. Its old initial baseline cannot fill the published join interval.
-        late.run_status(
-            raw,
-            (0..2049).map(|_| raw_midi([0xf8, 0, 0], 0)).collect(),
-            None,
-            None,
-            512,
-            true,
-        );
-        let mut onsets = 0;
-        let mut tunings = 0;
-        for _ in 0..128 {
-            raw += 512;
-            let output = source.run_format(raw, vec![], None, None, 512);
-            onsets += output.values.iter().filter(|(_, event)| event.attack().is_some()).count();
-            tunings += output
-                .values
-                .iter()
-                .filter(|(_, event)| matches!(event, Event::Expression { kind: 2, .. }))
-                .count();
-            late.run_format(raw, vec![], None, None, 512);
-            hub.run_format(raw, vec![], None, None, 512);
-            assert_eq!(inspect_hub(&hub, |hub| hub.test_terminal_scope()), (false, 2));
-            assert!(!inspect_hub(&hub, |hub| hub.test_input_row(1).0));
-            assert_eq!(source.source_snapshot().faults, 0);
-            if onsets == 64 {
-                break;
-            }
-        }
-        assert_eq!((onsets, tunings), (64, 64), "local settlement retains the healthy cohort's cursor, configuration and delivery obligations");
-        assert_ne!(late.source_snapshot().faults & source::INPUT_FAULT, 0);
-        println!(
-            "LOCAL completed64 raw={raw} extra={} snapshot={:?}",
-            source.shared().extra_delay.load(Ordering::Acquire),
-            source.source_snapshot()
-        );
-        raw += 512;
-        source.run_format(
-            raw,
-            (0..64).map(|id| note(id, 0, id as i16, 0, false)).collect(),
-            None,
-            None,
-            512,
-        );
-        late.run_format(raw, vec![], None, None, 512);
-        hub.run_format(raw, vec![], None, None, 512);
-        let drain_rounds = source.shared().extra_delay.load(Ordering::Acquire) / 512 + 160;
-        for _ in 0..drain_rounds {
-            raw += 512;
-            source.run_format(raw, vec![], None, None, 512);
-            late.run_format(raw, vec![], None, None, 512);
-            hub.run_format(raw, vec![], None, None, 512);
-        }
-        assert_eq!(
-            (
-                source.source_snapshot().held,
-                source.source_snapshot().captures,
-                source.source_snapshot().lives
-            ),
-            (0, 0, 0),
-            "raw={raw} {:?}; Hub {:?}",
-            source.source_snapshot(),
-            inspect_hub(&hub, |hub| hub.test_input_sequence_progress())
-        );
-        drop(late);
-        drop(source);
-        drop(hub);
-        assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
-    }
-}
-
-#[test]
-fn production_replay_accepts_done_original_with_an_already_retired_plan() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    source.run_format(1536, vec![note(7, 0, 60, 0, true)], None, None, 512);
-    let original = inspect_source(&source, |source| source.test_capture(1).unwrap());
-    hub.run_format(1536, vec![], None, None, 512);
-    let wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    wrapper.test_with_plugin(|plugin| plugin.aggregation.as_mut().unwrap().test_pause_captures());
-    assert_eq!(
-        source.run_format(2048, vec![note(7, 0, 60, 20, false)], None, None, 512).values.len(),
-        2
-    );
-    hub.run_format(2048, vec![], None, None, 512);
-    let released = source.run_format(2560, vec![], None, None, 512);
-    assert_eq!(released.values.iter().filter(|(_, event)| event.release()).count(), 1);
-    hub.run_format(2560, vec![], None, None, 512);
-    assert!(inspect_hub(&hub, |hub| hub.test_plan_state(0, original.life)).unwrap().0);
-    // Isolate the legitimate independent retirement order: exact actual Off
-    // makes the Plan terminal while a retained capture still owns its Original.
-    wrapper.test_with_plugin(|plugin| {
-        plugin.aggregation.as_mut().unwrap().test_service_terminal_plans()
-    });
-    assert!(inspect_hub(&hub, |hub| hub.test_plan_state(0, original.life)).is_none());
-    assert!(inspect_source(&source, |source| source.test_capture(1)).is_some());
-    wrapper
-        .test_with_plugin(|plugin| plugin.aggregation.as_mut().unwrap().test_request_recovery(1));
-    let mut raw = 2560;
-    for _ in 0..160 {
-        raw += 512;
-        assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
-        hub.run_format(raw, vec![], None, None, 512);
-        if !inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("active=true") {
-            break;
-        }
-    }
-    assert!(!inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("active=true"));
-    assert!(inspect_hub(&hub, |hub| hub.test_plan_state(0, original.life)).is_none());
-    wrapper.test_with_plugin(|plugin| {
-        plugin.aggregation.as_mut().unwrap().test_resume_capture_collection()
-    });
-    for _ in 0..80 {
-        raw += 512;
-        assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    assert_eq!(
-        (
-            source.source_snapshot().lives,
-            source.source_snapshot().captures,
-            source.source_snapshot().faults
-        ),
-        (0, 0, 0)
-    );
-    drop(source);
-    drop(hub);
-    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
-}
-
-#[test]
-fn production_terminal_joined_pressure_advances_completed_capture_scans() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    let hub_wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    let source_wrapper = unsafe {
-        &*((*source.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
-    };
-    hub_wrapper
-        .test_with_plugin(|plugin| plugin.aggregation.as_mut().unwrap().test_pause_captures());
-    let mut raw = 1536;
-    let mut accepted = 0;
-    for block in 0..12 {
-        let input =
-            if block < 8 { (0..512).map(|_| raw_midi([0xf8, 0, 0], 0)).collect() } else { vec![] };
-        accepted += source.run_format(raw, input, None, None, 512).values.len();
-        hub.run_format(raw, vec![], None, None, 512);
-        raw += 512;
-    }
-    let state = source.source_snapshot();
-    assert_eq!(accepted, 4096);
-    assert_eq!((state.pending, state.local_pending, state.intent_slots), (4096, 0, 0));
-    assert_eq!(state.captures, 2047, "Hub and Source input windows are full");
-    assert!(state.journal > 0, "accepted factual history also remains owned");
-    assert!(inspect_source(&source, |s| s.test_capture(1025).unwrap().local_done));
-    // The real cancellation cursor crosses completed retained originals. No
-    // disposition, output ACK or queue length changes can supply this witness.
-    let before = inspect_source(&source, |s| s.service_position());
-    source_wrapper
-        .test_with_plugin(|plugin| plugin.source.as_mut().unwrap().test_cancel_before_receive());
-    assert_ne!(inspect_source(&source, |s| s.service_position()), before);
-    for _ in 0..2 {
-        source.run_format(
-            raw,
-            (0..1536).map(|_| note(7, 0, 60, 1, true)).collect(),
-            None,
-            None,
-            512,
-        );
-        hub.run_format(raw, vec![], None, None, 512);
-        raw += 512;
-    }
-    source.run_status(
-        raw,
-        (0..2049).map(|_| raw_midi([0xf8, 0, 0], 0)).collect(),
-        None,
-        None,
-        512,
-        true,
-    );
-    assert_ne!(source.source_snapshot().faults & source::INPUT_FAULT, 0);
-    hub.run_format(raw, vec![], None, None, 512);
-    for _ in 0..4 {
-        raw += 512;
-        source.run_format(raw, vec![], None, None, 512);
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    assert_eq!(source.source_snapshot().lives, 3072, "48 inventory chunks remain owned at join");
-    assert!(inspect_source(&source, |s| s.test_recovery_state().0));
-    drop(source);
-    drop(hub);
-    assert!(registry::test_service_rounds() > 2048, "the fixture exceeds the obsolete loop bound");
-    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
-}
-
-#[test]
 fn production_reset_requires_fresh_complete_input_after_a_same_class_fault() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
@@ -3306,26 +1948,175 @@ fn production_reset_requires_fresh_complete_input_after_a_same_class_fault() {
 }
 
 #[test]
-fn production_terminal_abort_retires_delivery_before_waiting_for_factual_output() {
+fn production_same_sample_group_past_one_queue_latches_instead_of_stalling() {
+    let _scope = crate::test_scope::enter();
+    // Both input owners stage into a CAPTURES_PER_SOURCE queue and both stop
+    // collecting when it fills: a Tune's row through the intent ring, and the
+    // Hub's own MIDI without one. The group is oversized for either.
+    for slot in [1, 0] {
+        let (hub, source) = production_pair();
+        let (played, other) = if slot == 0 { (&hub, &source) } else { (&source, &hub) };
+        let mut raw = 1536;
+        let held = (0..64).map(|index| note(index, 0, index as i16, index as u32, true)).collect();
+        played.run_format(raw, held, None, None, 512);
+        other.run_format(raw, vec![], None, None, 512);
+        for _ in 0..128 {
+            raw += 512;
+            played.run_format(raw, vec![], None, None, 512);
+            other.run_format(raw, vec![], None, None, 512);
+        }
+        // Seventeen wildcard tuning expressions at one sample copy one record
+        // per addressed note: 1,088, past the 1,024 either queue stages. The
+        // 2,048-record batch overflow never sees them; collection stops first.
+        raw += 512;
+        let wildcards =
+            (0..17).map(|index| expression(-1, 0.01 + f64::from(index) * 0.001, 0)).collect();
+        played.run_format(raw, wildcards, None, None, 512);
+        other.run_format(raw, vec![], None, None, 512);
+        let session = inspect_hub(&hub, |hub| hub.offer.as_ref().unwrap().session.clone());
+        let mut group = None;
+        let mut latched = false;
+        for _ in 0..24 {
+            raw += 512;
+            played.run_format(raw, vec![], None, None, 512);
+            other.run_format(raw, vec![], None, None, 512);
+            let staged = inspect_hub(&hub, |hub| hub.test_inputs(slot));
+            if group.is_none() && staged.len() == protocol::CAPTURES_PER_SOURCE {
+                group = Some(staged.iter().map(|record| record.sample).collect::<Vec<_>>());
+            }
+            latched |= session.faults.load(Ordering::Acquire) & source::STORAGE_FAULT != 0;
+        }
+        let group = group.unwrap_or_else(|| panic!("slot {slot} fills with the oversized group"));
+        assert!(
+            group.iter().all(|sample| *sample == group[0]),
+            "slot {slot}: every staged record stands at one sample, which is what makes the group unconsumable"
+        );
+        assert!(
+            latched,
+            "slot {slot}: an unconsumable same-sample group is a bounded storage failure, not a silent stall"
+        );
+        assert_eq!(
+            inspect_hub(&hub, |hub| hub.test_inputs(slot).len()),
+            0,
+            "slot {slot}: the latch settles the stream and drops copies it can never sequence"
+        );
+        drop(source);
+        drop(hub);
+    }
+}
+
+#[test]
+fn production_a_sample_too_big_for_the_rest_of_a_callback_waits_rather_than_vanishing() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let calibration = Calibration { offset: 0 };
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, calibration);
+    hub.activate_format(44100.0, 512);
+    let sources: [Device; 16] = std::array::from_fn(|_| {
+        let mut source = Device::new(true);
+        source.configure_format(uuid, true, calibration);
+        source.activate_format(44100.0, 512);
+        source
+    });
+    let mut raw = 0;
+    for _ in 0..3 {
+        for source in &sources {
+            source.run_format(raw, vec![], None, None, 512);
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+    }
+    raw = 1536;
+    for (index, source) in sources.iter().enumerate() {
+        let held = (0..16)
+            .map(|key| note(key, index as i16 % 16, 48 + key as i16, 0, true))
+            .collect::<Vec<_>>();
+        source.run_format(raw, held, None, None, 512);
+    }
+    hub.run_format(raw, vec![], None, None, 512);
+    for _ in 0..64 {
+        raw += 512;
+        for source in &sources {
+            source.run_format(raw, vec![], None, None, 512);
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context().len()),
+        256,
+        "the crowded sample needs every source's sixteen notes sounding to address"
+    );
+    // One crowded sample per source: six wildcard tuning expressions over the
+    // sixteen held notes (96 records) plus sixteen same-key retriggers, each
+    // copying its predecessor's choke beside its own onset (32). 128 a source,
+    // 2,048 across the session, every one of them at that sample. Collecting
+    // them costs 2,064 of the callback's 4,096, which leaves less than the
+    // 2,048 assembly then needs.
+    raw += 512;
+    for (index, source) in sources.iter().enumerate() {
+        let mut crowd = (0..6).map(|_| expression(-1, 0.25, 0)).collect::<Vec<_>>();
+        crowd.extend(
+            (0..16).map(|key| note(100 + key, index as i16 % 16, 48 + key as i16, 0, true)),
+        );
+        source.run_format(raw, crowd, None, None, 512);
+    }
+    hub.run_format(raw, vec![], None, None, 512);
+    let mut sounded = 0;
+    for _ in 0..64 {
+        raw += 512;
+        for source in &sources {
+            sounded += source
+                .run_format(raw, vec![], None, None, 512)
+                .values
+                .iter()
+                .filter(|(_, event)| event.attack().is_some())
+                .count();
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(
+        sounded, 256,
+        "a deferred sample is late, not lost: every retrigger still gets its assignment"
+    );
+    assert_eq!(
+        inspect_hub(&hub, |hub| (1..=16).map(|s| hub.test_inputs(s).len()).sum::<usize>()),
+        0,
+        "and the deferral leaves nothing behind once the next callback takes it"
+    );
+    for source in &sources {
+        raw += 512;
+        source.run_format(raw, vec![note(-1, -1, -1, 0, false)], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    for _ in 0..64 {
+        raw += 512;
+        for source in &sources {
+            source.run_format(raw, vec![], None, None, 512);
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert!(sources.iter().all(|source| source.source_snapshot().held == 0));
+    drop(sources);
+    drop(hub);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
+
+#[test]
+fn production_reset_retires_a_cohort_that_never_published_its_marker() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
-    source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
-    hub.run_format(1536, vec![], None, None, 512);
-    source.run_format(2048, vec![], None, None, 512);
-    hub.run_format(2048, vec![], None, None, 512);
-    assert_eq!(source.source_snapshot().held, 1);
-    source.run_format(2560, vec![note(2, 1, 64, 0, true)], None, None, 512);
-    let original = inspect_source(&source, |s| s.test_capture(2).unwrap());
     let hub_wrapper = unsafe {
         &*((*hub.plugin)
             .plugin_data
             .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
     };
+    // A full reply ring is the production route to a cohort that cannot
+    // publish its marker: the assignment is minted and owed but cannot enqueue.
     let fill = || {
         hub_wrapper.test_with_plugin(|plugin| {
-            let replies =
-                &mut plugin.aggregation.as_mut().unwrap().offer.as_mut().unwrap().bank.rows[0]
-                    .replies;
+            let hub = plugin.aggregation.as_mut().unwrap();
+            let replies = &mut hub.offer.as_mut().unwrap().bank.as_mut().unwrap().rows[0].replies;
             while replies.slots() != 0 {
                 replies
                     .push(protocol::Reply::PlanRetired {
@@ -3337,238 +2128,201 @@ fn production_terminal_abort_retires_delivery_before_waiting_for_factual_output(
                     })
                     .unwrap();
             }
-        })
+        });
     };
+    let mut raw = 1536;
+    source.run_format(raw, vec![note(1, 0, 60, 0, true)], None, None, 512);
     fill();
-    hub.run_format(2560, vec![], None, None, 512);
-    assert!(inspect_hub(&hub, |h| h.test_delivery_owed(0, original.life)));
-    assert_eq!(inspect_hub(&hub, |h| h.test_cohort_delivery().1), 1);
-    hub_wrapper
-        .test_with_plugin(|plugin| plugin.aggregation.as_mut().unwrap().test_request_recovery(2));
-    // The Source advances continuously ahead of the Hub. The established Off
-    // is actual accepted output, but the Hub cannot yet publish its time.
-    let mut source_raw = 2560;
-    for _ in 0..96 {
-        source_raw += 512;
-        assert!(source.run_format(source_raw, vec![], None, None, 512).values.is_empty());
-    }
-    source_raw += 512;
-    assert!(source
-        .run_format(source_raw, vec![note(1, 0, 60, 0, false)], None, None, 512)
-        .values
-        .is_empty());
-    source_raw += 512;
-    let off = source.run_format(source_raw, vec![], None, None, 512);
-    assert_eq!(off.values.iter().filter(|(_, e)| e.release()).count(), 1);
-    let mut hub_raw = 2560;
-    for _ in 0..96 {
-        fill();
-        hub_raw += 512;
-        hub.run_format(hub_raw, vec![], None, None, 512);
-        if inspect_hub(&hub, |h| h.test_recovery_progress()).contains("phase=Rebuild") {
+    hub.run_format(raw, vec![], None, None, 512);
+    for _ in 0..8 {
+        if inspect_hub(&hub, |hub| hub.test_cohort_delivery()).3 {
             break;
         }
-        source_raw += 512;
-        assert!(source.run_format(source_raw, vec![], None, None, 512).values.is_empty());
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        fill();
+        hub.run_format(raw, vec![], None, None, 512);
     }
-    assert!(inspect_hub(&hub, |h| h.test_recovery_progress()).contains("phase=Rebuild"));
-    assert!(inspect_hub(&hub, |h| h.test_recovery_output_waiting()));
-    assert_eq!(inspect_hub(&hub, |h| h.test_cohort_delivery().1), 1);
-    assert!(inspect_hub(&hub, |h| h.test_delivery_owed(0, original.life)));
-    // Actual input loss promotes this transaction while its output cut is
-    // still retained and publishes the original On's cancellation.
-    source_raw += 512;
-    source.run_status(
-        source_raw,
-        (0..2049).map(|_| raw_midi([0xf8, 0, 0], 0)).collect(),
-        None,
-        None,
-        512,
-        true,
+    let pending = inspect_hub(&hub, |hub| hub.test_cohort_delivery());
+    assert!(
+        pending.3 && pending.2 != 0,
+        "the fixture starts from a cohort holding an unpublished marker: {pending:?}"
     );
-    assert_ne!(source.source_snapshot().faults & source::INPUT_FAULT, 0);
-    assert_eq!(source.source_snapshot().manifest, 1);
-    fill();
-    hub_raw += 512;
-    println!(
-        "TERMINAL ABANDONMENT source={source_raw} hub={hub_raw} output_wait={} unsent={}",
-        inspect_hub(&hub, |h| h.test_recovery_output_waiting()),
-        inspect_hub(&hub, |h| h.test_cohort_delivery().1)
-    );
-    hub.run_format(hub_raw, vec![], None, None, 512);
-    assert!(inspect_hub(&hub, |h| h.test_recovery_progress()).contains("phase=Finish"));
-    assert!(inspect_hub(&hub, |h| h.test_recovery_output_waiting()));
-    assert_eq!(
-        inspect_hub(&hub, |h| h.test_plan_state(0, original.life)),
-        Some((true, true, true))
-    );
-    assert_eq!(inspect_hub(&hub, |h| h.test_cohort_delivery().1), 0);
-    assert!(!inspect_hub(&hub, |h| h.test_delivery_owed(0, original.life)));
-    while hub_raw < source_raw {
-        hub_raw += 512;
-        hub.run_format(hub_raw, vec![], None, None, 512);
+    // A latched terminal fault from the Source's own malformed input.
+    raw += 512;
+    let malformed = Input::Midi(clap_event_midi {
+        header: clap_event_header {
+            size: std::mem::size_of::<clap_event_header>() as u32,
+            ..header::<clap_event_midi>(CLAP_EVENT_MIDI, 0)
+        },
+        port_index: 0,
+        data: [0xf8, 0, 0],
+    });
+    source.run_status(raw, vec![malformed], None, None, 512, true);
+    hub.run_format(raw, vec![], None, None, 512);
+    for _ in 0..16 {
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
     }
+    assert!(
+        inspect_hub(&hub, |hub| hub.test_terminal_scope()).0,
+        "the fault latches the shared reset, which is what bypasses publish_cohort"
+    );
+    assert!(
+        inspect_hub(&hub, |hub| hub.test_cohort_delivery()).3,
+        "and leaves the marker unpublished across it"
+    );
+    let source_setup = source.shared();
+    let hub_setup = hub.shared();
+    source_setup.apply(source_setup.value().routing, true).unwrap();
+    hub_setup.apply(hub_setup.value().routing, true).unwrap();
     for _ in 0..256 {
-        source_raw += 512;
-        assert!(source.run_format(source_raw, vec![], None, None, 512).values.is_empty());
-        hub.run_format(source_raw, vec![], None, None, 512);
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        source.main();
+        hub.main();
+        if source.source_snapshot().faults == 0 {
+            break;
+        }
+    }
+    assert_eq!(source.source_snapshot().faults, 0, "the explicit reset settles");
+    let settled = inspect_hub(&hub, |hub| hub.test_cohort_delivery());
+    assert!(
+        !settled.3 && settled.2 == 0 && settled.1 == 0,
+        "the old session's commit barrier goes with it: {settled:?}"
+    );
+    let mut sounded = 0;
+    for step in 0..64 {
+        raw += 512;
+        let events = if step == 0 { vec![note(2, 0, 62, 0, true)] } else { vec![] };
+        sounded += source
+            .run_format(raw, events, None, None, 512)
+            .values
+            .iter()
+            .filter(|(_, event)| event.attack().is_some())
+            .count();
+        hub.run_format(raw, vec![], None, None, 512);
     }
     assert_eq!(
-        (
-            source.source_snapshot().pending,
-            source.source_snapshot().lives,
-            source.source_snapshot().held
-        ),
-        (0, 0, 0)
+        sounded, 1,
+        "a re-paired session sequences fresh input rather than returning on a dead barrier"
     );
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        vec![(1, 2)],
+        "and the Hub believes the note it assigned is the one that is sounding"
+    );
+    raw += 512;
+    source.run_format(raw, vec![note(-1, -1, -1, 0, false)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    for _ in 0..64 {
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
     drop(source);
     drop(hub);
     assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
 }
 
 #[test]
-fn production_destroyed_held_source_closes_pending_peer_without_fabricating_release() {
+fn production_a_full_sixty_four_voices_still_replace_one_of_their_own_in_one_callback() {
     let _scope = crate::test_scope::enter();
-    if std::env::var_os("HARMONIGRAPH_TERMINAL_OWNER_LOSS_CHILD").is_none() {
-        for mode in ["held", "empty", "ack"] {
-            assert!(std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "performance::tests::sequencing_tests::production_destroyed_held_source_closes_pending_peer_without_fabricating_release", "--nocapture", "--test-threads=1"])
-            .env("HARMONIGRAPH_TERMINAL_OWNER_LOSS_CHILD", mode).status().unwrap().success());
+    let musical = |sink: &Sink| {
+        sink.values
+            .iter()
+            .filter(|(_, event)| !matches!(event, Event::Midi { data: [0xf8, ..], .. }))
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    let (hub, source) = production_pair();
+    let mut raw = 1536;
+    let sounding =
+        (0..64).map(|index| note(index + 1, 0, 24 + index as i16, 0, true)).collect::<Vec<_>>();
+    source.run_format(raw, sounding, None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    loop {
+        raw += 512;
+        assert!(raw < 8192, "the sixty-four never sounded");
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        if source.source_snapshot().held == 64 {
+            break;
         }
-        return;
     }
-    let mode = std::env::var("HARMONIGRAPH_TERMINAL_OWNER_LOSS_CHILD").unwrap();
-    let held = mode == "held";
-    let ack_debt = mode == "ack";
-    // The real destroyed producer cannot accept an Off. Its physical debt
-    // intentionally retains an owner, isolated from unrelated registry tests.
-    let uuid = SavedUuid::default();
-    let calibration = Calibration { offset: 0 };
-    let mut hub = Device::new(false);
-    hub.configure_format(uuid, true, calibration);
-    hub.activate_format(44100.0, 512);
-    let mut a = Device::new(true);
-    a.configure_format(uuid, true, calibration);
-    a.activate_format(44100.0, 512);
-    let mut b = Device::new(true);
-    b.configure_format(uuid, true, calibration);
-    b.activate_format(44100.0, 512);
-    for raw in [0, 512, 1024] {
-        a.run_format(raw, vec![], None, None, 512);
-        b.run_format(raw, vec![], None, None, 512);
+    // Every one of the source's 64 reservations is spoken for, and the one this
+    // retrigger displaces stays charged until the Hub acknowledges its release
+    // — a whole round trip after the choke goes out. A replacement that had to
+    // find a 65th would emit its choke here and its onset in a later callback,
+    // leaving the key dead in between.
+    raw += 512;
+    source.run_format(raw, vec![note(200, 0, 24, 0, true)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    let replaced = loop {
+        raw += 512;
+        assert!(raw < 16384, "the retrigger never emitted");
+        let out = source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        if !musical(&out).is_empty() {
+            break out;
+        }
+    };
+    assert!(
+        matches!(
+            musical(&replaced)[..],
+            [
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, key: 24, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 200, key: 24, .. }),
+                (0, Event::Expression { kind: 2, id: 200, .. }),
+            ]
+        ),
+        "a full source replaces one of its own voices whole: {:?}",
+        musical(&replaced)
+    );
+    assert_eq!(
+        source.source_snapshot().held,
+        64,
+        "and the pair shares one reservation rather than needing a sixty-fifth"
+    );
+    // DIRECT reaches the same preparation with no round trip in the way, so its
+    // predecessor's release is unacknowledged for certain: choke and onset are
+    // in the callback the retrigger arrives in.
+    raw += 512;
+    let sounding =
+        (0..64).map(|index| note(index + 1, 0, 24 + index as i16, 0, true)).collect::<Vec<_>>();
+    source.run_format(raw, vec![], None, None, 512);
+    assert_eq!(hub.run_format(raw, sounding, None, None, 512).values.len(), 64);
+    raw += 512;
+    source.run_format(raw, vec![], None, None, 512);
+    let direct = hub.run_format(raw, vec![note(200, 0, 24, 0, true)], None, None, 512);
+    assert!(
+        matches!(
+            musical(&direct)[..],
+            [
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, key: 24, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 200, key: 24, .. }),
+            ]
+        ),
+        "DIRECT replaces its own voice the same way: {:?}",
+        musical(&direct)
+    );
+    let session = inspect_hub(&hub, |hub| hub.offer.as_ref().unwrap().session.clone());
+    let mut off = vec![note(200, 0, 24, 0, false)];
+    off.extend((1..64).map(|index| note(index + 1, 0, 24 + index as i16, 0, false)));
+    raw += 512;
+    source.run_format(raw, off.clone(), None, None, 512);
+    hub.run_format(raw, off, None, None, 512);
+    for _ in 0..16 {
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
         hub.run_format(raw, vec![], None, None, 512);
     }
-    a.run_format(1536, vec![], None, None, 512);
-    b.run_format(
-        1536,
-        if held {
-            vec![note(7, 0, 60, 0, true)]
-        } else if ack_debt {
-            vec![raw_midi([0xb0, 64, 0], 0), note(7, 0, 60, 0, true)]
-        } else {
-            vec![transport(0, 120.0)]
-        },
-        None,
-        None,
-        512,
-    );
-    hub.run_format(1536, vec![], None, None, 512);
-    a.run_format(2048, vec![], None, None, 512);
-    let mut stop = transport(0, 120.0);
-    let Input::Transport(ref mut event) = stop else { unreachable!() };
-    event.flags &= !CLAP_TRANSPORT_IS_PLAYING;
-    let b_output =
-        b.run_format(2048, if held || ack_debt { vec![] } else { vec![stop] }, None, None, 512);
-    assert_eq!(
-        b_output.values.iter().filter(|(_, e)| e.attack().is_some()).count(),
-        usize::from(held || ack_debt)
-    );
-    assert_eq!(
-        b.source_snapshot().faults,
-        0,
-        "empty healthy Stop is nonfatal without a controller seed"
-    );
-    hub.run_format(2048, vec![], None, None, 512);
-    a.run_format(
-        2560,
-        vec![note(8, 0, 64, 0, true), expression(8, 0.125, 10), note(8, 0, 64, 20, false)],
-        None,
-        None,
-        512,
-    );
-    let original = inspect_source(&a, |s| s.test_capture(1).unwrap());
-    b.run_format(
-        2560,
-        if ack_debt { vec![note(7, 0, 60, 0, false)] } else { vec![] },
-        None,
-        None,
-        512,
-    );
-    hub.run_format(2560, vec![], None, None, 512);
-    assert!(inspect_hub(&hub, |h| h.test_plan_binding(0, original.life)).is_some());
-    if ack_debt {
-        let off = b.run_format(3072, vec![], None, None, 512);
-        assert_eq!(off.values.iter().filter(|(_, e)| e.release()).count(), 1);
-        assert_eq!(b.source_snapshot().held, 1, "credit is still awaiting the unrun Hub ACK");
-        assert!(b.source_snapshot().sequence > b.source_snapshot().acknowledged);
-        inspect_source(&b, |s| {
-            assert_eq!(s.state.count(), 0);
-            assert!(!s.unknown_joined_wire_state(), "actual Off leaves no wire/debt evidence");
-            let channel = &s.state.channels()[0];
-            assert_eq!(channel.controllers[64], 0);
-            assert_ne!(channel.controller_valid[1] & 1, 0);
-            assert_eq!(
-                channel.controller_valid[1] & ((1 << 2) | (1 << 5)),
-                0,
-                "CC66/69 are still initially unknown"
-            );
-        });
-    } else {
-        assert_eq!(b.source_snapshot().held, usize::from(held));
-    }
-    let cut = b.source_snapshot().sequence;
-    let id = b.shared().registration().unwrap();
-    let session = registry::global().lock().unwrap().test_session(uuid);
-    drop(b);
-    assert_eq!(session.rows[1].faults.load(Ordering::Acquire) & source::REFERENCE_FAULT != 0, held);
-    let mut accepted = Vec::new();
-    for raw in (3072..134_144).step_by(512) {
-        // The Hub observes owner loss before the peer's next emission permit.
-        hub.run_format(raw, vec![], None, None, 512);
-        accepted.extend(
-            a.run_format(raw, vec![], None, None, 512)
-                .values
-                .into_iter()
-                .map(|(time, event)| (raw + i64::from(time), event)),
-        );
-        hub.main();
-        a.main();
-    }
-    assert_eq!(inspect_hub(&hub, |h| h.test_terminal_scope()).0, held);
-    if held {
-        assert!(accepted.is_empty(), "unclaimed peer group cannot emit after the observed close");
-    } else {
-        assert_eq!(
-            accepted.iter().map(|(time, _)| *time).collect::<Vec<_>>(),
-            [3072, 3072, 3082, 3092]
-        );
-        assert_eq!(accepted.iter().filter(|(_, e)| e.attack().is_some()).count(), 1);
-        assert_eq!(accepted.iter().filter(|(_, e)| e.release()).count(), 1);
-        assert_eq!(a.source_snapshot().faults, 0);
-    }
-    assert!(!inspect_hub(&hub, |h| h.test_recovery_progress()).contains("active=true"));
-    assert_eq!((a.source_snapshot().pending, a.source_snapshot().held), (0, 0));
-    if held {
-        let joined = inspect_hub(&hub, |h| h.test_joined_rows()[1]);
-        assert_eq!(joined.1, Some(cut));
-        assert!(joined.2);
-        let retained = registry::global().lock().unwrap().test_retired_source_state(id).unwrap();
-        assert_eq!((retained.held, retained.sequence), (1, cut));
-    }
-    drop(a);
-    drop(hub);
-    assert_eq!(
-        registry::global().lock().unwrap().test_counts(),
-        if held { (1, 1, 1) } else { (0, 0, 0) }
-    );
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
+    // An inherited reservation is still exactly one credit, carrying the
+    // predecessor's acknowledgement debt as well as the successor's, so the
+    // session comes back to nothing owed rather than one short.
+    assert_eq!(session.credits.load(Ordering::Acquire), 0);
 }

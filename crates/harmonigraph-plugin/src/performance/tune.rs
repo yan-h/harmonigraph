@@ -104,8 +104,8 @@ impl ClapPlugin for HarmonigraphTune {
     fn clap_performance_begin(&mut self, callback: api::Callback, _output: &mut api::Output<'_>) {
         self.source.as_mut().unwrap().begin(callback);
     }
-    fn clap_performance_input(&mut self, input: OwnedInput) -> api::Consumption {
-        self.source.as_mut().unwrap().input(input)
+    fn clap_performance_input(&mut self, input: OwnedInput) {
+        self.source.as_mut().unwrap().input(input);
     }
     fn clap_performance_input_boundary(&mut self) {
         self.source.as_mut().unwrap().apply_setup();

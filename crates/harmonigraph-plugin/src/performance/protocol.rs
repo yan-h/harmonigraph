@@ -3,7 +3,6 @@
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize};
 use std::sync::Arc;
 
-use harmonigraph_core::canonical::SourceBaseline;
 use harmonigraph_core::SourceId;
 
 use super::{clock::Coverage, event::Event, slots::Slots};
@@ -14,8 +13,21 @@ pub const INTENT_RING: usize = 1024;
 pub const REPLY_RING: usize = 1024;
 pub const OUTPUT_RING: usize = 2048;
 pub const OUTCOME_JOURNAL: usize = 4096;
+/// A request slot is held for as long as any in-flight input still addresses
+/// it, not for as long as its note sounds, so this tracks `PENDING_EVENTS`
+/// rather than `HELD_PER_SOURCE`. Both stay where they were; the plan ledger
+/// they size belongs to the per-pairing allocation, not to their depth.
 pub const PENDING_EVENTS: usize = 8192;
 pub const LIFETIMES: usize = 8192;
+/// Copied records the Hub stages per source between arrival and sequencing.
+/// One input can address every held note, so this is deeper than the number
+/// of inputs a callback can carry. Exhaustion is back pressure on the ring,
+/// which the Tune retries; it is not made unreachable by the size.
+pub const CAPTURES_PER_SOURCE: usize = 1024;
+/// Copied records the ordering pass may hold for one sample across all
+/// sources: sixteen tracks each choking every held note at the same sample is
+/// 1,040. Beyond it the pass latches rather than dropping an input.
+pub const BATCH_EVENTS: usize = 2048;
 pub const DELAY: i64 = 512;
 
 /// Four bytes retain all three outcomes without conflating an Off birth with
@@ -106,58 +118,94 @@ pub struct Lease {
     pub slot: u8,
 }
 
-/// Hub-owned immutable emission fence. Generation is the packed OPEN word;
-/// closing preserves its BUSY bit until the Source durably completes the group.
+/// One copied, self-contained input record. Everything the Hub needs to order
+/// and assign this input is here; nothing points back into Tune storage.
+///
+/// The Tune emits one record per addressed target, so a wildcard release or a
+/// channel termination becomes one record per held note rather than one record
+/// carrying a 64-wide fan-out. That keeps the cell fixed-size and bounds the
+/// traffic by the notes actually sounding.
+#[derive(Clone, Copy, Debug)]
+pub struct Capture {
+    pub lease: Lease,
+    /// Reset generation. A reply minted under a different epoch is obsolete.
+    pub epoch: u64,
+    /// The original input's own sequence at its source. Several records share
+    /// one serial when that one input addressed several notes.
+    pub serial: u64,
+    /// Input sample already mapped into the Hub's timebase.
+    pub sample: i64,
+    pub kind: CaptureKind,
+    /// Request slot of the addressed note, or `NO_REQUEST`.
+    pub request: u16,
+    /// Birth serial of the addressed note, or zero when none is addressed.
+    pub lifetime: u64,
+    pub channel: u8,
+    pub key: u8,
+    /// This onset asks for an adaptive assignment.
+    pub adaptive: bool,
+}
+pub const NO_REQUEST: u16 = u16::MAX;
+
+impl Capture {
+    pub fn onset(self) -> bool {
+        matches!(self.kind, CaptureKind::Onset)
+    }
+    /// Merge order inside one sample: every release and controller from every
+    /// source applies before any onset, and onsets then run in the musical
+    /// key/channel/source tie-break. Ties inside each half fall back to the
+    /// original per-source input order, which copying preserves.
+    pub fn order(self) -> (bool, u8, u8, u8, u64) {
+        if self.onset() {
+            (true, self.key, self.channel, self.lease.slot, self.serial)
+        } else {
+            (false, 0, 0, self.lease.slot, self.serial)
+        }
+    }
+}
+
+/// What one copied record does to the Hub's musical state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CaptureKind {
+    Onset,
+    /// Ends the addressed note: its own release, a same-key replacement's
+    /// choke, or one held note's share of a channel termination.
+    Terminal,
+    /// Per-note pitch expression addressed to one note.
+    Tuning {
+        value_bits: u64,
+    },
+    /// A shared channel controller, carrying its channel in the record. It
+    /// addresses no note of its own; the notes a termination ends arrive as
+    /// their own Terminal records.
+    Channel,
+    Participation(bool),
+    /// This source's transport Stop. It ends every note the source is playing
+    /// — the sounding ones by emergency release, the unsounded ones by
+    /// cancellation — and neither ending becomes an addressed Terminal record.
+    Stop,
+    /// Note-addressed expression and everything else the Hub keeps only as
+    /// chronological context.
+    Other,
+}
+
+/// Exactly the identity a reply needs to reach one request and to be refused
+/// after a reset, a re-pairing or a request-slot reuse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Fence {
+pub struct Request {
     pub lease: Lease,
     pub epoch: u64,
-    pub transaction: u64,
-    pub generation: u64,
-    pub from_decision: u64,
-    pub terminal: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RequestOutcome {
-    Retained,
-    Accepted,
-    Partial,
-    Canceled,
-}
-
-/// Reconciliation identity and outcome. Original input timing remains owned by
-/// Source Life/Capture and accepted OutputDelta, not this inventory projection.
-#[derive(Clone, Copy, Debug)]
-pub struct RequestInventory {
+    /// The onset's own input serial.
+    pub serial: u64,
+    /// The Tune's request slot.
+    pub request: u16,
+    /// The addressed note's birth serial.
     pub lifetime: u64,
-    pub on_serial: u64,
-    pub decision: u64,
-    pub configuration: harmonigraph_core::configuration::ResolvedConfig,
-    pub life: u16,
-    pub outcome: RequestOutcome,
 }
 
-/// One owned 64-entry window, independent of Capture ingress. Common identity
-/// stays in the header; records confer no remote CaptureArena read permission.
-pub struct InventoryChunk {
-    pub fence: Fence,
-    pub arena: usize,
-    pub input_cut: u64,
-    pub lifetime_cut: u64,
-    pub output_cut: u64,
-    pub sequence: u32,
-    pub total: u32,
-    pub first: u32,
-    pub count: u8,
-    pub records: [Option<RequestInventory>; 64],
-}
-
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Intent {
-    Capture(super::capture::Token),
-    /// Hub-local phase of the same retained ingress slot, never Source output.
-    CaptureRetirement(super::capture::Retirement),
+    Capture(Capture),
     Coverage {
         incarnation: u64,
         epoch: u64,
@@ -177,24 +225,11 @@ pub enum Intent {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Reply {
-    InventoryComplete {
-        fence: Fence,
-        input_cut: u64,
-        total: u32,
-        chunks: u32,
-    },
-    Fence(Fence),
-    RecoveryComplete {
-        fence: Fence,
-        generation: u64,
-        boundary: i64,
-    },
     CohortCommitted {
         lease: Lease,
         epoch: u64,
         through: u64,
     },
-    CaptureStatusQuery(super::capture::Key),
     PlanRetired {
         incarnation: u64,
         epoch: u64,
@@ -203,20 +238,17 @@ pub enum Reply {
         decision: u64,
     },
     Assignment {
-        key: super::capture::Key,
-        life: u16,
-        lifetime: u64,
+        request: Request,
         binding: Assignment,
     },
-    /// All immutable reads and remote references ended for exactly this capture.
-    CaptureRetired(super::capture::Key),
-    Baseline {
+    /// This Tune is enrolled in the session at revision `membership`, from
+    /// coverage `start` onward. A `start` beyond what the Tune adopted with
+    /// is a join floor: the Hub has already published past that point, so the
+    /// Tune rejoins from there instead. Carries no held-note snapshot — the
+    /// pairing boundary is a reset, so there is nothing sounding to hand over.
+    Enrolled {
         incarnation: u64,
         epoch: u64,
-        transaction: u64,
-        cut: u64,
-        // The producer already publishes the revision it owns. #616 consumes
-        // this acknowledgement when binding assignment/input cohorts.
         membership: u64,
         start: i64,
     },
@@ -239,17 +271,6 @@ pub enum Reply {
     },
 }
 
-/// Original-consumer identity is meaningful only under the receiver's retained
-/// lease/epoch/capture permissions and monotonic output cut. Synthetic output
-/// has no original consumer, including injected tuning and channel setup replay.
-#[derive(Clone, Copy, Debug)]
-pub struct OutputOrigin {
-    pub parent: u16,
-}
-impl OutputOrigin {
-    pub const NONE: Self = Self { parent: u16::MAX };
-}
-
 /// Explicit compact discriminator avoids paying a second aligned enum tag in
 /// every 128-byte output cell. 0/1 are physical wire facts;120/123 are logical
 /// terminals whose separately accepted raw controller owns wire_sequence.
@@ -257,16 +278,15 @@ impl OutputOrigin {
 pub struct Outcome {
     wire_sequence: u64,
     pub request: u16,
-    pub origin: OutputOrigin,
     tag: u8,
 }
 impl Outcome {
-    pub fn wire(request: u16, origin: OutputOrigin, partial: bool) -> Self {
-        Self { wire_sequence: 0, request, origin, tag: u8::from(partial) }
+    pub fn wire(request: u16, partial: bool) -> Self {
+        Self { wire_sequence: 0, request, tag: u8::from(partial) }
     }
-    pub fn channel(wire_sequence: u64, controller: u8, request: u16, origin: OutputOrigin) -> Self {
+    pub fn channel(wire_sequence: u64, controller: u8, request: u16) -> Self {
         assert!(matches!(controller, 120 | 123));
-        Self { wire_sequence, request, origin, tag: controller }
+        Self { wire_sequence, request, tag: controller }
     }
     pub fn is_wire(self) -> bool {
         self.tag <= 1
@@ -299,16 +319,6 @@ pub struct OutputDelta {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Control {
-    RevokeAck {
-        fence: Fence,
-        input_cut: u64,
-        output_cut: u64,
-        settled_attempt: u64,
-    },
-    CaptureStatus {
-        key: super::capture::Key,
-        status: Option<CaptureStatus>,
-    },
     Disposition {
         incarnation: u64,
         epoch: u64,
@@ -318,12 +328,15 @@ pub enum Control {
         request: u16,
         original_on: bool,
     },
+    /// The join request. Everything the Hub needs to enroll this row: no
+    /// separate snapshot follows it, because the Tune reset at this boundary.
     Adopt {
         lease: Lease,
         epoch: u64,
         coverage: Coverage,
         output_cut: u64,
         input_start_cut: u64,
+        participating: bool,
     },
     Progress {
         incarnation: u64,
@@ -352,19 +365,8 @@ pub enum Control {
     },
 }
 
-/// Copied only by the Source owner, after every indicated original effect has
-/// durably recorded its actual output or received its exact no-wire settlement.
-/// The cut bounds those effects; later unrelated output cannot move this proof.
-#[derive(Clone, Copy, Debug)]
-pub struct CaptureStatus {
-    pub output_cut: u64,
-    pub work_done: u64,
-    pub inline_done: bool,
-}
-
 /// Partition the existing pair: ordinary progress owns cell zero, while exact
 /// capture status and cancellation acknowledgements always have cell one.
-/// Attachment and baseline pairs retain their existing two-cell semantics.
 pub struct SourceSlots<T>(Slots<T>);
 impl<T> Default for SourceSlots<T> {
     fn default() -> Self {
@@ -397,14 +399,6 @@ impl<T: Copy> SourceSlots<T> {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct Baseline {
-    pub incarnation: u64,
-    pub epoch: u64,
-    pub frame: SourceBaseline,
-    pub start: i64,
-}
-
 pub struct SourceControl {
     pub expected_incarnation: AtomicU64,
     pub faults: AtomicU32,
@@ -414,8 +408,11 @@ pub struct SourceControl {
     pub emission_gate: AtomicU64,
     pub to_hub: SourceSlots<Control>,
     pub to_source: SourceSlots<Reply>,
-    pub baselines: Slots<Baseline>,
-    pub inventory: Arc<Slots<InventoryChunk, 1>>,
+    /// This row's storage on its way from the registry's pairing boundary to
+    /// the Hub. Cell zero only; the Hub keeps what it takes, so a row that is
+    /// ever paired is built once, off audio, and reused if it pairs again.
+    pub store: Slots<super::hub::RowStore>,
+    pub store_held: AtomicBool,
 }
 impl Default for SourceControl {
     fn default() -> Self {
@@ -428,8 +425,8 @@ impl Default for SourceControl {
             emission_gate: AtomicU64::new(2),
             to_hub: SourceSlots::default(),
             to_source: SourceSlots::default(),
-            baselines: Slots::default(),
-            inventory: Arc::new(Slots::default()),
+            store: Slots::default(),
+            store_held: AtomicBool::new(false),
         }
     }
 }
@@ -480,14 +477,13 @@ pub fn bank() -> (Box<HubBank>, [Option<SourceEndpoints>; TUNERS]) {
 }
 
 const _: () = assert!(std::mem::size_of::<OutputDelta>() <= 128);
+const _: () = assert!(std::mem::size_of::<Capture>() <= 96);
+const _: () = assert!(std::mem::size_of::<Option<Capture>>() <= 96);
 const _: () = assert!(std::mem::size_of::<Intent>() <= 128);
 const _: () = assert!(std::mem::size_of::<Reply>() <= 256);
 const _: () = assert!(std::mem::size_of::<Control>() <= 256);
-const _: () = assert!(std::mem::size_of::<Baseline>() <= 16384);
 // Hub windows and journals allocate Option payloads, not just the bare wire type.
 const _: () = assert!(std::mem::size_of::<Option<OutputDelta>>() <= 128);
 const _: () = assert!(std::mem::size_of::<Option<Intent>>() <= 128);
-const _: () = assert!(std::mem::size_of::<Option<Baseline>>() <= 16384);
 const _: () = assert!(std::mem::align_of::<Option<OutputDelta>>() <= 8);
 const _: () = assert!(std::mem::align_of::<Option<Intent>>() <= 8);
-const _: () = assert!(std::mem::align_of::<Option<Baseline>>() <= 8);

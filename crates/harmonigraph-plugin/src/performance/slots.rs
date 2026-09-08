@@ -38,24 +38,6 @@ pub struct Reservation<'a, T> {
 }
 
 impl<T, const N: usize> Slots<T, N> {
-    /// Retain the actual shared payload without copying a large chunk into a
-    /// second owner. The guard keeps Reading until bounded application ends.
-    pub fn read_owned(self: &Arc<Self>) -> Option<ReadGuard<T, N>> {
-        for (index, slot) in self.cells.iter().enumerate() {
-            if slot
-                .state
-                .compare_exchange(READY, READING, Ordering::Acquire, Ordering::Relaxed)
-                .is_ok()
-            {
-                return Some(ReadGuard {
-                    slots: self.clone(),
-                    index,
-                    value: std::marker::PhantomData,
-                });
-            }
-        }
-        None
-    }
     pub(super) fn reserve_at(&self, index: usize) -> Option<Reservation<'_, T>> {
         let slot = &self.cells[index];
         slot.state
@@ -186,26 +168,11 @@ pub struct OwnedReservation<T, const N: usize = 2> {
     published: bool,
 }
 impl<T, const N: usize> OwnedReservation<T, N> {
-    pub fn initialize(&mut self, value: T) {
-        // SAFETY: Writing excludes every reader and other writer.
-        let cell = unsafe { &mut *self.slots.cells[self.index].value.get() };
-        assert!(cell.is_none());
-        *cell = Some(value);
-    }
-    pub fn value_mut(&mut self) -> &mut T {
-        // SAFETY: this unique guard owns Writing for the whole borrow.
-        unsafe { (*self.slots.cells[self.index].value.get()).as_mut().expect("initialized writer") }
-    }
-    pub fn publish_initialized(mut self) {
-        assert!(unsafe { (*self.slots.cells[self.index].value.get()).is_some() });
-        self.published = true;
-        self.slots.cells[self.index].state.store(READY, Ordering::Release);
-    }
     pub fn publish(mut self, value: T) {
         let slot = &self.slots.cells[self.index];
         // SAFETY: this owned reservation acquired Writing and pins the slot.
         unsafe {
-            assert!((*slot.value.get()).is_none(), "use publish_initialized for a retained writer");
+            assert!((*slot.value.get()).is_none());
             *slot.value.get() = Some(value);
         }
         self.published = true;
@@ -221,30 +188,6 @@ impl<T, const N: usize> Drop for OwnedReservation<T, N> {
             }
             self.slots.cells[self.index].state.store(EMPTY, Ordering::Release);
         }
-    }
-}
-
-pub struct ReadGuard<T, const N: usize = 2> {
-    slots: Arc<Slots<T, N>>,
-    index: usize,
-    // value() exposes &T, so sharing this guard requires T: Sync even though
-    // the exclusive slot itself may safely transport a merely Send payload.
-    value: std::marker::PhantomData<T>,
-}
-impl<T, const N: usize> ReadGuard<T, N> {
-    pub fn value(&self) -> &T {
-        // SAFETY: Reading excludes writes until this pinned guard is dropped.
-        unsafe { (*self.slots.cells[self.index].value.get()).as_ref().expect("published reader") }
-    }
-}
-impl<T, const N: usize> Drop for ReadGuard<T, N> {
-    fn drop(&mut self) {
-        let slot = &self.slots.cells[self.index];
-        // SAFETY: this guard exclusively owns Reading, including destruction.
-        unsafe {
-            *slot.value.get() = None;
-        }
-        slot.state.store(EMPTY, Ordering::Release);
     }
 }
 

@@ -542,6 +542,66 @@ fn production_musical_dfa_permutations_include_each_predecessor() {
 }
 
 #[test]
+fn production_musical_ii_v_i_keeps_each_common_tone_through_the_change() {
+    let _scope = crate::test_scope::enter();
+    use harmonigraph_core::tuning::PitchClass;
+    let tuning = Tuning::just();
+    let mut phrase = Phrase::new();
+    let expect = |phrase: &Phrase, source: usize, key: u8, node: LatticePos| {
+        let voice = phrase.voice(source, key, 0);
+        assert_eq!(voice.attack_node, Some(node), "source {source} key {key}");
+        assert_eq!(PitchClass::from_microcents(voice.pitch_microcents), tuning.pitch_class(node));
+        voice
+    };
+    // ii, one voice per Tune at one sample.
+    phrase.step(
+        [
+            vec![note(10, 0, 50, 0, true)],
+            vec![note(11, 0, 53, 0, true)],
+            vec![note(12, 0, 57, 0, true)],
+        ],
+        [0, 1, 2],
+    );
+    phrase.idle();
+    let d = expect(&phrase, 0, 50, LatticePos::new(2, 0, 0));
+    expect(&phrase, 1, 53, LatticePos::new(3, -1, 0));
+    expect(&phrase, 2, 57, LatticePos::new(3, 0, 0));
+    // V. D is the common tone: the two voices it replaces release and their
+    // successors start in the same callback, so every terminal reaches the
+    // Hub's context before an onset is scored against what is left. The Tune
+    // carrying the LOWER new key runs second, so key order rather than
+    // callback order has to decide the assignment chain.
+    phrase.step(
+        [
+            vec![],
+            vec![note(11, 0, 53, 0, false), note(21, 0, 59, 0, true)],
+            vec![note(12, 0, 57, 0, false), note(22, 0, 55, 0, true)],
+        ],
+        [0, 1, 2],
+    );
+    phrase.idle();
+    let g = expect(&phrase, 2, 55, LatticePos::new(1, 0, 0));
+    let b = expect(&phrase, 1, 59, LatticePos::new(1, 1, 0));
+    assert!(g.decision < b.decision, "G is assigned before B, and B sees it");
+    assert_eq!(phrase.voice(0, 50, 0), d, "the common tone is neither restarted nor retuned");
+    // I. G is now the common tone, and again the lower new key runs later.
+    phrase.step(
+        [
+            vec![note(10, 0, 50, 0, false), note(30, 0, 52, 0, true)],
+            vec![note(21, 0, 59, 0, false), note(31, 0, 48, 0, true)],
+            vec![],
+        ],
+        [0, 1, 2],
+    );
+    phrase.idle();
+    let c = expect(&phrase, 1, 48, LatticePos::ORIGIN);
+    let e = expect(&phrase, 0, 52, LatticePos::new(0, 1, 0));
+    assert!(c.decision < e.decision, "C is assigned before E, and E sees it");
+    assert_eq!(phrase.voice(2, 55, 0), g, "the common tone is neither restarted nor retuned");
+    phrase.release_all();
+}
+
+#[test]
 fn production_musical_released_history_is_source_channel_specific_and_off_clears_it() {
     let _scope = crate::test_scope::enter();
     let mut phrase = Phrase::new();
@@ -832,7 +892,7 @@ fn production_musical_normal_phrase_overrides_bends_and_keeps_old_configuration_
 }
 
 #[test]
-fn production_musical_configuration_and_stop_recovery_clear_history() {
+fn production_musical_a_configuration_edit_clears_history_and_a_transport_stop_does_not() {
     let _scope = crate::test_scope::enter();
     for stop in [false, true] {
         let mut phrase = Phrase::new();
@@ -844,8 +904,10 @@ fn production_musical_configuration_and_stop_recovery_clear_history() {
         phrase.idle();
         let held = phrase.voice(0, 50, 0);
         if stop {
-            // Releasing this held D at Stop changes actual output and reaches
-            // recovery. A silent Stop in the same epoch need not clear history.
+            // Stop terminates this held D downstream. It is not one of the
+            // Hub's history boundaries -- those are a configuration revision,
+            // a participation toggle, a re-pairing and a clock reset -- so the
+            // prospective spelling of a key survives it.
             phrase.step(std::array::from_fn(|_| vec![transport(0, 120.0)]), [0, 1, 2]);
             phrase.step(
                 std::array::from_fn(|_| {
@@ -879,10 +941,16 @@ fn production_musical_configuration_and_stop_recovery_clear_history() {
         }
         phrase.step([vec![], vec![], vec![note(4, 0, 52, 0, true)]], [0, 1, 2]);
         phrase.idle();
+        // Measured with a probe on `assign_new_note`: the configuration edit
+        // hands the policy `history=None` and E is re-derived against the
+        // sounding D, while the Stop hands it `Some(0,1,0)` and E is recalled.
+        // Both branches read (4,0,0) until the Hub stopped leaving a Stop's
+        // released voice in its context: the duplicate D outweighed the recall.
+        let node = if stop { LatticePos::new(0, 1, 0) } else { LatticePos::new(4, 0, 0) };
         assert_eq!(
             phrase.voice(2, 52, 0).attack_node,
-            Some(LatticePos::new(4, 0, 0)),
-            "boundary stop={stop} removes release-surviving E history"
+            Some(node),
+            "stop={stop}: only a configuration revision clears released E history"
         );
         phrase.release_all();
     }

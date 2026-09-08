@@ -5,7 +5,13 @@
 use super::*;
 use harmonigraph_core::LatticePos;
 
-const KEYS: usize = (TUNERS + 1) * ACTUAL_KEYS_PER_SOURCE;
+/// This table's own key directory: one cell per (source, channel, key). It is
+/// a bounded direct address, not a hint — nothing here needs a fallback scan.
+const KEYS_PER_SOURCE: usize = 16 * 128;
+const KEYS: usize = (TUNERS + 1) * KEYS_PER_SOURCE;
+fn address(lease: Lease, channel: u8, key: u8) -> usize {
+    usize::from(lease.slot) * KEYS_PER_SOURCE + usize::from(channel) * 128 + usize::from(key)
+}
 
 #[derive(Clone, Copy, Default)]
 struct Entry {
@@ -49,7 +55,7 @@ impl History {
         key: u8,
         revision: u64,
     ) -> Option<LatticePos> {
-        let entry = self.prospective[actual_address(lease, channel, key)];
+        let entry = self.prospective[address(lease, channel, key)];
         (self.revision == Some(revision)
             && entry.revision == revision
             && entry.incarnation == lease.incarnation
@@ -64,7 +70,7 @@ impl History {
         {
             return;
         }
-        let entry = &mut self.prospective[actual_address(lease, channel, key)];
+        let entry = &mut self.prospective[address(lease, channel, key)];
         if entry.decision >= binding.decision {
             return;
         }
@@ -92,7 +98,7 @@ fn a_clear_cannot_be_undone_on_the_prospective_table() {
     let mut binding =
         Assignment { decision: 1, selection: Selection::Node([0, 1, 0]), ..Assignment::default() };
     let revision = binding.configuration.revision;
-    let address = actual_address(lease, 0, 64);
+    let address = address(lease, 0, 64);
     history.configuration(revision, 0);
     history.commit(lease, 0, 64, binding);
     assert_eq!(history.previous(lease, 0, 64, revision), binding.node());

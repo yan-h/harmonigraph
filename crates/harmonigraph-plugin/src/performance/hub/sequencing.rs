@@ -1,52 +1,24 @@
 //! The Hub's owned original-input cursor, separate from actual-output progress.
 use super::*;
-use harmonigraph_core::cohort::{self, EventPhase, TargetAccess};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::{policy, LatticePos, PitchClass};
-#[cfg(test)]
-mod actual_lookup_tests;
 mod history;
-mod recovery;
 
 #[derive(Clone, Copy)]
-struct Plan {
-    key: super::super::capture::Key,
-    lifetime: u64,
+pub(super) struct Plan {
+    request: Request,
     binding: Assignment,
     /// Expected input-to-output translation for this exact decision. Replayed
     /// plans start at their acknowledged boundary; accepted onsets freeze it.
     shift: i64,
     sent: bool,
     terminal: bool,
-    inventoried: bool,
     accepted: bool,
     bound: bool,
-    replay: u8,
     next: u32,
     previous: u32,
 }
 const NO_PLAN: u32 = u32::MAX;
-const NO_VOICE: u16 = u16::MAX;
-const PREFIX: u8 = 1;
-
-/// Physical factual slots are independent of request/Plan ownership and of
-/// State's packed voice array. This directory is only a bounded lookup hint.
-const ACTUAL_KEYS_PER_SOURCE: usize = 16 * 128;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ActualKey {
-    lease: Lease,
-    epoch: u64,
-    lifetime: u64,
-}
-fn actual_address(lease: Lease, channel: u8, key: u8) -> usize {
-    usize::from(lease.slot) * ACTUAL_KEYS_PER_SOURCE + usize::from(channel) * 128 + usize::from(key)
-}
-
-pub(super) struct ActualLookup {
-    key: ActualKey,
-    index: u16,
-    address: Option<usize>,
-}
 
 #[derive(Clone, Copy, PartialEq)]
 struct Voice {
@@ -100,12 +72,10 @@ pub(super) struct Sequencer {
     pub retired: bool,
     pub terminal_session: bool,
     pub terminal_sources: u16,
-    pub heads: [Option<usize>; TUNERS + 1],
     pub captured: [u64; TUNERS + 1],
     membership: Option<Membership>,
     config: Option<ResolvedConfig>,
     binding_sample: i64,
-    assembling: usize,
     pub(super) decision: u64,
     cohort_floor: u64,
     cohort_unsent: usize,
@@ -113,19 +83,25 @@ pub(super) struct Sequencer {
     committing: bool,
     pub finalized: Option<i64>,
     pub copied: Option<i64>,
-    plans: Box<[Option<Plan>]>,
+    /// One LIFETIMES-long ledger per PAIRED row, and nothing at all for a row
+    /// that has never been paired. The registry allocates a row's ledger on
+    /// the main thread when it hands out that row's lease; the Hub only ever
+    /// moves the box in. Plan indices stay flat — `row * LIFETIMES + request` —
+    /// so the intrusive list still links freely across rows.
+    plans: [Option<Box<[Option<Plan>]>>; TUNERS],
     plan_head: u32,
     plan_tail: u32,
     plan_cursor: u32,
     plan_left: usize,
     plan_count: usize,
     plan_work: usize,
+    /// Every note the Hub believes is sounding, prospective and factual in one
+    /// table: a copied onset record puts a voice here with the pitch it was
+    /// assigned, and the accepted output that realizes it snaps that pitch to
+    /// the exact wire value. A terminal record removes it. The Hub's own
+    /// authoritative sounding-note facts stay where they always were, in each
+    /// row's `State`; this is the policy's context, not a second copy of them.
     context: Box<[Option<Voice>]>,
-    actual: Box<[Option<Voice>]>,
-    actual_keys: Box<[Option<ActualKey>]>,
-    actual_index: Box<[u16]>,
-    actual_free: Vec<u16>,
-    actual_revision: u64,
     pub(super) history: history::History,
     policy: Box<policy::PolicyScratch>,
     policy_context: Box<[policy::ContextPitch]>,
@@ -135,7 +111,6 @@ pub(super) struct Sequencer {
     pub extra_delay: u64,
     #[cfg(test)]
     policy_counts: [usize; 3],
-    recovery: recovery::Recovery,
 }
 impl Default for Sequencer {
     fn default() -> Self {
@@ -143,12 +118,10 @@ impl Default for Sequencer {
             retired: false,
             terminal_session: false,
             terminal_sources: 0,
-            heads: [None; TUNERS + 1],
             captured: [0; TUNERS + 1],
             membership: None,
             config: None,
             binding_sample: 0,
-            assembling: 0,
             decision: 0,
             cohort_floor: 0,
             cohort_unsent: 0,
@@ -158,7 +131,7 @@ impl Default for Sequencer {
             copied: None,
             // DIRECT has no plan row. Birth indices are already separately
             // reserved at Source; they are never authority without the key.
-            plans: vec![None; TUNERS * LIFETIMES].into_boxed_slice(),
+            plans: std::array::from_fn(|_| None),
             plan_head: NO_PLAN,
             plan_tail: NO_PLAN,
             plan_cursor: NO_PLAN,
@@ -166,11 +139,6 @@ impl Default for Sequencer {
             plan_count: 0,
             plan_work: 0,
             context: vec![None; HELD_SESSION].into_boxed_slice(),
-            actual: vec![None; HELD_SESSION].into_boxed_slice(),
-            actual_keys: vec![None; HELD_SESSION].into_boxed_slice(),
-            actual_index: vec![NO_VOICE; (TUNERS + 1) * ACTUAL_KEYS_PER_SOURCE].into_boxed_slice(),
-            actual_free: (0..HELD_SESSION as u16).rev().collect(),
-            actual_revision: 0,
             history: history::History::default(),
             policy: Box::default(),
             policy_context: vec![
@@ -187,142 +155,106 @@ impl Default for Sequencer {
             extra_delay: 0,
             #[cfg(test)]
             policy_counts: [0; 3],
-            recovery: recovery::Recovery::default(),
         }
     }
 }
 impl Sequencer {
-    /// Received accepted output is already factual evidence even when another
-    /// Source has not yet supplied the complete canonical publication frontier.
-    /// Collection deduplicates its exact output sequence before calling this.
-    pub(super) fn received_divergence(
-        &self,
-        source: usize,
-        lease: Lease,
-        output: OutputDelta,
-    ) -> Option<u64> {
-        if !output.mapped
-            || !(output.event.attack().is_some()
-                || output.event.release()
-                || matches!(output.event, super::super::event::Event::Expression { kind: 2, .. }))
-            || usize::from(output.outcome.request) >= LIFETIMES
-        {
-            return None;
-        }
-        let plan = self.plans[source * LIFETIMES + usize::from(output.outcome.request)]?;
-        (plan.bound
-            && plan.key.lease == lease
-            && plan.key.epoch == output.epoch
-            && lease.incarnation == output.incarnation
-            && plan.lifetime == output.lifetime
-            && plan.binding.decision == output.decision
-            && output.input.checked_add(plan.shift).is_some_and(|planned| output.actual != planned))
-        .then_some(plan.binding.decision)
-    }
-
-    pub(super) fn can_reset_clock_context(&self) -> bool {
-        self.actual_revision.checked_add(1).is_some()
-    }
+    /// A clock boundary empties the Hub's belief about what is sounding.
+    ///
+    /// Nothing is reseeded across it. The copied input records own every cell
+    /// here and number their notes in the Tune's own lifetime space, so a
+    /// voice put here from anywhere else is a voice no later Terminal record
+    /// can address — it would sit in the policy's context until the next
+    /// clock boundary swept it out. The DIRECT observation this used to be
+    /// seeded from keeps its own held notes in `Direct::state`, which is
+    /// where display and recording read them; and a boundary is only
+    /// committed once forwarding has settled, so nothing is still sounding
+    /// for the seeded voices to have represented.
     pub(super) fn clear_clock_context(&mut self) {
         self.history.clear_all(self.decision);
-        let revision = self.actual_revision.checked_add(1).expect("preflighted clock boundary");
-        self.actual_free.clear();
-        for index in 0..HELD_SESSION {
-            self.context[index] = None;
-            self.actual[index] = None;
-            self.actual_keys[index] = None;
-            self.actual_free.push((HELD_SESSION - 1 - index) as u16);
+        for cell in self.context.iter_mut() {
+            *cell = None;
         }
-        self.actual_revision = revision;
     }
-    pub(super) fn reset_clock_context(&mut self, lease: Lease, epoch: u64, direct: &State) {
-        self.clear_clock_context();
-        // A discontinuous reset has already cleared this observed-input State.
-        // A healthy reanchor preserves it, independently of forwarding's paid
-        // termination. Rebind those same factual lifetimes to the new clock.
-        for voice in direct.voices() {
-            let index = self.actual_free.pop().expect("at most 64 DIRECT voices");
-            let value = Voice::factual(0, voice);
-            self.actual[usize::from(index)] = Some(value);
-            self.context[usize::from(index)] = Some(value);
-            self.actual_keys[usize::from(index)] =
-                Some(ActualKey { lease, epoch, lifetime: voice.lifetime });
-            self.actual_index[actual_address(lease, voice.channel, voice.note)] = index;
-        }
-        // Absent identities invalidate old hints without scanning the 34816
-        // address directory. No physical debt may reach this committed cut.
+    /// A settled reset retires the cohort still in flight along with the
+    /// session that owned it.
+    ///
+    /// A cohort stays `committing` whenever its marker cannot be published --
+    /// a full reply ring or a spent plan budget is enough -- and a terminal
+    /// fault then leaves it there, because the faulted path never reaches
+    /// `publish_cohort`. Its recipients' leases die at this boundary, so the
+    /// barrier could never be satisfied again: `publish_cohort` refuses on the
+    /// lease mismatch and `sequence_inputs` returns on it before it looks at
+    /// any fresh input. Epoch validation retires the obsolete REPLIES; nothing
+    /// retired the coordinator work that was waiting for them.
+    ///
+    /// The floor moves with the debt. Every plan the old cohort minted has a
+    /// decision at or below the current one, so clearing the debt without
+    /// moving the floor would leave those plans claiming a delivery against a
+    /// count of zero -- which `service_plans` reads as broken accounting and
+    /// latches.
+    pub(super) fn retire_cohort(&mut self) {
+        self.committing = false;
+        self.cohort_recipients = 0;
+        self.cohort_unsent = 0;
+        self.cohort_floor = self.decision;
+        self.membership = None;
+        self.config = None;
     }
-    pub(super) fn recovering(&self) -> bool {
-        self.recovery.active
+    pub(super) fn install_plan_row(&mut self, row: usize, ledger: Box<[Option<Plan>]>) {
+        self.plans[row] = Some(ledger);
     }
-    pub(super) fn diagnostic_recovery(&self) -> (i64, i64) {
-        self.recovery.diagnostic_state()
+    #[cfg(test)]
+    fn plan_ledger_bytes(&self) -> usize {
+        self.plans.iter().flatten().map(|row| std::mem::size_of_val(&**row)).sum()
     }
-    pub(super) fn revoke_ack(
-        &mut self,
-        source: usize,
-        fence: Fence,
-        input_cut: u64,
-        output_cut: u64,
-        settled_attempt: u64,
-    ) {
-        self.recovery.acknowledge(source, fence, input_cut, output_cut, settled_attempt);
+    fn plan(&self, index: usize) -> Option<Plan> {
+        self.plans[index / LIFETIMES].as_ref()?[index % LIFETIMES]
+    }
+    fn plan_mut(&mut self, index: usize) -> Option<&mut Plan> {
+        self.plans[index / LIFETIMES].as_mut()?[index % LIFETIMES].as_mut()
+    }
+    /// None only for a row with no ledger, which is a row that was never
+    /// paired. Every plan index reaching this comes from a leased row.
+    fn plan_cell(&mut self, index: usize) -> Option<&mut Option<Plan>> {
+        Some(&mut self.plans[index / LIFETIMES].as_mut()?[index % LIFETIMES])
     }
     /// False when the slot is already live: overwriting it would strand the
     /// old plan's links in the intrusive list and overcount `plan_count`, so
-    /// the caller latches a fault and abandons the insert instead.
+    /// the caller latches a fault and abandons the insert instead. Also false
+    /// for a row whose ledger the pairing boundary has not delivered.
     #[must_use]
     fn insert_plan(&mut self, index: usize, mut plan: Plan) -> bool {
-        if self.plans[index].is_some() {
-            return false;
+        match self.plan_cell(index) {
+            Some(cell) if cell.is_none() => {}
+            _ => return false,
         }
         plan.previous = self.plan_tail;
         plan.next = NO_PLAN;
         if self.plan_tail == NO_PLAN {
             self.plan_head = index as u32;
         } else {
-            self.plans[self.plan_tail as usize].as_mut().unwrap().next = index as u32;
+            self.plan_mut(self.plan_tail as usize).unwrap().next = index as u32;
         }
         self.plan_tail = index as u32;
         self.plan_count += 1;
-        self.plans[index] = Some(plan);
+        *self.plan_cell(index).unwrap() = Some(plan);
         true
     }
     fn remove_plan(&mut self, index: usize) {
-        let plan = self.plans[index].take().unwrap();
+        let plan = self.plan_cell(index).unwrap().take().unwrap();
         if plan.previous == NO_PLAN {
             self.plan_head = plan.next;
         } else {
-            self.plans[plan.previous as usize].as_mut().unwrap().next = plan.next;
+            self.plan_mut(plan.previous as usize).unwrap().next = plan.next;
         }
         if plan.next == NO_PLAN {
             self.plan_tail = plan.previous;
         } else {
-            self.plans[plan.next as usize].as_mut().unwrap().previous = plan.previous;
+            self.plan_mut(plan.next as usize).unwrap().previous = plan.previous;
         }
         self.plan_count -= 1;
     }
-    pub(super) fn consume_terminal_original(
-        &mut self,
-        source: usize,
-        token: &super::super::capture::Token,
-        permissions: &super::super::capture::Permissions,
-    ) {
-        let Some((life, lifetime)) = permissions.original_on(token) else { return };
-        if let Some(plan) = self.plans[source * LIFETIMES + usize::from(life)].as_mut() {
-            if plan.terminal
-                && plan.lifetime == lifetime
-                && plan.key.lease == token.key.lease
-                && plan.key.epoch == token.key.epoch
-                && plan.key.serial == token.key.serial
-                && (plan.key.arena == 0 || plan.key.arena == token.key.arena)
-            {
-                plan.key = token.key;
-                plan.bound = true;
-            }
-        }
-    }
-
     /// False only when plan accounting is already broken; a rejected argument
     /// is a normal no-op, not a fault.
     #[must_use]
@@ -339,38 +271,32 @@ impl Sequencer {
             return true;
         }
         let index = source * LIFETIMES + usize::from(request);
-        if let Some(plan) = self.plans[index].as_mut() {
-            if plan.key.lease == lease
-                && plan.key.epoch == epoch
-                && plan.key.serial == serial
-                && plan.lifetime == lifetime
-            {
-                plan.terminal = true;
+        let identity = Request { lease, epoch, serial, request, lifetime };
+        if let Some(plan) = self.plan_mut(index) {
+            if plan.request != identity {
+                return true;
             }
+            plan.terminal = true;
+            // An authoritative cancellation ends the note as surely as a
+            // release does. Marking the plan alone would leave the voice this
+            // onset prospectively inserted scoring every later note, because
+            // a canceled attack never produces the output that would clear it.
+            self.forget_voice(identity.lease.slot, lifetime);
             true
         } else {
-            // A copied Retained inventory record may predate this cancellation.
-            // Keep its exact original-On identity until the complete fixed
-            // inventory passes; no capture permission is claimed by this key.
+            // A cancellation can overtake the onset's own copied record. Hold
+            // its exact identity until that record passes the input cursor, so
+            // ordinary sequencing cannot resurrect it as a fresh onset.
             self.insert_plan(
                 index,
                 Plan {
-                    key: super::super::capture::Key {
-                        lease,
-                        epoch,
-                        serial,
-                        arena: 0,
-                        position: u16::MAX,
-                    },
-                    lifetime,
+                    request: identity,
                     binding: Assignment::default(),
                     shift: DELAY,
                     sent: false,
                     terminal: true,
-                    inventoried: false,
                     accepted: false,
                     bound: false,
-                    replay: 0,
                     next: NO_PLAN,
                     previous: NO_PLAN,
                 },
@@ -380,26 +306,23 @@ impl Sequencer {
 }
 
 const _: () = assert!(std::mem::size_of::<Option<Plan>>() <= 256);
-const _: () = assert!(std::mem::size_of::<Option<ActualKey>>() <= 56);
-const _: () = assert!(std::mem::align_of::<Option<ActualKey>>() <= 8);
 const _: () = assert!(
     std::mem::size_of::<Option<Plan>>() - std::mem::size_of::<ResolvedConfig>() + 128 <= 256
 );
 const _: () = assert!(std::mem::size_of::<Option<Voice>>() <= 256);
-// ConfirmedPitches and its rich factual companion share one confirmed budget;
-// the other half remains exclusively prospective. Keep full future config room.
-const _: () = assert!(
-    std::mem::size_of::<Option<Voice>>()
-        + std::mem::size_of::<Option<harmonigraph_core::confirmed::ConfirmedPitch>>()
-        // Node and decision are now populated in Voice. Its revision occupies
-        // eight bytes of the prepaid complete configuration; reserve the rest.
-        + (128 - std::mem::size_of::<u64>())
-        <= 256
-);
+// One context cell keeps full room for a future complete configuration beside
+// the eight bytes its revision already occupies.
 const _: () = assert!(std::mem::size_of::<Option<Voice>>() + 128 - 8 <= 256);
 
 #[cfg(test)]
 impl Sequencer {
+    /// Every voice the policy would score a fresh onset against, as
+    /// `(source slot, lifetime)`. Distinct from a row's factual `State`: this
+    /// is what tuning reads, and a note the Hub no longer believes is sounding
+    /// has to be gone from BOTH.
+    pub(super) fn test_context(&self) -> Vec<(u8, u64)> {
+        self.context.iter().flatten().map(|voice| (voice.source, voice.lifetime)).collect()
+    }
     pub(super) fn print_test_memory_layout(&self) {
         println!(
             "LEDGER musical [history_cell,prospective] {:?}; policy [scratch,context] {:?}",
@@ -407,28 +330,12 @@ impl Sequencer {
             [std::mem::size_of_val(&*self.policy), std::mem::size_of_val(&*self.policy_context)]
         );
         println!(
-            "LEDGER factual lookup [key_cell,key_backing,directory_backing] {:?}",
-            [
-                std::mem::size_of::<Option<ActualKey>>(),
-                std::mem::size_of_val(&*self.actual_keys),
-                std::mem::size_of_val(&*self.actual_index)
-            ]
-        );
-        println!(
-            "LEDGER sequencer actual [backing,free_capacity,free_metadata,recovery_owner] {:?}",
-            [
-                std::mem::size_of_val(&*self.actual),
-                self.actual_free.capacity() * std::mem::size_of::<u16>(),
-                std::mem::size_of_val(&self.actual_free),
-                std::mem::size_of_val(&self.recovery),
-            ]
-        );
-        println!(
-            "LEDGER sequencer [owner,plan_option,plan_backing,voice_option,voice_backing] {:?}",
+            "LEDGER sequencer [owner,plan_option,paired_row_backing,plan_backing,voice_option,voice_backing] {:?}",
             [
                 std::mem::size_of::<Self>(),
                 std::mem::size_of::<Option<Plan>>(),
-                std::mem::size_of_val(&*self.plans),
+                Hub::test_plan_row_bytes(),
+                self.plan_ledger_bytes(),
                 std::mem::size_of::<Option<Voice>>(),
                 std::mem::size_of_val(&*self.context)
             ]
@@ -437,50 +344,36 @@ impl Sequencer {
 }
 
 impl Hub {
+    /// What one paired row's ledger costs, so a fixture can say which rows are
+    /// allocated rather than repeating a byte count that would drift.
+    #[cfg(test)]
+    pub(in crate::performance) fn test_plan_row_bytes() -> usize {
+        std::mem::size_of::<Option<Plan>>() * LIFETIMES
+    }
+    #[cfg(test)]
+    pub(in crate::performance) fn test_plan_ledger_bytes(&self) -> usize {
+        self.sequencer.plan_ledger_bytes()
+    }
     #[cfg(test)]
     pub(in crate::performance) fn test_policy_counts(&self) -> [usize; 3] {
         self.sequencer.policy_counts
     }
+    /// The Hub's belief about one sounding note: its slot, its frozen adaptive
+    /// correction and the player tuning last applied to it.
     #[cfg(test)]
-    pub(in crate::performance) fn test_actual_voice(
+    pub(in crate::performance) fn test_context_voice(
         &self,
         source: u8,
         lifetime: u64,
     ) -> Option<(usize, i64, f64)> {
-        self.sequencer.actual.iter().enumerate().find_map(|(index, cell)| {
+        self.sequencer.context.iter().enumerate().find_map(|(index, cell)| {
             cell.filter(|voice| voice.source == source && voice.lifetime == lifetime)
                 .map(|voice| (index, voice.correction, voice.player))
         })
     }
     #[cfg(test)]
-    pub(in crate::performance) fn test_service_terminal_plans(&mut self) {
-        self.plan_callback();
-        self.service_plans();
-    }
-    #[cfg(test)]
     pub(in crate::performance) fn test_terminal_scope(&self) -> (bool, u16) {
         (self.sequencer.terminal_session, self.sequencer.terminal_sources)
-    }
-    #[cfg(test)]
-    pub(in crate::performance) fn test_request_recovery(&mut self, from: u64) {
-        self.request_recovery(from);
-    }
-    #[cfg(test)]
-    pub(in crate::performance) fn test_plan_binding(
-        &self,
-        source: usize,
-        life: u16,
-    ) -> Option<Assignment> {
-        self.sequencer.plans[source * LIFETIMES + usize::from(life)].map(|plan| plan.binding)
-    }
-    #[cfg(test)]
-    pub(in crate::performance) fn test_plan_state(
-        &self,
-        source: usize,
-        life: u16,
-    ) -> Option<(bool, bool, bool)> {
-        self.sequencer.plans[source * LIFETIMES + usize::from(life)]
-            .map(|plan| (plan.terminal, plan.bound, self.sequencer.recovering()))
     }
     /// Drop the cohort's outstanding delivery count while the plans that owe
     /// it stay unsent — the accounting violation `service_plans` latches. No
@@ -509,11 +402,11 @@ impl Hub {
         !self.sequencer.retired
     }
 
-    fn input_window(&self, source: usize) -> &Window<Intent, INTENT_RING> {
+    fn inputs(&mut self, source: usize) -> &mut Queue<Capture, CAPTURES_PER_SOURCE> {
         if source == 0 {
-            &self.direct_ingress
+            &mut self.direct_inputs
         } else {
-            &self.rows[source - 1].ingress
+            &mut self.rows[source - 1].inputs
         }
     }
 
@@ -580,43 +473,95 @@ impl Hub {
         Some(snapshot)
     }
 
+    /// The merge front: the earliest sample any source still owes. Records
+    /// within a source are already in input order, so this is one look at
+    /// seventeen queue fronts.
     fn next_input_sample(&mut self) -> Option<i64> {
         let mut sample = None;
         for source in 0..=TUNERS {
             if source != 0 && self.rows[source - 1].terminal_cut.is_some() {
                 continue;
             }
-            while let Some(index) = self.sequencer.heads[source] {
-                if self.input_work == 4096 {
-                    return None;
-                }
-                self.input_work += 1;
-                let window = self.input_window(source);
-                if let Some(Intent::Capture(token)) = window.at_ref(index) {
-                    if token.frozen.is_none() {
-                        sample =
-                            Some(sample.map_or(token.sample, |old: i64| old.min(token.sample)));
-                        break;
-                    }
-                }
-                self.sequencer.heads[source] = window.next_position(index);
+            if let Some(record) = self.inputs(source).front() {
+                sample = Some(sample.map_or(record.sample, |old: i64| old.min(record.sample)));
             }
         }
         sample
     }
 
-    pub(super) fn sequence_inputs(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
-        self.observe_terminal_faults();
-        if self.sequencer.recovering() {
-            self.service_recovery(owner);
-            self.service_plans();
+    /// A resource or host-output fault is a latched shared reset, not a
+    /// recovery pass: it closes every affected emission gate, faults the
+    /// sources so their own Stop path cancels unsounded attacks and arms the
+    /// downstream release debt, and latches `terminal_session` so no new
+    /// attack is admitted until an explicit Reset clears it in
+    /// `commit_transition`. Obsolete replies die with the epoch that latched.
+    pub(super) fn observe_terminal_faults(&mut self) {
+        if !self.sequences_inputs() && !self.sequencer.retired {
             return;
         }
+        let Some(offer) = &self.offer else { return };
+        let mut faults =
+            offer.session.faults.load(Ordering::Acquire) & !super::super::source::TIMING_FAILURE;
+        let mut local = 0u16;
+        for (source, row) in self.rows.iter().enumerate() {
+            let bits = offer.session.rows[source].faults.load(Ordering::Acquire)
+                & !super::super::source::TIMING_FAILURE;
+            if row.lease.is_none()
+                || bits == 0
+                || self.sequencer.terminal_sources & (1 << source) != 0
+            {
+                continue;
+            }
+            if row.member
+                || self
+                    .sequencer
+                    .membership
+                    .is_some_and(|membership| membership.leases[source].is_some())
+            {
+                faults |= bits;
+            } else {
+                local |= 1 << source;
+            }
+        }
+        if faults != 0 && !self.sequencer.terminal_session {
+            offer.session.faults.fetch_or(faults, Ordering::AcqRel);
+            self.sequencer.terminal_session = true;
+            local = u16::MAX;
+            self.direct.fault(faults);
+        }
+        if local == 0 {
+            return;
+        }
+        self.sequencer.terminal_sources |= local;
+        for source in 0..TUNERS {
+            if local & (1 << source) == 0 || self.rows[source].lease.is_none() {
+                continue;
+            }
+            self.offer.as_ref().unwrap().session.rows[source]
+                .emission_gate
+                .fetch_or(super::super::source::CLOSED, Ordering::AcqRel);
+            // The latch terminates this row's input stream where the Hub has
+            // already settled it. Sequencing stops waiting for its coverage,
+            // and its pending baseline may now be acknowledged so the Source's
+            // own settlement can finish; explicit Reset clears the cut.
+            if self.rows[source].terminal_cut.is_none() {
+                self.rows[source].terminal_cut = Some(self.rows[source].input_settled.0);
+                if !self.rows[source].member {
+                    // A refused provisional join never contributed coverage,
+                    // so its proposed floor cannot pin other Sources.
+                    self.rows[source].joining = None;
+                }
+            }
+        }
+    }
+
+    pub(super) fn sequence_inputs(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
+        self.observe_terminal_faults();
         if self.sequencer.terminal_session {
             self.service_plans();
             return;
         }
-        if !self.sequences_inputs() || !self.clock.valid || self.invalidated || self.capture_hold {
+        if !self.sequences_inputs() || !self.clock.valid || self.invalidated {
             return;
         }
         if self.sequencer.committing {
@@ -627,138 +572,128 @@ impl Hub {
             return;
         }
         while self.sequencer.work < 1024 && self.input_work < 4096 {
-            if !self.frozen_captures.active {
-                let Some(membership) = self.input_snapshot(owner) else { return };
-                let sample = self.next_input_sample();
-                if self.input_work == 4096 {
-                    return;
-                }
-                let boundary =
-                    sample.map_or(membership.through, |sample| sample.max(membership.floor));
-                let finalized = boundary.min(membership.through);
-                if owner.finalize_input(membership.clock, finalized, finalized, recorder).is_err() {
-                    return;
-                }
-                self.sequencer.finalized = Some(finalized);
-                self.sequencer.copied = Some(finalized);
-                let Some(sample) = sample.filter(|_| boundary < membership.through) else { return };
-                let Ok(config) = owner.bind_input_cohort(membership.clock, boundary) else {
-                    return;
-                };
-                if self.frozen_captures.begin(sample, 0).is_err() {
-                    self.configuration_exhausted();
-                    return;
-                }
-                self.sequencer.membership = Some(membership);
-                self.sequencer.binding_sample = boundary;
-                self.sequencer.history.configuration(config.revision, self.sequencer.decision);
-                self.sequencer.config = Some(config);
-                self.sequencer.assembling = 0;
-                self.sequencer.cohort_floor = self.sequencer.decision;
-                self.sequencer.cohort_unsent = 0;
-                self.sequencer.cohort_recipients = 0;
-            }
-            if !self.assemble_inputs() {
+            let Some(membership) = self.input_snapshot(owner) else { return };
+            let sample = self.next_input_sample();
+            let boundary = sample.map_or(membership.through, |sample| sample.max(membership.floor));
+            let finalized = boundary.min(membership.through);
+            if owner.finalize_input(membership.clock, finalized, finalized, recorder).is_err() {
                 return;
             }
-            // Graph work and event applications each retain their cursor. The
-            // one shared structural grant is never refreshed by a subblock.
-            let units = 4096 - self.input_work;
-            let progress = self.advance_captures(units);
-            self.input_work += self.frozen_captures.spent;
-            match progress {
-                Ok(cohort::Progress::Pending) => return,
-                Ok(cohort::Progress::Complete { .. }) => {
-                    self.frozen_captures.end(false);
-                    self.sequencer.committing = true;
-                    if !self.publish_cohort() {
-                        return;
-                    }
-                }
-                Ok(cohort::Progress::Event(selected)) => {
-                    if !self.assign_selected(selected) {
-                        return;
-                    }
-                    if let cohort::Kind::Participation(_) =
-                        self.frozen_captures.event(selected.event_index).unwrap().kind
-                    {
-                        let source = usize::from(
-                            self.frozen_captures.event(selected.event_index).unwrap().id.source,
-                        );
-                        if source != 0 {
-                            Self::confirm(&self.rows[source - 1], &mut owner.confirmed);
-                        }
-                    }
-                    self.commit_capture().expect("same retained offered phase");
-                    self.sequencer.work += 1;
-                }
-                Err(_) => {
-                    self.configuration_exhausted();
-                    return;
-                }
+            self.sequencer.finalized = Some(finalized);
+            self.sequencer.copied = Some(finalized);
+            let Some(sample) = sample.filter(|_| boundary < membership.through) else { return };
+            // Collection and assembly spend one allowance, so a callback that
+            // spent most of it collecting cannot be trusted to finish taking
+            // this sample. Reserve the whole sample before removing any of it:
+            // a partly consumed batch has nowhere to go, since `end` clears
+            // what was popped and those records are already gone from their
+            // queues. Too big for the pass at all is the bounded failure; too
+            // big for what is left of this callback is a wait, and the next
+            // callback starts the allowance over with room for any sample.
+            let owed = self.same_sample_records(sample);
+            if owed > BATCH_EVENTS {
+                self.configuration_exhausted();
+                return;
+            }
+            if self.input_work + owed > 4096 {
+                return;
+            }
+            let Ok(config) = owner.bind_input_cohort(membership.clock, boundary) else {
+                return;
+            };
+            self.batch.begin(sample);
+            self.sequencer.membership = Some(membership);
+            self.sequencer.binding_sample = boundary;
+            self.sequencer.history.configuration(config.revision, self.sequencer.decision);
+            self.sequencer.config = Some(config);
+            self.sequencer.cohort_floor = self.sequencer.decision;
+            self.sequencer.cohort_unsent = 0;
+            self.sequencer.cohort_recipients = 0;
+            // One sample, start to finish, inside this callback: assemble the
+            // copies, sort them once, then apply them in that order. The
+            // records are out of their queues from here, so a step that fails
+            // is a terminal fault and never a deferral — several of `apply`'s
+            // own refusals latch nothing on their own.
+            if !self.assemble_inputs() || !self.apply_batch(owner) {
+                self.configuration_exhausted();
+                self.batch.end();
+                return;
+            }
+            self.batch.end();
+            self.sequencer.committing = true;
+            if !self.publish_cohort() {
+                return;
             }
         }
     }
 
+    /// What this sample owes across every source, leaving all of it in place.
+    /// Records within a source are in input order, so each source's share is
+    /// the run standing at its queue front. Counting stops one past the batch
+    /// capacity: beyond that the answer is only "too many", and the scan has
+    /// no reason to walk seventeen full queues to say so.
+    fn same_sample_records(&mut self, sample: i64) -> usize {
+        let mut owed = 0;
+        for source in 0..=TUNERS {
+            let mut offset = 0;
+            while owed <= BATCH_EVENTS
+                && self.inputs(source).get(offset).is_some_and(|record| record.sample == sample)
+            {
+                offset += 1;
+                owed += 1;
+            }
+        }
+        owed
+    }
+
+    /// Take every copied record standing at this sample, from every source,
+    /// and put the batch in merge order. The caller reserved room for the
+    /// whole sample in both the callback allowance and the batch, so false is
+    /// a latched fault rather than the deferral it used to be.
+    #[must_use]
     fn assemble_inputs(&mut self) -> bool {
-        while self.sequencer.assembling <= TUNERS {
-            let source = self.sequencer.assembling;
-            let Some(position) = self.sequencer.heads[source] else {
-                self.sequencer.assembling += 1;
-                continue;
-            };
-            if self.input_work == 4096 {
+        let sample = self.batch.sample;
+        for source in 0..=TUNERS {
+            while self.inputs(source).front().is_some_and(|record| record.sample == sample) {
+                let record = self.inputs(source).pop().unwrap();
+                self.input_work += 1;
+                if !self.batch.push(record) {
+                    // Reserved above, so unreachable; latching rather than
+                    // asserting keeps a wrong reservation off the host's
+                    // audio thread.
+                    self.configuration_exhausted();
+                    return false;
+                }
+            }
+        }
+        self.batch.order();
+        true
+    }
+
+    /// Apply the ordered batch: every release and controller from every source
+    /// first, then the onsets. Assignment order inside the second half is the
+    /// key/channel/source tie-break the musical decision has always used.
+    fn apply_batch(&mut self, owner: &mut Owner) -> bool {
+        while let Some(record) = self.batch.next() {
+            if !self.apply(record) {
                 return false;
             }
-            self.input_work += 1;
-            let window = self.input_window(source);
-            let Some(Intent::Capture(token)) = window.at_ref(position) else {
-                self.sequencer.heads[source] = window.next_position(position);
-                continue;
-            };
-            if token.sample != self.frozen_captures.sample {
-                self.sequencer.assembling += 1;
-                continue;
+            if matches!(record.kind, CaptureKind::Participation(_)) && record.lease.slot != 0 {
+                Self::confirm(&self.rows[usize::from(record.lease.slot) - 1], &mut owner.confirmed);
             }
-            if self.frozen_captures.len() == cohort::COHORT_EVENTS {
-                self.configuration_exhausted();
-                return false;
-            }
-            let id = self.frozen_captures.id;
-            let (window, permissions, lease, epoch) = if source == 0 {
-                (
-                    &mut self.direct_ingress,
-                    &self.direct_captures,
-                    self.direct.capture_lease().unwrap(),
-                    self.publication_clock.epoch,
-                )
-            } else {
-                let row = &mut self.rows[source - 1];
-                (&mut row.ingress, &row.captures, row.lease.unwrap(), row.epoch)
-            };
-            let Some(Intent::Capture(token)) = window.at_mut(position) else { unreachable!() };
-            token.frozen = Some(id);
-            let view = super::super::capture::View {
-                ingress: window,
-                permissions,
-                lease,
-                epoch,
-                frozen: id,
-            };
-            self.frozen_captures.push(view.metadata(position).expect("installed immutable input"));
-            self.sequencer.heads[source] = window.next_position(position);
+            self.sequencer.work += 1;
         }
         true
     }
 
-    fn assign_selected(&mut self, selected: cohort::Selected) -> bool {
-        let event = self.frozen_captures.event(selected.event_index).unwrap();
-        if let cohort::Kind::Participation(value) = event.kind {
-            let source = usize::from(event.id.source);
-            // Replay may revisit the already committed marker. A later marker
-            // or baseline cannot turn its old Original into a new transition.
-            if event.id.sequence > self.sequencer.participation_serial[source] {
-                self.sequencer.participation_serial[source] = event.id.sequence;
+    /// Apply one copied record. This is the whole of what a record does to the
+    /// Hub's musical state; the ordering pass has already put them in the order
+    /// that makes it correct.
+    fn apply(&mut self, record: Capture) -> bool {
+        let source = usize::from(record.lease.slot);
+        if let CaptureKind::Participation(value) = record.kind {
+            if record.serial > self.sequencer.participation_serial[source] {
+                self.sequencer.participation_serial[source] = record.serial;
                 self.sequencer.participating[source] = value;
                 if !value {
                     self.sequencer.history.clear(source, self.sequencer.decision);
@@ -770,248 +705,216 @@ impl Hub {
             }
             return true;
         }
-        let targets = Self::capture_targets(
-            &self.rows,
-            &self.direct_ingress,
-            &self.direct_captures,
-            self.direct.capture_lease(),
-            self.publication_clock.epoch,
-            self.frozen_captures.id,
-        );
-        let span = if selected.phase == EventPhase::ReplacedRelease {
-            event.replaced
-        } else {
-            event.targets
-        };
-        let mut next = span.first;
-        if event.kind == cohort::Kind::Onset && selected.phase == EventPhase::Original {
-            let target = targets.get(event.id.source, next).unwrap().target;
-            let source = event.id.source as usize;
-            let view = targets.rows[source].as_ref().unwrap();
-            let position = (next >> 16) as usize;
-            let (key, _) = view.original(position).unwrap();
-            let (life, birth) = view.onset(position).unwrap();
-            let replay = self.sequencer.recovering();
-            let done = replay && view.effect_done(next, 0).expect("copied replay status");
-            let prior = (source != 0)
-                .then(|| self.sequencer.plans[(source - 1) * LIFETIMES + usize::from(life)])
-                .flatten();
-            if let Some(prior) = prior {
-                if prior.lifetime != birth.serial
-                    || prior.key.lease != key.lease
-                    || prior.key.epoch != key.epoch
-                    || prior.key.arena != 0 && prior.key.arena != key.arena
-                    || prior.key.serial != key.serial
-                    || prior.key.position != u16::MAX && prior.key != key
-                {
-                    return false;
+        if let CaptureKind::Stop = record.kind {
+            // Neither of a Stop's two endings is an addressed Terminal record:
+            // the notes already sounding go out as emergency releases and the
+            // rest are cancelled where they stand. A paired row's releases come
+            // back as accepted output and its attacks through `cancel`, but
+            // DIRECT reaches neither — its forwarding never becomes an
+            // `OutputDelta` and it has no plan to cancel — so this record is
+            // the whole of source 0's cleanup.
+            self.sequencer.forget_source(record.lease.slot);
+            self.batch.stopped(record.lease.slot, record.serial);
+            return true;
+        }
+        if !record.onset() {
+            let voice = self.sequencer.context.iter_mut().find(|cell| {
+                cell.is_some_and(|voice| {
+                    voice.source == record.lease.slot && voice.lifetime == record.lifetime
+                })
+            });
+            match (record.kind, voice) {
+                (CaptureKind::Terminal, Some(cell)) => *cell = None,
+                (CaptureKind::Tuning { value_bits }, Some(cell)) => {
+                    cell.as_mut().unwrap().tune(f64::from_bits(value_bits))
                 }
-                if prior.terminal {
-                    let plan = self.sequencer.plans[(source - 1) * LIFETIMES + usize::from(life)]
-                        .as_mut()
-                        .unwrap();
-                    plan.key = key;
-                    if !plan.bound {
-                        plan.binding.configuration =
-                            self.sequencer.config.unwrap_or(plan.binding.configuration);
+                // Release-first ordering puts a terminal ahead of the onset it
+                // addresses whenever one lifetime is born and ends at a single
+                // sample. Retain the identity so that onset does not leave a
+                // live context entry for a note this sample already ended.
+                (CaptureKind::Terminal, None) => {
+                    self.batch.ended(record.lease.slot, record.lifetime)
+                }
+                // A pitch expression that arrives at its own note's sample has
+                // no voice to reach yet: it is the value that note starts from.
+                (CaptureKind::Tuning { value_bits }, None) => {
+                    if !self.batch.stash_tuning(record.lease.slot, record.lifetime, value_bits) {
+                        self.configuration_exhausted();
+                        return false;
                     }
-                    plan.bound = true;
-                    return true;
                 }
-                if replay && prior.accepted {
-                    return true;
-                }
-                if !replay && prior.bound {
-                    return false;
-                }
-            } else if replay && source != 0 && !done {
+                _ => {}
+            }
+            return true;
+        }
+        let request = Request {
+            lease: record.lease,
+            epoch: record.epoch,
+            serial: record.serial,
+            request: record.request,
+            lifetime: record.lifetime,
+        };
+        let prior = (source != 0)
+            .then(|| self.sequencer.plan((source - 1) * LIFETIMES + usize::from(record.request)))
+            .flatten();
+        if let Some(prior) = prior {
+            if prior.request != request {
                 return false;
             }
-            if done {
+            if prior.terminal {
+                // Its cancellation arrived before its own record. Binding the
+                // plan here is what lets `service_plans` retire it, and keeps
+                // ordinary sequencing from assigning it as a fresh onset.
+                let config = self.sequencer.config;
+                let plan = self
+                    .sequencer
+                    .plan_mut((source - 1) * LIFETIMES + usize::from(record.request))
+                    .unwrap();
+                if !plan.bound {
+                    plan.binding.configuration = config.unwrap_or(plan.binding.configuration);
+                }
+                plan.bound = true;
                 return true;
             }
-            let Some(decision) = self.sequencer.decision.checked_add(1) else { return false };
-            let configuration = prior
-                .filter(|plan| plan.bound)
-                .map(|plan| plan.binding.configuration)
-                .or(self.sequencer.config)
-                .expect("owned original cohort configuration");
-            let prefix = replay && prior.is_some_and(|plan| plan.replay & PREFIX != 0);
-            let (correction, selection) = if prefix {
-                let binding = prior.unwrap().binding;
-                (binding.correction, binding.selection)
-            } else if source != 0 && birth.adaptive {
-                let mut count = 0;
-                for voice in self.sequencer.context.iter().flatten() {
-                    if self.sequencer.participating[usize::from(voice.source)] {
-                        self.sequencer.policy_context[count] = policy::ContextPitch {
-                            pitch: PitchClass::from_microcents(voice.pitch),
-                            node: voice.node,
-                        };
-                        count += 1;
-                    }
+            if prior.bound {
+                return false;
+            }
+        }
+        let Some(decision) = self.sequencer.decision.checked_add(1) else { return false };
+        let configuration = prior
+            .filter(|plan| plan.bound)
+            .map(|plan| plan.binding.configuration)
+            .or(self.sequencer.config)
+            .expect("owned original cohort configuration");
+        let (correction, selection) = if source != 0 && record.adaptive {
+            let mut count = 0;
+            for voice in self.sequencer.context.iter().flatten() {
+                if self.sequencer.participating[usize::from(voice.source)] {
+                    self.sequencer.policy_context[count] = policy::ContextPitch {
+                        pitch: PitchClass::from_microcents(voice.pitch),
+                        node: voice.node,
+                    };
+                    count += 1;
                 }
-                #[cfg(test)]
-                {
-                    self.sequencer.policy_counts[0] += 1;
-                    self.sequencer.policy_counts[1] += count;
-                    self.sequencer.policy_counts[2] = self.sequencer.policy_counts[2].max(count);
-                }
-                let history = self.sequencer.history.previous(
-                    key.lease,
-                    birth.channel,
-                    birth.key,
-                    configuration.revision,
-                );
-                let Ok(selection) = policy::assign_new_note(
-                    configuration.into(),
-                    &self.sequencer.policy_context[..count],
-                    history,
-                    policy::OrderedOnset { key: birth.key },
-                    &mut self.sequencer.policy,
-                ) else {
-                    self.configuration_exhausted();
-                    return false;
-                };
-                let node = match selection.assignment {
-                    policy::Assignment::Selected { node, .. } => Selection::Node([
-                        i8::try_from(node.threes).expect("bounded canonical threes"),
-                        i8::try_from(node.fives).expect("bounded canonical fives"),
-                        i8::try_from(node.sevens).expect("bounded canonical sevens"),
-                    ]),
-                    policy::Assignment::NoCandidate => Selection::NoCandidate,
-                };
-                (selection.assignment.correction_microcents(), node)
-            } else {
-                (0, Selection::Unretuned)
-            };
-            let player = if replay && prior.is_some_and(|plan| plan.replay & PREFIX != 0) {
-                prior.unwrap().binding.initial_player
-            } else {
-                selected.initial_tuning.map_or(0.0, |initial| f64::from_bits(initial.value_bits))
-            };
-            let Some(slot) = self.sequencer.context.iter().position(Option::is_none) else {
+            }
+            #[cfg(test)]
+            {
+                self.sequencer.policy_counts[0] += 1;
+                self.sequencer.policy_counts[1] += count;
+                self.sequencer.policy_counts[2] = self.sequencer.policy_counts[2].max(count);
+            }
+            let history = self.sequencer.history.previous(
+                record.lease,
+                record.channel,
+                record.key,
+                configuration.revision,
+            );
+            let Ok(selection) = policy::assign_new_note(
+                configuration.into(),
+                &self.sequencer.policy_context[..count],
+                history,
+                policy::OrderedOnset { key: record.key },
+                &mut self.sequencer.policy,
+            ) else {
                 self.configuration_exhausted();
                 return false;
             };
-            if source != 0 {
-                let index = (source - 1) * LIFETIMES + usize::from(life);
-                let emission = if replay {
-                    self.sequencer.recovery.generation(source - 1).unwrap()
-                } else {
-                    self.offer.as_ref().unwrap().session.rows[source - 1]
-                        .emission_gate
-                        .load(Ordering::Acquire)
-                        & !super::super::source::GATE_FLAGS
-                };
-                let binding = Assignment {
-                    configuration,
-                    decision,
-                    emission,
-                    correction,
-                    selection,
-                    initial_player: player,
-                };
-                let shift = if replay {
-                    let Some(shift) = self.sequencer.recovery.boundary.checked_sub(event.sample)
-                    else {
-                        return false;
-                    };
-                    shift.max(DELAY)
-                } else {
-                    DELAY
-                };
-                if let Some(plan) = self.sequencer.plans[index].as_mut() {
-                    plan.key = key;
-                    plan.binding = binding;
-                    plan.sent = false;
-                    plan.bound = true;
-                    plan.shift = shift;
-                } else if !self.sequencer.insert_plan(
-                    index,
-                    Plan {
-                        key,
-                        lifetime: birth.serial,
-                        binding,
-                        shift,
-                        sent: false,
-                        terminal: false,
-                        inventoried: false,
-                        accepted: false,
-                        bound: true,
-                        replay: 0,
-                        next: NO_PLAN,
-                        previous: NO_PLAN,
-                    },
-                ) {
-                    self.configuration_exhausted();
-                    return false;
-                }
-                if birth.adaptive && self.sequencer.participating[source] {
-                    self.sequencer.history.commit(key.lease, birth.channel, birth.key, binding);
-                }
-                self.sequencer.cohort_unsent += 1;
-                self.sequencer.cohort_recipients |= 1 << (source - 1);
-                let reply = Reply::Assignment { key, life, lifetime: birth.serial, binding };
-                if self.offer.as_mut().unwrap().bank.rows[source - 1].replies.push(reply).is_ok() {
-                    self.sequencer.plans[index].as_mut().unwrap().sent = true;
-                    self.sequencer.cohort_unsent -= 1;
-                }
+            let node = match selection.assignment {
+                policy::Assignment::Selected { node, .. } => Selection::Node([
+                    i8::try_from(node.threes).expect("bounded canonical threes"),
+                    i8::try_from(node.fives).expect("bounded canonical fives"),
+                    i8::try_from(node.sevens).expect("bounded canonical sevens"),
+                ]),
+                policy::Assignment::NoCandidate => Selection::NoCandidate,
+            };
+            (selection.assignment.correction_microcents(), node)
+        } else {
+            (0, Selection::Unretuned)
+        };
+        let player = self.batch.initial_tuning(record.lease.slot, record.lifetime).unwrap_or(0.0);
+        // A lifetime this sample already ended still gets its assignment — the
+        // Tune is waiting for one — but never becomes context, because the
+        // release that ended it applied before this onset existed.
+        let slot = if self.batch.already_ended(record.lease.slot, record.lifetime)
+            || self.batch.already_stopped(record.lease.slot, record.serial)
+        {
+            None
+        } else if let Some(slot) = self.sequencer.context.iter().position(Option::is_none) {
+            Some(slot)
+        } else {
+            self.configuration_exhausted();
+            return false;
+        };
+        if source != 0 {
+            let index = (source - 1) * LIFETIMES + usize::from(record.request);
+            let emission = self.offer.as_ref().unwrap().session.rows[source - 1]
+                .emission_gate
+                .load(Ordering::Acquire)
+                & !super::super::source::GATE_FLAGS;
+            let binding = Assignment {
+                configuration,
+                decision,
+                emission,
+                correction,
+                selection,
+                initial_player: player,
+            };
+            if let Some(plan) = self.sequencer.plan_mut(index) {
+                plan.request = request;
+                plan.binding = binding;
+                plan.sent = false;
+                plan.bound = true;
+                plan.shift = DELAY;
+            } else if !self.sequencer.insert_plan(
+                index,
+                Plan {
+                    request,
+                    binding,
+                    shift: DELAY,
+                    sent: false,
+                    terminal: false,
+                    accepted: false,
+                    bound: true,
+                    next: NO_PLAN,
+                    previous: NO_PLAN,
+                },
+            ) {
+                self.configuration_exhausted();
+                return false;
             }
+            if record.adaptive && self.sequencer.participating[source] {
+                self.sequencer.history.commit(record.lease, record.channel, record.key, binding);
+            }
+            self.sequencer.cohort_unsent += 1;
+            self.sequencer.cohort_recipients |= 1 << (source - 1);
+            let reply = Reply::Assignment { request, binding };
+            if self.row_replies(source - 1).is_some_and(|row| row.replies.push(reply).is_ok()) {
+                self.sequencer.plan_mut(index).unwrap().sent = true;
+                self.sequencer.cohort_unsent -= 1;
+            }
+        }
+        if let Some(slot) = slot {
             self.sequencer.context[slot] = Some(Voice {
-                source: event.id.source,
-                lifetime: target.lifetime,
+                source: record.lease.slot,
+                lifetime: record.lifetime,
                 correction: i64::from(correction),
                 player,
-                key: target.key,
-                channel: target.channel,
-                pitch: i64::from(target.key) * 100_000_000
+                key: record.key,
+                channel: record.channel,
+                pitch: i64::from(record.key) * 100_000_000
                     + i64::from(correction)
                     + (player * 100_000_000.0).round() as i64,
                 node: selection.node(),
                 configuration_revision: configuration.revision,
                 decision,
             });
-            self.sequencer.decision = decision;
-        } else {
-            for ordinal in 0..span.len {
-                let address = next;
-                let link = targets.get(event.id.source, next).unwrap();
-                next = link.next;
-                if self.sequencer.recovering()
-                    && targets.rows[event.id.source as usize]
-                        .as_ref()
-                        .unwrap()
-                        .effect_done(address, u16::from(ordinal))
-                        .expect("copied replay status")
-                {
-                    continue;
-                }
-                if let Some(cell) = self.sequencer.context.iter_mut().find(|cell| {
-                    cell.is_some_and(|voice| {
-                        voice.source == event.id.source && voice.lifetime == link.target.lifetime
-                    })
-                }) {
-                    match (selected.phase, event.kind) {
-                        (EventPhase::ReplacedRelease, _)
-                        | (
-                            _,
-                            cohort::Kind::Terminal | cohort::Kind::Channel { terminal: true, .. },
-                        ) => *cell = None,
-                        (_, cohort::Kind::Tuning { value_bits }) => {
-                            cell.as_mut().unwrap().tune(f64::from_bits(value_bits))
-                        }
-                        _ => {}
-                    }
-                }
-            }
         }
+        self.sequencer.decision = decision;
         true
     }
 
     pub(super) fn plan_callback(&mut self) {
         self.sequencer.plan_work = 0;
-        self.sequencer.recovery.work = 0;
     }
 
     /// A traversal may finish across callbacks, and the real reply consumer may
@@ -1033,11 +936,7 @@ impl Hub {
                 return false;
             }
             self.sequencer.plan_work += 1;
-            let lease = if self.sequencer.recovering() {
-                self.sequencer.recovery.lease(source).unwrap()
-            } else {
-                self.sequencer.membership.unwrap().leases[source].unwrap()
-            };
+            let lease = self.sequencer.membership.unwrap().leases[source].unwrap();
             if self.rows[source].lease != Some(lease) {
                 return false;
             }
@@ -1046,7 +945,7 @@ impl Hub {
                 epoch: self.rows[source].epoch,
                 through: self.sequencer.decision,
             };
-            if self.offer.as_mut().unwrap().bank.rows[source].replies.push(reply).is_err() {
+            if self.row_replies(source).is_none_or(|row| row.replies.push(reply).is_err()) {
                 continue;
             }
             self.sequencer.cohort_recipients &= !bit;
@@ -1069,11 +968,11 @@ impl Hub {
         if usize::from(request) >= LIFETIMES {
             return None;
         }
-        let plan = self.sequencer.plans[source * LIFETIMES + usize::from(request)].as_mut()?;
-        if self.rows[source].lease != Some(plan.key.lease)
+        let plan = self.sequencer.plan_mut(source * LIFETIMES + usize::from(request))?;
+        if self.rows[source].lease != Some(plan.request.lease)
             || !plan.bound
-            || output.epoch != plan.key.epoch
-            || output.lifetime != plan.lifetime
+            || output.epoch != plan.request.epoch
+            || output.lifetime != plan.request.lifetime
             || output.decision != plan.binding.decision
         {
             return None;
@@ -1082,19 +981,16 @@ impl Hub {
             plan.terminal = true;
         }
         let planned = output.input.checked_add(plan.shift)?;
-        let divergence = (output.mapped
-            && output.actual != planned
-            && (output.event.attack().is_some() || plan.accepted))
-            .then_some(plan.binding.decision);
+        let mut accepted_shift = None;
         if output.event.attack().is_some() {
             plan.accepted = true;
             plan.shift = output.actual.checked_sub(output.input)?;
-            self.sequencer.extra_delay =
-                self.sequencer.extra_delay.max(plan.shift.saturating_sub(DELAY).max(0) as u64);
+            accepted_shift = Some(plan.shift);
         }
         let binding = plan.binding;
-        if let Some(from) = divergence {
-            self.output_diverged(from);
+        if let Some(shift) = accepted_shift {
+            self.sequencer.extra_delay =
+                self.sequencer.extra_delay.max(shift.saturating_sub(DELAY).max(0) as u64);
         }
         Some((binding, planned))
     }
@@ -1106,7 +1002,7 @@ impl Hub {
         }
         while self.sequencer.plan_work < 256 && self.sequencer.plan_left != 0 {
             let index = self.sequencer.plan_cursor as usize;
-            let plan = self.sequencer.plans[index].unwrap();
+            let plan = self.sequencer.plan(index).unwrap();
             self.sequencer.plan_cursor = plan.next;
             self.sequencer.plan_left -= 1;
             self.sequencer.plan_work += 1;
@@ -1129,38 +1025,32 @@ impl Hub {
                     continue;
                 };
                 self.sequencer.cohort_unsent = remaining;
-                self.sequencer.plans[index].as_mut().unwrap().sent = true;
+                self.sequencer.plan_mut(index).unwrap().sent = true;
             }
-            // A canceled unbound Original still has to pass the input cursor.
-            // Keep its exact identity until then so normal sequencing cannot
-            // resurrect it after an earlier inventory frame was acknowledged.
+            // A canceled onset still has to pass the input cursor, so normal
+            // sequencing cannot resurrect it. A terminated or retired row will
+            // never deliver that record — its stream is settled where it
+            // stopped and its emission gate is closed — so retire it there.
             if plan.terminal
-                && (self.sequencer.recovering() || !self.sequencer.retired && !plan.bound)
+                && !plan.bound
+                && !self.sequencer.retired
+                && self.rows[source].terminal_cut.is_none()
             {
                 continue;
             }
-            if !plan.terminal
-                && (!plan.bound
-                    || self.sequencer.recovering()
-                        && self.sequencer.recovery.old_decision(plan.binding.decision))
-            {
+            if !plan.terminal && !plan.bound {
                 continue;
             }
             let reply = if plan.terminal {
                 Reply::PlanRetired {
-                    incarnation: plan.key.lease.incarnation,
-                    epoch: plan.key.epoch,
+                    incarnation: plan.request.lease.incarnation,
+                    epoch: plan.request.epoch,
                     life,
-                    lifetime: plan.lifetime,
+                    lifetime: plan.request.lifetime,
                     decision: plan.binding.decision,
                 }
             } else if !plan.sent && !self.sequencer.retired {
-                Reply::Assignment {
-                    key: plan.key,
-                    life,
-                    lifetime: plan.lifetime,
-                    binding: plan.binding,
-                }
+                Reply::Assignment { request: plan.request, binding: plan.binding }
             } else {
                 continue;
             };
@@ -1175,7 +1065,7 @@ impl Hub {
                 self.configuration_exhausted();
                 continue;
             }
-            if self.offer.as_mut().unwrap().bank.rows[source].replies.push(reply).is_err() {
+            if self.row_replies(source).is_none_or(|row| row.replies.push(reply).is_err()) {
                 continue;
             }
             if owes_cohort {
@@ -1184,236 +1074,72 @@ impl Hub {
             if plan.terminal {
                 self.sequencer.remove_plan(index);
             } else {
-                self.sequencer.plans[index].as_mut().unwrap().sent = true;
+                self.sequencer.plan_mut(index).unwrap().sent = true;
             }
         }
     }
 }
 
 impl Sequencer {
-    fn actual_hint(&self, key: ActualKey, hint: u16) -> bool {
-        hint != NO_VOICE && self.actual_keys[usize::from(hint)] == Some(key)
+    /// Accepted output realizing one planned voice: keep the exact wire pitch,
+    /// boundary rounding included, so later assignments see what actually
+    /// sounded rather than what was intended. Only when the accepted fact
+    /// still agrees with the plan — a report overtaken by a newer bend or by
+    /// a scheduled release must not move or resurrect a live context voice.
+    ///
+    /// One bounded scan of the 256 context cells, charged to nothing: the
+    /// table it replaced paid a keyed directory hint plus, on a miss, a
+    /// 256-cell fallback against the same per-callback budget the merge loop
+    /// spends on output.
+    /// A note the Hub no longer believes is sounding leaves no policy context
+    /// behind it. The ordinary path is the addressed Terminal record in
+    /// `apply`; this is for the endings that never become one.
+    fn forget_voice(&mut self, source: u8, lifetime: u64) {
+        if let Some(cell) = self.context.iter_mut().find(|cell| {
+            cell.is_some_and(|voice| voice.source == source && voice.lifetime == lifetime)
+        }) {
+            *cell = None;
+        }
     }
 
-    /// Resolve once under the output grant, including unsuccessful fallback
-    /// searches. The returned slot (or proven absence) is reused by application.
-    fn lookup_actual(
-        &self,
-        key: ActualKey,
-        address: Option<usize>,
-        new_on: bool,
-        work: &mut usize,
-    ) -> Option<ActualLookup> {
-        if key.lifetime == 0 {
-            return Some(ActualLookup { key, index: NO_VOICE, address });
-        }
-        if *work == 4096 {
-            return None;
-        }
-        *work += 1;
-        let hint = address.map_or(NO_VOICE, |address| self.actual_index[address]);
-        if self.actual_hint(key, hint) {
-            return Some(ActualLookup { key, index: hint, address });
-        }
-        if new_on {
-            return Some(ActualLookup { key, index: NO_VOICE, address });
-        }
-        if *work + HELD_SESSION > 4096 {
-            return None;
-        }
-        *work += HELD_SESSION;
-        let index = self.actual_keys.iter().position(|old| *old == Some(key));
-        Some(ActualLookup { key, index: index.map_or(NO_VOICE, |index| index as u16), address })
-    }
-
-    pub(super) fn lookup_output(
-        &self,
-        lease: Lease,
-        output: OutputDelta,
-        work: &mut usize,
-    ) -> Option<ActualLookup> {
-        use super::super::event::Event;
-        let address = match output.event {
-            Event::Note { channel: channel @ 0..=15, key: key @ 0..=127, .. }
-            | Event::Expression { channel: channel @ 0..=15, key: key @ 0..=127, .. } => {
-                Some(actual_address(lease, channel as u8, key as u8))
-            }
-            Event::Midi { data: [status, key @ 0..=127, _], .. }
-                if matches!(status & 0xf0, 0x80 | 0x90) =>
-            {
-                Some(actual_address(lease, status & 15, key))
-            }
-            _ => None,
-        };
-        self.lookup_actual(
-            ActualKey { lease, epoch: output.epoch, lifetime: output.lifetime },
-            address,
-            output.event.attack().is_some(),
-            work,
-        )
-    }
-
-    pub(super) fn lookup_direct(
-        &self,
-        delta: harmonigraph_core::canonical::NoteDelta,
-        work: &mut usize,
-    ) -> Option<ActualLookup> {
-        let clock = delta.timing?.clock;
-        let lease = Lease {
-            session: clock.runtime_session,
-            source: harmonigraph_core::SourceId::DIRECT,
-            incarnation: 0,
-            slot: 0,
-        };
-        self.lookup_actual(
-            ActualKey { lease, epoch: clock.epoch, lifetime: delta.lifetime },
-            Some(actual_address(lease, delta.event.channel, delta.event.note)),
-            matches!(delta.event.kind, harmonigraph_core::NoteEventKind::On { .. }),
-            work,
-        )
-    }
-
-    fn store_actual(&mut self, lookup: ActualLookup, voice: Option<Voice>) -> Result<(), ()> {
-        let ActualLookup { key, index, address } = lookup;
-        if let Some(fact) = voice {
-            // Do not overwrite a later scheduled bend or resurrect a scheduled
-            // release. Once this same planned expression is accepted, retain
-            // the exact wire pitch (including its boundary rounding).
-            if let Some(planned) = self.context.iter_mut().flatten().find(|planned| {
-                planned.source == fact.source
-                    && planned.lifetime == fact.lifetime
-                    && planned.decision == fact.decision
-                    && planned.correction == fact.correction
-                    && planned.player == fact.player
-            }) {
-                planned.pitch = fact.pitch;
-            }
-        }
-        if index != NO_VOICE {
-            // The resolved slot no longer carries this identity, so writing it
-            // would overwrite an unrelated voice. Err is the caller's existing
-            // exhaustion channel; it latches the fault and drops this store.
-            if !self.actual_hint(key, index) {
-                return Err(());
-            }
-            let slot = usize::from(index);
-            if self.actual[slot] != voice {
-                self.actual_revision = self.actual_revision.checked_add(1).ok_or(())?;
-            }
-            self.actual[slot] = voice;
-            if voice.is_none() {
-                self.actual_keys[slot] = None;
-                self.actual_free.push(index);
-                if let Some(address) =
-                    address.filter(|address| self.actual_index[*address] == index)
-                {
-                    self.actual_index[address] = NO_VOICE;
-                }
-            } else if let Some(address) = address {
-                self.actual_index[address] = index;
-            }
-        } else if let Some(voice) = voice {
-            let revision = self.actual_revision.checked_add(1).ok_or(())?;
-            let index = self.actual_free.pop().ok_or(())?;
-            let slot = usize::from(index);
-            // The free list handed back an occupied slot. Its bookkeeping is
-            // already inconsistent, so leak the slot rather than pushing it
-            // back: returning it would re-offer the same corrupt entry.
-            if self.actual[slot].is_some() {
-                return Err(());
-            }
-            self.actual[slot] = Some(voice);
-            self.actual_keys[slot] = Some(key);
-            if let Some(address) = address {
-                self.actual_index[address] = index;
-            }
-            self.actual_revision = revision;
-        }
-        Ok(())
-    }
-
-    pub(super) fn actual_output(
-        &mut self,
-        lookup: ActualLookup,
-        voice: Option<harmonigraph_core::canonical::VoiceBaseline>,
-    ) -> bool {
-        if lookup.key.lifetime == 0 {
-            return true;
-        }
-        let voice = voice.map(|voice| Voice::factual(lookup.key.lease.slot, &voice));
-        self.store_actual(lookup, voice).is_ok()
-    }
-
-    pub(super) fn actual_baseline(
-        &mut self,
-        lease: Lease,
-        epoch: u64,
-        frame: &harmonigraph_core::canonical::SourceBaseline,
-    ) -> bool {
-        let source = lease.slot;
-        let mut replaced = false;
-        for (index, cell) in self.actual.iter_mut().enumerate() {
+    /// The same, for an ending addressed to no lifetime because it ends all of
+    /// them. One pass over the cells the scan above already walks.
+    fn forget_source(&mut self, source: u8) {
+        for cell in self.context.iter_mut() {
             if cell.is_some_and(|voice| voice.source == source) {
-                replaced = true;
                 *cell = None;
-                self.actual_keys[index] = None;
-                self.actual_free.push(index as u16);
             }
         }
-        // Stale directory entries are harmless: full lease/epoch/lifetime
-        // equality is required even when replacement reuses the same cell.
-        for voice in frame.voices() {
-            replaced = true;
-            let Some(index) = self.actual_free.pop() else { return false };
-            let key = ActualKey { lease, epoch, lifetime: voice.lifetime };
-            self.actual_keys[usize::from(index)] = Some(key);
-            self.actual_index[actual_address(lease, voice.channel, voice.note)] = index;
-            self.actual[usize::from(index)] = Some(Voice::factual(source, voice));
-        }
-        if replaced {
-            let Some(revision) = self.actual_revision.checked_add(1) else { return false };
-            self.actual_revision = revision;
-        }
-        true
     }
 
-    pub(super) fn actual_direct(
+    pub(super) fn accepted_output(
         &mut self,
-        delta: harmonigraph_core::canonical::NoteDelta,
-        lookup: ActualLookup,
-    ) -> bool {
-        use harmonigraph_core::NoteEventKind;
-        if delta.lifetime == 0 {
-            return true;
-        }
-        let voice = match delta.event.kind {
-            NoteEventKind::On { .. } => Some(Voice {
-                source: 0,
-                lifetime: delta.lifetime,
-                correction: 0,
-                player: 0.0,
-                key: delta.event.note,
-                channel: delta.event.channel,
-                pitch: delta.pitch_microcents.unwrap_or(i64::from(delta.event.note) * 100_000_000),
-                node: None,
-                configuration_revision: 0,
-                decision: 0,
-            }),
-            NoteEventKind::Off => None,
-            NoteEventKind::Tuning { .. } => {
-                if lookup.index == NO_VOICE {
-                    return true;
-                }
-                let Some(mut voice) = self.actual[usize::from(lookup.index)] else {
-                    return false;
-                };
-                let Some(pitch) = delta.pitch_microcents else { return false };
-                voice.player = (pitch - i64::from(voice.key) * 100_000_000) as f64 / 100_000_000.0;
-                voice.pitch = pitch;
-                Some(voice)
+        source: u8,
+        value: OutputDelta,
+        voice: Option<&harmonigraph_core::canonical::VoiceBaseline>,
+    ) {
+        let Some(voice) = voice.filter(|voice| voice.lifetime != 0) else {
+            // An accepted termination the Hub's factual row has already applied
+            // away. A Stop or a membership withdrawal ends its forwarded voices
+            // through emergency releases, which reach the Hub as output and
+            // never as an addressed Terminal record, so this is the only place
+            // that can take them out of the policy's context.
+            if value.lifetime != 0
+                && (value.event.release() || value.outcome.channel_terminal().is_some())
+            {
+                self.forget_voice(source, value.lifetime);
             }
-            _ => return true,
+            return;
         };
-        self.store_actual(lookup, voice).is_ok()
+        let fact = Voice::factual(source, voice);
+        if let Some(planned) = self.context.iter_mut().flatten().find(|planned| {
+            planned.source == fact.source
+                && planned.lifetime == fact.lifetime
+                && planned.decision == fact.decision
+                && planned.correction == fact.correction
+                && planned.player == fact.player
+        }) {
+            planned.pitch = fact.pitch;
+        }
     }
 }
