@@ -1085,8 +1085,31 @@ fn production_a_congested_callback_chokes_a_predecessor_only_with_its_replacemen
         musical(&congested)
     );
     assert_eq!(congested.values.len(), 512, "the callback's credits are spent, not exceeded");
+    // The Hub's own DIRECT input reaches the same staging with no round trip in
+    // the way and a one-event onset group, so 511 clocks are what saturate its
+    // callback rather than 510. The rule and the reservation are the same.
+    source.run_format(raw, vec![], None, None, 512);
+    hub.run_format(raw, vec![note(3, 0, 72, 0, true)], None, None, 512);
+    raw += 512;
+    source.run_format(raw, vec![], None, None, 512);
+    let mut retrigger = vec![note(4, 0, 72, 0, true)];
+    retrigger.extend((0..511).map(|_| raw_midi([0xf8, 0, 0], 0)));
+    let saturated = hub.run_format(raw, retrigger, None, None, 512);
+    assert!(
+        matches!(
+            musical(&saturated)[..],
+            [
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 3, key: 72, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 4, key: 72, .. }),
+            ]
+        ),
+        "DIRECT pairs them the same way: {:?}",
+        musical(&saturated)
+    );
+    assert_eq!(saturated.values.len(), 512, "and spends its credits the same way");
+    raw += 512;
     source.run_format(raw, vec![note(2, 0, 60, 0, false)], None, None, 512);
-    hub.run_format(raw, vec![], None, None, 512);
+    hub.run_format(raw, vec![note(4, 0, 72, 0, false)], None, None, 512);
     for _ in 0..8 {
         raw += 512;
         source.run_format(raw, vec![], None, None, 512);
