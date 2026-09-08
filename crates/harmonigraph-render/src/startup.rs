@@ -151,9 +151,7 @@ mod tests {
 
     #[test]
     fn plugin_shutdown_joins_the_worker_and_prevents_restart() {
-        let instance = wgpu::Instance::default();
-        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
-            eprintln!("no GPU adapter available; skipping");
+        let Some((instance, adapter)) = crate::test_gpu_adapter() else {
             return;
         };
         let (device, queue) =

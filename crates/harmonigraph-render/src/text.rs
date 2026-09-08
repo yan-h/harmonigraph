@@ -2610,3 +2610,13 @@ pub(crate) mod tests {
         }
     }
 }
+
+#[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
+pub(super) fn asset_catalog(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    format: wgpu::TextureFormat,
+    layouts: &crate::spectral_shadow::Layouts,
+) {
+    drop(TextResources::new(device, queue, format, layouts));
+}

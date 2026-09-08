@@ -82,6 +82,15 @@ name = "clap_boundary"
 path = "tests/clap_boundary.rs"
 required-features = ["assert_process_allocs", "clap-boundary-tests"]
 
+[[test]]
+name = "clap_auxiliary"
+path = "tests/clap_auxiliary.rs"
+
+[[test]]
+name = "vst3_auxiliary"
+path = "tests/vst3_auxiliary.rs"
+required-features = ["vst3"]
+
 [dependencies.anyhow]
 version = "1.0"
 

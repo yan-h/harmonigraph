@@ -3,7 +3,7 @@
 //! parameters.
 
 use crate::spectral::SpectralReading;
-use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
+use crate::style::{Gradient, NoteNames, SevensLabel};
 use crate::{
     Camera, ShadowSettings, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX,
     GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX,
@@ -108,9 +108,11 @@ fn exponential_level(p: f32, shape: f32) -> f32 {
 
 impl Default for GlowCurve {
     fn default() -> Self {
-        // A late falloff carries the broad fresh-view field through the gaps
-        // before it drops at the far edge, with earlier falls still in reach.
-        GlowCurve { shape: -1.303_725_2 }
+        // An early falloff: the light spends most of its level near the node
+        // and thins across the gaps, so the fields the wide reach overlaps
+        // meet as a haze rather than a plateau. Captured from the DAW on
+        // 2026-09-07; the late fall it replaced is a drag the other way.
+        GlowCurve { shape: 1.238_095_3 }
     }
 }
 
@@ -546,12 +548,6 @@ pub struct ViewConfig {
     /// above whatever this is, so it is a shape rather than a second
     /// strength — and it is inert without two extras to differ.
     pub octave_extra_blend: f32,
-    // Which shimmer sweeps the octave glyphs has no field here: one pattern
-    // (`pulse_marks`) sizes the sheet for every layer it reaches — the
-    // glyphs of a currently sounding octave and a melody or bass mark's own
-    // strip alike. Saved blobs still carry the `pulse_octaves` key, naming a
-    // pattern nothing reads any more; serde ignores unknown keys, so such a
-    // blob loads intact and drops the key on the next save.
     // ---- What the audio ring says ----------------------------------------
     // Which notes are HELD, or which sine waves are SOUNDING. The two are
     // different questions about the same music, and the lattice answers both
@@ -856,126 +852,6 @@ pub struct ViewConfig {
     /// fresh view opens on — see `impl Default`, where the wait that stops
     /// the chord-release smear is written out.
     pub mark_delay: f32,
-    /// Which shimmer sweeps the lattice (see [`Pulse`]): the sheet takes
-    /// every octave slice a note currently lights, and a melody or bass
-    /// mark's own strip past the band as well — a mark being one slice in
-    /// two pieces, so light crossing one crosses the other. Fresh it is steady,
-    /// because the marks read as note history rather than another moving
-    /// spectral signal. A blob with no `pulse_marks` key gets that same value,
-    /// the container-level `#[serde(default)]` making `impl Default` the one
-    /// fallback for this field as for every other.
-    pub pulse_marks: Pulse,
-
-    // ---- Shimmer ---------------------------------------------------------
-    // The sweep's knobs: what the pattern above is sized and paced by, one
-    // sheet of light crossing the whole lattice.
-    //
-    // All four are inert while the pattern is Off.
-    /// How fast the shimmer travels, in world units per second — the
-    /// lattice's own units, so the DAW window and an exported video sweep at
-    /// the same rate across the same nodes, where a rate in screen pixels
-    /// would not. It travels along the bands' own normal, every pattern here
-    /// being gratings. 0 freezes the sheet where it stands, which is a look
-    /// rather than an off switch (the mode is the switch).
-    pub shimmer_speed: f32,
-    /// How wide the pattern is, in the same world units: the distance from one
-    /// bright peak to the next, which sizes the lit part and the dark
-    /// between it and its neighbour together — the shimmer is one shape,
-    /// scaled, rather than a width and a spacing that could disagree. Every
-    /// pattern is built out of gratings of exactly this period, so the bar
-    /// means the same thing in all of them (a hex cell comes out about 15%
-    /// wider than this, three gratings at sixty degrees being what makes it).
-    ///
-    /// The range spans three ORDERS of it, and the two ends are different
-    /// pictures rather than more and less of one:
-    ///
-    /// - Wide (around the default, several nodes to a band) is a sheet
-    ///   crossing the lattice, each node lighting as it passes.
-    /// - Around one node to a band the two read against each other worst:
-    ///   neighbours land most of a cycle apart and the picture is alternating
-    ///   NODES rather than a band passing over them, the lattice's own
-    ///   spacing being irregular (the thirds and fifths axes both project
-    ///   onto the screen's x).
-    /// - Below that, several bands cross a single node at once and it is a
-    ///   texture on the nodes rather than a sweep between them — which is a
-    ///   look worth reaching, and why the floor is a small fraction of a node
-    ///   rather than a stop above the awkward middle.
-    ///
-    /// A node is [`spacing`](Self::spacing) × 0.25 in world radius, so the
-    /// count of bands across one is roughly its diameter over this.
-    ///
-    /// The tight end is a resolution trade as well as a look, and the shader
-    /// spends it deliberately. A pattern is sines of a world coordinate
-    /// sampled once per fragment, so a period approaching a pixel — a tight
-    /// setting seen from far enough out — has no samples left to carry it and
-    /// would alias into moire that crawls as the camera moves. Rather than
-    /// draw that, `shimmer_terms` fades the sheet's amplitude out as its
-    /// period closes on the pixel footprint, so the layer settles to its
-    /// unshimmered self instead of to a shifting texture. The setting is
-    /// still the size it says it is on the lattice; what runs out is the
-    /// SAMPLING, and the fade is what makes running out look like an ending
-    /// rather than a fault. Frame the shot at the zoom the tight end is
-    /// chosen for.
-    pub shimmer_width: f32,
-    /// How strong the sweep is where it passes, 0..1 being none to the full
-    /// tuned depth: the ratio of light between a band's crest and the trough
-    /// beside it, which is ONE number for the whole of what a band does.
-    ///
-    /// The light is a MULTIPLY — an exposure — rather than an amount added or a
-    /// mix toward white (`SHIMMER_EXPOSURE` in `lattice.wgsl`). That is what
-    /// makes one setting mean one thing across the pitch ramp, and it means it
-    /// in the currency the eye reads a moving texture in: the crest-to-trough
-    /// ratio a setting is worth varies 3% from the ramp's dark end to its bright
-    /// one, where an added light varies 28% and a mix toward white more still.
-    /// A sheet that was uniform in the LIGHT it added — which the addition very
-    /// nearly was — still read weaker on the ramp's bright half, because equal
-    /// added light is not equal contrast up there.
-    ///
-    /// What it costs is CHROMA at a crest, and what it holds is hue. Scaling all
-    /// three channels by one gain slides a color along its own chromaticity, and
-    /// where the crest runs out of room it pales toward white rather than
-    /// clipping — all three channels moving together, so the color keeps its
-    /// hue while it loses some of its colorfulness. Across the ramp's two ends
-    /// at 1 that is 0.7 and 5.0 degrees of hue, against 88% and 57% of the
-    /// chroma. An addition clips in whichever channel is already highest, which
-    /// holds more chroma (99.6% and 73%) and swings the hue three times as far
-    /// (15.3 degrees); a mix toward white leaves 15% of the chroma everywhere,
-    /// at a trough as much as at a crest.
-    ///
-    /// 0 is the layer drawing exactly as it does unshimmered, from a bar rather
-    /// than from the mode. Where the display leaves the swing room, the whole
-    /// of it goes upward: the troughs sit at the layer's own color and stay
-    /// there. Where a color is too bright for that, the swing slides down to
-    /// keep its crest a color rather than a white flash, and the troughs pay
-    /// for the slide — nothing below the middle of the default ramp, about 15
-    /// `L*` of standing shade at its bright end at 1.
-    ///
-    /// What the light costs is real at any setting, and it is the point of
-    /// the bar: under a strong band an indicator says "an octave sounds here"
-    /// without saying which.
-    pub shimmer_intensity: f32,
-    /// How the light is shared out ACROSS one period, 0..1 — where
-    /// [`shimmer_intensity`](Self::shimmer_intensity) says how much light
-    /// there is, this says how gradually it arrives.
-    ///
-    /// The pattern is a raised cosine raised to a power, and this is the
-    /// power, log-spaced from 8 at 0 to 1 at 1:
-    ///
-    /// - Toward 0 the peak is a narrow crest on a layer that is otherwise at
-    ///   rest — a hard white band with a dark field around it, which at a
-    ///   tight width is a stripe pattern more than a sweep.
-    /// - Toward 1 the exponent reaches 1 and the pattern IS the cosine: every
-    ///   point of the period is on its way somewhere, so the brightest part
-    ///   fades into the clearest across the whole of the gap rather than at
-    ///   an edge. Nothing is at rest, which is the cost — the layer is lit
-    ///   somewhere at every instant.
-    ///
-    /// One number for both halves of the shape, like Intensity: the bright
-    /// part narrows exactly as the dark part widens, so a period always adds
-    /// up to itself and no setting can leave the sheet mostly-lit and
-    /// mostly-dark at once.
-    pub shimmer_softness: f32,
-
     // ---- Home markers ----------------------------------------------------
     // The cross standing at each home-sheet node position (see
     // `derive_pluses`), and the whole of what an unplayed lattice draws. Its
@@ -1106,6 +982,11 @@ pub struct ViewConfig {
     /// Off by default: the HUD is a development instrument, and it sits over
     /// the picture the plugin exists to draw. The Display tab's System page,
     /// under Performance, is where it gets switched on.
+    ///
+    /// It was ON in the DAW when the 2026-09-07 look was captured, and stayed
+    /// out of that capture for the reason above — the overlay is what the
+    /// picture is read AGAINST while it is dialled, not part of the picture.
+    /// `the_performance_overlay_ships_off` holds it.
     ///
     pub show_perf: bool,
     /// Expand the overlay from the headline numbers into the full per-stage
@@ -2064,17 +1945,6 @@ impl ViewConfig {
             fresh.octave_extra_blend
         };
 
-        // The shimmer's four knobs, on the same grounds and against the same
-        // hole in `clamp`. `derive_scene` clamps all four into their ranges
-        // every frame, which is what the shader trusts — and a NaN walks
-        // through a clamp untouched, because every comparison against it is
-        // false. From there it is a divide (the period), a `pow` exponent
-        // (the softness) and two mixes, so ONE non-finite number in a
-        // hand-edited blob NaNs the sheet, and a NaN sheet takes the rings and
-        // the slices they name with it wherever the mode is on. Repaired here rather
-        // than in `derive_scene` because this is the blob's own door: the bars
-        // cannot reach these values, so a view that holds one got it from a
-        // file.
         // The mark delay, against that same hole: it is added to a timestamp
         // and the sum divided by the attack, so a non-finite one poisons the
         // ease of every ring. The symptom is the rings VANISHING, not drawing
@@ -2227,11 +2097,6 @@ impl ViewConfig {
         self.glow_release =
             finite_or(self.glow_release, fresh.glow_release).clamp(0.0, GLOW_BALLISTICS_MAX);
 
-        self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
-        self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);
-        self.shimmer_intensity = finite_or(self.shimmer_intensity, fresh.shimmer_intensity);
-        self.shimmer_softness = finite_or(self.shimmer_softness, fresh.shimmer_softness);
-
         // The resting marker's three lengths. The arm and its taper are a
         // reach-and-fade PAIR, held the way every such pair here is — the fade
         // clamped to its own reach — because `edge_bar` puts `reach - taper` on
@@ -2263,16 +2128,13 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
     }
 }
 
-/// The `L*` a fresh [`ViewConfig::lattice_ground`] opens on — and a fresh
-/// [`ViewConfig::marker_ink`] with it, so the resting picture opens as ONE grey
-/// and the two bars start as a pair to be moved apart. Named because both
-/// `_lightness` accessors need it without building a whole fresh view to read
+/// The `L*` a fresh [`ViewConfig::lattice_ground`] opens on. Named because the
+/// `_lightness` accessor needs it without building a whole fresh view to read
 /// one field off. Named, and not a second value: the `Default` below is written
 /// in terms of it, the way it is written in terms of `octaves::DEFAULT_COUNT`.
 ///
-/// Which grey this is, and why that rung, is at
-/// [`skin::surface_faint_color`](crate::skin::surface_faint_color).
-const DEFAULT_RING_GROUND: f32 = 20.0;
+/// Where on the chrome's ladder this grey sits is said at the `Default` below.
+const DEFAULT_RING_GROUND: f32 = 11.0;
 
 /// The `L*` a fresh [`ViewConfig::marker_ink`] opens on. Kept beside the ring
 /// ground because the accessors repair the two independently without building
@@ -2356,24 +2218,25 @@ impl Default for ViewConfig {
             pitch_gradient: Gradient {
                 hue_start: 257.842_65,
                 hue_span: 190.0,
-                lightness: 53.0,
-                lightness_ramp: 31.0,
+                // Brighter in the middle and over a much steeper ramp than
+                // the arc opened on (53.0 over 31.0): the low end stays dark
+                // enough to sit back while the top of the range carries real
+                // light, which is what separates octaves at a glance.
+                lightness: 60.5,
+                lightness_ramp: 65.0,
                 // Denominated in the floor every hue can hold (see
                 // `chroma_of`), which is a tighter axis than the per-hue
-                // ceiling: this is the fraction holding the mean colorfulness
-                // of THIS arc where 0.601_670_8 of the ceiling held it, so the
-                // lattice a fresh install draws is as colored as it was and
-                // only spends that color evenly. Retuning the type's own
-                // `default_chroma` does not reach here — the two are
-                // independent numbers, which is the point of writing this out.
-                chroma: 0.793_2,
-                // Flat, where the brightness ramp is not: the hue arc is
-                // already spending color on pitch, and a chroma ramp over it
-                // would say the same thing twice at the price of one end of
-                // the range going grey. Dialled rather than opened on — see
-                // `default_chroma_ramp`, which the type's own default takes
-                // for the same reason.
-                chroma_ramp: 0.0,
+                // ceiling. Retuning the type's own `default_chroma` does not
+                // reach here — the two are independent numbers, which is the
+                // point of writing this out.
+                chroma: 0.825_000_05,
+                // A slight ramp, no longer flat: the brightness ramp above it
+                // is steep enough that the bright end would read washed
+                // without a little more color under it. Small on purpose —
+                // the hue arc is still what spends color on pitch, and a
+                // ramp that competed with it would take one end of the range
+                // grey.
+                chroma_ramp: 0.069_999_99,
             },
             // A narrow octave band, stopping short of the quad edge, with a
             // tight gap everywhere: the octaves read as a ring of distinct
@@ -2395,17 +2258,16 @@ impl Default for ViewConfig {
             // person can meet by dialling neither.
             ring_gap: 0.05,
             octave_gap: 0.05,
-            // The rung of the chrome's own ladder the rings stand on: `L*` 20.0
-            // is the skin's `surface_faint`, two rungs ABOVE the well grey
-            // (4.7) the lattice pane stands on, and clear of the panel between
-            // them (8.8), which is near enough the ground to read as a smudge
-            // on it rather than as a raised surface. A quiet ring is therefore
-            // a faintly raised backdrop that is plainly still a reading —
-            // `the_fresh_ground_is_the_skins_faint_surface` holds the number to
-            // the skin, so retuning that rung and leaving this behind is a test
-            // failure rather than a drift.
+            // Where the DAW look was captured on 2026-09-07, a step DOWN from
+            // the `L*` 20.0 the fresh view stood on before: just above the
+            // chrome's panel (8.8) and well short of its faint surface (20.0),
+            // so a quiet ring is a dim reading barely raised off the pane and
+            // still clear of the well grey (4.7) the lattice pane stands on.
+            // Nothing ties this to the skin any more — the chrome's ladder and
+            // the ground are dialled apart.
             lattice_ground: DEFAULT_RING_GROUND,
-            // One rung above the ring ground, so the resting positions stay
+            // Well above the ring ground — 17 `L*` clear of it since the
+            // capture moved the ground down — so the resting positions stay
             // legible through the broad glow without competing with a sounding
             // node's white name.
             marker_ink: DEFAULT_MARKER_INK,
@@ -2480,25 +2342,18 @@ impl Default for ViewConfig {
             // OUT over the whole Fade, so lifting a chord one key at a time
             // leaves a fading mark on nearly every note of it.
             mark_delay: 0.102_448_754,
-            // The marks hold steady so they read as note history rather than
-            // as another moving spectral signal.
-            pulse_marks: Pulse::Off,
-            // These values ride inert with the steady mode and preserve the
-            // dialled sheet if a moving pattern is selected.
-            shimmer_speed: 0.335_761_5,
-            shimmer_width: 0.639_271_56,
-            shimmer_intensity: 0.517_033_16,
-            shimmer_softness: 1.0,
-            // Long arms nearly fill the middle inside the ring stack, making
-            // the resting lattice continuous enough to read through the wide
-            // glow field.
-            plus_arm: 0.477_250_43,
-            // A narrow stroke keeps that reach from turning each crossing into
-            // a solid block.
-            plus_width: 0.064_242_415,
-            // Most of each arm is taper, so the long marker arrives at a fine
-            // point rather than carrying its full width into the ring stack.
-            plus_taper: 0.367_250_4,
+            // Arms reaching about half way from the crossing to the ring stack
+            // (`ring_inner`, in the same UV): the resting lattice reads as
+            // separate crosses with ground between them rather than as a
+            // near-continuous mesh. Captured from the DAW on 2026-09-07, with
+            // the two below.
+            plus_arm: 0.305_142_85,
+            // A hairline stroke, so the crosses stay marks rather than blocks
+            // through the wide glow field.
+            plus_width: 0.045_857_143,
+            // About two thirds of each arm is taper, so the marker arrives at
+            // a fine point rather than carrying its width to the tip.
+            plus_taper: 0.195_142_84,
             // The fresh 12-TET tuning satisfies both comma identities, so the
             // spelling locks open on the tuning's own equivalences rather than
             // showing duplicate comma spellings.
@@ -2510,28 +2365,38 @@ impl Default for ViewConfig {
             show_perf: false,
             show_perf_detail: false,
             render_scale: 1.0,
-            // A halo at about four fifths strength: a node's rings are quiet
-            // shapes, and the bloom is what gives them presence.
-            bloom_strength: 0.806_154_85,
+            // A halo at about half strength, down from the four fifths the
+            // view opened on: a node's rings are quiet shapes and the bloom is
+            // what gives them presence, but the glow beside it now carries
+            // more of that job — see `glow_blend` and `glow_wash` below.
+            bloom_strength: 0.482_142_87,
             // A reach spanning several lattice steps turns each node's light
-            // into a shared field. The lower strength keeps those overlapping
-            // fields from flattening the rings and markers drawn over them.
+            // into a shared field, laid down at about half strength — where
+            // the DAW look was captured on 2026-09-07, up from the quarter the
+            // view opened on before.
             glow_reach: 4.546_375,
-            glow_strength: 0.274_842_2,
+            glow_strength: 0.484_285_7,
             glow_curve: GlowCurve::default(),
-            // Both groups at one style, which is the fresh picture with the
-            // groups not yet asked anything: the numbers themselves and why
-            // they are those numbers live in `impl Default for ShadowStyle`,
-            // that being the one source of a persisted field's fallback.
+            // Four groups at four styles, which is the picture as captured
+            // from the DAW: the numbers themselves live in `impl Default for
+            // ShadowSettings`, that being the one source of a persisted
+            // group's fallback.
             shadow: ShadowSettings::default(),
-            // The whole field, which is the fresh picture with no bar in it:
-            // every piece of the lattice's ink wears the light it stands in,
-            // and the bar is there to pull a SOUNDING slice back out of its own
-            // halo without the grey around it going with it.
-            glow_wash: 1.0,
-            // Each octave keeps its own arc of colour around the node instead
-            // of averaging with the opposite side.
-            glow_blend: 0.0,
+            // About a third of the field, where the picture opened on the
+            // whole of it: a sounding slice is pulled back out of its own halo
+            // and reads as ink rather than as light, while the resting grey
+            // around it still wears what it stands in. That is exactly what
+            // the bar is for, and the fresh view now uses it.
+            glow_wash: 0.365_952_37,
+            // Two thirds of the way round: an octave's arc is softened well
+            // into its neighbours rather than cut against them, which is what
+            // turns the overlapping fields of a chord into one light instead
+            // of a stack of coloured rings.
+            glow_blend: 0.669_761_9,
+            // The fixed-peak glow alone: with the blend above carrying a
+            // chord's halos into each other, the per-channel screen
+            // accumulation was adding brightness where they meet on top of a
+            // union that already reads as one light.
             glow_accumulation: 0.0,
             // Slow and fluid, which is what the pair is for: a light that
             // arrives inside a third of a second and takes a couple of seconds

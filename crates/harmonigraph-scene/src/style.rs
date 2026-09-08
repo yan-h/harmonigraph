@@ -370,66 +370,6 @@ impl Gradient {
     }
 }
 
-/// Which shimmer sweeps the lattice: one sheet of soft light laid over every
-/// octave slice a note currently lights, in the pattern this names, or
-/// [`Off`](Pulse::Off) for the steady picture.
-///
-/// Every live mode is the same animation with a different shape to it, which
-/// is what lets one set of knobs size all of them
-/// ([`ViewConfig::shimmer_speed`](crate::ViewConfig::shimmer_speed) and the
-/// three beside it). They share more than the knobs: the sheet is ONE field
-/// spanning the whole lattice rather than a copy per node — every node
-/// samples it at its own place on the plane the billboards face — so the
-/// light reads as raking over the picture instead of as many small identical
-/// animations.
-///
-/// A melody or bass mark's own strip takes the sheet too, past the band — a
-/// mark being the ring together with the octave it names, so light crossing
-/// the one has to cross the other. A silent slice with no mark extending it
-/// draws steady. All of it lives in `lattice.wgsl`'s Shimmer section.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum Pulse {
-    /// Steady — no animation, the look every earlier build drew.
-    #[default]
-    Off,
-    /// Parallel bands laid diagonally, travelling along their own normal: one
-    /// grating, and the plainest reading of light passing over the lattice.
-    Bands,
-    /// Two gratings crossed at right angles and multiplied, which is a
-    /// checkerboard with the corners rounded off: cells of light and cells of
-    /// dark, swapping as the sheet slides a half cell.
-    Checker,
-    /// Three gratings sixty degrees apart and summed — the hexagonal answer
-    /// to [`Checker`](Pulse::Checker), a honeycomb of bright cells.
-    ///
-    /// It tessellates where a checkerboard fights the picture: the lattice's
-    /// own rows run along three directions, not two, so a hex sheet lands
-    /// with them instead of across them, and a hexagon's neighbours are all
-    /// edge-to-edge where a square's touch at the corners.
-    Hex,
-}
-
-impl Pulse {
-    /// Index the shader reads (`ShimmerParams::pattern` in
-    /// harmonigraph-render). 0 is the steady layer and every other value picks
-    /// a pattern out of `shimmer_terms`.
-    pub fn shader_index(self) -> u32 {
-        match self {
-            Pulse::Off => 0,
-            Pulse::Bands => 1,
-            Pulse::Checker => 2,
-            Pulse::Hex => 3,
-        }
-    }
-
-    /// Whether this mode lays a sheet over its layer at all — everything but
-    /// [`Off`](Pulse::Off). What the UI grays the shared Shimmer knobs on,
-    /// and what the shader's identity return tests.
-    pub fn sweeps(self) -> bool {
-        self != Pulse::Off
-    }
-}
-
 /// What text an OFF-SHEET node's label carries — a node on any sevens sheet
 /// but the center one.
 ///
@@ -801,6 +741,10 @@ pub struct ShadowStyle {
 }
 
 impl Default for ShadowStyle {
+    /// The style a bare `ShadowStyle` opens on: a fixture, or the renderer's
+    /// fallback for a caster handed no style. Not what a fresh VIEW draws —
+    /// its four groups are [`ShadowSettings::default`], and each of them
+    /// differs from this.
     fn default() -> ShadowStyle {
         ShadowStyle {
             // Distance keeps a caster's form at this broad shadow width, where
@@ -813,7 +757,7 @@ impl Default for ShadowStyle {
             // the shared field back to the ground.
             depth: 0.477_784_4,
             // The plain exponential the standoff has always decayed on, so a
-            // fresh view is the picture from before the bar existed to the
+            // bare style is the picture from before the bar existed to the
             // last bit (`pow` is skipped outright at 1, see
             // `standoff_coverage`).
             falloff: 1.0,
@@ -860,7 +804,7 @@ impl ShadowStyle {
 /// want independent shadows, and the width that preserves a ring need not be
 /// the width that keeps a letterform or resting marker legible.
 ///
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ShadowSettings {
     /// The lattice's node geometry: audio rings, octave bands and marks.
@@ -871,6 +815,54 @@ pub struct ShadowSettings {
     pub spectral_geometry: ShadowStyle,
     /// The spectral pane's note names and axis labels, and the spiral's names.
     pub spectral_text: ShadowStyle,
+}
+
+impl Default for ShadowSettings {
+    /// The four groups a fresh view opens on, and the fallback for any one of
+    /// them missing from a blob (the container-level `serde(default)` above).
+    ///
+    /// Four styles rather than one, captured from the DAW on 2026-09-07: the
+    /// picture as dialled, group by group. Every group is a distance shadow
+    /// (see [`ShadowStyle::default`]); what differs is how far each kind of
+    /// ink casts, how dark, and how the decay is bent.
+    fn default() -> ShadowSettings {
+        ShadowSettings {
+            // As wide as the bar goes at about a third of the depth, falling
+            // early: a node's rings and marks stand in a broad, shallow
+            // shadow.
+            lattice_geometry: ShadowStyle {
+                kernel: ShadowKernel::Distance,
+                width: 1.0,
+                depth: 0.329_285_7,
+                falloff: 0.757_595_24,
+            },
+            // Tight and shallower than the geometry beside it, a hair under
+            // the plain exponential: a letterform or a resting marker keeps a
+            // crisp edge and sits close to what it is written on rather than
+            // standing off it.
+            lattice_text: ShadowStyle {
+                kernel: ShadowKernel::Distance,
+                width: 0.242_857_14,
+                depth: 0.297_857_14,
+                falloff: 0.984_738_1,
+            },
+            // Full depth under the roll's ribbons and the spiral's dots, wide
+            // enough to lift them off the heatmap.
+            spectral_geometry: ShadowStyle {
+                kernel: ShadowKernel::Distance,
+                width: 0.739_761_9,
+                depth: 1.0,
+                falloff: 0.693_238_14,
+            },
+            // Full depth under the spectral pane's names and axis labels too.
+            spectral_text: ShadowStyle {
+                kernel: ShadowKernel::Distance,
+                width: 0.642_857_13,
+                depth: 1.0,
+                falloff: 0.797_345_2,
+            },
+        }
+    }
 }
 
 impl ShadowSettings {

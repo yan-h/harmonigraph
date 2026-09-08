@@ -1,0 +1,82 @@
+[
+  {
+    "name": "export-bindings",
+    "mode": "export",
+    "status": 0,
+    "hits": 0,
+    "unique_hits": 0,
+    "sources": 3
+  },
+  {
+    "name": "export-renderer",
+    "mode": "export",
+    "status": 0,
+    "hits": 0,
+    "unique_hits": 0,
+    "sources": 11830
+  },
+  {
+    "name": "export-offline-goldens",
+    "mode": "export",
+    "status": 0,
+    "hits": 0,
+    "unique_hits": 0,
+    "sources": 126
+  },
+  {
+    "name": "strict-bindings",
+    "mode": "strict",
+    "status": 0,
+    "hits": 3,
+    "unique_hits": 3,
+    "sources": 0
+  },
+  {
+    "name": "strict-renderer",
+    "mode": "strict",
+    "status": 0,
+    "hits": 11830,
+    "unique_hits": 67,
+    "sources": 0
+  },
+  {
+    "name": "strict-offline-goldens",
+    "mode": "strict",
+    "status": 0,
+    "hits": 126,
+    "unique_hits": 32,
+    "sources": 0
+  },
+  {
+    "name": "missing-strict",
+    "mode": "strict",
+    "status": 101,
+    "hits": 2,
+    "unique_hits": 2,
+    "sources": 0
+  },
+  {
+    "name": "missing-fallback",
+    "mode": "fallback",
+    "status": 0,
+    "hits": 2,
+    "unique_hits": 2,
+    "sources": 1
+  },
+  {
+    "name": "mismatch-strict",
+    "mode": "strict",
+    "status": 101,
+    "hits": 2,
+    "unique_hits": 2,
+    "sources": 0
+  },
+  {
+    "name": "mismatch-fallback",
+    "mode": "fallback",
+    "status": 0,
+    "hits": 2,
+    "unique_hits": 2,
+    "sources": 1
+  }
+]

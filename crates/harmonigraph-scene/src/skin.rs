@@ -1,9 +1,7 @@
 //! The skin: one struct owning every color the CHROME draws, so a look is
 //! defined in exactly one place. `harmonigraph-ui::theme` converts the bytes
 //! into egui colors for the panel chrome; the scene reaches them through
-//! [`well_color`], the ground it is composited over, and through
-//! [`surface_faint_color`], the rung a fresh
-//! [`ViewConfig::lattice_ground`](crate::ViewConfig) opens on.
+//! [`well_color`], the ground it is composited over.
 //!
 //! Only one built-in skin exists so far (the original dark look). Adding a
 //! skin = another `Skin` value plus a way to select it (a `set_skin`
@@ -21,8 +19,7 @@ pub struct Skin {
     // CHROME only. What the lattice is drawn AT REST in — its markers, both of
     // a node's rings where nothing is lit — is a view setting rather than a
     // skin color (`ViewConfig::lattice_ground`), because it is a thing to be
-    // dialled while a picture is being read. The skin's part in it is
-    // `surface_faint`, the rung that setting opens on.
+    // dialled while a picture is being read.
     /// Window/panel background.
     pub panel: [u8; 3],
     /// Recessed areas: console scrollback, tab bar, meters.
@@ -129,41 +126,5 @@ pub fn ground_color(rgb: (u8, u8, u8)) -> Vec4 {
 /// other the colour a frame is matted with.
 pub fn well_color() -> Vec4 {
     let [r, g, b] = active_skin().well;
-    ground_color((r, g, b))
-}
-
-/// The active skin's `surface_faint`: the grey a subtly raised surface of the
-/// chrome sits at, and the rung both of the lattice's at-rest bars open on —
-/// [`ViewConfig::lattice_ground`](crate::ViewConfig) for a node's two rings
-/// where nothing is lit, and [`ViewConfig::marker_ink`](crate::ViewConfig) for
-/// the markers standing between the nodes. Equal there, and free to be dialled
-/// apart.
-///
-/// Which rung of the ladder is the whole of what that default is, and the
-/// ladder is short: [`well_color`] — the ground the lattice is composited
-/// OVER — at `L*` 4.7, the chrome's panel at 8.8, and this at 20.0. The
-/// lattice's ground has to sit well ABOVE the ground it stands on, so that a
-/// quiet ring and a resting marker read as faintly raised structure rather
-/// than as marks on the surface. The well IS the pane exactly, and structure
-/// standing there vanishes into it — which is what a ring dialled to no width
-/// looks like, the off switch
-/// ([`ViewConfig::spectral_ring_width`](crate::ViewConfig)). The panel a single
-/// rung up is barely clear of it, near enough that the structure reads as a
-/// smudge on the ground rather than as a surface above it.
-///
-/// A step DOWN from the chrome's own [`hairline`](Skin::hairline), which is
-/// the other grey the lattice could rule itself with — the argument for that
-/// one being that the picture and the panel around it then cannot drift. What
-/// it costs is the whole reason this is the rung instead: it holds the
-/// lattice's structure to a CHROME decision, so the markers answer to the settings
-/// pane's dividers rather than to the rings standing over them, and no bar can
-/// move any of it. The rings are on the same sheet as the markers; the dividers
-/// are not.
-///
-/// A DEFAULT and not the value itself: the bar reaches the whole `L*` axis, and
-/// `the_fresh_ground_is_the_skins_faint_surface` is what keeps this rung and
-/// that default the same number.
-pub fn surface_faint_color() -> Vec4 {
-    let [r, g, b] = active_skin().surface_faint;
     ground_color((r, g, b))
 }

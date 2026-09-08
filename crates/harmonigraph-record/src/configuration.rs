@@ -19,6 +19,8 @@ pub(crate) struct RecordFence {
     pub intent: AtomicU64,
     pub finishing: AtomicBool,
     pub failed: AtomicBool,
+    /// First worker-side failure detail. Audio-thread failures only set `failed`.
+    pub failure_message: parking_lot::Mutex<Option<String>>,
     pub configuration_closed: AtomicU64,
     pub source_closed: AtomicU64,
     /// The joined plugin still owns actual source history not yet published.
@@ -38,6 +40,10 @@ pub(crate) struct RecordFence {
     pub worker_failure_accounted: AtomicBool,
     #[cfg(feature = "test-support")]
     pub test_directory: parking_lot::Mutex<Option<std::path::PathBuf>>,
+    #[cfg(feature = "test-support")]
+    pub test_wav_limit: parking_lot::Mutex<Option<u64>>,
+    #[cfg(feature = "test-support")]
+    pub test_wav_finish_failure: AtomicBool,
     #[cfg(feature = "test-support")]
     pub boundary_pause: TestPause,
     #[cfg(feature = "test-support")]
@@ -67,5 +73,13 @@ impl RecordFence {
     }
     pub fn fail(&self) {
         self.failed.store(true, Ordering::Release);
+    }
+
+    /// Worker only: preserve the concrete cause across GUI status refreshes.
+    pub fn fail_with_message(&self, message: String) {
+        self.failure_message
+            .lock()
+            .get_or_insert_with(|| format!("recording incomplete: {message}; no render started"));
+        self.fail();
     }
 }

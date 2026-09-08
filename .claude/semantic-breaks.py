@@ -2,9 +2,9 @@
 """Lay out markdown prose one clause per line, and check that it stays that way.
 
 `--check` is the CI mode: it reports lines that break mid-clause and exits 1.
-`--write` rewrites the files. Both operate on the tracked `.md` files this repo
-owns; `vendor/` is excluded so a local fork keeps diffing cleanly against
-upstream.
+`--write` repairs those breaks, leaving accepted lines alone. Both operate on
+the tracked `.md` files this repo owns; `vendor/` is excluded so a local fork
+keeps diffing cleanly against upstream.
 
 A line break inside a paragraph renders as a space, so where the breaks fall
 changes no rendered output. What it changes is the diff: an edit touches the
@@ -14,9 +14,9 @@ splicing paragraphs cannot leave a fragment stranded on its own line.
 
 Structure is left alone entirely — frontmatter, fenced code, tables, headings,
 HTML blocks, indented code, and reference definitions are copied through
-untouched. Inside prose, a break is only ever taken at a boundary that already
-carries punctuation, and never inside a code span, a link target, or after an
-abbreviation.
+untouched. Inside prose, repairs join mid-clause breaks without introducing
+new ones. Accepted boundaries stay in place, including those inside multiline
+code spans and links.
 """
 
 from __future__ import annotations
@@ -26,23 +26,12 @@ import re
 import subprocess
 import sys
 
-# Sentence enders, then the clause boundaries the spec allows. Breaking only
-# after punctuation is what makes the check below a mechanical test rather than
-# a judgement: every line of a paragraph but its last ends at one of these.
-SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
-CLAUSE_END = re.compile(r"(?<=[;:—])\s+")
-
-# A period that does NOT end a sentence. Version numbers and the Latin
-# abbreviations this tree actually uses; a break after one reads as a sentence
-# boundary that is not there.
-ABBREV = re.compile(r"(?:^|\s)(?:e\.g|i\.e|cf|vs|etc|Dr|Mr|Ms|St|approx|Fig|no)\.$|\d\.$", re.I)
-
 # Structure that is copied through rather than reflowed.
 STRUCTURAL = re.compile(
     r"""^(
       \s*(\#{1,6})\s        # heading
     | \s*[-*+]\s            # bullet
-    | \s*\d+\.\s            # ordered item
+    | \s*\d+[.)]\s          # ordered item
     | \s*>                  # block quote
     | \s*\|                 # table row
     | \s*<                  # html block
@@ -52,90 +41,37 @@ STRUCTURAL = re.compile(
     )""",
     re.X,
 )
+FENCE = re.compile(r"^(`{3,}|~{3,})")
 
 
-def _spans_to_protect(text: str) -> list[tuple[int, int]]:
-    """Character ranges a break must not fall inside."""
-    spans: list[tuple[int, int]] = []
-    for m in re.finditer(r"`[^`]*`", text):  # inline code
-        spans.append(m.span())
-    for m in re.finditer(r"\[[^\]]*\]\([^)]*\)", text):  # inline link
-        spans.append(m.span())
-    return spans
-
-
-def _inside(pos: int, spans: list[tuple[int, int]]) -> bool:
-    return any(a < pos < b for a, b in spans)
-
-
-def split_clauses(text: str) -> list[str]:
-    """Break `text` after sentences, then after clause punctuation."""
-    protect = _spans_to_protect(text)
-
-    def cut(chunk: str, pattern: re.Pattern[str], offset: int) -> list[str]:
-        out, last = [], 0
-        for m in pattern.finditer(chunk):
-            if _inside(offset + m.start(), protect):
-                continue
-            head = chunk[last : m.start()]
-            if ABBREV.search(head):
-                continue
-            out.append(head)
-            last = m.end()
-        out.append(chunk[last:])
-        return [p for p in out if p.strip()]
-
-    pieces, base = [], 0
-    for sentence in cut(text, SENTENCE_END, 0):
-        start = text.index(sentence, base)
-        base = start + len(sentence)
-        pieces.extend(cut(sentence, CLAUSE_END, start))
-    return [p.strip() for p in pieces if p.strip()]
+def _indent(line: str) -> str:
+    return line[: len(line) - len(line.lstrip())]
 
 
 def reflow(lines: list[str]) -> list[str]:
-    """Rewrite prose paragraphs one clause per line; copy structure through."""
+    """Repair only reported breaks, retaining indentation and valid boundaries."""
+    # Share the checker's structural decisions: a passing file is a no-op,
+    # including comma breaks and optional clause splits the checker accepts.
+    bad = {n for n, _ in offenders("", lines)}
     out: list[str] = []
-    fence: str | None = None
-    para: list[str] = []
     i = 0
-
-    # YAML frontmatter is data, not prose.
-    if lines and lines[0].strip() == "---":
-        for j in range(1, len(lines)):
-            if lines[j].strip() == "---":
-                out.extend(lines[: j + 1])
-                i = j + 1
-                break
-
-    def flush() -> None:
-        if not para:
-            return
-        # A trailing double space is a hard break and is load-bearing; leave the
-        # whole paragraph alone rather than guess where it wanted to break.
-        if any(p.endswith("  ") for p in para[:-1]):
-            out.extend(para)
-        else:
-            out.extend(split_clauses(" ".join(p.strip() for p in para)))
-        para.clear()
-
     while i < len(lines):
-        line = lines[i]
-        stripped = line.strip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            flush()
-            marker = stripped[:3]
-            fence = None if fence == marker else marker
-            out.append(line)
-        elif fence is not None:
-            out.append(line)
-        elif not stripped or STRUCTURAL.match(line):
-            flush()
-            out.append(line)
+        start = i
+        while i + 1 in bad:
+            i += 1
+        if start == i:
+            out.append(lines[i])
         else:
-            para.append(line)
+            # The checker never crosses an indentation change. Preserve that
+            # prefix so list continuations stay in place. Only join: inserting
+            # new breaks could split an inline span opened on an accepted line
+            # before this run, turning its text into a heading or list marker.
+            indent = _indent(lines[start])
+            joined = " ".join(p.strip() for p in lines[start : i + 1])
+            # The last line may end in an explicit Markdown hard break.
+            suffix = lines[i][len(lines[i].rstrip()) :]
+            out.append(indent + joined + suffix)
         i += 1
-    flush()
     return out
 
 
@@ -150,15 +86,21 @@ def offenders(path: str, lines: list[str]) -> list[tuple[int, str]]:
             if n > 1 and stripped == "---":
                 in_front = False
             continue
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            marker = stripped[:3]
-            fence = None if fence == marker else marker
+        if fence is not None:
+            if stripped.startswith(fence) and not stripped.strip(fence[0]):
+                fence = None
             continue
-        if fence is not None or not stripped or STRUCTURAL.match(line):
+        marker = FENCE.match(stripped)
+        if marker:
+            fence = marker[0]
+            continue
+        if not stripped or STRUCTURAL.match(line):
             continue
         nxt = lines[n] if n < len(lines) else ""
-        if not nxt.strip() or STRUCTURAL.match(nxt):
+        if not nxt.strip() or STRUCTURAL.match(nxt) or FENCE.match(nxt.strip()):
             continue  # last line of a paragraph may end anywhere
+        if _indent(line) != _indent(nxt):
+            continue  # preserve list depth and lazy continuation boundaries
         if line.endswith("  "):
             continue  # explicit hard break
         if not re.search(r"[.!?;:—,]$", stripped):

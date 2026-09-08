@@ -274,6 +274,12 @@ impl BufferManager {
                     .zip(self.aux_input_buffers.iter_mut()),
             )
         {
+            // Both copied input and silence must expose this callback's length,
+            // even when a preceding callback shrank the backing slices.
+            for channel in input_storage.iter_mut() {
+                crate::nice_debug_assert!(num_samples <= channel.capacity());
+                channel.resize(num_samples, 0.0);
+            }
             // Since these buffers are backed by our own storage, we can fill them with zeroes if
             // the pointers are missing for whatever reason that might be
             crate::nice_debug_assert!(input_channel_pointers.is_some());
@@ -291,8 +297,6 @@ impl BufferManager {
                         let input_channel_pointer =
                             unsafe { input_channel_pointers.ptrs.as_ptr().add(channel_idx) };
 
-                        crate::nice_debug_assert!(num_samples <= channel.capacity());
-                        channel.resize(num_samples, 0.0);
                         channel.copy_from_slice(unsafe {
                             std::slice::from_raw_parts_mut(
                                 (*input_channel_pointer).add(sample_offset),
