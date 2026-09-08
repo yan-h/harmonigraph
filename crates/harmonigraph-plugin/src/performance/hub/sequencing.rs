@@ -213,10 +213,9 @@ impl Sequencer {
     /// carries nothing across one.
     pub(super) fn carry_observed(&mut self, state: &State) {
         self.clear_clock_context();
-        for voice in state.voices() {
-            let Some(cell) = self.context.iter_mut().find(|cell| cell.is_none()) else {
-                return;
-            };
+        // The clear leaves every cell free, and there are four times as many
+        // of them as one source can hold voices, so this zip drops nothing.
+        for (cell, voice) in self.context.iter_mut().zip(state.voices()) {
             *cell = Some(Voice { observed: true, ..Voice::factual(0, voice) });
         }
     }
