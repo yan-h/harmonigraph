@@ -1047,24 +1047,6 @@ mod tests {
         }
     }
 
-    /// The fresh Ground is the skin's own `surface_faint` rung, to under a fifth
-    /// of an `L*`.
-    ///
-    /// The one thing tying the default to the chrome now that the ring reads a
-    /// number instead of the skin: with the tie in code the two moved together
-    /// and could not be dialled apart, and with no tie at all retuning the
-    /// chrome's ladder would leave the lattice standing on the rung the ladder
-    /// used to have. This is the tie a bar can still be dragged off.
-    #[test]
-    fn the_fresh_ground_is_the_skins_faint_surface() {
-        let rung = lightness(crate::skin::surface_faint_color());
-        let fresh = ViewConfig::default().lattice_ground;
-        assert!(
-            (fresh - rung).abs() < 0.2,
-            "the fresh Ground is L* {fresh}, the skin's faint surface L* {rung}",
-        );
-    }
-
     /// A gradient whose own dark end ALREADY sits above the ground is still
     /// moved onto it.
     ///

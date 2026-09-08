@@ -52,13 +52,21 @@ STATE_START = b'{"version"'
 
 def newest_project() -> pathlib.Path:
     """The most recently modified .bwproject, auto-backups included — an
-    autosave is as good a source as a manual save."""
+    autosave is as good a source as a manual save.
+
+    Two sources, because Spotlight does not index the cloud-synced folder the
+    real projects live in: `mdfind` alone found only Bitwig's own temp-project
+    backups, a month stale, while the project saved a minute ago sat under
+    Google Drive unseen."""
     out = subprocess.run(
         ["mdfind", "-name", ".bwproject"], capture_output=True, text=True
     ).stdout.split("\n")
     paths = [pathlib.Path(p) for p in out if p.strip().endswith(".bwproject")]
+    cloud = pathlib.Path.home() / "Library/CloudStorage"
+    for drive in cloud.glob("GoogleDrive-*/My Drive/music"):
+        paths.extend(drive.rglob("*.bwproject"))
     if not paths:
-        sys.exit("No .bwproject found by mdfind. Pass one explicitly.")
+        sys.exit("No .bwproject found by mdfind or under Google Drive. Pass one explicitly.")
     return max(paths, key=lambda p: p.stat().st_mtime)
 
 
@@ -100,6 +108,14 @@ def json_blobs(buf: bytes):
 
 
 def find_states(path: pathlib.Path):
+    """Every plugin instance's state in the project.
+
+    The whole file, not the first section that yields one: adaptive tuning
+    puts a second Harmonigraph in a project (the tune-pairing participant,
+    whose state is one `participating` param and no `ui-state`), and the two
+    sit in separate compressed sections. Stopping at the first productive one
+    reported that instance alone and read as "the editor was never closed".
+    A full scan is about 13 s on a 600 KB project."""
     data = path.read_bytes()
     states, seen = [], set()
     for buf in candidate_bytes(data):
@@ -108,8 +124,6 @@ def find_states(path: pathlib.Path):
             if key not in seen and "fields" in st:
                 seen.add(key)
                 states.append(st)
-        if states:
-            break
     return states
 
 
@@ -169,18 +183,30 @@ def main() -> None:
             "WINDOW is closed. Close it, save the project, and re-run."
         )
 
+    if args.rust:
+        # Only the editor's instance carries a view; the tune-pairing
+        # participant beside it has no ui-state at all, and is not a failure.
+        bodies = [
+            (n, body)
+            for n, st in enumerate(states, 1)
+            if (ui := st.get("fields", {}).get("ui-state")) and (body := block(ui, "view"))
+        ]
+        if not bodies:
+            sys.exit("No view block in any instance's ui-state blob.")
+        # Numbered where there is more than one, so two runs of fields cannot be
+        # read as one: the bodies print back to back, and a paste of the wrong
+        # one is a look nobody dialled.
+        for n, body in bodies:
+            where = f" instance {n}" if len(bodies) > 1 else ""
+            print(f"// From a live Bitwig session{where}; see read-plugin-state.py.")
+            for name, value in split_ron(body):
+                print(f"    {name}: {value},")
+        return
+
     for n, st in enumerate(states, 1):
         ui = st.get("fields", {}).get("ui-state")
         if len(states) > 1:
             print(f"\n=== instance {n} ===")
-        if args.rust:
-            body = block(ui, "view") if ui else None
-            if not body:
-                sys.exit("No view block in the ui-state blob.")
-            print("// From a live Bitwig session; see read-plugin-state.py.")
-            for name, value in split_ron(body):
-                print(f"    {name}: {value},")
-            continue
         print("\n--- params (host-automatable; always current) ---")
         for k, v in sorted(st.get("params", {}).items()):
             print(f"  {k}: {list(v.values())[0]}")

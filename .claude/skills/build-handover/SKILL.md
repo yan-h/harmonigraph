@@ -25,6 +25,11 @@ Fully quit Bitwig before loading a build, then reopen it after the swap.
 The loader signs a staging bundle and atomically installs a fresh executable inode;
 existing host processes deliberately keep their old mapped code until they exit.
 A device deactivate/reactivate, editor reopen or rescan alone may leave that process alive.
+After installing, the loader reports observed old/current executable identities in Bitwig plug-in hosts and the audio engine, with PID and start time when it can recheck them.
+It compares mapped device/inode pairs with the replaced and installed files;
+a pathname alone or unavailable process information is reported as uncertain.
+This is one process snapshot, not a check of the running build tag or a guarantee about the next instantiation.
+Bitwig closed adds no output, and a failed diagnostic never fails an otherwise successful install.
 
 The loader discovers registered Git worktrees, not one hard-coded parent directory, so a Codex-managed worktree appears on the same menu without any loader configuration.
 It does need a branch:

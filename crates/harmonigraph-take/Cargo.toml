@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+test-support = []
+
 # Deliberately tiny: this crate is linked into the PLUGIN, whose audio
 # thread writes takes. Nothing here may pull in a GUI stack, and nothing
 # on the write path may allocate or block. serde + ron, plus

@@ -620,6 +620,29 @@ impl SpectrumConfig {
         self.marking_scale = sane_scale(self.marking_scale);
         self.note_name_scale = sane_scale(self.note_name_scale);
         let fresh = SpectrumConfig::default();
+        // Loading owns normalization; drawing a settings page must not change
+        // the stored value or make live and offline pictures disagree.
+        let bounded = |value: f32, default: f32, min: f32, max: f32| {
+            if value.is_finite() { value } else { default }.clamp(min, max)
+        };
+        self.tilt = if self.tilt.is_finite() {
+            TILT_STEPS
+                .into_iter()
+                .min_by(|a, b| (a - self.tilt).abs().total_cmp(&(b - self.tilt).abs()))
+                .unwrap_or(fresh.tilt)
+        } else {
+            fresh.tilt
+        };
+        self.keyline = bounded(self.keyline, fresh.keyline, 0.0, 1.0);
+        self.roll_fraction = bounded(self.roll_fraction, fresh.roll_fraction, 0.0, 1.0);
+        self.roll_seconds =
+            bounded(self.roll_seconds, fresh.roll_seconds, ROLL_SECONDS_MIN, ROLL_SECONDS_MAX);
+        self.roll_thickness = bounded(
+            self.roll_thickness,
+            fresh.roll_thickness,
+            *ROLL_THICKNESS_RANGE.start(),
+            *ROLL_THICKNESS_RANGE.end(),
+        );
         // The lead and its fade, which are the same shape of pair on the same
         // shape of bar (the Lead bar), and carry the same trap: a NaN reach
         // becomes the MAX of the fade's clamp, and `f32::clamp` asserts
@@ -820,6 +843,9 @@ const DEFAULT_CEILING_DB: f32 = -20.0;
 /// increments; see [`SpectrumConfig::tilt`]).
 pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
 
+/// MIDI ribbon width in semitones, shared by persistence and its control.
+pub(crate) const ROLL_THICKNESS_RANGE: std::ops::RangeInclusive<f32> = 0.2..=2.0;
+
 impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
@@ -854,7 +880,9 @@ impl Default for SpectrumConfig {
             low_midi: harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI,
             high_midi: harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
             show_roll: true,
-            roll_fraction: 0.55,
+            // Most of the pane to the roll, as captured from the DAW on
+            // 2026-09-07; the analyzer's own display keeps the rest.
+            roll_fraction: 0.704_143_05,
             // Three minutes, which is a whole piece rather than a glimpse of
             // the hands: the roll and the heatmap are read for the SHAPE of
             // what has been played, and a dozen seconds only ever shows the

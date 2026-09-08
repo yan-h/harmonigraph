@@ -29,9 +29,9 @@
 //!   thing the design does not want. It is stepped in the shader, against the
 //!   row it left there last frame.
 //!
-//! What ties the two is [`GlowStep::mix`], the coefficient this pass computes:
-//! the level takes it here and the strip takes the same one there, so the two
-//! halves of one light cannot come to run at different speeds.
+//! Both follow [`GlowTiming`]. The level advances here; the renderer advances
+//! the colour from the last scene it actually encoded. A discarded layout pass
+//! must not consume a new row's seed or the time owed to its GPU history.
 //!
 //! A light also has a SIZE, and it is carried here beside the level for the
 //! same reason both of those are: the span the halo is drawn over is the node's
@@ -54,17 +54,18 @@
 //! is the high-water mark of how many have been out at once, rounded up to a
 //! power of two — it grows and never shrinks, because shrinking it rebuilds the
 //! textures and takes every node's colour history with it. Growing does too;
-//! rounding up is what makes that rare, and the frame it happens on is a
-//! [`GlowStep::mix`] of 1 everywhere, which seeds rather than fading up from a
-//! texture nobody drew.
+//! rounding up makes that rare. The renderer seeds a new texture and any row
+//! whose owner differs from the one actually encoded there.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use harmonigraph_core::LatticePos;
-use harmonigraph_scene::{GlowStep, Scene, ViewConfig};
+use harmonigraph_scene::{GlowStep, GlowTiming, Scene, ViewConfig};
 
-use crate::spectrum::hop_alpha;
 use crate::SharedState;
+
+static NEXT_INCARNATION: AtomicU64 = AtomicU64::new(1);
 
 /// Below this a node's light is over: it is dropped to exactly 0, the node
 /// stops being drawn into the strip, and its row goes back.
@@ -119,9 +120,6 @@ pub struct GlowFade {
     /// strip's height is rounded up from, and the next row to hand out when
     /// [`free`](Self::free) is empty.
     handed: u32,
-    /// How tall the strip was asked to be last step, which is what says whether
-    /// the textures behind it have just been rebuilt.
-    rows: u32,
     /// Which step this is, so the pass can tell the nodes it has just seen from
     /// the ones that have left the window.
     frame: u64,
@@ -132,6 +130,7 @@ pub struct GlowFade {
 /// One node's light: where it has got to, and where its colour is kept.
 #[derive(Clone, Copy)]
 struct Lit {
+    incarnation: u64,
     level: f32,
     row: u32,
     /// How much of a mark the light still has this node wearing (see
@@ -175,13 +174,14 @@ impl GlowFade {
     /// to transition from, and a light fading up from a row nobody drew is a
     /// node arriving out of black.
     fn step(&mut self, scene: &mut Scene, view: &ViewConfig, now: f64) {
-        let dt = self.at.map_or(f64::INFINITY, |at| now - at);
+        let timing = GlowTiming { now, attack: view.glow_attack, release: view.glow_release };
+        let (up, down) = timing.coefficients(self.at);
+        scene.glow_timing = Some(timing);
         self.at = Some(now);
         self.frame += 1;
         // Two coefficients for the whole frame: every node's light runs on the
         // same pair of times, and which of the two it takes is which way it is
         // going.
-        let (up, down) = (hop_alpha(view.glow_attack, dt), hop_alpha(view.glow_release, dt));
         for node in &mut scene.nodes {
             // The largest level that puts LIGHT on this node: the MIDI layers,
             // since a node wearing a mark with no key down is still a node with
@@ -223,7 +223,13 @@ impl GlowFade {
                     if lit.level < GONE && target <= 0.0 {
                         lit.level = 0.0;
                     }
-                    GlowStep { level: lit.level, row: lit.row, mix, marked: lit.marked }
+                    GlowStep {
+                        incarnation: lit.incarnation,
+                        level: lit.level,
+                        row: lit.row,
+                        mix,
+                        marked: lit.marked,
+                    }
                 }
                 // A node with no light yet and none arriving is left alone: a
                 // row handed to a target of 0 would be handed straight back.
@@ -235,15 +241,22 @@ impl GlowFade {
                     })
                 }) {
                     Some(row) => {
+                        let incarnation = NEXT_INCARNATION.fetch_add(1, Ordering::Relaxed);
                         self.nodes.insert(
                             node.lattice_pos,
-                            Lit { level: target, row, marked: wears, seen: self.frame },
+                            Lit {
+                                incarnation,
+                                level: target,
+                                row,
+                                marked: wears,
+                                seen: self.frame,
+                            },
                         );
                         // Settled, not faded in: this node's row holds whatever
                         // the last node to own it left there, and its size is
                         // the node's own — there is no earlier size to ease a
                         // light nobody has drawn yet out of.
-                        GlowStep { level: target, row, mix: 1.0, marked: wears }
+                        GlowStep { incarnation, level: target, row, mix: 1.0, marked: wears }
                     }
                     // Every row is spoken for, so this node has no light at
                     // all — see `MAX_ROWS`.
@@ -261,22 +274,7 @@ impl GlowFade {
             }
             kept
         });
-        let rows = self.handed.next_power_of_two().max(FIRST_ROWS);
-        // A strip of a different height is a strip built afresh, so every row
-        // in it holds nothing and every node has to seed. The level is left
-        // where the filter put it — a light that jumped to its target here
-        // would pop on the one frame the texture happened to grow.
-        //
-        // Against what this pass asked for last time and not against the
-        // scene's own field, which `derive_scene` fills afresh every frame with
-        // a row per node.
-        if rows != self.rows {
-            for node in &mut scene.nodes {
-                node.glow.mix = 1.0;
-            }
-            self.rows = rows;
-        }
-        scene.glow_rows = rows;
+        scene.glow_rows = self.handed.next_power_of_two().max(FIRST_ROWS);
     }
 }
 
@@ -500,5 +498,37 @@ mod tests {
         apply(&mut scene, &mut state, 0, 0.0);
         assert_eq!(node_at(&scene, LatticePos::ORIGIN).glow, before);
         assert!(state.glow_fade.is_empty(), "a light that is off kept state");
+    }
+
+    #[test]
+    fn discarded_layout_passes_keep_the_row_owner_until_the_light_ends() {
+        let mut state = lit(0.3, 2.5);
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        let ctx = egui::Context::default();
+        let mut steps = Vec::new();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::Grid::new("glow-multipass").show(ui, |ui| {
+                ui.label("A new grid requests its sizing pass automatically");
+            });
+            let mut scene = scene_at(&state, 0.0);
+            apply(&mut scene, &mut state, 0, 0.0);
+            steps.push(node_at(&scene, LatticePos::ORIGIN).glow);
+            assert_eq!(scene.glow_timing.unwrap().now, 0.0);
+        });
+        assert!(steps.len() >= 2, "the fixture must discard an actual layout pass");
+        let last = steps.last().unwrap();
+        assert!(last.level > 0.99);
+        assert_eq!(last.mix, 0.0, "the CPU seed was consumed by the discarded pass");
+        assert!(steps.iter().all(|step| step.incarnation == last.incarnation));
+        assert_ne!(last.incarnation, 0);
+
+        let mut off = scene_at(&state, 0.0);
+        off.glow_reach = 0.0;
+        apply(&mut off, &mut state, 0, 0.0);
+        let mut on = scene_at(&state, 0.0);
+        apply(&mut on, &mut state, 0, 0.0);
+        let new = node_at(&on, LatticePos::ORIGIN).glow;
+        assert_eq!(new.row, last.row);
+        assert_ne!(new.incarnation, last.incarnation, "same-position recreation is a new owner");
     }
 }

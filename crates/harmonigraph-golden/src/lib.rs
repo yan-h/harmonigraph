@@ -71,8 +71,18 @@ impl Gate {
     ///
     /// `frame` is tightly packed RGBA8, `size[0] * size[1] * 4` bytes.
     pub fn check(&self, name: &str, size: [u32; 2], frame: &[u8]) {
-        let levels: std::collections::BTreeSet<[u8; 4]> =
-            frame.chunks_exact(4).map(|px| [px[0], px[1], px[2], px[3]]).collect();
+        let bytes = (size[0] as usize)
+            .checked_mul(size[1] as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .expect("RGBA8 dimensions exceed addressable memory");
+        assert_eq!(frame.len(), bytes, "{name}: wrong RGBA8 byte length");
+        let mut levels = std::collections::BTreeSet::new();
+        for px in frame.chunks_exact(4) {
+            levels.insert([px[0], px[1], px[2], px[3]]);
+            if levels.len() == LEVELS {
+                break;
+            }
+        }
         assert!(
             levels.len() >= LEVELS,
             "{name} drew {} distinct pixel values — the fixture reaches nothing",
@@ -81,7 +91,9 @@ impl Gate {
         let path = self.dir.join(format!("{name}.png"));
 
         if std::env::var_os(BLESS).is_some() {
-            let before = read_png(&path).map(|(px, _)| drift(&px, frame));
+            let before = read_png(&path)
+                .filter(|(_, previous_size)| *previous_size == size)
+                .map(|(px, _)| drift(&px, frame));
             write_png(&path, size, frame);
             match before {
                 Some((mean, max)) if max > 0 => {
@@ -162,6 +174,7 @@ impl Gate {
 /// and a small max spread over a nonzero mean is a level shifting everywhere —
 /// the #453 shape, and the one an eye does not catch.
 pub fn drift(expected: &[u8], actual: &[u8]) -> (f64, u8) {
+    assert_eq!(expected.len(), actual.len(), "cannot compare incomplete frames");
     let mut sum = 0u64;
     let mut max = 0u8;
     for (e, a) in expected.iter().zip(actual) {
@@ -191,4 +204,27 @@ fn read_png(path: &Path) -> Option<(Vec<u8>, [u32; 2])> {
     let info = reader.next_frame(&mut buf).expect("png data");
     buf.truncate(info.buffer_size());
     Some((buf, [info.width, info.height]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn golden_requires_a_complete_frame_even_when_the_prefix_matches() {
+        let dir = std::env::temp_dir().join(format!("harmonigraph-golden-{}", std::process::id()));
+        let gate = Gate { dir: dir.clone(), diffs: dir.join("diffs") };
+        let frame: Vec<u8> = (0..64).flat_map(|x| [x, 0, 0, 255]).collect();
+        write_png(&dir.join("complete.png"), [8, 8], &frame);
+        gate.check("complete", [8, 8], &frame);
+        for len in [128, 255, 257, 260] {
+            let mut incomplete = frame.clone();
+            incomplete.resize(len, 0);
+            assert!(
+                std::panic::catch_unwind(|| gate.check("complete", [8, 8], &incomplete)).is_err(),
+                "accepted {len} bytes for a 256-byte frame",
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
