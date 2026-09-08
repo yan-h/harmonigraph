@@ -21,6 +21,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub(super) mod channel;
+mod debt;
 #[cfg(all(test, debug_assertions))]
 mod replay_tests;
 mod stop;
@@ -188,8 +189,9 @@ pub struct Source {
     active: [u16; 64],
     reserved: [u16; 64],
     owed_note_off: [u16; 64],
-    emergency: [Option<Release>; 64],
-    channel_reset: [u8; 16],
+    /// Every obligation only an accepted host output event can discharge,
+    /// behind the one rule that says when a new one may be minted.
+    debt: debt::Debt,
     /// Largest accepted onset shift seen since the delay setting was last
     /// applied, reported as this Tune's worst lateness above D. A gauge, not a
     /// schedule: nothing reads it back to decide when anything emits.
@@ -416,8 +418,7 @@ impl Source {
             active: [NONE; 64],
             reserved: [NONE; 64],
             owed_note_off: [NONE; 64],
-            emergency: [None; 64],
-            channel_reset: [0; 16],
+            debt: debt::Debt::new(),
             late_shift: 0,
             missed: 0,
             emergency_output: Queue::default(),
@@ -612,6 +613,10 @@ impl Source {
             || (self.pitch_center_owed || self.participation_marker_queued())
                 && self.owes_pitch_center();
         self.producer_joined = true;
+        // From here nothing may mint output debt: no callback follows the
+        // final cut to discharge it, and both `output_settled` and
+        // `publish_seal` would refuse this Source for good.
+        self.debt.join();
         if self.joined_unknown_wire {
             // Destruction removes the only possible owner of further physical
             // termination. Publish its exact row evidence before the joined
@@ -633,9 +638,7 @@ impl Source {
         self.state.count() != 0 || self.state.pedals_held() || self.owed_note_off != [NONE; 64]
     }
     pub fn unknown_joined_wire_state(&self) -> bool {
-        self.forwarded_wire_state()
-            || self.emergency.iter().flatten().any(|release| release.accepted.is_none())
-            || self.channel_reset != [0; 16]
+        self.forwarded_wire_state() || self.debt.unsent()
     }
     pub fn settled(&self) -> bool {
         self.output_settled() && self.pending.len() == 0 && self.capture_group.len() == 0
@@ -651,8 +654,7 @@ impl Source {
             && self.emergency_output.len() == 0
             && self.permit.is_none()
             && self.manifest.len() == 0
-            && self.emergency.iter().all(Option::is_none)
-            && self.channel_reset == [0; 16]
+            && self.debt.settled()
     }
 
     /// Reserve the return/ack slot BEFORE moving an endpoint-bearing offer.
@@ -1480,10 +1482,8 @@ impl Source {
                             && state.controllers[controller] < 64;
                     // A completed reset is already factual; another fault
                     // cannot recreate it. A staged reset still owns its debt.
-                    if !known_neutral
-                        && self.channel_reset[channel] & (1 << (bit + CHANNEL_RESETS)) == 0
-                    {
-                        self.channel_reset[channel] |= 1 << bit;
+                    if !known_neutral && !self.debt.staged(channel, bit) {
+                        self.debt.arm(channel, bit);
                     }
                 }
             }
@@ -1500,14 +1500,11 @@ impl Source {
     /// phrase without changing who owns pitch, and the recenter would be an
     /// event no reset before this one sent.
     fn arm_pitch_center(&mut self) {
-        // Past the producer join there is no far side to wait for: the
-        // retirement pump invokes no host output and never reaches `begin`, so
-        // a bit armed here would hold `output_settled` false for the life of
-        // the process and the registry would keep this Source for good.
-        // `join_producer` has already put the bend into the teardown evidence.
-        if self.producer_joined {
-            return;
-        }
+        // Past the producer join `Debt` refuses everything this arms, and
+        // `join_producer` has already put the bend into the teardown evidence
+        // instead. That rule is not restated here, deliberately: restating it
+        // per caller is what let the same leak reappear through `fault`.
+        //
         // Behind the final cut `schedule_emergency` stages nothing, so a bit
         // armed here would never leave and `output_settled` would wait on it
         // for good. The obligation outlives the lease, though -- the wire keeps
@@ -1520,7 +1517,7 @@ impl Source {
         self.pitch_center_owed = false;
         for channel in 0..16 {
             if self.owes_pitch_center_on(channel) {
-                self.channel_reset[channel] |= 1 << PITCH_RESET;
+                self.debt.arm(channel, PITCH_RESET);
             }
         }
     }
@@ -1529,31 +1526,26 @@ impl Source {
     /// One it never bent, or already left at center, owes nothing.
     fn owes_pitch_center_on(&self, channel: usize) -> bool {
         self.state.channels()[channel].pitch_bend.is_some_and(|value| value != BEND_CENTER)
-            && self.channel_reset[channel] & (1 << (PITCH_RESET + CHANNEL_RESETS)) == 0
+            && !self.debt.staged(channel, PITCH_RESET)
     }
     fn owes_pitch_center(&self) -> bool {
         (0..16).any(|channel| self.owes_pitch_center_on(channel))
     }
 
     fn channel_has_release_debt(&self, channel: u8) -> bool {
-        self.channel_reset[usize::from(channel)] != 0
-            || self.emergency.iter().flatten().any(|release| {
+        self.debt.channel_owes(usize::from(channel))
+            || self.debt.releases().any(|release| {
                 release.accepted.is_none()
                     && self.lives.at(release.life).is_some_and(|life| life.channel == channel)
             })
     }
 
     fn ensure_emergency(&mut self, life: u16) {
-        if self.emergency.iter().flatten().any(|release| release.life == life) {
-            return;
+        // The slot owns a reference to the life, so the bump belongs to the
+        // one call that took the slot -- and to no call the join refused.
+        if self.debt.arm_release(life) {
+            self.lives.local_mut(life).unwrap().refs += 1;
         }
-        let slot = self
-            .emergency
-            .iter()
-            .position(Option::is_none)
-            .expect("at most64 held/owed wire lifetimes");
-        self.lives.local_mut(life).unwrap().refs += 1;
-        self.emergency[slot] = Some(Release { life, staged: false, accepted: None });
     }
     pub fn schedule(&mut self, block: api::Block, output: &mut api::Output<'_>) {
         let Some(start) = block.callback.steady_time.checked_add(i64::from(block.start)) else {
@@ -2518,7 +2510,7 @@ impl Source {
         }
         // 64 voice releases and 64 channel resets fit the reserved 128 exactly.
         for index in 0..64 {
-            let Some(mut release) = self.emergency[index] else {
+            let Some(mut release) = self.debt.release(index) else {
                 continue;
             };
             if release.staged || release.accepted.is_some() {
@@ -2543,11 +2535,11 @@ impl Source {
                 break;
             }
             release.staged = true;
-            self.emergency[index] = Some(release);
+            self.debt.update_release(index, release);
         }
         for channel in 0..16 {
             for bit in 0..CHANNEL_RESETS {
-                if self.channel_reset[channel] & (1 << bit) == 0 {
+                if !self.debt.armed(channel, bit) {
                     continue;
                 }
                 let event = Self::channel_reset_event(channel as u8, bit);
@@ -2561,8 +2553,7 @@ impl Source {
                 if output.stage(group).is_err() {
                     return;
                 }
-                self.channel_reset[channel] &= !(1 << bit);
-                self.channel_reset[channel] |= 1 << (bit + CHANNEL_RESETS);
+                self.debt.stage(channel, bit);
             }
         }
     }
@@ -2611,7 +2602,7 @@ impl Source {
         let permit = self.permit.take();
         let index = completion.group.token.0[1] as usize;
         if completion.group.token.0[3] == 1 {
-            let Some(mut release) = self.emergency[index] else {
+            let Some(mut release) = self.debt.release(index) else {
                 return;
             };
             release.staged = false;
@@ -2645,20 +2636,18 @@ impl Source {
                     }
                 }
             }
-            self.emergency[index] = Some(release);
+            self.debt.update_release(index, release);
         } else {
-            let bit = completion.group.token.0[2] as u8;
-            let (pending_bit, staged_bit) = (1 << bit, 1 << (bit + CHANNEL_RESETS as u8));
-            self.channel_reset[index] &= !staged_bit;
-            if completion.accepted & 1 != 0 {
+            let bit = completion.group.token.0[2] as usize;
+            let accepted = completion.accepted & 1 != 0;
+            self.debt.complete(index, bit, accepted);
+            if accepted {
                 let event = Event::from_input(completion.group.event(0).unwrap()).unwrap();
                 let actual = self.callback.unwrap().steady_time + i64::from(completion.group.time);
                 let delta = self.record(event, NONE, actual, actual);
                 self.emergency_output
                     .push(delta)
                     .unwrap_or_else(|_| unreachable!("prepared emergency cell"));
-            } else {
-                self.channel_reset[index] |= pending_bit;
             }
         }
     }
@@ -2840,14 +2829,14 @@ impl Source {
             self.emergency_sent = self.emergency_sent.saturating_sub(1);
         }
         for slot in 0..64 {
-            if self.emergency[slot].is_some_and(|release| {
+            if self.debt.release(slot).is_some_and(|release| {
                 release.accepted.is_some_and(|delta| {
                     delta.sequence <= cut
                         && (delta.mapped && delta.actual < through
                             || self.sealed_ack.is_some_and(|sealed| delta.sequence <= sealed))
                 })
             }) {
-                let release = self.emergency[slot].take().unwrap();
+                let release = self.debt.discharge_release(slot).unwrap();
                 self.lives.local_mut(release.life).unwrap().refs -= 1;
                 self.recycle(release.life);
             }
@@ -2983,8 +2972,8 @@ impl Source {
                 | (i64::from(self.emergency_output.len() != 0) << 4)
                 | (i64::from(self.permit.is_some()) << 5)
                 | (i64::from(self.manifest.len() != 0) << 6)
-                | (i64::from(self.emergency.iter().any(Option::is_some)) << 7)
-                | (i64::from(self.channel_reset != [0; 16]) << 8),
+                | (i64::from(self.debt.any_release()) << 7)
+                | (i64::from(self.debt.any_channel()) << 8),
             self.capture_published as i64,
             self.trace.last_output_player,
             self.trace.last_output_correction,
@@ -3552,9 +3541,8 @@ impl Source {
             || self.owed_note_off != [NONE; 64]
             || self.old_pending != 0
             || self.state.count() != 0
-            || self.channel_reset != [0; 16]
             || self.permit.is_some()
-            || self.emergency.iter().flatten().any(|release| release.accepted.is_none())
+            || self.debt.unsent()
         {
             return;
         }

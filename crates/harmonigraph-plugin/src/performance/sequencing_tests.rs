@@ -3773,6 +3773,13 @@ fn production_a_lost_direct_replay_is_a_fault_at_the_sample_it_was_lost_at() {
 /// queue. The recentre that disposal owes cannot be armed there -- the pump
 /// invokes no host output and never reaches `begin` -- so an armed bit would
 /// hold `output_settled` false for the life of the process.
+///
+/// The controller is the fixture, not scenery. Nothing this Tune holds is
+/// wire state, so `stop()` arms no debt at all; what reaches the pedal resets
+/// is the marker turning the join's evidence true, the join faulting on that
+/// evidence, and `arm_release_debt` finding a channel whose controller state
+/// is nonzero and whose three pedals were never observed neutral. Without the
+/// CC1 that branch is never entered and the test passes for the wrong reason.
 #[test]
 fn production_destroying_a_tune_with_an_unreached_toggle_still_reclaims_its_entry() {
     let _scope = crate::test_scope::enter();
@@ -3790,10 +3797,23 @@ fn production_destroying_a_tune_with_an_unreached_toggle_still_reclaims_its_entr
     musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
     source.run_format(1536, vec![source.participation(false, 0)], None, None, 512);
     hub.run_format(1536, vec![], None, None, 512);
-    source.run_format(2048, vec![raw_midi([0xe0, 0x00, 0x60], 0)], None, None, 512);
+    source.run_format(
+        2048,
+        vec![raw_midi([0xb0, 0x01, 0x64], 0), raw_midi([0xe0, 0x00, 0x60], 1)],
+        None,
+        None,
+        512,
+    );
     hub.run_format(2048, vec![], None, None, 512);
     let bent = source.run_format(2560, vec![], None, None, 512);
     hub.run_format(2560, vec![], None, None, 512);
+    assert!(
+        bent.values
+            .iter()
+            .any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 0x01, 0x64], .. })),
+        "the fixture must actually forward a controller: nothing arms a pedal reset until \
+         this channel's controller state is nonzero"
+    );
     assert!(
         bent.values
             .iter()
