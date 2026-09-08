@@ -868,8 +868,12 @@ mod tests {
             .replace(")))", &format!("{channels})))"));
         let aged_note =
             note.replace("assignment:Some((", "assignment:Some((configuration_revision:9,");
-        assert_ne!(aged_frame, frame, "the aged baseline has to differ to test anything");
-        assert_ne!(aged_note, note, "the aged delta has to differ to test anything");
+        // Each key named separately, because one `assert_ne!` over the whole
+        // line passes when only one of the three replacements landed — and
+        // each of the three was checked alone against `deny_unknown_fields`.
+        assert!(aged_frame.contains("coverage_start:2.0"), "{aged_frame}");
+        assert!(aged_frame.contains(",channels:[(controllers:[0,"), "{aged_frame}");
+        assert!(aged_note.contains("configuration_revision:9"), "{aged_note}");
         let aged =
             Take::parse(std::io::Cursor::new(format!("{header}\n{aged_frame}\n{aged_note}")))
                 .expect("a take carrying pruned keys still opens");
