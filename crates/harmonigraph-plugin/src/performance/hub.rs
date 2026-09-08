@@ -158,6 +158,9 @@ pub struct Hub {
     publication_clock: ClockId,
     transition: Option<setup::Update>,
     invalidated: bool,
+    /// Set by a reactivation and consumed by the Reset `start_processing`
+    /// raises straight after it, which is the same boundary and not a fault.
+    reactivated: bool,
     clock_loss_pending: bool,
     retired_publication: Option<(Box<Owner>, Recorder, f64)>,
     retired_through: Option<i64>,
@@ -283,6 +286,15 @@ impl Hub {
         if self.offer.is_none() {
             return false;
         }
+        if allow_idle && self.reactivated {
+            // `start_processing` runs this Reset immediately after the
+            // activation that already adopted the host's format. The session
+            // was not processing across that boundary, so there is no accepted
+            // history for an invalidation to protect and nothing that could
+            // clear it afterwards: take the adoption as the reset.
+            self.reactivated = false;
+            return true;
+        }
         if allow_idle
             && !self.invalidated
             && self.direct.settled()
@@ -397,6 +409,7 @@ impl Hub {
             publication_clock: ClockId::default(),
             transition: None,
             invalidated: false,
+            reactivated: false,
             clock_loss_pending: false,
             retired_publication: None,
             retired_through: None,
@@ -411,10 +424,13 @@ impl Hub {
         self.rate = rate;
         self.max_frames = frames;
         if !first {
-            self.clock.sample_rate = rate;
-            self.clock.max_frames = frames;
-            self.clock.valid = false;
+            // Reactivation is a host-owned boundary rather than a clock
+            // failure: the members cancel and release through their own
+            // `activate`, and this session adopts the new format outright.
+            self.clock = Clock::new(self.clock.calibration, rate, frames);
             self.direct.activate(rate, frames);
+            self.anchor = None;
+            self.reactivated = true;
             return;
         }
         self.clock = Clock::new(self.shared.value().routing.calibration(), rate, frames);

@@ -452,18 +452,30 @@ impl Source {
         self.rate = rate;
         self.max_frames = max_frames;
         if !first {
-            // Reactivation cannot install accepted setup over a still-owned lease.
-            self.clock.sample_rate = rate;
-            self.clock.max_frames = max_frames;
-            self.clock.valid = false;
-            self.shared.publish_clock(&self.clock);
+            // Reactivation is a host-owned boundary, not a clock failure: no
+            // callback is in flight, so cancel and release like Stop and then
+            // adopt the new format outright. Publishing an invalid clock here
+            // instead strands the release debt this Stop just armed, because
+            // no later callback can repair a clock it never covers.
             self.stop();
+            self.adopt_boundary_clock();
             return;
         }
         self.apply_setup();
         self.clock = Clock::new(self.shared.value().routing.calibration(), rate, max_frames);
         self.shared.publish_clock(&self.clock);
         self.coverage = None;
+    }
+    /// Reactivation takes the host's current format as adopted. The host
+    /// skips enclosing time while it is stopped, so raw continuity starts
+    /// over; the session's own coverage does not, because the lease it was
+    /// reported under survives this boundary and the Hub grants only a
+    /// contiguous accepted prefix.
+    pub fn adopt_boundary_clock(&mut self) {
+        let coverage = self.clock.coverage;
+        self.clock = Clock::new(self.clock.calibration, self.rate, self.max_frames);
+        self.clock.coverage = coverage;
+        self.shared.publish_clock(&self.clock);
     }
     pub fn reset_idle_clock(&mut self, epoch: u64) {
         assert!(self.settled());

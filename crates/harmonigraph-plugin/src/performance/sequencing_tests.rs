@@ -2330,3 +2330,62 @@ fn production_a_tuning_edit_waits_for_the_next_boundary_and_a_group_keeps_its_sn
     let settled = source.source_snapshot();
     assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
 }
+
+#[test]
+fn production_a_host_format_reactivation_reestablishes_the_paired_session() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut source) = production_pair();
+    let mut phrase = |source: &Device, hub: &Device, raw: &mut i64, id: i32, key: i16, frames: u32| {
+        let mut output =
+            source.run_format(*raw, vec![note(id, 0, key, 0, true)], None, None, frames).values;
+        hub.run_format(*raw, vec![], None, None, frames);
+        for _ in 0..16 {
+            *raw += i64::from(frames);
+            output.extend(source.run_format(*raw, vec![], None, None, frames).values);
+            hub.run_format(*raw, vec![], None, None, frames);
+        }
+        *raw += i64::from(frames);
+        output.extend(
+            source.run_format(*raw, vec![note(id, 0, key, 0, false)], None, None, frames).values,
+        );
+        hub.run_format(*raw, vec![], None, None, frames);
+        for _ in 0..16 {
+            *raw += i64::from(frames);
+            output.extend(source.run_format(*raw, vec![], None, None, frames).values);
+            hub.run_format(*raw, vec![], None, None, frames);
+        }
+        output
+    };
+    let mut raw = 1536;
+    let before = phrase(&source, &hub, &mut raw, 1, 64, 512);
+    assert_eq!(before.iter().filter(|(_, event)| event.attack().is_some()).count(), 1);
+    assert_eq!(source.source_snapshot().held, 0);
+
+    // The host changes its processing format: stop, deactivate, activate,
+    // start. Nothing is outstanding, so this is a boundary and not a failure.
+    hub.reactivate_format(48000.0, 256);
+    source.reactivate_format(48000.0, 256);
+    for _ in 0..8 {
+        raw += 256;
+        source.main();
+        hub.main();
+        source.run_format(raw, vec![], None, None, 256);
+        hub.run_format(raw, vec![], None, None, 256);
+    }
+    for adopted in [hub.shared().adopted().unwrap(), source.shared().adopted().unwrap()] {
+        assert_eq!((adopted.sample_rate, adopted.max_frames), (48000.0, 256));
+        assert!(adopted.valid, "the reactivated format is adopted, not latched: {adopted:?}");
+    }
+    assert_eq!(source.source_snapshot().faults, 0, "{:?}", source.source_snapshot());
+
+    raw += 256;
+    let after = phrase(&source, &hub, &mut raw, 2, 67, 256);
+    assert_eq!(
+        after.iter().filter(|(_, event)| event.attack().is_some()).count(),
+        1,
+        "a phrase played after the reactivation sounds: {:?}",
+        source.source_snapshot()
+    );
+    assert_eq!(after.iter().filter(|(_, event)| event.release()).count(), 1);
+    assert_eq!(source.source_snapshot().held, 0);
+}

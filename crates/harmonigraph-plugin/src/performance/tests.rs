@@ -295,6 +295,15 @@ impl Device {
             }
         }
     }
+    fn reactivate_format(&mut self, rate: f64, frames: u32) {
+        assert!(self.active);
+        unsafe {
+            (*self.plugin).stop_processing.unwrap()(self.plugin);
+            (*self.plugin).deactivate.unwrap()(self.plugin);
+        }
+        self.active = false;
+        self.activate_format(rate, frames);
+    }
     fn recorded_aggregation_hub() -> (Self, harmonigraph_record::testing::Capture) {
         let (recorder, capture) = harmonigraph_record::testing::channel();
         crate::configuration::inject_recorder(recorder);
