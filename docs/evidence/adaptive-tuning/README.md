@@ -28,15 +28,13 @@ no measurement in either was edited.
 the shared capture arena, the channel-wave controller replay, both recovery modules, the resumable cohort sort, the configuration timeline and the publication repair protocol.
 So the ledger's *populations* are stale in two different ways at once, and it is worth separating them.
 
-**Stale because the mechanism is gone.**
-The "constrained future allocation plan" reserves storage for things that were never built or have since been deleted:
+**Stale because the mechanism is gone.** The "constrained future allocation plan" reserves storage for things that were never built or have since been deleted:
 the 1,024 × 1,024-bit cohort adjacency matrix and its traversal indices, the retained configuration timeline, the pending manifest windows, the future plan free-index array and the 4 MiB policy workspace.
 The 150,890,091-byte plan and its 104,853 bytes of slack under the 144 MiB cap describe a design that no longer exists.
 The cap itself was never a measured constraint;
 it was a self-imposed ceiling.
 
-**Stale because the number moved.**
-These are the measurements later stages took against the same fixtures, and they are the interesting half:
+**Stale because the number moved.** These are the measurements later stages took against the same fixtures, and they are the interesting half:
 
 | Quantity | Ledger / audit | Later | Now |
 | --- | ---: | ---: | ---: |
@@ -50,8 +48,7 @@ These are the measurements later stages took against the same fixtures, and they
 The publication row is the one worth reading twice.
 It was measured at 2,483,712 B and called the largest single item in the ledger;
 by the time a stage went to shrink it, it had *grown* 17% to 2,910,496 B, because the ledger's own cell sizes were wrong in two places —
-`Item` was 224 bytes rather than the recorded 176, and the baseline bank 537,744 rather than 520,336.
-It ends at 2,172,800 B, 25% below where it actually stood.
+`Item` was 224 bytes rather than the recorded 176, and the baseline bank 537,744 rather than 520,336. It ends at 2,172,800 B, 25% below where it actually stood.
 A ledger nobody re-measures drifts in the direction that flatters it.
 
 The instance rows are one change rather than three:
@@ -80,7 +77,8 @@ The measured session totals are still what they were.
 Because the alternative is re-measuring.
 Every number here cost a fixture, a machine in a known state and a run;
 several of them were the argument that settled a design question, and one of them —
-the publication drift — is only legible *because* the old number was preserved instead of being quietly updated.
+the publication drift —
+is only legible *because* the old number was preserved instead of being quietly updated.
 
 The same reasoning is why `CLAUDE.md` sends an unfinished investigation to an issue rather than a backlog line.
 What a session measured is the expensive thing it produced.
