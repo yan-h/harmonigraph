@@ -124,6 +124,17 @@ pub(super) struct Life {
     /// This request has already been counted once against the deadline gauge.
     pub(super) timing_reported: bool,
 }
+/// What one staging visit produced: nothing to do, a refusal to retry, or the
+/// group it would emit. A replacement plans both of its groups before either
+/// is admitted, which is why building one is separate from staging it.
+// A `Group` is what every staging path already moves by value on the audio
+// thread, and boxing the variant to even the enum out would allocate there.
+#[allow(clippy::large_enum_variant)]
+enum Plan {
+    Skip,
+    Refused,
+    Ready(api::Group),
+}
 #[derive(Clone, Copy)]
 struct Permit {
     position: usize,
@@ -1546,22 +1557,26 @@ impl Source {
         }
         !self.stage_full && self.admitted(parent.generation)
     }
-    fn stage_work(
+    /// Everything one group owes before it can be admitted, ending in the
+    /// group itself. It stages nothing: a replacement's choke and onset are
+    /// planned separately and admitted together, so a plan that succeeds must
+    /// still be discardable when its partner's does not.
+    fn plan_work(
         &mut self,
         position: usize,
         child: u16,
         start: i64,
         end: i64,
         output: &mut api::Output<'_>,
-    ) -> bool {
+    ) -> Plan {
         let Some(parent) = self.pending.at(position) else {
-            return true;
+            return Plan::Skip;
         };
         if parent.staged {
-            return true;
+            return Plan::Skip;
         }
         if child != NONE && self.work.at(child).phase != 0 {
-            return true;
+            return Plan::Skip;
         }
         let pending = self.resolved(position, child);
         if pending.disposition
@@ -1569,18 +1584,18 @@ impl Source {
                 && parent.inline_done
                 && !matches!(parent.channel.role, channel::Role::Header { .. })
         {
-            return true;
+            return Plan::Skip;
         }
         if (self.faults != 0 || pending.serial <= self.cancel_cut) && !pending.event.release() {
-            return false;
+            return Plan::Refused;
         }
         if !pending.event.release()
             && pending.event.channel().is_some_and(|channel| self.channel_has_release_debt(channel))
         {
-            return false;
+            return Plan::Refused;
         }
         if !self.channel_ready(pending) {
-            return false;
+            return Plan::Refused;
         }
         let life = (pending.life != NONE).then(|| self.lives.at(pending.life).unwrap());
         if self.detaching
@@ -1590,14 +1605,14 @@ impl Source {
                 && self.transition_seen != 0
                 && pending.generation > self.direct_generation
         {
-            return false;
+            return Plan::Refused;
         }
         if life.is_some_and(|life| {
             life.canceled
                 || life.terminal.is_some() && !(life.note_off_owed && pending.event.release())
         }) {
             self.dispose_work(position, child);
-            return true;
+            return Plan::Skip;
         }
         // Rule two ties a replacement's forced release of its predecessor to the
         // moment the replacement is emitted, and an attack's children are
@@ -1607,28 +1622,28 @@ impl Source {
         // staging paths reach it -- the predecessor's own indexed release scan
         // stages this child too, and it is the one that gets here first.
         if child != NONE && parent.event.attack().is_some() && !self.replacement_ready(parent) {
-            return false;
+            return Plan::Refused;
         }
         if pending.event.attack().is_some() && !self.admitted(pending.generation) {
-            return false;
+            return Plan::Refused;
         }
         if pending.event.attack().is_some() && !self.assignment_ready(pending.life) {
             if pending.input.checked_add(self.delay()).is_some_and(|deadline| deadline < end) {
                 self.timing_failure(pending.life);
             }
             self.note_wait = true;
-            return false;
+            return Plan::Refused;
         }
         let established = life.is_some_and(|life| life.sounded);
         if life.is_some() && !established && pending.event.attack().is_none() {
             self.note_wait = true;
-            return false;
+            return Plan::Refused;
         }
         if pending.event.attack().is_none()
             && !pending.event.release()
             && life.is_some_and(|life| life.ready_head != work::ready_reference(position, child))
         {
-            return false;
+            return Plan::Refused;
         }
         // Rule: an established note keeps its own onset lateness for its own
         // later release and expression. Everything else — a fresh onset and
@@ -1644,7 +1659,7 @@ impl Source {
         };
         let Some(mut due) = pending.input.checked_add(shift) else {
             self.fault(CLOCK_FAULT);
-            return false;
+            return Plan::Refused;
         };
         due = due.max(start);
         if due >= end || self.next_stop_sample().is_some_and(|stop| due >= stop) {
@@ -1653,14 +1668,14 @@ impl Source {
             // else is input+D, which is monotonic in input order. A stop
             // boundary blocks the whole track and is not this note's wait.
             self.note_wait |= established && due >= end;
-            return false;
+            return Plan::Refused;
         }
         let callback = self.callback.unwrap();
         let Some(offset) =
             due.checked_sub(callback.steady_time).and_then(|value| u32::try_from(value).ok())
         else {
             self.fault(CLOCK_FAULT);
-            return false;
+            return Plan::Refused;
         };
         let time = offset.max(output.cursor());
         if pending.event.attack().is_some()
@@ -1675,7 +1690,7 @@ impl Source {
         }
         let Some(attempt) = self.attempt.checked_add(1) else {
             self.fault(STORAGE_FAULT);
-            return false;
+            return Plan::Refused;
         };
         self.attempt = attempt;
         let token = api::Token([
@@ -1703,26 +1718,47 @@ impl Source {
         };
         let Ok(group) = group else {
             self.fault(INPUT_FAULT);
-            return false;
+            return Plan::Refused;
+        };
+        Plan::Ready(group)
+    }
+
+    fn stage_work(
+        &mut self,
+        position: usize,
+        child: u16,
+        start: i64,
+        end: i64,
+        output: &mut api::Output<'_>,
+    ) -> bool {
+        let group = match self.plan_work(position, child, start, end, output) {
+            Plan::Skip => return true,
+            Plan::Refused => return false,
+            Plan::Ready(group) => group,
         };
         // Rule two ties the choke to the replacement's own emission, and the
-        // two are staged a host round trip apart: the choke here, the onset
-        // from `complete`, with every other event this callback owes competing
-        // for the same 512 credits in between. So the onset's allowance is
-        // committed with the choke or the predecessor is not choked at all.
-        let hold = if replacement { 1 + usize::from(self.delay() != 0) } else { 0 };
-        if hold != 0 && !output.hold(hold) {
-            self.stage_full = true;
-            return false;
-        }
-        let staged = if child == NONE && parent.selected != NONE && parent.event.attack().is_some()
-        {
-            output.stage_held(group)
+        // two are separate host pushes: the choke, then a completion, then the
+        // onset, with everything else the callback owes competing for the same
+        // 512 credits in between. So they are admitted together or not at all.
+        // Nothing is reserved across the round trip -- the onset is already in
+        // the scheduler before the choke can be pushed -- which is what keeps a
+        // callback boundary, a spent visit budget or another replacement from
+        // coming between the two.
+        let replacement = child != NONE
+            && self.pending.at(position).is_some_and(|parent| parent.event.attack().is_some());
+        let staged = if replacement {
+            match self.plan_work(position, NONE, start, end, output) {
+                Plan::Ready(onset) => output.stage_all(&[group, onset]),
+                // The replacement will never emit, so nothing is choked for it:
+                // the forced release retires with the onset instead of sounding
+                // alone, which is also what keeps the envelope retirable.
+                Plan::Skip => return self.dispose_work(position, child),
+                Plan::Refused => return false,
+            }
         } else {
             output.stage(group)
         };
         if staged.is_err() {
-            output.release(hold);
             self.stage_full = true;
             return false;
         }
@@ -1962,7 +1998,17 @@ impl Source {
             return;
         };
         let pending = self.resolved(position, child);
-        parent.staged = false;
+        // A replacement's onset was admitted in the same pass as its choke and
+        // is still in the scheduler, so the envelope stays busy through it and
+        // hands the completion filter over by clearing the selection the choke
+        // matched. A choke that was not accepted takes its onset with it:
+        // `staged` falls as it always did, the onset finds no match of its own,
+        // and the pair is planned and admitted again whole.
+        if child != NONE && parent.event.attack().is_some() && completion.accepted & 1 != 0 {
+            parent.selected = NONE;
+        } else {
+            parent.staged = false;
+        }
         self.pending.set(position, parent);
         let permit = self.permit.take();
         if completion.accepted & 1 != 0 {

@@ -1120,6 +1120,108 @@ fn production_a_congested_callback_chokes_a_predecessor_only_with_its_replacemen
 }
 
 #[test]
+fn production_two_replacements_in_one_callback_each_keep_the_output_their_own_onset_needs() {
+    let _scope = crate::test_scope::enter();
+    let clocks = |count| (0..count).map(|_| raw_midi([0xf8, 0, 0], 0)).collect::<Vec<_>>();
+    let musical = |sink: &Sink| {
+        sink.values
+            .iter()
+            .filter(|(_, event)| !matches!(event, Event::Midi { data: [0xf8, ..], .. }))
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    let (hub, source) = production_pair();
+    // Two sounding notes, so the two retriggers below each owe a forced release.
+    source.run_format(
+        1536,
+        vec![note(1, 0, 60, 0, true), note(2, 0, 72, 0, true)],
+        None,
+        None,
+        512,
+    );
+    hub.run_format(1536, vec![], None, None, 512);
+    assert_eq!(source.run_format(2048, vec![], None, None, 512).values.len(), 4);
+    hub.run_format(2048, vec![], None, None, 512);
+    let mut input = vec![note(3, 0, 60, 0, true), note(4, 0, 72, 0, true)];
+    input.extend(clocks(510));
+    source.run_format(2560, input, None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    // Both retriggers are answered together, so both land in one callback that
+    // another 510 raw MIDI clocks are already claiming. Six musical events
+    // against 512 credits is the whole point: two chokes, two onsets and two
+    // tunings, and nothing may come between a choke and the onset it is for.
+    // Which callback the Hub's answer lets them take is not what this measures.
+    let mut raw = 3072;
+    let congested = loop {
+        assert!(raw < 8192, "the retriggers never emitted");
+        let out = source.run_format(raw, clocks(510), None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+        if !musical(&out).is_empty() {
+            break out;
+        }
+    };
+    // Rule two is not divisible, and it is not divisible per replacement
+    // either: one pair's admission cannot spend what the other pair's onset
+    // still needs, so the credits that give way are the ordinary stream's.
+    assert!(
+        matches!(
+            musical(&congested)[..],
+            [
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, key: 60, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 3, key: 60, .. }),
+                (0, Event::Expression { kind: 2, id: 3, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 2, key: 72, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 4, key: 72, .. }),
+                (0, Event::Expression { kind: 2, id: 4, .. }),
+            ]
+        ),
+        "each choke rides out with its own replacement: {:?}",
+        musical(&congested)
+    );
+    assert_eq!(congested.values.len(), 512, "the callback's credits are spent, not exceeded");
+    // The Hub's own DIRECT input reaches the same staging with one-event onset
+    // groups, so its two pairs are four events rather than six.
+    source.run_format(raw, vec![], None, None, 512);
+    hub.run_format(raw, vec![note(5, 0, 48, 0, true), note(6, 0, 55, 0, true)], None, None, 512);
+    raw += 512;
+    source.run_format(raw, vec![], None, None, 512);
+    let mut retrigger = vec![note(7, 0, 48, 0, true), note(8, 0, 55, 0, true)];
+    retrigger.extend(clocks(510));
+    let saturated = hub.run_format(raw, retrigger, None, None, 512);
+    assert!(
+        matches!(
+            musical(&saturated)[..],
+            [
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 5, key: 48, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 7, key: 48, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 6, key: 55, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 8, key: 55, .. }),
+            ]
+        ),
+        "DIRECT keeps both pairs whole the same way: {:?}",
+        musical(&saturated)
+    );
+    assert_eq!(saturated.values.len(), 512, "and spends its credits the same way");
+    raw += 512;
+    source.run_format(
+        raw,
+        vec![note(3, 0, 60, 0, false), note(4, 0, 72, 0, false)],
+        None,
+        None,
+        512,
+    );
+    hub.run_format(raw, vec![note(7, 0, 48, 0, false), note(8, 0, 55, 0, false)], None, None, 512);
+    for _ in 0..8 {
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
+}
+
+#[test]
 fn production_all_sound_off_owes_each_voice_a_physical_note_off_and_all_notes_off_does_not() {
     let _scope = crate::test_scope::enter();
     for cc in [120u8, 123] {
