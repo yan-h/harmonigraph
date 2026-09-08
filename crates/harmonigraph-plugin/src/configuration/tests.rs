@@ -1202,17 +1202,7 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
         velocity: 0.8,
         ..Default::default()
     });
-    let baseline = SourceBaseline::new(
-        SourceId::DIRECT,
-        1,
-        1.0,
-        0.0,
-        0,
-        true,
-        &voices,
-        [ChannelBaseline::default(); 16],
-    )
-    .unwrap();
+    let baseline = SourceBaseline::new(SourceId::DIRECT, 1, 1.0, 0, true, &voices).unwrap();
     let mut confirmed = ConfirmedPitches::default();
     for row in &voices {
         confirmed.on(row.confirmed(SourceId::DIRECT)).unwrap();

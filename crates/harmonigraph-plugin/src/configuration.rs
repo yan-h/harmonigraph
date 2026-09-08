@@ -443,14 +443,9 @@ impl Owner {
             self.fault();
             return;
         };
-        let Some(frame) = self.direct.state.baseline(
-            SourceId::DIRECT,
-            id,
-            self.direct.sequence,
-            time,
-            self.direct.coverage_start,
-            true,
-        ) else {
+        let Some(frame) =
+            self.direct.state.baseline(SourceId::DIRECT, id, self.direct.sequence, time, true)
+        else {
             return;
         };
         match recorder.publish_baseline(&frame, observation_time, route) {

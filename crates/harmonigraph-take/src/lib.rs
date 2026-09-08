@@ -767,17 +767,7 @@ mod tests {
             pitch_microcents: 6_000_000_000,
             ..Default::default()
         };
-        let baseline = SourceBaseline::new(
-            SourceId::DIRECT,
-            1,
-            2.0,
-            0.0,
-            5,
-            true,
-            &[row],
-            [ChannelBaseline::default(); 16],
-        )
-        .unwrap();
+        let baseline = SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 5, true, &[row]).unwrap();
         let full = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
             CanonicalEvent::Baseline(&baseline),
         )))
@@ -819,6 +809,71 @@ mod tests {
             Take::parse(std::io::Cursor::new(format!("{header}\n{frame}\n{later}"))),
             Err(ReadError::InvalidCanonical(3))
         ));
+    }
+
+    /// A version-4 take written before a field was pruned still reads, and
+    /// reads the same.
+    ///
+    /// Every record carries a container-level `#[serde(default)]` and none of
+    /// them denies unknown fields, so a key the reader no longer has costs that
+    /// key alone — the same rule the UI blob lives by. That is the whole of
+    /// what makes dropping a field from the take format safe to do without
+    /// touching `FORMAT_VERSION`, and it is worth pinning rather than
+    /// remembering: `deny_unknown_fields` on any of these would turn every
+    /// pruned field into a take nobody can open.
+    ///
+    /// The keys below are the real ones and in the real shape the pre-prune
+    /// writer emitted them in — `coverage_start` after `t`, sixteen `channels`
+    /// of 128 controllers after `voices`, `configuration_revision` first inside
+    /// an assignment. A hand-shortened stand-in would prove nothing about the
+    /// nested vector RON actually has to skip.
+    #[test]
+    fn a_take_carrying_a_since_pruned_field_still_reads() {
+        use harmonigraph_core::canonical::*;
+        use harmonigraph_core::{NoteEvent, SourceId};
+        let row = VoiceBaseline {
+            note: 60,
+            velocity: 0.8,
+            pitch_microcents: 6_000_000_000,
+            ..Default::default()
+        };
+        let baseline = SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 5, true, &[row]).unwrap();
+        let frame = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
+            CanonicalEvent::Baseline(&baseline),
+        )))
+        .unwrap();
+        let mut delta: NoteDelta = NoteEvent::on(3.0, SourceId::DIRECT, 0, 60, 0.8).into();
+        delta.assignment = Some(AssignmentMetadata {
+            decision: 7,
+            node: None,
+            correction_microcents: 0,
+            player_tuning: 0.0,
+        });
+        let note = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
+            CanonicalEvent::Note(delta),
+        )))
+        .unwrap();
+        let header = ron::to_string(&Record::Header(Header::default())).unwrap();
+        let current = Take::parse(std::io::Cursor::new(format!("{header}\n{frame}\n{note}")))
+            .expect("the fixture has to parse before the aged one means anything");
+
+        // What the pre-prune writer put in the same two records.
+        let channel = format!(
+            "(controllers:[{}],controller_valid:(0,0),pitch_bend:None,pressure:None,program:None)",
+            ["0"; 128].join(",")
+        );
+        let channels = format!(",channels:[{}]", vec![channel; 16].join(","));
+        let aged_frame = frame
+            .replace("t:2.0,", "t:2.0,coverage_start:2.0,")
+            .replace(")))", &format!("{channels})))"));
+        let aged_note =
+            note.replace("assignment:Some((", "assignment:Some((configuration_revision:9,");
+        assert_ne!(aged_frame, frame, "the aged baseline has to differ to test anything");
+        assert_ne!(aged_note, note, "the aged delta has to differ to test anything");
+        let aged =
+            Take::parse(std::io::Cursor::new(format!("{header}\n{aged_frame}\n{aged_note}")))
+                .expect("a take carrying pruned keys still opens");
+        assert_eq!(aged.events, current.events, "and draws exactly what it drew");
     }
 
     #[test]

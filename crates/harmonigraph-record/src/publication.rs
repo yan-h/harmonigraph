@@ -346,7 +346,7 @@ pub fn print_test_memory_layout() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harmonigraph_core::canonical::{ChannelBaseline, VoiceBaseline};
+    use harmonigraph_core::canonical::VoiceBaseline;
     use harmonigraph_core::{NoteEvent, SourceId};
 
     fn held(note: u8, onset: f64, pitch: i64) -> VoiceBaseline {
@@ -361,17 +361,7 @@ mod tests {
     }
 
     fn frame(id: u64, time: f64, voices: &[VoiceBaseline]) -> SourceBaseline {
-        SourceBaseline::new(
-            SourceId::DIRECT,
-            id,
-            time,
-            0.0,
-            0,
-            true,
-            voices,
-            [ChannelBaseline::default(); 16],
-        )
-        .unwrap()
+        SourceBaseline::new(SourceId::DIRECT, id, time, 0, true, voices).unwrap()
     }
 
     #[test]

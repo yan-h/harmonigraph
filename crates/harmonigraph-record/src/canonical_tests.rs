@@ -81,9 +81,7 @@ fn delayed_history_and_baseline_keep_original_pass_and_both_wav_tails() {
     for event in events {
         recorder.publish_note(event, 10.0, route).unwrap();
     }
-    let empty =
-        SourceBaseline::new(source, 1, 2.0, 0.0, 3, true, &[], [ChannelBaseline::default(); 16])
-            .unwrap();
+    let empty = SourceBaseline::new(source, 1, 2.0, 3, true, &[]).unwrap();
     recorder.publish_baseline(&empty, 10.0, route).unwrap();
     // Duplicated transfer must not write an already completed lifetime twice.
     for event in events {
@@ -212,17 +210,8 @@ fn all_128_passes_need_source_closure_before_the_129th_file() {
             assert!(harmonigraph_take::Take::read(&file).unwrap().incomplete.is_some());
             // Refusal terminates recording ownership, not display publication.
             for id in 1..=3 {
-                let baseline = SourceBaseline::new(
-                    SourceId::DIRECT,
-                    id,
-                    11.0,
-                    0.0,
-                    0,
-                    true,
-                    &[],
-                    [ChannelBaseline::default(); 16],
-                )
-                .unwrap();
+                let baseline =
+                    SourceBaseline::new(SourceId::DIRECT, id, 11.0, 0, true, &[]).unwrap();
                 let route = publication::Route {
                     address: Some(RecordAddress { epoch: 1, pass: 129 }),
                     time_offset: 0.0,
@@ -296,17 +285,7 @@ fn real_worker_materializes_pending_start_before_accounting_publication_loss() {
             harmonigraph_core::configuration::ConfigReducer::default().resolved(),
         );
         for id in 1..=2 {
-            let baseline = SourceBaseline::new(
-                SourceId::DIRECT,
-                id,
-                0.0,
-                0.0,
-                0,
-                true,
-                &[],
-                [ChannelBaseline::default(); 16],
-            )
-            .unwrap();
+            let baseline = SourceBaseline::new(SourceId::DIRECT, id, 0.0, 0, true, &[]).unwrap();
             recorder
                 .publish_baseline(
                     &baseline,

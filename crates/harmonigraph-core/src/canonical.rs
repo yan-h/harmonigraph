@@ -24,9 +24,14 @@ pub struct EventTiming {
     pub sample_rate: f64,
 }
 
+/// What the tuner decided about one attack. It also named the configuration
+/// revision the decision was taken under, for reconstructing historical
+/// configuration from a note; #712 settled that configuration is adopted per
+/// block and captured when a group's assignment starts, so nothing
+/// reconstructs it and nothing ever read the number. The take's configuration
+/// timeline still carries every revision and when it applied.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AssignmentMetadata {
-    pub configuration_revision: u64,
     pub decision: u64,
     pub node: Option<LatticePos>,
     pub correction_microcents: i64,
@@ -159,8 +164,7 @@ impl Default for VoiceBaseline {
 
 impl VoiceBaseline {
     pub fn metadata(&self) -> Option<AssignmentMetadata> {
-        self.assignment.filter(|_| self.decision != 0).map(|configuration| AssignmentMetadata {
-            configuration_revision: configuration.revision,
+        self.assignment.filter(|_| self.decision != 0).map(|_| AssignmentMetadata {
             decision: self.decision,
             node: self.attack_node,
             correction_microcents: self.frozen_offset_microcents,
@@ -188,60 +192,39 @@ impl VoiceBaseline {
     }
 }
 
-/// Latest accepted ordinary MIDI channel values. Validity accompanies each
-/// value: an untouched control is not fabricated neutral state.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ChannelBaseline {
-    pub controllers: [u8; 128],
-    pub controller_valid: [u64; 2],
-    pub pitch_bend: Option<u16>,
-    pub pressure: Option<u8>,
-    pub program: Option<u8>,
-}
-
-impl Default for ChannelBaseline {
-    fn default() -> Self {
-        Self {
-            controllers: [0; 128],
-            controller_valid: [0; 2],
-            pitch_bend: None,
-            pressure: None,
-            program: None,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InvalidCanonical;
 
 /// One complete immutable source frame. A transport carries a handle to this
 /// separately allocated payload; it must not inline 64 voices in ordinary cells.
+///
+/// What is sounding NOW, and nothing about how it got there. A frame carried
+/// each source's 16 channels of folded controller state and the time its
+/// knowledge began, both for a repair protocol that reconstructed history from
+/// a baseline; #712 replaced that with "clear and re-publish what is sounding",
+/// which reads neither. The channel state cost 2,432 of every 15,816 bytes,
+/// and its only readers were always the audio thread's own `State`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SourceBaseline {
     pub source: SourceId,
     pub id: u64,
     pub time: Time,
-    pub coverage_start: Time,
     pub output_cut: u64,
     pub participating: bool,
-    pub channels: [ChannelBaseline; 16],
     count: usize,
     voices: [VoiceBaseline; HELD_PER_SOURCE],
 }
 
 impl SourceBaseline {
-    // All envelope fields and both complete payloads must enter validation
+    // All envelope fields and the complete payload must enter validation
     // together; no partially initialized baseline is publicly constructible.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         source: SourceId,
         id: u64,
         time: Time,
-        coverage_start: Time,
         output_cut: u64,
         participating: bool,
         voices: &[VoiceBaseline],
-        channels: [ChannelBaseline; 16],
     ) -> Result<Self, InvalidCanonical> {
         if voices.len() > HELD_PER_SOURCE {
             return Err(InvalidCanonical);
@@ -250,10 +233,8 @@ impl SourceBaseline {
             source,
             id,
             time,
-            coverage_start,
             output_cut,
             participating,
-            channels,
             count: voices.len(),
             voices: [VoiceBaseline::default(); HELD_PER_SOURCE],
         };
@@ -267,12 +248,7 @@ impl SourceBaseline {
     }
 
     pub fn validate(&self) -> Result<(), InvalidCanonical> {
-        if self.id == 0
-            || !self.time.is_finite()
-            || !self.coverage_start.is_finite()
-            || self.coverage_start > self.time
-            || self.count > HELD_PER_SOURCE
-        {
+        if self.id == 0 || !self.time.is_finite() || self.count > HELD_PER_SOURCE {
             return Err(InvalidCanonical);
         }
         for (i, voice) in self.voices().iter().enumerate() {
@@ -299,14 +275,6 @@ impl SourceBaseline {
                 return Err(InvalidCanonical);
             }
         }
-        if self.channels.iter().any(|channel| {
-            channel.controllers.iter().any(|&v| v >= 128)
-                || channel.pitch_bend.is_some_and(|v| v >= 16384)
-                || channel.pressure.is_some_and(|v| v >= 128)
-                || channel.program.is_some_and(|v| v >= 128)
-        }) {
-            return Err(InvalidCanonical);
-        }
         Ok(())
     }
 
@@ -314,7 +282,6 @@ impl SourceBaseline {
     /// provenance and assignment values are deliberately unchanged.
     pub fn translate(&mut self, offset: f64) {
         self.time += offset;
-        self.coverage_start += offset;
         for voice in &mut self.voices[..self.count] {
             voice.input_onset += offset;
             voice.actual_onset += offset;
@@ -404,16 +371,7 @@ mod tests {
     }
 
     fn frame(voices: &[VoiceBaseline]) -> Result<SourceBaseline, InvalidCanonical> {
-        SourceBaseline::new(
-            SourceId(1),
-            1,
-            2.0,
-            1.0,
-            64,
-            true,
-            voices,
-            [ChannelBaseline::default(); 16],
-        )
+        SourceBaseline::new(SourceId(1), 1, 2.0, 64, true, voices)
     }
 
     #[test]
@@ -554,11 +512,9 @@ mod tests {
             source,
             3,
             2.2,
-            1.0,
             65,
             true,
             &[VoiceBaseline { pitch_microcents: 6_050_000_000, ..row }],
-            [ChannelBaseline::default(); 16],
         )
         .unwrap();
         tracker.replace_source(&rejoin).unwrap();
@@ -612,17 +568,7 @@ mod tests {
             pitch_microcents: 6_063_000_000,
             ..voice(60)
         };
-        let frame = SourceBaseline::new(
-            source,
-            1,
-            2.0,
-            2.0,
-            66,
-            true,
-            &[row],
-            [ChannelBaseline::default(); 16],
-        )
-        .unwrap();
+        let frame = SourceBaseline::new(source, 1, 2.0, 66, true, &[row]).unwrap();
         tracker.replace_source(&frame).unwrap();
         tracker
             .handle_canonical(CanonicalEvent::Note(delta(

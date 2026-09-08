@@ -82,6 +82,7 @@ impl From<Observation> for NoteDelta {
     }
 }
 
+#[derive(Default)]
 pub struct Direct {
     pub state: State,
     pending: Queue<Observation, OUTPUT_WINDOW>,
@@ -110,28 +111,7 @@ pub struct Direct {
     pub recovery: bool,
     pub lost: bool,
     anchor: Option<(ClockId, i64, f64, f64)>,
-    pub coverage_start: f64,
     pub offset: i64,
-}
-
-impl Default for Direct {
-    fn default() -> Self {
-        Self {
-            state: State::default(),
-            pending: Queue::default(),
-            carried: Queue::default(),
-            carried_lost: None,
-            fence: 0,
-            sequence: 0,
-            lifetime: 0,
-            baseline_id: 0,
-            recovery: false,
-            lost: false,
-            anchor: None,
-            coverage_start: 0.0,
-            offset: 0,
-        }
-    }
 }
 
 impl Direct {
@@ -143,10 +123,7 @@ impl Direct {
     }
     pub fn begin(&mut self, clock: ClockId, raw: i64, time: f64, rate: f64) {
         match self.anchor {
-            None => {
-                self.anchor = Some((clock, raw, time, rate));
-                self.coverage_start = time;
-            }
+            None => self.anchor = Some((clock, raw, time, rate)),
             Some((old, _, _, old_rate)) if old != clock || old_rate != rate => {
                 // Only an explicit owner reset can establish new certainty.
                 self.state.complete = false;

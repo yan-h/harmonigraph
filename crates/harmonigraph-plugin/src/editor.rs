@@ -1310,12 +1310,11 @@ mod tests {
             12.0
         );
         assert!(!shared.drain_into_tracker(22.0));
-        use harmonigraph_core::canonical::{ChannelBaseline, SourceBaseline, VoiceBaseline};
+        use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
         let baseline = SourceBaseline::new(
             SourceId::DIRECT,
             1,
             3.0,
-            0.0,
             0,
             true,
             &[VoiceBaseline {
@@ -1326,7 +1325,6 @@ mod tests {
                 pitch_microcents: 7_200_000_000,
                 ..Default::default()
             }],
-            [ChannelBaseline::default(); 16],
         )
         .unwrap();
         producer.observe_clock(12.0);
@@ -1366,7 +1364,6 @@ mod tests {
             SourceId(3),
             1,
             3.5,
-            3.5,
             3,
             true,
             &[VoiceBaseline {
@@ -1380,7 +1377,6 @@ mod tests {
                 provenance: PitchProvenance::AcceptedOutput,
                 ..Default::default()
             }],
-            [ChannelBaseline::default(); 16],
         )
         .unwrap();
         producer.baseline(&resumed, 12.0, Default::default()).unwrap();

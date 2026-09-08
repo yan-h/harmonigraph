@@ -1418,15 +1418,9 @@ impl Hub {
             };
             let sample = through.saturating_sub(1);
             let time = sample as f64 / self.rate + time_offset;
-            let start = row.coverage.map_or(sample, |c| c.start) as f64 / self.rate + time_offset;
-            let Some(frame) = row.state.baseline(
-                lease.source,
-                id,
-                row.applied,
-                time,
-                start.min(time),
-                row.participating,
-            ) else {
+            let Some(frame) =
+                row.state.baseline(lease.source, id, row.applied, time, row.participating)
+            else {
                 continue;
             };
             let timing =
