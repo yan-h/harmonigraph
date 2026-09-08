@@ -196,10 +196,11 @@ pub struct Wrapper<P: ClapPlugin> {
     /// extension.
     pub current_latency: AtomicU32,
     /// The latency the plugin last asked for. CLAP lets the reported latency
-    /// change only across an activation while letting the host query it at any
-    /// time, so a request made by an active plugin waits here and
-    /// `current_latency` keeps answering with the latency this activation is
-    /// actually running until the next one adopts the replacement.
+    /// change only across an activation, and lets the host query it only while
+    /// the plugin is being activated or active, so a request made by an active
+    /// plugin waits here and `current_latency` keeps answering with the latency
+    /// this activation is actually running until the next one adopts the
+    /// replacement. Every number the host can read is therefore one it was told.
     pending_latency: AtomicU32,
     trace_latency_queries: AtomicU64,
     /// A data structure that helps manage and create buffers for all of the plugin's inputs and
