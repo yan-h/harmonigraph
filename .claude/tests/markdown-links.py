@@ -51,6 +51,7 @@ class MarkdownLinksTests(unittest.TestCase):
 `[Missing](inline.md)` and `` `[Missing](backtick.md)` ``
 <!-- [Missing](comment.md)
 # Comment heading
+```
 -->
 [A `code` label](#real)
 [Stale](#fake)

@@ -36,6 +36,8 @@ def blank(text: str) -> str:
 
 def prose(text: str) -> str:
     """Mask examples without moving line numbers or heading boundaries."""
+    # Commented-out examples must not open a fence over the live prose after them.
+    text = re.sub(r"<!--.*?(?:-->|\Z)", lambda m: blank(m[0]), text, flags=re.S)
     lines = text.splitlines(keepends=True)
     fence = None
     frontmatter = bool(lines) and lines[0].strip() == "---"
@@ -56,7 +58,7 @@ def prose(text: str) -> str:
             lines[n] = blank(line)
         elif line.startswith(("    ", "\t")):
             lines[n] = blank(line)
-    return re.sub(r"<!--.*?(?:-->|\Z)", lambda m: blank(m[0]), "".join(lines), flags=re.S)
+    return "".join(lines)
 
 
 def destination(text: str, start: int) -> str:
