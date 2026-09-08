@@ -268,8 +268,14 @@ impl Sequencer {
     ) {
         self.recovery.acknowledge(source, fence, input_cut, output_cut, settled_attempt);
     }
-    fn insert_plan(&mut self, index: usize, mut plan: Plan) {
-        assert!(self.plans[index].is_none());
+    /// False when the slot is already live: overwriting it would strand the
+    /// old plan's links in the intrusive list and overcount `plan_count`, so
+    /// the caller latches a fault and abandons the insert instead.
+    #[must_use]
+    fn insert_plan(&mut self, index: usize, mut plan: Plan) -> bool {
+        if self.plans[index].is_some() {
+            return false;
+        }
         plan.previous = self.plan_tail;
         plan.next = NO_PLAN;
         if self.plan_tail == NO_PLAN {
@@ -280,6 +286,7 @@ impl Sequencer {
         self.plan_tail = index as u32;
         self.plan_count += 1;
         self.plans[index] = Some(plan);
+        true
     }
     fn remove_plan(&mut self, index: usize) {
         let plan = self.plans[index].take().unwrap();
@@ -316,6 +323,9 @@ impl Sequencer {
         }
     }
 
+    /// False only when plan accounting is already broken; a rejected argument
+    /// is a normal no-op, not a fault.
+    #[must_use]
     pub(super) fn cancel(
         &mut self,
         source: usize,
@@ -324,9 +334,9 @@ impl Sequencer {
         serial: u64,
         request: u16,
         lifetime: u64,
-    ) {
+    ) -> bool {
         if serial == 0 || lifetime == 0 || usize::from(request) >= LIFETIMES {
-            return;
+            return true;
         }
         let index = source * LIFETIMES + usize::from(request);
         if let Some(plan) = self.plans[index].as_mut() {
@@ -337,6 +347,7 @@ impl Sequencer {
             {
                 plan.terminal = true;
             }
+            true
         } else {
             // A copied Retained inventory record may predate this cancellation.
             // Keep its exact original-On identity until the complete fixed
@@ -363,7 +374,7 @@ impl Sequencer {
                     next: NO_PLAN,
                     previous: NO_PLAN,
                 },
-            );
+            )
         }
     }
 }
@@ -470,6 +481,14 @@ impl Hub {
     ) -> Option<(bool, bool, bool)> {
         self.sequencer.plans[source * LIFETIMES + usize::from(life)]
             .map(|plan| (plan.terminal, plan.bound, self.sequencer.recovering()))
+    }
+    /// Drop the cohort's outstanding delivery count while the plans that owe
+    /// it stay unsent — the accounting violation `service_plans` latches. No
+    /// MIDI input reaches that state, so a test constructs it. Returns the
+    /// debt cleared, so a fixture with nothing to break cannot read as one.
+    #[cfg(test)]
+    pub(in crate::performance) fn test_clear_cohort_unsent(&mut self) -> usize {
+        std::mem::take(&mut self.sequencer.cohort_unsent)
     }
     #[cfg(test)]
     pub(in crate::performance) fn test_cohort_delivery(&self) -> (u64, usize, u16, bool, usize) {
@@ -908,24 +927,25 @@ impl Hub {
                     plan.sent = false;
                     plan.bound = true;
                     plan.shift = shift;
-                } else {
-                    self.sequencer.insert_plan(
-                        index,
-                        Plan {
-                            key,
-                            lifetime: birth.serial,
-                            binding,
-                            shift,
-                            sent: false,
-                            terminal: false,
-                            inventoried: false,
-                            accepted: false,
-                            bound: true,
-                            replay: 0,
-                            next: NO_PLAN,
-                            previous: NO_PLAN,
-                        },
-                    );
+                } else if !self.sequencer.insert_plan(
+                    index,
+                    Plan {
+                        key,
+                        lifetime: birth.serial,
+                        binding,
+                        shift,
+                        sent: false,
+                        terminal: false,
+                        inventoried: false,
+                        accepted: false,
+                        bound: true,
+                        replay: 0,
+                        next: NO_PLAN,
+                        previous: NO_PLAN,
+                    },
+                ) {
+                    self.configuration_exhausted();
+                    return false;
                 }
                 if birth.adaptive && self.sequencer.participating[source] {
                     self.sequencer.history.commit(key.lease, birth.channel, birth.key, binding);
@@ -1099,8 +1119,16 @@ impl Hub {
                 && !plan.sent
                 && plan.binding.decision > self.sequencer.cohort_floor
             {
-                assert_ne!(self.sequencer.cohort_unsent, 0);
-                self.sequencer.cohort_unsent -= 1;
+                // A plan that still owes this cohort a reply while the unsent
+                // count reads zero is broken accounting, not a full queue.
+                // Latch it and abandon this plan for the pass; wrapping the
+                // counter would corrupt every later cohort, and panicking on
+                // the audio thread takes the host's engine down with it.
+                let Some(remaining) = self.sequencer.cohort_unsent.checked_sub(1) else {
+                    self.configuration_exhausted();
+                    continue;
+                };
+                self.sequencer.cohort_unsent = remaining;
                 self.sequencer.plans[index].as_mut().unwrap().sent = true;
             }
             // A canceled unbound Original still has to pass the input cursor.
@@ -1136,15 +1164,21 @@ impl Hub {
             } else {
                 continue;
             };
+            let owes_cohort = !self.sequencer.retired
+                && !plan.terminal
+                && !plan.sent
+                && plan.binding.decision > self.sequencer.cohort_floor;
+            // Same broken accounting as above, tested before the push so the
+            // reply is abandoned along with the plan rather than leaving the
+            // cohort a delivery it can no longer account for.
+            if owes_cohort && self.sequencer.cohort_unsent == 0 {
+                self.configuration_exhausted();
+                continue;
+            }
             if self.offer.as_mut().unwrap().bank.rows[source].replies.push(reply).is_err() {
                 continue;
             }
-            if !self.sequencer.retired
-                && !plan.terminal
-                && !plan.sent
-                && plan.binding.decision > self.sequencer.cohort_floor
-            {
-                assert_ne!(self.sequencer.cohort_unsent, 0);
+            if owes_cohort {
                 self.sequencer.cohort_unsent -= 1;
             }
             if plan.terminal {
@@ -1256,7 +1290,12 @@ impl Sequencer {
             }
         }
         if index != NO_VOICE {
-            assert!(self.actual_hint(key, index));
+            // The resolved slot no longer carries this identity, so writing it
+            // would overwrite an unrelated voice. Err is the caller's existing
+            // exhaustion channel; it latches the fault and drops this store.
+            if !self.actual_hint(key, index) {
+                return Err(());
+            }
             let slot = usize::from(index);
             if self.actual[slot] != voice {
                 self.actual_revision = self.actual_revision.checked_add(1).ok_or(())?;
@@ -1277,7 +1316,12 @@ impl Sequencer {
             let revision = self.actual_revision.checked_add(1).ok_or(())?;
             let index = self.actual_free.pop().ok_or(())?;
             let slot = usize::from(index);
-            assert!(self.actual[slot].is_none());
+            // The free list handed back an occupied slot. Its bookkeeping is
+            // already inconsistent, so leak the slot rather than pushing it
+            // back: returning it would re-offer the same corrupt entry.
+            if self.actual[slot].is_some() {
+                return Err(());
+            }
             self.actual[slot] = Some(voice);
             self.actual_keys[slot] = Some(key);
             if let Some(address) = address {
