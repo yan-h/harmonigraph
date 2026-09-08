@@ -199,6 +199,12 @@ pub struct Wrapper<P: ClapPlugin> {
     /// [`ProcessContext`](nice_plug_core::context::process::ProcessContext). Uses the latency
     /// extension.
     pub current_latency: AtomicU32,
+    /// The latency the plugin last asked for. CLAP lets the reported latency
+    /// change only across an activation while letting the host query it at any
+    /// time, so a request made by an active plugin waits here and
+    /// `current_latency` keeps answering with the latency this activation is
+    /// actually running until the next one adopts the replacement.
+    pending_latency: AtomicU32,
     trace_latency_queries: AtomicU64,
     /// A data structure that helps manage and create buffers for all of the plugin's inputs and
     /// outputs based on channel pointers provided by the host.
@@ -515,6 +521,8 @@ impl<P: ClapPlugin> MainThreadExecutor<Task<P>> for Wrapper<P> {
                         }
                         unsafe_clap_call! { &*self.host_callback=>request_restart(&*self.host_callback) };
                     } else {
+                        // Deactivated, so the request may be published now.
+                        self.publish_pending_latency();
                         unsafe_clap_call! { host_latency=>changed(&*self.host_callback) };
                     }
                 }
@@ -726,6 +734,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             last_process_status: AtomicCell::new(ProcessStatus::Normal),
             latency_changed: AtomicBool::new(false),
             current_latency: AtomicU32::new(0),
+            pending_latency: AtomicU32::new(0),
             trace_latency_queries: AtomicU64::new(0),
             // This is initialized just before calling `Plugin::initialize()` so that during the
             // process call buffers can be initialized without any allocations
@@ -1951,15 +1960,29 @@ impl<P: ClapPlugin> Wrapper<P> {
         success
     }
 
+    /// Asking for a latency is not publishing it. An active plugin gets the
+    /// restart it needs to adopt the request and nothing else: the host is
+    /// compensating for the latency this activation is running, and moving the
+    /// reported number out from under it would misalign everything already
+    /// scheduled against it. The next activation publishes the replacement.
     pub fn set_latency_samples(&self, samples: u32) {
         // Only make a callback if it's actually needed
         // XXX: For CLAP we could move this handling to the Plugin struct, but it may be worthwhile
         //      to keep doing it this way to stay consistent with VST3.
-        let old_latency = self.current_latency.swap(samples, Ordering::SeqCst);
-        if old_latency != samples {
+        let requested = self.pending_latency.swap(samples, Ordering::SeqCst);
+        if !self.is_activated.load(Ordering::SeqCst) {
+            self.publish_pending_latency();
+        }
+        if requested != samples {
             let task_posted = self.schedule_gui(Task::LatencyChanged);
             crate::nice_debug_assert!(task_posted, "The task queue is full, dropping task...");
         }
+    }
+
+    /// Move the number the host reads to the one the plugin asked for. Only a
+    /// deactivated plugin may do this.
+    fn publish_pending_latency(&self) {
+        self.current_latency.store(self.pending_latency.load(Ordering::SeqCst), Ordering::SeqCst);
     }
 
     pub fn set_current_voice_capacity(&self, capacity: u32) {
@@ -2121,7 +2144,10 @@ impl<P: ClapPlugin> Wrapper<P> {
         }
 
         // If this reactivation happened due to the latency changing, notify the host of that
-        // latency change.
+        // latency change. The request this activation is answering was deliberately
+        // not published while the plugin was active; adopt it before the host is
+        // told to read it, and `initialize` below then republishes the same number.
+        wrapper.publish_pending_latency();
         if wrapper.latency_changed.swap(false, Ordering::SeqCst) {
             if let Some(host_latency) = &*wrapper.host_latency.borrow() {
                 unsafe_clap_call! { host_latency=>changed(&*wrapper.host_callback) };

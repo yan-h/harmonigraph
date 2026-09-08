@@ -2444,7 +2444,7 @@ fn a_delay_edit_leaves_participation_where_the_host_put_it() {
     // finished slider gesture, admitted at the next capture, and plain host
     // automation. Both are read back from both sides afterwards, because the
     // defect moved one of them and left the other saying the opposite.
-    let mut edit = |raw: &mut i64, value: i32, gesture: bool, participating: bool| {
+    let edit = |raw: &mut i64, value: i32, gesture: bool, participating: bool| {
         let automation = if gesture {
             unsafe {
                 context.raw_begin_set_parameter(delay);
@@ -2486,4 +2486,83 @@ fn a_delay_edit_leaves_participation_where_the_host_put_it() {
     }
     assert_eq!(source.source_snapshot().faults, 0);
     drop(context);
+}
+
+#[test]
+fn a_pending_delay_change_keeps_the_reported_latency_at_the_active_one() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut source) = production_pair();
+    assert_eq!(source.latency(), 512);
+    // 2x buffer, requested while this activation runs 1x, alongside a note.
+    source.run_format(
+        1536,
+        vec![note(7, 0, 60, 0, true), source.param_event(DELAY_PARAM, 1.0, 1)],
+        None,
+        None,
+        512,
+    );
+    hub.run_format(1536, vec![], None, None, 512);
+    let emitted = source.run_format(2048, vec![], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    source.main();
+    assert_eq!(emitted.values[0].0, 0, "the note still emits at input + the active 512");
+    assert_eq!(source.latency(), 512, "which is the latency the host is still told to expect");
+    assert_eq!(source._stats.restarts.load(Ordering::Relaxed), 1, "one restart is requested");
+    assert_eq!(
+        source._stats.latency_changes.load(Ordering::Relaxed),
+        1,
+        "and nothing is published"
+    );
+    assert_eq!(
+        source._stats.observed_latency.load(Ordering::Relaxed),
+        512,
+        "the only value this host has ever read is the one it is compensating for"
+    );
+    source.run_format(2560, vec![note(7, 0, 60, 0, false)], None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    for raw in [3072, 3584] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(source.source_snapshot().held, 0);
+    // The host answers the request. The multiplier is adopted whole at that
+    // boundary and the reported latency moves with it, together.
+    hub.reactivate_format(44100.0, 512);
+    source.reactivate_format(44100.0, 512);
+    assert_eq!(source.latency(), 1024);
+    assert_eq!(source._stats.latency_changes.load(Ordering::Relaxed), 2, "published exactly once");
+    assert_eq!(
+        source._stats.observed_latency.load(Ordering::Relaxed),
+        1024,
+        "and reading it the way a host does, inside the notification, finds the new delay"
+    );
+    let mut raw = 3584;
+    for _ in 0..8 {
+        raw += 512;
+        source.main();
+        hub.main();
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    raw += 512;
+    source.run_format(raw, vec![note(8, 0, 62, 0, true)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    assert!(
+        source.run_format(raw + 512, vec![], None, None, 512).values.is_empty(),
+        "input + the old 512 is now a callback short of the delay"
+    );
+    hub.run_format(raw + 512, vec![], None, None, 512);
+    let after = source.run_format(raw + 1024, vec![], None, None, 512);
+    assert_eq!(after.values[0].0, 0, "and the note emits at input + the adopted 1024");
+    assert!(after.values[0].1.attack().is_some());
+    hub.run_format(raw + 1024, vec![], None, None, 512);
+    // End the phrase rather than abandoning a held stream in the registry.
+    source.run_format(raw + 1536, vec![note(8, 0, 62, 0, false)], None, None, 512);
+    hub.run_format(raw + 1536, vec![], None, None, 512);
+    for step in 1..6 {
+        let raw = raw + 1536 + 512 * step;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(source.source_snapshot().held, 0);
 }

@@ -22,7 +22,7 @@ use nice_plug::plugin::{ParamValue, PluginState};
 use routing::{HubSetup, SavedUuid, SourceSetup};
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 #[path = "attachment_tests.rs"]
 mod attachment_tests;
@@ -40,6 +40,10 @@ struct Host {
     callbacks: AtomicUsize,
     restarts: AtomicUsize,
     latency_changes: AtomicUsize,
+    /// The plugin, so the notification below can do what a host does with one:
+    /// read the value the moment it is told there is a new one.
+    plugin: AtomicPtr<clap_plugin>,
+    observed_latency: AtomicUsize,
 }
 unsafe extern "C" fn extension(_: *const clap_host, id: *const c_char) -> *const c_void {
     if unsafe { CStr::from_ptr(id) } == CLAP_EXT_LATENCY {
@@ -50,7 +54,19 @@ unsafe extern "C" fn extension(_: *const clap_host, id: *const c_char) -> *const
 }
 static HOST_LATENCY: clap_host_latency = clap_host_latency { changed: Some(latency_changed) };
 unsafe extern "C" fn latency_changed(host: *const clap_host) {
-    unsafe { &*((*host).host_data.cast::<Host>()) }.latency_changes.fetch_add(1, Ordering::Relaxed);
+    let stats = unsafe { &*((*host).host_data.cast::<Host>()) };
+    stats.latency_changes.fetch_add(1, Ordering::Relaxed);
+    let plugin = stats.plugin.load(Ordering::Relaxed);
+    if !plugin.is_null() {
+        stats.observed_latency.store(latency_of(plugin) as usize, Ordering::Relaxed);
+    }
+}
+fn latency_of(plugin: *const clap_plugin) -> u32 {
+    let latency = unsafe {
+        &*((*plugin).get_extension.unwrap()(plugin, CLAP_EXT_LATENCY.as_ptr())
+            .cast::<clap_plugin_latency>())
+    };
+    unsafe { latency.get.unwrap()(plugin) }
 }
 unsafe extern "C" fn restart(host: *const clap_host) {
     unsafe { &*((*host).host_data.cast::<Host>()) }.restarts.fetch_add(1, Ordering::Relaxed);
@@ -269,6 +285,7 @@ impl Device {
             )
         };
         assert!(!plugin.is_null());
+        stats.plugin.store(plugin.cast_mut(), Ordering::Relaxed);
         assert!(unsafe { (*plugin).init.unwrap()(plugin) });
         Self { plugin, _host: host, _stats: stats, tuner, active: false }
     }
@@ -332,11 +349,7 @@ impl Device {
         }
     }
     fn latency(&self) -> u32 {
-        let latency = unsafe {
-            &*((*self.plugin).get_extension.unwrap()(self.plugin, CLAP_EXT_LATENCY.as_ptr())
-                .cast::<clap_plugin_latency>())
-        };
-        unsafe { latency.get.unwrap()(self.plugin) }
+        latency_of(self.plugin)
     }
     fn param_id(&self, index: u32) -> u32 {
         assert!(self.tuner);

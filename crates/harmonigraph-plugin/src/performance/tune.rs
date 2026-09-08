@@ -51,9 +51,13 @@ impl HarmonigraphTune {
     fn multiplier(&self) -> u32 {
         self.params.delay.value().clamp(1, super::protocol::DELAY_MULTIPLIER_MAX) as u32
     }
-    /// What the host is told. Zero frames means no activation has advertised a
-    /// format yet, and there is no delay to report until one has.
-    fn latency(&self) -> u32 {
+    /// What this Tune asks the host for. Zero frames means no activation has
+    /// advertised a format yet, and there is no delay to report until one has.
+    /// Asking is not being answered: the wrapper publishes a request only
+    /// across an activation, so between a finished edit and the reactivation
+    /// the host keeps reading the delay this activation is actually running.
+    /// Requested against active is a number for the editor, not for the host.
+    fn requested_latency(&self) -> u32 {
         self.multiplier().saturating_mul(self.frames)
     }
 }
@@ -79,9 +83,11 @@ impl Plugin for HarmonigraphTune {
     ) -> bool {
         // Activation order is `clap_main_activate` then `initialize`, so the
         // frames this reports against are the ones the delay was just built
-        // from. Nothing about pairing is consulted: a Tune that has never seen
-        // a Hub still reports the latency its own saved multiplier implies.
-        context.set_latency_samples(self.latency());
+        // from, and the request equals the delay this activation adopted.
+        // Publishing it here is what makes it the host's number. Nothing about
+        // pairing is consulted: a Tune that has never seen a Hub still reports
+        // the latency its own saved multiplier implies.
+        context.set_latency_samples(self.requested_latency());
         true
     }
     #[cfg(target_os = "macos")]
@@ -153,10 +159,12 @@ impl ClapPlugin for HarmonigraphTune {
         output: &mut api::Output<'_>,
     ) -> ProcessStatus {
         // A changed multiplier is a changed latency, and nice-plug turns that
-        // into a host restart request; the new delay is adopted at that
-        // reactivation and never mid-activation. Repeating the same number
-        // costs one atomic swap and asks for nothing.
-        context.set_latency_samples(self.latency());
+        // into a host restart request WITHOUT changing what the host reads:
+        // the delay is adopted at that reactivation and never mid-activation,
+        // so a reported latency that ran ahead of it would ask the host to
+        // compensate for a delay no note is being given. Repeating the same
+        // number costs one atomic swap and asks for nothing.
+        context.set_latency_samples(self.requested_latency());
         self.source.as_mut().unwrap().schedule(block, output);
         ProcessStatus::KeepAlive
     }
