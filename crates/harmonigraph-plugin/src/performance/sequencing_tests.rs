@@ -3992,3 +3992,34 @@ fn destruction_settlement(direct: bool) {
     assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn production_replacement_keeps_its_onset_when_subblocks_spend_the_visit_budget() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    source.run_format(1536, vec![], None, None, 512);
+    let established = hub.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
+    assert_eq!(established.values.iter().filter(|(_, event)| event.attack().is_some()).count(), 1);
+    source.run_format(2048, vec![], None, None, 512);
+    // These subblocks and raw clocks leave enough work budget to prepare the
+    // choke, but its completion spends the last visit before the paired onset.
+    let mut events: Vec<_> =
+        (0..23).map(|i| transport(1 + 12 * i, 120.0 + f64::from(i % 2))).collect();
+    events.extend((0..37).map(|_| raw_midi([0xf8, 0, 0], 479)));
+    events.push(note(2, 0, 60, 480, true));
+    let output = hub.run_format(2048, events, None, None, 512);
+    let musical: Vec<_> = output
+        .values
+        .iter()
+        .filter(|(_, event)| event.attack().is_some() || event.release())
+        .copied()
+        .collect();
+    assert_eq!(musical.len(), 2, "a replacement must not choke its predecessor alone");
+    assert_eq!((musical[0].0, musical[1].0), (480, 480));
+    assert!(musical[0].1.release());
+    assert!(musical[1].1.attack().is_some());
+    assert_eq!(inspect_hub(&hub, |h| h.direct.test_snapshot().faults), 0);
+    drop(source);
+    drop(hub);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}

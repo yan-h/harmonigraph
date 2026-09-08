@@ -43,6 +43,9 @@ pub(super) const CHANNEL_RESETS: usize = 4;
 const PITCH_RESET: usize = 3;
 /// The 14-bit MIDI pitch bend that means no bend.
 const BEND_CENTER: u16 = 0x2000;
+// Token child selectors use 0 for inline, 1/2 for emergency, and u16 + 3
+// for work cells. This inline onset's completion was paid by its paired choke.
+const PREPAID_ONSET: u64 = u64::MAX;
 #[cfg(test)]
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
@@ -1922,15 +1925,17 @@ impl Source {
         // two are separate host pushes: the choke, then a completion, then the
         // onset, with everything else the callback owes competing for the same
         // 512 credits in between. So they are admitted together or not at all.
-        // Nothing is reserved across the round trip -- the onset is already in
-        // the scheduler before the choke can be pushed -- which is what keeps a
-        // callback boundary, a spent visit budget or another replacement from
-        // coming between the two.
+        // The onset is already in the scheduler before the choke can be pushed.
+        // Its token also tells prepare to spend both completion budgets before
+        // the choke, so the choke's cleanup cannot consume the onset's visit.
         let replacement = child != NONE
             && self.pending.at(position).is_some_and(|parent| parent.event.attack().is_some());
         let staged = if replacement {
             match self.plan_work(position, NONE, start, end, output) {
-                Plan::Ready(onset) => output.stage_all(&[group, onset]),
+                Plan::Ready(mut onset) => {
+                    onset.token.0[3] = PREPAID_ONSET;
+                    output.stage_all(&[group, onset])
+                }
                 // The replacement will never emit, so nothing is choked for it:
                 // the forced release retires with the onset instead of sounding
                 // alone, which is also what keeps the envelope retirable.
@@ -2032,7 +2037,11 @@ impl Source {
             return self.prepare_emergency(group);
         }
         let position = group.token.0[1] as usize;
-        let child = if group.token.0[3] == 0 { NONE } else { (group.token.0[3] - 3) as u16 };
+        let child = if matches!(group.token.0[3], 0 | PREPAID_ONSET) {
+            NONE
+        } else {
+            (group.token.0[3] - 3) as u16
+        };
         let Some(parent) = self.pending.at(position).filter(|parent| {
             parent.serial == group.token.0[2] && parent.staged && parent.selected == child
         }) else {
@@ -2062,6 +2071,16 @@ impl Source {
             usize::from(parent.work_count)
         } else {
             1
+        };
+        let completion_work = if group.token.0[3] == PREPAID_ONSET {
+            // Only accepted completion of the paired choke can hand this
+            // staged parent to its inline onset. A refused choke invalidates
+            // both tokens; a later standalone retry pays normally.
+            0
+        } else if child != NONE && parent.event.attack().is_some() {
+            completion_work + usize::from(parent.work_count)
+        } else {
+            completion_work
         };
         if !self.charge(completion_work) {
             return false;
@@ -2204,7 +2223,7 @@ impl Source {
             return;
         }
         let position = completion.group.token.0[1] as usize;
-        let child = if completion.group.token.0[3] == 0 {
+        let child = if matches!(completion.group.token.0[3], 0 | PREPAID_ONSET) {
             NONE
         } else {
             (completion.group.token.0[3] - 3) as u16
