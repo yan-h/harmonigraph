@@ -16,6 +16,7 @@ use nice_plug::wrapper::clap::{
     configuration::{InputValue, OwnedInput},
     performance as api,
 };
+use nice_plug::wrapper::hash_param_id;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -877,10 +878,16 @@ impl Source {
     /// later callback, so every refusal below is a latched fault rather than a
     /// request to be offered this value again.
     pub fn input(&mut self, input: OwnedInput) {
-        if let InputValue::Parameter { value, modulation: false, .. } = input.value {
-            // Tune has exactly one parameter; its original retained value is the
-            // authority even if the generic parameter atomic has run ahead.
-            if self.shared.source.is_some() {
+        if let InputValue::Parameter { id, value, modulation: false } = input.value {
+            // Participation is the only parameter this class reads, and the id
+            // is the only thing that says which one arrived: a stepped
+            // parameter carries its step index, so the tuning delay's 1x is a
+            // zero here and would read as Off. The delay is the wrapper's to
+            // store and the activation's to have adopted already.
+            //
+            // For participation the original retained value is the authority
+            // even if the generic parameter atomic has run ahead.
+            if self.shared.source.is_some() && id == hash_param_id(setup::PARTICIPATING) {
                 let Some(sample) = input.sample else {
                     self.fault(INPUT_FAULT);
                     return;

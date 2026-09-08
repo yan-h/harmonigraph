@@ -2424,3 +2424,66 @@ fn production_a_host_format_reactivation_reestablishes_the_paired_session() {
     assert_eq!(after.iter().filter(|(_, event)| event.release()).count(), 1);
     assert_eq!(source.source_snapshot().held, 0);
 }
+
+#[test]
+fn a_delay_edit_leaves_participation_where_the_host_put_it() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    let wrapper = unsafe {
+        &*((*source.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
+    };
+    let (context, delay) = wrapper.test_gui_context("tuning_delay");
+    // A stepped parameter carries its step index, so the multiplier's ends are
+    // a zero for 1x buffer and fifteen for 16x -- the same two numbers as Off
+    // and On, which is what made reading this as participation invisible.
+    let steps = protocol::DELAY_MULTIPLIER_MAX - 1;
+    let mut raw = 1536;
+    // One delay edit made each of the two ways a Tune receives them: a
+    // finished slider gesture, admitted at the next capture, and plain host
+    // automation. Both are read back from both sides afterwards, because the
+    // defect moved one of them and left the other saying the opposite.
+    let mut edit = |raw: &mut i64, value: i32, gesture: bool, participating: bool| {
+        let automation = if gesture {
+            unsafe {
+                context.raw_begin_set_parameter(delay);
+                context.raw_set_parameter_normalized(delay, value as f32 / steps as f32);
+                context.raw_end_set_parameter(delay);
+            }
+            vec![]
+        } else {
+            vec![source.param_event(DELAY_PARAM, f64::from(value), 1)]
+        };
+        source.run_format(*raw, automation, None, None, 512);
+        hub.run_format(*raw, vec![], None, None, 512);
+        source.main();
+        *raw += 512;
+        assert_eq!(source.param_value(DELAY_PARAM), f64::from(value), "the edit was delivered");
+        assert_eq!(
+            inspect_source(&source, |source| source.participating),
+            participating,
+            "a {value}-step delay edit moved the Source's participation"
+        );
+        assert_eq!(
+            source.param_value(PARTICIPATING_PARAM),
+            f64::from(u8::from(participating)),
+            "and the host's own readback disagrees with it"
+        );
+    };
+    for gesture in [true, false] {
+        edit(&mut raw, 0, gesture, true);
+        edit(&mut raw, steps, gesture, true);
+    }
+    source.run_format(raw, vec![source.participation(false, 1)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    raw += 512;
+    assert!(!inspect_source(&source, |source| source.participating));
+    // Off is the state a delay edit used to switch back on.
+    for gesture in [true, false] {
+        edit(&mut raw, 0, gesture, false);
+        edit(&mut raw, steps, gesture, false);
+    }
+    assert_eq!(source.source_snapshot().faults, 0);
+    drop(context);
+}

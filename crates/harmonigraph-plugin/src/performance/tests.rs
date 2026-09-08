@@ -211,6 +211,9 @@ unsafe extern "C" fn push(
     sink.values.push((header.time, value));
     true
 }
+/// The two parameters the Tune exports, in the order it declares them.
+const PARTICIPATING_PARAM: u32 = 0;
+const DELAY_PARAM: u32 = 1;
 struct Device {
     plugin: *const clap_plugin,
     _host: Box<clap_host>,
@@ -335,20 +338,37 @@ impl Device {
         };
         unsafe { latency.get.unwrap()(self.plugin) }
     }
-    fn participation(&self, value: bool, time: u32) -> Input {
+    fn param_id(&self, index: u32) -> u32 {
         assert!(self.tuner);
         let mut info = unsafe { std::mem::zeroed() };
-        assert!(unsafe { self.params().get_info.unwrap()(self.plugin, 0, &mut info) });
+        assert!(unsafe { self.params().get_info.unwrap()(self.plugin, index, &mut info) });
+        info.id
+    }
+    /// Automation for the Tune's parameter at `index`, carrying the value a
+    /// host sends: a stepped parameter's CLAP value is its step index, so
+    /// Participating is 0 or 1 and the tuning delay's 1x buffer is a zero.
+    fn param_event(&self, index: u32, value: f64, time: u32) -> Input {
         Input::Param(clap_event_param_value {
             header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, time),
-            param_id: info.id,
+            param_id: self.param_id(index),
             cookie: ptr::null_mut(),
             note_id: -1,
             port_index: -1,
             channel: -1,
             key: -1,
-            value: f64::from(value),
+            value,
         })
+    }
+    /// What the host reads back for that parameter, in the same units.
+    fn param_value(&self, index: u32) -> f64 {
+        let mut value = 0.0;
+        assert!(unsafe {
+            self.params().get_value.unwrap()(self.plugin, self.param_id(index), &mut value)
+        });
+        value
+    }
+    fn participation(&self, value: bool, time: u32) -> Input {
+        self.param_event(PARTICIPATING_PARAM, f64::from(value), time)
     }
     fn source_snapshot(&self) -> source::Snapshot {
         assert!(self.tuner);
