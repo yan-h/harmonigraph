@@ -220,6 +220,11 @@ pub struct Source {
     cancel_cursor: Option<usize>,
     pub faults: u32,
     reset_armed: bool,
+    /// A participation toggle's recenter, retired with its marker while the
+    /// lease it belonged to was already sealed. Held rather than armed: a seal
+    /// refuses fresh output, and the bend it would neutralize is on the wire
+    /// rather than in the lease.
+    pitch_center_owed: bool,
     pub participating: bool,
     timing_failed: bool,
     generation: u64,
@@ -436,6 +441,7 @@ impl Source {
             cancel_cursor: None,
             faults: 0,
             reset_armed: false,
+            pitch_center_owed: false,
             participating: true,
             timing_failed: false,
             generation: 1,
@@ -804,6 +810,13 @@ impl Source {
         }
         self.drain_finished();
         self.drain_ready_work();
+        // A recenter the seal refused, now that the lease it waited on has
+        // returned. Placed after the drain because that is where a cancelled
+        // marker is disposed, so an obligation raised this callback is armed
+        // in it rather than in the next one.
+        if self.pitch_center_owed {
+            self.arm_pitch_center();
+        }
         if let Some(session) = self.session() {
             let faults = session.faults.load(Ordering::Acquire)
                 | self.offer.as_ref().map_or(0, |o| {
@@ -1479,6 +1492,16 @@ impl Source {
     /// phrase without changing who owns pitch, and the recenter would be an
     /// event no reset before this one sent.
     fn arm_pitch_center(&mut self) {
+        // Behind the final cut `schedule_emergency` stages nothing, so a bit
+        // armed here would never leave and `output_settled` would wait on it
+        // for good. The obligation outlives the lease, though -- the wire keeps
+        // the bend across the seal -- so it waits rather than being dropped,
+        // and `begin` arms it on the far side.
+        if self.sealed {
+            self.pitch_center_owed = true;
+            return;
+        }
+        self.pitch_center_owed = false;
         for channel in 0..16 {
             let bent =
                 self.state.channels()[channel].pitch_bend.is_some_and(|value| value != BEND_CENTER);

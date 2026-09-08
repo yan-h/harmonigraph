@@ -2972,6 +2972,75 @@ fn production_returning_to_participating_recentres_what_off_bent() {
     settle(&hub, &source, 4096, vec![]);
 }
 
+/// A restore can move participation and routing together, and the routing half
+/// is a reset whose cancel cut covers the participation marker standing in the
+/// same queue. That marker never reaches output -- and it carries the only
+/// thing that arms the recentre. Losing it leaves the wire holding the bend the
+/// Off phrase passed through, under a Tune that owns pitch again, so every note
+/// it tunes afterwards sounds at that offset.
+#[test]
+fn production_a_reset_that_cancels_a_toggle_still_recentres_what_off_bent() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, Calibration { offset: 0 });
+    hub.activate_format(44100.0, 512);
+    let mut source = Device::new(true);
+    source.configure_format(uuid, true, Calibration { offset: 0 });
+    source.activate_format(44100.0, 512);
+    for raw in [0, 512, 1024] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    source.run_format(1536, vec![source.participation(false, 0)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    source.run_format(2048, vec![raw_midi([0xe0, 0x00, 0x60], 0)], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    let bent = source.run_format(2560, vec![], None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    assert!(
+        bent.values
+            .iter()
+            .any(|(_, event)| matches!(event, Event::Midi { data: [0xe0, 0x00, 0x60], .. })),
+        "the fixture must actually leave an Off bend on the wire"
+    );
+    let before = attachment_tests::lease(&source).expect("the fixture must reach a paired Tune");
+    // Participation and calibration in one restored state: `Adapter::prepare`
+    // makes the routing change a reset, so `apply_setup` captures the toggle's
+    // marker and cancels it again inside the same call.
+    source.configure_format(uuid, true, Calibration { offset: 64 });
+    let mut recentres = 0;
+    let mut raw = 3072;
+    for _ in 0..16 {
+        let sink = source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        source.main();
+        hub.main();
+        recentres += sink
+            .values
+            .iter()
+            .filter(|(_, event)| matches!(event, Event::Midi { data: [0xe0, 0x00, 0x40], .. }))
+            .count();
+        raw += 512;
+    }
+    assert_eq!(
+        source.param_value(PARTICIPATING_PARAM),
+        1.0,
+        "the restore must actually reach the Participating mode that owns pitch"
+    );
+    assert_ne!(
+        attachment_tests::lease(&source).map(|lease| lease.incarnation),
+        Some(before.incarnation),
+        "and it must actually reach the reset: nothing armed this at the marker, so it \
+         has to survive the whole withdraw and re-adopt the routing change puts between \
+         the toggle and the next moment output is allowed"
+    );
+    assert_eq!(recentres, 1, "the toggle still owes the wire its centre, exactly once");
+    assert_eq!(source.source_snapshot().faults, 0);
+    settle(&hub, &source, raw, vec![]);
+}
+
 /// Lateness is not a mode change. A note whose assignment misses its deadline
 /// takes the late-playback path and nothing else: the phrase already sounding
 /// keeps sounding, no release or controller cleanup goes out, and the note
