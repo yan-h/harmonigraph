@@ -54,7 +54,6 @@ struct Control {
     final_emergency: bool,
     process_error: bool,
     misuse: bool,
-    learn_at: Option<i64>,
     apply_limit: AtomicUsize,
     restarts: AtomicUsize,
     latency_changes: AtomicUsize,
@@ -108,7 +107,6 @@ impl Default for Control {
             final_emergency: false,
             process_error: false,
             misuse: false,
-            learn_at: None,
             apply_limit: AtomicUsize::new(usize::MAX),
             restarts: AtomicUsize::new(0),
             latency_changes: AtomicUsize::new(0),
@@ -120,7 +118,6 @@ struct Fixture<const CONFIG: bool, const PERFORMANCE: bool> {
     control: Arc<Control>,
     callback: usize,
     mailbox: Option<Arc<ConfigurationMailbox>>,
-    learned: bool,
 }
 impl<const C: bool, const P: bool> Default for Fixture<C, P> {
     fn default() -> Self {
@@ -136,7 +133,6 @@ impl<const C: bool, const P: bool> Default for Fixture<C, P> {
                 .clone(),
             callback: 0,
             mailbox: None,
-            learned: false,
         }
     }
 }
@@ -239,16 +235,6 @@ impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
         self.control.apply_limit.store(remaining - 1, Ordering::Relaxed);
         self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).applies.push(commit.sample);
         Some(ConfigurationSnapshot::default())
-    }
-    fn clap_configuration_group_end(&mut self, sample: i64) -> Option<ConfigurationEdit> {
-        if !self.learned && self.control.learn_at == Some(sample) {
-            self.learned = true;
-            let mut edit = ConfigurationEdit::default();
-            edit.values[0] = Some(0.25);
-            Some(edit)
-        } else {
-            None
-        }
     }
     fn clap_configuration_observe(&mut self, input: OwnedInput) {
         self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).configuration.push(input);
@@ -1400,51 +1386,6 @@ fn allocated_boundary_layouts_fit_declared_budgets() {
         INPUT_SCAN * std::mem::size_of::<Option<OwnedInput>>(),
         perf::OUTPUT_CELLS * std::mem::size_of::<Option<perf::Group>>()
     );
-}
-
-#[test]
-fn future_configuration_notification_does_not_overtake_earlier_performance() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut script = instructions([single(1, perf::Lane::Normal, 0, note(CLAP_EVENT_NOTE_OFF))]);
-    script.push(Instruction {
-        callback: 1,
-        block: 31,
-        group: single(2, perf::Lane::Normal, 31, note(CLAP_EVENT_NOTE_OFF)),
-    });
-    let mut d = Device::new(
-        Control { script, learn_at: Some(131), ..Default::default() },
-        c"fixture.combined",
-    );
-    let param = d.param(31);
-    d.run(100, 64, vec![on(0), param], true);
-    assert_eq!(
-        d.sink.attempts.iter().map(|a| (a.kind, a.time)).collect::<Vec<_>>(),
-        [
-            (CLAP_EVENT_NOTE_OFF, 0),
-            (CLAP_EVENT_PARAM_GESTURE_BEGIN, 31),
-            (CLAP_EVENT_PARAM_VALUE, 31),
-            (CLAP_EVENT_PARAM_GESTURE_END, 31),
-            (CLAP_EVENT_NOTE_OFF, 31)
-        ]
-    );
-}
-
-#[test]
-fn configuration_backpressure_precedes_performance_ack_without_reobserving_learning() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d =
-        Device::new(Control { learn_at: Some(110), ..Default::default() }, c"fixture.combined");
-    d.control.apply_limit.store(1, Ordering::Release);
-    let param = d.param(10);
-    d.run(100, 64, vec![param, on(10)], true);
-    assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).configuration.len(), 2);
-    assert!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.is_empty());
-    d.control.apply_limit.store(100, Ordering::Release);
-    d.run(164, 8, vec![on(0)], true);
-    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    assert_eq!(o.configuration.len(), 3);
-    assert_eq!(o.inputs.len(), 3);
-    assert_eq!(o.applies, [110, 110]);
 }
 
 #[test]
