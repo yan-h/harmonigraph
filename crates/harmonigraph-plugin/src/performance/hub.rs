@@ -11,8 +11,7 @@ use super::{
 };
 use crate::configuration::Owner;
 use harmonigraph_core::canonical::{ClockId, EventTiming};
-use harmonigraph_core::confirmed::{ConfirmedPitch, PitchProvenance};
-use harmonigraph_core::VoiceKey;
+use harmonigraph_core::confirmed::PitchProvenance;
 use harmonigraph_record::Recorder;
 use nice_plug::wrapper::clap::performance as api;
 use std::sync::atomic::Ordering;
@@ -600,7 +599,10 @@ impl Hub {
         self.sequencer.terminal_session = false;
         self.sequencer.terminal_sources = 0;
         self.sequencer.retire_cohort();
-        self.sequencer.clear_clock_context();
+        // `resume_clock` above has already reset the observation if this
+        // boundary was discontinuous, so what it still holds here is exactly
+        // what a healthy one carries: keys the player has not let go of.
+        self.sequencer.carry_observed(&owner.direct.state);
         // Rematching cannot reopen a row until the complete committed clock is
         // visible. Old returned/still-Ready offers remain withdrawn and fenced.
         offer.session.faults.store(0, Ordering::Release);
@@ -1307,7 +1309,7 @@ impl Hub {
         #[cfg(test)]
         self.shared.before_direct_repair.reach();
         if owner.direct.pending().is_none() {
-            owner.publish_direct(recorder, observation);
+            owner.publish_direct_repair(recorder, observation);
         }
         if let Some(offer) = &self.offer {
             if self.clock.valid && offer.session.alive.load(Ordering::Acquire) {
@@ -1350,25 +1352,15 @@ impl Hub {
             false
         }
     }
+    /// A row that is Off, or whose state has lost an event, contributes no
+    /// confirmed pitches -- and says so by clearing, since the Hub is the only
+    /// thing that knows anything about this source at all.
     fn confirm(row: &Row, confirmed: &mut harmonigraph_core::confirmed::ConfirmedPitches) {
         let Some(lease) = row.lease else {
             return;
         };
-        let empty = ConfirmedPitch {
-            key: VoiceKey { source: lease.source, channel: 0, note: 0 },
-            lifetime: None,
-            host_note_id: None,
-            onset_sample: 0,
-            pitch_microcents: 0,
-            provenance: PitchProvenance::AcceptedOutput,
-        };
-        let mut rows = [empty; 64];
-        let count = if row.participating && row.state.complete {
-            row.state.confirmed(lease.source, &mut rows)
-        } else {
-            0
-        };
-        let _ = confirmed.replace_source(lease.source, &rows[..count]);
+        let live = row.participating && row.state.complete;
+        let _ = row.state.publish_confirmed(lease.source, live, confirmed);
     }
     /// The row snapshot display and recording read after a gap: built from
     /// what the Hub itself has applied, not from anything the Tune sends. The

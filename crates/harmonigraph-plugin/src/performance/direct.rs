@@ -2,8 +2,8 @@
 //! accepted-output facet. Configuration and canonical publication read this
 //! one rich owner; neither reconstructs facts from a display or pitch-only row.
 use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta};
-use harmonigraph_core::confirmed::{ConfirmedPitch, ConfirmedPitches, PitchProvenance};
-use harmonigraph_core::{SourceId, VoiceKey};
+use harmonigraph_core::confirmed::{ConfirmedPitches, PitchProvenance};
+use harmonigraph_core::SourceId;
 use nice_plug::wrapper::clap::configuration::OwnedInput;
 
 use super::{
@@ -209,21 +209,10 @@ impl Direct {
         }
     }
 
+    /// An incomplete observation declines rather than clearing: what learning
+    /// already holds for DIRECT is still the last thing that was true of it.
     pub fn sync_learning(&self, confirmed: &mut ConfirmedPitches) -> bool {
-        if !self.state.complete {
-            return false;
-        }
-        let empty = ConfirmedPitch {
-            key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 0 },
-            lifetime: None,
-            host_note_id: None,
-            pitch_microcents: 0,
-            onset_sample: 0,
-            provenance: PitchProvenance::ObservedDirect,
-        };
-        let mut rows = [empty; 64];
-        let count = self.state.confirmed(SourceId::DIRECT, &mut rows);
-        confirmed.replace_source(SourceId::DIRECT, &rows[..count]).is_ok()
+        self.state.complete && self.state.publish_confirmed(SourceId::DIRECT, true, confirmed)
     }
 
     pub fn pending(&self) -> Option<NoteDelta> {

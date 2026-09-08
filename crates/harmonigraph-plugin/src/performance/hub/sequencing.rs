@@ -23,6 +23,13 @@ const NO_PLAN: u32 = u32::MAX;
 #[derive(Clone, Copy, PartialEq)]
 struct Voice {
     source: u8,
+    /// True for the DIRECT voices a clock boundary carried across. The copied
+    /// record stream owns every other cell and numbers its notes in the
+    /// source's own lifetime space; these are numbered in `Direct`'s, so no
+    /// capture record may address them and only the observation retires them.
+    /// The two spaces are disjoint by this flag rather than by their values,
+    /// which can and do collide.
+    observed: bool,
     lifetime: u64,
     correction: i64,
     player: f64,
@@ -38,6 +45,7 @@ impl Voice {
     fn factual(source: u8, voice: &harmonigraph_core::canonical::VoiceBaseline) -> Self {
         Self {
             source,
+            observed: false,
             lifetime: voice.lifetime,
             correction: voice.frozen_offset_microcents,
             player: voice.player_tuning,
@@ -170,19 +178,59 @@ impl Sequencer {
     }
     /// A clock boundary empties the Hub's belief about what is sounding.
     ///
-    /// Nothing is reseeded across it. The copied input records own every cell
-    /// here and number their notes in the Tune's own lifetime space, so a
-    /// voice put here from anywhere else is a voice no later Terminal record
-    /// can address — it would sit in the policy's context until the next
-    /// clock boundary swept it out. The DIRECT observation this used to be
-    /// seeded from keeps its own held notes in `Direct::state`, which is
-    /// where display and recording read them; and a boundary is only
-    /// committed once forwarding has settled, so nothing is still sounding
-    /// for the seeded voices to have represented.
+    /// The copied input records own every cell this leaves behind and number
+    /// their notes in the source's own lifetime space, so a voice put here
+    /// from anywhere else is a voice no later Terminal record can address.
+    /// That is why the boundary does not simply retarget the old DIRECT seed
+    /// at this table: measured at the boundary, the DIRECT capture stream has
+    /// already forgotten the note the player is still holding and reports its
+    /// next events with no lifetime at all, so a cell seeded in the
+    /// observation's numbering would sit in the policy's context until the
+    /// next boundary swept it out. [`Sequencer::carry_observed`] is what
+    /// preserves the contribution instead.
     pub(super) fn clear_clock_context(&mut self) {
         self.history.clear_all(self.decision);
         for cell in self.context.iter_mut() {
             *cell = None;
+        }
+    }
+    /// Carry the notes the player is still holding across a healthy boundary.
+    ///
+    /// A setup transition terminates what DIRECT has forwarded before it can
+    /// commit — that is the settled-ownership precondition `commit_transition`
+    /// waits on — but the key is still down and the observation still holds the
+    /// note, which is what display, recording and learning read. #712 requires
+    /// DIRECT's contribution to tuning context to survive with them.
+    ///
+    /// These cells are owned by the observation alone, and marked so: they are
+    /// refreshed and retired by [`Sequencer::refresh_observed`] against the
+    /// same `State` they were seeded from, and no capture record may address
+    /// them. That is the whole of what keeps this from being the old seed,
+    /// which put one subsystem's numbering into cells another subsystem's
+    /// records were expected to retire.
+    ///
+    /// A discontinuous boundary has already reset the observation, so this
+    /// carries nothing across one.
+    pub(super) fn carry_observed(&mut self, state: &State) {
+        self.clear_clock_context();
+        for voice in state.voices() {
+            let Some(cell) = self.context.iter_mut().find(|cell| cell.is_none()) else {
+                return;
+            };
+            *cell = Some(Voice { observed: true, ..Voice::factual(0, voice) });
+        }
+    }
+    /// The observation is the sole authority over the cells it carried: a
+    /// voice it no longer holds leaves the context, and one whose player
+    /// tuning moved since the boundary scores at the value it is now heard
+    /// at. Nothing here creates a cell, so a note struck after the boundary
+    /// belongs to the capture stream like every other note.
+    pub(super) fn refresh_observed(&mut self, state: &State) {
+        for cell in self.context.iter_mut() {
+            let Some(carried) = cell.filter(|voice| voice.observed) else { continue };
+            *cell = state
+                .voice(carried.lifetime)
+                .map(|voice| Voice { observed: true, ..Voice::factual(0, voice) });
         }
     }
     /// A settled reset retires the cohort still in flight along with the
@@ -578,6 +626,9 @@ impl Hub {
         if !self.sequences_inputs() || !self.clock.valid || self.invalidated {
             return;
         }
+        // The cells a boundary carried answer to the observation and nothing
+        // else, so they are reconciled where the policy is about to read them.
+        self.sequencer.refresh_observed(&owner.direct.state);
         if self.sequencer.committing {
             self.publish_cohort();
         }
@@ -741,7 +792,9 @@ impl Hub {
         if !record.onset() {
             let voice = self.sequencer.context.iter_mut().find(|cell| {
                 cell.is_some_and(|voice| {
-                    voice.source == record.lease.slot && voice.lifetime == record.lifetime
+                    !voice.observed
+                        && voice.source == record.lease.slot
+                        && voice.lifetime == record.lifetime
                 })
             });
             match (record.kind, voice) {
@@ -938,6 +991,7 @@ impl Hub {
         if let Some(slot) = slot {
             self.sequencer.context[slot] = Some(Voice {
                 source: record.lease.slot,
+                observed: false,
                 lifetime: record.lifetime,
                 correction: i64::from(correction),
                 player,
@@ -1131,7 +1185,9 @@ impl Sequencer {
     /// `apply`; this is for the endings that never become one.
     fn forget_voice(&mut self, source: u8, lifetime: u64) {
         if let Some(cell) = self.context.iter_mut().find(|cell| {
-            cell.is_some_and(|voice| voice.source == source && voice.lifetime == lifetime)
+            cell.is_some_and(|voice| {
+                !voice.observed && voice.source == source && voice.lifetime == lifetime
+            })
         }) {
             *cell = None;
         }
