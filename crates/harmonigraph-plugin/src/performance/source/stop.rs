@@ -127,6 +127,27 @@ impl Source {
         }
     }
 
+    /// A participation toggle output has not reached. Whichever way its cell
+    /// leaves the queue, `retire_marker` will owe the wire a recentre for it,
+    /// so a teardown that can no longer send one has to account for it before
+    /// it publishes what it left behind.
+    pub(super) fn participation_marker_queued(&self) -> bool {
+        let mut index = self.stops.head;
+        while let Some(pending) = self.pending.at(usize::from(index)) {
+            if matches!(pending.event, Event::Participation(_)) {
+                return true;
+            }
+            let channel::Role::Stop { next, .. } = pending.channel.role else { unreachable!() };
+            index = next;
+        }
+        false
+    }
+
+    #[cfg(test)]
+    pub(in crate::performance) fn test_marker_queued(&self) -> bool {
+        self.stops.head != NONE
+    }
+
     pub(super) fn unlink_stop(&mut self, previous: u16, next: u16) {
         if previous == NONE {
             self.stops.head = next;

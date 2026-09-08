@@ -3766,3 +3766,75 @@ fn production_a_lost_direct_replay_is_a_fault_at_the_sample_it_was_lost_at() {
     drop(hub);
     assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
 }
+
+/// Destruction is the one reset that never resumes, and it takes the marker
+/// with it: `retire_source` stops and joins the producer, and only then does
+/// the retirement pump dispose the participation toggle still standing in the
+/// queue. The recentre that disposal owes cannot be armed there -- the pump
+/// invokes no host output and never reaches `begin` -- so an armed bit would
+/// hold `output_settled` false for the life of the process.
+#[test]
+fn production_destroying_a_tune_with_an_unreached_toggle_still_reclaims_its_entry() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, Calibration { offset: 0 });
+    hub.activate_format(44100.0, 512);
+    let mut source = Device::new(true);
+    source.configure_format(uuid, true, Calibration { offset: 0 });
+    source.activate_format(44100.0, 512);
+    for raw in [0, 512, 1024] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    source.run_format(1536, vec![source.participation(false, 0)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    source.run_format(2048, vec![raw_midi([0xe0, 0x00, 0x60], 0)], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    let bent = source.run_format(2560, vec![], None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    assert!(
+        bent.values
+            .iter()
+            .any(|(_, event)| matches!(event, Event::Midi { data: [0xe0, 0x00, 0x60], .. })),
+        "the fixture must actually leave an Off bend on the wire"
+    );
+    // A restored Participating value, whose marker `apply_setup` stands at the
+    // end of the callback that adopts it -- so output never reaches it, and
+    // the destroy that follows is what disposes it.
+    source.configure_format(uuid, true, Calibration { offset: 0 });
+    source.run_format(3072, vec![], None, None, 512);
+    hub.run_format(3072, vec![], None, None, 512);
+    assert_eq!(
+        inspect_source(&source, |s| s.test_snapshot().held),
+        0,
+        "the fixture must destroy with no held note: an emergency release nothing can \
+         accept is a different unsettled obligation"
+    );
+    assert!(
+        inspect_source(&source, |s| s.test_marker_queued()),
+        "and it must actually leave the toggle unreached"
+    );
+    drop(source);
+    let mut raw = 3584;
+    for _ in 0..8 {
+        hub.run_format(raw, vec![], None, None, 512);
+        hub.main();
+        raw += 512;
+    }
+    assert!(
+        inspect_hub(&hub, |hub| hub.test_joined_rows().iter().any(|row| row.2)),
+        "the teardown evidence carries the recentre nothing will send: the bend the Off \
+         phrase left is still on the wire, and destruction removed the only owner that \
+         could ever have centred it"
+    );
+    assert_eq!(
+        registry::global().lock().unwrap().test_counts(),
+        (1, 0, 0),
+        "and the entry is reclaimed rather than held by that obligation: an armed bit \
+         would wait on output no callback will ever run"
+    );
+    drop(hub);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}

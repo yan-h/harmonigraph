@@ -602,7 +602,15 @@ impl Source {
     /// assertion. Retirement never invokes a host or increments sequence.
     pub fn join_producer(&mut self) {
         assert!(!self.producer_joined);
-        self.joined_unknown_wire = self.unknown_joined_wire_state();
+        // A participation marker still standing in the queue is disposed after
+        // this, by the retirement pump, and the recentre its disposal owes can
+        // no longer reach output. Resolve it here, into the evidence this
+        // publishes, rather than leaving it to arm debt nothing will clear:
+        // the bend stays on the wire either way, and that is exactly what
+        // unknown joined wire state means.
+        self.joined_unknown_wire = self.unknown_joined_wire_state()
+            || (self.pitch_center_owed || self.participation_marker_queued())
+                && self.owes_pitch_center();
         self.producer_joined = true;
         if self.joined_unknown_wire {
             // Destruction removes the only possible owner of further physical
@@ -1492,6 +1500,14 @@ impl Source {
     /// phrase without changing who owns pitch, and the recenter would be an
     /// event no reset before this one sent.
     fn arm_pitch_center(&mut self) {
+        // Past the producer join there is no far side to wait for: the
+        // retirement pump invokes no host output and never reaches `begin`, so
+        // a bit armed here would hold `output_settled` false for the life of
+        // the process and the registry would keep this Source for good.
+        // `join_producer` has already put the bend into the teardown evidence.
+        if self.producer_joined {
+            return;
+        }
         // Behind the final cut `schedule_emergency` stages nothing, so a bit
         // armed here would never leave and `output_settled` would wait on it
         // for good. The obligation outlives the lease, though -- the wire keeps
@@ -1503,12 +1519,20 @@ impl Source {
         }
         self.pitch_center_owed = false;
         for channel in 0..16 {
-            let bent =
-                self.state.channels()[channel].pitch_bend.is_some_and(|value| value != BEND_CENTER);
-            if bent && self.channel_reset[channel] & (1 << (PITCH_RESET + CHANNEL_RESETS)) == 0 {
+            if self.owes_pitch_center_on(channel) {
                 self.channel_reset[channel] |= 1 << PITCH_RESET;
             }
         }
+    }
+
+    /// A channel this Tune has actually bent and has not already recentred.
+    /// One it never bent, or already left at center, owes nothing.
+    fn owes_pitch_center_on(&self, channel: usize) -> bool {
+        self.state.channels()[channel].pitch_bend.is_some_and(|value| value != BEND_CENTER)
+            && self.channel_reset[channel] & (1 << (PITCH_RESET + CHANNEL_RESETS)) == 0
+    }
+    fn owes_pitch_center(&self) -> bool {
+        (0..16).any(|channel| self.owes_pitch_center_on(channel))
     }
 
     fn channel_has_release_debt(&self, channel: u8) -> bool {
