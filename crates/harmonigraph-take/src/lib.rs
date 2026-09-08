@@ -17,8 +17,8 @@
 //! One RON-encoded [`Record`] per line, appendable and streamable:
 //!
 //! ```text
-//! Header((version:3,sample_rate:48000.0,...))
-//! Note((t:0.5,source:0,channel:0,note:60,kind:On((velocity:0.8))))
+//! Header((version:4,sample_rate:48000.0,...))
+//! Note((t:0.5,source:0,channel:0,note:60,kind:On(velocity:0.8)))
 //! Param((t:0.0,id:"pitch-class-fade",value:2.0))
 //! ```
 //!

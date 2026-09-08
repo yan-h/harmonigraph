@@ -1,9 +1,16 @@
 # Aggregation storage and the future session budget
 
-The latest terminal-stage measurements and full future projection are recorded in [the terminal checkpoint](adaptive-tuning-terminal-faults.md#memory-ledger).
-The tables below retain their earlier population derivation; the current projection must include the later measured owner and index deltas.
+> **Frozen.**
+> Measured before the [#712](https://github.com/yan-h/harmonigraph/issues/712) simplification and not maintained since.
+> [The archive index](README.md) records what has changed and by how much.
+> The text below is the original, with only its cross-references repointed;
+> its numbers are true of the tree it was measured on and of no later one.
 
-This is the allocation account for [companion aggregation](adaptive-tuning-companion-aggregation.md), its [ordinary channel-wave replay slice](adaptive-tuning-channel-waves.md), and [original CaptureArena ownership](adaptive-tuning-capture-arena.md).
+The tables below retain their earlier population derivation;
+the later measured owner and index deltas are in [the archive index](README.md#the-terminal-fault-checkpoint-deltas).
+
+This is the allocation account for the companion aggregation stage, its ordinary channel-wave replay slice, and original `CaptureArena` ownership —
+the last two of which no longer exist.
 The hard ceiling remains 144 MiB, or 150,994,944 bytes, of additional adaptive-session storage.
 It is not a limit on the whole plugin's RSS.
 The current layout and constructor measurements below come from the isolated production factory fixture on macOS arm64 with the pinned toolchain.

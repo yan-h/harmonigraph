@@ -26,15 +26,15 @@ Successor to [midi_lattice](https://github.com/yan-h/midi_lattice).
 ## Adaptive tuning in CLAP
 
 The CLAP bundle includes a lightweight Harmonigraph Tune note effect before each participating instrument path;
-one full Harmonigraph sequences new attacks across tracks and returns their tuning assignments for output after a fixed delay.
+one full Harmonigraph sequences new attacks across tracks and returns their tuning assignments for output after a chosen delay.
 Each assignment takes the preceding ones into account, and its adaptive correction stays fixed through release while composing with later player pitch expression.
-A missed assignment deadline delays the note further and reports a failure, rather than dropping it or emitting an unretuned attack.
-The configured delay is 512 samples at 44.1 kHz (11.610 ms) with a 512-sample engine buffer and validated fixed routing.
-Recovery and maximum-capacity cohorts can add substantially more delay;
-the complete musical build still needs fresh Bitwig initialization, listening and destination checks.
+A missed assignment deadline delays that note further and reports it, rather than dropping the note or emitting an unretuned attack.
+The delay is a per-Tune **Tuning delay** parameter, 1 to 16 multiples of the host's advertised maximum callback size, adopted at activation and reported to the host as latency.
+Only the note that missed its deadline is late;
+the rest of the track keeps its schedule.
 Explicit Stop/Reset cancels pending attacks and releases affected voices;
-actual storage exhaustion permits a visible emergency stop that rejects new attacks until Reset.
-Start with the [setup and musical verification checklist](docs/adaptive-tuning-musical-integration.md#trying-the-current-build) and the [measured process/routing requirements](docs/adaptive-tuning.md#session-pairing-and-process-boundary).
+actual storage exhaustion latches a visible fault that rejects new attacks until Reset.
+Start with the [setup and musical verification checklist](docs/adaptive-tuning.md#setting-it-up-in-bitwig) and the [measured process/routing requirements](docs/adaptive-tuning.md#session-pairing-and-process-boundary).
 Use one Master hub, Tune before each instrument, Bitwig **by Vendor** hosting with individual overrides off, and each instance's adopted routing offset.
 Sample rate and maximum buffer size come from the host automatically;
 the only clock setup is validating the signed routing offset and applying/reinitializing it.
@@ -43,7 +43,7 @@ choose **Just** with **Auto** and **Learn** off to verify independent Just tunin
 VST3 still exports full Harmonigraph only.
 See [`docs/adaptive-tuning.md`](docs/adaptive-tuning.md) for the behavior, protocol and deliberately deferred alternatives.
 
-The [source-identity foundation](docs/adaptive-tuning-source-identity.md) gives tracking and replay independent source keys and explicit source/session resets.
+Every tracked note carries a [source identity](docs/adaptive-tuning.md#voice-identity), so tracking and replay have independent source keys and explicit source/session resets.
 Takes use format v4, including source/reset scope, resolved configurations, canonical baselines and accepted pitch provenance;
 v1–v3 takes are refused with a version error and must be recorded again.
 The current musical integration adds optional assignment metadata within v4.

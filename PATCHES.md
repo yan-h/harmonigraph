@@ -11,13 +11,16 @@ An atomic counter records actual latency queries without calling the plugin unde
 Ordinary plugins keep the flag false, compiling out processing observations.
 Probe-only `eprintln!` lifecycle diagnostics in `Task::LatencyChanged` and `ext_render_set` record latency/restart decisions and offline-mode switches outside the processing callback.
 - **Why**: #615 cannot infer a shared clock or callback boundaries from Rust `Plugin::process()` counters.
-The disposable [tuning probe](docs/tuning-probe.md) consumes the hook and verifies the actual CLAP wrapper through an exported-factory fixture.
+The [disposable probe](docs/tuning-probe.md) that first consumed the hook has been deleted;
+the vendored `clap_boundary` fixture and the wrapper's own tracing sites keep it live.
 - **Patch 2** (`src/wrapper/clap/wrapper.rs`, `activate`): drop the plugin lock and initialization context before marking the wrapper active.
 The context publishes the initial latency while activation is still in progress, as the CLAP latency contract requires, instead of requesting a redundant restart from an already-active wrapper.
 This fixes the Bitwig offline-export stall measured by #615;
 the exported-factory fixture checks one initial latency notification and no restart for a nonzero delay.
-- **Production CLAP ownership** (`src/wrapper/clap/{configuration,configuration_adapter,input_adapter,performance,performance_adapter,setup,wrapper}.rs` and `src/wrapper/clap.rs`): the effective-configuration and performance opt-ins share one acknowledged host-input pool.
-The ordinary processing walker, configuration owner and performance owner must all finish an input before its owned cell is reused.
+- **Production CLAP ownership** (`src/wrapper/clap/{configuration,configuration_adapter,input_adapter,performance,performance_adapter,setup,wrapper}.rs` and `src/wrapper/clap.rs`): the effective-configuration and performance opt-ins share one host-input pool.
+The ordinary processing walker, configuration owner and performance owner each keep a progress cursor over it, and an owned cell is reused only once all three have passed.
+The retain-and-acknowledge contract that used to sit on top of that pool is gone;
+a plugin that cannot take an input reports a bounded failure instead of holding it.
 The fixed 512-normal/128-emergency scheduler exposes prepare, actual accepted-prefix completion and finalization;
 an opted-in plugin cannot infer acceptance from legacy `send_event`.
 Prepared nonautomatable setup validates and reserves capacity before parameter/state mutation, then adopts at the enclosing input boundary.
@@ -28,7 +31,7 @@ the plugin retains original recording routes until joined actual output has a pu
 Tune's performance-only opt-in creates no configuration mailbox.
 `allocation_probe.rs` instruments the actual debug allocation guard on the calling thread, including deallocation, for exported-factory ownership fixtures;
 it does not measure RSS or other threads.
-See the [configuration](docs/adaptive-tuning-effective-configuration.md), [performance boundary](docs/adaptive-tuning-clap-performance.md) and [aggregation](docs/adaptive-tuning-companion-aggregation.md) handoffs for the contracts and measured limits.
+See [the adaptive tuning design](docs/adaptive-tuning.md#the-framework-boundary) for what the plugin asks of this boundary, and for the output scheduler that is still here and still owes its own removal.
 - **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics, activation notification ordering and production configuration/performance/setup seams.
 No tuning or sequencing policy belongs in this framework patch.
 

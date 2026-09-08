@@ -1,5 +1,10 @@
 # Targeted known-state replay callback observations
 
+> **Frozen.**
+> Measured at commit `f5f7464f`, before the [#712](https://github.com/yan-h/harmonigraph/issues/712) simplification, and not maintained since.
+> The workload it times included the channel-wave replay that no longer exists, so the reproduction command below still names a live test that no longer runs this workload.
+> [The archive index](README.md) records what has changed.
+
 Both final runs passed the actual production CLAP fixture at workload commit `f5f7464ff663fad3f6aaad51c68206a6d1d4992a`, with production Source unchanged from the independently reviewed `0e1a0339` correction.
 Each profile ran once under normal ambient app load, including 16 success and 16 partial-prefix rejection/repair episodes.
 The largest observed sum of all 16 Source callbacks and the Hub callback in one replay block was **3.951876 ms in guarded optimized-dev** and **3.264163 ms in release**;
@@ -7,21 +12,22 @@ both maxima occurred during the 256-onset phase.
 The setup-continuation maxima were 0.578583 ms and 0.569917 ms respectively.
 These are measured samples, not a worst-case bound or full #616 D512/Bitwig deadline qualification.
 
-The [complete per-owner/phase summary statistics](data/replay-callbacks-f5f7464f.csv) contain 728 rows: 720 replay summaries and eight existing empty/held summaries.
-The [run metadata](data/replay-callbacks-f5f7464f.json) preserves the exact commands, revision, environment, profile, timestamps, reach receipts and single baseline-onset observation.
+The [complete per-owner/phase summary statistics](../../data/replay-callbacks-f5f7464f.csv) contain 728 rows:
+720 replay summaries and eight existing empty/held summaries.
+The [run metadata](../../data/replay-callbacks-f5f7464f.json) preserves the exact commands, revision, environment, profile, timestamps, reach receipts and single baseline-onset observation.
 No favorable run was selected from repeated final measurements.
 
 ## Environment and timer boundary
 
-The coordinator verified a MacBookPro18,3 with Apple M1 Pro, eight physical/eight logical CPUs and 16 GiB memory, running Darwin 25.6.0 ARM64_T6000.
-The compiler was rustc 1.92.0 (`ded5c06cf21d2b93bffd5d884aa6e96934ee4234`), LLVM 21.1.3, targeting aarch64-apple-darwin.
+The coordinator verified a MacBookPro18,3 with Apple M1 Pro, eight physical/eight logical CPUs and 16 GiB memory, running Darwin 25.6.0 ARM64_T6000. The compiler was rustc 1.92.0 (`ded5c06cf21d2b93bffd5d884aa6e96934ee4234`), LLVM 21.1.3, targeting aarch64-apple-darwin.
 Optimized-dev uses workspace opt-level 2 and dependency opt-level 3;
 release uses the repository release profile with LTO disabled.
 `nice-plug/assert_process_allocs` was selected for both runs.
 The wrapper's allocation/deallocation guard is enabled only with debug assertions, so optimized-dev supplies that evidence and release does not.
 
 At the coordinator's 2026-09-06 11:08:26 UTC clearance, no Cargo, rustc, clang, linker or sccache process was present, and this task was the sole agent build owner.
-User apps remained active: WindowServer 60.8%, BitwigPluginHost 50.6%, CodexService 23.7%, Codex 15.2%, Renderer 10.3% and Bitwig 9.5% in that per-process snapshot.
+User apps remained active:
+WindowServer 60.8%, BitwigPluginHost 50.6%, CodexService 23.7%, Codex 15.2%, Renderer 10.3% and Bitwig 9.5% in that per-process snapshot.
 Those percentages are not total machine utilization or continuous load monitoring.
 No user app was stopped or changed.
 The guarded run began at 11:10:28 UTC and release at 11:11:55 UTC;
@@ -48,11 +54,11 @@ No consumed CC88=37 is restored.
 
 Success accepts adjacent CC88=55 and B-On at the same actual sample, followed by exact original CC7, pitch bend value 8,256, pressure, sostenuto, Off and Up offsets.
 B's original duration of 36 samples is preserved, and positive canonical B-On/Off records carry those actual samples.
-Rejection derives its attempt positions from the remaining setup, accepts CC88=55, rejects the exact B-On bytes, rejects the first neutral repair, then accepts CC88=0.
-The preallocated host trace proves both refused messages;
+Rejection derives its attempt positions from the remaining setup, accepts CC88=55, rejects the exact B-On bytes, rejects the first neutral repair, then accepts CC88=0. The preallocated host trace proves both refused messages;
 no B voice or canonical B note is invented.
 
-Every episode proves Hub received/applied cuts equal Source acknowledgements: 4,181 on success and 4,175 on rejection.
+Every episode proves Hub received/applied cuts equal Source acknowledgements:
+4,181 on success and 4,175 on rejection.
 Observed peak target occupancy is 2,086 Pending records, 2,074 references and 1,280 journal entries;
 rejection additionally reaches one emergency entry.
 Accepted journal/emergency history and all session credits settle before destruction.
@@ -132,7 +138,8 @@ env -u HARMONIGRAPH_REPLAY_REHEARSAL RUSTC_WRAPPER='' CARGO_BUILD_JOBS=2 RUST_TE
 env -u HARMONIGRAPH_REPLAY_REHEARSAL RUSTC_WRAPPER='' CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 cargo test --release -p harmonigraph-plugin --lib --features nice-plug/assert_process_allocs performance::tests::observed_callback_cost_at_empty_and_full_session_state -- --exact --nocapture --test-threads=1
 ```
 
-Both exact tests passed: optimized-dev in 1.65 s and release in 1.57 s, excluding compilation.
+Both exact tests passed:
+optimized-dev in 1.65 s and release in 1.57 s, excluding compilation.
 The stable helper also passed independent fixture review, guarded rehearsal, 145 existing functional tests with the exact timing test excluded, focused Clippy and formatting checks.
-Actual ordinary memory remains 60,123,376 bytes per session in the [allocation ledger](adaptive-tuning-aggregation-memory.md).
+Actual ordinary memory remains 60,123,376 bytes per session in the [allocation ledger](memory-ledger.md).
 This checkpoint does not complete #616/#621 policy/capacity integration, representative simultaneous musical workload coverage, host scheduling validation, routing/calibration audition or the pending unknown-state decision.
