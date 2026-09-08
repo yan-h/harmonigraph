@@ -2335,7 +2335,7 @@ fn production_a_tuning_edit_waits_for_the_next_boundary_and_a_group_keeps_its_sn
 fn production_a_host_format_reactivation_reestablishes_the_paired_session() {
     let _scope = crate::test_scope::enter();
     let (mut hub, mut source) = production_pair();
-    let mut phrase = |source: &Device, hub: &Device, raw: &mut i64, id: i32, key: i16, frames: u32| {
+    let phrase = |source: &Device, hub: &Device, raw: &mut i64, id: i32, key: i16, frames: u32| {
         let mut output =
             source.run_format(*raw, vec![note(id, 0, key, 0, true)], None, None, frames).values;
         hub.run_format(*raw, vec![], None, None, frames);
@@ -2389,3 +2389,4 @@ fn production_a_host_format_reactivation_reestablishes_the_paired_session() {
     assert_eq!(after.iter().filter(|(_, event)| event.release()).count(), 1);
     assert_eq!(source.source_snapshot().held, 0);
 }
+
