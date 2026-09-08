@@ -81,7 +81,10 @@ run .claude/semantic-breaks.py --check
 run python3 -B .claude/tests/semantic-breaks.py
 
 run cargo clippy --workspace --all-targets -- -D warnings
-run cargo test --workspace
+# Guard the existing production performance scenarios at their exported callbacks.
+# The isolated configuration filter below does not reach them; enabling the
+# guard here keeps those expensive scenarios to one run.
+run cargo test --workspace --features nice-plug/assert_process_allocs
 
 group isolated
 
