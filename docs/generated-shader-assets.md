@@ -1,9 +1,9 @@
 # Generated Metal shader assets
 
 This is the feasibility investigation for [#699](https://github.com/yan-h/harmonigraph/issues/699).
-The production plugin and offline renderer still use their normal WGSL path.
-The tooling in `tools/metal-precompile/` modifies an isolated copy of pinned wgpu-hal 29.0.4 for an opt-in experiment;
-no backend fork or generated libraries are added to the production dependency graph.
+This historical report describes probe commit `06d3f0a8`; its reconstruction commands apply at that commit.
+The subsequent [production integration](metal-shader-assets.md) replaces the copied-backend experiment with one installed provider and embedded assets.
+The measured results below remain evidence from the original probe, not measurements of that later integration.
 
 ## Recommendation and scope
 
@@ -71,6 +71,9 @@ The source, strict asset and controlled fallback paths all produced these result
 Production image coverage and fallback controls passed in the workflow described below.
 
 ## Reproduction
+
+This section reproduces probe commit `06d3f0a8`, whose `backend.py` and `exercise.py` were removed from the current tree.
+For current code, use the [production workflow](metal-shader-assets.md).
 
 The local machine has Command Line Tools but no `metal` or `metallib` executable.
 The existing macOS CI job can obtain Apple's Metal toolchain, as the earlier #704 probe already does.

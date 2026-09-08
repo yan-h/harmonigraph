@@ -41,6 +41,7 @@ use harmonigraph_scene::Scene;
 
 mod ink_history;
 
+pub mod shader_assets;
 /// Progress for interactive editor initialization; offline rendering remains synchronous.
 pub mod startup;
 

@@ -1487,3 +1487,8 @@ mod tests {
         assert_eq!(through_entry, through_callback);
     }
 }
+
+#[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
+pub(super) fn asset_catalog(device: &wgpu::Device, format: wgpu::TextureFormat) {
+    drop(SpectrogramResources::new(device, format));
+}

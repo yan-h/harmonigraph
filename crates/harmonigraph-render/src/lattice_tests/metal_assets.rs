@@ -1,4 +1,5 @@
-//! Manual metadata probe for the isolated backend hook in tools/metal-precompile.
+//! Manual metadata probe through the production library provider. Generation
+//! gives this synthetic shader a separate temporary corpus, never shipping it.
 
 use crate::wgpu;
 use wgpu::util::DeviceExt;
@@ -7,7 +8,7 @@ use wgpu::util::DeviceExt;
 /// depends on the actual binding range, arrayLength, and a generated bounds
 /// check, rather than on the allocation size or a declared fixed array.
 #[test]
-#[ignore = "manual generated-Metal-asset probe; requires Metal and the copied backend"]
+#[ignore = "manual generated-Metal-asset probe; requires Metal and test-only assets"]
 fn generated_metal_assets_preserve_storage_binding_lengths() {
     let (_, adapter) = crate::test_gpu_adapter().expect("Metal adapter required");
     assert_eq!(adapter.get_info().backend, wgpu::Backend::Metal);
@@ -97,4 +98,5 @@ fn main() {
         assert_eq!(result, &[count as u32, 11, last, last]);
         eprintln!("METAL_BINDING_LENGTH offset={offset} count={count} result={result:?}");
     }
+    eprintln!("METAL_BINDING_ASSETS {:?}", crate::shader_assets::statistics());
 }

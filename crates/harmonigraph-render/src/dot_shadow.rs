@@ -490,3 +490,12 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
+pub(super) fn asset_catalog(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    layouts: &crate::spectral_shadow::Layouts,
+) {
+    drop(Resources::new(device, format, layouts));
+}

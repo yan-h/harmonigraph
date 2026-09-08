@@ -44,6 +44,7 @@ impl Renderer {
     /// usable GPU adapter — callers decide whether that is fatal. Tests use
     /// the shared GPU requirement, which makes unavailable GPUs fatal in CI.
     pub fn new(size: [u32; 2]) -> Option<Renderer> {
+        harmonigraph_render::shader_assets::initialize();
         #[cfg(test)]
         let (device, queue) = harmonigraph_render::test_gpu_device()?;
         #[cfg(not(test))]

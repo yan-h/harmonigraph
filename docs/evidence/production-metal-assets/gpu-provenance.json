@@ -1,0 +1,7 @@
+{
+  "binary_sha256": "4d1b1af3bcd606cc4aae2a39c22706cb0686a43044061420b743f9fb938e92b4",
+  "frames_per_workload": 240,
+  "measured_pairs": 8,
+  "warmup_processes": 2,
+  "platform": "Apple M1 Pro; macOS 26.6.2 (25G83)"
+}
