@@ -3391,6 +3391,7 @@ impl Source {
                             incarnation: offer.lease.incarnation,
                             epoch: self.epoch,
                             cut: self.sequence,
+                            input_cut: self.next_event,
                             unknown_wire: self.joined_unknown_wire,
                         })
                         .is_ok()

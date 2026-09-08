@@ -834,15 +834,27 @@ impl Hub {
                         row.seal_generation = generation;
                         row.joining = None;
                     }
-                    Control::ProducerJoined { incarnation, epoch, cut, unknown_wire }
-                        if row.current(incarnation, epoch)
-                            && shared.withdrawn.load(Ordering::Acquire)
-                            && row.received <= cut
-                            && row.producer_joined.is_none_or(|old| old == cut) =>
+                    Control::ProducerJoined {
+                        incarnation,
+                        epoch,
+                        cut,
+                        input_cut,
+                        unknown_wire,
+                    } if row.current(incarnation, epoch)
+                        && shared.withdrawn.load(Ordering::Acquire)
+                        && row.received <= cut
+                        && row.producer_joined.is_none_or(|old| old == cut) =>
                     {
                         row.producer_joined = Some(cut);
                         row.joined_unknown_wire = unknown_wire;
                         row.joining = None;
+                        // Destruction ends input at its actual final serial,
+                        // including a setup marker at the exclusive coverage
+                        // front. Dispose its copies through the existing
+                        // terminal path; no future callback can complete that
+                        // sample. Later copies may still arrive on the intent
+                        // ring, and Detach still certifies transfer has ended.
+                        row.terminal_cut = Some(input_cut);
                     }
                     Control::Detach { incarnation, epoch, cut }
                         if row.current(incarnation, epoch) =>
@@ -1662,6 +1674,7 @@ pub struct TestRow {
     pub lease: Option<Lease>,
     pub epoch: u64,
     pub detach: Option<u64>,
+    pub terminal_cut: Option<u64>,
     pub participating: bool,
     pub participation_serial: u64,
 }
@@ -1685,6 +1698,7 @@ impl Hub {
             lease: self.rows[slot].lease,
             epoch: self.rows[slot].epoch,
             detach: self.rows[slot].detach,
+            terminal_cut: self.rows[slot].terminal_cut,
             participating: self.sequencer.participating[slot + 1],
             participation_serial: self.sequencer.participation_serial[slot + 1],
         }

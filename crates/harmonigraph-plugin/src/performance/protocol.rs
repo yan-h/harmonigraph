@@ -360,6 +360,9 @@ pub enum Control {
         incarnation: u64,
         epoch: u64,
         cut: u64,
+        /// Last captured input serial. Authorizes disposal of this destroyed
+        /// producer's input, not receipt of its copies or extra coverage.
+        input_cut: u64,
         unknown_wire: bool,
     },
     Detach {

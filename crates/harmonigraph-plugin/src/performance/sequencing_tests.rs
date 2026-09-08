@@ -3869,6 +3869,64 @@ fn production_destruction_settles_held_pedal_without_fabricating_releases() {
     destruction_settlement(false);
 }
 
+#[test]
+fn production_destroyed_empty_toggle_disposes_its_final_input_at_the_frozen_front() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    source.run_format(1536, vec![source.participation(false, 0)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    for raw in [2048, 2560] {
+        assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let setup::Routing::Source(setup) = source.shared().value().routing else { unreachable!() };
+    source.configure_format(setup.selected.unwrap(), true, Calibration { offset: 0 });
+    assert!(source.run_format(3072, vec![], None, None, 512).values.is_empty());
+    hub.run_format(3072, vec![], None, None, 512);
+    let final_input = source.source_snapshot().input_cut;
+    let (coverage, covered_input) = inspect_hub(&hub, |h| h.test_input_row(0).3.unwrap());
+    let inputs = inspect_hub(&hub, |h| h.test_inputs(1));
+    assert_eq!((coverage.through, covered_input, final_input), (3584, 1, 2));
+    assert_eq!(inputs.len(), 1);
+    assert_eq!((inputs[0].sample, inputs[0].serial), (coverage.through, final_input));
+    assert!(matches!(
+        inputs[0].kind,
+        crate::performance::protocol::CaptureKind::Participation(true)
+    ));
+    let snapshot = source.source_snapshot();
+    assert_eq!(
+        (snapshot.held, snapshot.note_off_owed, snapshot.emergency, snapshot.faults),
+        (0, 0, 0, 0)
+    );
+    assert!(!snapshot.pedals_held);
+    assert!(inspect_source(&source, |s| s
+        .state
+        .channels()
+        .iter()
+        .all(|ch| ch.pitch_bend.is_none())));
+
+    // A live source still needs coverage strictly beyond this sample.
+    hub.run_format(3584, vec![], None, None, 512);
+    hub.main();
+    assert_eq!(inspect_hub(&hub, |h| h.test_inputs(1)).len(), 1);
+    assert_eq!(inspect_hub(&hub, |h| h.test_joined_rows()[0].1), None);
+    drop(source);
+    for raw in (4096..8192).step_by(512) {
+        hub.run_format(raw, vec![], None, None, 512);
+        hub.main();
+    }
+    let joined = inspect_hub(&hub, |h| h.test_joined_rows()[0]);
+    let terminal_cut = inspect_hub(&hub, |h| h.test_row_identity(0).terminal_cut);
+    let pending = inspect_hub(&hub, |h| h.test_inputs(1)).len();
+    let counts = registry::global().lock().unwrap().test_counts();
+    drop(hub);
+    assert_eq!((joined.1, joined.2, joined.3), (Some(0), false, 0));
+    assert_eq!(terminal_cut, Some(final_input));
+    assert_eq!(pending, 0, "destruction disposes the final input without inventing coverage");
+    assert_eq!(counts, (1, 0, 0));
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
+
 fn destruction_settlement(direct: bool) {
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
