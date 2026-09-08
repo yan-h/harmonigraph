@@ -555,8 +555,16 @@ pub fn service_retired() {
     // Fixed joined incarnations generate no new musical input. Each outer
     // round services every Source and Hub; per-row paths run in parallel,
     // while shared work/grant interference is charged across all seventeen
-    // rows. The full derivation is in adaptive-tuning-terminal-faults.md.
-    // These are ownership rounds, not a callback or physical-release deadline.
+    // rows. These are ownership rounds, not a callback or physical-release
+    // deadline.
+    //
+    // The eight sub-bounds below are the whole derivation that survives: the
+    // checkpoint document that argued each one was collapsed into
+    // docs/adaptive-tuning.md, which does not reproduce it. What matters at a
+    // call site is that the sum only PERMITS work — the loop leaves after 16
+    // quiet rounds, so the arithmetic is a ceiling nothing has been observed
+    // to approach, and RECOVERY_ROUNDS is now a name for retirement rounds
+    // rather than for the recovery pass #712 deleted.
     const CAPTURE_ROUNDS: usize = PENDING_EVENTS * (OUTPUT_RING / 64 + 3 * INTENT_RING / 64 + 4);
     const CONTROL_ROUNDS: usize = 4 * (PENDING_EVENTS + 32768 + INTENT_RING + REPLY_RING);
     const RECOVERY_ROUNDS: usize = 4 * (2 * TUNERS * LIFETIMES / 256 + 4 * TUNERS)

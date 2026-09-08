@@ -7,14 +7,14 @@ Nothing here blocks anything today.
 
 ## Adaptive-tuning alternatives
 
-**State.** Project-wide adaptive retuning is designed but not implemented.
-The active design is documented in [`adaptive-tuning.md`](adaptive-tuning.md):
-one lightweight tuner per independent note path, automatic aggregation into one full Harmonigraph, and fixed-delay central sequencing with sequential assignment.
+**State.** Project-wide adaptive retuning is built.
+[`adaptive-tuning.md`](adaptive-tuning.md) is the design and the account of what shipped:
+one lightweight tuner per independent note path, automatic aggregation into one full Harmonigraph, and central sequencing at a chosen fixed delay with sequential assignment.
 Each new assignment sees its predecessors across tracks, and its correction remains frozen through release.
-A missed assignment deadline delays the pending attack and reports a failure;
-the affected track can remain late until a safe idle boundary.
-Stop/Reset cancellation and a visible emergency stop at required-storage exhaustion are accepted exceptions to retaining pending attacks.
-The active design records those decisions and their remaining implementation mechanics.
+A missed assignment deadline delays that one attack and reports it;
+unrelated ready notes on the same track keep their schedule.
+Stop/Reset cancellation and a latched terminal fault at required-storage exhaustion are the accepted exceptions to retaining pending attacks.
+What follows is the set of alternatives that were considered and parked, which is why this entry survives its own implementation.
 
 **Immediate and jointly optimized alternatives.** Independent immediate assignment from prior snapshots permits simultaneous cross-track notes to miss each other's choices.
 That does not meet the chosen musical requirement.
