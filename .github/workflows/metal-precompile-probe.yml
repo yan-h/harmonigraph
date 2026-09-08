@@ -11,10 +11,9 @@ on:
       - Cargo.toml
       - Cargo.lock
       - crates/harmonigraph-render/**
-      - crates/harmonigraph-ui/**
-      - crates/harmonigraph-plugin/**
+      - crates/harmonigraph-plugin/src/editor.rs
       - crates/harmonigraph-offline/**
-      - crates/harmonigraph-standalone/**
+      - crates/harmonigraph-standalone/src/main.rs
   workflow_dispatch:
     inputs:
       regenerate:
@@ -24,6 +23,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: metal-assets-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   compile:

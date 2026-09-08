@@ -21,6 +21,8 @@ The deterministic hash only chooses a bucket; full input equality is mandatory.
 Scene state and device pointers do not belong in that identity.
 Compiler provenance and deployment target are recorded in the manifest.
 The current producer supports Metal 3.2, macOS 15+, fast math and preserved invariance.
+The producer derives compiler flags from the recorded options and verifies that every manifest agrees;
+changing that mapping requires regenerating and validating the corpus.
 Other inputs or native-library load failures use ordinary source compilation and report the fallback.
 An Apple Silicon corpus does not promise complete Intel internal-shader coverage.
 
@@ -43,7 +45,10 @@ The regular workspace gates remain required too.
 Generation also builds a separate temporary storage-array diagnostic corpus and verifies strict rejection/source fallback for missing, mismatched and invalid libraries.
 Those diagnostic libraries are never imported into the shipping corpus.
 The PR workflow runs these controls after checking committed coverage; they can also be run with `python3 tools/shader-assets.py controls` when Apple's compiler is available.
-Generation and controls temporarily rebuild the asset crate, so do not run other Cargo builds in the same checkout concurrently.
+Generation and controls use `HARMONIGRAPH_METAL_ASSET_BUILD_DIR` to embed temporary corpora into their test binaries at build time.
+They never replace the tracked corpus, even during deliberate invalid-library controls, so an interrupted run cannot leave those controls in an ordinary build.
+Cargo tracks this build input and rebuilds with the checked-in corpus when the variable is absent.
+Do not run other Cargo builds in the same checkout concurrently with validation: a second build could replace a test executable between its build and execution.
 
 With Apple's Metal toolchain available, generate into a fresh directory:
 
@@ -52,12 +57,14 @@ python3 tools/shader-assets.py generate target/new-metal-assets
 python3 tools/shader-assets.py import target/new-metal-assets
 ```
 
-Generation exports exact backend inputs, compiles and verifies them, temporarily embeds the candidate corpus, then checks it through the normal production path.
-It restores the caller's corpus even on validation failure.
+Generation exports exact backend inputs, compiles and verifies them, embeds the candidate corpus in validation binaries, then checks it through the normal production path.
 Only explicit import replaces the checked-in assets.
 Inspect and commit the changed source/options/manifest together with the binary libraries.
 When local Command Line Tools lack `metal`/`metallib`, run the Metal shader assets workflow with `regenerate=true` on the intended branch, then download and import its validated `production-metal-assets` artifact.
 The ordinary PR workflow checks the committed corpus without regenerating it, so generation cannot conceal stale coverage.
+Its path filter covers assets, renderer code, graphics setup and dependencies;
+ordinary tuning implementation edits do not schedule a third macOS job.
+New pushes cancel superseded asset-validation runs.
 
 ## Diagnostics and measurements
 

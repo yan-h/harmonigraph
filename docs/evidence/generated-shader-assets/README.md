@@ -10,10 +10,14 @@ This directory preserves measured results from probe commit `06d3f0a8`, not a sh
 - `gpu-timings.json`: every workload's median and p10/p90 from all six fresh-process GPU runs.
 
 The [CI run](https://github.com/yan-h/harmonigraph/actions/runs/34172958788) uploaded full logs and compiled libraries as `generated-metal-assets`, with seven-day retention.
-After expiration, regenerate them with `tools/metal-precompile/exercise.py` as described in the design document.
+After expiration, regenerate them from probe commit `06d3f0a8` with `tools/metal-precompile/exercise.py` as described in the design document.
 The compiler version may change, so compare the new manifest rather than assuming byte-identical compiler output.
 
 ## Reconstructing the local measurements
+
+These commands apply to probe commit `06d3f0a8`.
+The named `exercise.py` and `backend.py` tools were removed from the current tree;
+use the [production workflow](../../metal-shader-assets.md) for current code.
 
 Build the render test binary with the isolated backend configuration created by `backend.py prepare`, using the build procedure in `exercise.py` so the temporary path patch does not persist in `Cargo.lock`.
 Verify the downloaded or regenerated asset directory with `backend.py verify`.

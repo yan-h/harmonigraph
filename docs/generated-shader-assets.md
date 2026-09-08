@@ -72,6 +72,9 @@ Production image coverage and fallback controls passed in the workflow described
 
 ## Reproduction
 
+This section reproduces probe commit `06d3f0a8`, whose `backend.py` and `exercise.py` were removed from the current tree.
+For current code, use the [production workflow](metal-shader-assets.md).
+
 The local machine has Command Line Tools but no `metal` or `metallib` executable.
 The existing macOS CI job can obtain Apple's Metal toolchain, as the earlier #704 probe already does.
 No local toolchain installation is required to inspect exported inputs or run downloaded libraries.

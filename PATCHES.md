@@ -1,6 +1,6 @@
 # Carried patches against upstream dependencies
 
-Three dependencies carry local patches, wired in via `[patch.crates-io]` in the workspace `Cargo.toml`.
+Four dependencies carry local patches, wired in via `[patch.crates-io]` in the workspace `Cargo.toml`.
 Keep this file current when bumping them.
 
 ## wgpu-hal — vendored at `vendor/wgpu-hal/`

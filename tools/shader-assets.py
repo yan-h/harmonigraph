@@ -2,7 +2,6 @@
 """Generate, validate or import the embedded production Metal shader corpus."""
 
 import argparse
-from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -15,7 +14,32 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 EMBEDDED = ROOT / "crates/harmonigraph-metal-assets/assets"
-FLAGS = ["-std=metal3.2", "-mmacosx-version-min=15.0", "-ffast-math", "-fpreserve-invariance"]
+
+def compiler_flags(settings):
+    assert set(settings) == {
+        "schema", "wgpu-hal", "language", "fast_math", "invariance", "math_mode", "math_functions",
+    }, f"unknown compiler options: {settings}"
+    assert settings["schema"] == "1" and settings["wgpu-hal"] == "29.0.4"
+    language = int(settings["language"])
+    version = (language >> 16, language & 0xffff)
+    deployment_targets = {(3, 2): "15.0"}
+    assert version in deployment_targets, f"unsupported Metal language: {version}"
+    # This is the supported native math profile. Reject other profiles until
+    # their offline equivalents have been established and validated.
+    math_profiles = {("true", "2", "0"): ["-ffast-math"]}
+    math_profile = tuple(settings[name] for name in ("fast_math", "math_mode", "math_functions"))
+    assert math_profile in math_profiles, f"unsupported Metal math options: {math_profile}"
+    invariance_profiles = {"true": ["-fpreserve-invariance"]}
+    assert settings["invariance"] in invariance_profiles, "unsupported Metal invariance option"
+    return [f"-std=metal{version[0]}.{version[1]}",
+            f"-mmacosx-version-min={deployment_targets[version]}",
+            *math_profiles[math_profile],
+            *invariance_profiles[settings["invariance"]]]
+
+
+def source_flags(source):
+    settings = dict(line.split("=", 1) for line in source.with_suffix(".options").read_text().splitlines())
+    return compiler_flags(settings)
 
 
 def verify(directory):
@@ -31,6 +55,7 @@ def verify(directory):
     for source in sources:
         assert source.with_suffix(".options").is_file()
         assert source.with_suffix(".metallib").is_file()
+        assert source_flags(source) == manifest["flags"], "compiler flags do not match recorded options"
     print(f"Verified {len(sources)} libraries", flush=True)
 
 
@@ -38,29 +63,29 @@ def compile_assets(directory):
     compiler = subprocess.check_output(["xcrun", "--sdk", "macosx", "metal", "--version"], text=True)
     sources = sorted(directory.glob("*.metal"))
     assert sources, "catalog exported no sources"
+    flags = source_flags(sources[0])
     for source in sources:
-        settings = dict(line.split("=", 1) for line in source.with_suffix(".options").read_text().splitlines())
-        assert settings == {
-            "schema": "1", "wgpu-hal": "29.0.4", "language": "196610",
-            "fast_math": "true", "invariance": "true", "math_mode": "2", "math_functions": "0",
-        }, f"unsupported compiler options: {settings}"
+        assert source_flags(source) == flags, "corpus contains mixed compiler options"
         air = source.with_suffix(".air")
-        subprocess.run(["xcrun", "--sdk", "macosx", "metal", *FLAGS, "-c", str(source), "-o", str(air)], check=True)
+        subprocess.run(["xcrun", "--sdk", "macosx", "metal", *flags, "-c", str(source), "-o", str(air)], check=True)
         subprocess.run(["xcrun", "--sdk", "macosx", "metallib", str(air), "-o", str(source.with_suffix(".metallib"))], check=True)
         air.unlink()
     files = [source.with_suffix(extension) for source in sources for extension in (".metal", ".options", ".metallib")]
-    manifest = {"schema": 1, "compiler": compiler, "flags": FLAGS,
+    manifest = {"schema": 1, "compiler": compiler, "flags": flags,
                 "sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in files}}
     (directory / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     verify(directory)
 
 
-def build(package, logs):
+def build(package, logs, assets=EMBEDDED):
     command = ["cargo", "test", "--locked", "--release", "-p", package,
                "--no-run", "--message-format=json"]
     if package == "harmonigraph-render":
         command += ["--lib", "--features", "shader-assets-tools"]
-    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, check=True)
+    # Only these validation test builds select a candidate corpus. Ordinary
+    # builds keep the tracked assets, even if validation is interrupted.
+    environment = dict(os.environ, HARMONIGRAPH_METAL_ASSET_BUILD_DIR=str(assets.resolve()))
+    result = subprocess.run(command, cwd=ROOT, env=environment, text=True, stdout=subprocess.PIPE, check=True)
     (logs / f"{package}-build.jsonl").write_text(result.stdout)
     binaries = [item["executable"] for line in result.stdout.splitlines()
                 if (item := json.loads(line)).get("executable")]
@@ -90,12 +115,12 @@ def run(binary, arguments, mode, name, logs, export=None, failure=False):
     return result.stdout
 
 
-def check(logs):
-    verify(EMBEDDED)
-    renderer = build("harmonigraph-render", logs)
+def check(logs, assets=EMBEDDED):
+    verify(assets)
+    renderer = build("harmonigraph-render", logs, assets)
     run(renderer, ["production_metal_asset_catalog", "--ignored"], "strict", "strict-catalog", logs)
     run(renderer, ["golden"], "strict", "strict-renderer-goldens", logs)
-    offline = build("harmonigraph-offline", logs)
+    offline = build("harmonigraph-offline", logs, assets)
     run(offline, ["golden"], "strict", "strict-offline-goldens", logs)
 
 
@@ -107,19 +132,6 @@ def install(directory):
     shutil.copytree(directory, EMBEDDED)
 
 
-@contextmanager
-def preserve_embedded():
-    # Temporary validation builds must not persist changes to the caller's corpus.
-    with tempfile.TemporaryDirectory(prefix="harmonigraph-assets-") as backup:
-        saved = Path(backup) / "assets"
-        shutil.copytree(EMBEDDED, saved)
-        try:
-            yield
-        finally:
-            shutil.rmtree(EMBEDDED)
-            shutil.copytree(saved, EMBEDDED)
-
-
 def generate(directory, logs):
     assert not directory.exists(), "export requires a fresh directory"
     assert EMBEDDED.resolve() not in directory.resolve().parents
@@ -127,11 +139,9 @@ def generate(directory, logs):
     renderer = build("harmonigraph-render", logs)
     run(renderer, ["production_metal_asset_catalog", "--ignored"], "export", "export-catalog", logs, directory)
     compile_assets(directory)
-    # Validate actual embedded bytes, without a runtime sidecar override.
-    with preserve_embedded():
-        install(directory)
-        check(logs)
-        binding_controls(directory, logs)
+    # Validate actual embedded bytes, without modifying the tracked corpus.
+    check(logs, directory)
+    binding_controls(directory, logs)
 
 
 def rewrite_manifest(directory):
@@ -150,7 +160,7 @@ def binding_controls(production, logs):
         scratch = Path(scratch)
         supplemental = scratch / "supplemental"
         supplemental.mkdir()
-        renderer = build("harmonigraph-render", logs)
+        renderer = build("harmonigraph-render", logs, production)
         run(renderer, probe, "export", "export-bindings", logs, supplemental)
         compile_assets(supplemental)
         complete = scratch / "complete"
@@ -159,8 +169,7 @@ def binding_controls(production, logs):
             if file.name != "manifest.json":
                 shutil.copyfile(file, complete / file.name)
         rewrite_manifest(complete)
-        install(complete)
-        renderer = build("harmonigraph-render", logs)
+        renderer = build("harmonigraph-render", logs, complete)
         output = run(renderer, probe, "strict", "strict-bindings", logs)
         assert "source: 0," in output and "loaded: 3," in output
         source, = [p for p in supplemental.glob("*.metal") if "struct Input" in p.read_text()]
@@ -176,8 +185,7 @@ def binding_controls(production, logs):
             else:
                 target.with_suffix(".metallib").write_bytes(b"invalid Metal library control")
             rewrite_manifest(candidate)
-            install(candidate)
-            renderer = build("harmonigraph-render", logs)
+            renderer = build("harmonigraph-render", logs, candidate)
             output = run(renderer, probe, "strict", f"{control}-strict", logs, failure=True)
             assert ("could not load" if control == "invalid" else "missing Metal asset") in output
             output = run(renderer, probe, "embedded", f"{control}-fallback", logs)
@@ -201,8 +209,7 @@ def main():
         check(args.logs)
     elif args.action == "controls":
         verify(EMBEDDED)
-        with preserve_embedded():
-            binding_controls(EMBEDDED, args.logs)
+        binding_controls(EMBEDDED, args.logs)
     elif args.action == "import":
         assert args.directory is not None
         install(directory)

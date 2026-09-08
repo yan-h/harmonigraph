@@ -3,8 +3,15 @@ use std::{collections::BTreeSet, env, fs, path::PathBuf};
 use sha2::{Digest, Sha256};
 
 fn main() {
-    let directory = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("assets");
-    println!("cargo:rerun-if-changed=assets");
+    // The generator embeds candidates into its test binaries without replacing
+    // tracked assets. This is a build input only; runtime loading stays embedded.
+    const OVERRIDE: &str = "HARMONIGRAPH_METAL_ASSET_BUILD_DIR";
+    println!("cargo:rerun-if-env-changed={OVERRIDE}");
+    let directory = env::var_os(OVERRIDE).map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("assets")
+    });
+    assert!(directory.is_absolute(), "Metal asset build directory must be absolute");
+    println!("cargo:rerun-if-changed={}", directory.display());
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(directory.join("manifest.json")).unwrap()).unwrap();
     assert_eq!(manifest["schema"], 1, "unknown Metal asset manifest schema");
