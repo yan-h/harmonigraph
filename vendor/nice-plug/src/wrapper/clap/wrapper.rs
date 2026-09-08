@@ -191,14 +191,17 @@ pub struct Wrapper<P: ClapPlugin> {
     output_events: AtomicRefCell<VecDeque<PluginNoteEvent<P>>>,
     /// The last process status returned by the plugin. This is used for tail handling.
     last_process_status: AtomicCell<ProcessStatus>,
-    /// Whether the latency has changed since the last call to `activate`. When this is set,
-    /// `latency_changed` needs to be called in `activate` in order to inform the host of the
-    /// latency change.
-    latency_changed: AtomicBool,
     /// The current latency in samples, as set by the plugin through the
     /// [`ProcessContext`](nice_plug_core::context::process::ProcessContext). Uses the latency
     /// extension.
     pub current_latency: AtomicU32,
+    /// The latency the plugin last asked for. CLAP lets the reported latency
+    /// change only across an activation, and lets the host query it only while
+    /// the plugin is being activated or active, so a request made by an active
+    /// plugin waits here and `current_latency` keeps answering with the latency
+    /// this activation is actually running until the next one adopts the
+    /// replacement. Every number the host can read is therefore one it was told.
+    pending_latency: AtomicU32,
     trace_latency_queries: AtomicU64,
     /// A data structure that helps manage and create buffers for all of the plugin's inputs and
     /// outputs based on channel pointers provided by the host.
@@ -494,18 +497,19 @@ impl<P: ClapPlugin> MainThreadExecutor<Task<P>> for Wrapper<P> {
                 }
             }
             Task::LatencyChanged => match &*self.host_latency.borrow() {
-                Some(host_latency) => {
+                Some(_) => {
                     crate::nice_debug_assert!(is_gui_thread);
 
-                    // The plugin needs to be deactivated in order for the latency to change. If
-                    // it's already deactivated we can notify the host immediately, otherwise we
-                    // need to request a restart and remember to notify the host of the latency
-                    // change in the `activate` function.
-                    //
-                    // In practice, ignoring the activation status would be fine for many hosts, but
-                    // following the specification is probably a good idea regardless :)
-                    if self.is_activated.load(Ordering::SeqCst) {
-                        self.latency_changed.store(true, Ordering::SeqCst);
+                    // The latency may only change during an activation, so all this
+                    // task can do is ask for one. A deactivated plugin is between
+                    // activations already and has nothing to restart; an active one
+                    // whose request some activation has overtaken and adopted has
+                    // nothing left to ask for either, since the number the host
+                    // reads is by then the one that was asked for.
+                    if self.is_activated.load(Ordering::SeqCst)
+                        && self.pending_latency.load(Ordering::SeqCst)
+                            != self.current_latency.load(Ordering::SeqCst)
+                    {
                         if P::CLAP_PROCESS_TRACE {
                             eprintln!(
                                 "[clap-probe lifecycle] pid={} class={} instance={:p} request_restart reason=latency_changed processing={}",
@@ -514,8 +518,6 @@ impl<P: ClapPlugin> MainThreadExecutor<Task<P>> for Wrapper<P> {
                             );
                         }
                         unsafe_clap_call! { &*self.host_callback=>request_restart(&*self.host_callback) };
-                    } else {
-                        unsafe_clap_call! { host_latency=>changed(&*self.host_callback) };
                     }
                 }
                 None => {
@@ -724,8 +726,8 @@ impl<P: ClapPlugin> Wrapper<P> {
             input_events: AtomicRefCell::new(VecDeque::with_capacity(if P::CLAP_PERFORMANCE { 0 } else { 512 })),
             output_events: AtomicRefCell::new(VecDeque::with_capacity(if P::CLAP_PERFORMANCE { 0 } else { 512 })),
             last_process_status: AtomicCell::new(ProcessStatus::Normal),
-            latency_changed: AtomicBool::new(false),
             current_latency: AtomicU32::new(0),
+            pending_latency: AtomicU32::new(0),
             trace_latency_queries: AtomicU64::new(0),
             // This is initialized just before calling `Plugin::initialize()` so that during the
             // process call buffers can be initialized without any allocations
@@ -1951,14 +1953,40 @@ impl<P: ClapPlugin> Wrapper<P> {
         success
     }
 
+    /// Asking for a latency is not publishing it. An active plugin gets the
+    /// restart it needs to adopt the request and nothing else: the host is
+    /// compensating for the latency this activation is running, and moving the
+    /// reported number out from under it would misalign everything already
+    /// scheduled against it. Publishing belongs to `publish_pending_latency`,
+    /// at the one moment the host may be told -- the activation that adopts
+    /// the request -- so the number the host reads never moves in silence.
     pub fn set_latency_samples(&self, samples: u32) {
         // Only make a callback if it's actually needed
         // XXX: For CLAP we could move this handling to the Plugin struct, but it may be worthwhile
         //      to keep doing it this way to stay consistent with VST3.
-        let old_latency = self.current_latency.swap(samples, Ordering::SeqCst);
-        if old_latency != samples {
+        let requested = self.pending_latency.swap(samples, Ordering::SeqCst);
+        if requested != samples {
             let task_posted = self.schedule_gui(Task::LatencyChanged);
             crate::nice_debug_assert!(task_posted, "The task queue is full, dropping task...");
+        }
+    }
+
+    /// Move the number the host reads to the one the plugin asked for, and tell
+    /// the host whenever that moves it, which is the only thing that makes the
+    /// new number the host's. CLAP accepts `changed()` during `activate` and
+    /// nowhere else, so an activation is the only caller: publishing anywhere
+    /// else spends the notification at a moment the host may discard, and
+    /// leaves the activation that adopts the request with nothing to say.
+    /// That makes this the sole writer of `current_latency`, and the value the
+    /// host was last told is therefore the value it reads -- a deactivated
+    /// plugin keeps reporting the delay its host is still compensating for
+    /// until the next activation adopts a replacement.
+    fn publish_pending_latency(&self) {
+        let pending = self.pending_latency.load(Ordering::SeqCst);
+        if self.current_latency.swap(pending, Ordering::SeqCst) != pending {
+            if let Some(host_latency) = &*self.host_latency.borrow() {
+                unsafe_clap_call! { host_latency=>changed(&*self.host_callback) };
+            }
         }
     }
 
@@ -2120,14 +2148,6 @@ impl<P: ClapPlugin> Wrapper<P> {
             unsafe { param._internal_update_smoother(buffer_config.sample_rate, true) };
         }
 
-        // If this reactivation happened due to the latency changing, notify the host of that
-        // latency change.
-        if wrapper.latency_changed.swap(false, Ordering::SeqCst) {
-            if let Some(host_latency) = &*wrapper.host_latency.borrow() {
-                unsafe_clap_call! { host_latency=>changed(&*wrapper.host_callback) };
-            }
-        }
-
         // NOTE: This needs to be dropped after the `plugin` lock to avoid deadlocks
         let mut init_context = wrapper.make_init_context();
         let mut plugin = wrapper.plugin.lock();
@@ -2143,11 +2163,17 @@ impl<P: ClapPlugin> Wrapper<P> {
             // Also store this for later, so we can reinitialize the plugin after restoring state
             wrapper.current_buffer_config.store(Some(buffer_config));
 
-            // Publish initialize's deferred latency while still being activated. Letting the
-            // context drop after this flag instead requests an unnecessary restart, which can
-            // stall Bitwig's next offline export. Release the plugin lock before host callbacks.
+            // Run initialize's deferred latency request while `is_activated` is still
+            // clear. Letting the context drop after this flag instead requests an
+            // unnecessary restart, which can stall Bitwig's next offline export.
+            // Release the plugin lock before host callbacks.
             drop(plugin);
             drop(init_context);
+            // The one place the reported latency moves and the one place the host
+            // is told it has. Whatever this activation adopts -- requested during
+            // this initialization or while the previous activation ran -- becomes
+            // the number the host reads, here.
+            wrapper.publish_pending_latency();
             wrapper.is_activated.store(true, Ordering::SeqCst);
 
             true
@@ -2287,9 +2313,6 @@ impl<P: ClapPlugin> Wrapper<P> {
                         .map(|t| t.song_pos_seconds as f64 / CLAP_SECTIME_FACTOR as f64),
                     playing: transport.is_some_and(|t| t.flags & CLAP_TRANSPORT_IS_PLAYING != 0),
                 });
-                if input_status == performance::InputStatus::Complete {
-                    wrapper.publish_configuration_prefix(process.steady_time, process.frames_count);
-                }
                 wrapper.configuration_request_main();
             }
 

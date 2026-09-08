@@ -774,9 +774,8 @@ fn production_musical_normal_phrase_overrides_bends_and_keeps_old_configuration_
             .plugin_data
             .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
     };
-    let config = wrapper.test_inspect_plugin(|plugin| {
-        plugin.configuration.as_ref().unwrap().timeline.reducer().resolved()
-    });
+    let config = wrapper
+        .test_inspect_plugin(|plugin| plugin.configuration.as_ref().unwrap().reducer.resolved());
     let context: Vec<_> = current
         .iter()
         .flatten()

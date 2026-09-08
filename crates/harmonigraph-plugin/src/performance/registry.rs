@@ -36,6 +36,11 @@ pub struct SourceBridge {
     pub returns: Slots<SourceReturn>,
     pub generation: AtomicU64,
     pub status: AtomicU32,
+    /// A delay multiplier the paired Hub asked this Tune to adopt, or zero.
+    /// The Tune takes it on its own main thread and writes its own parameter;
+    /// the Hub never owns another instance's saved value.
+    pub requested_delay: AtomicU32,
+    pub wake: OnceLock<Arc<dyn Fn() + Send + Sync>>,
 }
 impl Default for SourceBridge {
     fn default() -> Self {
@@ -44,6 +49,8 @@ impl Default for SourceBridge {
             returns: Slots::default(),
             generation: AtomicU64::new(1),
             status: AtomicU32::new(MISSING),
+            requested_delay: AtomicU32::new(0),
+            wake: OnceLock::new(),
         }
     }
 }
@@ -213,6 +220,30 @@ impl Registry {
         }
         self.collect();
         self.rematch();
+    }
+
+    /// The Hub's "apply to all paired Tunes". Every Tune holding a lease on
+    /// this Hub's session is asked; each one adopts it as its own parameter
+    /// and requests its own reactivation, so they change one at a time and a
+    /// transient mismatch between them is only a live-feel difference.
+    pub fn request_delay(&self, bridge: &Arc<HubBridge>, multiplier: u32) {
+        let Some(hub) =
+            self.hubs.iter().flatten().find(|h| !h.retired && Arc::ptr_eq(&h.bridge, bridge))
+        else {
+            return;
+        };
+        let runtime = hub.session.runtime;
+        for source in self
+            .sources
+            .iter()
+            .flatten()
+            .filter(|s| !s.retired && s.offered.is_some_and(|lease| lease.session == runtime))
+        {
+            source.bridge.requested_delay.store(multiplier, Ordering::Release);
+            if let Some(wake) = source.bridge.wake.get() {
+                wake();
+            }
+        }
     }
 
     #[cfg(target_os = "macos")]

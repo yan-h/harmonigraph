@@ -96,9 +96,12 @@ pub trait ClapPlugin: Plugin {
     /// All following hooks are inside the process allocation guard. Returning
     /// None retains the exact command/input cursor; this is work backpressure.
     fn clap_configuration_begin(&mut self, boundary: configuration::ConfigurationBoundary) {}
-    /// Exclusive prefix with no retained earlier configuration input/commands.
-    fn clap_configuration_prefix(&mut self, through: i64) {}
+    /// Every command accepted before this callback has been applied. Fix the
+    /// block's effective configuration here; nothing later in the callback may
+    /// move it, so an edit arriving mid-block waits for the next one.
+    fn clap_configuration_adopt(&mut self) {}
     /// Actual wrapper sub-block boundaries, including in-callback transport cuts.
+    /// These are NOT configuration boundaries; `adopt` is the only one.
     fn clap_configuration_segment(&mut self, start: u32, frames: u32) {}
     fn clap_configuration_apply(
         &mut self,

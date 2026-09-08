@@ -12,6 +12,9 @@ pub mod vst3;
 
 // This is used by the wrappers.
 pub use util::setup_logger;
+// A plugin that reads raw parameter events needs the same string-to-id hash the
+// wrappers report to the host, or it cannot tell one parameter from another.
+pub use util::hash_param_id;
 
 #[cfg(all(debug_assertions, feature = "clap-boundary-tests"))]
 pub mod allocation_probe;

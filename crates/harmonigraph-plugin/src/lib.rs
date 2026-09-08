@@ -752,6 +752,7 @@ impl ClapPlugin for Harmonigraph {
     fn clap_setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
         Some(Arc::new(performance::setup::Adapter(
             self.aggregation.as_ref().unwrap().shared.clone(),
+            None,
         )))
     }
     fn clap_main_init(&mut self) -> bool {
@@ -911,8 +912,8 @@ impl ClapPlugin for Harmonigraph {
     ) {
         self.configuration.as_mut().unwrap().begin(boundary, &self.take, self.presentation_seconds);
     }
-    fn clap_configuration_prefix(&mut self, through: i64) {
-        self.configuration.as_mut().unwrap().prefix(through);
+    fn clap_configuration_adopt(&mut self) {
+        self.configuration.as_mut().unwrap().adopt();
     }
     fn clap_configuration_segment(&mut self, start: u32, frames: u32) {
         self.configuration.as_mut().unwrap().segment(start, frames);
@@ -923,10 +924,7 @@ impl ClapPlugin for Harmonigraph {
         commit: nice_plug::wrapper::clap::configuration::ConfigurationCommit,
     ) -> Option<nice_plug::wrapper::clap::configuration::ConfigurationSnapshot> {
         let owner = self.configuration.as_mut().unwrap();
-        let result = owner.apply(command, commit, &self.take);
-        if owner.timeline.storage_fault {
-            self.aggregation.as_mut().unwrap().configuration_exhausted();
-        }
+        let result = owner.apply(command, commit);
         if result.is_none() {
             self.params.configuration.get().unwrap().published.publish(owner.snapshot);
         }

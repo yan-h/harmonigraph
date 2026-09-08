@@ -6,7 +6,7 @@ pub mod event;
 pub(crate) mod hub;
 #[cfg(target_os = "macos")]
 mod native;
-mod protocol;
+pub mod protocol;
 mod queue;
 pub(crate) mod registry;
 pub(crate) mod routing;

@@ -158,6 +158,9 @@ pub struct Hub {
     publication_clock: ClockId,
     transition: Option<setup::Update>,
     invalidated: bool,
+    /// Set by a reactivation and cleared by the first callback after it. Every
+    /// Reset in between belongs to that same boundary, not to a clock failure.
+    reactivated: bool,
     clock_loss_pending: bool,
     retired_publication: Option<(Box<Owner>, Recorder, f64)>,
     retired_through: Option<i64>,
@@ -197,7 +200,23 @@ impl Hub {
             }
         }
         self.shared.status.store(diagnostics, Ordering::Release);
-        self.shared.extra_delay.fetch_max(self.sequencer.extra_delay, Ordering::Relaxed);
+        // Each Tune measures its own deadline against its own D; the session's
+        // status is how many notes missed across all of them and the worst one
+        // of those. A sum and a max, not a second measurement.
+        let rows = &self.rows;
+        let (misses, worst) = self.offer.as_ref().map_or((0, 0), |offer| {
+            offer.session.rows.iter().zip(rows.iter()).filter(|(_, row)| row.lease.is_some()).fold(
+                (0, 0),
+                |(misses, worst), (published, _)| {
+                    (
+                        misses + published.deadline_misses.load(Ordering::Relaxed),
+                        worst.max(published.worst_lateness.load(Ordering::Relaxed)),
+                    )
+                },
+            )
+        });
+        self.shared.deadline_misses.store(misses, Ordering::Relaxed);
+        self.shared.extra_delay.store(worst as u64, Ordering::Relaxed);
         if self.trace.due(callback.frames, self.rate) {
             self.publish_diagnostics(callback, owner);
             self.shared.request_main();
@@ -205,7 +224,7 @@ impl Hub {
     }
     fn publish_diagnostics(&self, callback: api::Callback, owner: &Owner) {
         self.direct.publish_diagnostics(callback);
-        let config = owner.timeline.reducer().resolved();
+        let config = owner.reducer.resolved();
         self.shared.diagnostics.hub.as_ref().unwrap().publish([
             self.offer.as_ref().map_or(0, |offer| offer.session.runtime) as i64,
             self.publication_clock.epoch as i64,
@@ -282,6 +301,14 @@ impl Hub {
     pub fn force_reset(&mut self, owner: &mut Owner, allow_idle: bool) -> bool {
         if self.offer.is_none() {
             return false;
+        }
+        if allow_idle && self.reactivated {
+            // `start_processing` runs this Reset immediately after the
+            // activation that already adopted the host's format. The session
+            // was not processing across that boundary, so there is no accepted
+            // history for an invalidation to protect and nothing that could
+            // clear it afterwards: take the adoption as the reset.
+            return true;
         }
         if allow_idle
             && !self.invalidated
@@ -397,6 +424,7 @@ impl Hub {
             publication_clock: ClockId::default(),
             transition: None,
             invalidated: false,
+            reactivated: false,
             clock_loss_pending: false,
             retired_publication: None,
             retired_through: None,
@@ -411,14 +439,17 @@ impl Hub {
         self.rate = rate;
         self.max_frames = frames;
         if !first {
-            self.clock.sample_rate = rate;
-            self.clock.max_frames = frames;
-            self.clock.valid = false;
-            self.direct.activate(rate, frames);
+            // Reactivation is a host-owned boundary rather than a clock
+            // failure: the members cancel and release through their own
+            // `activate`, and this session adopts the new format outright.
+            self.clock = Clock::new(self.clock.calibration, rate, frames);
+            self.direct.activate(rate, frames, 0);
+            self.anchor = None;
+            self.reactivated = true;
             return;
         }
         self.clock = Clock::new(self.shared.value().routing.calibration(), rate, frames);
-        self.direct.activate(rate, frames);
+        self.direct.activate(rate, frames, 0);
         self.anchor = None;
     }
     fn attach(&mut self, owner: &mut Owner) {
@@ -440,6 +471,7 @@ impl Hub {
         self.shared.request_main();
     }
     pub fn begin(&mut self, callback: api::Callback, owner: &mut Owner, presentation: f64) {
+        self.reactivated = false;
         self.attach(owner);
         self.callback = Some(callback);
         self.collected = 0;
@@ -1026,7 +1058,7 @@ impl Hub {
         // Incomplete publication may return early; sequencing still gets its
         // independent bounded turn to advance input/recovery ownership.
         self.publish_output(owner, recorder, observation);
-        self.sequence_inputs(owner, recorder);
+        self.sequence_inputs(owner);
     }
 
     fn publish_output(&mut self, owner: &mut Owner, recorder: &mut Recorder, observation: f64) {
@@ -1612,7 +1644,7 @@ impl Hub {
         self.sequencer.retired = true;
         self.direct.join_producer();
         recorder.hold_retired_publication();
-        owner.recording.dispose_retired_configuration(&mut recorder, &owner.timeline);
+        owner.recording.dispose_retired_configuration(&mut recorder);
         if self.shared.registration().is_none() {
             assert!(self.offer.is_none());
             owner.publish_retired_direct(&mut recorder, observation);

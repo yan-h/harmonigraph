@@ -9,7 +9,7 @@ use super::{
 use nice_plug::prelude::*;
 use objc2::rc::Retained;
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
-use objc2_app_kit::{NSButton, NSPopUpButton, NSTextField, NSView};
+use objc2_app_kit::{NSButton, NSPopUpButton, NSSlider, NSTextField, NSView};
 use objc2_foundation::{
     MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer,
 };
@@ -27,6 +27,8 @@ struct Widgets {
     participation: Retained<NSButton>,
     pairing: Retained<NSPopUpButton>,
     offset: Retained<NSTextField>,
+    delay: Retained<NSSlider>,
+    delay_label: Retained<NSTextField>,
     status: Retained<NSTextField>,
     choices: RefCell<Vec<SavedUuid>>,
     available: RefCell<Vec<SavedUuid>>,
@@ -56,6 +58,19 @@ define_class!(
         }
         #[unsafe(method(apply:))]
         fn apply(&self, _: &NSButton) { self.apply_value(true); }
+        // The slider is not continuous, so AppKit sends this once, when the
+        // drag ends. One finished gesture is one latency change, and one
+        // reactivation request; the intermediate values never leave the knob.
+        #[unsafe(method(delay:))]
+        fn delay(&self, slider: &NSSlider) {
+            let vars = self.ivars();
+            let value = slider.integerValue() as i32;
+            let setter = ParamSetter::new(&*vars.context);
+            setter.begin_set_parameter(&vars.params.delay);
+            setter.set_parameter(&vars.params.delay, value);
+            setter.end_set_parameter(&vars.params.delay);
+            self.refresh_status();
+        }
         #[unsafe(method(reset:))]
         fn reset(&self, _: &NSButton) {
             let shared = &self.ivars().shared;
@@ -108,18 +123,41 @@ impl Actions {
             _ => "Unavailable",
         };
         let status = vars.shared.status.load(Ordering::Acquire);
-        let delay = vars.shared.extra_delay.load(Ordering::Relaxed);
         let value = vars.shared.value();
-        let diagnostics = setup::diagnostics_text(status, delay);
+        let diagnostics = setup::diagnostics_text(status);
         let pending = if value.generation > vars.shared.applied.load(Ordering::Acquire) {
             " · setup pending: old output must settle"
         } else {
             ""
         };
-        if let Some(adopted) = vars.shared.adopted() {
+        let requested = vars.params.delay.value().max(1) as u32;
+        let active = vars.shared.active_multiplier.load(Ordering::Acquire);
+        w.delay.setIntegerValue(requested as isize);
+        let adopted = vars.shared.adopted();
+        w.delay_label.setStringValue(&NSString::from_str(&setup::delay_text(
+            requested,
+            active,
+            adopted.map_or(0, |adopted| adopted.max_frames),
+            adopted.map_or(0.0, |adopted| adopted.sample_rate),
+        )));
+        // Startup, a Hub this Tune has not attached to, and a setup still
+        // settling are all reasons a note can be late that raising the delay
+        // would not fix, so the deadline line names them instead.
+        let starting = !pending.is_empty()
+            || adopted.is_none_or(|adopted| !adopted.valid)
+            || pairing != registry::ATTACHED;
+        let deadline = setup::deadline_text(
+            status,
+            Some(pairing),
+            starting,
+            vars.shared.deadline_misses.load(Ordering::Relaxed),
+            vars.shared.extra_delay.load(Ordering::Relaxed),
+            adopted.map_or(0.0, |adopted| adopted.sample_rate),
+        );
+        if let Some(adopted) = adopted {
             let calibration = adopted.calibration;
             w.status.setStringValue(&NSString::from_str(&format!(
-                "{name}{pending}\n{diagnostics}\nAdopted {}: offset {} · Host: {} Hz · ≤{} frames\n{}",
+                "{name}{pending}\n{diagnostics}\n{deadline}\nAdopted {}: offset {} · Host: {} Hz · ≤{} frames\n{}",
                 adopted.generation,
                 calibration.offset,
                 adopted.sample_rate,
@@ -132,7 +170,7 @@ impl Actions {
             )));
         } else {
             w.status.setStringValue(&NSString::from_str(&format!(
-                "{name}{pending}\n{diagnostics}\nWaiting for the first audio clock boundary"
+                "{name}{pending}\n{diagnostics}\n{deadline}\nWaiting for the first audio clock boundary"
             )));
         }
         let available = registry::global().lock().unwrap().candidates();
@@ -194,14 +232,36 @@ impl Editor for NativeEditor {
             widgets: OnceCell::new(),
         });
         let actions: Retained<Actions> = unsafe { msg_send![super(actions), init] };
-        let view = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 520.0, 460.0));
+        let view = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 520.0, 540.0));
         let label = |text: &str, y: f64| {
             let field = NSTextField::labelWithString(&NSString::from_str(text), mtm);
             field.setFrame(rect(16.0, y, 485.0, 26.0));
             view.addSubview(&field);
             field
         };
-        label("Harmonigraph Tune", 422.0);
+        label("Harmonigraph Tune", 502.0);
+        let delay_label =
+            NSTextField::wrappingLabelWithString(&NSString::from_str("Tuning delay"), mtm);
+        delay_label.setFrame(rect(16.0, 466.0, 485.0, 34.0));
+        delay_label.setMaximumNumberOfLines(0);
+        view.addSubview(&delay_label);
+        // Stepped and discontinuous: the tick marks are the only values it can
+        // take, and the action arrives once the drag is over.
+        let delay = unsafe {
+            NSSlider::sliderWithValue_minValue_maxValue_target_action(
+                f64::from(self.params.delay.value()),
+                1.0,
+                f64::from(super::protocol::DELAY_MULTIPLIER_MAX),
+                Some(&actions),
+                Some(sel!(delay:)),
+                mtm,
+            )
+        };
+        delay.setFrame(rect(16.0, 438.0, 485.0, 24.0));
+        delay.setNumberOfTickMarks(super::protocol::DELAY_MULTIPLIER_MAX as isize);
+        delay.setAllowsTickMarkValuesOnly(true);
+        delay.setContinuous(false);
+        view.addSubview(&delay);
         let participation = unsafe {
             NSButton::checkboxWithTitle_target_action(
                 &NSString::from_str("Participating"),
@@ -260,6 +320,8 @@ impl Editor for NativeEditor {
                 participation,
                 pairing,
                 offset,
+                delay,
+                delay_label,
                 status,
                 choices: RefCell::new(Vec::new()),
                 available: RefCell::new(Vec::new()),
@@ -281,7 +343,7 @@ impl Editor for NativeEditor {
         Box::new(Handle { actions, timer })
     }
     fn size(&self) -> (u32, u32) {
-        (520, 460)
+        (520, 540)
     }
     fn set_scale_factor(&self, _: f32) -> bool {
         true

@@ -16,6 +16,7 @@ use nice_plug::wrapper::clap::{
     configuration::{InputValue, OwnedInput},
     performance as api,
 };
+use nice_plug::wrapper::hash_param_id;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -179,10 +180,13 @@ pub struct Source {
     owed_note_off: [u16; 64],
     emergency: [Option<Release>; 64],
     channel_reset: [u8; 16],
-    /// Largest accepted onset shift seen since the last quiescence, reported
-    /// as this Tune's extra delay above the fixed D. A gauge, not a schedule:
-    /// nothing reads it back to decide when anything emits.
+    /// Largest accepted onset shift seen since the delay setting was last
+    /// applied, reported as this Tune's worst lateness above D. A gauge, not a
+    /// schedule: nothing reads it back to decide when anything emits.
     late_shift: i64,
+    /// Notes that missed their deadline over the same interval, each counted
+    /// exactly once however many times it is seen to be late.
+    missed: u64,
     emergency_output: Queue<OutputDelta, 128>,
     journal: Queue<OutputDelta, OUTCOME_JOURNAL>,
     sent: usize,
@@ -197,6 +201,9 @@ pub struct Source {
     pub clock: Clock,
     rate: f64,
     max_frames: u32,
+    /// `multiplier x max_frames`, adopted whole at activation and fixed for
+    /// it. The host is told this number and compensates playback by it.
+    delay: i64,
     callback: Option<api::Callback>,
     visits: usize,
     intent_pushed: usize,
@@ -274,12 +281,19 @@ impl Source {
         self.faults | if self.timing_failed { TIMING_FAILURE } else { 0 }
     }
 
+    /// One note, one count. The same note reaches this twice by design -- once
+    /// when its deadline passes with no assignment, again when it finally
+    /// emits late -- and only the first arrival is the note. Its lateness is
+    /// measured separately, in `late_shift`, where the emission that knows the
+    /// number is; a note counted on the earlier arrival still contributes the
+    /// worst lateness it eventually turns out to have.
     fn timing_failure(&mut self, life: u16) {
         let request = self.lives.local_mut(life).expect("retained timing request");
         if request.timing_reported {
             return;
         }
         request.timing_reported = true;
+        self.missed += 1;
         self.timing_failed = true;
         // Diagnostic publication is independent of the emergency fault path:
         // this original request remains eligible for one valid late assignment.
@@ -291,13 +305,28 @@ impl Source {
         self.shared.status.store(self.diagnostics(), Ordering::Release);
     }
 
+    /// The deadline gauge, to this Tune's own editor and to the row its Hub
+    /// aggregates. Both numbers describe the interval since the delay setting
+    /// was applied, so nothing here is cleared by a quiet passage.
+    fn publish_deadline(&self) {
+        let worst = self.late_shift.saturating_sub(self.delay()).max(0);
+        self.shared.extra_delay.store(worst as u64, Ordering::Relaxed);
+        self.shared.deadline_misses.store(self.missed, Ordering::Relaxed);
+        if let Some(offer) = &self.offer {
+            let row = &offer.session.rows[usize::from(offer.lease.slot - 1)];
+            row.delay.store(self.delay(), Ordering::Release);
+            row.worst_lateness.store(worst, Ordering::Relaxed);
+            row.deadline_misses.store(self.missed, Ordering::Relaxed);
+        }
+    }
+
     fn delay(&self) -> i64 {
         #[cfg(test)]
         if self.test_aggregation {
             return 0;
         }
         if self.shared.source.is_some() {
-            DELAY
+            self.delay
         } else {
             0
         }
@@ -375,6 +404,7 @@ impl Source {
             emergency: [None; 64],
             channel_reset: [0; 16],
             late_shift: 0,
+            missed: 0,
             emergency_output: Queue::default(),
             journal: Queue::default(),
             sent: 0,
@@ -389,6 +419,7 @@ impl Source {
             clock: Clock::new(Calibration::default(), 0.0, 0),
             rate: 0.0,
             max_frames: 0,
+            delay: 0,
             callback: None,
             visits: 0,
             intent_pushed: 0,
@@ -447,23 +478,43 @@ impl Source {
             membership: 0,
         })
     }
-    pub fn activate(&mut self, rate: f64, max_frames: u32) {
+    /// The multiplier is the Tune's saved parameter and `max_frames` the
+    /// format the host advertises for this activation; D is their product and
+    /// nothing recomputes it until the next activation. Applying a new setting
+    /// is what clears the deadline measurement, so the count and worst
+    /// lateness on screen always describe the delay that is actually running.
+    pub fn activate(&mut self, rate: f64, max_frames: u32, multiplier: u32) {
         let first = self.rate == 0.0;
         self.rate = rate;
         self.max_frames = max_frames;
+        self.delay = i64::from(multiplier) * i64::from(max_frames);
+        self.late_shift = 0;
+        self.missed = 0;
         if !first {
-            // Reactivation cannot install accepted setup over a still-owned lease.
-            self.clock.sample_rate = rate;
-            self.clock.max_frames = max_frames;
-            self.clock.valid = false;
-            self.shared.publish_clock(&self.clock);
+            // Reactivation is a host-owned boundary, not a clock failure: no
+            // callback is in flight, so cancel and release like Stop and then
+            // adopt the new format outright. Publishing an invalid clock here
+            // instead strands the release debt this Stop just armed, because
+            // no later callback can repair a clock it never covers.
             self.stop();
+            self.adopt_boundary_clock();
             return;
         }
         self.apply_setup();
         self.clock = Clock::new(self.shared.value().routing.calibration(), rate, max_frames);
         self.shared.publish_clock(&self.clock);
         self.coverage = None;
+    }
+    /// Reactivation takes the host's current format as adopted. The host
+    /// skips enclosing time while it is stopped, so raw continuity starts
+    /// over; the session's own coverage does not, because the lease it was
+    /// reported under survives this boundary and the Hub grants only a
+    /// contiguous accepted prefix.
+    pub fn adopt_boundary_clock(&mut self) {
+        let coverage = self.clock.coverage;
+        self.clock = Clock::new(self.clock.calibration, self.rate, self.max_frames);
+        self.clock.coverage = coverage;
+        self.shared.publish_clock(&self.clock);
     }
     pub fn reset_idle_clock(&mut self, epoch: u64) {
         assert!(self.settled());
@@ -686,6 +737,13 @@ impl Source {
         } else {
             row.source_detached.store(false, Ordering::Release);
             row.emission_gate.fetch_and(!BUSY, Ordering::Release);
+            // The Hub reads this row's delay to report what each output was
+            // planned for, and it can bind an onset from the first callback
+            // this row is enrolled for. Publish D with the row, not only in
+            // the end-of-callback gauge.
+            row.delay.store(self.delay(), Ordering::Release);
+            row.worst_lateness.store(0, Ordering::Relaxed);
+            row.deadline_misses.store(0, Ordering::Relaxed);
             self.epoch = offer.session.epoch.load(Ordering::Acquire);
             self.generation = offer.generation;
             self.old_pending = self.obligations;
@@ -820,10 +878,16 @@ impl Source {
     /// later callback, so every refusal below is a latched fault rather than a
     /// request to be offered this value again.
     pub fn input(&mut self, input: OwnedInput) {
-        if let InputValue::Parameter { value, modulation: false, .. } = input.value {
-            // Tune has exactly one parameter; its original retained value is the
-            // authority even if the generic parameter atomic has run ahead.
-            if self.shared.source.is_some() {
+        if let InputValue::Parameter { id, value, modulation: false } = input.value {
+            // Participation is the only parameter this class reads, and the id
+            // is the only thing that says which one arrived: a stepped
+            // parameter carries its step index, so the tuning delay's 1x is a
+            // zero here and would read as Off. The delay is the wrapper's to
+            // store and the activation's to have adopted already.
+            //
+            // For participation the original retained value is the authority
+            // even if the generic parameter atomic has run ahead.
+            if self.shared.source.is_some() && id == hash_param_id(setup::PARTICIPATING) {
                 let Some(sample) = input.sample else {
                     self.fault(INPUT_FAULT);
                     return;
@@ -1447,7 +1511,7 @@ impl Source {
         self.schedule_pending(start, end, output);
         self.schedule_channels(start, end, output);
         self.schedule_ready(start, end, output);
-        self.compact();
+        self.drain_finished();
     }
 
     /// Rule one waits with the note an event is addressed to, and nothing else
@@ -2342,22 +2406,6 @@ impl Source {
             }
         }
     }
-    fn compact(&mut self) {
-        self.drain_finished();
-        if self.obligations == 0
-            && self.state.count() == 0
-            && self.held() == 0
-            && self.journal.len() == 0
-            && self.emergency_output.len() == 0
-            && self.manifest.len() == 0
-            && self.permit.is_none()
-            && self.joined
-            && self.owed_note_off == [NONE; 64]
-            && self.channel_reset == [0; 16]
-        {
-            self.late_shift = 0;
-        }
-    }
 
     fn schedule_emergency(&mut self, output: &mut api::Output<'_>) {
         if self.sealed {
@@ -2698,11 +2746,9 @@ impl Source {
     pub fn end(&mut self, callback: api::Callback) {
         #[cfg(test)]
         self.shared.before_transfer.reach();
-        self.compact();
+        self.drain_finished();
         self.shared.status.store(self.diagnostics(), Ordering::Release);
-        self.shared
-            .extra_delay
-            .store(self.late_shift.saturating_sub(self.delay()).max(0) as u64, Ordering::Relaxed);
+        self.publish_deadline();
         if self.direct.is_some() {
             self.publish_seal();
             return;
@@ -3191,7 +3237,7 @@ impl Source {
         self.receive();
         self.cancel_slice();
         self.drain_ready_work();
-        self.compact();
+        self.drain_finished();
         if !self.detaching {
             self.transfer();
         }

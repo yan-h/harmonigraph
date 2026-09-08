@@ -72,63 +72,6 @@ fn tuning_parameter(hub: &Device, cents: f32, time: u32) -> Input {
 }
 
 #[test]
-fn production_missing_source_interval_retains_128_configuration_markers_then_contains_129() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    let wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    let mailbox = wrapper.configuration_handle().unwrap();
-    source.run_format(1536, vec![note(7, 0, 60, 0, true)], None, None, 512);
-    hub.run_format(1536, vec![], None, None, 512);
-    source.run_format(2048, vec![], None, None, 512);
-    hub.run_format(2048, vec![], None, None, 512);
-    let original =
-        inspect_source(&source, |source| source.state.voices().next().unwrap().assignment.unwrap());
-    for block in 0..16 {
-        let events =
-            (0..8).map(|index| tuning_parameter(&hub, 690.0 + index as f32, index)).collect();
-        hub.run_format(2560 + block * 512, events, None, None, 512);
-        assert_eq!(mailbox.visible().0.status, 0);
-        assert!(!mailbox.visible().1);
-        let (len, pending, frontier) = wrapper.test_inspect_plugin(|plugin| {
-            let timeline = &plugin.configuration.as_ref().unwrap().timeline;
-            (timeline.len(), timeline.pending(), timeline.finalized_exclusive())
-        });
-        assert_eq!(len, (block + 1) as usize * 8);
-        assert_eq!(
-            pending, 0,
-            "the actual required-marker store fills after command ingress drains"
-        );
-        assert_eq!(frontier, 2560, "missing Source input keeps later markers unretirable");
-    }
-    let retained = mailbox.visible().0;
-    hub.run_format(10752, vec![tuning_parameter(&hub, 710.0, 0)], None, None, 512);
-    assert_eq!(mailbox.visible().0.status & 2, 2);
-    assert_eq!(mailbox.visible().0.raw, retained.raw);
-    assert_eq!(mailbox.visible().0.revision, retained.revision);
-    assert_eq!(
-        inspect_source(&source, |source| source.state.voices().next().unwrap().assignment),
-        Some(original)
-    );
-    let emergency = source.run_format(2560, vec![], None, None, 512);
-    assert_eq!(emergency.values.iter().filter(|(_, event)| event.release()).count(), 1);
-    assert_ne!(source.source_snapshot().faults & source::STORAGE_FAULT, 0);
-    hub.run_format(11264, vec![], None, None, 512);
-    source.run_format(3072, vec![], None, None, 512);
-    assert_eq!(source.source_snapshot().held, 0);
-    drop(source);
-    drop(hub);
-    assert_eq!(
-        registry::global().lock().unwrap().test_counts(),
-        (0, 0, 0),
-        "completed Originals pinned by the terminal reader retire after callback join"
-    );
-}
-
-#[test]
 fn production_sixteen_sources_complete_a_256_onset_cohort_and_hold_exact_credit() {
     let _scope = crate::test_scope::enter();
     let synthetic = std::env::var_os("HARMONIGRAPH_MUSICAL_MAX").is_some();
@@ -171,24 +114,21 @@ fn production_sixteen_sources_complete_a_256_onset_cohort_and_hold_exact_credit(
                 .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
         };
         wrapper.test_with_plugin(|plugin| {
-            use harmonigraph_core::configuration::{
-                timeline::ConfigTimeline, ConfigReducer, TuningModes,
-            };
-            plugin.configuration.as_mut().unwrap().timeline =
-                ConfigTimeline::new(ConfigReducer::new(
-                    harmonigraph_core::Tuning {
-                        c_offset: 0,
-                        three: 0,
-                        five: 0,
-                        seven: 0,
-                        tolerance: 0,
-                    },
-                    TuningModes {
-                        tempered: harmonigraph_core::Tempered::default(),
-                        auto: [false; 2],
-                        learning: false,
-                    },
-                ));
+            use harmonigraph_core::configuration::{ConfigReducer, TuningModes};
+            plugin.configuration.as_mut().unwrap().reducer = ConfigReducer::new(
+                harmonigraph_core::Tuning {
+                    c_offset: 0,
+                    three: 0,
+                    five: 0,
+                    seven: 0,
+                    tolerance: 0,
+                },
+                TuningModes {
+                    tempered: harmonigraph_core::Tempered::default(),
+                    auto: [false; 2],
+                    learning: false,
+                },
+            );
         });
     }
     for source in &sources {
@@ -707,6 +647,35 @@ fn production_missing_assignment_retains_one_late_onset_and_fixed_latency() {
     hub.run_format(3584, vec![], None, None, 512);
     source.run_format(4608, vec![], None, None, 512);
     hub.run_format(4096, vec![], None, None, 512);
+}
+
+#[test]
+fn the_deadline_counter_counts_each_note_once_with_worst_lateness() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    // Two onsets in one callback, 256 samples apart. The Hub runs a callback
+    // behind, so both wait past input+D and both emit in the same later
+    // callback: the first one 512 samples late, the second only 256.
+    assert!(source
+        .run_format(1536, vec![note(7, 0, 60, 0, true), note(8, 0, 62, 256, true)], None, None, 512)
+        .values
+        .is_empty());
+    // Both deadlines pass here, unassigned, and each note is seen late a
+    // second time when it finally emits below. Counting arrivals rather than
+    // notes would double this.
+    assert!(source.run_format(2048, vec![], None, None, 512).values.is_empty());
+    hub.run_format(1536, vec![], None, None, 512);
+    let late = source.run_format(2560, vec![], None, None, 512);
+    assert_eq!(late.values.iter().filter(|(_, event)| event.attack().is_some()).count(), 2);
+    assert_eq!(source.shared().deadline_misses.load(Ordering::Acquire), 2);
+    assert_eq!(
+        source.shared().extra_delay.load(Ordering::Acquire),
+        512,
+        "the worst of 512 and 256, not the last measured and not their mean"
+    );
+    hub.run_format(2048, vec![], None, None, 512);
+    assert_eq!(hub.shared().deadline_misses.load(Ordering::Acquire), 2);
+    assert_eq!(hub.shared().extra_delay.load(Ordering::Acquire), 512);
 }
 
 #[test]
@@ -2325,4 +2294,435 @@ fn production_a_full_sixty_four_voices_still_replace_one_of_their_own_in_one_cal
     // predecessor's acknowledgement debt as well as the successor's, so the
     // session comes back to nothing owed rather than one short.
     assert_eq!(session.credits.load(Ordering::Acquire), 0);
+}
+
+/// A tuning edit is effective at the NEXT Hub block boundary, and the group
+/// assigned before it keeps the configuration it started with -- through the
+/// emission that lands a whole callback after that boundary.
+#[test]
+fn production_a_tuning_edit_waits_for_the_next_boundary_and_a_group_keeps_its_snapshot() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    let bends = |output: &Sink| {
+        output
+            .values
+            .iter()
+            .filter_map(|(_, event)| match event {
+                Event::Expression { kind: 2, id, value, .. } => Some((*id, *value)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // A fifth of 710c, adopted at the 2048 boundary. Neither configuration in
+    // this fixture is the default, so a lost snapshot cannot read as a kept one.
+    hub.run_format(1536, vec![tuning_parameter(&hub, 710.0, 0)], None, None, 512);
+    source.run_format(1536, vec![], None, None, 512);
+    // D and A, one group at raw2148, while THIS Hub block also carries 690c at
+    // its own offset0. Two fifths and three fifths from the origin, so the
+    // value the group is assigned under is visible in the bend.
+    source.run_format(
+        2048,
+        vec![note(1, 0, 62, 100, true), note(2, 0, 69, 100, true)],
+        None,
+        None,
+        512,
+    );
+    hub.run_format(2048, vec![tuning_parameter(&hub, 690.0, 0)], None, None, 512);
+    // Input2148 + D512 = raw2660, so the group completes a whole callback after
+    // the boundary that adopted 690c.
+    let group = bends(&source.run_format(2560, vec![], None, None, 512));
+    hub.run_format(2560, vec![], None, None, 512);
+    assert_eq!(
+        group,
+        [(1, 0.2), (2, 0.3)],
+        "the group keeps the 710c it was assigned under, across the boundary that adopted 690c"
+    );
+    // The same D, assigned by a Hub block that has adopted the edit.
+    let mut raw = 3072;
+    source.run_format(
+        raw,
+        vec![note(1, 0, 62, 0, false), note(2, 0, 69, 0, false)],
+        None,
+        None,
+        512,
+    );
+    hub.run_format(raw, vec![], None, None, 512);
+    raw += 512;
+    source.run_format(raw, vec![note(3, 0, 62, 0, true)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    raw += 512;
+    let after = bends(&source.run_format(raw, vec![], None, None, 512));
+    hub.run_format(raw, vec![], None, None, 512);
+    assert_eq!(after, [(3, -0.2)], "two fifths of 690c is 20 cents flat of the tempered second");
+    raw += 512;
+    source.run_format(raw, vec![note(3, 0, 62, 0, false)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    for _ in 0..4 {
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
+}
+
+#[test]
+fn production_a_host_format_reactivation_reestablishes_the_paired_session() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut source) = production_pair();
+    let phrase = |source: &Device, hub: &Device, raw: &mut i64, id: i32, key: i16, frames: u32| {
+        let mut output =
+            source.run_format(*raw, vec![note(id, 0, key, 0, true)], None, None, frames).values;
+        hub.run_format(*raw, vec![], None, None, frames);
+        for _ in 0..16 {
+            *raw += i64::from(frames);
+            output.extend(source.run_format(*raw, vec![], None, None, frames).values);
+            hub.run_format(*raw, vec![], None, None, frames);
+        }
+        *raw += i64::from(frames);
+        output.extend(
+            source.run_format(*raw, vec![note(id, 0, key, 0, false)], None, None, frames).values,
+        );
+        hub.run_format(*raw, vec![], None, None, frames);
+        for _ in 0..16 {
+            *raw += i64::from(frames);
+            output.extend(source.run_format(*raw, vec![], None, None, frames).values);
+            hub.run_format(*raw, vec![], None, None, frames);
+        }
+        output
+    };
+    let mut raw = 1536;
+    let before = phrase(&source, &hub, &mut raw, 1, 64, 512);
+    assert_eq!(before.iter().filter(|(_, event)| event.attack().is_some()).count(), 1);
+    assert_eq!(source.source_snapshot().held, 0);
+
+    // The host changes its processing format: stop, deactivate, activate,
+    // start. Nothing is outstanding, so this is a boundary and not a failure.
+    hub.reactivate_format(48000.0, 256);
+    source.reactivate_format(48000.0, 256);
+    for _ in 0..8 {
+        raw += 256;
+        source.main();
+        hub.main();
+        source.run_format(raw, vec![], None, None, 256);
+        hub.run_format(raw, vec![], None, None, 256);
+    }
+    for adopted in [hub.shared().adopted().unwrap(), source.shared().adopted().unwrap()] {
+        assert_eq!((adopted.sample_rate, adopted.max_frames), (48000.0, 256));
+        assert!(adopted.valid, "the reactivated format is adopted, not latched: {adopted:?}");
+    }
+    assert_eq!(source.source_snapshot().faults, 0, "{:?}", source.source_snapshot());
+
+    raw += 256;
+    let after = phrase(&source, &hub, &mut raw, 2, 67, 256);
+    assert_eq!(
+        after.iter().filter(|(_, event)| event.attack().is_some()).count(),
+        1,
+        "a phrase played after the reactivation sounds: {:?}",
+        source.source_snapshot()
+    );
+    assert_eq!(after.iter().filter(|(_, event)| event.release()).count(), 1);
+    assert_eq!(source.source_snapshot().held, 0);
+}
+
+#[test]
+fn a_delay_edit_leaves_participation_where_the_host_put_it() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    let wrapper = unsafe {
+        &*((*source.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
+    };
+    let (context, delay) = wrapper.test_gui_context("tuning_delay");
+    // A stepped parameter carries its step index, so the multiplier's ends are
+    // a zero for 1x buffer and fifteen for 16x -- the same two numbers as Off
+    // and On, which is what made reading this as participation invisible.
+    let steps = protocol::DELAY_MULTIPLIER_MAX - 1;
+    let mut raw = 1536;
+    // One delay edit made each of the two ways a Tune receives them: a
+    // finished slider gesture, admitted at the next capture, and plain host
+    // automation. Both are read back from both sides afterwards, because the
+    // defect moved one of them and left the other saying the opposite.
+    let edit = |raw: &mut i64, value: i32, gesture: bool, participating: bool| {
+        let automation = if gesture {
+            unsafe {
+                context.raw_begin_set_parameter(delay);
+                context.raw_set_parameter_normalized(delay, value as f32 / steps as f32);
+                context.raw_end_set_parameter(delay);
+            }
+            vec![]
+        } else {
+            vec![source.param_event(DELAY_PARAM, f64::from(value), 1)]
+        };
+        source.run_format(*raw, automation, None, None, 512);
+        hub.run_format(*raw, vec![], None, None, 512);
+        source.main();
+        *raw += 512;
+        assert_eq!(source.param_value(DELAY_PARAM), f64::from(value), "the edit was delivered");
+        assert_eq!(
+            inspect_source(&source, |source| source.participating),
+            participating,
+            "a {value}-step delay edit moved the Source's participation"
+        );
+        assert_eq!(
+            source.param_value(PARTICIPATING_PARAM),
+            f64::from(u8::from(participating)),
+            "and the host's own readback disagrees with it"
+        );
+    };
+    for gesture in [true, false] {
+        edit(&mut raw, 0, gesture, true);
+        edit(&mut raw, steps, gesture, true);
+    }
+    source.run_format(raw, vec![source.participation(false, 1)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    raw += 512;
+    assert!(!inspect_source(&source, |source| source.participating));
+    // Off is the state a delay edit used to switch back on.
+    for gesture in [true, false] {
+        edit(&mut raw, 0, gesture, false);
+        edit(&mut raw, steps, gesture, false);
+    }
+    assert_eq!(source.source_snapshot().faults, 0);
+    drop(context);
+}
+
+#[test]
+fn a_pending_delay_change_keeps_the_reported_latency_at_the_active_one() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut source) = production_pair();
+    assert_eq!(source.latency(), 512);
+    // 2x buffer, requested while this activation runs 1x, alongside a note.
+    source.run_format(
+        1536,
+        vec![note(7, 0, 60, 0, true), source.param_event(DELAY_PARAM, 1.0, 1)],
+        None,
+        None,
+        512,
+    );
+    hub.run_format(1536, vec![], None, None, 512);
+    let emitted = source.run_format(2048, vec![], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    source.main();
+    assert_eq!(emitted.values[0].0, 0, "the note still emits at input + the active 512");
+    assert_eq!(source.latency(), 512, "which is the latency the host is still told to expect");
+    assert_eq!(source._stats.restarts.load(Ordering::Relaxed), 1, "one restart is requested");
+    assert_eq!(
+        source._stats.latency_changes.load(Ordering::Relaxed),
+        1,
+        "and nothing is published"
+    );
+    assert_eq!(
+        source._stats.observed_latency.load(Ordering::Relaxed),
+        512,
+        "the only value this host has ever read is the one it is compensating for"
+    );
+    source.run_format(2560, vec![note(7, 0, 60, 0, false)], None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    for raw in [3072, 3584] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(source.source_snapshot().held, 0);
+    // The host answers the request. The multiplier is adopted whole at that
+    // boundary and the reported latency moves with it, together.
+    hub.reactivate_format(44100.0, 512);
+    source.reactivate_format(44100.0, 512);
+    assert_eq!(source.latency(), 1024);
+    assert_eq!(source._stats.latency_changes.load(Ordering::Relaxed), 2, "published exactly once");
+    assert_eq!(
+        source._stats.observed_latency.load(Ordering::Relaxed),
+        1024,
+        "and reading it the way a host does, inside the notification, finds the new delay"
+    );
+    let mut raw = 3584;
+    for _ in 0..8 {
+        raw += 512;
+        source.main();
+        hub.main();
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    raw += 512;
+    source.run_format(raw, vec![note(8, 0, 62, 0, true)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    assert!(
+        source.run_format(raw + 512, vec![], None, None, 512).values.is_empty(),
+        "input + the old 512 is now a callback short of the delay"
+    );
+    hub.run_format(raw + 512, vec![], None, None, 512);
+    let after = source.run_format(raw + 1024, vec![], None, None, 512);
+    assert_eq!(after.values[0].0, 0, "and the note emits at input + the adopted 1024");
+    assert!(after.values[0].1.attack().is_some());
+    hub.run_format(raw + 1024, vec![], None, None, 512);
+    // End the phrase rather than abandoning a held stream in the registry.
+    source.run_format(raw + 1536, vec![note(8, 0, 62, 0, false)], None, None, 512);
+    hub.run_format(raw + 1536, vec![], None, None, 512);
+    for step in 1..6 {
+        let raw = raw + 1536 + 512 * step;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(source.source_snapshot().held, 0);
+}
+
+/// What the host has been told about the latency, and what it read when it was
+/// told. A host compensates with the value it takes inside `changed()`, so a
+/// published number nobody was told about is a number nobody is using.
+fn announced(device: &Device) -> (usize, usize) {
+    (
+        device._stats.latency_changes.load(Ordering::Relaxed),
+        device._stats.observed_latency.load(Ordering::Relaxed),
+    )
+}
+fn restarts(device: &Device) -> usize {
+    device._stats.restarts.load(Ordering::Relaxed)
+}
+
+/// Notifications that reached the host outside `activate`. CLAP allows the
+/// latency to change only there, so one delivered anywhere else is one a
+/// conforming host may discard -- and a plugin that spends its notification
+/// out of phase has told nobody anything.
+fn out_of_phase(device: &Device) -> usize {
+    device._stats.out_of_phase.load(Ordering::Relaxed)
+}
+
+#[test]
+fn an_activation_announces_a_delay_whose_task_ran_while_deactivated() {
+    // Two requests, the first serviced while the activation it cannot move is
+    // still running and the second serviced in the gap between deactivation
+    // and reactivation. Neither delivery is a moment the host may be told at,
+    // so the activation that adopts the second one is left holding the only
+    // notification the host will accept.
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut source) = production_pair();
+    assert_eq!(announced(&source), (1, 512), "the first activation published its own delay");
+    // 2x, requested and delivered while active: a restart and nothing else.
+    source.run_format(1536, vec![source.param_event(DELAY_PARAM, 1.0, 1)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    source.run_format(2048, vec![], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    source.main();
+    hub.main();
+    assert_eq!(restarts(&source), 1, "the active request asks for the restart that adopts it");
+    assert_eq!(announced(&source), (1, 512));
+    // 3x, and this time the host services the task after deactivating.
+    source.run_format(2560, vec![source.param_event(DELAY_PARAM, 2.0, 1)], None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    source.run_format(3072, vec![], None, None, 512);
+    hub.run_format(3072, vec![], None, None, 512);
+    source.deactivate();
+    source.main();
+    assert_eq!(out_of_phase(&source), 0, "a task between activations tells the host nothing");
+    assert_eq!(announced(&source), (1, 512), "so the host is still on the delay it read");
+    assert_eq!(source.latency(), 512, "and still reads the one it is compensating for");
+    assert_eq!(restarts(&source), 1, "a deactivated plugin asks for no restart");
+    hub.reactivate_format(44100.0, 512);
+    source.activate_format(44100.0, 512);
+    assert_eq!(source.latency(), 1536, "the activation adopts the last request");
+    assert_eq!(
+        announced(&source),
+        (2, 1536),
+        "and is the one that tells the host, at a moment the host may be told"
+    );
+}
+
+#[test]
+fn an_activation_that_adopts_a_pending_delay_announces_it() {
+    // The host reactivates before it services `on_main_thread`, so the
+    // activation adopts the request while the task that would have announced
+    // it is still queued. Adopting it silently leaves the host compensating
+    // for the delay it last read, with the notification it is waiting for
+    // deduplicated away by the request the activation already carries.
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut source) = production_pair();
+    assert_eq!(announced(&source), (1, 512), "the first activation published its own delay");
+    assert_eq!(restarts(&source), 0);
+    source.run_format(1536, vec![source.param_event(DELAY_PARAM, 1.0, 1)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    source.run_format(2048, vec![], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    assert_eq!(announced(&source), (1, 512), "the request alone tells the host nothing");
+    assert_eq!(restarts(&source), 0, "and the task carrying it has not been delivered");
+    hub.reactivate_format(44100.0, 512);
+    source.reactivate_format(44100.0, 512);
+    assert_eq!(source.latency(), 1024, "the activation adopted the request");
+    assert_eq!(
+        announced(&source),
+        (2, 1024),
+        "and told the host, which read the adopted delay rather than the one it had"
+    );
+    // The queued task arrives after the change it was carrying was adopted.
+    source.main();
+    hub.main();
+    assert_eq!(restarts(&source), 0, "a request already adopted asks for no further restart");
+    assert_eq!(announced(&source), (2, 1024), "and is announced once, not twice");
+}
+
+#[test]
+fn a_delay_request_delivered_while_deactivated_waits_for_the_activation() {
+    // The host services `on_main_thread` between the deactivation and the
+    // activation. That is not a moment the latency may change at, so the
+    // request stays pending and the activation ahead of it is the one that
+    // adopts and announces it -- there is still no restart to ask for.
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut source) = production_pair();
+    source.run_format(1536, vec![source.param_event(DELAY_PARAM, 1.0, 1)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    source.run_format(2048, vec![], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    source.deactivate();
+    source.main();
+    assert_eq!(source.latency(), 512, "a deactivated plugin publishes nothing");
+    assert_eq!(announced(&source), (1, 512), "and announces nothing");
+    assert_eq!(restarts(&source), 0, "and asks for no restart it is already between");
+    hub.reactivate_format(44100.0, 512);
+    source.activate_format(44100.0, 512);
+    assert_eq!(source.latency(), 1024);
+    assert_eq!(
+        announced(&source),
+        (2, 1024),
+        "the activation that follows is the one that moves the value and tells the host"
+    );
+}
+
+#[test]
+fn the_last_delay_request_is_the_one_the_activation_announces() {
+    // A second edit while the restart answering the first is still outstanding.
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut source) = production_pair();
+    for (raw, value) in [(1536, 1.0), (2560, 2.0)] {
+        source.run_format(raw, vec![source.param_event(DELAY_PARAM, value, 1)], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        source.run_format(raw + 512, vec![], None, None, 512);
+        hub.run_format(raw + 512, vec![], None, None, 512);
+        source.main();
+        hub.main();
+    }
+    assert_eq!(restarts(&source), 2, "each request asks the host for the restart that adopts it");
+    assert_eq!(announced(&source), (1, 512), "and neither moves what the host is compensating for");
+    hub.reactivate_format(44100.0, 512);
+    source.reactivate_format(44100.0, 512);
+    assert_eq!(source.latency(), 1536, "the activation adopts the last request, not the first");
+    assert_eq!(announced(&source), (2, 1536), "announced once, at the value that was adopted");
+    // Down to 1x and back to 3x inside one activation. The second edit leaves
+    // the published number where it already is, so the restart it would have
+    // asked for has nothing left to adopt.
+    for (raw, value) in [(3584, 0.0), (4096, 2.0)] {
+        source.run_format(raw, vec![source.param_event(DELAY_PARAM, value, 1)], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        source.main();
+        hub.main();
+    }
+    assert_eq!(
+        restarts(&source),
+        3,
+        "the edit away asked for a restart; the edit back asks for none"
+    );
+    assert_eq!(announced(&source), (2, 1536), "with nothing to adopt, nothing is announced");
+    hub.reactivate_format(44100.0, 512);
+    source.reactivate_format(44100.0, 512);
+    assert_eq!(source.latency(), 1536);
+    assert_eq!(announced(&source), (2, 1536), "including across the activation that answers it");
 }
