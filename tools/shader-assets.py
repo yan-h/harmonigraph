@@ -82,6 +82,12 @@ def build(package, logs, assets=EMBEDDED):
                "--no-run", "--message-format=json"]
     if package == "harmonigraph-render":
         command += ["--lib", "--features", "shader-assets-tools"]
+    if package == "harmonigraph-offline":
+        # The golden tests this validates live in src/golden.rs, so they are in
+        # the bin's own harness. Naming the target keeps that the only
+        # executable: an integration test under tests/ is another one, and the
+        # unpacking below would fail on it rather than on anything real.
+        command += ["--bin", "harmonigraph-offline"]
     # Only these validation test builds select a candidate corpus. Ordinary
     # builds keep the tracked assets, even if validation is interrupted.
     environment = dict(os.environ, HARMONIGRAPH_METAL_ASSET_BUILD_DIR=str(assets.resolve()))
