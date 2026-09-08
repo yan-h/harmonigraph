@@ -29,8 +29,5 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)"
     ]
-  },
-  "skillOverrides": {
-    "delegate-with-subagents": "user-invocable-only"
   }
 }
