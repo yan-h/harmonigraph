@@ -27,17 +27,48 @@
 # `pr-hygiene` skill makes squashing the default, so four already-merged
 # PRs (#101, #103, #104, #105) sat undeletable while every gate said
 # "unmerged, keep".
-# Tier 2 therefore takes TWO signals, and a worktree needs either:
+# Tier 2 therefore takes THREE signals, and a worktree needs any one of:
 #   - HEAD is an ancestor of main. Offline, instant, covers merge-commit PRs.
 #   - a MERGED PR's head sha EQUALS this worktree's HEAD, from one
-#     `gh pr list` call (~0.9s for 300 PRs, once per run, lazy). Sha equality
+#     `gh pr list` call (~1.5s for 600 PRs, once per run, lazy). Sha equality
 #     is the safety: the worktree holds exactly what merged and nothing newer,
-#     so main's squash commit supersedes it. A worktree that committed past
-#     its merge fails this and is kept.
+#     so main's squash commit supersedes it.
+#   - every commit reachable from HEAD is reachable from main or from some
+#     RESOLVED PR head — merged or closed. See CONTAINMENT below.
 # Rejected alternatives: patch-id containment caught one of the four, because
 # main edited the same files afterwards, and cost 1.9s. "Remote branch is
 # gone" was worse — 46 of 48 merged branches are still on the remote here,
 # because --delete-branch mostly did not run.
+#
+# CONTAINMENT, and why equality alone left 17 worktrees standing on a disk at
+# 95%. Equality answers "did exactly this merge?", which is a narrower question
+# than the one tier 2 is actually asking, and it missed in two directions at
+# once (measured 2026-09-07, 29 Claude worktrees, 26 of them reclaimable):
+#   - BEHIND a merge. Five worktrees (#375, #390, #444, #505, #506) held a
+#     strict ANCESTOR of the sha that merged: the branch was pushed to, or
+#     amended, after the worktree last built, so the local ref trailed the
+#     remote. Every commit in the tree was in main, and equality still said no.
+#   - CLOSED unmerged. Sixteen more (the rejected #568 crease set, #453, #493,
+#     #683, #687, #581) belonged to PRs a human explicitly closed. Under a
+#     merged-only rule those are PERMANENT residents — no future event can ever
+#     make them eligible — so rejected experiments accumulate forever, one
+#     `target/release` apiece.
+# A closed PR is as final a verdict as a merged one; both mean nobody is coming
+# back to that worktree. What makes acting on either safe is that removal loses
+# no commits at all: `git worktree remove` KEEPS the branch ref, the remote
+# still has the branch, and GitHub keeps `refs/pull/<n>/head` even for a closed
+# PR. The only things a removal can destroy are uncommitted files and the
+# built `target/release` — which is why the clean-tree gate below stays strict,
+# and why a branch with no PR at all is still kept: an unresolved branch is
+# work in flight, and there is no verdict to read.
+#
+# Containment is ONE `git rev-list --ignore-missing --stdin --count` per
+# worktree, negating main and every resolved PR head at once. `--ignore-missing`
+# is what makes it safe to feed shas this clone may never have fetched (a
+# deleted remote branch), and `--stdin` keeps 600 shas off the argv limit. Zero
+# means the tree adds nothing to what is already resolved. A per-sha
+# `merge-base --is-ancestor` loop answers the same question and costs 300+ git
+# invocations per worktree, which is why it is not what runs here.
 #
 # WHY TIER 1 STILL EXISTS once tier 2 can see squashes: an UNFINISHED branch
 # is never removable, and its cache is still dead weight. The three fade-*
@@ -57,7 +88,8 @@
 #     Codex-managed worktree)
 #   - it is not the main checkout
 #   - it is not the worktree this session is running in
-#   - its HEAD is an ancestor of main, so the work is merged and nothing is lost
+#   - its work is RESOLVED by one of the three signals above, so the commits
+#     survive the removal in main, on the remote, or on the kept branch ref
 #   - `git status --porcelain` is empty: no uncommitted and no untracked files
 #   - it is not locked by a live SESSION — a lock whose pid is sitting in the
 #     `claude bg-spare` pool, which its claim socket still being on disk is
@@ -69,6 +101,20 @@
 # A worktree's cache is PRUNED (tier 1) on the same ownership, session and
 # live-lock checks, plus: `target/debug` itself has not been written in
 # PRUNE_IDLE_MINUTES. Merge state is deliberately not consulted.
+#
+# ORPHANS are swept last, and they are the miss no gate above could catch:
+# both tiers walk `git worktree list`, so a directory git no longer counts as a
+# worktree is not skipped for a reason — it is never looked at. Six of them
+# were sitting under .claude/worktrees on 2026-09-07, invisible to every
+# dry-run line. They arise when the admin entry in .git/worktrees is pruned
+# while the directory survives: a `git worktree prune` after the tree was moved
+# or partly deleted, or a session killed mid-teardown. The sweep runs AFTER the
+# `git worktree prune` below, so a stale admin entry is resolved into either a
+# real record or an orphan before anything is judged, and it removes only a
+# direct child that git does not list, holds no live `.git`, and has been idle
+# for MIN_IDLE_MINUTES. There is no merge question to ask: git has already
+# forgotten the worktree, so any branch it once held is reachable by name or
+# not at all, and nothing this script does changes that.
 #
 # `git worktree remove` keeps the branch ref, so merged commits stay reachable
 # and the branch can be checked out again later.
@@ -110,14 +156,22 @@ DRY_RUN=${RECLAIM_DRY_RUN:-0}
 FORCE=${RECLAIM_FORCE:-0}
 
 # The squash-merge answer, and the only thing here that touches the network.
-# One `gh pr list` call per run resolves every merged PR's head sha, which is
-# what makes a squash-merged worktree removable rather than merely prunable.
+# One `gh pr list` call per run resolves every RESOLVED PR's head sha — merged
+# and closed alike — which is what makes a squash-merged or explicitly rejected
+# worktree removable rather than merely prunable.
 # It is lazy (nothing asks until a worktree fails the ancestor check), bounded
 # (killed after GH_TIMEOUT_S), and fail-safe: any failure falls back to
 # ancestor-only, so a flaky network makes the script conservative, never wrong.
+#
+# The limit is a CEILING ON HISTORY, not a page size, and setting it too low
+# fails silently in the one direction that matters: a PR older than the newest
+# GH_PR_LIMIT is simply invisible, and its worktree reads as unresolved
+# forever. 300 was already below this repo's 530 merged PRs on 2026-09-07 —
+# everything before #261 was unreadable. Keep it comfortably above the total
+# PR count; the call is lazy and costs ~1.5s at 600.
 NO_NETWORK=${RECLAIM_NO_NETWORK:-0}
 GH_TIMEOUT_S=${RECLAIM_GH_TIMEOUT_S:-8}
-GH_PR_LIMIT=${RECLAIM_GH_PR_LIMIT:-300}
+GH_PR_LIMIT=${RECLAIM_GH_PR_LIMIT:-1000}
 
 # SessionStart delivers its payload as JSON on stdin; a hand-run has a tty and
 # must not block waiting for input that never comes.
@@ -173,7 +227,9 @@ fi
 # Sweep staging dirs a previous run left behind BEFORE the df gate: a killed
 # background delete is exactly the case where space is still held, so exiting
 # early on a "roomy" reading would strand it forever.
-for stale in "$WT_DIR"/*/target/.reclaiming-*; do
+# Both shapes: tier 1 stages a cache inside its own worktree's `target/`, tier 3
+# stages a whole orphan directory alongside its siblings in WT_DIR.
+for stale in "$WT_DIR"/*/target/.reclaiming-* "$WT_DIR"/.reclaiming-*; do
   [ -d "$stale" ] || continue
   if [ "$DRY_RUN" = 1 ]; then
     act "would sweep leftover $stale"
@@ -214,8 +270,10 @@ human() {
   }'
 }
 
-# "<branch> <sha>" per line for every merged PR, loaded at most once per run.
+# One sha per line for every merged PR, and one per line for every resolved PR
+# (merged or closed). Loaded at most once per run.
 MERGED_HEADS=""
+RESOLVED_HEADS=""
 MERGED_TRIED=0
 
 load_merged_heads() {
@@ -237,10 +295,13 @@ load_merged_heads() {
   # merged commit (pr97 and pr98 here are aliases for the heads of #97 and
   # #98). The sha alone is the whole claim — if HEAD *is* a merged PR's head
   # commit, that work merged, whatever the branch is called.
-  # --jq uses gh's embedded jq, so this needs no external jq.
-  gh pr list --state merged --limit "$GH_PR_LIMIT" \
-    --json headRefOid \
-    --jq '.[].headRefOid' >"$tmp" 2>/dev/null &
+  # --jq uses gh's embedded jq, so this needs no external jq. `--state all`
+  # rather than two calls: one round trip carries both verdicts, and OPEN is
+  # dropped here so an in-flight PR never counts as resolved.
+  gh pr list --state all --limit "$GH_PR_LIMIT" \
+    --json state,headRefOid \
+    --jq '.[] | select(.state == "MERGED" or .state == "CLOSED")
+              | "\(.state) \(.headRefOid)"' >"$tmp" 2>/dev/null &
   gh_pid=$!
 
   # Bound it by hand: macOS ships no `timeout`, and a hung network call must not
@@ -261,8 +322,9 @@ load_merged_heads() {
   wait "$gh_pid" 2>/dev/null
 
   if [ -s "$tmp" ]; then
-    MERGED_HEADS=$(cat "$tmp")
-    note "gh: $(printf '%s\n' "$MERGED_HEADS" | wc -l | tr -d ' ') merged PR head(s) resolved"
+    MERGED_HEADS=$(awk '$1 == "MERGED" {print $2}' "$tmp")
+    RESOLVED_HEADS=$(awk '{print $2}' "$tmp")
+    note "gh: $(printf '%s\n' "$RESOLVED_HEADS" | wc -l | tr -d ' ') resolved PR head(s) ($(printf '%s\n' "$MERGED_HEADS" | wc -l | tr -d ' ') merged)"
   else
     note 'gh returned nothing (offline, or not authenticated) — ancestor-only for this run'
   fi
@@ -277,6 +339,28 @@ load_merged_heads() {
 pr_merged_at_head() {
   [ -n "$MERGED_HEADS" ] || return 1
   printf '%s\n' "$MERGED_HEADS" | grep -Fxq "$1"
+}
+
+# True when every commit reachable from HEAD is already reachable from main or
+# from some resolved PR head — the worktree adds nothing unresolved to the
+# repo. This is what catches a branch that trails the sha which merged, and a
+# branch whose PR a human closed unmerged; see CONTAINMENT in the header.
+#
+# The head sha is verified to EXIST first, and that guard is load-bearing:
+# `--ignore-missing` drops an unknown POSITIVE rev as readily as an unknown
+# negative one, so an unresolvable HEAD would otherwise count zero commits and
+# read as fully contained — the one input that turns this test into a
+# rubber stamp. Bad sha in, "keep" out.
+head_contained_in_resolved() {
+  head=$1
+  [ -n "$RESOLVED_HEADS" ] || return 1
+  git -C "$ROOT" cat-file -e "$head^{commit}" 2>/dev/null || return 1
+
+  count=$( { printf '%s\n' "$head"
+             [ -n "$MAIN_REF" ] && printf '^%s\n' "$MAIN_REF"
+             printf '^%s\n' $RESOLVED_HEADS
+           } | git -C "$ROOT" rev-list --ignore-missing --stdin --count 2>/dev/null )
+  [ "$count" = 0 ]
 }
 
 # Rename aside, then delete detached. The rename is atomic within the volume,
@@ -435,11 +519,14 @@ remove_worktree() {
   name=$(basename "$path")
   [ -n "$MAIN_REF" ] || { note "no-remove $name: could not resolve main"; return 1; }
 
-  # Two independent merged-signals, because one of them cannot see a squash.
-  #   ancestor — covers merge-commit PRs, works offline, always tried first.
-  #   gh sha   — covers squash merges, which the ancestor test reads as unmerged
-  #              forever. Consulted only when ancestor says no, so the network
-  #              is untouched on a repo that merge-commits everything.
+  # Three independent resolved-signals, widening in cost order. Each is only
+  # consulted when the cheaper one above it says no, so a repo that
+  # merge-commits everything never touches the network at all.
+  #   ancestor    — covers merge-commit PRs, works offline, always tried first.
+  #   gh sha      — covers squash merges, which the ancestor test reads as
+  #                 unmerged forever.
+  #   containment — covers a branch trailing the sha that merged, and a PR
+  #                 closed unmerged. One rev-list; see CONTAINMENT in the header.
   how=""
   if git -C "$ROOT" merge-base --is-ancestor "$head" "$MAIN_REF" 2>/dev/null; then
     how="ancestor of $MAIN_REF"
@@ -447,10 +534,12 @@ remove_worktree() {
     load_merged_heads
     if pr_merged_at_head "$head"; then
       how="merged PR, head sha matches"
+    elif head_contained_in_resolved "$head"; then
+      how="every commit is in $MAIN_REF or a resolved PR"
     fi
   fi
   if [ -z "$how" ]; then
-    note "no-remove $name: not an ancestor of $MAIN_REF and no merged PR at this HEAD"
+    note "no-remove $name: unresolved — not in $MAIN_REF and not covered by any merged or closed PR"
     return 1
   fi
 
@@ -532,6 +621,61 @@ flush
 
 git -C "$ROOT" worktree prune >/dev/null 2>&1
 
+# Tier 3: directories under .claude/worktrees that git does not list. Runs after
+# the prune above so a stale admin entry has already become one or the other.
+# See ORPHANS in the header for why neither tier above can reach these.
+REGISTERED=$(git -C "$ROOT" worktree list --porcelain | awk '/^worktree /{print substr($0, 10)}')
+for path in "$WT_DIR"/*; do
+  [ -d "$path" ] || continue
+  name=$(basename "$path")
+  case "$name" in .reclaiming-*) continue ;; esac
+
+  # -F -x: a path is data, and a worktree name may hold regex metacharacters
+  # (the harness mints names like `bridge-cse_01UJ...` and `claude+branch`).
+  printf '%s\n' "$REGISTERED" | grep -Fxq "$path" && continue
+
+  # "git does not list THIS path" is not "git lists nothing under it", and
+  # conflating the two deletes a live Codex worktree. Codex's managed shape is
+  # `<id>/<repo>`, so when its root is configured below .claude/worktrees the
+  # registered worktree is the CHILD and the `<id>` directory above it is
+  # listed by nobody — an orphan by the test one line up, and not ours to
+  # remove. Anything containing a registered worktree is somebody's tree.
+  # -F: the path is data here too.
+  printf '%s\n' "$REGISTERED" | grep -Fq "$path/" && {
+    note "skip orphan $name: contains a registered worktree, so it is not Claude's to remove"
+    continue
+  }
+
+  # Never saw off the branch we are sitting on, even when git has forgotten it.
+  case "$SESSION_CWD/" in "$path"/*) continue ;; esac
+
+  # A live `.git` means git ought to know about this and something is wrong
+  # with the assumption, not with the directory. Leave it for a human.
+  if [ -e "$path/.git" ]; then
+    note "skip orphan $name: still has a .git, so git should be listing it"
+    continue
+  fi
+
+  if [ -n "$(find "$path" -maxdepth 2 -newermt "-${MIN_IDLE_MINUTES} minutes" -print -quit 2>/dev/null)" ]; then
+    note "no-remove orphan $name: touched in the last ${MIN_IDLE_MINUTES}m"
+    continue
+  fi
+
+  size_kb=$(du -sk "$path" 2>/dev/null | awk '{print $1}')
+  [ -n "$size_kb" ] || size_kb=0
+
+  if [ "$DRY_RUN" = 1 ]; then
+    act "would remove orphan $path ($(human "$size_kb")) — not a worktree git knows"
+    continue
+  fi
+
+  if detach_delete "$path"; then
+    removed=$((removed + 1))
+    freed_kb=$((freed_kb + size_kb))
+    names="$names $(printf '%s' "$name" | tr -cd 'A-Za-z0-9._-')"
+  fi
+done
+
 if [ "$DRY_RUN" = 1 ]; then
   # Report what is held rather than asserting why nothing happened: the reasons
   # differ per worktree and the per-line notes above already carry them.
@@ -553,7 +697,7 @@ fi
 # Stay silent on a no-op; SessionStart runs on every single session.
 if [ "$removed" -gt 0 ] || [ "$pruned" -gt 0 ]; then
   detail=""
-  [ "$removed" -gt 0 ] && detail="$removed merged worktree(s):$names"
+  [ "$removed" -gt 0 ] && detail="$removed resolved worktree(s):$names"
   if [ "$pruned" -gt 0 ]; then
     [ -n "$detail" ] && detail="$detail, "
     detail="${detail}${pruned} idle build cache(s)"
