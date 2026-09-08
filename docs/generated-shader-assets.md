@@ -8,6 +8,7 @@ no backend fork or generated libraries are added to the production dependency gr
 ## Recommendation and scope
 
 Make compiled Metal libraries automatically generated build assets while keeping the existing renderer.
+The isolated experiment establishes that this is feasible for the exercised renderer paths, with a substantial cache-blocked construction improvement.
 Retain one authoring copy of WGSL and the production Rust pipeline constructors.
 Let the pinned backend continue owning native bindings, vertex pulling, specialization, bounds checks and reflection.
 The initial integration should replace only the expensive source-library compilation call with an exact artifact lookup and library load.
@@ -58,7 +59,7 @@ Its outputs depend on `arrayLength`, the first/last element and an out-of-range 
 The initial two-element range was rejected by wgpu validation because the struct's vec4 prefix makes its minimum binding size 32 bytes;
 the final fixture uses valid ranges that actually reach the shader.
 
-The ordinary source-path results are:
+The source, strict asset and controlled fallback paths all produced these results:
 
 | Buffer offset | Array length | Output |
 | --- | ---: | --- |
@@ -67,8 +68,7 @@ The ordinary source-path results are:
 | 256 | 4 | `[4, 11, 44, 44]` |
 | 256 | 7 | `[7, 11, 77, 77]` |
 
-Compiled replay, production image coverage and fallback controls are executed by the workflow described below.
-Their measured results belong in the results section before treating the design as established.
+Production image coverage and fallback controls passed in the workflow described below.
 
 ## Reproduction
 
@@ -114,13 +114,84 @@ Compiler provenance is recorded in `manifest.json`.
 
 ## Results and limits
 
-The ordinary source diagnostic passed on an Apple M1 Pro, including both lengths and both offsets.
-Asset replay and image results are pending the branch's CI experiment.
+The [macOS CI experiment](https://github.com/yan-h/harmonigraph/actions/runs/34172958788) passed at probe commit `06d3f0a8`.
+The ordinary Full CI and security checks also passed at that commit.
+The subsequent documentation/evidence commit does not change the probe implementation.
 
-The probe can establish metadata preservation, actual image parity, tested-input coverage and controlled fallback behavior.
-It does not establish a current native first-visible/full-ready editor improvement, natural long-idle Bitwig behavior, unchanged steady-state GPU timing, all supported configurations, or production package installation.
-A strict pass covers the exercised tests, not every possible future shader or pane configuration.
-Source-versus-asset timing must use the same instrumented binary and explicitly account for logging and file verification.
+| Strict asset replay | Passed | Ignored | Library loads | Source compilations |
+| --- | ---: | ---: | ---: | ---: |
+| Storage-binding diagnostic | 1 | 0 | 3 | 0 |
+| Renderer suite | 243 | 8 | 11,830 | 0 |
+| Offline goldens | 5 | 2 | 126 | 0 |
+
+The same suites passed in source/export mode, and no golden was changed.
+Both missing-library and mismatched-source controls failed in strict mode;
+fallback mode reproduced all four diagnostic outputs with exactly one source compilation.
+Normal-path reflection remained present for real shadow vertex/fragment programs and the glow-gather program with two runtime-storage bindings.
+This goes beyond replaying a texture-only blur or a synthetic shader.
+
+The exported test corpus contains 70 libraries totaling 676,057 bytes, about 660 KiB before any executable packaging overhead.
+It includes test-only programs and is not a complete shipping manifest.
+The compiler was Apple Metal `32023.883` with the options documented above.
+The downloaded corpus passed SHA-256/file-set verification and then the diagnostic and all 243 renderer tests on the local Apple M1 Pro.
+That is evidence of CI-to-local library reuse for this configuration, not an OS/GPU compatibility matrix.
+The durable [validation record](evidence/generated-shader-assets/validation.txt), [CI counters](evidence/generated-shader-assets/ci-results.json) and [artifact manifest](evidence/generated-shader-assets/asset-manifest.json) preserve the results independently of the expiring CI artifact.
+
+### Startup measurements
+
+The same local release test binary ran `timing_editor_pipeline_startup` with an empty artifact directory/source fallback versus strict downloaded assets.
+Three fresh processes per mode and cache condition used alternating source/asset, asset/source, source/asset order.
+The table reports the median of the first opening in each fresh process;
+all three openings per process are retained in the [raw timings](evidence/generated-shader-assets/startup-timings.json).
+
+| Measured stage | Cache blocked, source | Cache blocked, assets | Cache available, source | Cache available, assets |
+| --- | ---: | ---: | ---: | ---: |
+| Device setup | 121.4 ms | 88.9 ms | 22.6 ms | 19.4 ms |
+| Lattice resource construction | 4,565.6 ms | 684.6 ms | 26.6 ms | 28.6 ms |
+
+Cache-blocked lattice construction fell about 85%, with source samples of 7,185.1 / 4,041.1 / 4,565.6 ms and asset samples of 646.3 / 684.6 / 737.3 ms.
+The high first source sample is retained.
+Warm-cache ranges overlap, so these samples establish no reliable warm improvement.
+Every asset process reported 156 hits and zero source compilations;
+every source process reported the reverse.
+Both modes include the hook's identity work and logging;
+asset mode additionally reads and compares source/options sidecars and loads library files.
+The separate full-corpus SHA-256 verification happens before timing.
+The local backend copy uses the same asset hook as CI, without the later reflection logging.
+
+These are headless `LatticeResources::new` measurements with BGRA8 targets, including normal translation/reflection and final pipeline creation.
+They exclude the editor window, asynchronous worker scheduling, egui setup and first-visible/full-ready presentation.
+The process-local sandbox denied reads/writes to the known Metal cache directory without deleting caches;
+it does not prove all compiler-service caches were cold or reproduce natural long-idle Bitwig behavior.
+Do not extrapolate this percentage to whole-editor startup or add it to historical #699 timing series.
+
+### Steady-state GPU sampling
+
+The existing `a_frame_of_names_at_each_kernel_costs_this_much` probe ran three alternating fresh-process pairs on the same binary, with caches available.
+Each workload used ten warmup frames followed by 120 measured frames at 768 × 768, with 30 names and 355 lit nodes.
+The table gives the median of the three per-run GPU medians.
+
+| Workload | Source | Assets |
+| --- | ---: | ---: |
+| Gaussian, live view | 0.764 ms | 0.802 ms |
+| Gaussian, top of shadow bar | 0.635 ms | 0.641 ms |
+| Distance, live view | 0.537 ms | 0.575 ms |
+| Distance, top of shadow bar | 0.649 ms | 0.564 ms |
+
+GPU timestamps cover the prepare encoder, including scene, label/shadow and bloom work;
+they exclude the final egui composite.
+The [raw results](evidence/generated-shader-assets/gpu-timings.json) retain every run and its p10/p90 spread.
+The spread and first-source-run disturbance are large enough that this does not establish unchanged GPU performance.
+Three of four medians are slightly higher with assets, while one is lower;
+controlled broader GPU measurements remain a release gate.
+No shader optimization downgrade or source rewrite was required to obtain the startup benefit.
+
+### Feasibility decision
+
+The critical library boundary works: existing constructors and backend metadata can use generated assets, pass the exercised pixel tests, handle controlled misses and substantially reduce cache-blocked construction time.
+This supports implementing the asset architecture as the preferred next investment.
+A strict suite pass covers exercised inputs, not every pane/format/variant, and does not establish current native editor readiness, unload behavior, production installation or universal GPU parity.
+The production gates below remain necessary before enabling it in a release.
 
 ## Production packaging
 
@@ -139,9 +210,20 @@ Unexpected release-coverage misses should fail validation visibly, while develop
 
 ## Subsequent decisions
 
-After the library boundary is proved, a production implementation still needs constructor enumeration, embedded assets, build integration and native cold/warm measurements.
-Preserve the existing retained-device/reopen and asynchronous-loading contracts.
-Measure active-audio contention, unload behavior, retained memory and steady-state GPU time.
+The library boundary is proved for the exercised inputs.
+A production implementation should proceed through these gates:
+
+1. Define the narrow provider boundary and upgrade contract against the pinned backend, preferably upstreamable.
+   It owns artifact lookup only; Naga and backend reflection retain their existing owners.
+2. Enumerate real constructors and supported variants, including egui, internal shaders, native/offline formats and device-dependent generation options.
+   Strict release validation must expose missing assets instead of silently warming a source cache.
+3. Automate export, compilation, verification and embedding for both binaries, with explicit toolchain/target provenance and regeneration on shader or backend changes.
+   Test development fallback and package/load behavior, including an older plugin still mapped by the host.
+4. Measure native first-visible/full-ready cold and warm startup against the current asynchronous baseline, retained-device reopen, natural long-idle Bitwig behavior, active-audio contention, unload and memory.
+   Require broader controlled GPU timings and unchanged exercised pixels before release.
+
+Stop and reassess if this needs manual per-shader binding tables or an invasive permanent backend fork.
+The prototype's small replacement point is encouraging, but it is not evidence that future backend upgrades will be free.
 
 GPU binary archives are a separate optional layer targeting final pipeline compilation.
 Apple can harvest real pipeline descriptors and generate GPU-specific archives from them.
