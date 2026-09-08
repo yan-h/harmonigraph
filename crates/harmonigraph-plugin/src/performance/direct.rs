@@ -13,10 +13,16 @@ use super::{
 };
 
 pub const OUTPUT_WINDOW: usize = 2048;
-/// The replay window for observation-owned context, sized to
-/// `CAPTURES_PER_SOURCE`: every carried change but a channel termination's
-/// arrives with a source-0 capture record standing beside it in a queue of the
-/// same length, and that queue is what latches first.
+/// The replay window for observation-owned context, one cell per input event
+/// a full callback of DIRECT can carry.
+///
+/// It is a size and not a proof. A change addresses as many cells as the
+/// observation holds voices, so one wildcard expression against a full source
+/// owes 64 of them and a capture stream that retired those lifetimes at the
+/// boundary owes one unaddressed record for the same event: no queue beside
+/// this one latches first, and the host, not this plugin, decides how many
+/// events a callback carries. What bounds the failure is [`Direct::carry`]'s
+/// surrender, not this number.
 const CARRIED_WINDOW: usize = super::protocol::CAPTURES_PER_SOURCE;
 
 /// One change the observation makes to a voice a clock boundary carried into
@@ -84,8 +90,13 @@ pub struct Direct {
     /// its own frontier: publication and sequencing advance independently, so
     /// neither can be made to read the other's cursor.
     carried: Queue<Carried, CARRIED_WINDOW>,
-    /// The replay overflowed and its order is gone with it.
-    pub carried_lost: bool,
+    /// The sample a change was heard at that the replay could not hold.
+    ///
+    /// Ownership of a cell lasts exactly as long as the observation can still
+    /// say when it changed, so this ends the carried contribution -- but at
+    /// its own sample, like every other change the replay carries, and never
+    /// ahead of an onset the cells were still standing for.
+    pub carried_lost: Option<i64>,
     /// Lifetimes at or below this were struck before the boundary that ended
     /// forwarding's ownership of them, so no capture record can address them
     /// again and the Hub carries them as observation-owned context. Everything
@@ -109,7 +120,7 @@ impl Default for Direct {
             state: State::default(),
             pending: Queue::default(),
             carried: Queue::default(),
-            carried_lost: false,
+            carried_lost: None,
             fence: 0,
             sequence: 0,
             lifetime: 0,
@@ -160,7 +171,33 @@ impl Direct {
     /// still holds may be applied to it a second time.
     pub fn start_carry(&mut self) {
         self.carried.clear();
-        self.carried_lost = false;
+        self.carried_lost = None;
+    }
+    /// True while the observation still owns this lifetime's context cell, and
+    /// therefore owes the merge every change it makes to it.
+    ///
+    /// The fence is the bound as well as the rule: a change to a lifetime
+    /// above it addresses no observation-owned cell, and before the first
+    /// boundary there are none at all, so nothing queues then. A surrender
+    /// recorded and not yet taken ends the ownership too: the merge still owes
+    /// those cells their retirement, and a change queued behind it would be
+    /// replayed into cells that retirement is about to take.
+    fn carries(&self, lifetime: u64) -> bool {
+        lifetime != 0 && lifetime <= self.fence && self.carried_lost.is_none()
+    }
+    /// Record one change to a carried voice for the merge to replay.
+    ///
+    /// No size makes the failure unreachable: a single input event changes as
+    /// many cells as the observation holds voices -- one wildcard expression
+    /// against a full source is 64 of them -- and the host decides how many
+    /// events a callback carries. So the surrender is a real path rather than
+    /// a formality, and what it owes the merge is its sample: the cells are
+    /// retired there, and the caller latches, instead of either of them
+    /// scoring an onset against what is left.
+    fn carry(&mut self, update: Carried) {
+        if self.carried.push(update).is_err() {
+            self.carried_lost = Some(update.sample);
+        }
     }
     /// The next carried change at or before `through`, removed.
     pub fn next_carried(&mut self, through: i64) -> Option<Carried> {
@@ -171,7 +208,7 @@ impl Direct {
         self.state = State::default();
         self.pending.clear();
         self.carried.clear();
-        self.carried_lost = false;
+        self.carried_lost = None;
         self.fence = 0;
         self.anchor = None;
         self.recovery = false;
@@ -200,7 +237,22 @@ impl Direct {
             return;
         };
         let mut targets = [0; 64];
-        let count = if event.attack().is_some() {
+        let count = if let Some((_, channel, note, _)) = event.attack() {
+            // `State::apply` gives an attack the slot its own channel and key
+            // already hold, so striking a key that is still down replaces the
+            // voice rather than joining it. That is a change to a fenced
+            // lifetime this event's target set never names -- the attack's own
+            // lifetime is above the fence, and the displaced one is retired --
+            // and the merge is owed it at this sample like any other.
+            let displaced = self
+                .state
+                .voices()
+                .find(|voice| voice.channel == channel && voice.note == note)
+                .map(|voice| voice.lifetime)
+                .filter(|lifetime| self.carries(*lifetime));
+            if let Some(lifetime) = displaced {
+                self.carry(Carried { sample, lifetime, player: None });
+            }
             let Some(next) = self.lifetime.checked_add(1) else {
                 self.state.complete = false;
                 self.lost = true;
@@ -270,21 +322,10 @@ impl Direct {
                 }
                 // A fenced voice is one the Hub scores from here rather than
                 // from a capture record, so every change to one is owed to the
-                // merge at the sample it was heard. The fence is the bound as
-                // well as the rule: a change to any other voice would address
-                // no observation-owned cell, and before the first boundary
-                // there are none at all, so this queue stays empty.
-                if lifetime != 0 && lifetime <= self.fence {
+                // merge at the sample it was heard.
+                if self.carries(lifetime) {
                     let player = self.state.voice(lifetime).map(|voice| voice.player_tuning);
-                    if self.carried.push(Carried { sample, lifetime, player }).is_err() {
-                        // Bounded failure: an unorderable replay ends the
-                        // carried contribution rather than freezing it at a
-                        // value the player has already left. Display,
-                        // recording and learning read `state` and keep it.
-                        self.carried.clear();
-                        self.carried_lost = true;
-                        self.fence = 0;
-                    }
+                    self.carry(Carried { sample, lifetime, player });
                 }
             }
         }

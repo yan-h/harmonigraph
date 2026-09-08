@@ -3660,3 +3660,109 @@ fn production_a_direct_key_struck_during_a_transition_takes_one_context_cell() {
         "and its own release is what takes it out again"
     );
 }
+
+/// Striking a carried key again is a change to a fenced voice that the event's
+/// own target set does not name: `State::apply` overwrites the same
+/// channel/key slot, and the attack's lifetime is above the fence. The
+/// displaced lifetime is retired, so the replay owes the merge that retirement
+/// at this sample like any other change the observation makes.
+#[test]
+fn production_a_restruck_direct_key_retires_the_carried_cell_it_replaced() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, Calibration { offset: 0 });
+    hub.activate_format(44100.0, 512);
+    let mut source = Device::new(true);
+    source.configure_format(uuid, true, Calibration { offset: 0 });
+    source.activate_format(44100.0, 512);
+    for raw in [0, 512, 1024] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let mut raw = reanchored(&hub, &source, uuid, vec![note(31, 0, 50, 1, true)]);
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        [(0, 1)],
+        "the fixture must reach a carried DIRECT voice"
+    );
+    // The player strikes the same key again without having let go of it.
+    source.run_format(raw, vec![], None, None, 512);
+    hub.run_format(raw, vec![note(32, 0, 50, 8, true)], None, None, 512);
+    raw += 512;
+    for _ in 0..6 {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+    }
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()).len(),
+        1,
+        "one physical key, one context cell: the capture stream owns the replacement, \
+         and the observation's cell for the lifetime it displaced is gone"
+    );
+    source.run_format(raw, vec![], None, None, 512);
+    hub.run_format(raw, vec![note(32, 0, 50, 0, false)], None, None, 512);
+    raw += 512;
+    settle(&hub, &source, raw, vec![]);
+    assert!(
+        inspect_hub(&hub, |hub| hub.test_context()).is_empty(),
+        "and the release of the replacement empties the context: a cell the replacement \
+         never owned would outlive it and score every assignment afterwards"
+    );
+    assert_eq!(source.source_snapshot().faults, 0);
+}
+
+/// Sixty-four carried keys and a burst of wildcard tuning expressions: each
+/// expression addresses every one of them, so seventeen of them are 1,088
+/// changes owed to a 1,024-cell replay. Forwarding retired those lifetimes at
+/// the boundary, so the same seventeen events are seventeen unaddressed
+/// captures -- the capture queue of the same length is nowhere near full, and
+/// nothing else stands between this and losing the replay.
+#[test]
+fn production_a_lost_direct_replay_is_a_fault_at_the_sample_it_was_lost_at() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, Calibration { offset: 0 });
+    hub.activate_format(44100.0, 512);
+    let mut source = Device::new(true);
+    source.configure_format(uuid, true, Calibration { offset: 0 });
+    source.activate_format(44100.0, 512);
+    for raw in [0, 512, 1024] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let held = (0..64)
+        .map(|index| note(100 + index, 0, 24 + index as i16, 1 + index as u32, true))
+        .collect();
+    let raw = reanchored(&hub, &source, uuid, held);
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context().len()),
+        64,
+        "the fixture must carry a full source of DIRECT voices"
+    );
+    let before = inspect_hub(&hub, |hub| hub.test_policy_counts());
+    // The Tune's onset at the callback's head; the burst 400 frames later, in
+    // the Hub's own numbering, which the boundary moved to +64.
+    source.run_format(raw, vec![note(7, 0, 52, 64, true)], None, None, 512);
+    hub.run_format(raw, (0..17).map(|_| expression(-1, 0.02, 400)).collect(), None, None, 512);
+    let after = inspect_hub(&hub, |hub| hub.test_policy_counts());
+    assert_eq!(
+        (after[0] - before[0], after[1] - before[1]),
+        (1, 64),
+        "one assignment, scored against every carried key: it stands 400 samples before          the burst, and a surrender applied at the front this pass reached instead of at          the sample it happened would take them all out from under it"
+    );
+    assert!(
+        inspect_hub(&hub, |hub| hub.test_context().iter().all(|(source, _)| *source != 0)),
+        "and past that sample they are gone: the observation cannot say when a carried          cell changes any more, so it stops owning one"
+    );
+    assert_ne!(
+        inspect_hub(&hub, |hub| hub.direct.test_snapshot().faults) & source::STORAGE_FAULT,
+        0,
+        "audibly: a bounded store that could not hold what it was given latches, rather          than every assignment after this scoring against a context missing the keys the          player is still holding"
+    );
+    drop(source);
+    drop(hub);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}

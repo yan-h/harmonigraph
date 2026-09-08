@@ -237,18 +237,17 @@ impl Sequencer {
     ///
     /// Nothing here creates a cell, so a note struck after the boundary
     /// belongs to the capture stream like every other note.
-    pub(super) fn apply_observed(&mut self, direct: &mut Direct, through: i64) {
-        if std::mem::take(&mut direct.carried_lost) {
-            // The replay overflowed, so its order is gone. End the carried
-            // contribution rather than freeze it at a value the player has
-            // already left; display, recording and learning read the
-            // observation's own state and keep it.
-            for cell in self.context.iter_mut() {
-                if cell.is_some_and(|voice| voice.observed) {
-                    *cell = None;
-                }
-            }
-        }
+    ///
+    /// False where the replay was lost. The surrender is a change like the
+    /// rest of them and takes the same rule: everything the queue still holds
+    /// is ordered and still true, so it lands first, and the cells go at the
+    /// sample the loss happened at rather than at whatever front this pass has
+    /// reached. Then it is the caller's, because a context missing keys the
+    /// player is still holding must stop assignment rather than quietly score
+    /// against what is left. What display, recording and learning read is the
+    /// observation's own state, and that is untouched.
+    #[must_use]
+    pub(super) fn apply_observed(&mut self, direct: &mut Direct, through: i64) -> bool {
         while let Some(update) = direct.next_carried(through) {
             let Some(cell) = self
                 .context
@@ -262,6 +261,16 @@ impl Sequencer {
                 Some(player) => cell.as_mut().unwrap().tune(player),
             }
         }
+        if direct.carried_lost.is_none_or(|sample| sample > through) {
+            return true;
+        }
+        direct.carried_lost = None;
+        for cell in self.context.iter_mut() {
+            if cell.is_some_and(|voice| voice.observed) {
+                *cell = None;
+            }
+        }
+        false
     }
     /// A settled reset retires the cohort still in flight along with the
     /// session that owned it.
@@ -674,7 +683,13 @@ impl Hub {
             // the copied records take. `finalized` is how far this pass has
             // proved input complete, so everything at or before it is settled
             // history and everything after it is still the callback's future.
-            self.sequencer.apply_observed(&mut owner.direct, finalized);
+            if !self.sequencer.apply_observed(&mut owner.direct, finalized) {
+                // A bounded store could not hold what it was given, which is
+                // the same failure `same_sample_records` latches for below and
+                // takes the same latch. The one thing it must not be is quiet.
+                self.configuration_exhausted();
+                return;
+            }
             let Some(sample) = sample.filter(|_| boundary < membership.through) else { return };
             // Collection and assembly spend one allowance, so a callback that
             // spent most of it collecting cannot be trusted to finish taking
