@@ -45,17 +45,6 @@ struct OctaveParams {
     bounds: array<vec4<f32>, 3>,
 };
 
-struct ShimmerParams {
-    @align(16) slide: f32,
-    period: f32,
-    intensity: f32,
-    softness: f32,
-    pattern: f32,
-    padding0: f32,
-    padding1: f32,
-    padding2: f32,
-};
-
 struct SpectralParams {
     @align(16) inner: f32,
     outer: f32,
@@ -101,7 +90,6 @@ struct Uniforms {
     node: NodeParams,
     marker: MarkerParams,
     octave: OctaveParams,
-    shimmer: ShimmerParams,
     spectral: SpectralParams,
     glow: GlowParams,
     geometry_shadow: ShadowParams,
@@ -602,14 +590,6 @@ struct VsOut {
     // The circle the node fits inside (`node_rim`), in this node's uv —
     // computed once in the vertex shader because the billboard is sized on it.
     @location(11) @interpolate(flat) rim: f32,
-    // Where this fragment sits on the plane the billboards face, in world
-    // units: its world position resolved onto the camera's own right/up
-    // axes. Every billboard faces that same plane, so this is ONE coordinate
-    // system spanning the whole lattice — which is what lets the shimmer be
-    // a single sheet of bands crossing node after node instead of a copy per
-    // node. Interpolated rather than flat for the same reason: a band has to
-    // cross a node, not step from one to the next.
-    @location(13) field: vec2<f32>,
     // How much of the audio ring this node wears (see Instance::ring), which
     // multiplies the ring's coverage and nothing else on the node.
     @location(14) @interpolate(flat) ring: f32,
@@ -702,8 +682,6 @@ fn vs_node_cell(
         delta.x * up.y - delta.y * up.x,
         right.x * delta.y - right.y * delta.x,
     ) / stable_det;
-    out.field = vec2<f32>(dot(inst.world_pos, u.camera.right.xyz), dot(inst.world_pos, u.camera.up.xyz))
-        + out.uv * uv_world;
 
     out.clip_pos =
         select(no_quad(), cell_clip(texel, u.shadow_target.atlas_texels, 1.0), cell_packed(box.cell));
@@ -780,11 +758,6 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     // PANE's, which is where every draw that gets no further than here lands.
     out.shadow_box = vec4<f32>(0.0);
     out.shadow_at = vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    // The shimmer's shared coordinate — see VsOut::field. Taken off the
-    // CORNER's world position rather than the node's center, so the field
-    // varies across the quad and the interpolator hands the fragment shader
-    // the real plane position of every pixel.
-    out.field = vec2<f32>(dot(world, u.camera.right.xyz), dot(world, u.camera.up.xyz));
     return out;
 }
 
@@ -1001,403 +974,6 @@ fn oct_arc_coverage(edges: vec2<f32>, uv: vec2<f32>, aa: f32) -> f32 {
     let s1 = smoothstep(-aa, aa, c1);
     let s2 = smoothstep(-aa, aa, -c2);
     return select(s1 * s2, 1.0 - (1.0 - s1) * (1.0 - s2), edges.x - edges.y > TAU * 0.5);
-}
-
-// The shimmer's pattern selector (u.shimmer.pattern — see `Pulse`).
-fn pulse_marks_mode() -> u32 {
-    return u32(u.shimmer.pattern + 0.5);
-}
-
-// ---- Shimmer: one sheet of soft light over the whole lattice --------------
-// Every pulse mode but 0, and the same animation in each: a pattern of light
-// laid over the layer, travelling. What the mode picks is its SHAPE.
-//
-// WHICH pixels it covers is not quite the same question. The sheet reaches
-// every octave slice a note currently lights (`lit_slice` in `node_ink`), and
-// the strip a melody or bass mark extends past the band as well, because a
-// mark is one slice in two pieces rather than the outer piece alone. A slice
-// with no note sounding and no mark extending it draws steady.
-//
-// The field is SHARED. Every node samples the same sheet at its own place on
-// `in.field` — the plane the billboards face, in world units — so the light
-// crosses the lattice as one thing rather than each node running a copy of it
-// inside its own uv, which would read as many small identical animations
-// rather than one big one.
-//
-// There is no texture, for the same reason there is no per-node phase: every
-// pattern here is a handful of dot products, sines and one power, so the
-// shared sheet is a few lines of arithmetic instead of an upload, a sampler
-// and a bind group. It is also seamless and resolution-free, which a scrolled
-// image is not — and being built from sines rather than sampled is what lets
-// it be band-limited honestly below.
-//
-// World units rather than screen pixels: the DAW window and a 1080p offline
-// render then draw the same pattern at the same size ON THE LATTICE, where a
-// period in pixels would lay a different number of cells across the picture
-// in each — the same look in the plugin and in the exported video is worth
-// more here than a pattern that holds still while the camera moves. Both the
-// settings below are in those units for that reason.
-//
-// Distance from one bright peak to the next (u.shimmer.period, the view's Width
-// bar), and how far the sheet has travelled by now (u.shimmer.slide, the Speed bar
-// against the clock, multiplied out on the CPU). The pair sizes and moves ONE
-// shape: the softness below is what shares the period out between the lit part
-// and the dark, so a wider setting widens both together rather than spacing out
-// peaks of a fixed size. See `ViewConfig::shimmer_width` for what a setting
-// under the node spacing costs.
-fn shimmer_period() -> f32 {
-    // The scene clamps this well clear of zero; the floor is here so a hand-
-    // built Scene in a test cannot divide by it either.
-    return max(u.shimmer.period, 0.01);
-}
-// The exponent the raised cosine is taken to, from the Softness bar
-// (u.shimmer.softness): 8 at 0, 1 at 1, log-spaced so equal drags are equal RATIOS of
-// sharpness rather than equal steps of an exponent, which is not a scale
-// anyone reads by eye.
-//
-// It is the whole of what the bar means, and the two ends are different
-// pictures. High up, the pattern IS the cosine: every point of the period is
-// on its way somewhere and the brightest part fades into the clearest across
-// the whole gap, which is the gradual sweep. Low down the peak narrows to a
-// crest on a layer otherwise at rest — a hard band with edges, and at a tight
-// width a stripe laid on the layer rather than light crossing it.
-//
-// Clamped rather than trusted to the scene's clamp, because the range is what
-// keeps the shape a shape: below 1 the exponent would widen the lit part past
-// the dark and invert the pattern into holes.
-const SHIMMER_SHARP_MAX: f32 = 3.0;
-fn shimmer_sharpness() -> f32 {
-    return exp2(SHIMMER_SHARP_MAX * (1.0 - clamp(u.shimmer.softness, 0.0, 1.0)));
-}
-// What a peak is worth at intensity 1, as the natural log of the gain from the
-// sheet's trough to its crest: an EXPOSURE, not an amount of light to add.
-//
-// A multiply and not an addition, and that is what the sheet MEANS rather than
-// how it is arithmetically spelled. The values here are gamma-encoded — the
-// half-float working targets and the host's UNORM surface are both non-sRGB, so
-// nothing decodes on the way in — and a channel ratio therefore remains the
-// same through every pass: while it fits, the sheet slides a color along its
-// own chromaticity, holding hue and saturation exactly at every phase. That is
-// what light falling on a surface does, and it is the model that keeps the
-// sheet ONE SIZE, because a ratio is the same ratio on every color where an
-// amount of light is not.
-//
-// It does not always fit, and `shimmer_light` is where that is dealt with: a
-// crest with nowhere left to go pales toward white rather than clipping. So the
-// honest claim is that hue is held — 0.7 and 5.0 degrees across the ramp's two
-// ends at Intensity 1 — and that chroma is what a bright crest spends, keeping
-// 88% and 57%.
-//
-// The two other shapes spend it worse. A mix toward white drains chroma to 15%
-// at EVERY point on the ramp, bright crest or dark trough alike — a ring under
-// a peak is bleached rather than lit, and on a dark saturated color bleaching is
-// most of what there is to see. An addition holds the channel GAPS instead,
-// which is the same thing until a channel saturates: 0.4 of added light fits the
-// headroom of exactly one color on the default ramp, so the other 63 clip at
-// Intensity 1, and a clip is asymmetric — the channels with room go on rising
-// and the one without does not. That costs chroma AND swings the hue 15 degrees
-// at the ramp's bright end, which a lerp does not do.
-//
-// The SIZE is in contrast, which is the currency a texture this fine is seen
-// in, and choosing it is the whole of what this constant decides. An addition
-// is near-uniform in the `L*` it ADDS — 20.8 to 23.9 across the ramp at the
-// fresh view's Intensity, a 13% spread, which is the property an addition is
-// tuned to hold — but the ratio between a crest and its trough falls from
-// 0.508 at the ramp's dark end to 0.367 at its bright one, a 29% decline. A
-// moving texture is read by that ratio and not by the `L*` difference, which
-// is why such a sheet reads weaker on the ramp's bright half however uniform
-// its added light is. One exposure everywhere makes the ratio the constant
-// instead, at a 13% spread of its own. The trade runs the other way — the
-// `L*` a peak is worth varies so the ratio can hold — and that is the right
-// way round for what the eye is doing here. Both halves are measured in
-// `the_sweep_is_worth_the_same_contrast_on_a_dark_color_as_on_a_bright_one` and
-// `a_ring_keeps_its_color_under_a_sweep_peak`.
-//
-// 0.873 sizes a peak at the fresh view's Intensity to what an added-light
-// sheet is worth at mid-ramp, so a saved view's Intensity keeps meaning about
-// the size it was dialled at.
-const SHIMMER_EXPOSURE: f32 = 0.873;
-// The most LIGHT a crest may ask for, as the luma of the layer under it. Where
-// a swing would take a layer past this, it slides down until the crest lands
-// here instead (see `shimmer_light`).
-//
-// This is the knob on a three-way trade with no free corner, because the sRGB
-// gamut is what sets it: a sheet can be one size everywhere, leave the troughs
-// alone, and keep the color — any two, never all three. The ramp's bright end
-// carries a luma of 0.64 in the scale this arithmetic runs on, and one uniform
-// peak wants half again more light than the display has — and what room there
-// is near white leaves that hue almost no chroma to be at. Something gives,
-// and this says what.
-//
-// Measured across the default ramp at the fresh view's Intensity, against an
-// added light (which darkens 5.0, spreads 29%, keeps 80% of the chroma and
-// swings 6.0 degrees). The trough figures model `lit` as the DECODED colors'
-// linear luminance (bright end 0.38, which clears the slide threshold for one
-// color); the shader dots the stored encoded values themselves (bright end
-// 0.64), and its slide compounds through the display transfer into a deeper
-// ratio in light — so every row's trough cost runs higher on screen than its
-// figure says, and what the table carries is the comparison between shapes,
-// not the prices. The first three rows are a fixed FRACTION
-// of the shortfall taken as slide instead, which is the other shape this
-// could have; the ceiling is the rest:
-//
-//                    darkens by   spread   worst chroma   worst hue
-//   quarter-slide       4.3 L*      11%        29%           3.2
-//   half-slide          8.3 L*       8%        65%           2.5
-//   full slide         15.2 L*       3%       112%           0.3
-//   ceiling 0.95        3.8 L*      13%        25%           3.6
-//   ceiling 0.90       10.1 L*      15%        43%           3.6
-//
-// A ceiling and not a fraction, because a fraction does not know how big the
-// swing is and this does. At the TOP of the Intensity bar the quarter-slide
-// blows out — 0% of the chroma left and 41 degrees of hue, no better than the
-// addition's 37 — where the ceiling still holds 12% and 6.4 degrees, because
-// it goes on sliding exactly as far as the growing swing needs. One constant
-// that behaves at both ends of a bar beats one tuned for the middle of it.
-//
-// 0.95 leaves the slide engaged over the ramp's upper half. The swing fits
-// under the ceiling up to a luma of CEILING / e^swing — about 0.40 at
-// Intensity 1 — so below that a trough IS the steady layer; mid-ramp (0.45)
-// pays about 4 `L*` of trough for its crest, and the bright end (0.64) pays
-// about 15, most of its swing arriving as shade.
-// `between_peaks_the_layer_sits_at_its_own_color` pins those three measured
-// readings. What the slide buys is the crest staying a color — what a bright
-// crest still cannot take as light it gives up as chroma — and moving the
-// ceiling trades the two across the board: lower is darker troughs and more
-// chroma kept at the top of the ramp.
-const SHIMMER_CEILING: f32 = 0.95;
-// sRGB's own luminance row, for the ceiling above and the desaturation below.
-// Weighted rather than a plain mean so a blown yellow pales toward the white
-// its own light names, rather than toward a grey darker than it started.
-const SHIMMER_LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
-// How much of that exposure this view asks for (u.shimmer.intensity, the Intensity bar).
-// One number scaling one thing, where an added-light model has a brightness
-// and a coverage fade to keep in step: the sheet is one shape at every setting,
-// and 0 leaves `shimmer_light` returning the layer exactly as it draws
-// unshimmered — from the bar rather than from the mode.
-fn shimmer_depth() -> f32 {
-    return max(u.shimmer.intensity, 0.0);
-}
-// Which way the sheet is laid and travels. A diagonal because the lattice's
-// own structure is upright — its rows of fifths and thirds — so a pattern
-// along either axis would run parallel to something already in the picture and
-// read as part of it.
-const SHIMMER_ANGLE: f32 = 0.375 * TAU;
-// Where one fragment's shimmer stops being resolvable: how much of a period
-// a single pixel spans. Below the first the sheet is drawn at full strength;
-// past the second it is gone, and between them it fades.
-//
-// The upper bound is Nyquist — half a period to a pixel is the tightest a
-// sampled sine can mean anything at all, and past it the pattern does not get
-// finer, it gets WRONG: a moire of the sampling grid, which crawls as the
-// camera moves and lands differently in the DAW window than in a render of
-// another size. So the sheet is faded to nothing rather than aliased, and a
-// width dialed past what the zoom can carry settles to the layer's own steady
-// look. The lower bound sits well short of Nyquist so the fade is finishing
-// where the moire would be starting, rather than racing it.
-//
-// Both are scaled by a ROOT TWO the Width bar never sees, because the period
-// the bar sets is not every pattern's finest feature. Checker multiplies two
-// crossed gratings into their sum and difference frequencies, and those run at
-// k*sqrt(2) — so a Checker at the bar's Nyquist is already half a period past
-// its own. The row is faded on its tightest member rather than per pattern:
-// one fade for one sheet, and what Bands gives up for it is a slightly earlier
-// finish at a width no shot is framed for anyway.
-const SHIMMER_RESOLVE_FULL: f32 = 0.14;
-const SHIMMER_RESOLVE_GONE: f32 = 0.35;
-// Turn a unit vector by `angle`, for the gratings below.
-fn rotated(v: vec2<f32>, angle: f32) -> vec2<f32> {
-    let c = cos(angle);
-    let s = sin(angle);
-    return vec2<f32>(v.x * c - v.y * s, v.x * s + v.y * c);
-}
-// The signed pattern at `p`, in -1..1 — mode by mode, and every one of them
-// built out of gratings of the SAME period, so the Width bar means one thing
-// across the row. `d` is the direction the sheet is laid along and `n` its
-// perpendicular.
-//
-// The two that cross gratings are the tessellating family the checkerboard
-// belongs to: multiply two and you get its cells, sum three at sixty degrees
-// and the cells come out hexagonal — which lands on the lattice better than
-// squares do, its rows running three ways rather than two.
-fn shimmer_pattern(mode: u32, p: vec2<f32>, d: vec2<f32>, n: vec2<f32>) -> f32 {
-    let k = TAU / shimmer_period();
-    if mode == 2u {
-        // Checker: two gratings at right angles, multiplied. The product is
-        // +1 where both crests meet AND where both troughs do, which is the
-        // checkerboard's two colors of cell; it crosses zero along the lines
-        // between them.
-        return sin(k * dot(p, d)) * sin(k * dot(p, n));
-    }
-    if mode == 3u {
-        // Hex: three gratings sixty degrees apart, summed. Their wavevectors
-        // close a triangle (the middle one is the sum of the outer two), so
-        // the three crests can meet, and where they do the sum reaches 3
-        // against a floor of -1.5 — bright cells rarer and sharper than the
-        // dark between them, which IS the honeycomb. Mapped through that
-        // range rather than divided by the count, which would leave the
-        // pattern unable to reach either end.
-        //
-        // The outer two gratings take the travel through a cos of sixty
-        // degrees, so along their own axes the sheet moves at HALF its own
-        // rate and this pattern only closes a cycle over two periods. That
-        // is what `Scene::shimmer_slide` reduces against, and it is the one
-        // arm here that needs the two: changing these angles changes the
-        // modulus, and reducing by one period flips this pattern's sign at
-        // every wrap.
-        //
-        // COSINES, where every other pattern here takes sines, and the
-        // asymmetry is the whole point: sin(A) + sin(C) + sin(A+C) is an odd
-        // function, so it runs a symmetric ±3sqrt(3)/2 with as many dark
-        // blobs as bright and no crest that ever reaches full. Only the
-        // cosine form has the crest the honeycomb is made of, and it is the
-        // one the -1.5..3 above is the range of.
-        let a = cos(k * dot(p, d));
-        let b = cos(k * dot(p, rotated(d, TAU / 6.0)));
-        let c = cos(k * dot(p, rotated(d, TAU / 3.0)));
-        return (a + b + c - 0.75) / 2.25;
-    }
-    // Bands (mode 1): one grating along the sheet's own direction.
-    return sin(k * dot(p, d));
-}
-// The sheet at this fragment, as (swing, shape): the log gain from its trough
-// to its crest, and where in that swing this fragment sits, 0 at a trough and 1
-// at a crest. `shimmer_light` is what turns the pair into a color.
-//
-// ONE term, where an added-light sheet needs two — a brightness and a
-// coverage scale. An added light clips at white, so on color alone a layer
-// already near it would barely move and its dip would have to be an
-// opacity's job; an exposure moves a near-white glyph as readily as the dark
-// ground beside it, because it is a ratio rather than an amount.
-// Coverage is the layer's own, untouched by the sheet, which is what keeps
-// `paint_reach` exact: nothing here can make a layer cover more than it does
-// steady, since the sheet never touches coverage at all.
-//
-// A swing of 0 in mode 0, which `shimmer_light` reads as the identity, so a
-// caller applies it unconditionally and Off stays byte-for-byte the look it
-// was.
-//
-// `footprint` is how much of the field one pixel spans, in the field's own
-// world units, taken with the other derivatives at the top of the fragment
-// body — derivatives have to be in uniform control flow, and by here the
-// shader has already been free to discard.
-//
-// The direction is built from SHIMMER_ANGLE here rather than passed in, so the
-// cos/sin that make it sit AFTER the early return. Handed in as a vector they
-// would be evaluated at the call site in every mode, and Off would be free
-// only if the backend inlined this and folded the constant — which is the sort
-// of thing that holds on one driver and not the next.
-fn shimmer_terms(mode: u32, field: vec2<f32>, footprint: f32) -> vec2<f32> {
-    if mode == 0u {
-        return vec2<f32>(0.0, 0.0);
-    }
-    let period = shimmer_period();
-    let dir = vec2<f32>(cos(SHIMMER_ANGLE), sin(SHIMMER_ANGLE));
-    let norm = vec2<f32>(-dir.y, dir.x);
-    // How far the sheet has slid — arriving whole rather than as a clock
-    // times a speed, and already reduced onto one cycle of the pattern. The
-    // reduction is exact (every arm below is periodic in it) and it is done
-    // in f64 on the CPU, where a song position still HAS the resolution to
-    // phase a band with. See `Scene::shimmer_slide`.
-    let slide = u.shimmer.slide;
-    // The field slid along the sheet's own direction, which is the one
-    // position every pattern is built on.
-    let p = field - dir * slide;
-    let pattern = shimmer_pattern(mode, p, dir, norm);
-    // Clamped because the power below is `pow`, which is undefined for a
-    // negative base — and sin is only promised to land NEAR its range, so a
-    // wave of -1e-8 at a trough would put a NaN into the node's color.
-    let wave = clamp(0.5 + 0.5 * pattern, 0.0, 1.0);
-    let band = pow(wave, shimmer_sharpness());
-    // Fade the sheet out as its period closes on the pixel — see
-    // SHIMMER_RESOLVE_*. It rides on the DEPTH rather than on the pattern's
-    // amplitude, so what a sheet running out of resolution settles onto is
-    // the identity below — the layer's own steady look. Damping the amplitude
-    // instead would leave `wave` at a half and the layer under a flat pale
-    // haze at a flat coverage dip: the average of a sheet nobody can see, and
-    // a picture that never returns to the one Off draws.
-    let resolve = 1.0 - smoothstep(
-        SHIMMER_RESOLVE_FULL,
-        SHIMMER_RESOLVE_GONE,
-        footprint / period,
-    );
-    let depth = shimmer_depth() * resolve;
-    // No clamp on the swing, and none is needed: an exposure has no value that
-    // stops meaning something the way an added light past 1 or a coverage below
-    // 0 does, and `shimmer_light` fits whatever arrives to the layer's own
-    // headroom. `ViewConfig::sanitize` checks this intensity for finiteness and
-    // not for range, so what reaches here from a saved view can be larger than
-    // the bar's own top of 2 — a very large swing is a very dark trough, which
-    // is a picture, where a clamp would be a flat lid over one.
-    return vec2<f32>(SHIMMER_EXPOSURE * depth, band);
-}
-// The layer's color under the sheet: `rgb` scaled by the gain the pair from
-// `shimmer_terms` asks for at this fragment.
-//
-// The gamut handling, and the whole of it: a crest may not take a channel past
-// 1, and this is what happens instead of the clip an addition takes there.
-//
-// Two things share the shortfall. The swing SLIDES DOWN, but only so far as
-// `SHIMMER_CEILING` asks — which costs the troughs some light and nothing else,
-// since a slid swing is the same RATIO between crest and trough and so still
-// one size. And whatever crest still overflows a channel is DESATURATED toward
-// the grey of its own light rather than clipped, which costs that crest some
-// chroma and buys back the light the slide gave up.
-//
-// The ceiling is read against the layer's own light, never below it: a layer
-// already brighter than the ceiling is not asked to be dimmer than it draws, it
-// simply has nowhere up to go and takes the whole swing as shade. That is what
-// keeps this continuous as the swing closes on zero, where a fixed ceiling
-// would step a near-white layer down the moment a mode was switched on.
-//
-// The desaturation is the smaller move of the two and it is worth being exact
-// about why it is not a clip. A per-channel clip stops the channel that is
-// full and lets the others go on rising, so the color turns as it brightens —
-// 15 degrees of hue at the ramp's bright end, which is #235. Mixing all three
-// toward one grey moves them TOGETHER: the order of the channels is preserved,
-// because mixing toward a constant is monotone, so the color pales toward white
-// along its own hue instead of rotating away from it. `t` is the least mix that
-// brings the top channel back to 1, so nothing is paled further than it must
-// be, and the result reads as a highlight blowing out rather than as a ring
-// changing color.
-//
-// `rgb` is read per LAYER rather than once per fragment: a near-white octave
-// glyph and a ramp color have different room, and one fit for both would clip
-// whichever it was not measured on. A glyph at the top of the pitch ramp has
-// almost none — the case an added light cannot move at all, and the reason an
-// additive sheet needs the coverage dip this model does without.
-//
-// The early return is the identity, and it has to be exact rather than nearly
-// so: Off and Intensity 0 both arrive here as a swing of 0, and every layer
-// below premultiplies its color by its coverage, so a color coming back a
-// rounding under itself would show as a mark drawn dimmer than the bar says.
-fn shimmer_light(rgb: vec3<f32>, terms: vec2<f32>) -> vec3<f32> {
-    let a = terms.x;
-    if a <= 0.0 {
-        return rgb;
-    }
-    // The floor keeps the log finite on a black layer, which has no light to
-    // lose and nowhere it needs sliding to.
-    let lit = max(dot(rgb, SHIMMER_LUMA), 1e-4);
-    let slide = min(0.0, log(max(SHIMMER_CEILING, lit) / lit) - a);
-    let v = rgb * exp(slide + a * terms.y);
-    let over = max(max(v.r, v.g), v.b);
-    if over <= 1.0 {
-        return v;
-    }
-    // The least mix toward grey that brings the full channel back to 1. Mixing
-    // all three toward one value moves them TOGETHER, so their order — and with
-    // it the hue — survives, where a per-channel clip stops the full one and
-    // lets the others climb past it, which is the 15 degrees in #235.
-    let grey = dot(v, SHIMMER_LUMA);
-    let t = clamp((over - 1.0) / max(over - grey, 1e-4), 0.0, 1.0);
-    // The slide keeps `grey` at or under the ceiling for any in-gamut layer
-    // at any swing — the crest's luma is capped at max(SHIMMER_CEILING, lit)
-    // by construction — and the mix lands the top channel at exactly 1. The
-    // clamp is rounding insurance on the exp/log round trip, and the honest
-    // end for a layer handed in already brighter than white, whose grey sits
-    // past 1 before the sheet touches it.
-    return min(mix(v, vec3<f32>(grey), t), vec3<f32>(1.0));
 }
 
 // ---- Outer octave layer ----------------------------------------------------
@@ -2095,8 +1671,6 @@ struct NodeGeom {
     d: f32,
     /// The screen-constant softness every shape edge is taken over, in uv.
     aa: f32,
-    /// How much of the shimmer's shared field one pixel spans, in world units.
-    field_step: f32,
     /// Where this node's ring sits — which octaves it draws and how far it is
     /// turned. Left at nothing where `paints` is false, no sector being drawn.
     oct: OctRing,
@@ -2113,21 +1687,12 @@ fn node_geom(in: VsOut, analytic: bool) -> NodeGeom {
     // surface this draw is landing on (`aa_width`). Shape edges below use
     // this instead of fixed-uv smoothsteps.
     let aa = aa_width(fwidth(in.uv.x), in.shadow_at.w);
-    // How much of the shimmer's shared field one pixel spans, in that field's
-    // own world units — what tells `shimmer_terms` when a pattern has run out
-    // of pixels to be drawn in. Taken here, beside `aa` and for the same
-    // reason: it is a derivative, and by the time the sheet is wanted the
-    // shader has already been free to discard. The field's axes are the
-    // camera's own right and up, which the screen's x and y run along, so the
-    // larger of the two steps IS the world size of a pixel.
-    let field_fw = fwidth(in.field);
-    let field_step = max(field_fw.x, field_fw.y);
 
     // Outside everything this node can paint. `fwidth` above is taken first
     // and in uniform control flow, as its comment requires; from here on the
     // shader is free to leave.
     if EARLY_OUT && !analytic && d > paint_reach(in, aa) {
-        return NodeGeom(d, aa, field_step, OctRing(0, 0.0), false);
+        return NodeGeom(d, aa, OctRing(0, 0.0), false);
     }
 
     // An idle node paints NOTHING but its audio ring — no glyphs (a ghost needs
@@ -2167,7 +1732,7 @@ fn node_geom(in: VsOut, analytic: bool) -> NodeGeom {
         && in.params.z <= 0.0
         && (in.octaves.x | in.octaves.y | in.octaves.z) == 0u
     {
-        return NodeGeom(d, aa, field_step, OctRing(0, 0.0), false);
+        return NodeGeom(d, aa, OctRing(0, 0.0), false);
     }
 
     // Where THIS node's ring sits — which octaves it draws and how far it is
@@ -2178,7 +1743,7 @@ fn node_geom(in: VsOut, analytic: bool) -> NodeGeom {
     // computed dozens of times over. After the idle branch above, which paints
     // no sector at all.
     let oct = oct_ring(in.cents);
-    return NodeGeom(d, aa, field_step, oct, true);
+    return NodeGeom(d, aa, oct, true);
 }
 
 // What a node paints of itself at one fragment, and what that ink IS.
@@ -2225,7 +1790,6 @@ fn node_ink(
     in: VsOut,
     d: f32,
     aa: f32,
-    field_step: f32,
     oct: OctRing,
     analytic: bool,
 ) -> NodeInk {
@@ -2317,20 +1881,11 @@ fn node_ink(
     // reach zero `span` times over.
     // An empty pair is the octave layer dialled off (its width bar at 0), and
     // it takes the whole layer with it: the slot loop below only ever scales
-    // this coverage, the backdrop rides it, and the shimmer reaches the
-    // slices through it.
+    // this coverage, and the backdrop rides it.
     var band = NodeLayer(EMPTY_DISTANCE, 0.0, 0.0);
     if band_out > band_in {
         band = glyph_band(d, band_in, band_out, 1.0, aa);
     }
-    // How much of this pixel is a slice some note currently lights, and how
-    // strongly: the weight the shimmer reaches the octave glyphs with, below.
-    // The slice's own shape, so the sweep fades in exactly with the wedge's
-    // edges instead of at a boundary of its own, times the louder of the
-    // slot's own level and whatever a melody or bass mark is still holding it
-    // at -- a released note stops shimmering as its own level goes, and a
-    // mark still extending it keeps the slice lit until the mark itself is.
-    var lit_slice = 0.0;
     for (var i = 0u;
         i < oct_span() && (!EARLY_OUT || analytic || layer_coverage(band) > 0.0);
         i = i + 1u) {
@@ -2342,17 +1897,6 @@ fn node_ink(
         let shape_layer = outer_glyph(slot, oct, in.uv, band, band_in, band_out, aa);
         let shape = layer_coverage(shape_layer);
         glyph_mask = max(glyph_mask, shape_layer.coverage);
-        // This slot's bit in the mark masks, or none at all where the ring
-        // names an octave the packing has no room for. The shift is CLAMPED
-        // into the word rather than guarded by the range test alone: `select`
-        // evaluates both arms, and a shift past the width is undefined.
-        let in_range = slot >= 0 && slot < i32(OCTAVE_SLOTS);
-        let bit = select(0u, 1u << u32(clamp(slot, 0, i32(OCTAVE_SLOTS) - 1)), in_range);
-        let mark_level = max(
-            select(0.0, in.params.y, (in.marks.x & bit) != 0u),
-            select(0.0, in.params.z, (in.marks.y & bit) != 0u),
-        );
-        lit_slice = max(lit_slice, shape * max(level, mark_level));
         // Ghosts carry the ring's shape in the rings' own ground, and a lit
         // slot is that ghost with its pitch painted OVER it — never one in
         // place of the other.
@@ -2379,17 +1923,9 @@ fn node_ink(
             // element owns a pixel, so the seam between a lit slice and a
             // silent one cross-fades in both answers at once.
             //
-            // This slot's own LEVEL, where `lit_slice` above takes the louder
-            // of that and the mark still holding the slice. The two terms
-            // differ on purpose and the case that parts them is a released
-            // note under a held mark: the slice is then drawn in the GROUND
-            // (`oct_slot_ink` returns the ghost at level 0) while the strip
-            // outside it is still the mark's own colour. A sweep crossing both
-            // is one light passing over one slice, which is what `lit_slice`
-            // is for; the wash is about what the ink IS, and grey ink is
-            // exactly the ink that has to keep the whole field or read as a
-            // hole. So the wash follows the COLOUR: it fades to the full field
-            // on the same envelope the slice fades to the ground on.
+            // Follow this slot's own level, even while a mark still holds
+            // its extension: a released slice fades to the ground and keeps
+            // the full wash field as its ink becomes grey.
             glyph_lit = shape * level;
         }
     }
@@ -2402,37 +1938,6 @@ fn node_ink(
     glyph = glyph * glyph_taper;
     glyph_lit = glyph_lit * glyph_taper;
     glyph_mask = glyph_mask * glyph_taper;
-    // The sheet, which the glyphs take too -- over every slice a note
-    // currently lights, and the strip a melody or bass mark extends past the
-    // band as well. A mark is the octave it names TOGETHER with the extension
-    // that says so, one slice in two pieces, so light crossing the one
-    // crosses the other; a sweep that stopped at the extension's edge would
-    // cut the mark in half at the gap.
-    //
-    // After the slot loop and after the margin taper: the sheet is a plane
-    // crossing the lattice rather than anything per slot, and a peak must not
-    // push the layer back out past the fade the taper just closed.
-    let mark_shimmer = shimmer_terms(pulse_marks_mode(), in.field, field_step);
-    // Taken down by the slice weight rather than applied flat, which is what
-    // keeps the sheet inside the lit slices: `lit_slice` is how much of this
-    // pixel is a wedge some note is sounding at, or a mark is still
-    // extending, so a silent slice arrives at a SWING of zero and draws
-    // exactly as it does steady. Scaling the swing and not the shape, because
-    // the shape is where in the sheet this fragment sits and a half-lit slice
-    // sits in the same place as a fully lit one -- it is how far the sheet
-    // moves it that the weight is about. The mode needs no guard of its own
-    // here -- `shimmer_terms` returns a zero swing when the pattern is Off,
-    // so the scale is a no-op either way.
-    let glyph_shimmer = vec2<f32>(mark_shimmer.x * lit_slice, mark_shimmer.y);
-    // No clamp at white here, where an added light needs one:
-    // `shimmer_light` fits its crest to the layer's own headroom, so the top
-    // channel lands AT 1 and never past it. That guarantee is what the layers
-    // below rely on, and they rely on it exactly -- each one premultiplies its
-    // color by its coverage, so a channel left at 1.2 would not come back to 1
-    // but to 1.2 times whatever fraction of the pixel it covers, and the ring
-    // would grow a bright fringe on its half-covered edges under every peak.
-    glyph_rgb = shimmer_light(glyph_rgb, glyph_shimmer);
-
     // The audio ring, over the octave layer. A layer of its own, and radially
     // disjoint from the band above and the marks below, so the three bands
     // of a node — audio ring, octave band, marks — simply stack outward.
@@ -2440,10 +1945,6 @@ fn node_ink(
     // overlap the band still shows the measurement: the band's own reading is
     // drawn twice over in that case (its wedge and its ghost), and the
     // spectrum's is not drawn anywhere else.
-    //
-    // After the shimmer, and deliberately outside it: the sheet belongs to the
-    // marks and the slices they point at, and light crossing a measurement
-    // would be a brightness nobody asked the analyzer for.
     let audio_radii = spectral_radii();
     let audio = spectral_ring(
         in,
@@ -2513,17 +2014,7 @@ fn node_ink(
     // layer already runs between two adjacent indicators.
     var mark = max(melody_cov, bass_cov);
     var mark_mask = max(melody_mask, bass_mask);
-    // The marks' own shimmer (`mark_shimmer`, taken with the glyph layer's
-    // above). ONE direction for both, not one each: they lie in one strip and
-    // never overlap, so a single sweep crossing both reads as light passing
-    // over the node, where two would read as two unrelated animations. The
-    // mark's own color is what the fit is measured on, which is why this is a
-    // second call and not the glyph layer's result reused -- a mark and the
-    // slice it continues are different colors with different room above them.
-    let mark_rgb = shimmer_light(
-        select(in.bass_color.rgb, in.melody_color.rgb, melody_cov > bass_cov),
-        mark_shimmer,
-    );
+    let mark_rgb = select(in.bass_color.rgb, in.melody_color.rgb, melody_cov > bass_cov);
     // Safety taper only. The radii above are already capped inside the
     // billboard (a circle of radius QUAD_MARGIN fits the square quad), so
     // this just keeps a soft edge from ending on the boundary; starting it
@@ -2538,7 +2029,7 @@ fn node_ink(
     // slice in two pieces, drawn only where a note is marked and already
     // carried on that note's level (`melody_cov`, `bass_cov`). A mark washing
     // on other terms than the slice it continues would part the two at the gap
-    // between them, which is the seam the shimmer above is shaped to avoid.
+    // between them.
     glyph_lit = mark + glyph_lit * (1.0 - mark);
     glyph = mark + glyph * (1.0 - mark);
     glyph_mask = mark_mask + glyph_mask * (1.0 - mark_mask);
@@ -2623,7 +2114,7 @@ fn node_paint(in: VsOut) -> Painted {
         }
         return Painted(vec3<f32>(0.0), shadow, bloom);
     }
-    var ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, false);
+    var ink = node_ink(in, g.d, g.aa, g.oct, false);
     if ink.alpha < INK_FLOOR {
         ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, 0.0, ink.sd);
     }
@@ -2689,7 +2180,7 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
     if !g.paints {
         return vec4<f32>(0.0);
     }
-    let ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, analytic);
+    let ink = node_ink(in, g.d, g.aa, g.oct, analytic);
     if analytic {
         // Stabilize the value before the R16 attachment rounds it. The fast
         // and reference builds carry different dead coverage branches and a

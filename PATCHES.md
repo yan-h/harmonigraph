@@ -1,7 +1,25 @@
 # Carried patches against upstream dependencies
 
-Three dependencies carry local patches, wired in via `[patch.crates-io]` in the workspace `Cargo.toml`.
+Four dependencies carry local patches, wired in via `[patch.crates-io]` in the workspace `Cargo.toml`.
 Keep this file current when bumping them.
+
+## wgpu-hal — vendored at `vendor/wgpu-hal/`
+
+Based on the unmodified crates.io `wgpu-hal` 29.0.4 package, retaining its licenses and a standalone `[workspace]` table.
+The Metal patch has three sites: `src/metal/mod.rs` exports `shader_library`, `src/metal/shader_library.rs` defines a generic immutable provider, and the normal Naga branch of `Device::load_shader` delegates only source-to-library creation to it.
+Normal specialization, MSL generation, entry-point lookup, bounds/reflection metadata and per-device resource ownership are unchanged.
+No filesystem, artifact manifest, application dependency or GPU-object cache belongs to the patch.
+
+The provider is installed before device creation, so backend-internal shaders use the same path.
+Installation is unsafe because wgpu cannot validate arbitrary Metal bytecode; the application must establish exact source/options equivalence and artifact integrity.
+Harmonigraph does that with build-time hashes and exact immutable-input lookup.
+Unavailable native compiler-option APIs are guarded before access, and unsupported profiles retain source fallback.
+
+**Upgrade:** replace the upstream package, retain the workspace exclusion, and reapply only those three sites.
+Inspect all compiler options and changes around the normal reflection boundary, then regenerate the corpus through the real production constructors.
+Require strict catalog/real-path golden coverage, storage-binding behavior, native lifecycle checks and rendering-performance validation.
+The optional provider is a candidate upstream boundary, not a reason to accumulate renderer-specific logic in the backend.
+See [production assets](docs/metal-shader-assets.md) for generation, validation and fallback policy.
 
 ## nice-plug — vendored at `vendor/nice-plug/`
 
@@ -29,7 +47,18 @@ Tune's performance-only opt-in creates no configuration mailbox.
 `allocation_probe.rs` instruments the actual debug allocation guard on the calling thread, including deallocation, for exported-factory ownership fixtures;
 it does not measure RSS or other threads.
 See the [configuration](docs/adaptive-tuning-effective-configuration.md), [performance boundary](docs/adaptive-tuning-clap-performance.md) and [aggregation](docs/adaptive-tuning-companion-aggregation.md) handoffs for the contracts and measured limits.
-- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics, activation notification ordering and production configuration/performance/setup seams.
+- **Auxiliary descriptor bounds** (`src/wrapper/clap/wrapper.rs`): stop both auxiliary-port loops at the host's declared input/output count, before dereferencing the one-past descriptor (#638).
+Missing inputs keep the existing silent-buffer fallback;
+missing outputs keep the existing skip-processing behavior and leave undeclared storage untouched.
+The existing debug diagnostics remain in place.
+`src/wrapper/util/buffer_management.rs` sizes all auxiliary input storage to the current callback before copying or clearing it, so omitted inputs cannot expose the shorter slices left by a preceding callback.
+This moves the existing resize within preallocated capacity ahead of the presence check;
+it is necessary for #638's silent-input fallback to remain safe across variable callback sizes.
+`tests/clap_auxiliary.rs` reaches both bounds through an exported stereo plugin with auxiliary input and output ports, including disappearance, return and changing callback lengths.
+- **VST3 bus arrangements** (`src/wrapper/vst3/wrapper.rs`): auxiliary arrangements begin after the main bus when it exists, and at zero otherwise (#741).
+Only read a main output arrangement when the layout declares one.
+`tests/vst3_auxiliary.rs` checks matching and incompatible auxiliary channel counts and auxiliary-only layouts through the COM negotiation interface, with valid canary storage beyond declared counts.
+- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics, activation notification ordering, auxiliary descriptor bounds and storage sizing, VST3 arrangement matching, and production configuration/performance/setup seams.
 No tuning or sequencing policy belongs in this framework patch.
 
 ## baseview — vendored at `vendor/baseview/`

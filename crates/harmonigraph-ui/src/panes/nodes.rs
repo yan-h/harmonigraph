@@ -5,10 +5,9 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    Pulse, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
-    PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
-    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
-    SPECTRAL_WIDTH_MIN,
+    SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
+    SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
+    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 /// Sizes and timing first, then the audio and MIDI layers and their accents.
@@ -17,7 +16,6 @@ pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
     audio_section(ui, &mut state.view);
     octaves_section(ui, &mut state.view);
     melody_bass_section(ui, &mut state.view);
-    shimmer_section(ui, &mut state.view);
 }
 
 /// Octaves: which octaves of the pitch class are sounding, shown as arcs of a
@@ -119,12 +117,6 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // octave still reads as a whole note. How BRIGHT it stands is the At rest
     // section's Ground bar at the foot of the page, which is not this layer's
     // to own: the audio ring reads its own silence in that same grey.
-    //
-    // No Shimmer row either: the glyphs are what says which octaves sound, and
-    // a sheet laid over that reading costs it — so the sweep belongs to the
-    // marks, which carry no such reading. What reaches this layer is the mark
-    // sheet crossing the one slice each mark extends, from the row in
-    // Melody/bass below.
 }
 
 /// Melody / bass: mark the outer held notes so a chord's top and bottom line
@@ -175,66 +167,6 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  Increase to avoid flicker during fast passages. \
                  0 ms marks immediately.",
             );
-    });
-}
-
-/// The patterns the shimmer's sheet can be laid in, for the Shimmer row.
-///
-/// A table beside the row rather than four arms written into it: a pattern is a
-/// shape the light takes, and each one's description is a sentence about that
-/// shape rather than about the lattice, so it belongs next to the others it is
-/// told apart from.
-const SHIMMER_PATTERNS: &[(Pulse, &str, &str)] = &[
-    (Pulse::Off, "Off", "Steady — no sweep"),
-    (Pulse::Bands, "Bands", "Diagonal bands of light moving across the melody and bass marks."),
-    (Pulse::Checker, "Checker", "A moving checkerboard of light on the melody and bass marks."),
-    (Pulse::Hex, "Hex", "A moving honeycomb of light on the melody and bass marks."),
-];
-
-/// Shimmer: the shape the sheet crossing the lattice takes, and how it is
-/// sized and paced. The whole feature, under the one heading that names it.
-///
-/// The pattern is the first row and the four bars follow it, because the row
-/// says WHETHER there is a sweep and the bars only say what it looks like. It
-/// sits after Melody/bass because a mark's own strip rides the same sheet,
-/// but the pattern reaches every octave slice a note lights whether or not
-/// either mark is switched on.
-///
-/// The bars gate on [`Pulse::sweeps`] alone: with the pattern Off they have
-/// nothing to move. The pattern row itself is always draggable — Off is
-/// where a session leaves it when nothing should shimmer, not a state the
-/// pane has to protect the row from reaching.
-fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    section(ui, "Mark shimmer");
-    // Off is its own option rather than a checkbox beside the row: one row
-    // says both whether the lattice shimmers and how.
-    choice_row(ui, "Pattern", &mut view.pulse_marks, SHIMMER_PATTERNS);
-    ui.add_enabled_ui(view.pulse_marks.sweeps(), |ui| {
-        ValueBar::new(&mut view.shimmer_speed, 0.0..=6.0, "Travel speed")
-        .unit(1.0, " steps/s").show(ui).on_hover_text(
-            "Pattern movement in lattice steps per second. 0 freezes the pattern.",
-        );
-        // Eased, because the range is three orders wide and the useful
-        // settings are not spread evenly over it: the tight end is a
-        // different picture every few hundredths (0.05 to 0.1 halves the
-        // periods on a node), where the wide end changes little between 8
-        // and 15. Geometric travel gives each end the same share of the bar.
-        ValueBar::new(&mut view.shimmer_width, 0.05..=15.0, "Pattern spacing")
-        .unit(1.0, " steps")
-            .eased(true)
-            .show(ui)
-            .on_hover_text(
-                "Distance between bright peaks, in lattice steps. \
-                 Larger spacing makes broad sweeps; smaller spacing makes a fine texture.",
-            );
-        ValueBar::new(&mut view.shimmer_intensity, 0.0..=2.0, "Contrast")
-        .unit(1.0, "×").show(ui).on_hover_text(
-            "Brightness contrast between peaks and troughs. 0 removes shimmer; 1× is the reference contrast.",
-        );
-        ValueBar::new(&mut view.shimmer_softness, 0.0..=1.0, "Edge softness")
-        .percent().show(ui).on_hover_text(
-            "Transition from a bright peak to a dark trough. 0% gives narrow, hard bands; 100% gives a smooth wave.",
-        );
     });
 }
 

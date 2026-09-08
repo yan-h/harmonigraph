@@ -1,0 +1,9 @@
+[package]
+name = "harmonigraph-metal-assets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[build-dependencies]
+serde_json = "1"
+sha2 = "0.10"

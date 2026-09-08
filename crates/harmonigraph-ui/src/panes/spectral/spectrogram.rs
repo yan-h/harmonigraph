@@ -25,8 +25,8 @@ use crate::SharedState;
 use harmonigraph_scene::Gradient;
 
 /// The MEAN OF dB over the buckets a pixel covers — the operator the heatmap's
-/// fragment shader performs on stored dB bytes, written here in the curve's own
-/// domain of powers, where the same operator is the geometric mean.
+/// fragment shader performs on stored dB bytes, applied here to powers.
+/// The result stays in dB for the height and color mappings that consume it.
 ///
 /// The pixel covers `[x0, x1)` of the bucket axis, where bucket `b` spans
 /// `[b, b + 1)`. Wider than a bucket, the answer is the AREA-WEIGHTED mean of
@@ -72,10 +72,10 @@ use harmonigraph_scene::Gradient;
 /// Reached through [`power_db`], so a bucket the analyzer reports as silent
 /// contributes the store's own floor rather than an infinity — the same value
 /// the heatmap's byte 0 carries.
-pub(crate) fn footprint_mean(powers: &[f32], x0: f32, x1: f32) -> f32 {
+pub(crate) fn footprint_mean_db(powers: &[f32], x0: f32, x1: f32) -> f32 {
     let n = powers.len();
     if n == 0 {
-        return 0.0;
+        return power_db(0.0);
     }
     let top = n as f32 - 1.0;
     let idx = x0.floor().clamp(0.0, top) as usize;
@@ -96,9 +96,9 @@ pub(crate) fn footprint_mean(powers: &[f32], x0: f32, x1: f32) -> f32 {
         // one return that skips [`power_db`]'s floor, so a silent bucket would
         // read 0 here and the store's floor everywhere else.
         if total <= 0.0 {
-            return 10f32.powf(0.1 * power_db(powers[idx]));
+            return power_db(powers[idx]);
         }
-        return 10f32.powf(0.1 * sum / total);
+        return sum / total;
     }
     // A bucket's centre sits half a bucket above where the floor divides them,
     // which is the 0.5; the clamp keeps the upper tap inside the spectrum.
@@ -106,7 +106,7 @@ pub(crate) fn footprint_mean(powers: &[f32], x0: f32, x1: f32) -> f32 {
     let b = x.floor().clamp(0.0, (n as f32 - 2.0).max(0.0)) as usize;
     let f = (x - b as f32).clamp(0.0, 1.0);
     let (a, c) = (power_db(powers[b]), power_db(powers[(b + 1).min(n - 1)]));
-    10f32.powf(0.1 * (a + (c - a) * f))
+    a + (c - a) * f
 }
 
 /// The scrolling quads the heatmap is read through, from `d_near` to `d_far`.

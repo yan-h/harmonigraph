@@ -27,19 +27,6 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         "the EARLY_OUT switch was renamed; this test is no longer comparing anything",
     );
 
-    // The sheet running, at one fixed instant. `paint_reach` is where the
-    // claim that shimmer keeps every bound exact has to be checked, and it can
-    // only be checked here: the sheet relights the rings and the marked
-    // slice inside their own coverage — `shimmer_terms` never touches
-    // coverage — and a sheet that widened what a layer paints would push it
-    // past the reach the early-out proved it could not cross, visible as a
-    // ring clipped flat in the fast pipeline alone, which no other fixture
-    // would catch because every other one leaves the pulse Off.
-    let shimmering = || {
-        let mut scene = parity_scene();
-        scene.pulse_marks = harmonigraph_scene::Pulse::Bands;
-        scene
-    };
     // The audio ring on, which has two early-outs of its own: the annulus
     // skip inside `spectral_ring`, and the idle branch's radial exception,
     // which keeps an otherwise idle node's fragments where the ring is.
@@ -143,7 +130,6 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     };
     for (name, scene) in [
         ("lit", parity_scene()),
-        ("shimmering", shimmering()),
         ("ringing", ringing()),
         ("folded", folded()),
         ("a wide shadow", wide_shadow()),

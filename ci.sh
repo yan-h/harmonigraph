@@ -78,6 +78,7 @@ run cargo fmt --all --check
 # A break inside a paragraph renders as a space, so none of this changes a
 # rendered byte. `--write` fixes every failure this reports.
 run .claude/semantic-breaks.py --check
+run python3 -B .claude/tests/semantic-breaks.py
 
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
@@ -119,9 +120,10 @@ run cargo test -p harmonigraph-render
 #
 # Each crate is its own workspace root, so keep both of their targets under
 # `target/debug`: the idle-worktree reclaimer owns that whole subtree.
-# Production opt-in CLAP performance boundary, independent of the optional probe.
+# Production opt-in CLAP performance boundary and CLAP/VST3 auxiliary bounds.
 run cargo test --manifest-path vendor/nice-plug/Cargo.toml \
-  --target-dir target/debug/vendor-nice-plug --features assert_process_allocs,clap-boundary-tests --test clap_boundary
+  --target-dir target/debug/vendor-nice-plug --features assert_process_allocs,clap-boundary-tests \
+  --test clap_boundary --test clap_auxiliary --test vst3_auxiliary
 run cargo test --manifest-path vendor/baseview/Cargo.toml --target-dir target/debug/vendor-baseview
 run cargo test --manifest-path vendor/egui-baseview/Cargo.toml \
   --no-default-features --features wgpu,tracing \

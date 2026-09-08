@@ -58,21 +58,6 @@ impl Audio {
         let (start, end) = (frame(from), frame(to).max(frame(from)));
         (&self.samples[start * channels..end * channels], end)
     }
-
-    /// The channels averaged into one signal, allocated on demand.
-    ///
-    /// For the things that genuinely want one envelope rather than a spectrum —
-    /// [`align`](crate::align), which correlates onsets. Phase cancellation is
-    /// not a concern there: it is looking for where the energy JUMPS, and a
-    /// transient is correlated across channels by nature.
-    pub fn mono(&self) -> Vec<f32> {
-        let channels = self.channels.max(1);
-        if channels == 1 {
-            return self.samples.clone();
-        }
-        let gain = 1.0 / channels as f32;
-        self.samples.chunks_exact(channels).map(|f| f.iter().sum::<f32>() * gain).collect()
-    }
 }
 
 pub fn read(path: impl AsRef<std::path::Path>) -> Result<Audio, String> {
@@ -227,20 +212,16 @@ mod tests {
 
     /// Channels come through INTACT — the analyzer combines them in the power
     /// domain and cannot do that with an average it never saw
-    /// ([`ChannelBank`](harmonigraph_core::spectrum::ChannelBank)). The average is still
-    /// available, for the things that want one envelope rather than a spectrum.
+    /// ([`ChannelBank`](harmonigraph_core::spectrum::ChannelBank)). Alignment also
+    /// measures their energy before combining channels.
     #[test]
-    fn float32_stereo_keeps_its_channels_and_averages_only_on_request() {
+    fn float32_stereo_keeps_its_channels() {
         let frames = vec![vec![1.0, 0.0], vec![-1.0, 1.0], vec![0.5, 0.5]];
         let audio = decode(&build(3, 32, 2, 48_000, &frames)).unwrap();
         assert_eq!(audio.sample_rate, 48_000.0);
         assert_eq!(audio.channels, 2);
         assert_eq!(audio.samples, vec![1.0, 0.0, -1.0, 1.0, 0.5, 0.5], "interleaved, as decoded");
         assert_eq!(audio.frames(), 3, "frames, not samples");
-        assert_eq!(audio.mono(), vec![0.5, 0.0, 0.5]);
-        // The anti-phase frame is exactly what an averaging decoder would have
-        // erased before the analyzer could see it.
-        assert_eq!(audio.mono()[1], 0.0);
     }
 
     /// A slice has to start on channel 0 however its bounds are clamped: one
