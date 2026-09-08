@@ -17,6 +17,7 @@ use crate::wgpu;
 /// Local machines may still skip. `WGPU_BACKEND` selects test backends; an
 /// empty value disables all backends to exercise both failure policies.
 pub fn test_gpu_adapter() -> Option<(wgpu::Instance, wgpu::Adapter)> {
+    crate::shader_assets::initialize();
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = wgpu::Backends::from_env().unwrap_or_default();
     let instance = wgpu::Instance::new(descriptor);

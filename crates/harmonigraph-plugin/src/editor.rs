@@ -556,6 +556,7 @@ fn pace(
 /// what you just played — so it is not worth carrying. 3 was the whole knob
 /// anyway: wgpu-hal clamps to 2..=3 for `CAMetalLayer.maximumDrawableCount`.
 fn graphics_config() -> GraphicsConfig {
+    harmonigraph_render::shader_assets::initialize();
     use egui_baseview::WgpuSetup;
     use harmonigraph_render::wgpu;
 

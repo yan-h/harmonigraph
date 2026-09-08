@@ -3,6 +3,24 @@
 Three dependencies carry local patches, wired in via `[patch.crates-io]` in the workspace `Cargo.toml`.
 Keep this file current when bumping them.
 
+## wgpu-hal — vendored at `vendor/wgpu-hal/`
+
+Based on the unmodified crates.io `wgpu-hal` 29.0.4 package, retaining its licenses and a standalone `[workspace]` table.
+The Metal patch has three sites: `src/metal/mod.rs` exports `shader_library`, `src/metal/shader_library.rs` defines a generic immutable provider, and the normal Naga branch of `Device::load_shader` delegates only source-to-library creation to it.
+Normal specialization, MSL generation, entry-point lookup, bounds/reflection metadata and per-device resource ownership are unchanged.
+No filesystem, artifact manifest, application dependency or GPU-object cache belongs to the patch.
+
+The provider is installed before device creation, so backend-internal shaders use the same path.
+Installation is unsafe because wgpu cannot validate arbitrary Metal bytecode; the application must establish exact source/options equivalence and artifact integrity.
+Harmonigraph does that with build-time hashes and exact immutable-input lookup.
+Unavailable native compiler-option APIs are guarded before access, and unsupported profiles retain source fallback.
+
+**Upgrade:** replace the upstream package, retain the workspace exclusion, and reapply only those three sites.
+Inspect all compiler options and changes around the normal reflection boundary, then regenerate the corpus through the real production constructors.
+Require strict catalog/real-path golden coverage, storage-binding behavior, native lifecycle checks and rendering-performance validation.
+The optional provider is a candidate upstream boundary, not a reason to accumulate renderer-specific logic in the backend.
+See [production assets](docs/metal-shader-assets.md) for generation, validation and fallback policy.
+
 ## nice-plug — vendored at `vendor/nice-plug/`
 
 - **Upstream base**: crates.io nice-plug 0.1.10, with its normalized standalone manifest, original manifest, README, sources and tests, plus the ISC `LICENSE` from pinned upstream commit `a80e0e267e52027be4bc07480bef77e798d3342c`.

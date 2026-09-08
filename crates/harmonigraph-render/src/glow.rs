@@ -1186,3 +1186,8 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
+pub(super) fn asset_catalog(device: &wgpu::Device, format: wgpu::TextureFormat) {
+    drop(GlowResources::new(device, format));
+}

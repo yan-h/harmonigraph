@@ -318,6 +318,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
 #[test]
 #[ignore = "manual editor startup timing"]
 fn timing_editor_pipeline_startup() {
+    crate::shader_assets::initialize();
     for opening in 0..3 {
         let started = std::time::Instant::now();
         let instance = wgpu::Instance::default();
