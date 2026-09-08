@@ -790,7 +790,7 @@ impl ClapPlugin for Harmonigraph {
         self.aggregation.as_mut().unwrap().direct.input(input);
     }
     fn clap_performance_input_boundary(&mut self) {
-        self.aggregation.as_mut().unwrap().input_boundary();
+        self.aggregation.as_mut().unwrap().input_boundary(self.configuration.as_mut().unwrap());
     }
     fn clap_performance_process(
         &mut self,

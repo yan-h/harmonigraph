@@ -3424,3 +3424,239 @@ fn production_off_notes_take_no_plan_slot_and_never_exhaust_the_ledger() {
     hub.run_format(behind, vec![], None, None, 512);
     settle(&hub, &source, raw, vec![]);
 }
+
+/// A paired Hub and Tune, then a healthy DIRECT reanchor with a key held down
+/// through it. Returns the raw time to play from and how far the run got.
+fn reanchored(hub: &Device, source: &Device, uuid: SavedUuid, held: Vec<Input>) -> i64 {
+    musical_tests::configure(hub, harmonigraph_core::Tuning::just());
+    source.run_format(1536, vec![], None, None, 512);
+    hub.run_format(1536, held, None, None, 512);
+    let mut raw = 2048;
+    for _ in 0..2 {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+    }
+    hub.shared()
+        .apply(
+            setup::Routing::Hub(HubSetup { uuid, calibration: Calibration { offset: 64 } }),
+            false,
+        )
+        .unwrap();
+    // The transition, then the Tune's own withdraw and re-adopt behind it.
+    for _ in 0..96 {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        source.main();
+        hub.main();
+        raw += 512;
+    }
+    assert_eq!(
+        inspect_hub(hub, |hub| hub.direct.test_snapshot().epoch),
+        2,
+        "the fixture must reach a committed healthy boundary"
+    );
+    raw
+}
+
+/// The observation runs a whole callback ahead of the merge: the wrapper walks
+/// every input through `clap_configuration_observe` before performance sees any
+/// of it. Reconciling the cells a boundary carried against that state answers
+/// with the end of the callback, so a release at its tail retires the voice for
+/// onsets at its head -- and an assignment, once made, is frozen.
+#[test]
+fn production_a_carried_direct_voice_is_context_for_the_onset_before_its_release() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, Calibration { offset: 0 });
+    hub.activate_format(44100.0, 512);
+    let mut source = Device::new(true);
+    source.configure_format(uuid, true, Calibration { offset: 0 });
+    source.activate_format(44100.0, 512);
+    for raw in [0, 512, 1024] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let mut raw = reanchored(&hub, &source, uuid, vec![note(31, 0, 50, 1, true)]);
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        [(0, 1)],
+        "the fixture must reach a carried DIRECT voice: forwarding released this D at \
+         the boundary, but the player is still holding the key"
+    );
+    let before = inspect_hub(&hub, |hub| hub.test_policy_counts());
+    // One callback: the Tune's E at its head, the carried D's own release 400
+    // samples later.
+    source.run_format(raw, vec![note(7, 0, 52, 0, true)], None, None, 512);
+    hub.run_format(raw, vec![note(31, 0, 50, 400, false)], None, None, 512);
+    raw += 512;
+    let after = inspect_hub(&hub, |hub| hub.test_policy_counts());
+    assert_eq!(
+        (after[0] - before[0], after[1] - before[1]),
+        (1, 1),
+        "exactly one assignment, and the D was still sounding at the sample it was made"
+    );
+    for _ in 0..6 {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+    }
+    assert_eq!(
+        inspect_source(&source, |s| s
+            .state
+            .voices()
+            .find(|voice| voice.note == 52)
+            .and_then(|voice| voice.attack_node)),
+        Some(harmonigraph_core::LatticePos::new(-4, -1, 0)),
+        "and the musical consequence: scored against the held D. Read against a context \
+         the release had already emptied, this E is the plain 5/4 (0, 1, 0)"
+    );
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        [(1, 1)],
+        "the release still lands: the observation retires its own cell, one sample later \
+         rather than one callback earlier"
+    );
+    assert_eq!(source.source_snapshot().faults, 0);
+    settle(&hub, &source, raw, vec![note(7, 0, 52, 0, false)]);
+}
+
+/// The other half of the merge rule the replay has to obey: inside one sample
+/// every release and controller lands before any onset. The carried voice's own
+/// release is a release, so an onset at exactly its sample is scored without it.
+#[test]
+fn production_a_carried_direct_release_applies_before_the_onset_at_its_own_sample() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, Calibration { offset: 0 });
+    hub.activate_format(44100.0, 512);
+    let mut source = Device::new(true);
+    source.configure_format(uuid, true, Calibration { offset: 0 });
+    source.activate_format(44100.0, 512);
+    for raw in [0, 512, 1024] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let mut raw = reanchored(&hub, &source, uuid, vec![note(31, 0, 50, 1, true)]);
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        [(0, 1)],
+        "the fixture must reach a carried DIRECT voice"
+    );
+    let before = inspect_hub(&hub, |hub| hub.test_policy_counts());
+    // The boundary moved the Hub's calibration to +64, so a DIRECT event at
+    // this callback's head and a Tune event 64 frames in are the same sample.
+    source.run_format(raw, vec![note(7, 0, 52, 64, true)], None, None, 512);
+    hub.run_format(raw, vec![note(31, 0, 50, 0, false)], None, None, 512);
+    raw += 512;
+    let after = inspect_hub(&hub, |hub| hub.test_policy_counts());
+    assert_eq!(
+        (after[0] - before[0], after[1] - before[1]),
+        (1, 0),
+        "one assignment, scored against nothing: the release is at its sample too"
+    );
+    for _ in 0..6 {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+    }
+    assert_eq!(
+        inspect_source(&source, |s| s
+            .state
+            .voices()
+            .find(|voice| voice.note == 52)
+            .and_then(|voice| voice.attack_node)),
+        Some(harmonigraph_core::LatticePos::new(0, 1, 0)),
+        "the plain 5/4, not the (-4, -1, 0) the same E takes when the D outlives it"
+    );
+    assert_eq!(source.source_snapshot().faults, 0);
+    settle(&hub, &source, raw, vec![note(7, 0, 52, 0, false)]);
+}
+
+/// A healthy transition waits across callbacks for the paired rows to settle,
+/// and the player can strike a key inside that window. The fence never ended
+/// that note: its onset record is retained across the closing and arrives under
+/// the new session carrying its own identity. Carrying the observation of it as
+/// well would give one physical note two owners -- two context slots, and two
+/// votes in every assignment after it.
+#[test]
+fn production_a_direct_key_struck_during_a_transition_takes_one_context_cell() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, Calibration { offset: 0 });
+    hub.activate_format(44100.0, 512);
+    let mut source = Device::new(true);
+    source.configure_format(uuid, true, Calibration { offset: 0 });
+    source.activate_format(44100.0, 512);
+    for raw in [0, 512, 1024] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    let mut raw = 1536;
+    hub.shared()
+        .apply(
+            setup::Routing::Hub(HubSetup { uuid, calibration: Calibration { offset: 64 } }),
+            false,
+        )
+        .unwrap();
+    for _ in 0..2 {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        source.main();
+        hub.main();
+        raw += 512;
+    }
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.direct.test_snapshot().epoch),
+        1,
+        "the fixture must strike the key while the transition is still waiting"
+    );
+    source.run_format(raw, vec![], None, None, 512);
+    hub.run_format(raw, vec![note(41, 0, 67, 3, true)], None, None, 512);
+    source.main();
+    hub.main();
+    raw += 512;
+    let mut retained = false;
+    for _ in 0..96 {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        source.main();
+        hub.main();
+        raw += 512;
+        retained |= inspect_hub(&hub, |hub| {
+            hub.test_inputs(0).iter().any(|record| record.onset() && record.lifetime == 1)
+        });
+        assert!(
+            inspect_hub(&hub, |hub| hub.test_context().len()) <= 1,
+            "one physical note, one context cell, at every point in the transition"
+        );
+    }
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.direct.test_snapshot().epoch),
+        2,
+        "the fixture must reach the committed boundary the carry runs at"
+    );
+    assert!(
+        retained,
+        "and it must reach the case that makes the two owners possible: the capture \
+         stream still held this note's onset record across the closing"
+    );
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        [(0, 1)],
+        "the capture stream owns it, because the fence never took it away from there"
+    );
+    assert_eq!(source.source_snapshot().faults, 0);
+    source.run_format(raw, vec![], None, None, 512);
+    hub.run_format(raw, vec![note(41, 0, 67, 0, false)], None, None, 512);
+    raw += 512;
+    settle(&hub, &source, raw, vec![]);
+    assert!(
+        inspect_hub(&hub, |hub| hub.test_context()).is_empty(),
+        "and its own release is what takes it out again"
+    );
+}

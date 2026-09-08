@@ -2,6 +2,7 @@
 //! waits for the display, file drainer, an editor, or registry bookkeeping.
 use super::{
     clock::{Clock, Coverage},
+    direct::Direct,
     protocol::*,
     queue::Queue,
     registry::HubOffer,
@@ -392,7 +393,7 @@ impl Hub {
         }
         offer.session.closing.store(0, Ordering::Release);
     }
-    pub fn input_boundary(&mut self) {
+    pub fn input_boundary(&mut self, owner: &mut Owner) {
         if let Some(update) = self.direct.apply_setup_with_clock(false) {
             if self.transition.is_none() {
                 self.transition = Some(update);
@@ -400,6 +401,14 @@ impl Hub {
                     self.fence_rows(update.generation);
                 }
                 self.direct.fence_transition();
+                // The same cut, in the observation's own numbering. Every
+                // input this callback carried is already observed AND
+                // captured -- the wrapper delivers performance input in full
+                // before it calls this -- so what the fence orphans and what
+                // the observation may carry are one set. A key struck while
+                // the transition waits is above the cut, and its retained
+                // onset record is what will own it.
+                owner.direct.fence();
             }
         }
         if self.sequences_inputs() {
@@ -602,7 +611,7 @@ impl Hub {
         // `resume_clock` above has already reset the observation if this
         // boundary was discontinuous, so what it still holds here is exactly
         // what a healthy one carries: keys the player has not let go of.
-        self.sequencer.carry_observed(&owner.direct.state);
+        self.sequencer.carry_observed(&mut owner.direct);
         // Rematching cannot reopen a row until the complete committed clock is
         // visible. Old returned/still-Ready offers remain withdrawn and fenced.
         offer.session.faults.store(0, Ordering::Release);

@@ -199,33 +199,68 @@ impl Sequencer {
     /// DIRECT's contribution to tuning context to survive with them.
     ///
     /// These cells are owned by the observation alone, and marked so: they are
-    /// refreshed and retired by [`Sequencer::refresh_observed`] against the
-    /// same `State` they were seeded from, and no capture record may address
-    /// them. That is the whole of what keeps this from being the old seed,
-    /// which put one subsystem's numbering into cells another subsystem's
-    /// records were expected to retire.
+    /// moved and retired by [`Sequencer::apply_observed`] from the observation's
+    /// own stream of changes, and no capture record may address them. That is
+    /// the whole of what keeps this from being the old seed, which put one
+    /// subsystem's numbering into cells another subsystem's records were
+    /// expected to retire.
+    ///
+    /// The fence is what keeps that ownership single. Only voices struck before
+    /// the boundary are carried: a key struck while the transition waits for the
+    /// paired rows to settle still has its onset record retained in the capture
+    /// stream, so it arrives under the new session with its own identity, and
+    /// carrying the observation of it too would leave one physical note holding
+    /// two cells, scored twice in every assignment after it.
     ///
     /// A discontinuous boundary has already reset the observation, so this
     /// carries nothing across one.
-    pub(super) fn carry_observed(&mut self, state: &State) {
+    pub(super) fn carry_observed(&mut self, direct: &mut Direct) {
         self.clear_clock_context();
         // The clear leaves every cell free, and there are four times as many
         // of them as one source can hold voices, so this zip drops nothing.
-        for (cell, voice) in self.context.iter_mut().zip(state.voices()) {
+        for (cell, voice) in self.context.iter_mut().zip(direct.fenced_voices()) {
             *cell = Some(Voice { observed: true, ..Voice::factual(0, voice) });
         }
+        direct.start_carry();
     }
-    /// The observation is the sole authority over the cells it carried: a
-    /// voice it no longer holds leaves the context, and one whose player
-    /// tuning moved since the boundary scores at the value it is now heard
-    /// at. Nothing here creates a cell, so a note struck after the boundary
+    /// The observation is the sole authority over the cells it carried, and it
+    /// exercises it here, at the merge front rather than once a callback.
+    ///
+    /// The wrapper walks a whole callback of input through
+    /// `clap_configuration_observe` before performance sees any of it, so the
+    /// observation's own `State` is always a block-end answer: reconciling
+    /// against it would retire a voice, or move its tuning, for onsets earlier
+    /// in the same callback than the release or bend that did it. The changes
+    /// arrive here as a stream stamped with their samples instead, and the
+    /// merge applies each where it stands -- before the onsets at that sample,
+    /// like every other release and controller.
+    ///
+    /// Nothing here creates a cell, so a note struck after the boundary
     /// belongs to the capture stream like every other note.
-    pub(super) fn refresh_observed(&mut self, state: &State) {
-        for cell in self.context.iter_mut() {
-            let Some(carried) = cell.filter(|voice| voice.observed) else { continue };
-            *cell = state
-                .voice(carried.lifetime)
-                .map(|voice| Voice { observed: true, ..Voice::factual(0, voice) });
+    pub(super) fn apply_observed(&mut self, direct: &mut Direct, through: i64) {
+        if std::mem::take(&mut direct.carried_lost) {
+            // The replay overflowed, so its order is gone. End the carried
+            // contribution rather than freeze it at a value the player has
+            // already left; display, recording and learning read the
+            // observation's own state and keep it.
+            for cell in self.context.iter_mut() {
+                if cell.is_some_and(|voice| voice.observed) {
+                    *cell = None;
+                }
+            }
+        }
+        while let Some(update) = direct.next_carried(through) {
+            let Some(cell) = self
+                .context
+                .iter_mut()
+                .find(|cell| cell.is_some_and(|v| v.observed && v.lifetime == update.lifetime))
+            else {
+                continue;
+            };
+            match update.player {
+                None => *cell = None,
+                Some(player) => cell.as_mut().unwrap().tune(player),
+            }
         }
     }
     /// A settled reset retires the cohort still in flight along with the
@@ -621,9 +656,6 @@ impl Hub {
         if !self.sequences_inputs() || !self.clock.valid || self.invalidated {
             return;
         }
-        // The cells a boundary carried answer to the observation and nothing
-        // else, so they are reconciled where the policy is about to read them.
-        self.sequencer.refresh_observed(&owner.direct.state);
         if self.sequencer.committing {
             self.publish_cohort();
         }
@@ -637,6 +669,12 @@ impl Hub {
             let boundary = sample.map_or(membership.through, |sample| sample.max(membership.floor));
             let finalized = boundary.min(membership.through);
             self.sequencer.finalized = Some(finalized);
+            // The observation's own changes to the cells a boundary carried,
+            // replayed at their samples inside the same chronological merge
+            // the copied records take. `finalized` is how far this pass has
+            // proved input complete, so everything at or before it is settled
+            // history and everything after it is still the callback's future.
+            self.sequencer.apply_observed(&mut owner.direct, finalized);
             let Some(sample) = sample.filter(|_| boundary < membership.through) else { return };
             // Collection and assembly spend one allowance, so a callback that
             // spent most of it collecting cannot be trusted to finish taking
