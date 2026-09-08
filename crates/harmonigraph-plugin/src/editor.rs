@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{HarmonigraphParams, PluginParamBackend};
 
+#[cfg(all(feature = "startup-probe", target_os = "macos"))]
+pub(crate) mod startup_probe;
+
 /// The surface format egui-baseview's wgpu backend will pick. It isn't
 /// exposed through its API, so we mirror the choice egui-wgpu makes: the
 /// first supported non-sRGB 8-bit format, which is Bgra8Unorm on both Metal

@@ -32,7 +32,7 @@ pub fn find(source: &str, options: &str) -> Option<&'static Asset> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn exact_inputs_are_required_even_when_the_bucket_matches() {
+    fn embedded_inputs_round_trip_and_reject_edits() {
         for asset in super::ASSETS {
             assert_eq!(super::key(asset.source, asset.options), asset.key);
             assert!(super::find(asset.source, asset.options).is_some());

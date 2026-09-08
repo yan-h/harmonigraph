@@ -40,6 +40,8 @@ python3 tools/shader-assets.py check
 This requires zero source fallback in the constructor catalog and runs real-path renderer and offline goldens in strict mode.
 Ordinary reference tests retain normal fallback, so their test-only shaders do not pollute the shipping corpus.
 The regular workspace gates remain required too.
+Generation also builds a separate temporary storage-array diagnostic corpus and verifies strict rejection/source fallback for missing, mismatched and invalid libraries.
+Those diagnostic libraries are never imported into the shipping corpus.
 
 With Apple's Metal toolchain available, generate into a fresh directory:
 
@@ -64,5 +66,16 @@ There is no runtime sidecar override.
 `shader_assets::statistics()` reports actual backend library loads, source calls, load failures and rejected requests.
 
 Native editor timing, package checks and controlled GPU comparisons must accompany the production handoff.
+The optional native probe uses the production graphics configuration, loading UI and frame pacing in three parented editors with one retained device:
+
+```sh
+cargo build --release -p harmonigraph-plugin --example editor-startup --features startup-probe
+HARMONIGRAPH_SHADER_ASSETS=strict target/release/examples/editor-startup
+HARMONIGRAPH_SHADER_ASSETS=source target/release/examples/editor-startup
+```
+
+It activates its own temporary host window so Metal can present, closes each editor from the host callback, joins initialization and returns normally.
+It asserts all three editor states were dropped and exactly one device was created.
+First/full-frame times are observed on the next UI update after a paint callback; they include up to one subsequent update interval.
 Headless cache-blocked measurements do not establish natural long-idle Bitwig behavior or physical display latency.
 The installed DAW slot is selected by the user through `load-plugin.sh`; generation and validation never swap it.

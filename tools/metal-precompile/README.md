@@ -1,10 +1,11 @@
 # One precompiled Metal pipeline
 
-The newer [generated-asset investigation](../../docs/generated-shader-assets.md) tests a copied-backend hook with runtime storage arrays, production pixel tests and fallback controls.
+The [production asset workflow](../../docs/metal-shader-assets.md) now owns generated libraries and validation.
+The earlier [feasibility investigation](../../docs/generated-shader-assets.md) established the metadata-preserving backend boundary.
 This page preserves the original one-pipeline public-passthrough experiment.
 
 This experiment measures the horizontal shadow-blur pipeline from the production renderer.
-The regular plugin and offline renderer continue to use WGSL unchanged.
+WGSL remains the authoring source for the plugin and offline renderer.
 The manual probe can instead load two precompiled `.metallib` stages through wgpu's public passthrough API,
 then compare complete lattice frames with only that pipeline replaced.
 
@@ -54,8 +55,8 @@ python3 tools/metal-precompile/compile.py "$HARMONIGRAPH_METAL_PROBE_DIR"
 ```
 
 The last command requires `xcrun metal` and `xcrun metallib`.
-The Metal precompile probe workflow performs these steps on a macOS runner and uploads the small `precompiled-shadow-blur` artifact,
-so a developer with Command Line Tools alone can download it and run the local measurement.
+The historical Metal precompile workflow performed these steps at probe commit `06d3f0a8` and uploaded a `precompiled-shadow-blur` artifact.
+The current workflow generates the production corpus instead.
 No Apple toolchain binaries are included in the artifact.
 
 Verify downloaded artifacts before loading their compiled shader code:

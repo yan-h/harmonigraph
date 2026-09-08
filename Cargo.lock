@@ -1471,6 +1471,7 @@ dependencies = [
  "crossbeam",
  "egui",
  "egui-baseview",
+ "egui-wgpu",
  "getrandom 0.3.4",
  "harmonigraph-core",
  "harmonigraph-perf",

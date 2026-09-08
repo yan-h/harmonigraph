@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -66,7 +67,7 @@ def build(package, logs):
     return binary
 
 
-def run(binary, arguments, mode, name, logs, export=None):
+def run(binary, arguments, mode, name, logs, export=None, failure=False):
     environment = dict(os.environ, HARMONIGRAPH_REQUIRE_GPU="1", WGPU_BACKEND="metal",
                        HARMONIGRAPH_SHADER_ASSETS=mode)
     environment.pop("HARMONIGRAPH_BLESS", None)
@@ -76,10 +77,16 @@ def run(binary, arguments, mode, name, logs, export=None):
                             env=environment, text=True, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, timeout=300)
     (logs / f"{name}.log").write_text(result.stdout)
+    if failure:
+        assert result.returncode != 0, f"{name} unexpectedly succeeded"
+        assert "test result: FAILED" in result.stdout, "control did not fail inside the GPU test"
+        print(f"Rejected {name} as expected", flush=True)
+        return result.stdout
     assert result.returncode == 0, f"{name} failed; see {logs / (name + '.log')}"
-    assert "test result: ok." in result.stdout and "0 passed;" not in result.stdout
+    assert re.search(r"test result: ok\. ([1-9][0-9]*) passed;", result.stdout)
     assert "missing Metal asset" not in result.stdout, "a test caught a strict coverage error"
     print(f"Passed {name}", flush=True)
+    return result.stdout
 
 
 def check(logs):
@@ -94,6 +101,7 @@ def check(logs):
 def install(directory):
     verify(directory)
     assert directory.resolve() != EMBEDDED.resolve()
+    assert EMBEDDED.resolve() not in directory.resolve().parents
     shutil.rmtree(EMBEDDED)
     shutil.copytree(directory, EMBEDDED)
 
@@ -112,9 +120,61 @@ def generate(directory, logs):
         try:
             install(directory)
             check(logs)
+            binding_controls(directory, logs)
         finally:
             shutil.rmtree(EMBEDDED)
             shutil.copytree(saved, EMBEDDED)
+
+
+def rewrite_manifest(directory):
+    manifest = json.loads((directory / "manifest.json").read_text())
+    manifest["sha256"] = {
+        p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(directory.iterdir()) if p.name != "manifest.json"
+    }
+    (directory / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+
+def binding_controls(production, logs):
+    """Test-only bytecode stays in a temporary corpus, never the shipping one."""
+    probe = ["generated_metal_assets_preserve_storage_binding_lengths", "--ignored"]
+    with tempfile.TemporaryDirectory(prefix="harmonigraph-binding-assets-") as scratch:
+        scratch = Path(scratch)
+        supplemental = scratch / "supplemental"
+        supplemental.mkdir()
+        renderer = build("harmonigraph-render", logs)
+        run(renderer, probe, "export", "export-bindings", logs, supplemental)
+        compile_assets(supplemental)
+        complete = scratch / "complete"
+        shutil.copytree(production, complete)
+        for file in supplemental.iterdir():
+            if file.name != "manifest.json":
+                shutil.copyfile(file, complete / file.name)
+        rewrite_manifest(complete)
+        install(complete)
+        renderer = build("harmonigraph-render", logs)
+        output = run(renderer, probe, "strict", "strict-bindings", logs)
+        assert "source: 0," in output and "loaded: 3," in output
+        source, = [p for p in supplemental.glob("*.metal") if "struct Input" in p.read_text()]
+        for control in ("missing", "mismatched", "invalid"):
+            candidate = scratch / control
+            shutil.copytree(complete, candidate)
+            target = candidate / source.name
+            if control == "missing":
+                for extension in (".metal", ".options", ".metallib"):
+                    target.with_suffix(extension).unlink()
+            elif control == "mismatched":
+                target.write_text(target.read_text() + "\n// mismatched input control\n")
+            else:
+                target.with_suffix(".metallib").write_bytes(b"invalid Metal library control")
+            rewrite_manifest(candidate)
+            install(candidate)
+            renderer = build("harmonigraph-render", logs)
+            output = run(renderer, probe, "strict", f"{control}-strict", logs, failure=True)
+            assert ("could not load" if control == "invalid" else "missing Metal asset") in output
+            output = run(renderer, probe, "embedded", f"{control}-fallback", logs)
+            assert "loaded: 2," in output and "source: 1," in output
+            assert f"load_failed: {int(control == 'invalid')}," in output
 
 
 def main():
