@@ -261,6 +261,11 @@ pub(crate) struct Scheduler {
     ready_len: usize,
     used_cells: usize,
     normal_reserved: usize,
+    /// Normal-lane credits committed to a group the caller cannot stage yet.
+    /// Held credits are unavailable to staging, parameters and notifications
+    /// alike, so a caller whose two emissions must both land in this callback
+    /// can prove the second one still fits before it commits to the first.
+    normal_held: usize,
     emergency_reserved: usize,
     pub summary: Summary,
     pub frames: u32,
@@ -275,6 +280,7 @@ impl Default for Scheduler {
             ready_len: 0,
             used_cells: 0,
             normal_reserved: 0,
+            normal_held: 0,
             emergency_reserved: 0,
             summary: Summary::default(),
             frames: 0,
@@ -289,6 +295,7 @@ impl Scheduler {
         self.ready_len = 0;
         self.used_cells = 0;
         self.normal_reserved = 0;
+        self.normal_held = 0;
         self.emergency_reserved = 0;
         self.summary = Summary::default();
         self.frames = frames;
@@ -367,7 +374,7 @@ impl Scheduler {
     /// Parameters share ordinary reservation and attempt credits. They cannot
     /// consume the independent emergency allowance.
     pub fn reserve_parameter(&mut self) -> bool {
-        if self.normal_reserved == NORMAL_OUTPUT_ATTEMPTS {
+        if self.normal_reserved + self.normal_held == NORMAL_OUTPUT_ATTEMPTS {
             return false;
         }
         self.normal_reserved += 1;
@@ -403,16 +410,16 @@ impl Output<'_> {
         if group.time < s.summary.cursor || group.time >= s.frames {
             return Err(StageError::Invalid);
         }
-        let (reserved, limit) = match group.lane {
+        let (reserved, held, limit) = match group.lane {
             Lane::Normal => {
                 if s.inhibited {
                     return Err(StageError::Inhibited);
                 }
-                (&mut s.normal_reserved, NORMAL_OUTPUT_ATTEMPTS)
+                (&mut s.normal_reserved, s.normal_held, NORMAL_OUTPUT_ATTEMPTS)
             }
-            Lane::Emergency => (&mut s.emergency_reserved, EMERGENCY_OUTPUT_ATTEMPTS),
+            Lane::Emergency => (&mut s.emergency_reserved, 0, EMERGENCY_OUTPUT_ATTEMPTS),
         };
-        if *reserved + group.event_count() > limit {
+        if *reserved + held + group.event_count() > limit {
             return Err(StageError::Full);
         }
         if s.used_cells == OUTPUT_CELLS {
@@ -421,6 +428,37 @@ impl Output<'_> {
         *reserved += group.event_count();
         s.insert(group);
         Ok(())
+    }
+
+    /// Commit normal-lane credits to a group this caller will stage later in
+    /// the same callback, so a pair of emissions that must land together
+    /// cannot lose the second one to unrelated output in between.
+    pub fn hold(&mut self, events: usize) -> bool {
+        let s = &mut self.scheduler;
+        if s.inhibited || s.normal_reserved + s.normal_held + events > NORMAL_OUTPUT_ATTEMPTS {
+            return false;
+        }
+        s.normal_held += events;
+        true
+    }
+
+    /// Give a hold back when its group turns out not to be staged after all.
+    pub fn release(&mut self, events: usize) {
+        self.scheduler.normal_held = self.scheduler.normal_held.saturating_sub(events);
+    }
+
+    /// Stage a group a `hold` already paid for. The pool is fungible rather
+    /// than keyed: one holder spending another's credits leaves the same count
+    /// outstanding, and a group arriving with no hold left simply competes for
+    /// ordinary credits as it did before.
+    pub fn stage_held(&mut self, group: Group) -> Result<(), StageError> {
+        let held = self.scheduler.normal_held.min(group.event_count());
+        self.scheduler.normal_held -= held;
+        let staged = self.stage(group);
+        if staged.is_err() {
+            self.scheduler.normal_held += held;
+        }
+        staged
     }
 }
 

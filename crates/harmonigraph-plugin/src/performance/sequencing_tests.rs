@@ -1032,6 +1032,71 @@ fn production_stop_cancels_the_pending_attack_and_releases_the_forwarded_voice()
 }
 
 #[test]
+fn production_a_congested_callback_chokes_a_predecessor_only_with_its_replacement() {
+    let _scope = crate::test_scope::enter();
+    let clocks = || (0..510).map(|_| raw_midi([0xf8, 0, 0], 0)).collect::<Vec<_>>();
+    let musical = |sink: &Sink| {
+        sink.values
+            .iter()
+            .filter(|(_, event)| !matches!(event, Event::Midi { data: [0xf8, ..], .. }))
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    let (hub, source) = production_pair();
+    // Note 1 sounds first, so the retrigger below owes it a forced release.
+    source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    assert_eq!(source.run_format(2048, vec![], None, None, 512).values.len(), 2);
+    hub.run_format(2048, vec![], None, None, 512);
+    let mut input = vec![note(2, 0, 60, 0, true)];
+    input.extend(clocks());
+    source.run_format(2560, input, None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    // Every callback from here carries another 510 raw MIDI clocks, so
+    // whichever one the Hub's answer lets the retrigger take is saturated:
+    // its choke, onset and tuning are three events against the two those 510
+    // leave of the callback's 512. Which callback that is depends on how long
+    // the Hub takes with the copied input, and is not what this measures.
+    let mut raw = 3072;
+    let congested = loop {
+        assert!(raw < 8192, "the retrigger never emitted");
+        let out = source.run_format(raw, clocks(), None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+        if !musical(&out).is_empty() {
+            break out;
+        }
+    };
+    // The choke stages first, out of the indexed release scan; the
+    // replacement's own onset stages a host round trip later, out of
+    // `complete`, with the whole raw stream having had its turn at the same
+    // credits in between. Rule two: without room for the onset the predecessor
+    // is not choked at all, so the two either ride together or neither goes.
+    assert!(
+        matches!(
+            musical(&congested)[..],
+            [
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, key: 60, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 2, key: 60, .. }),
+                (0, Event::Expression { kind: 2, id: 2, .. }),
+            ]
+        ),
+        "the choke rides out with the replacement it is for: {:?}",
+        musical(&congested)
+    );
+    assert_eq!(congested.values.len(), 512, "the callback's credits are spent, not exceeded");
+    source.run_format(raw, vec![note(2, 0, 60, 0, false)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    for _ in 0..8 {
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
+}
+
+#[test]
 fn production_all_sound_off_owes_each_voice_a_physical_note_off_and_all_notes_off_does_not() {
     let _scope = crate::test_scope::enter();
     for cc in [120u8, 123] {

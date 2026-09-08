@@ -1705,7 +1705,24 @@ impl Source {
             self.fault(INPUT_FAULT);
             return false;
         };
-        if output.stage(group).is_err() {
+        // Rule two ties the choke to the replacement's own emission, and the
+        // two are staged a host round trip apart: the choke here, the onset
+        // from `complete`, with every other event this callback owes competing
+        // for the same 512 credits in between. So the onset's allowance is
+        // committed with the choke or the predecessor is not choked at all.
+        let hold = if replacement { 1 + usize::from(self.delay() != 0) } else { 0 };
+        if hold != 0 && !output.hold(hold) {
+            self.stage_full = true;
+            return false;
+        }
+        let staged = if child == NONE && parent.selected != NONE && parent.event.attack().is_some()
+        {
+            output.stage_held(group)
+        } else {
+            output.stage(group)
+        };
+        if staged.is_err() {
+            output.release(hold);
             self.stage_full = true;
             return false;
         }
