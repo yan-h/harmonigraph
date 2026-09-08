@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical full CI gate: formatting, markdown clause breaks, workspace clippy with warnings denied,
+# Canonical full CI gate: formatting, markdown clause breaks and local links, workspace clippy with warnings denied,
 # workspace tests, the plugin package check, harmonigraph-render's own tests,
 # vendored GUI crates' tests, the optional CLAP probe fixture, doc links, the harmonigraph-core dependency
 # guard, the security-audit trigger split, the CI group split, worktree reclaim
@@ -79,6 +79,11 @@ run cargo fmt --all --check
 # rendered byte. `--write` fixes every failure this reports.
 run .claude/semantic-breaks.py --check
 run python3 -B .claude/tests/semantic-breaks.py
+
+# Rustdoc below checks Rust comments only. Local Markdown links must also
+# resolve to tracked targets and current headings, including after docs move.
+run python3 -B .claude/markdown-links.py
+run python3 -B .claude/tests/markdown-links.py
 
 run cargo clippy --workspace --all-targets -- -D warnings
 # Guard the existing production performance scenarios at their exported callbacks.
@@ -213,7 +218,7 @@ run .claude/tests/plugin-swap.sh
 
 echo
 if [ "$CI_GROUP" = all ]; then
-  echo "✅ full CI passed (fmt + markdown breaks + workspace clippy + workspace tests + plugin check + render tests + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + reclaim safety + plugin swap)"
+  echo "✅ full CI passed (fmt + markdown breaks + markdown links + workspace clippy + workspace tests + plugin check + render tests + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + reclaim safety + plugin swap)"
 else
   echo "✅ CI group '$CI_GROUP' passed — one of: ${CI_GROUPS[*]}"
 fi
