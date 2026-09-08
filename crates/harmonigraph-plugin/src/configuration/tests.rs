@@ -1211,14 +1211,13 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
     let start = std::time::Instant::now();
     nice_assert_no_alloc::assert_no_alloc(|| {
         for _ in 0..SNAPSHOT_SLOTS {
-            publisher.baseline(&baseline, 1.0, Route::default()).unwrap();
+            publisher.baseline(&baseline, Route::default()).unwrap();
         }
-        assert_eq!(publisher.baseline(&baseline, 1.0, Route::default()), Err(PublishError::Busy));
+        assert_eq!(publisher.baseline(&baseline, Route::default()), Err(PublishError::Busy));
         for _ in SNAPSHOT_SLOTS..PUBLICATION_RING - 1 {
             publisher
                 .note(
                     harmonigraph_core::NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 0.8).into(),
-                    1.0,
                     Route::default(),
                 )
                 .unwrap();
@@ -1226,7 +1225,6 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
         assert_eq!(
             publisher.note(
                 harmonigraph_core::NoteEvent::off(2.0, SourceId::DIRECT, 0, 60).into(),
-                2.0,
                 Route::default()
             ),
             Err(PublishError::Lost)
@@ -1237,11 +1235,11 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
     });
     let duration = start.elapsed();
     // Consume outside the audio guard, then exercise payload reuse under it.
-    consumer.drain(|_, _, _| true);
+    consumer.drain(|_, _| true);
     nice_assert_no_alloc::assert_no_alloc(|| {
-        publisher.baseline(&baseline, 3.0, Route::default()).unwrap()
+        publisher.baseline(&baseline, Route::default()).unwrap()
     });
-    consumer.drain(|_, _, _| true);
+    consumer.drain(|_, _| true);
     eprintln!("canonical guarded fill: {SNAPSHOT_SLOTS} complete 64-voice payloads + {} notes + Busy/Lost = {duration:?}; no allocation/deallocation", PUBLICATION_RING - 1 - SNAPSHOT_SLOTS);
 }
 

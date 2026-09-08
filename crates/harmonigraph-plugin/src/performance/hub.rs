@@ -1186,7 +1186,7 @@ impl Hub {
                         recorder.fail_configuration();
                         Default::default()
                     });
-                if recorder.publish_note(delta, observation, route).is_err() {
+                if recorder.publish_note(delta, route).is_err() {
                     owner.direct.recovery = true;
                 } else {
                     self.trace.published(delta);
@@ -1266,7 +1266,7 @@ impl Hub {
                         recorder.fail_configuration();
                         Default::default()
                     });
-                    if recorder.publish_note(delta, observation, route).is_err() {
+                    if recorder.publish_note(delta, route).is_err() {
                         row.repair = true;
                     } else {
                         self.trace.published(delta);
@@ -1320,7 +1320,7 @@ impl Hub {
                 row.repair = true;
             }
         }
-        self.publish_snapshots(owner, recorder, observation, completed);
+        self.publish_snapshots(owner, recorder, completed);
         // Source journals may release only through this actual audio-owned
         // retention cut. GUI/file progress and baseline ack are absent here.
         self.acknowledge(completed);
@@ -1389,13 +1389,7 @@ impl Hub {
     /// what the Hub itself has applied, not from anything the Tune sends. The
     /// Tune-to-Hub snapshot this replaced existed to resynchronize `row.state`
     /// after a lost delta, and a lost delta is now a latched terminal fault.
-    fn publish_snapshots(
-        &mut self,
-        owner: &mut Owner,
-        recorder: &mut Recorder,
-        observation: f64,
-        through: i64,
-    ) {
+    fn publish_snapshots(&mut self, owner: &mut Owner, recorder: &mut Recorder, through: i64) {
         let clock = self.clock_id();
         let time_offset = self.presentation(0);
         if self.offer.is_none() {
@@ -1426,7 +1420,7 @@ impl Hub {
             let timing =
                 EventTiming { clock, input: sample, planned: None, sample, sample_rate: self.rate };
             let route = owner.recording_route(timing, time).unwrap_or_default();
-            if recorder.publish_baseline(&frame, observation, route).is_ok() {
+            if recorder.publish_baseline(&frame, route).is_ok() {
                 row.baseline_id = id;
                 row.repair = false;
             }

@@ -313,7 +313,7 @@ impl EditorShared {
         }
         let Some(offset) = self.clock.offset else { return false };
         let tracker = &mut self.ui.tracker;
-        self.consumer.drain(|delivery, _, _| {
+        self.consumer.drain(|delivery, _| {
             if let harmonigraph_record::publication::Delivery::Event(event) = delivery {
                 let result = tracker.handle_canonical_mapped(event, offset);
                 debug_assert!(result.is_ok(), "validated canonical publication");
@@ -1263,7 +1263,6 @@ mod tests {
                         }),
                         pitch_microcents: None,
                     },
-                    99.995,
                     Default::default(),
                 )
                 .unwrap();
@@ -1301,9 +1300,9 @@ mod tests {
             }),
             pitch_microcents: None,
         };
-        producer.note(accepted, 11.0, Default::default()).unwrap();
+        producer.note(accepted, Default::default()).unwrap();
         let event = NoteEvent::on(2.0, SourceId::DIRECT, 0, 72, 0.8);
-        producer.note(event.into(), 11.0, Default::default()).unwrap();
+        producer.note(event.into(), Default::default()).unwrap();
         assert!(shared.drain_into_tracker(21.0));
         assert_eq!(
             shared.ui.tracker.voices().find(|v| v.source == SourceId::DIRECT).unwrap().on_time,
@@ -1328,7 +1327,7 @@ mod tests {
         )
         .unwrap();
         producer.observe_clock(12.0);
-        producer.baseline(&baseline, 12.0, Default::default()).unwrap();
+        producer.baseline(&baseline, Default::default()).unwrap();
         shared.drain_into_tracker(22.2);
         let note = shared.ui.tracker.roll().notes().find(|n| n.source == SourceId::DIRECT).unwrap();
         assert_eq!(note.start, 12.0);
@@ -1356,7 +1355,6 @@ mod tests {
                     last: 3,
                     reason: GapReason::PublicationFull,
                 },
-                12.0,
                 Default::default(),
             )
             .unwrap();
@@ -1379,7 +1377,7 @@ mod tests {
             }],
         )
         .unwrap();
-        producer.baseline(&resumed, 12.0, Default::default()).unwrap();
+        producer.baseline(&resumed, Default::default()).unwrap();
         shared.drain_into_tracker(22.3);
         let voice = shared.ui.tracker.voices().find(|v| v.source == SourceId(3)).unwrap();
         let note = shared.ui.tracker.roll().notes().find(|v| v.source == SourceId(3)).unwrap();
@@ -1416,7 +1414,7 @@ mod tests {
 
         producer.observe_clock(1.0);
         producer
-            .note(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0).into(), 1.0, Default::default())
+            .note(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0).into(), Default::default())
             .unwrap();
         assert!(shared.catch_up(7.1), "a note arrived and the frame was not told");
 

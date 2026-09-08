@@ -368,15 +368,14 @@ impl Recorder {
     pub fn publish_note(
         &mut self,
         note: harmonigraph_core::canonical::NoteDelta,
-        observation_time: f64,
         route: publication::Route,
     ) -> Result<(), publication::PublishError> {
-        let result = self.publication.note(note, observation_time, route);
+        let result = self.publication.note(note, route);
         // Only the take lane's own outcome accounts the take. A display lane
         // that overflowed still returns Err, so the caller arms a snapshot,
         // but it must not mark the file incomplete.
         self.publication_result(result, route);
-        let display = self.display.note(note, observation_time, publication::Route::default());
+        let display = self.display.note(note, publication::Route::default());
         self.display_outage |= display == Err(publication::PublishError::Lost);
         result.and(display)
     }
@@ -384,13 +383,11 @@ impl Recorder {
     pub fn publish_baseline(
         &mut self,
         baseline: &harmonigraph_core::canonical::SourceBaseline,
-        observation_time: f64,
         route: publication::Route,
     ) -> Result<(), publication::PublishError> {
-        let result = self.publication.baseline(baseline, observation_time, route);
+        let result = self.publication.baseline(baseline, route);
         self.publication_result(result, route);
-        let display =
-            self.display.baseline(baseline, observation_time, publication::Route::default());
+        let display = self.display.baseline(baseline, publication::Route::default());
         result.and(display)
     }
 
@@ -1335,7 +1332,7 @@ pub mod testing {
     impl Capture {
         pub fn display_events(&mut self) -> Vec<harmonigraph_take::CanonicalRecord> {
             let mut events = Vec::new();
-            self.displayed.drain(|delivery, _, _| {
+            self.displayed.drain(|delivery, _| {
                 if let publication::Delivery::Event(event) = delivery {
                     events.push(harmonigraph_take::CanonicalRecord::from_event(event));
                 }
@@ -1353,7 +1350,7 @@ pub mod testing {
                 &harmonigraph_core::NoteTracker,
             ),
         ) -> usize {
-            self.displayed.drain(|delivery, _, _| {
+            self.displayed.drain(|delivery, _| {
                 if let publication::Delivery::Event(event) = delivery {
                     watch(&event, tracker);
                     tracker.handle_canonical(event).unwrap();
@@ -1389,7 +1386,7 @@ pub mod testing {
         }
         pub fn drain_canonical(&mut self) -> Vec<harmonigraph_take::CanonicalRecord> {
             let mut events = Vec::new();
-            self.publications.drain(|delivery, _, _| {
+            self.publications.drain(|delivery, _| {
                 if let publication::Delivery::Event(event) = delivery {
                     events.push(harmonigraph_take::CanonicalRecord::from_event(event));
                 }
@@ -1595,7 +1592,7 @@ impl CanonicalFanout {
     ) -> usize {
         use harmonigraph_core::canonical::CanonicalEvent;
         self.waiting_file = false;
-        publications.drain(|delivery, _, route| {
+        publications.drain(|delivery, route| {
             // A record can reach this lane before its independently queued
             // Start/NewPass control has drained. Retain its whole payload.
             let address = match delivery {
@@ -3953,7 +3950,7 @@ mod tests {
             } else {
                 harmonigraph_core::NoteEvent::off(time, SourceId::DIRECT, 0, 60)
             };
-            recorder.publish_note(event.into(), time, route).unwrap();
+            recorder.publish_note(event.into(), route).unwrap();
         }
         assert_eq!(recorder.publication_free(), 0);
         recorder.publication_lost(4096.0 / 48000.0, route);

@@ -52,12 +52,17 @@ enum Value {
     EpochComplete(u64),
 }
 
-/// The publisher's serial is not carried here. It names an outage's extent
-/// inside the [`PublicationGap`] it produces and nothing else reads it, since
-/// nothing on this lane is ever republished or acknowledged.
+/// Neither the publisher's serial nor the audio time the item was heard at is
+/// carried here.
+///
+/// The serial names an outage's extent inside the [`PublicationGap`] it
+/// produces and nothing else reads it, since nothing on this lane is ever
+/// republished or acknowledged. The observation time was the writer thread's,
+/// for a fanout that forwarded the display's copy along with the take's; the
+/// display has its own lane now, every drainer binds the value to `_`, and a
+/// payload that needs a time already carries its own.
 #[derive(Clone, Copy, Debug)]
 struct Item {
-    observation_time: f64,
     route: Route,
     value: Value,
 }
@@ -161,38 +166,32 @@ impl Publisher {
             _ => route,
         };
         self.outage = Some((gap, route));
-        self.flush_outage(time);
+        self.flush_outage();
         PublishError::Lost
     }
 
     /// Put the outage on the ring the moment it happens. The reserved cell is
     /// free unless an earlier gap already occupies it, and that gap has told
     /// the consumer everything this one would.
-    fn flush_outage(&mut self, observation_time: f64) {
+    fn flush_outage(&mut self) {
         let Some((gap, route)) = self.outage else { return };
-        if self.ring.push(Item { observation_time, route, value: Value::Gap(gap) }).is_ok() {
+        if self.ring.push(Item { route, value: Value::Gap(gap) }).is_ok() {
             self.outage = None;
         }
     }
 
-    fn push(
-        &mut self,
-        value: Value,
-        time: f64,
-        observation_time: f64,
-        route: Route,
-    ) -> Result<(), PublishError> {
+    fn push(&mut self, value: Value, time: f64, route: Route) -> Result<(), PublishError> {
         let Some(serial) = self.serial.checked_add(1) else { return Err(PublishError::Invalid) };
-        if !time.is_finite() || !observation_time.is_finite() || !route.time_offset.is_finite() {
+        if !time.is_finite() || !route.time_offset.is_finite() {
             return Err(PublishError::Invalid);
         }
         if self.ring.slots() < self.needed() {
             self.serial = serial;
             return Err(self.lost(time, route));
         }
-        self.flush_outage(observation_time);
+        self.flush_outage();
         self.serial = serial;
-        let _ = self.ring.push(Item { observation_time, route, value });
+        let _ = self.ring.push(Item { route, value });
         Ok(())
     }
 
@@ -202,24 +201,14 @@ impl Publisher {
         1 + GAP_RESERVE + usize::from(self.outage.is_some())
     }
 
-    pub fn note(
-        &mut self,
-        note: NoteDelta,
-        observation_time: f64,
-        route: Route,
-    ) -> Result<(), PublishError> {
+    pub fn note(&mut self, note: NoteDelta, route: Route) -> Result<(), PublishError> {
         note.validate().map_err(|_| PublishError::Invalid)?;
-        self.push(Value::Note(note), note.event.time, observation_time, route)
+        self.push(Value::Note(note), note.event.time, route)
     }
 
-    pub fn gap(
-        &mut self,
-        gap: PublicationGap,
-        observation_time: f64,
-        route: Route,
-    ) -> Result<(), PublishError> {
+    pub fn gap(&mut self, gap: PublicationGap, route: Route) -> Result<(), PublishError> {
         gap.validate().map_err(|_| PublishError::Invalid)?;
-        self.push(Value::Gap(gap), gap.time, observation_time, route)
+        self.push(Value::Gap(gap), gap.time, route)
     }
 
     /// What the source is sounding NOW. Published whole or not at all: both
@@ -228,7 +217,6 @@ impl Publisher {
     pub fn baseline(
         &mut self,
         baseline: &SourceBaseline,
-        observation_time: f64,
         route: Route,
     ) -> Result<(), PublishError> {
         baseline.validate().map_err(|_| PublishError::Invalid)?;
@@ -236,30 +224,24 @@ impl Publisher {
             return Err(PublishError::Busy);
         }
         let _ = self.snapshots.push(*baseline);
-        let result = self.push(Value::Snapshot, baseline.time, observation_time, route);
+        let result = self.push(Value::Snapshot, baseline.time, route);
         debug_assert!(result.is_ok(), "capacity for both halves was checked together");
         result
     }
 
+    /// A closure carries no time of its own, so the caller's observation time
+    /// is what stamps the gap if the lane is full — the only use either of
+    /// these has for it.
     pub fn pass_complete(
         &mut self,
         address: RecordAddress,
-        observation_time: f64,
+        observed: f64,
     ) -> Result<(), PublishError> {
-        self.push(
-            Value::PassComplete(address),
-            observation_time,
-            observation_time,
-            Route::default(),
-        )
+        self.push(Value::PassComplete(address), observed, Route::default())
     }
 
-    pub fn epoch_complete(
-        &mut self,
-        epoch: u64,
-        observation_time: f64,
-    ) -> Result<(), PublishError> {
-        self.push(Value::EpochComplete(epoch), observation_time, observation_time, Route::default())
+    pub fn epoch_complete(&mut self, epoch: u64, observed: f64) -> Result<(), PublishError> {
+        self.push(Value::EpochComplete(epoch), observed, Route::default())
     }
 }
 
@@ -278,38 +260,27 @@ impl Consumer {
     /// One bounded drain of the actual selected ring capacity. The borrowed
     /// snapshot cannot escape the call; deferred consumers must make an owned
     /// copy BEFORE this returns and permits reuse.
-    pub fn drain(&mut self, mut consume: impl FnMut(Delivery<'_>, f64, Route) -> bool) -> usize {
+    pub fn drain(&mut self, mut consume: impl FnMut(Delivery<'_>, Route) -> bool) -> usize {
         let mut count = 0;
         for _ in 0..PUBLICATION_RING {
             let Some(item) = self.pending.take().or_else(|| self.ring.pop().ok()) else { break };
             let consumed = match item.value {
-                Value::Note(note) => consume(
-                    Delivery::Event(CanonicalEvent::Note(note)),
-                    item.observation_time,
-                    item.route,
-                ),
-                Value::Gap(gap) => consume(
-                    Delivery::Event(CanonicalEvent::Gap(gap)),
-                    item.observation_time,
-                    item.route,
-                ),
+                Value::Note(note) => {
+                    consume(Delivery::Event(CanonicalEvent::Note(note)), item.route)
+                }
+                Value::Gap(gap) => consume(Delivery::Event(CanonicalEvent::Gap(gap)), item.route),
                 Value::PassComplete(address) => {
-                    consume(Delivery::PassComplete(address), item.observation_time, item.route)
+                    consume(Delivery::PassComplete(address), item.route)
                 }
-                Value::EpochComplete(epoch) => {
-                    consume(Delivery::EpochComplete(epoch), item.observation_time, item.route)
-                }
+                Value::EpochComplete(epoch) => consume(Delivery::EpochComplete(epoch), item.route),
                 Value::Snapshot => {
                     let Some(frame) = self.held.take().or_else(|| self.snapshots.pop().ok()) else {
                         debug_assert!(false, "a snapshot marker always follows its frame");
                         count += 1;
                         continue;
                     };
-                    let consumed = consume(
-                        Delivery::Event(CanonicalEvent::Baseline(&frame)),
-                        item.observation_time,
-                        item.route,
-                    );
+                    let consumed =
+                        consume(Delivery::Event(CanonicalEvent::Baseline(&frame)), item.route);
                     if !consumed {
                         self.held = Some(frame);
                     }
@@ -369,11 +340,7 @@ mod tests {
         let (mut publisher, mut consumer) = channel();
         for note in [60, 72] {
             publisher
-                .note(
-                    NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 0.8).into(),
-                    0.0,
-                    Route::default(),
-                )
+                .note(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 0.8).into(), Route::default())
                 .unwrap();
         }
         // Bends rather than repeated attacks: one onset per key, so a note the
@@ -381,15 +348,12 @@ mod tests {
         for i in 2..PUBLICATION_RING - GAP_RESERVE {
             let mut event = NoteEvent::on(i as f64, SourceId::DIRECT, 0, 72, 0.8);
             event.kind = harmonigraph_core::NoteEventKind::Tuning { semitones: 0.1 };
-            publisher.note(event.into(), i as f64, Route::default()).unwrap();
+            publisher.note(event.into(), Route::default()).unwrap();
         }
         assert_eq!(publisher.free(), 0, "the fixture must actually fill the lane");
         assert_eq!(
-            publisher.note(
-                NoteEvent::off(9000.0, SourceId::DIRECT, 0, 60).into(),
-                9000.0,
-                Route::default()
-            ),
+            publisher
+                .note(NoteEvent::off(9000.0, SourceId::DIRECT, 0, 60).into(), Route::default()),
             Err(PublishError::Lost)
         );
         // Nothing publishes after the loss: whatever the drainer can see now
@@ -397,7 +361,7 @@ mod tests {
         let mut tracker = harmonigraph_core::NoteTracker::new();
         let mut held_at_gap = None;
         let mut gaps = 0;
-        let drained = consumer.drain(|delivery, _, _| {
+        let drained = consumer.drain(|delivery, _| {
             let Delivery::Event(event) = delivery else { panic!("unexpected control") };
             if let CanonicalEvent::Gap(_) = event {
                 held_at_gap = Some(tracker.held_count());
@@ -415,9 +379,9 @@ mod tests {
         // The refresh restores what is sounding NOW and nothing else: key 60
         // was released while the lane was full and does not come back.
         publisher
-            .baseline(&frame(1, 9001.0, &[held(72, 0.0, 7_200_000_000)]), 9001.0, Route::default())
+            .baseline(&frame(1, 9001.0, &[held(72, 0.0, 7_200_000_000)]), Route::default())
             .unwrap();
-        consumer.drain(|delivery, _, _| {
+        consumer.drain(|delivery, _| {
             let Delivery::Event(event) = delivery else { panic!("unexpected control") };
             tracker.handle_canonical(event).unwrap();
             true
@@ -436,22 +400,22 @@ mod tests {
         let voices: Vec<_> =
             (0..64).map(|note| held(note, 0.0, i64::from(note) * 100_000_000)).collect();
         for id in 1..=SNAPSHOT_SLOTS as u64 {
-            publisher.baseline(&frame(id, 1.0, &voices), 1.0, Route::default()).unwrap();
+            publisher.baseline(&frame(id, 1.0, &voices), Route::default()).unwrap();
         }
         assert_eq!(
-            publisher.baseline(&frame(99, 1.0, &voices), 1.0, Route::default()),
+            publisher.baseline(&frame(99, 1.0, &voices), Route::default()),
             Err(PublishError::Busy),
             "a full snapshot FIFO refuses rather than reporting lost history"
         );
-        assert_eq!(consumer.drain(|_, _, _| false), 0, "a declining drainer retains the frame");
+        assert_eq!(consumer.drain(|_, _| false), 0, "a declining drainer retains the frame");
         let mut seen = Vec::new();
-        consumer.drain(|delivery, _, _| {
+        consumer.drain(|delivery, _| {
             let Delivery::Event(CanonicalEvent::Baseline(frame)) = delivery else { panic!() };
             seen.push(frame.id);
             true
         });
         assert_eq!(seen, (1..=SNAPSHOT_SLOTS as u64).collect::<Vec<_>>());
-        publisher.baseline(&frame(99, 2.0, &voices), 2.0, Route::default()).unwrap();
+        publisher.baseline(&frame(99, 2.0, &voices), Route::default()).unwrap();
         eprintln!(
             "canonical layouts: NoteDelta={} Item={} VoiceBaseline={} SourceBaseline={} ring_payload={} snapshot_fifo={}",
             std::mem::size_of::<NoteDelta>(),

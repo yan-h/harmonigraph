@@ -79,23 +79,20 @@ fn delayed_history_and_baseline_keep_original_pass_and_both_wav_tails() {
     ];
     let route = publication::Route { address: Some(first), time_offset: 19.0 };
     for event in events {
-        recorder.publish_note(event, 10.0, route).unwrap();
+        recorder.publish_note(event, route).unwrap();
     }
     let empty = SourceBaseline::new(source, 1, 2.0, 3, true, &[]).unwrap();
-    recorder.publish_baseline(&empty, 10.0, route).unwrap();
+    recorder.publish_baseline(&empty, route).unwrap();
     // Duplicated transfer must not write an already completed lifetime twice.
     for event in events {
-        recorder.publish_note(event, 10.0, route).unwrap();
+        recorder.publish_note(event, route).unwrap();
     }
-    recorder.publish_baseline(&empty, 10.0, route).unwrap();
-    recorder
-        .publish_note(accepted(NoteEvent::on(2.5, source, 0, 60, 0.7), 4), 10.0, route)
-        .unwrap();
+    recorder.publish_baseline(&empty, route).unwrap();
+    recorder.publish_note(accepted(NoteEvent::on(2.5, source, 0, 60, 0.7), 4), route).unwrap();
     // Explicit disarmed provenance remains unrecorded despite the active file.
     recorder
         .publish_note(
             NoteEvent::on(3.0, SourceId::DIRECT, 0, 90, 0.8).into(),
-            10.0,
             publication::Route::default(),
         )
         .unwrap();
@@ -148,14 +145,13 @@ fn real_publication_ring_loss_is_durable_after_the_last_callback() {
         recorder
             .publish_note(
                 NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into(),
-                1.0,
                 route,
             )
             .unwrap();
     }
     assert_eq!(recorder.publication_free(), 0, "the fixture must actually fill the lane");
     assert_eq!(
-        recorder.publish_note(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(), 1.0, route),
+        recorder.publish_note(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(), route),
         Err(publication::PublishError::Lost)
     );
     // Source and musical state never require this writer to acknowledge output.
@@ -216,13 +212,9 @@ fn all_128_passes_need_source_closure_before_the_129th_file() {
                     address: Some(RecordAddress { epoch: 1, pass: 129 }),
                     time_offset: 0.0,
                 };
-                recorder.publish_baseline(&baseline, 11.0, route).unwrap();
+                recorder.publish_baseline(&baseline, route).unwrap();
                 recorder
-                    .publish_note(
-                        NoteEvent::on(11.0, SourceId::DIRECT, 0, 60, 0.8).into(),
-                        11.0,
-                        route,
-                    )
+                    .publish_note(NoteEvent::on(11.0, SourceId::DIRECT, 0, 60, 0.8).into(), route)
                     .unwrap();
                 writer.drain(&mut capture);
                 let displayed = capture.display_events();
@@ -289,7 +281,6 @@ fn real_worker_materializes_pending_start_before_accounting_publication_loss() {
             recorder
                 .publish_baseline(
                     &baseline,
-                    1.0,
                     publication::Route { address: Some(address), time_offset: 0.0 },
                 )
                 .unwrap();
@@ -298,7 +289,6 @@ fn real_worker_materializes_pending_start_before_accounting_publication_loss() {
             recorder
                 .publish_note(
                     NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into(),
-                    1.0,
                     publication::Route { address: Some(address), time_offset: 0.0 },
                 )
                 .unwrap();
@@ -306,7 +296,6 @@ fn real_worker_materializes_pending_start_before_accounting_publication_loss() {
         assert_eq!(
             recorder.publish_note(
                 NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(),
-                1.0,
                 publication::Route { address: Some(address), time_offset: 0.0 }
             ),
             Err(publication::PublishError::Lost)
@@ -385,11 +374,9 @@ fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
     wait_for(&fence.worker_after_stop.entered);
     let route = publication::Route { address: Some(address), time_offset: 0.0 };
     recorder
-        .publish_note(accepted(NoteEvent::on(0.01, SourceId(1), 0, 60, 0.8), 1), 1.0, route)
+        .publish_note(accepted(NoteEvent::on(0.01, SourceId(1), 0, 60, 0.8), 1), route)
         .unwrap();
-    recorder
-        .publish_note(accepted(NoteEvent::off(0.02, SourceId(1), 0, 60), 2), 1.0, route)
-        .unwrap();
+    recorder.publish_note(accepted(NoteEvent::off(0.02, SourceId(1), 0, 60), 2), route).unwrap();
     recorder.source_pass_complete(address, 1.0);
     recorder.source_epoch_complete(1, 1.0);
     drop(recorder);
@@ -442,11 +429,9 @@ fn retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped() 
     assert!(!fence.worker_finished.load(Ordering::Acquire));
     let route = publication::Route { address: Some(address), time_offset: 0.0 };
     recorder
-        .publish_note(accepted(NoteEvent::on(0.01, SourceId(1), 0, 60, 0.8), 1), 1.0, route)
+        .publish_note(accepted(NoteEvent::on(0.01, SourceId(1), 0, 60, 0.8), 1), route)
         .unwrap();
-    recorder
-        .publish_note(accepted(NoteEvent::off(0.02, SourceId(1), 0, 60), 2), 1.0, route)
-        .unwrap();
+    recorder.publish_note(accepted(NoteEvent::off(0.02, SourceId(1), 0, 60), 2), route).unwrap();
     recorder.source_pass_complete(address, 1.0);
     recorder.source_epoch_complete(1, 1.0);
     drop(recorder);

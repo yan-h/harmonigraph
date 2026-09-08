@@ -397,7 +397,7 @@ impl Owner {
                     Default::default()
                 }
             };
-            if recorder.publish_note(delta, observation_time, route).is_err() {
+            if recorder.publish_note(delta, route).is_err() {
                 self.direct.recovery = true;
             }
             self.direct.published();
@@ -448,7 +448,7 @@ impl Owner {
         else {
             return;
         };
-        match recorder.publish_baseline(&frame, observation_time, route) {
+        match recorder.publish_baseline(&frame, route) {
             Ok(()) => {
                 self.direct.baseline_id = id;
                 self.direct.recovery = false;
