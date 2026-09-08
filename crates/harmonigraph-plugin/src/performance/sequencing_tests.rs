@@ -2566,3 +2566,118 @@ fn a_pending_delay_change_keeps_the_reported_latency_at_the_active_one() {
     }
     assert_eq!(source.source_snapshot().held, 0);
 }
+
+/// What the host has been told about the latency, and what it read when it was
+/// told. A host compensates with the value it takes inside `changed()`, so a
+/// published number nobody was told about is a number nobody is using.
+fn announced(device: &Device) -> (usize, usize) {
+    (
+        device._stats.latency_changes.load(Ordering::Relaxed),
+        device._stats.observed_latency.load(Ordering::Relaxed),
+    )
+}
+fn restarts(device: &Device) -> usize {
+    device._stats.restarts.load(Ordering::Relaxed)
+}
+
+#[test]
+fn an_activation_that_adopts_a_pending_delay_announces_it() {
+    // The host reactivates before it services `on_main_thread`, so the
+    // activation adopts the request while the task that would have announced
+    // it is still queued. Adopting it silently leaves the host compensating
+    // for the delay it last read, with the notification it is waiting for
+    // deduplicated away by the request the activation already carries.
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut source) = production_pair();
+    assert_eq!(announced(&source), (1, 512), "the first activation published its own delay");
+    assert_eq!(restarts(&source), 0);
+    source.run_format(1536, vec![source.param_event(DELAY_PARAM, 1.0, 1)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    source.run_format(2048, vec![], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    assert_eq!(announced(&source), (1, 512), "the request alone tells the host nothing");
+    assert_eq!(restarts(&source), 0, "and the task carrying it has not been delivered");
+    hub.reactivate_format(44100.0, 512);
+    source.reactivate_format(44100.0, 512);
+    assert_eq!(source.latency(), 1024, "the activation adopted the request");
+    assert_eq!(
+        announced(&source),
+        (2, 1024),
+        "and told the host, which read the adopted delay rather than the one it had"
+    );
+    // The queued task arrives after the change it was carrying was adopted.
+    source.main();
+    hub.main();
+    assert_eq!(restarts(&source), 0, "a request already adopted asks for no further restart");
+    assert_eq!(announced(&source), (2, 1024), "and is announced once, not twice");
+}
+
+#[test]
+fn a_delay_request_delivered_while_deactivated_is_announced_at_once() {
+    // The host services `on_main_thread` between the deactivation and the
+    // activation. There is no activation left to wait for: the number moves
+    // and the host is told, with no restart to ask for.
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut source) = production_pair();
+    source.run_format(1536, vec![source.param_event(DELAY_PARAM, 1.0, 1)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    source.run_format(2048, vec![], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    source.deactivate();
+    source.main();
+    assert_eq!(source.latency(), 1024);
+    assert_eq!(
+        announced(&source),
+        (2, 1024),
+        "a deactivated plugin publishes and announces at once"
+    );
+    assert_eq!(restarts(&source), 0, "and asks for no restart it is already between");
+    hub.reactivate_format(44100.0, 512);
+    source.activate_format(44100.0, 512);
+    assert_eq!(source.latency(), 1024);
+    assert_eq!(
+        announced(&source),
+        (2, 1024),
+        "the activation that follows repeats neither the value nor the announcement"
+    );
+}
+
+#[test]
+fn the_last_delay_request_is_the_one_the_activation_announces() {
+    // A second edit while the restart answering the first is still outstanding.
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut source) = production_pair();
+    for (raw, value) in [(1536, 1.0), (2560, 2.0)] {
+        source.run_format(raw, vec![source.param_event(DELAY_PARAM, value, 1)], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        source.run_format(raw + 512, vec![], None, None, 512);
+        hub.run_format(raw + 512, vec![], None, None, 512);
+        source.main();
+        hub.main();
+    }
+    assert_eq!(restarts(&source), 2, "each request asks the host for the restart that adopts it");
+    assert_eq!(announced(&source), (1, 512), "and neither moves what the host is compensating for");
+    hub.reactivate_format(44100.0, 512);
+    source.reactivate_format(44100.0, 512);
+    assert_eq!(source.latency(), 1536, "the activation adopts the last request, not the first");
+    assert_eq!(announced(&source), (2, 1536), "announced once, at the value that was adopted");
+    // Down to 1x and back to 3x inside one activation. The second edit leaves
+    // the published number where it already is, so the restart it would have
+    // asked for has nothing left to adopt.
+    for (raw, value) in [(3584, 0.0), (4096, 2.0)] {
+        source.run_format(raw, vec![source.param_event(DELAY_PARAM, value, 1)], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        source.main();
+        hub.main();
+    }
+    assert_eq!(
+        restarts(&source),
+        3,
+        "the edit away asked for a restart; the edit back asks for none"
+    );
+    assert_eq!(announced(&source), (2, 1536), "with nothing to adopt, nothing is announced");
+    hub.reactivate_format(44100.0, 512);
+    source.reactivate_format(44100.0, 512);
+    assert_eq!(source.latency(), 1536);
+    assert_eq!(announced(&source), (2, 1536), "including across the activation that answers it");
+}
