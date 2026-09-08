@@ -2,6 +2,7 @@
 """Generate, validate or import the embedded production Metal shader corpus."""
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -20,7 +21,7 @@ FLAGS = ["-std=metal3.2", "-mmacosx-version-min=15.0", "-ffast-math", "-fpreserv
 def verify(directory):
     manifest = json.loads((directory / "manifest.json").read_text())
     assert manifest["schema"] == 1
-    files = {p.name for p in directory.iterdir() if p.name != "manifest.json"}
+    files = {p.name for p in directory.iterdir() if p.suffix in (".metal", ".options", ".metallib")}
     assert files and files == set(manifest["sha256"]), "artifact file set changed"
     for name, digest in manifest["sha256"].items():
         assert Path(name).name == name, "artifact filenames must be simple"
@@ -106,31 +107,38 @@ def install(directory):
     shutil.copytree(directory, EMBEDDED)
 
 
-def generate(directory, logs):
-    assert not directory.exists(), "export requires a fresh directory"
-    directory.mkdir(parents=True)
-    renderer = build("harmonigraph-render", logs)
-    run(renderer, ["production_metal_asset_catalog", "--ignored"], "export", "export-catalog", logs, directory)
-    compile_assets(directory)
-    # Validate the actual embedded path, not a runtime sidecar override. Restore
-    # the caller's corpus even on failure; only the explicit import mutates it.
+@contextmanager
+def preserve_embedded():
+    # Temporary validation builds must not persist changes to the caller's corpus.
     with tempfile.TemporaryDirectory(prefix="harmonigraph-assets-") as backup:
         saved = Path(backup) / "assets"
         shutil.copytree(EMBEDDED, saved)
         try:
-            install(directory)
-            check(logs)
-            binding_controls(directory, logs)
+            yield
         finally:
             shutil.rmtree(EMBEDDED)
             shutil.copytree(saved, EMBEDDED)
+
+
+def generate(directory, logs):
+    assert not directory.exists(), "export requires a fresh directory"
+    assert EMBEDDED.resolve() not in directory.resolve().parents
+    directory.mkdir(parents=True)
+    renderer = build("harmonigraph-render", logs)
+    run(renderer, ["production_metal_asset_catalog", "--ignored"], "export", "export-catalog", logs, directory)
+    compile_assets(directory)
+    # Validate actual embedded bytes, without a runtime sidecar override.
+    with preserve_embedded():
+        install(directory)
+        check(logs)
+        binding_controls(directory, logs)
 
 
 def rewrite_manifest(directory):
     manifest = json.loads((directory / "manifest.json").read_text())
     manifest["sha256"] = {
         p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in sorted(directory.iterdir()) if p.name != "manifest.json"
+        for p in sorted(directory.iterdir()) if p.suffix in (".metal", ".options", ".metallib")
     }
     (directory / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
@@ -179,7 +187,7 @@ def binding_controls(production, logs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("generate", "check", "verify", "import"))
+    parser.add_argument("action", choices=("generate", "check", "controls", "verify", "import"))
     parser.add_argument("directory", nargs="?", type=Path)
     parser.add_argument("--logs", type=Path, default=ROOT / "target/shader-asset-logs")
     args = parser.parse_args()
@@ -191,6 +199,10 @@ def main():
         generate(directory, args.logs)
     elif args.action == "check":
         check(args.logs)
+    elif args.action == "controls":
+        verify(EMBEDDED)
+        with preserve_embedded():
+            binding_controls(EMBEDDED, args.logs)
     elif args.action == "import":
         assert args.directory is not None
         install(directory)

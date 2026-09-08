@@ -42,6 +42,8 @@ Ordinary reference tests retain normal fallback, so their test-only shaders do n
 The regular workspace gates remain required too.
 Generation also builds a separate temporary storage-array diagnostic corpus and verifies strict rejection/source fallback for missing, mismatched and invalid libraries.
 Those diagnostic libraries are never imported into the shipping corpus.
+The PR workflow runs these controls after checking committed coverage; they can also be run with `python3 tools/shader-assets.py controls` when Apple's compiler is available.
+Generation and controls temporarily rebuild the asset crate, so do not run other Cargo builds in the same checkout concurrently.
 
 With Apple's Metal toolchain available, generate into a fresh directory:
 
@@ -79,3 +81,47 @@ It asserts all three editor states were dropped and exactly one device was creat
 First/full-frame times are observed on the next UI update after a paint callback; they include up to one subsequent update interval.
 Headless cache-blocked measurements do not establish natural long-idle Bitwig behavior or physical display latency.
 The installed DAW slot is selected by the user through `load-plugin.sh`; generation and validation never swap it.
+
+## Measured production-path results
+
+The [initial generator](https://github.com/yan-h/harmonigraph/actions/runs/34175684884) produced 65 libraries, totaling 575,815 library bytes and 1,090,702 bytes including source/options/manifest.
+Strict catalog replay made 820 library loads with zero source calls.
+All 14 renderer goldens and five offline goldens passed without re-baselining.
+The [expanded control run](https://github.com/yan-h/harmonigraph/actions/runs/34176508889) passed compiled storage-array binding checks at two lengths and two offsets.
+Missing, mismatched and invalid library controls each failed strictly and reproduced the expected values through exactly one source fallback in normal mode.
+
+Five alternating fresh-process pairs per condition on the Apple M1 Pro measured the current asynchronous native editor path:
+
+| Median observed stage | Cache blocked, source | Cache blocked, assets | Cache available, source | Cache available, assets |
+| --- | ---: | ---: | ---: | ---: |
+| First frame, first opening | 305.7 ms | 147.9 ms | 79.2 ms | 75.6 ms |
+| Full ready, first opening | 4,770.8 ms | 766.0 ms | 95.8 ms | 95.2 ms |
+| Full ready, second opening | 453.7 ms | 59.6 ms | 24.4 ms | 21.9 ms |
+| Full ready, third opening | 448.2 ms | 59.2 ms | 21.4 ms | 21.1 ms |
+
+Each process completed three real window lifetimes with one retained device and three dropped window states.
+Strict processes reported 106 library loads with zero source calls, load failures or rejected requests.
+Cache-blocked first full readiness improved about 84% in this series; warm readiness was essentially unchanged.
+The cold reopen cost includes fresh egui/window work even though lattice pipelines and the device are retained.
+See the [durable evidence](evidence/production-metal-assets/README.md) for every sample, binary provenance and the process-local cache restriction.
+Actual Bitwig active-audio contention and natural long-idle behavior remain host checks for the loadable draft.
+
+The existing GPU probes ran eight alternating source/strict pairs after an unmeasured warmup pair, with 240 frames per workload and actual backend-path counters checked.
+Median GPU times across the per-run medians were:
+
+| Workload | Source | Assets |
+| --- | ---: | ---: |
+| Gaussian, live view | 0.787 ms | 0.762 ms |
+| Gaussian, top of shadow bar | 0.579 ms | 0.585 ms |
+| Distance, live view | 0.548 ms | 0.546 ms |
+| Distance, top of shadow bar | 0.513 ms | 0.528 ms |
+| 225 audio rings, no MIDI glow | 0.719 ms | 0.620 ms |
+| 225 audio rings, one MIDI glow | 0.724 ms | 0.740 ms |
+| Repeated Distance live reference | 0.549 ms | 0.534 ms |
+| Repeated top-of-bar reference | 0.516 ms | 0.516 ms |
+
+These samples show no consistent GPU slowdown: paired differences change sign, and the small median shifts are within the observed run-to-run spread.
+The no-glow audio-ring workload is particularly noisy; its lower asset median is not a reliable speedup claim.
+The measurement covers the prepare encoder, including scene/shadow/bloom work, and excludes the final egui composite.
+It is representative evidence on this M1 Pro, not a guarantee for every GPU or workload.
+No authoring shader, precision or optimization setting was downgraded.

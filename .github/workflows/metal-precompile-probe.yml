@@ -46,7 +46,6 @@ jobs:
         if: ${{ !inputs.regenerate }}
         run: python3 tools/shader-assets.py check
       - name: Ensure Apple's compiler is available
-        if: ${{ inputs.regenerate }}
         run: |
           if ! xcrun --sdk macosx metal --version; then
             xcodebuild -downloadComponent MetalToolchain
@@ -54,6 +53,9 @@ jobs:
       - name: Generate and validate replacement embedded assets
         if: ${{ inputs.regenerate }}
         run: python3 tools/shader-assets.py generate target/generated-metal-assets
+      - name: Exercise metadata and provider fallback
+        if: ${{ !inputs.regenerate }}
+        run: python3 tools/shader-assets.py controls
       - name: Preserve assets and validation evidence
         if: always()
         uses: actions/upload-artifact@v4

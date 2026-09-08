@@ -12,7 +12,9 @@ fn main() {
     let files: BTreeSet<_> = fs::read_dir(&directory)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .filter(|name| name != "manifest.json")
+        .filter(|name| {
+            [".metal", ".options", ".metallib"].iter().any(|suffix| name.ends_with(suffix))
+        })
         .collect();
     assert_eq!(files, hashes.keys().cloned().collect(), "Metal artifact file set changed");
     for (name, hash) in hashes {

@@ -126,6 +126,7 @@ fn a_frame_of_audio_rings_costs_this_much() {
 }
 
 fn time_a_frame_of_names(mut scene: Scene, what: &str) {
+    crate::shader_assets::initialize();
     if let Ok(value) = std::env::var("PROBE_BLOOM") {
         scene.bloom_strength = value.parse().expect("PROBE_BLOOM is a strength");
     }
@@ -309,6 +310,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         SIZE[1],
         samples.len(),
     );
+    eprintln!("METAL_TIMING_ASSETS {:?}", crate::shader_assets::statistics());
 }
 
 /// Device setup and pipeline compilation on successive fresh renderers.
