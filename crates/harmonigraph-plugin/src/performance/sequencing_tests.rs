@@ -2266,3 +2266,67 @@ fn production_a_full_sixty_four_voices_still_replace_one_of_their_own_in_one_cal
     // session comes back to nothing owed rather than one short.
     assert_eq!(session.credits.load(Ordering::Acquire), 0);
 }
+
+/// A tuning edit is effective at the NEXT Hub block boundary, and the group
+/// assigned before it keeps the configuration it started with -- through the
+/// emission that lands a whole callback after that boundary.
+#[test]
+fn production_a_tuning_edit_waits_for_the_next_boundary_and_a_group_keeps_its_snapshot() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    let bends = |output: &Sink| {
+        output
+            .values
+            .iter()
+            .filter_map(|(_, event)| match event {
+                Event::Expression { kind: 2, id, value, .. } => Some((*id, *value)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // A fifth of 710c, adopted at the 2048 boundary. Neither configuration in
+    // this fixture is the default, so a lost snapshot cannot read as a kept one.
+    hub.run_format(1536, vec![tuning_parameter(&hub, 710.0, 0)], None, None, 512);
+    source.run_format(1536, vec![], None, None, 512);
+    // D and A, one group at raw2148, while THIS Hub block also carries 690c at
+    // its own offset0. Two fifths and three fifths from the origin, so the
+    // value the group is assigned under is visible in the bend.
+    source.run_format(
+        2048,
+        vec![note(1, 0, 62, 100, true), note(2, 0, 69, 100, true)],
+        None,
+        None,
+        512,
+    );
+    hub.run_format(2048, vec![tuning_parameter(&hub, 690.0, 0)], None, None, 512);
+    // Input2148 + D512 = raw2660, so the group completes a whole callback after
+    // the boundary that adopted 690c.
+    let group = bends(&source.run_format(2560, vec![], None, None, 512));
+    hub.run_format(2560, vec![], None, None, 512);
+    assert_eq!(
+        group,
+        [(1, 0.2), (2, 0.3)],
+        "the group keeps the 710c it was assigned under, across the boundary that adopted 690c"
+    );
+    // The same D, assigned by a Hub block that has adopted the edit.
+    let mut raw = 3072;
+    source.run_format(raw, vec![note(1, 0, 62, 0, false), note(2, 0, 69, 0, false)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    raw += 512;
+    source.run_format(raw, vec![note(3, 0, 62, 0, true)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    raw += 512;
+    let after = bends(&source.run_format(raw, vec![], None, None, 512));
+    hub.run_format(raw, vec![], None, None, 512);
+    assert_eq!(after, [(3, -0.2)], "two fifths of 690c is 20 cents flat of the tempered second");
+    raw += 512;
+    source.run_format(raw, vec![note(3, 0, 62, 0, false)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    for _ in 0..4 {
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
+}
