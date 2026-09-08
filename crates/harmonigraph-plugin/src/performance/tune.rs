@@ -49,7 +49,7 @@ impl Default for HarmonigraphTune {
 }
 impl HarmonigraphTune {
     fn multiplier(&self) -> u32 {
-        self.params.delay.value().max(1) as u32
+        self.params.delay.value().clamp(1, super::protocol::DELAY_MULTIPLIER_MAX) as u32
     }
     /// What the host is told. Zero frames means no activation has advertised a
     /// format yet, and there is no delay to report until one has.

@@ -650,6 +650,41 @@ fn production_missing_assignment_retains_one_late_onset_and_fixed_latency() {
 }
 
 #[test]
+fn the_deadline_counter_counts_each_note_once_with_worst_lateness() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    // Two onsets in one callback, 256 samples apart. The Hub runs a callback
+    // behind, so both wait past input+D and both emit in the same later
+    // callback: the first one 512 samples late, the second only 256.
+    assert!(source
+        .run_format(
+            1536,
+            vec![note(7, 0, 60, 0, true), note(8, 0, 62, 256, true)],
+            None,
+            None,
+            512
+        )
+        .values
+        .is_empty());
+    // Both deadlines pass here, unassigned, and each note is seen late a
+    // second time when it finally emits below. Counting arrivals rather than
+    // notes would double this.
+    assert!(source.run_format(2048, vec![], None, None, 512).values.is_empty());
+    hub.run_format(1536, vec![], None, None, 512);
+    let late = source.run_format(2560, vec![], None, None, 512);
+    assert_eq!(late.values.iter().filter(|(_, event)| event.attack().is_some()).count(), 2);
+    assert_eq!(source.shared().deadline_misses.load(Ordering::Acquire), 2);
+    assert_eq!(
+        source.shared().extra_delay.load(Ordering::Acquire),
+        512,
+        "the worst of 512 and 256, not the last measured and not their mean"
+    );
+    hub.run_format(2048, vec![], None, None, 512);
+    assert_eq!(hub.shared().deadline_misses.load(Ordering::Acquire), 2);
+    assert_eq!(hub.shared().extra_delay.load(Ordering::Acquire), 512);
+}
+
+#[test]
 fn production_late_onset_keeps_its_duration_and_shifts_only_its_own_release() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
