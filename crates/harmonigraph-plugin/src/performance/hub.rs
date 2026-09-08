@@ -158,8 +158,8 @@ pub struct Hub {
     publication_clock: ClockId,
     transition: Option<setup::Update>,
     invalidated: bool,
-    /// Set by a reactivation and consumed by the Reset `start_processing`
-    /// raises straight after it, which is the same boundary and not a fault.
+    /// Set by a reactivation and cleared by the first callback after it. Every
+    /// Reset in between belongs to that same boundary, not to a clock failure.
     reactivated: bool,
     clock_loss_pending: bool,
     retired_publication: Option<(Box<Owner>, Recorder, f64)>,
@@ -292,7 +292,6 @@ impl Hub {
             // was not processing across that boundary, so there is no accepted
             // history for an invalidation to protect and nothing that could
             // clear it afterwards: take the adoption as the reset.
-            self.reactivated = false;
             return true;
         }
         if allow_idle
@@ -456,6 +455,7 @@ impl Hub {
         self.shared.request_main();
     }
     pub fn begin(&mut self, callback: api::Callback, owner: &mut Owner, presentation: f64) {
+        self.reactivated = false;
         self.attach(owner);
         self.callback = Some(callback);
         self.collected = 0;
