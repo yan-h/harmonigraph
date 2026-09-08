@@ -2226,3 +2226,103 @@ fn production_reset_retires_a_cohort_that_never_published_its_marker() {
     drop(hub);
     assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
 }
+
+#[test]
+fn production_a_full_sixty_four_voices_still_replace_one_of_their_own_in_one_callback() {
+    let _scope = crate::test_scope::enter();
+    let musical = |sink: &Sink| {
+        sink.values
+            .iter()
+            .filter(|(_, event)| !matches!(event, Event::Midi { data: [0xf8, ..], .. }))
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    let (hub, source) = production_pair();
+    let mut raw = 1536;
+    let sounding =
+        (0..64).map(|index| note(index + 1, 0, 24 + index as i16, 0, true)).collect::<Vec<_>>();
+    source.run_format(raw, sounding, None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    loop {
+        raw += 512;
+        assert!(raw < 8192, "the sixty-four never sounded");
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        if source.source_snapshot().held == 64 {
+            break;
+        }
+    }
+    // Every one of the source's 64 reservations is spoken for, and the one this
+    // retrigger displaces stays charged until the Hub acknowledges its release
+    // — a whole round trip after the choke goes out. A replacement that had to
+    // find a 65th would emit its choke here and its onset in a later callback,
+    // leaving the key dead in between.
+    raw += 512;
+    source.run_format(raw, vec![note(200, 0, 24, 0, true)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    let replaced = loop {
+        raw += 512;
+        assert!(raw < 16384, "the retrigger never emitted");
+        let out = source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        if !musical(&out).is_empty() {
+            break out;
+        }
+    };
+    assert!(
+        matches!(
+            musical(&replaced)[..],
+            [
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, key: 24, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 200, key: 24, .. }),
+                (0, Event::Expression { kind: 2, id: 200, .. }),
+            ]
+        ),
+        "a full source replaces one of its own voices whole: {:?}",
+        musical(&replaced)
+    );
+    assert_eq!(
+        source.source_snapshot().held,
+        64,
+        "and the pair shares one reservation rather than needing a sixty-fifth"
+    );
+    // DIRECT reaches the same preparation with no round trip in the way, so its
+    // predecessor's release is unacknowledged for certain: choke and onset are
+    // in the callback the retrigger arrives in.
+    raw += 512;
+    let sounding =
+        (0..64).map(|index| note(index + 1, 0, 24 + index as i16, 0, true)).collect::<Vec<_>>();
+    source.run_format(raw, vec![], None, None, 512);
+    assert_eq!(hub.run_format(raw, sounding, None, None, 512).values.len(), 64);
+    raw += 512;
+    source.run_format(raw, vec![], None, None, 512);
+    let direct = hub.run_format(raw, vec![note(200, 0, 24, 0, true)], None, None, 512);
+    assert!(
+        matches!(
+            musical(&direct)[..],
+            [
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, key: 24, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 200, key: 24, .. }),
+            ]
+        ),
+        "DIRECT replaces its own voice the same way: {:?}",
+        musical(&direct)
+    );
+    let session = inspect_hub(&hub, |hub| hub.offer.as_ref().unwrap().session.clone());
+    let mut off = vec![note(200, 0, 24, 0, false)];
+    off.extend((1..64).map(|index| note(index + 1, 0, 24 + index as i16, 0, false)));
+    raw += 512;
+    source.run_format(raw, off.clone(), None, None, 512);
+    hub.run_format(raw, off, None, None, 512);
+    for _ in 0..16 {
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
+    // An inherited reservation is still exactly one credit, carrying the
+    // predecessor's acknowledgement debt as well as the successor's, so the
+    // session comes back to nothing owed rather than one short.
+    assert_eq!(session.credits.load(Ordering::Acquire), 0);
+}

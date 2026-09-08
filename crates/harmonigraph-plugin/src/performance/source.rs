@@ -142,6 +142,9 @@ struct Permit {
     credit: bool,
     gate: bool,
     emergency: bool,
+    /// The silent note whose reservation this onset took over instead of
+    /// claiming a fresh one, so an unaccepted onset can hand it straight back.
+    inherited: u16,
 }
 #[derive(Clone, Copy)]
 struct Release {
@@ -1899,6 +1902,7 @@ impl Source {
             credit: false,
             gate: false,
             emergency: false,
+            inherited: NONE,
         };
         if !self.channel_ready(pending) || !self.channel_wire_bindings_available(pending) {
             return false;
@@ -1907,21 +1911,40 @@ impl Source {
             if !self.admitted(pending.generation) || !self.assignment_ready(pending.life) {
                 return false;
             }
-            // A channel choke can end the logical reservation while the
-            // original Note-Off remains a real wire obligation. Both kinds
-            // share the fixed64 emergency voice owners without double counting.
-            let unreserved_offs = self
-                .owed_note_off
-                .iter()
-                .copied()
-                .filter(|index| *index != NONE)
-                .filter(|index| !self.lives.at(*index).unwrap().reserved)
-                .count();
-            if self.held() + unreserved_offs >= 64 {
-                return false;
-            }
-            let Some(slot) = self.reserved.iter().position(|v| *v == NONE) else {
-                return false;
+            // Rule two makes a replacement the same voice as the note it
+            // displaces rather than a second one, so the pair holds one
+            // reservation and not one each -- the same cell `State` already
+            // reuses for a retrigger. Its predecessor is silent by the time
+            // this onset is prepared, because an unaccepted choke takes the
+            // onset down with it before either is permitted, so that
+            // reservation IS the room this onset needs. Inheriting it retires
+            // nothing early: the debt moves with the slot, and a successor's
+            // terminal cut and time both dominate its predecessor's, so the
+            // one credit comes back no sooner than the two would have.
+            // Claiming a 65th instead is what left 64 held notes plus a
+            // retrigger choked and silent until a later callback.
+            let inherited = self.replaced_reservation(position);
+            let slot = match inherited {
+                Some(slot) => slot,
+                None => {
+                    // A channel choke can end the logical reservation while the
+                    // original Note-Off remains a real wire obligation. Both kinds
+                    // share the fixed64 emergency voice owners without double counting.
+                    let unreserved_offs = self
+                        .owed_note_off
+                        .iter()
+                        .copied()
+                        .filter(|index| *index != NONE)
+                        .filter(|index| !self.lives.at(*index).unwrap().reserved)
+                        .count();
+                    if self.held() + unreserved_offs >= 64 {
+                        return false;
+                    }
+                    let Some(slot) = self.reserved.iter().position(|v| *v == NONE) else {
+                        return false;
+                    };
+                    slot
+                }
             };
             if let Some(offer) = &self.offer {
                 let row = &offer.session.rows[usize::from(offer.lease.slot - 1)];
@@ -1940,20 +1963,25 @@ impl Source {
                 }
                 permit.gate = true;
             }
-            let session = self.session().unwrap();
-            let credits = session.credits.load(Ordering::Acquire);
-            if credits >= HELD_SESSION
-                || session
-                    .credits
-                    .compare_exchange(credits, credits + 1, Ordering::AcqRel, Ordering::Acquire)
-                    .is_err()
-            {
-                if permit.gate {
-                    self.release_gate();
+            if inherited.is_some() {
+                permit.inherited = self.reserved[slot];
+                self.lives.local_mut(permit.inherited).unwrap().reserved = false;
+            } else {
+                let session = self.session().unwrap();
+                let credits = session.credits.load(Ordering::Acquire);
+                if credits >= HELD_SESSION
+                    || session
+                        .credits
+                        .compare_exchange(credits, credits + 1, Ordering::AcqRel, Ordering::Acquire)
+                        .is_err()
+                {
+                    if permit.gate {
+                        self.release_gate();
+                    }
+                    return false;
                 }
-                return false;
+                permit.credit = true;
             }
-            permit.credit = true;
             self.reserved[slot] = pending.life;
             self.lives.local_mut(pending.life).unwrap().reserved = true;
         } else if pending.life != NONE {
@@ -2112,6 +2140,20 @@ impl Source {
                 if permit.credit {
                     self.return_credit(pending.life);
                 }
+                if permit.inherited != NONE {
+                    // An onset the host never took leaves its predecessor
+                    // exactly as it found it: the borrowed slot goes back, and
+                    // with it the acknowledgement debt it still carries. A
+                    // permit only reaches here after an attempted push, so the
+                    // OUTPUT_FAULT below always accompanies this and no fixture
+                    // can tell the two apart -- this is the symmetric undo of
+                    // the acquisition, like the credit and the gate beside it,
+                    // rather than a state anything downstream still reads.
+                    self.lives.local_mut(pending.life).unwrap().reserved = false;
+                    *self.reserved.iter_mut().find(|v| **v == pending.life).unwrap() =
+                        permit.inherited;
+                    self.lives.local_mut(permit.inherited).unwrap().reserved = true;
+                }
                 if permit.gate {
                     self.release_gate();
                 }
@@ -2257,6 +2299,29 @@ impl Source {
             row.emission_gate.load(Ordering::Acquire) & !GATE_FLAGS
         }
     }
+    /// The reservation a replacement takes over instead of claiming a fresh
+    /// one: the slot still held by the note its own forced release has already
+    /// silenced. That release is this attack's own work child, so this is rule
+    /// two's pair and not merely the last note on the key -- an ordinary attack
+    /// after an ordinary release chokes nothing and waits its turn like any
+    /// other. `terminal` with no Note-Off owed is what `arm_release_debt` reads
+    /// to decide a life needs no emergency release of its own, so a slot handed
+    /// on here is one no fault could still have to spend.
+    fn replaced_reservation(&self, position: usize) -> Option<usize> {
+        let mut child = self.pending.at(position)?.work_head;
+        while child != NONE {
+            let cell = self.work.at(child);
+            if matches!(cell.operation, work::CHOKE | work::NOTE_OFF)
+                && self.lives.at(cell.life).is_some_and(|previous| {
+                    previous.reserved && previous.terminal.is_some() && !previous.note_off_owed
+                })
+            {
+                return self.reserved.iter().position(|index| *index == cell.life);
+            }
+            child = cell.next;
+        }
+        None
+    }
     fn return_credit(&mut self, index: u16) {
         let value = self.lives.local_mut(index).unwrap();
         assert!(value.reserved);
@@ -2359,6 +2424,7 @@ impl Source {
             credit: false,
             gate: false,
             emergency: true,
+            inherited: NONE,
         });
         true
     }
