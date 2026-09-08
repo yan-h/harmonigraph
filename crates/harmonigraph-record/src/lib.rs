@@ -420,10 +420,11 @@ impl Recorder {
     /// gap the lane queued on its reserved cell is what carries that warning
     /// into the file as an `IncompleteRecord`. Refusal is left to failures
     /// that are actually fatal to the recording — audio, ownership and I/O,
-    /// which reach the fence through [`Recorder::fail_configuration`] and the
-    /// writer's own paths — plus `Invalid` here, which is the one publication
-    /// outcome with NO gap to describe it and so the one that would otherwise
-    /// leave a silent hole.
+    /// which reach the fence through [`Recorder::fail_configuration`], the
+    /// closures' own [`Recorder::source_pass_complete`] /
+    /// [`Recorder::source_epoch_complete`], and the writer's paths — plus
+    /// `Invalid` here, which is the one publication outcome with NO gap to
+    /// describe it and so the one that would otherwise leave a silent hole.
     fn publication_result(
         &self,
         result: Result<(), publication::PublishError>,
@@ -1614,6 +1615,22 @@ impl FailureAccount {
 #[derive(Default)]
 struct CanonicalFanout {
     waiting_file: bool,
+    /// A gap that arrived with no file open, kept until one does.
+    ///
+    /// An unaddressed gap names no pass, so it deliberately waits for nothing
+    /// and marks whatever is open. When NOTHING is open its marker used to be
+    /// dropped where it stood, and since a gap no longer fails the fence that
+    /// made the loss silent: an outage merging a disarmed route with an armed
+    /// one keeps neither address, and a drain running concurrently with the
+    /// audio thread can consume it before the worker polls the `Start` that
+    /// would have given it a file. The take then sealed and exported with
+    /// history missing and nothing saying so (#712).
+    ///
+    /// One record rather than a queue, coalesced over the widest serial range
+    /// seen — the same shape the publisher's own outage takes, and for the
+    /// same reason: the consumer clears its whole held set either way, so a
+    /// second gap has nothing to add that the first has not already said.
+    unplaced: Option<harmonigraph_take::IncompleteRecord>,
     /// Non-RT deduplication only. These cuts authorize no musical reclamation.
     cursors: std::collections::BTreeMap<SourceId, (u64, u64, u64)>,
 }
@@ -1628,6 +1645,17 @@ impl CanonicalFanout {
     ) -> usize {
         use harmonigraph_core::canonical::CanonicalEvent;
         self.waiting_file = false;
+        // The first file to open after an unplaceable gap carries its warning.
+        //
+        // STATED RESIDUAL rather than a reconciler: that file need not be the
+        // one whose history was lost. An outage entirely inside a disarmed
+        // stretch marks the next take too, which warns about a hole that take
+        // does not have. Conservative in the direction #712 asks for — the
+        // export still runs, and the alternative is the silence this repairs.
+        if let (Some(record), Some(current)) = (self.unplaced, open.as_mut()) {
+            let _ = current.mark_incomplete(record);
+            self.unplaced = None;
+        }
         publications.drain(|delivery, route| {
             // A record can reach this lane before its independently queued
             // Start/NewPass control has drained. Retain its whole payload.
@@ -1734,12 +1762,31 @@ impl CanonicalFanout {
                     // this file. Audio, ownership and I/O failures are untouched
                     // and still refuse.
                     if let CanonicalEvent::Gap(gap) = event {
-                        if let Some(current) = open.as_mut() {
-                            let _ = current.mark_incomplete(harmonigraph_take::IncompleteRecord {
-                                first_publication: gap.first,
-                                last_publication: gap.last,
-                                reason: harmonigraph_take::canonical::GapRecord::from(gap).reason,
-                            });
+                        let record = harmonigraph_take::IncompleteRecord {
+                            first_publication: gap.first,
+                            last_publication: gap.last,
+                            reason: harmonigraph_take::canonical::GapRecord::from(gap).reason,
+                        };
+                        match open.as_mut() {
+                            Some(current) => {
+                                let _ = current.mark_incomplete(record);
+                            }
+                            // Nowhere to write it YET. Held rather than
+                            // dropped: see `unplaced`.
+                            None => {
+                                self.unplaced = Some(match self.unplaced {
+                                    Some(held) => harmonigraph_take::IncompleteRecord {
+                                        first_publication: held
+                                            .first_publication
+                                            .min(record.first_publication),
+                                        last_publication: held
+                                            .last_publication
+                                            .max(record.last_publication),
+                                        reason: held.reason,
+                                    },
+                                    None => record,
+                                })
+                            }
                         }
                     }
                 }

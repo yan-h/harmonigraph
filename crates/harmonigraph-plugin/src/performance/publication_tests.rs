@@ -67,9 +67,16 @@ fn full_primary_publication_does_not_block_three_sources_actual_releases_and_cre
     hub.run(36 * 64, vec![], None);
     writer.drain(&mut capture);
     // The take fails, and #712's export decision does not change that: what
-    // could not be published here is the pass CLOSURE, not note history. A file
-    // with no `PassComplete` can never seal, so there is no normal finalisation
-    // to preserve. The note gap on its own no longer refuses — see
+    // could not be published here is the pass CLOSURE, not note history.
+    //
+    // The refusal is `Recorder::source_pass_complete` and
+    // `source_epoch_complete` failing the fence on ANY publication error of
+    // their own — NOT, as this comment used to claim, the file being unable to
+    // seal without a `PassComplete`. `Open::ready` never consults the CURRENT
+    // pass's `source_complete`; only `EpochComplete` and a RETAINED pass's
+    // closure can hold a file open. The claim held, the reason did not.
+    //
+    // The note gap on its own no longer refuses — see
     // `an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with`
     // in harmonigraph-record.
     assert!(writer.failed());

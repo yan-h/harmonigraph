@@ -574,3 +574,169 @@ fn retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped() 
     assert_eq!(take.notes().count(), 2);
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+/// #712, the stage-5 review's remaining finding: a gap can reach the writer
+/// before the file it belongs to exists, and its marker had nowhere to land.
+///
+/// The interleaving is a genuine race in production. A merged gap only reaches
+/// the ring once a drain running CONCURRENTLY with the audio thread has freed
+/// cells, and the worker polls `Start` outside that drain — so the same drain
+/// consumes the gap with no file open, and `Lost` no longer fails the fence to
+/// make the loss visible some other way. The drain is therefore done by hand
+/// here, one item consumed and the next declined, which leaves exactly the two
+/// free cells the racing worker leaves behind.
+///
+/// What the serial range proves is that the fixture reaches the case rather
+/// than something next to it. `4097` is the ARMED publication, so the outage
+/// starts on history the take about to open owns; merging a later disarmed
+/// loss into it is what strips its address, and only an address-less gap goes
+/// past the wait for a file. Keep the address instead and the merged outage
+/// waits for its file like any addressed record, landing as an ordinary `Gap`
+/// in the pass: the range reads `4097..=4098`, and the only thing the unplaced
+/// path ever saw was the disarmed gap ahead of it.
+#[test]
+fn a_gap_with_no_file_open_marks_the_take_that_opens_after_it() {
+    let (mut publisher, mut consumer) = publication::channel();
+    let disarmed = publication::Route::default();
+    let armed =
+        publication::Route { address: Some(RecordAddress { epoch: 1, pass: 1 }), time_offset: 0.0 };
+    let sounding =
+        |i: usize| NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into();
+    for i in 0..publication::PUBLICATION_RING - 1 {
+        publisher.note(sounding(i), disarmed).unwrap();
+    }
+    // The reserve takes the first outage. The second is ARMED history, and it
+    // has nowhere to go: it is held on the audio thread until a cell frees.
+    assert_eq!(publisher.note(sounding(0), disarmed), Err(publication::PublishError::Lost));
+    assert_eq!(publisher.note(sounding(1), armed), Err(publication::PublishError::Lost));
+    // One item consumed and the next declined — the two free cells a drain
+    // running against the audio thread leaves behind mid-call.
+    let mut seen = 0;
+    consumer.drain(|_, _| {
+        seen += 1;
+        seen < 2
+    });
+    // A third loss, disarmed, merges into the held one. The two routes differ,
+    // so the merged outage keeps NEITHER address — and that is what sends it
+    // past the wait for an addressed file below.
+    assert_eq!(publisher.note(sounding(2), disarmed), Err(publication::PublishError::Lost));
+
+    let mut fanout = CanonicalFanout::default();
+    let fence = RecordFence::default();
+    let failure = FailureAccount::default();
+    let file = path("unplaced-gap");
+    // `Start` is queued and unpolled, so the writer holds no file at all.
+    let mut nothing_open: Option<Open> = None;
+    fanout.drain(&mut consumer, &mut nothing_open, &fence, &failure);
+    assert!(
+        !fence.failed.load(Ordering::Acquire),
+        "a hole in the note history still does not refuse the take"
+    );
+
+    let status = Mutex::new(String::new());
+    let mut opened =
+        Open::create(harmonigraph_take::Header::default(), file.clone(), 1, None, &status).unwrap();
+    opened.epoch = 1;
+    let mut open = Some(opened);
+    fanout.drain(&mut consumer, &mut open, &fence, &failure);
+    let sealed = open.take().unwrap().finish();
+    let take = harmonigraph_take::Take::read(&sealed).unwrap();
+    let loss =
+        take.incomplete.expect("the gap that had no file marks the one that opened after it");
+    assert_eq!(loss.reason, harmonigraph_take::canonical::GapReasonRecord::PublicationFull);
+    assert_eq!(
+        (loss.first_publication, loss.last_publication),
+        (4096, 4098),
+        "coalesced over both outages, and 4097 inside it is the armed publication"
+    );
+    assert!(!fence.failed.load(Ordering::Acquire));
+    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}
+
+/// The same repair through the REAL worker, and the end that matters: the
+/// sealed take carries the warning.
+///
+/// `worker_after_empty` parks the worker inside the arm that found no command,
+/// so everything published below reaches the ring before the loop's own drain
+/// runs, and the `Start` queued below is not polled until the iteration after
+/// it. The gap is drained against no file exactly as the racing case drains
+/// it, and the take opened one iteration later is what has to carry it.
+///
+/// The gap here spans only the disarmed prefix, which is this repair's STATED
+/// RESIDUAL rather than its motivating case: the take warns about a hole that
+/// is not in its own history. Reaching the merged armed gap needs the
+/// concurrent drain that
+/// `a_gap_with_no_file_open_marks_the_take_that_opens_after_it` builds by hand.
+#[test]
+fn a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take() {
+    let directory = path("worker-gap-before-start").parent().unwrap().to_path_buf();
+    let (mut recorder, control) = channel();
+    recorder.enable_configuration();
+    recorder.enable_canonical();
+    *control.fence.test_directory.lock() = Some(directory.clone());
+    let fence = control.fence.clone();
+    let _resume_on_panic = WorkerPause(fence.clone());
+    fence.worker_after_empty.enabled.store(true, Ordering::Release);
+    wait_for(&fence.worker_after_empty.entered);
+    let sounding =
+        |i: usize| NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into();
+    // Only the take lane is under test, so only its outcome is asserted; the
+    // editor's lane fills alongside it and is drained back to empty below.
+    let mut displayed = control.take_display().expect("the display lane's consumer");
+    for i in 0..publication::PUBLICATION_RING - 1 {
+        recorder.publish_note(sounding(i), publication::Route::default()).take.unwrap();
+    }
+    assert_eq!(
+        recorder.publish_note(sounding(0), publication::Route::default()).take,
+        Err(publication::PublishError::Lost),
+        "the fixture must actually lose a report"
+    );
+    displayed.drain(|_, _| true);
+    let address = RecordAddress { epoch: 1, pass: 1 };
+    control.start(48000.0, String::new(), false);
+    assert!(recorder.is_armed());
+    // Released into the drain that has no file, then into the poll that opens
+    // one — in that order, because the pause is inside the arm that found no
+    // command and the loop drains before it polls again. `recording to` is the
+    // status only `Open::create` writes, so waiting for it waits for both.
+    fence.worker_after_empty.enabled.store(false, Ordering::Release);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !control.status().starts_with("recording to") && std::time::Instant::now() < until {
+        std::thread::yield_now();
+    }
+    assert!(control.status().starts_with("recording to"), "{}", control.status());
+    recorder.configuration_at(
+        address,
+        0.0,
+        harmonigraph_core::configuration::ConfigReducer::default().resolved(),
+    );
+    let route = publication::Route { address: Some(address), time_offset: 0.0 };
+    recorder
+        .publish_note(accepted(NoteEvent::on(0.01, SourceId(1), 0, 60, 0.8), 1), route)
+        .expect_both();
+    recorder
+        .publish_note(accepted(NoteEvent::off(0.02, SourceId(1), 0, 60), 2), route)
+        .expect_both();
+    control.stop(None);
+    assert!(!recorder.is_armed(), "the disarm boundary closes the producer's prefix");
+    recorder.configuration_pass_complete(address);
+    recorder.configuration_epoch_complete(1);
+    recorder.source_pass_complete(address, 1.0);
+    recorder.source_epoch_complete(1, 1.0);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while control.last_take().is_none() && std::time::Instant::now() < until {
+        std::thread::yield_now();
+    }
+    let finished = control.last_take().expect("the take still finalises");
+    assert!(!fence.failed.load(Ordering::Acquire), "and still is not a refusal");
+    let take = harmonigraph_take::Take::read(&finished).unwrap();
+    assert!(
+        take.incomplete.is_some(),
+        "the gap the worker drained before this file existed is on it, not lost"
+    );
+    assert_eq!(take.notes().count(), 2, "and the take it opened is otherwise whole");
+    drop(recorder);
+    drop(control);
+    wait_for(&fence.worker_finished);
+    std::fs::remove_dir_all(directory).unwrap();
+}
