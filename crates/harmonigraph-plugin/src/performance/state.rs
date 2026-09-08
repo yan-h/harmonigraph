@@ -58,14 +58,23 @@ impl State {
                 *cell = None;
             }
             true
-        } else if let Event::Midi { port: 0, data: [status, cc, value], .. } = event {
-            if status & 0xf0 != 0xb0 || !(matches!(cc, 64 | 66 | 69) && value == 0) {
-                return false;
-            }
+        } else if let Event::Midi { port: 0, data: [status, first, second], .. } = event {
             let channel = &mut self.channels[usize::from(status & 15)];
-            channel.controllers[usize::from(cc)] = value;
-            channel.controller_valid[usize::from(cc / 64)] |= 1 << (cc % 64);
-            true
+            match status & 0xf0 {
+                0xb0 if matches!(first, 64 | 66 | 69) && second == 0 => {
+                    channel.controllers[usize::from(first)] = second;
+                    channel.controller_valid[usize::from(first / 64)] |= 1 << (first % 64);
+                    true
+                }
+                // The participation boundary's recenter. Like a pedal reset it
+                // is a neutral value the reset owes whatever the clock knows,
+                // so an unknown timestamp must not turn it into a lost fact.
+                0xe0 if (first, second) == (0, 64) => {
+                    channel.pitch_bend = Some(u16::from(first) | (u16::from(second) << 7));
+                    true
+                }
+                _ => false,
+            }
         } else {
             false
         }

@@ -15,6 +15,16 @@ impl Default for Stops {
     }
 }
 impl Source {
+    /// A participation toggle is a reset of this Tune in either direction, and
+    /// it takes the same boundary a transport Stop does: the marker stands in
+    /// the input queue at the toggle's own sample, and the reset runs where
+    /// output reaches it. Everything captured before it is cancelled or
+    /// terminated there; everything captured after it is already in the new
+    /// mode, because `participating` moves here, in input order.
+    ///
+    /// Deferring the reset to the marker is what keeps it off the input path:
+    /// no allocation, no wait, and the emergency releases land at the toggle's
+    /// own offset instead of at the head of whatever callback carried it.
     pub(super) fn capture_participation(&mut self, value: bool, sample: Option<i64>) -> bool {
         if value == self.participating {
             return true;
@@ -26,9 +36,7 @@ impl Source {
                 self.fault(STORAGE_FAULT);
                 return false;
             }
-            let position = self.enqueue_cell(Event::Participation(value), NONE, sample, false);
-            self.pending.seal(position);
-            self.finish_work(position, NONE);
+            self.capture_marker(Event::Participation(value), sample);
         }
         self.participating = value;
         true
@@ -39,7 +47,12 @@ impl Source {
             self.fault(STORAGE_FAULT);
             return;
         }
-        let position = self.enqueue_cell(Event::Stop, NONE, sample, false);
+        self.capture_marker(Event::Stop, sample);
+    }
+
+    /// The caller has already proved the queue has room for this cell.
+    fn capture_marker(&mut self, event: Event, sample: i64) {
+        let position = self.enqueue_cell(event, NONE, sample, false);
         let mut pending = self.pending.at(position).unwrap();
         pending.channel.role = channel::Role::Stop { previous: self.stops.tail, next: NONE };
         self.pending.set(position, pending);
@@ -54,8 +67,9 @@ impl Source {
             self.pending.set(usize::from(self.stops.tail), tail);
         }
         self.stops.tail = position as u16;
-        // Later original input cannot address a lifetime from before Stop.
-        // This changes input bindings, not actual sounding state or output debt.
+        // Later original input cannot address a lifetime from before the
+        // marker. This changes input bindings, not actual sounding state or
+        // output debt.
         for index in &mut self.active {
             if *index != NONE {
                 self.lives.local_mut(*index).unwrap().active = false;
@@ -94,6 +108,9 @@ impl Source {
             reached.channel.role = channel::Role::ReachedStop;
             self.pending.set(position, reached);
             self.arm_release_debt();
+            if matches!(pending.event, Event::Participation(_)) {
+                self.arm_pitch_center();
+            }
             self.finish_work(position, NONE);
             self.cancel_slice();
         }

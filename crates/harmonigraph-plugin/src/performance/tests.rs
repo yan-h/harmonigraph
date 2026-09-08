@@ -3658,19 +3658,34 @@ fn destroyed_configuration_drains_joined_output_past_its_last_callback() {
     let path = directory.join("record.take");
     let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
     for block in 0..9 {
-        let mut events: Vec<_> = (0..400).map(|_| expression(1, 0.125, 0)).collect();
-        if block == 8 {
-            events.insert(0, source.participation(false, 0));
-        }
-        assert_eq!(source.run(128 + block * 64, events, None).values.len(), 400);
+        assert_eq!(
+            source
+                .run(128 + block * 64, (0..400).map(|_| expression(1, 0.125, 0)).collect(), None)
+                .values
+                .len(),
+            400
+        );
     }
+    // Off is a reset. It cancels what stands and terminates the note this
+    // Tune has already forwarded, so the last span the destroyed instance has
+    // to drain past the Hub's final callback is emergency output behind a
+    // full ordinary journal rather than another block of expressions.
+    let toggled = source.run(704, vec![source.participation(false, 0)], None);
+    assert!(toggled
+        .values
+        .iter()
+        .any(|(_, event)| matches!(event, Event::Note { kind: 1 | 2, key: 60, .. })));
     assert_eq!(
-        source.run(704, (0..400).map(|_| expression(1, 0.25, 0)).collect(), None).values.len(),
-        400
+        source.run(768, (0..400).map(|_| expression(1, 0.25, 0)).collect(), None).values.len(),
+        0,
+        "an expression addressed to the note the toggle ended has nothing to reach"
     );
-    assert_eq!(source.run(768, vec![note(1, 0, 60, 0, false)], None).values.len(), 1);
     let snapshot = source.source_snapshot();
-    assert_eq!((snapshot.sequence, snapshot.journal), (4002, 4001));
+    // 3,600 expressions and the On, then the toggle's own four: the wire
+    // termination of note 1 and the three pedal neutralizations its channel
+    // still owed. Those four are emergency output, which is why the ordinary
+    // journal stops one short of the sequence it shares.
+    assert_eq!((snapshot.sequence, snapshot.journal, snapshot.emergency), (3605, 3600, 4));
     hub.run(128, vec![], None);
     drop(hub);
     drop(source);

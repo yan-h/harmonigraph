@@ -116,7 +116,7 @@ impl Source {
                     earlier.serial < self.pending.at(usize::from(first)).unwrap().serial
                         && earlier.event.attack().is_none()
                         && earlier.event.channel_control().is_none()
-                        && earlier.event != Event::Stop
+                        && !earlier.event.marker()
                         && (!earlier.inline_done || earlier.work_remaining != 0)
                 },
             )

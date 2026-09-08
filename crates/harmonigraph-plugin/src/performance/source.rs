@@ -31,6 +31,16 @@ pub(super) const NONE: u16 = u16::MAX;
 /// Records one input event can address: at most every held note plus the
 /// controller or onset itself. Copies are emitted one per addressed target.
 pub(super) const CAPTURE_GROUP: usize = 68;
+/// The per-channel wire state a reset may owe: sustain, sostenuto and soft
+/// neutralized, and the pitch bend recentered. `channel_reset` holds one
+/// pending bit and one staged bit for each, so this is half of a `u8`.
+pub(super) const CHANNEL_RESETS: usize = 4;
+/// The recentering slot. Unlike the three pedals it is never armed by
+/// `arm_release_debt`, because ending a phrase does not change who owns
+/// pitch; only a participation toggle does.
+const PITCH_RESET: usize = 3;
+/// The 14-bit MIDI pitch bend that means no bend.
+const BEND_CENTER: u16 = 0x2000;
 #[cfg(test)]
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
@@ -905,10 +915,15 @@ impl Source {
         let Some(mut event) = Event::from_input(input.value) else {
             return;
         };
-        if self.delay() != 0 {
-            // The musical Tune owns pitch. Normalize before capture so both
-            // prospective scoring and factual output see the same pitch;
-            // DIRECT observation still forwards its original input.
+        if self.participating && self.delay() != 0 {
+            // A PARTICIPATING musical Tune owns pitch. Normalize before capture
+            // so both prospective scoring and factual output see the same
+            // pitch; DIRECT observation still forwards its original input.
+            //
+            // Off owns nothing, so its bend and its per-note tuning are the
+            // player's and go out unchanged. `participating` moves at this
+            // event's own place in the input order, which is what makes the
+            // note after the toggle the first one in the new mode.
             match &mut event {
                 Event::Expression { kind: 2, value, .. } => *value = 0.0,
                 Event::Midi { data, .. } if data[0] & 0xf0 == 0xe0 => {
@@ -1444,10 +1459,31 @@ impl Source {
                             && state.controllers[controller] < 64;
                     // A completed reset is already factual; another fault
                     // cannot recreate it. A staged reset still owns its debt.
-                    if !known_neutral && self.channel_reset[channel] & (1 << (bit + 3)) == 0 {
+                    if !known_neutral
+                        && self.channel_reset[channel] & (1 << (bit + CHANNEL_RESETS)) == 0
+                    {
                         self.channel_reset[channel] |= 1 << bit;
                     }
                 }
+            }
+        }
+    }
+
+    /// Participating means the Tune owns pitch again, so the wire cannot be
+    /// left holding a bend an Off phrase passed through: every note the Tune
+    /// tunes afterwards would sound at that offset. Recenter the channels
+    /// this Tune has actually bent -- one it never bent, or already left at
+    /// center, owes nothing and costs no event.
+    ///
+    /// Only a participation toggle arms this. Stop and a terminal fault end a
+    /// phrase without changing who owns pitch, and the recenter would be an
+    /// event no reset before this one sent.
+    fn arm_pitch_center(&mut self) {
+        for channel in 0..16 {
+            let bent =
+                self.state.channels()[channel].pitch_bend.is_some_and(|value| value != BEND_CENTER);
+            if bent && self.channel_reset[channel] & (1 << (PITCH_RESET + CHANNEL_RESETS)) == 0 {
+                self.channel_reset[channel] |= 1 << PITCH_RESET;
             }
         }
     }
@@ -1589,7 +1625,7 @@ impl Source {
         let Some(parent) = self.pending.at(position) else {
             return true;
         };
-        if parent.event == Event::Stop {
+        if parent.event.marker() {
             return matches!(parent.channel.role, channel::Role::ReachedStop);
         }
         if matches!(parent.channel.role, channel::Role::Header { .. }) {
@@ -1783,7 +1819,11 @@ impl Source {
             if child == NONE { 0 } else { u64::from(child) + 3 },
         ]);
         let wire = self.assigned_event(pending);
-        let group = if pending.event.attack().is_some() && self.delay() != 0 {
+        // Only an adaptive onset carries an initial tuning. An Off onset has
+        // no assignment to state, and stating the default would be a zero
+        // sent over whatever bend or per-note tuning the player is holding --
+        // centering by another name, which is exactly what Off does not do.
+        let group = if pending.event.attack().is_some() && life.is_some_and(|life| life.adaptive) {
             let life = life.unwrap();
             let tuning = Event::Expression {
                 kind: 2,
@@ -2427,7 +2467,7 @@ impl Source {
         if self.sealed {
             return;
         }
-        // 64 voice releases and 48 pedal resets fit the reserved 128 exactly.
+        // 64 voice releases and 64 channel resets fit the reserved 128 exactly.
         for index in 0..64 {
             let Some(mut release) = self.emergency[index] else {
                 continue;
@@ -2457,12 +2497,11 @@ impl Source {
             self.emergency[index] = Some(release);
         }
         for channel in 0..16 {
-            for (bit, controller) in [64, 66, 69].into_iter().enumerate() {
+            for bit in 0..CHANNEL_RESETS {
                 if self.channel_reset[channel] & (1 << bit) == 0 {
                     continue;
                 }
-                let event =
-                    Event::Midi { port: 0, data: [0xb0 | channel as u8, controller, 0], flags: 0 };
+                let event = Self::channel_reset_event(channel as u8, bit);
                 let group = api::Group::single(
                     api::Token([0, channel as u64, bit as u64, 2]),
                     api::Lane::Emergency,
@@ -2474,9 +2513,22 @@ impl Source {
                     return;
                 }
                 self.channel_reset[channel] &= !(1 << bit);
-                self.channel_reset[channel] |= 1 << (bit + 3);
+                self.channel_reset[channel] |= 1 << (bit + CHANNEL_RESETS);
             }
         }
+    }
+    /// The neutral wire value for one channel reset slot. The three pedals go
+    /// out as their controller at zero; the recenter is the only one that is
+    /// not a CC, and it carries the 14-bit center split the way MIDI does.
+    fn channel_reset_event(channel: u8, bit: usize) -> Event {
+        if bit == PITCH_RESET {
+            return Event::Midi {
+                port: 0,
+                data: [0xe0 | channel, (BEND_CENTER & 0x7f) as u8, (BEND_CENTER >> 7) as u8],
+                flags: 0,
+            };
+        }
+        Event::Midi { port: 0, data: [0xb0 | channel, [64, 66, 69][bit], 0], flags: 0 }
     }
     fn prepare_emergency(&mut self, group: api::Group) -> bool {
         if self.sealed || self.emergency_output.free() == 0 || self.sequence == u64::MAX {
@@ -2539,7 +2591,7 @@ impl Source {
             self.emergency[index] = Some(release);
         } else {
             let bit = completion.group.token.0[2] as u8;
-            let (pending_bit, staged_bit) = (1 << bit, 1 << (bit + 3));
+            let (pending_bit, staged_bit) = (1 << bit, 1 << (bit + CHANNEL_RESETS as u8));
             self.channel_reset[index] &= !staged_bit;
             if completion.accepted & 1 != 0 {
                 let event = Event::from_input(completion.group.event(0).unwrap()).unwrap();

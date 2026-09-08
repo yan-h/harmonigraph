@@ -702,25 +702,78 @@ fn production_musical_no_candidate_uses_unbent_midi_pitch() {
 }
 
 #[test]
-fn production_musical_off_preserves_sounding_pitch_but_excludes_future_scoring() {
+fn production_musical_off_ends_its_own_phrase_and_excludes_future_scoring() {
     let _scope = crate::test_scope::enter();
     let mut phrase = Phrase::new();
     phrase.step([vec![note(1, 0, 50, 0, true)], vec![], vec![]], [0, 1, 2]);
     phrase.idle();
-    let held = phrase.voice(0, 50, 0);
+    assert_eq!(phrase.sources[0].source_snapshot().held, 1);
     let off = phrase.sources[0].participation(false, 0);
     // Marker and foreign onset share a sample; callback order cannot let the
-    // still-sounding D decide this E. Empty context prefers 5/4, not 81/64.
-    phrase.step(
+    // ended D decide this E. Empty context prefers 5/4, not 81/64.
+    let output = phrase.step(
         [vec![off, expression(1, 0.25, 0)], vec![note(2, 0, 52, 0, true)], vec![]],
         [1, 2, 0],
     );
     phrase.idle();
-    let bent = phrase.voice(0, 50, 0);
-    assert_eq!(bent.frozen_offset_microcents, held.frozen_offset_microcents);
-    assert_eq!(bent.pitch_microcents, held.pitch_microcents);
     assert_eq!(phrase.voice(1, 52, 0).attack_node, Some(LatticePos::new(0, 1, 0)));
-    assert_eq!(phrase.sources[0].source_snapshot().held, 1);
+    // Off is a reset in either direction: the toggle terminates the D this
+    // Tune had already forwarded rather than carrying it into the new mode,
+    // and it does so on the wire before the ownership is given up.
+    assert!(output[0]
+        .iter()
+        .any(|(_, event)| matches!(event, Event::Note { kind: 1 | 2, key: 50, .. })));
+    for _ in 0..8 {
+        phrase.idle();
+    }
+    assert_eq!(phrase.sources[0].source_snapshot().held, 0);
+    assert_eq!(inspect_source(&phrase.sources[0], |source| source.state.count()), 0);
+    phrase.release_all();
+}
+
+/// The Hub sequences later input against the membership the toggle
+/// established, so nothing the toggle ended is still scoring. Two ways that
+/// state goes obsolete: an Off voice still sounding when Participating is
+/// selected -- it would suddenly become context for everyone -- and an onset
+/// cancelled by the marker standing at its own sample.
+#[test]
+fn production_musical_a_toggle_drops_the_context_of_what_it_ended() {
+    let _scope = crate::test_scope::enter();
+    let mut phrase = Phrase::new();
+    let off = phrase.sources[0].participation(false, 0);
+    phrase.step([vec![off], vec![], vec![]], [0, 1, 2]);
+    phrase.idle();
+    phrase.step([vec![note(1, 0, 50, 0, true)], vec![], vec![]], [0, 1, 2]);
+    phrase.idle();
+    assert_eq!(phrase.sources[0].source_snapshot().held, 1, "an Off D is on the wire");
+    // Returning to Participating ends that D. It must not spend the callbacks
+    // its release takes as tuning context for a track that is participating.
+    let on = phrase.sources[0].participation(true, 0);
+    phrase.step([vec![on], vec![note(2, 0, 52, 0, true)], vec![]], [1, 2, 0]);
+    phrase.idle();
+    assert_eq!(
+        phrase.voice(1, 52, 0).attack_node,
+        Some(LatticePos::new(0, 1, 0)),
+        "the ended Off D is not context: empty context prefers 5/4, not 81/64"
+    );
+    phrase.step([vec![], vec![note(2, 0, 52, 0, false)], vec![]], [0, 1, 2]);
+    for _ in 0..8 {
+        phrase.idle();
+    }
+    // The other way: an onset the marker cancels at its own sample. It never
+    // sounds, so it is never anyone's context either.
+    let off = phrase.sources[0].participation(false, 0);
+    phrase.step(
+        [vec![note(3, 0, 50, 0, true), off], vec![], vec![note(4, 0, 52, 0, true)]],
+        [2, 1, 0],
+    );
+    phrase.idle();
+    assert_eq!(
+        phrase.voice(2, 52, 0).attack_node,
+        Some(LatticePos::new(0, 1, 0)),
+        "the cancelled D is not context either"
+    );
+    assert_eq!(phrase.sources[0].source_snapshot().held, 0, "and it never sounded");
     phrase.release_all();
 }
 

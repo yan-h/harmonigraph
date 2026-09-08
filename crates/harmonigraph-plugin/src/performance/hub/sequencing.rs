@@ -705,6 +705,14 @@ impl Hub {
                 if !value {
                     self.sequencer.history.clear(source, self.sequencer.decision);
                 }
+                // Either direction is now a reset of that Tune, and this
+                // record is still the whole of what the reset owes the Hub.
+                // The two things the toggle ends reach it on the lanes stage
+                // 2 already built: the attacks it cancels as cancellation
+                // dispositions, and the voices it terminates as ordinary
+                // accepted releases. Neither needs a Stop-style sweep here --
+                // DIRECT needs one because it reaches neither lane, and a
+                // paired Tune reaches both.
                 if source != 0 {
                     self.rows[source - 1].participating = value;
                     self.rows[source - 1].repair = true;

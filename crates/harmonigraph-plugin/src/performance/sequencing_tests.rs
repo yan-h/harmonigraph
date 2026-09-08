@@ -505,7 +505,12 @@ fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reappli
     }
     let attack_ids: Vec<_> =
         actual.iter().filter_map(|(_, event)| event.attack().map(|(id, ..)| id)).collect();
-    assert_eq!(attack_ids, [69, 70, 71, 72, 73], "rejoin adds no duplicate attacks");
+    assert_eq!(
+        attack_ids,
+        [69, 72, 73],
+        "either toggle direction cancels the attacks standing before it: 70 was pending and \
+         71 was captured into the Off mode the second marker left"
+    );
     let tuning = |id| {
         actual
             .iter()
@@ -517,12 +522,19 @@ fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reappli
     };
     assert_eq!(
         tuning(69),
-        [-0.11731262, -0.11731262],
-        "the held pitch survives Off/rejoin and ignores incoming bends"
+        [-0.11731262],
+        "the note that sounded before the toggle is tuned once, and the toggle ends it rather \
+         than carrying it into the new mode"
     );
-    assert_eq!(tuning(70).len(), 1);
-    assert_ne!(tuning(70)[0], 0.0, "the pre-Off pending request finishes tuned");
-    assert_eq!(tuning(71), [0.0], "only the newly received Off note deliberately uses zero");
+    assert!(
+        actual.iter().any(|(sample, event)| *sample == 2560
+            && matches!(event, Event::Note { kind: 2, id: 69, .. })),
+        "the wire termination goes out at the marker, before the ownership is forgotten"
+    );
+    assert!(
+        tuning(70).is_empty() && tuning(71).is_empty(),
+        "a cancelled attack is never tuned, and an Off onset states no tuning of its own"
+    );
     assert!(tuning(72)[0] != 0.0 && tuning(73)[0] != 0.0);
     assert_eq!(source.source_snapshot().held, 0);
     assert_eq!(source.source_snapshot().faults, 0);
@@ -2725,4 +2737,459 @@ fn the_last_delay_request_is_the_one_the_activation_announces() {
     source.reactivate_format(44100.0, 512);
     assert_eq!(source.latency(), 1536);
     assert_eq!(announced(&source), (2, 1536), "including across the activation that answers it");
+}
+
+/// Release what a fixture left sounding and run the pair until the Tune owns
+/// nothing, so the process registry it shares with every other fixture is
+/// empty when both are dropped.
+fn settle(hub: &Device, source: &Device, mut raw: i64, release: Vec<Input>) {
+    source.run_format(raw, release, None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    for _ in 0..32 {
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    source.main();
+    hub.main();
+    assert_eq!(source.source_snapshot().held, 0);
+}
+
+/// While Participating the Tune owns pitch and overrides what the player
+/// sends. Off owns nothing: the bend and the per-note tuning are the
+/// player's and reach the instrument as they were written.
+#[test]
+fn production_off_forwards_the_players_bend_and_per_note_tuning_unchanged() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    let mut actual = Vec::new();
+    let mut run = |raw, inputs| {
+        let sink = source.run_format(raw, inputs, None, None, 512);
+        actual.extend(
+            sink.values.into_iter().map(|(offset, event)| (raw + i64::from(offset), event)),
+        );
+    };
+    // A quarter-tone-up bend and a quarter-semitone per-note tuning, played
+    // twice against the same key: once Participating, once Off.
+    let bend = |time| raw_midi([0xe0, 0x00, 0x60], time);
+    run(1536, vec![bend(0), note(1, 0, 64, 1, true), expression(1, 0.25, 2)]);
+    hub.run_format(1536, vec![], None, None, 512);
+    for raw in [2048, 2560] {
+        run(raw, vec![]);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    run(3072, vec![note(1, 0, 64, 0, false), source.participation(false, 1)]);
+    hub.run_format(3072, vec![], None, None, 512);
+    for raw in [3584, 4096] {
+        run(raw, vec![]);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    run(4608, vec![bend(0), note(2, 0, 64, 1, true), expression(2, 0.25, 2)]);
+    hub.run_format(4608, vec![], None, None, 512);
+    for raw in [5120, 5632] {
+        run(raw, vec![]);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let bends: Vec<_> = actual
+        .iter()
+        .filter_map(|(_, event)| match event {
+            Event::Midi { data: [status, lsb, msb], .. } if status & 0xf0 == 0xe0 => {
+                Some(u16::from(*lsb) | (u16::from(*msb) << 7))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        bends,
+        [0x2000, 0x3000],
+        "Participating centres the player's bend; Off passes the same bend through"
+    );
+    let tuning = |id| {
+        actual
+            .iter()
+            .filter_map(|(_, event)| match event {
+                Event::Expression { kind: 2, id: found, value, .. } if *found == id => Some(*value),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let participating = tuning(1);
+    assert_eq!(participating.len(), 2, "an adaptive onset states its tuning, then the override");
+    assert_ne!(participating[0], 0.0, "the assignment the Tune chose, not the player's 0.25");
+    assert_eq!(
+        participating[1], participating[0],
+        "the player's per-note tuning is zeroed and carries only the assignment"
+    );
+    assert_eq!(
+        tuning(2),
+        [0.25],
+        "Off states no tuning of its own and forwards the player's exactly"
+    );
+    assert_eq!(source.source_snapshot().faults, 0);
+    settle(&hub, &source, 6144, vec![note(2, 0, 64, 0, false)]);
+}
+
+/// The control is not host bypass. Both modes play at the delay this
+/// activation adopted, and toggling asks the host for nothing.
+#[test]
+fn production_a_participation_toggle_keeps_the_delay_the_activation_adopted() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    let mut onsets = Vec::new();
+    let mut run = |raw: i64, inputs| {
+        let sink = source.run_format(raw, inputs, None, None, 512);
+        onsets.extend(
+            sink.values
+                .into_iter()
+                .filter(|(_, event)| event.attack().is_some())
+                .map(|(offset, _)| raw + i64::from(offset)),
+        );
+    };
+    let before = (source.latency(), restarts(&source), announced(&source));
+    run(1536, vec![note(1, 0, 64, 0, true)]);
+    hub.run_format(1536, vec![], None, None, 512);
+    for raw in [2048, 2560] {
+        run(raw, vec![]);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    run(3072, vec![note(1, 0, 64, 0, false), source.participation(false, 1)]);
+    hub.run_format(3072, vec![], None, None, 512);
+    for raw in [3584, 4096] {
+        run(raw, vec![]);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    run(4608, vec![note(2, 0, 64, 0, true)]);
+    hub.run_format(4608, vec![], None, None, 512);
+    for raw in [5120, 5632] {
+        run(raw, vec![]);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(
+        onsets,
+        [1536 + 512, 4608 + 512],
+        "each mode plays its note at its own input plus the one adopted D"
+    );
+    assert_eq!(
+        (source.latency(), restarts(&source), announced(&source)),
+        before,
+        "a toggle is not a latency change and asks the host for no reactivation"
+    );
+    assert_eq!(source.source_snapshot().faults, 0);
+    settle(&hub, &source, 6144, vec![note(2, 0, 64, 0, false)]);
+}
+
+/// A toggle owes the termination of what it has already forwarded, and it
+/// keeps owning those voices until the host has actually taken the release.
+/// A rejected release is retried; it is never a note the instrument keeps
+/// sounding after the Tune has forgotten it.
+#[test]
+fn production_a_toggle_owns_its_forwarded_note_until_the_release_is_accepted() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    source.run_format(1536, vec![note(1, 0, 64, 0, true)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    for raw in [2048, 2560] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(source.source_snapshot().held, 1, "the fixture must reach a forwarded note");
+    // The toggle's termination is refused by the host for one whole callback.
+    let refused =
+        source.run_format(3072, vec![source.participation(false, 0)], Some(u16::MAX), None, 512);
+    hub.run_format(3072, vec![], None, None, 512);
+    assert!(
+        refused.rejected.iter().any(|(_, event)| matches!(event, Event::Note { kind: 2, .. })),
+        "the toggle reached the termination"
+    );
+    assert!(refused.values.is_empty());
+    assert_eq!(
+        source.source_snapshot().held,
+        1,
+        "a refused release does not release the ownership it was owed for"
+    );
+    let retried = source.run_format(3584, vec![], None, None, 512);
+    hub.run_format(3584, vec![], None, None, 512);
+    assert!(retried.values.iter().any(|(_, event)| matches!(event, Event::Note { kind: 2, .. })));
+    for raw in (4096..6144).step_by(512) {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(source.source_snapshot().held, 0, "and it is given up once the host has taken it");
+    assert_eq!(
+        source.source_snapshot().faults,
+        source::OUTPUT_FAULT,
+        "a host that refuses a release the Tune owes is a latched output failure, not a note \
+         quietly written off"
+    );
+    settle(&hub, &source, 6144, vec![]);
+}
+
+/// Off leaves the player's bend on the wire. Participating owns pitch again,
+/// so returning to it recentres the channels Off actually bent -- otherwise
+/// every note the Tune tuned afterwards would sound at that offset.
+#[test]
+fn production_returning_to_participating_recentres_what_off_bent() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    source.run_format(1536, vec![source.participation(false, 0)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    // The bend is an ordinary shared controller and reaches the wire at its
+    // own input plus D, so it has to be a whole D clear of the next toggle.
+    source.run_format(2048, vec![raw_midi([0xe0, 0x00, 0x60], 0)], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    let bent = source.run_format(2560, vec![], None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    assert!(
+        bent.values
+            .iter()
+            .any(|(_, event)| matches!(event, Event::Midi { data: [0xe0, 0x00, 0x60], .. })),
+        "the fixture must actually leave a bend on the wire"
+    );
+    let back = source.run_format(3072, vec![source.participation(true, 0)], None, None, 512);
+    hub.run_format(3072, vec![], None, None, 512);
+    assert!(
+        back.values
+            .iter()
+            .any(|(_, event)| matches!(event, Event::Midi { data: [0xe0, 0x00, 0x40], .. })),
+        "the boundary recentres it"
+    );
+    // A channel this Tune never bent owes nothing, so the recentre is not a
+    // fixed cost every toggle pays.
+    let again = source.run_format(3584, vec![source.participation(false, 0)], None, None, 512);
+    hub.run_format(3584, vec![], None, None, 512);
+    assert!(
+        !again
+            .values
+            .iter()
+            .any(|(_, event)| matches!(event, Event::Midi { data: [0xe0, ..], .. })),
+        "a centred channel is already in the new mode's state"
+    );
+    assert_eq!(source.source_snapshot().faults, 0);
+    settle(&hub, &source, 4096, vec![]);
+}
+
+/// Lateness is not a mode change. A note whose assignment misses its deadline
+/// takes the late-playback path and nothing else: the phrase already sounding
+/// keeps sounding, no release or controller cleanup goes out, and the note
+/// itself arrives tuned rather than untuned or cancelled.
+#[test]
+fn production_a_missed_deadline_is_not_a_participation_toggle() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    let mut actual = Vec::new();
+    {
+        let mut run = |raw: i64, inputs| {
+            let sink = source.run_format(raw, inputs, None, None, 512);
+            actual.extend(
+                sink.values.into_iter().map(|(offset, event)| (raw + i64::from(offset), event)),
+            );
+        };
+        // The Hub runs one whole callback behind, so neither onset can be
+        // assigned by its own input+D and both take the late path.
+        run(1536, vec![note(1, 0, 64, 0, true)]);
+        run(2048, vec![]);
+        hub.run_format(1536, vec![], None, None, 512);
+        run(2560, vec![]);
+        hub.run_format(2048, vec![], None, None, 512);
+        run(3072, vec![note(2, 0, 67, 0, true)]);
+        hub.run_format(2560, vec![], None, None, 512);
+        run(3584, vec![]);
+        hub.run_format(3072, vec![], None, None, 512);
+        run(4096, vec![]);
+        hub.run_format(3584, vec![], None, None, 512);
+    }
+    assert_eq!(
+        source.shared().deadline_misses.load(Ordering::Acquire),
+        2,
+        "the fixture must actually miss both deadlines"
+    );
+    let snapshot = source.source_snapshot();
+    assert_eq!(
+        (snapshot.held, snapshot.emergency, snapshot.faults),
+        (2, 0, 0),
+        "a deadline miss cancels nothing, terminates nothing and latches nothing"
+    );
+    assert!(
+        !actual.iter().any(|(_, event)| event.release()
+            || matches!(event, Event::Note { kind: 2, .. })
+            || matches!(event, Event::Midi { data: [0xb0..=0xbf, 64 | 66 | 69, _], .. })
+            || matches!(event, Event::Midi { data: [0xe0..=0xef, ..], .. })),
+        "no release, pedal neutralization or recentre is owed for lateness"
+    );
+    assert!(inspect_source(&source, |source| source.participating));
+    let onsets: Vec<_> = actual
+        .iter()
+        .filter_map(|(sample, event)| event.attack().map(|(id, ..)| (*sample, id)))
+        .collect();
+    assert_eq!(
+        onsets,
+        [(2560, 1), (4096, 2)],
+        "each retained attack plays late on its own schedule rather than being dropped"
+    );
+    for id in [1, 2] {
+        assert!(
+            actual.iter().any(|(_, event)| matches!(
+                event,
+                Event::Expression { kind: 2, id: found, value, .. }
+                    if *found == id && *value != 0.0
+            )),
+            "and it arrives tuned"
+        );
+    }
+    settle(&hub, &source, 4608, vec![note(1, 0, 64, 0, false), note(2, 0, 67, 0, false)]);
+}
+
+/// A `Control` carries the lease incarnation and session epoch it was minted
+/// under, and a reset ends both. #712 makes "old replies must not revive
+/// notes in the new session" a hard constraint, and this is the one test
+/// every arm of the Hub's control lane is written in.
+///
+/// `Detach` is the arm with nothing else in its guard, so what reaches the
+/// row is exactly what the identity test let through.
+#[test]
+fn production_an_obsolete_control_cannot_act_on_the_row_that_replaced_it() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let calibration = Calibration { offset: 0 };
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, calibration);
+    hub.activate_format(44100.0, 512);
+    let mut source = Device::new(true);
+    source.configure_format(uuid, true, calibration);
+    source.activate_format(44100.0, 512);
+    for raw in (0..3072).step_by(512) {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let session = registry::global().lock().unwrap().test_session(uuid);
+    let lease = attachment_tests::lease(&source).expect("the fixture must reach a paired row");
+    let slot = usize::from(lease.slot) - 1;
+    let held = inspect_hub(&hub, |hub| hub.test_row_identity(slot));
+    assert_eq!(held.lease, Some(lease));
+    assert_eq!(held.detach, None);
+    // The Tune's own Progress owns the normal cell between callbacks. Take it
+    // the way the Hub would, so each injected message is the only one there.
+    let deliver = |control| {
+        session.rows[slot].to_hub.take();
+        assert!(session.rows[slot].to_hub.publish(control).is_ok());
+        hub.run_format(3072, vec![], None, None, 512);
+        inspect_hub(&hub, |hub| hub.test_row_identity(slot)).detach
+    };
+    assert_eq!(
+        deliver(protocol::Control::Detach {
+            incarnation: lease.incarnation - 1,
+            epoch: held.epoch,
+            cut: 7,
+        }),
+        None,
+        "a message from the lease this row replaced is not this row's"
+    );
+    assert_eq!(
+        deliver(protocol::Control::Detach {
+            incarnation: lease.incarnation,
+            epoch: held.epoch + 1,
+            cut: 8,
+        }),
+        None,
+        "nor is one minted under a session epoch this row does not hold"
+    );
+    assert_eq!(
+        deliver(protocol::Control::Detach {
+            incarnation: lease.incarnation,
+            epoch: held.epoch,
+            cut: 9,
+        }),
+        Some(9),
+        "the fixture must reach the arm at all, or neither refusal above means anything"
+    );
+}
+
+/// A row's slot outlives the lease that used it, and the Hub sequences by
+/// slot. What the previous Tune left there -- its participation, its serial,
+/// its key preferences -- belongs to that lease, so a fresh one must not
+/// inherit it: a Participating Tune that took an Off Tune's slot would be
+/// scored as Off, contributing nothing to anyone's tuning context including
+/// its own, with nothing on screen saying so.
+#[test]
+fn production_a_fresh_lease_is_not_sequenced_as_the_off_tune_whose_slot_it_took() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let calibration = Calibration { offset: 0 };
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, calibration);
+    hub.activate_format(44100.0, 512);
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    let mut raw = 0;
+    let idle = |hub: &Device, tune: Option<&Device>, raw: &mut i64, blocks: usize| {
+        for _ in 0..blocks {
+            if let Some(tune) = tune {
+                tune.run_format(*raw, vec![], None, None, 512);
+            }
+            hub.run_format(*raw, vec![], None, None, 512);
+            *raw += 512;
+        }
+    };
+    let slot = {
+        let mut off = Device::new(true);
+        off.configure_format(uuid, true, calibration);
+        off.activate_format(44100.0, 512);
+        idle(&hub, Some(&off), &mut raw, 3);
+        let lease = attachment_tests::lease(&off).expect("the first Tune must pair");
+        off.run_format(raw, vec![off.participation(false, 0)], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+        idle(&hub, Some(&off), &mut raw, 3);
+        let slot = usize::from(lease.slot) - 1;
+        let identity = inspect_hub(&hub, |hub| hub.test_row_identity(slot));
+        assert!(
+            !identity.participating && identity.participation_serial != 0,
+            "the fixture must reach an Off row the Hub has actually sequenced"
+        );
+        slot
+    };
+    // The Off Tune is gone. Its row settles and its slot goes back.
+    for _ in 0..16 {
+        hub.main();
+        idle(&hub, None, &mut raw, 1);
+    }
+    hub.main();
+    let mut back = Device::new(true);
+    back.configure_format(uuid, true, calibration);
+    back.activate_format(44100.0, 512);
+    idle(&hub, Some(&back), &mut raw, 4);
+    let lease = attachment_tests::lease(&back).expect("the second Tune must pair");
+    assert_eq!(usize::from(lease.slot) - 1, slot, "the fixture must reach slot reuse");
+    let identity = inspect_hub(&hub, |hub| hub.test_row_identity(slot));
+    assert_eq!(
+        (identity.participating, identity.participation_serial),
+        (true, 0),
+        "the fresh lease is sequenced as what it is, not as what the slot last held"
+    );
+    // And the musical consequence: this Tune's own held D is context for its
+    // own E. Sequenced as Off it would score against nothing and pick 5/4.
+    back.run_format(raw, vec![note(1, 0, 50, 0, true)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    raw += 512;
+    idle(&hub, Some(&back), &mut raw, 3);
+    back.run_format(raw, vec![note(2, 0, 52, 0, true)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    raw += 512;
+    idle(&hub, Some(&back), &mut raw, 3);
+    assert_eq!(
+        inspect_source(&back, |source| source
+            .state
+            .voices()
+            .find(|voice| voice.note == 52)
+            .unwrap()
+            .attack_node),
+        Some(harmonigraph_core::LatticePos::new(4, 0, 0)),
+        "the held D is in the context this E was scored against"
+    );
+    assert_eq!(back.source_snapshot().faults, 0);
+    settle(&hub, &back, raw, vec![note(1, 0, 50, 0, false), note(2, 0, 52, 0, false)]);
 }

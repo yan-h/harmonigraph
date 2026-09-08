@@ -1629,6 +1629,16 @@ impl Hub {
 }
 
 #[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TestRow {
+    pub lease: Option<Lease>,
+    pub epoch: u64,
+    pub detach: Option<u64>,
+    pub participating: bool,
+    pub participation_serial: u64,
+}
+
+#[cfg(test)]
 impl Hub {
     pub fn test_row_receiver(&self, slot: usize, channel: usize) -> (Option<u8>, usize, u64, u64) {
         let row = &self.rows[slot];
@@ -1639,6 +1649,17 @@ impl Hub {
             row.received,
             row.applied,
         )
+    }
+    /// What a row holds and how this Hub is sequencing the source that owns
+    /// it. `detach` is the plainest thing an obsolete `Control` would move.
+    pub fn test_row_identity(&self, slot: usize) -> TestRow {
+        TestRow {
+            lease: self.rows[slot].lease,
+            epoch: self.rows[slot].epoch,
+            detach: self.rows[slot].detach,
+            participating: self.sequencer.participating[slot + 1],
+            participation_serial: self.sequencer.participation_serial[slot + 1],
+        }
     }
     pub fn test_joined_rows(&self) -> [(Option<Lease>, Option<u64>, bool, u64); TUNERS] {
         std::array::from_fn(|index| {
