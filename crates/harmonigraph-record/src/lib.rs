@@ -1152,6 +1152,8 @@ pub fn channel() -> (Recorder, Control) {
                     } else {
                         open =
                             Open::create(*header, path, 1, spec, &thread_status).map(|mut open| {
+                                #[cfg(all(test, feature = "test-support"))]
+                                { open.fail_marker_on_pass = *thread_fence.test_marker_failure.lock(); }
                                 open.epoch = epoch;
                                 open.configuration_enabled = thread_fence.enabled.load(Ordering::Acquire);
                                 open.source_enabled =
@@ -1169,7 +1171,7 @@ pub fn channel() -> (Recorder, Control) {
                         }
                         if open.as_ref().is_none_or(|o| spec.is_some() && o.audio.is_none()) {
                             thread_fence.fail_with_message(thread_status.lock().clone());
-                            failure.account(&mut open, epoch, &thread_status, harmonigraph_take::IncompleteRecord {
+                            failure.account(&mut open, epoch, &thread_status, Some(&thread_fence), harmonigraph_take::IncompleteRecord {
                                 reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
                                 ..Default::default()
                             });
@@ -1231,7 +1233,7 @@ pub fn channel() -> (Recorder, Control) {
                     && consumer.is_empty() && publications.settled()
                     && (open.is_some() || disconnected)
                 {
-                    failure.account(&mut open, thread_fence.epoch(), &thread_status,
+                    failure.account(&mut open, thread_fence.epoch(), &thread_status, Some(&thread_fence),
                         harmonigraph_take::IncompleteRecord {
                             reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
                             ..Default::default()
@@ -1270,7 +1272,7 @@ pub fn channel() -> (Recorder, Control) {
                 if publications.settled() {
                     if open.is_some() {
                         thread_fence.fail();
-                        failure.account(&mut open, thread_fence.epoch(), &thread_status,
+                        failure.account(&mut open, thread_fence.epoch(), &thread_status, Some(&thread_fence),
                             harmonigraph_take::IncompleteRecord {
                                 reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
                                 ..Default::default()
@@ -1284,7 +1286,7 @@ pub fn channel() -> (Recorder, Control) {
                 if fanout.waiting_file {
                     // No remaining command can materialize this addressed file.
                     thread_fence.fail();
-                    failure.account(&mut open, thread_fence.epoch(), &thread_status,
+                    failure.account(&mut open, thread_fence.epoch(), &thread_status, Some(&thread_fence),
                         harmonigraph_take::IncompleteRecord {
                             reason: harmonigraph_take::canonical::GapReasonRecord::InvalidRecord,
                             ..Default::default()
@@ -1541,6 +1543,7 @@ pub mod testing {
                         &mut self.open,
                         self.fence.epoch(),
                         &self.status,
+                        Some(&self.fence),
                         harmonigraph_take::IncompleteRecord {
                             reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
                             ..Default::default()
@@ -1622,13 +1625,17 @@ impl FailureAccount {
         open: &mut Option<Open>,
         epoch: u64,
         status: &Mutex<String>,
+        fence: Option<&RecordFence>,
         record: harmonigraph_take::IncompleteRecord,
     ) {
         *status.lock() = CONFIGURATION_FAILURE.into();
         if let Some(current) = open.as_mut() {
             if let Err(error) = current.mark_incomplete(record) {
-                *status.lock() =
-                    format!("recording incomplete: cannot flush failure marker: {error}");
+                if let Some(fence) = fence {
+                    fence.fail_with_message(error.to_string());
+                } else {
+                    *status.lock() = format!("recording incomplete: {error}");
+                }
             }
         }
         self.0.set(Some(epoch));
@@ -1691,7 +1698,9 @@ impl CanonicalFanout {
         // does not have. Conservative in the direction #712 asks for — the
         // export still runs, and the alternative is the silence this repairs.
         if let (Some(record), Some(current)) = (self.unplaced, open.as_mut()) {
-            let _ = current.mark_incomplete(record);
+            if let Err(error) = current.mark_incomplete(record) {
+                fence.fail_with_message(error.to_string());
+            }
             self.unplaced = None;
         }
         publications.drain(|delivery, route| {
@@ -1807,7 +1816,9 @@ impl CanonicalFanout {
                         };
                         match open.as_mut() {
                             Some(current) => {
-                                let _ = current.mark_incomplete(record);
+                                if let Err(error) = current.mark_incomplete(record) {
+                                    fence.fail_with_message(error.to_string());
+                                }
                             }
                             // Nowhere to write it YET. Held rather than
                             // dropped: see `unplaced`.
@@ -1850,6 +1861,8 @@ struct Open {
     /// The marker this RECORDING carries, not this file: whatever was written
     /// into this pass, so [`Open::next_pass`] can write it into the next one.
     incomplete: Option<harmonigraph_take::IncompleteRecord>,
+    #[cfg(all(test, feature = "test-support"))]
+    fail_marker_on_pass: Option<u32>,
     writer: harmonigraph_take::Writer,
     header: harmonigraph_take::Header,
     /// The first pass's path; later passes append `-2`, `-3`, ...
@@ -1913,6 +1926,8 @@ impl Open {
                     source_complete: false,
                     last_voiced_number: 0,
                     incomplete: None,
+                    #[cfg(all(test, feature = "test-support"))]
+                    fail_marker_on_pass: None,
                     writer,
                     header,
                     base,
@@ -2026,9 +2041,11 @@ impl Open {
         if current.spec.is_some() && next.audio.is_none() {
             return Err(std::io::Error::other(status.lock().clone()));
         }
-        // Keep the entire old owner until creation and the capacity check pass.
-        let mut previous = open.take().unwrap();
-        next.last_voiced = previous.voiced_so_far();
+        #[cfg(all(test, feature = "test-support"))]
+        {
+            next.fail_marker_on_pass = current.fail_marker_on_pass;
+        }
+        next.last_voiced = current.voiced_so_far();
         // Incompleteness belongs to the RECORDING, so it crosses the rollover
         // with everything else the new pass inherits.
         //
@@ -2039,9 +2056,11 @@ impl Open {
         // unmarked whenever a later pass was the voiced one, because
         // [`Open::take_path`] picks the last voiced pass and `mark_incomplete`
         // reaches downward into `retained` rather than forward in time (#712).
-        if let Some(record) = previous.incomplete {
-            let _ = next.mark_incomplete(record);
+        if let Some(record) = current.incomplete {
+            next.mark_incomplete(record)?;
         }
+        // Keep the old owner until the next file and its inherited marker exist.
+        let mut previous = open.take().unwrap();
         next.epoch = previous.epoch;
         next.configuration_enabled = previous.configuration_enabled;
         next.source_enabled = previous.source_enabled;
@@ -2099,15 +2118,28 @@ impl Open {
     ) -> std::io::Result<()> {
         let mut result = Ok(());
         if self.incomplete.is_none() {
-            result = self.writer.incomplete(record).and_then(|_| self.writer.flush());
+            #[cfg(all(test, feature = "test-support"))]
+            if self.fail_marker_on_pass == Some(self.pass) {
+                self.writer.make_read_only_for_test(self.path())?;
+                self.fail_marker_on_pass = None;
+            }
+            result =
+                self.writer.incomplete(record).and_then(|_| self.writer.flush()).map_err(|error| {
+                    std::io::Error::new(
+                        error.kind(),
+                        format!(
+                            "cannot write incomplete marker {}: {error}",
+                            self.path().display()
+                        ),
+                    )
+                });
             if result.is_ok() {
                 self.incomplete = Some(record);
             }
         }
         for pass in &mut self.retained {
-            if let Err(error) = pass.mark_incomplete(record) {
-                result = Err(error);
-            }
+            // Visit every retained pass, keeping the first useful I/O cause.
+            result = result.and(pass.mark_incomplete(record));
         }
         result
     }
@@ -2220,6 +2252,7 @@ fn drain_with_boundaries(
                     open,
                     epoch,
                     status,
+                    fence,
                     harmonigraph_take::IncompleteRecord {
                         reason: harmonigraph_take::canonical::GapReasonRecord::InvalidRecord,
                         ..Default::default()

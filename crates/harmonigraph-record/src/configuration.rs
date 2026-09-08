@@ -53,6 +53,8 @@ pub(crate) struct RecordFence {
     pub test_wav_limit: parking_lot::Mutex<Option<u64>>,
     #[cfg(feature = "test-support")]
     pub test_wav_finish_failure: AtomicBool,
+    #[cfg(all(test, feature = "test-support"))]
+    pub test_marker_failure: parking_lot::Mutex<Option<u32>>,
     #[cfg(feature = "test-support")]
     pub boundary_pause: TestPause,
     #[cfg(feature = "test-support")]

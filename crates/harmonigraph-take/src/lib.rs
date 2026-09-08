@@ -435,6 +435,18 @@ impl Writer {
         Ok(writer)
     }
 
+    /// Make the real buffered file writes fail when flushed, after any prefix
+    /// already written. The replacement handle has no write permission.
+    #[cfg(feature = "test-support")]
+    pub fn make_read_only_for_test(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> std::io::Result<()> {
+        self.out.flush()?;
+        self.out = std::io::BufWriter::new(std::fs::File::open(path)?);
+        Ok(())
+    }
+
     /// Write one record, and flush it.
     ///
     /// Flushing every time is deliberate. A take is worth nothing if it
