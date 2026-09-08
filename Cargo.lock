@@ -1473,6 +1473,7 @@ version = "0.3.0"
 dependencies = [
  "harmonigraph-core",
  "harmonigraph-take",
+ "nice-assert-no-alloc",
  "parking_lot",
  "rtrb",
 ]

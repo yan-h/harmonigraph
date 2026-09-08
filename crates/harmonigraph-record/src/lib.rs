@@ -1131,6 +1131,9 @@ pub fn channel() -> (Recorder, Control) {
         let failure = FailureAccount::default();
         let mut disconnected = false;
         loop {
+            let mut waiting_for_start = false;
+            #[cfg(all(test, feature = "test-support"))]
+            let mut processed_stop = false;
             if !disconnected {
             match orders.try_recv() {
                 Ok(Command::Start(epoch, header, path, spec)) => {
@@ -1163,6 +1166,8 @@ pub fn channel() -> (Recorder, Control) {
                     }
                 }
                 Ok(Command::Stop(epoch, render)) => {
+                    #[cfg(all(test, feature = "test-support"))]
+                    { processed_stop = true; }
                     if thread_fence.enabled.load(Ordering::Acquire) {
                         pending_stop = Some((epoch, render));
                         if !failure.contains(epoch) {
@@ -1193,6 +1198,12 @@ pub fn channel() -> (Recorder, Control) {
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => {
+                    // Start can arrive just after this poll and arm a producer
+                    // before the drains below. With no file yet, its records
+                    // and audio still belong to that pending command. Stop's
+                    // own drain/disposal and terminal failures keep their paths.
+                    waiting_for_start = open.is_none()
+                        && !failure.contains(thread_fence.epoch());
                     #[cfg(feature = "test-support")]
                     {
                         thread_fence.worker_empty_visits.fetch_add(1, Ordering::AcqRel);
@@ -1202,14 +1213,14 @@ pub fn channel() -> (Recorder, Control) {
                 Err(mpsc::TryRecvError::Disconnected) => disconnected = true,
             }
             }
-            let had_records = drain_with_boundaries(
+            let had_records = !waiting_for_start && drain_with_boundaries(
                 &mut consumer, Some(&mut audio_consumer), &mut open,
                 &thread_status, Some(&thread_fence), &failure,
                 |open| {
                     fanout.drain(&mut publications, open, &thread_fence, &failure);
                 },
             );
-            let had_audio = !thread_fence.enabled.load(Ordering::Acquire)
+            let had_audio = !waiting_for_start && !thread_fence.enabled.load(Ordering::Acquire)
                 && drain_audio(&mut audio_consumer, &mut open, &thread_fence);
             let had_publications =
                 fanout.drain(&mut publications, &mut open, &thread_fence, &failure) != 0;
@@ -1255,6 +1266,10 @@ pub fn channel() -> (Recorder, Control) {
                             thread_progress.clone(), thread_render.clone());
                     }
                 }
+            }
+            #[cfg(all(test, feature = "test-support"))]
+            if processed_stop {
+                thread_fence.worker_stop_processed.store(true, Ordering::Release);
             }
             // Shutdown uses the same cross-lane pump and honors a now-ready
             // Stop first. Only ownership still unresolved after that is lost.
