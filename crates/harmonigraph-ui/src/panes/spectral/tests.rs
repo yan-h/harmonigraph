@@ -46,6 +46,20 @@ fn power_at(db: f32) -> f32 {
     10.0f32.powf(db / 10.0)
 }
 
+#[test]
+fn footprint_resampling_returns_db_for_average_interpolation_and_silence() {
+    use super::spectrogram::footprint_mean_db;
+    let powers = [power_at(-20.0), power_at(-80.0)];
+    for (from, to, expected) in
+        [(0.0, 2.0, -50.0), (0.75, 1.25, -50.0), (0.0, 0.5, -20.0), (1.0, 1.5, -65.0)]
+    {
+        assert!((footprint_mean_db(&powers, from, to) - expected).abs() < 1e-5);
+    }
+    for powers in [&[][..], &[0.0][..], &[0.0, 0.0][..]] {
+        assert_eq!(footprint_mean_db(powers, 0.0, 2.0), power_db(0.0));
+    }
+}
+
 /// The note names follow the pitch zoom and the markings do not, which is
 /// the whole of the difference between text written ON the picture and
 /// text labelling the axis it is drawn against.
@@ -566,11 +580,13 @@ fn the_spectrum_keeps_its_size_as_the_pane_grows() {
 /// spectrogram gives way first, and only what it has to.
 #[test]
 fn the_spectrogram_gives_way_down_to_its_floor_and_then_the_spectrum_yields() {
-    let mut state = dialled_at(SpectralOrientation::Left, 400.0);
-    let (dialled, _) = regions(&state, 400.0);
+    /// The pane the split is dialled on, before any of the squeezes below.
+    const DIALLED_DEPTH: f32 = 400.0;
+    let mut state = dialled_at(SpectralOrientation::Left, DIALLED_DEPTH);
+    let (dialled, _) = regions(&state, DIALLED_DEPTH);
     // Every point of the squeeze comes off the spectrogram while it has one
-    // to give — 244 points is where the far region reaches its floor with the
-    // spectrum still whole.
+    // to give — the dialled spectrum plus the far region's floor is where it
+    // runs out, with the spectrum still whole.
     for depth in [380.0, 300.0, dialled + FAR_REGION_FLOOR_PT] {
         hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, depth));
         let (spectrum, far) = regions(&state, depth);
@@ -578,8 +594,16 @@ fn the_spectrogram_gives_way_down_to_its_floor_and_then_the_spectrum_yields() {
         assert!(far >= FAR_REGION_FLOOR_PT - 0.5, "at {depth}: the far region is down to {far}");
     }
     // Past that the promise is the far region's floor instead, and the
-    // spectrum is what shrinks.
-    for depth in [200.0, 160.0, 120.0] {
+    // spectrum is what shrinks — but only down to where the PROPORTIONAL band
+    // takes over from the floor (`spectrum_hold`), under which the far region
+    // is a share again and a reading there measures the band rather than this
+    // claim. Both ends of that window move with the fresh split, so both are
+    // derived from it: written down, they follow one default and stop
+    // straddling the floor when it moves.
+    let crossover = dialled + FAR_REGION_FLOOR_PT;
+    let banded = FAR_REGION_FLOOR_PT / (1.0 - dialled / DIALLED_DEPTH);
+    assert!(banded + 20.0 < crossover - 20.0, "the floor holds over too little depth to read");
+    for depth in [crossover - 20.0, (crossover + banded) / 2.0, banded + 20.0] {
         hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, depth));
         let (spectrum, far) = regions(&state, depth);
         assert!(
@@ -588,10 +612,13 @@ fn the_spectrogram_gives_way_down_to_its_floor_and_then_the_spectrum_yields() {
         );
         assert!(spectrum < dialled, "at {depth}: the spectrum should have yielded, got {spectrum}");
     }
-    // And squeezed past even that, the split is simply the proportion it was
-    // dialled at — which is what a pane with no hold on it draws at any size.
-    let share = spectrum_share(&dialled_at(SpectralOrientation::Left, 400.0).spectrum_config);
-    for depth in [100.0, 60.0, 20.0] {
+    // And squeezed past even that — past `banded`, where the far region's
+    // floor would take more than the whole share — the split is simply the
+    // proportion it was dialled at, which is what a pane with no hold on it
+    // draws at any size.
+    let share =
+        spectrum_share(&dialled_at(SpectralOrientation::Left, DIALLED_DEPTH).spectrum_config);
+    for depth in [banded - 10.0, banded * 0.5, banded * 0.2] {
         hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, depth));
         let (spectrum, _) = regions(&state, depth);
         assert!(
@@ -610,30 +637,38 @@ fn the_spectrogram_gives_way_down_to_its_floor_and_then_the_spectrum_yields() {
 /// and where they do, tracking the last size makes every squeeze permanent.
 ///
 /// So the squeeze has to go through a depth where a clamp actually MOVES the
-/// split, or the test proves nothing about which of the two is remembered. 200
-/// points is that depth — the far region is at its floor there and the spectrum
-/// has yielded to 136 of the 180 it was dialled at — where the proportional
-/// band under it leaves the split exactly where it started and would pass
-/// against either.
+/// split, or the test proves nothing about which of the two is remembered:
+/// deep enough that the far region is still held at its floor rather than back
+/// on the proportional band, and shallow enough that the floor has taken real
+/// points off the spectrum. That is a window either side of the depth where
+/// the far region first reaches its floor, and it moves with the fresh split —
+/// so the squeeze is derived from that depth rather than written down, the
+/// band under it being where the split sits exactly where it started and the
+/// test would pass against either answer.
 #[test]
 fn a_pane_squeezed_and_opened_again_comes_back_to_its_picture() {
-    let mut state = dialled_at(SpectralOrientation::Left, 400.0);
+    /// The pane the split is dialled on, before the squeezes below.
+    const DIALLED_DEPTH: f32 = 400.0;
+    let mut state = dialled_at(SpectralOrientation::Left, DIALLED_DEPTH);
     let dialled = state.spectrum_config.roll_fraction;
-    let (spectrum, _) = regions(&state, 400.0);
+    let (spectrum, _) = regions(&state, DIALLED_DEPTH);
+    // Forty points inside the crossover, so the far region is on its floor and
+    // the spectrum has given up those forty.
+    let squeeze = spectrum + FAR_REGION_FLOOR_PT - 40.0;
     let squeezed = {
-        hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, 200.0));
-        regions(&state, 200.0)
+        hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, squeeze));
+        regions(&state, squeeze)
     };
     assert!(
         (squeezed.0 - spectrum).abs() > 20.0,
         "a squeeze that leaves the spectrum at {} of {spectrum} points tests nothing",
         squeezed.0,
     );
-    for depth in [90.0, 40.0, 200.0] {
+    for depth in [90.0, 40.0, squeeze] {
         hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, depth));
     }
-    hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, 400.0));
-    let (back, _) = regions(&state, 400.0);
+    hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, DIALLED_DEPTH));
+    let (back, _) = regions(&state, DIALLED_DEPTH);
     let split = state.spectrum_config.roll_fraction;
     assert!(
         (back - spectrum).abs() < 0.5 && (split - dialled).abs() < 1e-3,
@@ -1143,6 +1178,40 @@ fn a_collapsed_range_rules_nothing() {
     }
 }
 
+/// How much room for a level number the PANE measures on `rect` — the number
+/// [`level_grid`] thins the drawn ladder against.
+///
+/// A test comparing against what the pane painted has to thin its reference by
+/// this and not by a stand-in. A generous stand-in agrees with the pane only
+/// while the level axis is long enough that neither binds, and parts from it —
+/// silently, as a ladder that is simply a different one — as soon as the axis
+/// shortens enough for the stand-in to bind first. Shrinking the spectrum's
+/// share of the pane is what shortens it.
+///
+/// The ladder's OWN tests pass a room instead, and should: there the room is
+/// the input under test.
+fn pane_label_room(rect: egui::Rect, cfg: &SpectrumConfig) -> f32 {
+    let axes = Axes::new(rect, cfg);
+    let ctx = egui::Context::default();
+    let mut room = 0.0;
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let painter = ui.painter();
+        // The span reaches only the note names, which this discards; a level
+        // number is set in the markings, and those are the pane's alone.
+        //
+        // Ordered the way the pane orders it, and not by the raw pair: an
+        // inverted or collapsed range reaches the pane as `PITCH_RANGE_MIN_SPAN`
+        // and would reach this as a zero or negative span, which is a different
+        // markings scale and so a different font — the stand-in this helper
+        // exists to remove, put back where the range is degenerate.
+        let span = cfg.high_midi.max(cfg.low_midi + crate::PITCH_RANGE_MIN_SPAN) - cfg.low_midi;
+        let text = text_scales(cfg, &axes, span, painter.ctx().pixels_per_point());
+        room =
+            level_label_room(painter, &axes, &egui::FontId::monospace(MARKING_PT * text.markings));
+    });
+    room
+}
+
 /// A level window, as the two Level values the pane reads.
 fn level_cfg(floor: f32, ceiling: f32) -> SpectrumConfig {
     SpectrumConfig { floor_db: floor, ceiling_db: ceiling, ..Default::default() }
@@ -1605,7 +1674,7 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
 ///
 /// Loud by 40 dB rather than by a little, because a pixel of the curve
 /// resamples the whole run of buckets under it
-/// ([`footprint_mean`](super::spectrogram::footprint_mean)) and a tone is
+/// ([`footprint_mean_db`](super::spectrogram::footprint_mean_db)) and a tone is
 /// narrower than that run on a small pane: at 100 points of pitch axis across
 /// the analyzer's ten octaves the tone's own buckets are a fraction of what
 /// its pixel covers, so the level drawn is a fraction of the way up from the
@@ -2076,7 +2145,10 @@ fn the_volume_rulings_cross_the_pitch_axis_under_the_spectrum() {
         let split = spectrum_share(&cfg);
         let budget = plot_budget(split, axes.depth_len());
 
-        let want = level_grid(&cfg, budget * axes.depth_len(), 60.0);
+        // Thinned by the room the PANE measures, not a stand-in: this ladder
+        // is the reference the painted one is compared against below, so a
+        // second answer here is a reference to a different picture.
+        let want = level_grid(&cfg, budget * axes.depth_len(), pane_label_room(rect, &cfg));
         assert_eq!(want.len(), 4, "the default window is ruled in tens: -60, -50, -40, -30");
 
         let (levels, slabs) = painted_levels(rect, cfg);
@@ -2782,7 +2854,7 @@ fn resizing_the_editors_pane_leaves_the_exported_split_alone() {
 /// Pinned textually because neither call site can see the other, and every
 /// pane at 1x or above draws identically either way: the count each derives
 /// declares a footprint — the heatmap's rows become the shader's `0.5 / rows`,
-/// the curve's columns become `footprint_mean`'s span — and a floor claims
+/// the curve's columns become `footprint_mean_db`'s span — and a floor claims
 /// more pixels than the device has, so each sample integrates a fraction of
 /// the buckets it covers. Only a render BELOW 1x separates them, which
 /// `--scale` reaches with no clamp and `docs/offline-rendering.md` recommends

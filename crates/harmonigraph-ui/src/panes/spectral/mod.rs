@@ -38,9 +38,8 @@ pub(super) use settings::spectrum_settings_pane;
 use crate::panes::window_shows_node;
 use crate::{theme, SharedState};
 use axes::{
-    frequency_grid, label_anchor, level_grid, loudness, plot_budget, power_db,
-    spectrogram_level_db, text_scales, Axes, PitchScale, TimeAxis, LABEL_GAP_PT, LABEL_INSET_PT,
-    MARKING_PT, PROFILE_PT,
+    frequency_grid, label_anchor, level_grid, loudness_db, plot_budget, spectrogram_level_db,
+    text_scales, Axes, PitchScale, TimeAxis, LABEL_GAP_PT, LABEL_INSET_PT, MARKING_PT, PROFILE_PT,
 };
 use egui::Sense;
 use gestures::{drag_split, drag_zoom, spectrum_split};
@@ -233,7 +232,7 @@ pub(crate) fn spectral_pane(
     // SUBTRACTS it per octave above the 1 kHz pivot: -4.5 lifts treble
     // 4.5 dB/oct.
     let budget = plot_budget(split, axes.depth_len());
-    let d_of = |power: f32, midi: f32| loudness(&cfg, power, midi) * budget;
+    let d_of = |db: f32, midi: f32| loudness_db(&cfg, db, midi) * budget;
     // The spectrum joins the spectrogram: its region mirrors so the baseline
     // sits on the now-line (against the spectrogram's newest column) and the
     // peaks point outward. With no roll/spectrogram (split == 1) there's
@@ -371,7 +370,7 @@ pub(crate) fn spectral_pane(
             // zero.
             //
             // The run under a pixel is RESAMPLED by the heatmap's own operator
-            // ([`spectrogram::footprint_mean`]), not read by a MAX, and the two
+            // ([`spectrogram::footprint_mean_db`]), not read by a MAX, and the two
             // must stay the same read: a pixel of the curve and a pixel of the
             // heatmap cover the same buckets. A MAX here would put a ridge and
             // the curve above it at different heights on the same tone — and it
@@ -392,7 +391,7 @@ pub(crate) fn spectral_pane(
             let visible: Vec<(f32, f32, f32)> = (0..cols)
                 .map(|c| {
                     let edge = |i: usize| scale.min_midi + scale.span * i as f32 / cols as f32;
-                    let level = spectrogram::footprint_mean(
+                    let level = spectrogram::footprint_mean_db(
                         levels,
                         bucket_x(edge(c)),
                         bucket_x(edge(c + 1)),
@@ -406,10 +405,10 @@ pub(crate) fn spectral_pane(
             // volume-color dB window, so the curve reads in the heatmap's scheme
             // rather than a flat accent. `tint` keeps the gradient's hue/brightness and only
             // sets opacity (gamma_multiply would darken it toward black).
-            let hue = |power: f32, midi: f32| {
+            let hue = |db: f32, midi: f32| {
                 spectrogram::cell_color(
                     cfg.spectrogram_gradient,
-                    spectrogram_level_db(&cfg, power_db(power), midi),
+                    spectrogram_level_db(&cfg, db, midi),
                 )
             };
             let tint = |c: egui::Color32, a: u8| {

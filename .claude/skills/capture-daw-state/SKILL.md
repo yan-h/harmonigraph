@@ -31,8 +31,14 @@ That mismatch is the tell.
 ## Where the projects live
 
 Not `~/Documents/Bitwig Studio/Projects` (that's empty) —
-they're under `~/Library/CloudStorage/GoogleDrive-*/My Drive/music/`, and the script finds them via `mdfind`.
+they're under `~/Library/CloudStorage/GoogleDrive-*/My Drive/music/`, which Spotlight does not index, so the script globs that folder as well as asking `mdfind`.
 Auto-backups count as saves.
+
+Since adaptive tuning a project holds TWO Harmonigraph instances:
+the editor's, and a tune-pairing participant whose whole state is one `participating` param and no `ui-state`.
+The script prints both as numbered instances;
+the one with the `view` block is the editor's.
+An output showing only `participating` means the scan stopped short, not that the window was never closed.
 
 ## Scope check before you edit any default
 

@@ -231,11 +231,16 @@ fn viewport_changes_keep_history_without_allocating_a_strip() {
 
 /// This directly supplies renderer inputs, not an execution of the CPU row
 /// allocator. Capacity really changes 64 -> 128 and a held node writes row 64,
-/// beyond the old texture. Both rows receive the allocator's reseed signal.
+/// beyond the old texture. CPU mix is zero, as after a discarded layout pass;
+/// the GPU owner must seed both the new texture and a subsequently reused row.
 #[test]
 fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
     let mut scene = history_scene();
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 1.0, release: 2.0 });
+    scene.nodes[0].glow.incarnation = 1;
+    scene.nodes[0].glow.mix = 0.0;
     scene.node_radius = 0.6;
     // Reordering here measures row identity, independently of the Gaussian
     // shadow atlas repacking when the caster order changes.
@@ -253,14 +258,12 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
     held.world_pos.x = 1.2;
     held.lattice_pos = harmonigraph_core::LatticePos::new(1, 0, 0);
     held.glow.row = 64;
+    held.glow.incarnation = 2;
     held.activation = 1.0;
     held.octaves.fill(1.0);
     scene.nodes.push(held);
     scene.glow_rows = 128;
     scene.pitch_lut.fill(glam::Vec4::new(0.0, 1.0, 0.0, 1.0));
-    for node in &mut scene.nodes {
-        node.glow.mix = 1.0;
-    }
     let creations = super::INK_STRIP_CREATIONS.get();
     let grown = shooter.shot_again(&scene);
     assert_eq!(super::INK_STRIP_CREATIONS.get(), creations + 1);
@@ -287,6 +290,7 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
     let mut reused = scene.nodes[0];
     release(&mut scene);
     reused.glow.row = 0;
+    reused.glow.incarnation = 3;
     reused.world_pos.x = -1.2;
     reused.lattice_pos = harmonigraph_core::LatticePos::new(-1, 0, 0);
     scene.nodes.push(reused);
@@ -303,10 +307,69 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
         0,
         "row identity survives instance reordering"
     );
+    // An encoded pass clears absent rows. Even the same owner must seed when
+    // it returns after such a pass, because its previous pixels are gone.
+    let absent = scene.nodes.remove(0);
+    shooter.shot_again(&scene);
+    scene.nodes.push(absent);
+    let returned = shooter.shot_again(&scene);
+    assert!(returned.chunks_exact(4).map(|p| u64::from(p[2])).sum::<u64>() > 64);
     eprintln!("history growth fixture: 64 -> 128, 2 GPU instances including row 64, 1 strip creation, 0 viewport recreations; release red lost, held green present, reuse byte-exact");
 }
 
-/// Empty geometry keeps the existing maintenance/parity path. Once drawable
+#[test]
+fn glow_clock_consumes_only_encoded_callbacks_and_uses_the_previous_level() {
+    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
+    let mut scene = history_scene();
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 1.0, release: 4.0 });
+    scene.nodes[0].glow.incarnation = 1;
+    scene.nodes[0].glow.level = 0.25;
+    scene.nodes[0].glow.mix = 0.0;
+    for pane in [10, 20] {
+        shooter.pane = pane;
+        assert!(total_light(&shooter.shot_again(&scene)) > 64);
+    }
+    scene.pitch_lut.fill(glam::Vec4::new(0.0, 1.0, 0.0, 1.0));
+    scene.nodes[0].glow.level = 1.0;
+    for now in [0.02, 0.05] {
+        scene.glow_timing.as_mut().unwrap().now = now;
+        drop(LatticeCallback::from_scene(
+            &scene,
+            LatticeLabels::default(),
+            egui::vec2(256.0, 256.0),
+            shooter.format,
+            10,
+            None,
+        ));
+    }
+    scene.glow_timing.as_mut().unwrap().now = 0.1;
+    shooter.pane = 10;
+    let delivered = shooter.shot_again(&scene);
+    let pane = &shooter.resources.get::<LatticeResources>().unwrap().panes[&10];
+    let mix = pane.ink_instances[0].glow[2];
+    assert!(
+        (mix - (1.0 - (-0.1f32).exp())).abs() < 1e-6,
+        "attack uses the last encoded level: {mix}"
+    );
+    assert!(delivered.chunks_exact(4).map(|p| u64::from(p[0])).sum::<u64>() > 64);
+    assert!(delivered.chunks_exact(4).map(|p| u64::from(p[1])).sum::<u64>() > 64);
+    shooter.pane = 20;
+    assert_eq!(delivered, shooter.shot_again(&scene), "discarded callbacks cannot spend GPU time");
+    assert_eq!(delivered, shooter.shot_again(&scene), "same-time passes do not advance ink");
+    release(&mut scene);
+    scene.nodes[0].glow.level = 0.9;
+    scene.glow_timing.as_mut().unwrap().now = 0.5;
+    assert!(total_light(&shooter.shot_again(&scene)) > 64);
+    let pane = &shooter.resources.get::<LatticeResources>().unwrap().panes[&20];
+    let mix = pane.ink_instances[0].glow[2];
+    assert!(
+        (mix - (1.0 - (-0.4f32 / 4.0).exp())).abs() < 1e-6,
+        "falling targets use release: {mix}"
+    );
+}
+
+/// Empty geometry leaves history and parity untouched. Once drawable
 /// geometry returns, glow-off must discard both objects so an inkless release
 /// cannot resurrect a colour retained by the new history owner.
 #[test]
@@ -319,7 +382,7 @@ fn glow_off_discards_history_when_target_maintenance_runs() {
     assert!(total_light(&red) > 64);
     let raw = history(&shooter).raw_views.clone();
     let color = target(&shooter).color_view.clone();
-    let mut parity = history(&shooter).parity;
+    let parity = history(&shooter).parity;
     let nodes = std::mem::take(&mut scene.nodes);
     scene.glow_reach = 0.0;
     shooter.size = [256, 260];
@@ -329,8 +392,7 @@ fn glow_off_discards_history_when_target_maintenance_runs() {
         assert_eq!(history(&shooter).raw_views, raw);
         assert_eq!(target(&shooter).color_view, color);
         assert!(target(&shooter).glow.is_some());
-        assert_eq!(history(&shooter).parity, parity ^ 1);
-        parity ^= 1;
+        assert_eq!(history(&shooter).parity, parity);
     }
     assert_eq!(super::INK_STRIP_CREATIONS.get(), creations);
     scene.nodes = nodes;
