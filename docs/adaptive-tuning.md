@@ -348,6 +348,14 @@ Source health uses the measured audio progress/region model, with explicit reset
 Queue saturation and invalidation must remain observable even when the ordinary channel is full.
 Required-storage exhaustion follows the visible emergency-stop contract, never an unretuned assignment fallback.
 
+**The emission gate carries no generation, and the write-only bookkeeping beside it is gone** ([#712](https://github.com/yan-h/harmonigraph/issues/712)).
+The [engineering contracts](adaptive-tuning-contracts.md) describe a gate packing a checked emission generation into the 62 bits above CLOSED and BUSY, and that half was never built:
+the value a planned `Assignment` recorded and the value the Tune claimed against were both always zero — 3,720 mints and 50,719 claims across the suite, every one of them zero, which is why reverting the mode choice that reads it killed no test.
+Claiming the gate is now a plain claim of OPEN and `Assignment::emission` is removed.
+Removed with it, each written and never read: `Sequencer::binding_sample`, `Sequencer::copied`, `Stops::reached` and `Wave::delivered`.
+The emergency lane's `Permit { position, serial }` stays, because those two fields are the *ordinary* lane's slot-reuse guard and only the emergency lane's copies of them go uncompared;
+making that guard real needs a serial on the emergency `Release`, which is a mechanism rather than a deletion.
+
 ## Voice identity
 
 Channel and MIDI key are not enough once several tracks contribute.

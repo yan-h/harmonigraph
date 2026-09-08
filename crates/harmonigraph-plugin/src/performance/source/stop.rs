@@ -7,11 +7,10 @@ pub(super) struct Stops {
     head: u16,
     tail: u16,
     pub emergency_start: u32,
-    pub reached: u64,
 }
 impl Default for Stops {
     fn default() -> Self {
-        Self { head: NONE, tail: NONE, emergency_start: 0, reached: 0 }
+        Self { head: NONE, tail: NONE, emergency_start: 0 }
     }
 }
 impl Source {
@@ -99,7 +98,6 @@ impl Source {
             let position = usize::from(self.stops.head);
             self.stops.emergency_start = self.stops.emergency_start.max(offset);
             self.cancel_unsounded_through(pending.serial);
-            self.stops.reached = pending.serial;
             let channel::Role::Stop { previous, next } = pending.channel.role else {
                 unreachable!()
             };

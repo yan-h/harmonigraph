@@ -2078,15 +2078,17 @@ impl Source {
             };
             if let Some(offer) = &self.offer {
                 let row = &offer.session.rows[usize::from(offer.lease.slot - 1)];
-                let emission = self.emission(pending, row);
+                // Claiming the gate is a claim of OPEN. It used to be a claim
+                // of whatever generation the planned `Assignment` recorded, but
+                // the gate holds nothing but OPEN/BUSY/CLOSED, so the writer
+                // masked those flags off a value that never had anything else
+                // in it and both ends read zero -- 3,720 mints and 50,719
+                // claims across the suite, every one of them zero. Reverting
+                // the mode choice above to `delay() != 0` killed no test, which
+                // is what a field that is always zero looks like.
                 if row
                     .emission_gate
-                    .compare_exchange(
-                        emission,
-                        emission | BUSY,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    )
+                    .compare_exchange(OPEN, BUSY, Ordering::AcqRel, Ordering::Acquire)
                     .is_err()
                 {
                     return false;
@@ -2415,22 +2417,8 @@ impl Source {
         if let Some(offer) = &self.offer {
             let row = &offer.session.rows[usize::from(offer.lease.slot - 1)];
             // A Hub close can race any permitted group. All its actual facts
-            // are durable before BUSY is released; CLOSED and generation stay.
+            // are durable before BUSY is released; CLOSED stays.
             assert_ne!(row.emission_gate.fetch_and(!BUSY, Ordering::Release) & BUSY, 0);
-        }
-    }
-    /// The gate value an unsounded onset must still find to be admitted: the
-    /// one its own assignment was minted against, so a gate that has closed
-    /// and reopened underneath it refuses it. Only an ADAPTIVE onset has one;
-    /// an Off onset and DIRECT carry no assignment at all, so what they claim
-    /// against is the gate as it stands.
-    fn emission(&self, pending: Pending, row: &SourceControl) -> u64 {
-        if pending.life != NONE
-            && self.lives.at(pending.life).is_some_and(|life| life.adaptive && !life.sounded)
-        {
-            self.lives.at(pending.life).unwrap().assignment.emission
-        } else {
-            row.emission_gate.load(Ordering::Acquire) & !GATE_FLAGS
         }
     }
     /// The reservation a replacement takes over instead of claiming a fresh
@@ -2548,6 +2536,14 @@ impl Source {
         if self.sealed || self.emergency_output.free() == 0 || self.sequence == u64::MAX {
             return false;
         }
+        // `position` and `serial` are the ordinary lane's slot-reuse guard --
+        // `complete` asserts the pending cell it is about to write is still
+        // the one the permit was prepared for. The emergency lane compares
+        // neither, and cannot with what it carries: `complete_emergency`
+        // derives both from `completion.group.token`, the same token this
+        // prepared from, so an assertion here would compare a value to itself.
+        // A real check wants a serial on `Release`, which is a mechanism and
+        // an abort path rather than a deletion (#712).
         self.permit = Some(Permit {
             position: group.token.0[1] as usize,
             serial: group.token.0[2],

@@ -83,14 +83,12 @@ pub(super) struct Sequencer {
     pub captured: [u64; TUNERS + 1],
     membership: Option<Membership>,
     config: Option<ResolvedConfig>,
-    binding_sample: i64,
     pub(super) decision: u64,
     cohort_floor: u64,
     cohort_unsent: usize,
     cohort_recipients: u16,
     committing: bool,
     pub finalized: Option<i64>,
-    pub copied: Option<i64>,
     /// One LIFETIMES-long ledger per PAIRED row, and nothing at all for a row
     /// that has never been paired. The registry allocates a row's ledger on
     /// the main thread when it hands out that row's lease; the Hub only ever
@@ -128,14 +126,12 @@ impl Default for Sequencer {
             captured: [0; TUNERS + 1],
             membership: None,
             config: None,
-            binding_sample: 0,
             decision: 0,
             cohort_floor: 0,
             cohort_unsent: 0,
             cohort_recipients: 0,
             committing: false,
             finalized: None,
-            copied: None,
             // DIRECT has no plan row. Birth indices are already separately
             // reserved at Source; they are never authority without the key.
             plans: std::array::from_fn(|_| None),
@@ -641,7 +637,6 @@ impl Hub {
             let boundary = sample.map_or(membership.through, |sample| sample.max(membership.floor));
             let finalized = boundary.min(membership.through);
             self.sequencer.finalized = Some(finalized);
-            self.sequencer.copied = Some(finalized);
             let Some(sample) = sample.filter(|_| boundary < membership.through) else { return };
             // Collection and assembly spend one allowance, so a callback that
             // spent most of it collecting cannot be trusted to finish taking
@@ -666,7 +661,6 @@ impl Hub {
             };
             self.batch.begin(sample);
             self.sequencer.membership = Some(membership);
-            self.sequencer.binding_sample = boundary;
             self.sequencer.history.configuration(config.revision, self.sequencer.decision);
             self.sequencer.config = Some(config);
             self.sequencer.cohort_floor = self.sequencer.decision;
@@ -937,14 +931,9 @@ impl Hub {
         };
         if source != 0 {
             let index = (source - 1) * LIFETIMES + usize::from(record.request);
-            let emission = self.offer.as_ref().unwrap().session.rows[source - 1]
-                .emission_gate
-                .load(Ordering::Acquire)
-                & !super::super::source::GATE_FLAGS;
             let binding = Assignment {
                 configuration,
                 decision,
-                emission,
                 correction,
                 selection,
                 initial_player: player,

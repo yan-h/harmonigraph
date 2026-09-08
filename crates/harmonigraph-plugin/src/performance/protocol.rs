@@ -65,7 +65,6 @@ const _: () = assert!(std::mem::size_of::<Selection>() == 4);
 pub struct Assignment {
     pub configuration: harmonigraph_core::configuration::ResolvedConfig,
     pub decision: u64,
-    pub emission: u64,
     /// Exact microcents within the policy's inclusive +/-50-cent bound.
     pub correction: i32,
     /// Checked coordinates from the bounded canonical policy domain, or the
@@ -78,7 +77,6 @@ impl Default for Assignment {
         Self {
             configuration: harmonigraph_core::configuration::ConfigReducer::default().resolved(),
             decision: 0,
-            emission: 0,
             correction: 0,
             selection: Selection::Unretuned,
             initial_player: 0.0,
@@ -419,6 +417,8 @@ pub struct SourceControl {
     pub withdrawn: AtomicBool,
     pub hub_detached: AtomicBool,
     pub source_detached: AtomicBool,
+    /// OPEN, BUSY or CLOSED and nothing else. It carries no generation, so
+    /// claiming it is a claim of OPEN rather than of a recorded value.
     pub emission_gate: AtomicU64,
     pub to_hub: SourceSlots<Control>,
     pub to_source: SourceSlots<Reply>,
