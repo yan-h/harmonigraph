@@ -211,17 +211,17 @@ impl Registry {
         self.rematch();
     }
 
-    #[cfg(all(target_os = "macos", not(feature = "tuning-probe")))]
+    #[cfg(target_os = "macos")]
     pub fn candidates(&self) -> Vec<SavedUuid> {
         // Keep duplicates visible. Selecting their UUID cannot disambiguate two
         // restored copies of the same saved project.
         self.hubs.iter().flatten().filter(|h| !h.retired).map(|h| h.uuid).collect()
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub fn test_session(&self, uuid: SavedUuid) -> Arc<SessionControl> {
         self.hubs.iter().flatten().find(|h| h.uuid == uuid && !h.retired).unwrap().session.clone()
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub fn test_initialize_hub_clock(&self, bridge: &Arc<HubBridge>) {
         // Capacity/refusal fixtures also activate Hubs that have no session.
         if let Some(hub) = self.hubs.iter().flatten().find(|h| Arc::ptr_eq(&h.bridge, bridge)) {
@@ -236,11 +236,11 @@ impl Registry {
             self.sources.iter().flatten().filter(|s| s.retired).count(),
         )
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub fn test_has_source(&self, id: u64) -> bool {
         self.sources.iter().flatten().any(|s| s.id == id)
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub fn test_retired_source_state(&self, id: u64) -> Option<super::source::Snapshot> {
         self.sources
             .iter()
@@ -250,7 +250,7 @@ impl Registry {
             .as_ref()
             .map(|owner| owner.test_snapshot())
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub fn test_retained_hub(&self, id: u64) -> bool {
         self.hubs.iter().flatten().any(|h| h.id == id && h.retired && h.owner.is_some())
     }
@@ -449,7 +449,6 @@ impl Registry {
 
 /// Move the actual joined owner into its EXISTING counted entry. Registry
 /// bookkeeping never borrows a live plugin and never calls a host under lock.
-#[cfg(not(feature = "tuning-probe"))]
 pub fn retire_source(mut owner: Box<super::source::Source>) {
     let Some(id) = owner.shared.registration() else {
         return;
@@ -501,15 +500,15 @@ pub fn retire_hub(owner: Box<super::hub::Hub>) {
     service_retired();
 }
 
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 static TEST_SERVICE_ROUNDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 pub fn test_service_rounds() -> usize {
     TEST_SERVICE_ROUNDS.load(Ordering::Relaxed)
 }
 
 pub fn service_retired() {
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     TEST_SERVICE_ROUNDS.store(0, Ordering::Relaxed);
     // Fixed joined incarnations generate no new musical input. Each outer
     // round services every Source and Hub; per-row paths run in parallel,
@@ -537,7 +536,7 @@ pub fn service_retired() {
     let mut quiet = 0;
 
     for _ in 0..TERMINAL_ROUNDS {
-        #[cfg(all(test, not(feature = "tuning-probe")))]
+        #[cfg(test)]
         TEST_SERVICE_ROUNDS.fetch_add(1, Ordering::Relaxed);
         if service_retired_once() {
             quiet = 0;

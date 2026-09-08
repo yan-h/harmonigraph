@@ -338,6 +338,8 @@ impl Recorder {
     pub fn publication_free(&self) -> usize {
         self.publication.free()
     }
+    /// Consume a real publication serial and retain the loss independently of
+    /// the queue so an absent drainer cannot hide this missing historical cut.
     pub fn publication_lost(&mut self, time: f64, route: publication::Route) {
         self.publication.discarded(time, route);
         self.publication_result(Err(publication::PublishError::Lost), route);
@@ -370,14 +372,6 @@ impl Recorder {
         let result = self.publication.baseline(row, baseline, observation_time, route);
         self.publication_result(result, route);
         result
-    }
-
-    /// The audio owner has settled a snapshot it cannot retain for reporting.
-    /// Consume a real publication serial and retain the loss independently of
-    /// the queue so an absent drainer cannot hide this missing historical cut.
-    pub fn discard_publication(&mut self, time: f64, route: publication::Route) {
-        self.publication.discarded(time, route);
-        self.publication_result(Err(publication::PublishError::Lost), route);
     }
 
     fn publication_result(

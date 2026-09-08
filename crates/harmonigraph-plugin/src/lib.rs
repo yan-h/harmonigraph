@@ -18,14 +18,9 @@ mod editor;
 #[cfg(all(feature = "startup-probe", target_os = "macos"))]
 pub use editor::startup_probe::run as editor_startup_probe;
 mod performance;
-#[cfg(feature = "tuning-probe")]
-mod probe;
 #[cfg(test)]
 mod test_scope;
-#[cfg(not(feature = "tuning-probe"))]
 use performance::tune::HarmonigraphTune;
-#[cfg(feature = "tuning-probe")]
-use probe::HarmonigraphTune;
 
 /// Capacity of the audio→GUI sample ring feeding the Spectral pane's
 /// analyzer: >1 s of STEREO at 48 kHz. Overflow just drops frames — a spectrum
@@ -48,8 +43,6 @@ const DEFAULT_SAMPLE_RATE: f64 = 44_100.0;
 pub struct Harmonigraph {
     configuration: Option<Box<configuration::Owner>>,
     aggregation: Option<Box<performance::hub::Hub>>,
-    #[cfg(feature = "tuning-probe")]
-    probe: probe::Hub,
     /// Keeps the spectrogram's history running while the editor window is
     /// closed (see [`background`]). Held only to be dropped with the plugin,
     /// which is what stops its thread.
@@ -500,8 +493,6 @@ impl Default for Harmonigraph {
         Harmonigraph {
             configuration: None,
             aggregation: Some(aggregation),
-            #[cfg(feature = "tuning-probe")]
-            probe: probe::Hub::default(),
             params,
             audio_producer,
             sample_rate_bits,
@@ -565,10 +556,6 @@ impl Plugin for Harmonigraph {
     ) -> bool {
         self.sample_rate = f64::from(buffer_config.sample_rate);
         self.sample_rate_bits.store(buffer_config.sample_rate.to_bits(), Ordering::Relaxed);
-        #[cfg(feature = "tuning-probe")]
-        if !self.probe.initialize(buffer_config, _context.plugin_api()) {
-            return false;
-        }
         true
     }
 
@@ -591,8 +578,6 @@ impl Plugin for Harmonigraph {
             }
             mailbox.published.publish(owner.snapshot);
         }
-        #[cfg(feature = "tuning-probe")]
-        self.probe.reset();
         self.samples_processed = 0;
         // Reset only observed direct input. The session owner must publish
         // its own explicit source/session controls after lifecycle validation.
@@ -612,10 +597,6 @@ impl Plugin for Harmonigraph {
         aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        #[cfg(feature = "tuning-probe")]
-        if !self.probe.process(context.transport(), buffer) {
-            return ProcessStatus::Error("#615 hub probe run invalid; inspect trace");
-        }
         let block_start = self.samples_processed;
         let block_samples = buffer.samples();
         let transport = context.transport();
@@ -762,16 +743,7 @@ impl Plugin for Harmonigraph {
         self.samples_processed += block_samples as u64;
         self.presentation_seconds += block_samples as f64 / self.sample_rate;
         self.take.publish_clock(self.presentation_seconds);
-        #[cfg(feature = "tuning-probe")]
-        if self.probe.keep_alive() {
-            return ProcessStatus::KeepAlive;
-        }
         ProcessStatus::Normal
-    }
-
-    #[cfg(feature = "tuning-probe")]
-    fn deactivate(&mut self) {
-        self.probe.deactivate();
     }
 }
 
@@ -982,12 +954,6 @@ impl ClapPlugin for Harmonigraph {
         self.params.configuration.get().unwrap().published.publish(owner.snapshot);
     }
 
-    #[cfg(feature = "tuning-probe")]
-    const CLAP_PROCESS_TRACE: bool = true;
-    #[cfg(feature = "tuning-probe")]
-    fn clap_process_trace(&mut self, event: nice_plug::wrapper::clap::ProcessTrace<'_>) {
-        self.probe.hook(event);
-    }
     const CLAP_ID: &'static str = "com.yan-h.harmonigraph";
     const CLAP_DESCRIPTION: Option<&'static str> = Some("Tonnetz harmony and spectrum visualizer");
     const CLAP_MANUAL_URL: Option<&'static str> = None;
@@ -1003,9 +969,6 @@ impl Vst3Plugin for Harmonigraph {
         &[Vst3SubCategory::Fx, Vst3SubCategory::Analyzer];
 }
 
-#[cfg(not(feature = "tuning-probe"))]
-nice_export_clap!(Harmonigraph, HarmonigraphTune);
-#[cfg(feature = "tuning-probe")]
 nice_export_clap!(Harmonigraph, HarmonigraphTune);
 nice_export_vst3!(Harmonigraph);
 

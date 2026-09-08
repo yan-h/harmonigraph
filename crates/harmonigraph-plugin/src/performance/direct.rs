@@ -237,7 +237,7 @@ impl Direct {
     }
 }
 
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 impl Direct {
     pub fn print_test_memory_layout(&self) {
         println!(

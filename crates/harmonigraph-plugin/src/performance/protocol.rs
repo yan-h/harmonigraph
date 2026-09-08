@@ -217,7 +217,6 @@ pub enum Reply {
         cut: u64,
         // The producer already publishes the revision it owns. #616 consumes
         // this acknowledgement when binding assignment/input cohorts.
-        #[allow(dead_code)]
         membership: u64,
         start: i64,
     },

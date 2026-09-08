@@ -181,7 +181,6 @@ impl Device {
         // These fixtures isolate configuration/recording consumers, including
         // intentionally retained timeline markers. Musical sequencing has its
         // own factory-default acceptance fixtures under performance/tests.
-        #[cfg(not(feature = "tuning-probe"))]
         device.wrapper().test_with_plugin(|plugin| {
             plugin.aggregation.as_mut().unwrap().test_aggregation = true;
         });

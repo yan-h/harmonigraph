@@ -128,18 +128,18 @@ impl Hub {
         self.request_recovery(from);
     }
 
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_recovery_output_waiting(&self) -> bool {
         self.sequencer.recovery.participants.iter().enumerate().any(|(source, participant)| {
             participant.cuts.is_some_and(|cuts| self.rows[source].applied < cuts.output)
         })
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_delivery_owed(&self, source: usize, life: u16) -> bool {
         self.sequencer.plans[source * LIFETIMES + usize::from(life)]
             .is_some_and(|plan| !plan.sent && plan.binding.decision > self.sequencer.cohort_floor)
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_reset_progress(&self) -> String {
         format!(
             "transition={:?} invalidated={} shared={:?} direct={} rows={:?}",
@@ -177,7 +177,7 @@ impl Hub {
                 .collect::<Vec<_>>()
         )
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_recovery_output_cuts(
         &self,
         source: usize,
@@ -188,12 +188,12 @@ impl Hub {
             self.rows[source].baseline.is_some(),
         )
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_recovery_identity(&self) -> (bool, u64, Option<u64>, u64) {
         let recovery = &self.sequencer.recovery;
         (recovery.active, recovery.transaction, recovery.pending_from, self.sequencer.decision)
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_recovery_progress(&self) -> String {
         format!("active={} phase={:?} work={} heads={:?} waiting={:?} cuts={:?} plans={} decision={} frozen={}/{}/{}",
             self.sequencer.recovery.active, self.sequencer.recovery.phase, self.sequencer.recovery.work,

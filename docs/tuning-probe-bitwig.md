@@ -1,5 +1,8 @@
 # #615 Bitwig measurements
 
+> The apparatus this describes was removed in the adaptive-tuning stage 0 deletions;
+> the document is retained as the measurement record.
+
 **Verdict:
 viable with narrower constraints.** In the measured Bitwig graph, complete source intervals, central assignment and accepted delayed output fit a fixed D of 2,048 samples (46.440 ms).
 This establishes a usable host configuration for #615, not a portable CLAP clock guarantee or a finished tuning feature.

@@ -39,7 +39,7 @@ impl Recovery {
     pub(super) fn begin(&mut self) {
         self.work = 0;
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(super) fn active(&self) -> bool {
         self.pending.is_some()
     }
@@ -78,7 +78,7 @@ impl Recovery {
 }
 
 impl Source {
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_recovery_state(&self) -> (bool, u32, u32, usize) {
         (self.recovery.active(), self.recovery.total, self.recovery.chunks, self.recovery.work)
     }

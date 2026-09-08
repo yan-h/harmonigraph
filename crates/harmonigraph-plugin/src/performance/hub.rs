@@ -124,16 +124,16 @@ impl Row {
 }
 pub struct Hub {
     trace: Box<super::diagnostics::Counts>,
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub test_aggregation: bool,
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub test_capture_request: Option<i64>,
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     test_capture_id: Option<harmonigraph_core::cohort::FrozenInputId>,
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub test_capture_result:
         Option<Result<harmonigraph_core::cohort::Progress, harmonigraph_core::cohort::Error>>,
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub test_capture_commit: bool,
     #[cfg(test)]
     pub window_report_seen: bool,
@@ -376,15 +376,15 @@ impl Hub {
         let direct = Source::new(shared.clone());
         Box::new(Self {
             trace: Box::default(),
-            #[cfg(all(test, not(feature = "tuning-probe")))]
+            #[cfg(test)]
             test_aggregation: false,
-            #[cfg(all(test, not(feature = "tuning-probe")))]
+            #[cfg(test)]
             test_capture_request: None,
-            #[cfg(all(test, not(feature = "tuning-probe")))]
+            #[cfg(test)]
             test_capture_id: None,
-            #[cfg(all(test, not(feature = "tuning-probe")))]
+            #[cfg(test)]
             test_capture_result: None,
-            #[cfg(all(test, not(feature = "tuning-probe")))]
+            #[cfg(test)]
             test_capture_commit: false,
             #[cfg(test)]
             window_report_seen: false,
@@ -491,7 +491,7 @@ impl Hub {
         }
         self.collect();
         self.observe_terminal_faults();
-        #[cfg(all(test, not(feature = "tuning-probe")))]
+        #[cfg(test)]
         self.test_capture_tick();
     }
 
@@ -1445,19 +1445,6 @@ impl Hub {
                         value.player
                     };
                     row.state.assignment(value.lifetime, binding, player);
-                    if self.sequencer.participating[index + 1]
-                        && matches!(value.event, super::event::Event::Expression { kind: 2, .. })
-                    {
-                        if let Some(voice) = row.state.voice(value.lifetime) {
-                            self.sequencer.history.commit(
-                                row.lease.unwrap(),
-                                voice.channel,
-                                voice.note,
-                                binding,
-                                true,
-                            );
-                        }
-                    }
                 }
                 if let Some(mut delta) = delta {
                     delta.assignment = row
@@ -1681,7 +1668,7 @@ impl Hub {
                         // This incoming historical cut is being settled, not
                         // retained for retry. Declare that reporting loss at
                         // its actual route before allowing subsequent output.
-                        recorder.discard_publication(frame.time, route);
+                        recorder.publication_lost(frame.time, route);
                     }
                     row.repair |= result.is_err();
                     row.state.replace(&frame);
@@ -1988,7 +1975,7 @@ impl Hub {
     }
 }
 
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 impl Hub {
     pub fn test_row_receiver(&self, slot: usize, channel: usize) -> (Option<u8>, usize, u64, u64) {
         let row = &self.rows[slot];
@@ -2144,9 +2131,7 @@ impl Hub {
         }
     }
 
-    /// The future scheduler supplies the complete cut. This stage provides only
-    /// persistent metadata/target ownership; calling this proves no frontier.
-    #[allow(dead_code)] // Persistent ownership API; scheduler integration follows.
+    #[cfg(test)]
     pub(super) fn freeze_captures(
         &mut self,
         sample: i64,
@@ -2188,7 +2173,6 @@ impl Hub {
         self.capture_hold = false;
         Ok(id)
     }
-    #[allow(dead_code)] // Persistent ownership API; scheduler integration follows.
     fn capture_targets<'a>(
         rows: &'a [Row; TUNERS],
         direct: &'a Window<Intent, INTENT_RING>,
@@ -2220,7 +2204,6 @@ impl Hub {
             }),
         }
     }
-    #[allow(dead_code)] // Persistent ownership API; scheduler integration follows.
     pub(super) fn advance_captures(
         &mut self,
         units: usize,
@@ -2235,7 +2218,6 @@ impl Hub {
         );
         self.frozen_captures.advance(&targets, units)
     }
-    #[allow(dead_code)] // Persistent ownership API; scheduler integration follows.
     pub(super) fn commit_capture(&mut self) -> Result<(), harmonigraph_core::cohort::Error> {
         let targets = Self::capture_targets(
             &self.rows,
@@ -2247,7 +2229,7 @@ impl Hub {
         );
         self.frozen_captures.commit(&targets)
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(super) fn release_captures(&mut self, joined: bool) {
         self.test_capture_id = None;
         if !self.frozen_captures.active && !self.capture_hold {
@@ -2269,7 +2251,7 @@ impl Hub {
     }
 }
 
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 impl Hub {
     pub fn test_pause_captures(&mut self) {
         self.capture_hold = true;
@@ -2354,7 +2336,7 @@ impl Hub {
     }
 }
 
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 impl Hub {
     pub fn test_capture_phases(&self, source: usize) -> (usize, usize) {
         let window =
@@ -2405,7 +2387,7 @@ impl Hub {
     }
 }
 
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 impl Hub {
     pub fn test_frozen_id(&self) -> harmonigraph_core::cohort::FrozenInputId {
         self.frozen_captures.id
