@@ -28,7 +28,12 @@ pub const CAPTURES_PER_SOURCE: usize = 1024;
 /// sources: sixteen tracks each choking every held note at the same sample is
 /// 1,040. Beyond it the pass latches rather than dropping an input.
 pub const BATCH_EVENTS: usize = 2048;
-pub const DELAY: i64 = 512;
+/// The tuning delay is `multiplier x advertised max frames`, chosen per Tune
+/// and fixed for the whole activation. Sixteen is the top of the range: it
+/// still reaches the 512 samples this delay used to be fixed at even from a
+/// 32-frame callback, while 16x a 512-frame callback is already 171 ms at
+/// 48 kHz, past any use a live player has for it.
+pub const DELAY_MULTIPLIER_MAX: i32 = 16;
 
 /// Four bytes retain all three outcomes without conflating an Off birth with
 /// the policy's completed NoCandidate history clear.
@@ -402,6 +407,15 @@ impl<T: Copy> SourceSlots<T> {
 pub struct SourceControl {
     pub expected_incarnation: AtomicU64,
     pub faults: AtomicU32,
+    /// This Tune's activation-fixed delay in samples. The Source is the only
+    /// writer; the Hub reads it for the emission time it reports each output
+    /// was planned for, which is the Tune's own input+D and nothing else.
+    pub delay: AtomicI64,
+    /// Deadline feedback the Tune measures and the Hub aggregates for its own
+    /// display: notes counted once each, and the largest lateness seen since
+    /// the delay setting was last applied.
+    pub deadline_misses: AtomicU64,
+    pub worst_lateness: AtomicI64,
     pub withdrawn: AtomicBool,
     pub hub_detached: AtomicBool,
     pub source_detached: AtomicBool,
@@ -419,6 +433,9 @@ impl Default for SourceControl {
         Self {
             expected_incarnation: AtomicU64::new(0),
             faults: AtomicU32::new(0),
+            delay: AtomicI64::new(0),
+            deadline_misses: AtomicU64::new(0),
+            worst_lateness: AtomicI64::new(0),
             withdrawn: AtomicBool::new(false),
             hub_detached: AtomicBool::new(true),
             source_detached: AtomicBool::new(true),

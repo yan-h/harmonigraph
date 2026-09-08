@@ -750,6 +750,7 @@ impl ClapPlugin for Harmonigraph {
     fn clap_setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
         Some(Arc::new(performance::setup::Adapter(
             self.aggregation.as_ref().unwrap().shared.clone(),
+            None,
         )))
     }
     fn clap_main_init(&mut self) -> bool {

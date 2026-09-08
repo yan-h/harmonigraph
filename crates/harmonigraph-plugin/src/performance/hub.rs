@@ -200,7 +200,19 @@ impl Hub {
             }
         }
         self.shared.status.store(diagnostics, Ordering::Release);
-        self.shared.extra_delay.fetch_max(self.sequencer.extra_delay, Ordering::Relaxed);
+        // Each Tune measures its own deadline against its own D; the session's
+        // status is how many notes missed across all of them and the worst one
+        // of those. A sum and a max, not a second measurement.
+        let (misses, worst) = self.offer.as_ref().map_or((0, 0), |offer| {
+            offer.session.rows.iter().fold((0, 0), |(misses, worst), row| {
+                (
+                    misses + row.deadline_misses.load(Ordering::Relaxed),
+                    worst.max(row.worst_lateness.load(Ordering::Relaxed)),
+                )
+            })
+        });
+        self.shared.deadline_misses.store(misses, Ordering::Relaxed);
+        self.shared.extra_delay.store(worst as u64, Ordering::Relaxed);
         if self.trace.due(callback.frames, self.rate) {
             self.publish_diagnostics(callback, owner);
             self.shared.request_main();
@@ -427,13 +439,13 @@ impl Hub {
             // failure: the members cancel and release through their own
             // `activate`, and this session adopts the new format outright.
             self.clock = Clock::new(self.clock.calibration, rate, frames);
-            self.direct.activate(rate, frames);
+            self.direct.activate(rate, frames, 0);
             self.anchor = None;
             self.reactivated = true;
             return;
         }
         self.clock = Clock::new(self.shared.value().routing.calibration(), rate, frames);
-        self.direct.activate(rate, frames);
+        self.direct.activate(rate, frames, 0);
         self.anchor = None;
     }
     fn attach(&mut self, owner: &mut Owner) {

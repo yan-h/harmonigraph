@@ -108,7 +108,6 @@ pub(super) struct Sequencer {
     pub(super) participating: [bool; TUNERS + 1],
     pub(super) participation_serial: [u64; TUNERS + 1],
     pub work: usize,
-    pub extra_delay: u64,
     #[cfg(test)]
     policy_counts: [usize; 3],
 }
@@ -152,7 +151,6 @@ impl Default for Sequencer {
             participating: [true; TUNERS + 1],
             participation_serial: [0; TUNERS + 1],
             work: 0,
-            extra_delay: 0,
             #[cfg(test)]
             policy_counts: [0; 3],
         }
@@ -292,7 +290,9 @@ impl Sequencer {
                 Plan {
                     request: identity,
                     binding: Assignment::default(),
-                    shift: DELAY,
+                    // A placeholder for a canceled attack. It is never bound,
+                    // so no output ever reads this shift back.
+                    shift: 0,
                     sent: false,
                     terminal: true,
                     accepted: false,
@@ -856,18 +856,23 @@ impl Hub {
                 selection,
                 initial_player: player,
             };
+            // The Tune owns its own delay, so the emission this onset is
+            // planned for is that Tune's D and not a session-wide constant.
+            let shift = self.offer.as_ref().unwrap().session.rows[source - 1]
+                .delay
+                .load(Ordering::Acquire);
             if let Some(plan) = self.sequencer.plan_mut(index) {
                 plan.request = request;
                 plan.binding = binding;
                 plan.sent = false;
                 plan.bound = true;
-                plan.shift = DELAY;
+                plan.shift = shift;
             } else if !self.sequencer.insert_plan(
                 index,
                 Plan {
                     request,
                     binding,
-                    shift: DELAY,
+                    shift,
                     sent: false,
                     terminal: false,
                     accepted: false,
@@ -978,18 +983,11 @@ impl Hub {
             plan.terminal = true;
         }
         let planned = output.input.checked_add(plan.shift)?;
-        let mut accepted_shift = None;
         if output.event.attack().is_some() {
             plan.accepted = true;
             plan.shift = output.actual.checked_sub(output.input)?;
-            accepted_shift = Some(plan.shift);
         }
-        let binding = plan.binding;
-        if let Some(shift) = accepted_shift {
-            self.sequencer.extra_delay =
-                self.sequencer.extra_delay.max(shift.saturating_sub(DELAY).max(0) as u64);
-        }
-        Some((binding, planned))
+        Some((plan.binding, planned))
     }
 
     pub(super) fn service_plans(&mut self) {

@@ -515,7 +515,12 @@ fn frame(
     drop(guard);
     if state.params.configuration.get().is_some() {
         if let Some(session) = state.params.session.get() {
-            session_controls(ui.ctx(), session, &mut state.session_draft);
+            session_controls(
+                ui.ctx(),
+                session,
+                &mut state.session_draft,
+                &mut state.session_delay,
+            );
         }
     }
     if let Some(interval) = pace(state, fps_cap, display_max_fps) {
@@ -820,6 +825,9 @@ struct WindowState {
     shared: Arc<Mutex<EditorShared>>,
     params: Arc<HarmonigraphParams>,
     session_draft: Option<(u64, crate::performance::clock::Calibration)>,
+    /// The multiplier the "apply to all paired Tunes" button would send. It is
+    /// a draft in this menu, not anybody's saved value.
+    session_delay: i32,
     /// The frame interval armed on THIS window's timer, so an unchanged
     /// cadence doesn't rebuild the run-loop timer every frame. `None` until
     /// the first frame arms one.
@@ -837,7 +845,13 @@ struct WindowState {
 
 impl WindowState {
     fn new(shared: Arc<Mutex<EditorShared>>, params: Arc<HarmonigraphParams>) -> Self {
-        WindowState { shared, params, frame_interval: None, session_draft: None }
+        WindowState {
+            shared,
+            params,
+            frame_interval: None,
+            session_draft: None,
+            session_delay: 1,
+        }
     }
 
     /// The interval to arm on the window's frame timer, or `None` when it
@@ -1045,6 +1059,7 @@ fn session_controls(
     ctx: &egui::Context,
     shared: &Arc<crate::performance::setup::Shared>,
     draft: &mut Option<(u64, crate::performance::clock::Calibration)>,
+    delay: &mut i32,
 ) {
     use crate::performance::setup::{diagnostics_text, Routing};
     egui::Area::new(egui::Id::new("harmonigraph-session-setup"))
@@ -1082,7 +1097,8 @@ fn session_controls(
                     }
                 }
                 let applied = shared.applied.load(Ordering::Acquire);
-                if let Some(adopted) = shared.adopted() {
+                let adopted = shared.adopted();
+                if let Some(adopted) = adopted {
                     ui.label(format!(
                         "Active clock: {:+} samples, {} Hz, up to {} frames — {}",
                         adopted.calibration.offset,
@@ -1097,9 +1113,31 @@ fn session_controls(
                     "Setup pending: old output must settle"
                 });
                 ui.separator();
-                ui.label(diagnostics_text(
+                // The delay belongs to each Tune's own saved parameter; this is
+                // a convenience that asks all of them at once, and each one
+                // then requests its own reactivation.
+                ui.label("Tuning delay applies per Tune; this asks all paired ones at once.");
+                ui.horizontal(|ui| {
+                    ui.label("Buffers of delay");
+                    ui.add(egui::DragValue::new(delay).range(
+                        1..=crate::performance::protocol::DELAY_MULTIPLIER_MAX,
+                    ));
+                });
+                if ui.button("Apply to all paired Tunes").clicked() {
+                    crate::performance::registry::global()
+                        .lock()
+                        .unwrap()
+                        .request_delay(shared.hub.as_ref().unwrap(), *delay as u32);
+                }
+                ui.separator();
+                ui.label(diagnostics_text(shared.status.load(Ordering::Acquire)));
+                ui.label(crate::performance::setup::deadline_text(
                     shared.status.load(Ordering::Acquire),
+                    None,
+                    applied != accepted.generation || adopted.is_none_or(|clock| !clock.valid),
+                    shared.deadline_misses.load(Ordering::Relaxed),
                     shared.extra_delay.load(Ordering::Relaxed),
+                    adopted.map_or(0.0, |clock| clock.sample_rate),
                 ));
                 ui.label(harmonigraph_perf::BUILD_TAG);
             });
@@ -1122,6 +1160,7 @@ mod tests {
         let ctx = egui::Context::default();
         let shared = setup::Shared::hub();
         let mut draft = None;
+        let mut delay = 1;
         let mut draw = |events| {
             ctx.run_ui(
                 egui::RawInput {
@@ -1132,7 +1171,7 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| super::session_controls(ui.ctx(), &shared, &mut draft),
+                |ui| super::session_controls(ui.ctx(), &shared, &mut draft, &mut delay),
             )
         };
         fn text_position(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
@@ -1169,7 +1208,7 @@ mod tests {
             fields: Default::default(),
         };
         state.fields.insert(setup::HUB_FIELD.into(), serde_json::to_string(&restored).unwrap());
-        setup::Adapter(shared.clone()).prepare(&state).unwrap().commit();
+        setup::Adapter(shared.clone(), None).prepare(&state).unwrap().commit();
         let output = draw(vec![]);
         text_position(&output, &format!("Hub {}", restored.uuid));
         let offset = text_position(&output, "37");

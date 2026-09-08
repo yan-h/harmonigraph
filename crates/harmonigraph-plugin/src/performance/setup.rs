@@ -20,7 +20,7 @@ pub const TIMING_FAILURE: u32 = 1 << 5;
 
 /// Cosmetic UI text only. Reads published values without clearing them or
 /// interpreting a setup request as acknowledged recovery. Never called on audio.
-pub fn diagnostics_text(status: u32, extra_delay: u64) -> String {
+pub fn diagnostics_text(status: u32) -> String {
     use super::source::{CLOCK_FAULT, INPUT_FAULT, OUTPUT_FAULT, REFERENCE_FAULT, STORAGE_FAULT};
     let mut lines = Vec::new();
     if status == 0 {
@@ -46,8 +46,81 @@ pub fn diagnostics_text(status: u32, extra_delay: u64) -> String {
     if status & !known != 0 {
         lines.push("Unrecognized recovery status".to_owned());
     }
-    lines.push(format!("Current extra delay: {extra_delay} samples (above fixed tuner latency)"));
     lines.join("\n")
+}
+
+/// The Tuning delay setting, as multiplier, samples and milliseconds together.
+/// `active` is what this activation adopted and `requested` what the parameter
+/// now says; they differ exactly while a latency change waits for the host to
+/// reactivate, which is the only moment the two numbers are worth showing at
+/// once. Zero frames means no activation has been seen yet.
+pub fn delay_text(requested: u32, active: u32, frames: u32, rate: f64) -> String {
+    let describe = |multiplier: u32| {
+        let samples = u64::from(multiplier) * u64::from(frames);
+        if frames == 0 || rate <= 0.0 {
+            return format!("{multiplier}x buffer");
+        }
+        format!("{multiplier}x buffer - {samples} samples / {:.2} ms", samples as f64 * 1000.0 / rate)
+    };
+    if active == 0 {
+        return format!("Tuning delay {} - waiting for the host format", describe(requested));
+    }
+    if requested == active {
+        return format!("Tuning delay {}", describe(active));
+    }
+    format!(
+        "Tuning delay {} active - requested {}, waiting for host reactivation",
+        describe(active),
+        describe(requested)
+    )
+}
+
+/// The missed-deadline status, and the three states that are not one. Raising
+/// the multiplier is the remedy for exactly one of them; a session that has
+/// not started, a Hub that is missing or ambiguous, and a latched output or
+/// resource fault would each keep notes late at any multiplier, so they are
+/// named here instead of being counted as evidence that D is too small.
+///
+/// `pairing` is the Tune's registry status, absent for a Hub, which has no
+/// pairing of its own to be missing.
+pub fn deadline_text(
+    status: u32,
+    pairing: Option<u32>,
+    starting: bool,
+    misses: u64,
+    worst: u64,
+    rate: f64,
+) -> String {
+    use super::source::{CLOCK_FAULT, INPUT_FAULT, OUTPUT_FAULT, REFERENCE_FAULT, STORAGE_FAULT};
+    let faults = STORAGE_FAULT | OUTPUT_FAULT | CLOCK_FAULT | INPUT_FAULT | REFERENCE_FAULT;
+    if status & faults != 0 {
+        return "Deadline status unavailable: an output or resource fault is latched, which a \
+                larger delay does not address"
+            .to_owned();
+    }
+    if let Some(reason) = pairing.and_then(|status| match status {
+        registry::MISSING => Some("no matching hub"),
+        registry::AMBIGUOUS => Some("ambiguous hub UUID"),
+        registry::OVERCAPACITY => Some("session capacity reached"),
+        _ => None,
+    }) {
+        return format!("Notes are not being assigned ({reason}) - a larger delay is not a remedy");
+    }
+    if starting {
+        return "Waiting for the session to start - startup is not a missed deadline".to_owned();
+    }
+    if misses == 0 {
+        return "No missed deadlines".to_owned();
+    }
+    let lateness = if rate > 0.0 {
+        format!("{:.2} ms", worst as f64 * 1000.0 / rate)
+    } else {
+        format!("{worst} samples")
+    };
+    let notes = if misses == 1 { "1 note missed its deadline" } else {
+        &format!("{misses} notes missed their deadline")
+    };
+    format!("{notes} - worst lateness {lateness}")
 }
 
 #[cfg(test)]
@@ -161,7 +234,14 @@ pub struct Shared {
     pub applied: AtomicU64,
     adopted: Adoption,
     pub status: AtomicU32,
+    /// Worst lateness in samples and notes counted once each, over the
+    /// interval since the delay setting was last applied.
     pub extra_delay: AtomicU64,
+    pub deadline_misses: AtomicU64,
+    /// The multiplier this activation adopted; zero until the first one. The
+    /// parameter holds what is requested, so the pair is what the display
+    /// compares while a latency change waits for the host.
+    pub active_multiplier: AtomicU32,
 }
 impl Shared {
     pub fn hub() -> Arc<Self> {
@@ -201,6 +281,8 @@ impl Shared {
             adopted: Adoption::default(),
             status: AtomicU32::new(0),
             extra_delay: AtomicU64::new(0),
+            deadline_misses: AtomicU64::new(0),
+            active_multiplier: AtomicU32::new(0),
         })
     }
     pub fn value(&self) -> Update {
@@ -331,7 +413,9 @@ impl Prepared for Pending {
 
 /// Arc adapter lets a prepared value retain the instance's actual owned setup
 /// slot across wrapper field restoration, without any borrowed self-reference.
-pub struct Adapter(pub Arc<Shared>);
+/// A Tune also hands over its parameters, because the only value a Hub can ask
+/// it to change is one this instance owns and must write itself.
+pub struct Adapter(pub Arc<Shared>, pub Option<Arc<super::tune::TuneParams>>);
 impl Setup for Adapter {
     fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
         let routing = if self.0.hub.is_some() {
@@ -372,12 +456,44 @@ impl Setup for Adapter {
         if let Some(hub) = &self.0.hub {
             assert!(hub.wake.set(wake.clone()).is_ok());
         }
+        if let Some(source) = &self.0.source {
+            assert!(source.wake.set(wake.clone()).is_ok());
+        }
         assert!(self.0.wake.set(wake).is_ok());
     }
     fn service(&self) -> bool {
         registry::service_retired();
         registry::global().lock().unwrap().service();
         self.0.diagnostics.log(&self.0);
-        self.0.dirty.swap(false, Ordering::AcqRel)
+        let adopted = self.adopt_requested_delay();
+        self.0.dirty.swap(false, Ordering::AcqRel) || adopted
+    }
+}
+impl Adapter {
+    /// Take a Hub's "apply to all" request, if there is one. Writing the
+    /// parameter here and reporting true is exactly what this trait's `true`
+    /// means -- a host parameter rescan and a dirty state -- so the value the
+    /// project saves is the value on screen. The latency that follows is
+    /// reported from this Tune's own process callback, which is what asks the
+    /// host to reactivate it.
+    fn adopt_requested_delay(&self) -> bool {
+        let (Some(params), Some(bridge)) = (&self.1, &self.0.source) else {
+            return false;
+        };
+        let requested = bridge.requested_delay.swap(0, Ordering::AcqRel);
+        let plain = (requested as i32).clamp(1, super::protocol::DELAY_MULTIPLIER_MAX);
+        if requested == 0 || plain == params.delay.value() {
+            return false;
+        }
+        // SAFETY: the pointer is into `params`, which this adapter keeps alive
+        // for as long as the plugin instance, and the write is the same
+        // atomic store the wrapper makes for a host parameter event.
+        use nice_plug::prelude::Param;
+        unsafe {
+            params.delay.as_ptr()._internal_set_normalized_value(
+                Param::preview_normalized(&params.delay, plain),
+            );
+        }
+        true
     }
 }

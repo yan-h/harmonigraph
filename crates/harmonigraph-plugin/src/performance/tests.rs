@@ -269,8 +269,12 @@ impl Device {
         assert!(unsafe { (*plugin).init.unwrap()(plugin) });
         Self { plugin, _host: host, _stats: stats, tuner, active: false }
     }
+    /// D is `multiplier x max_frames`, so the format a fixture activates at is
+    /// also the delay it plays against: 512 frames at the default 1x is the
+    /// 512 samples this delay used to be fixed at. Callbacks stay whatever
+    /// size the fixture drives; this is only the advertised maximum.
     fn activate(&mut self) {
-        self.activate_format(48000.0, 64);
+        self.activate_format(48000.0, 512);
     }
     fn activate_format(&mut self, rate: f64, frames: u32) {
         assert!(unsafe { (*self.plugin).activate.unwrap()(self.plugin, rate, 1, frames) });
@@ -541,7 +545,8 @@ fn production_factory_exports_two_clap_classes_and_lightweight_tune_ports() {
     let descriptor = unsafe { &*factory().get_plugin_descriptor.unwrap()(factory(), 1) };
     assert_eq!(unsafe { CStr::from_ptr(descriptor.name) }, c"Harmonigraph Tune");
     let mut source = Device::new(true);
-    assert_eq!(unsafe { source.params().count.unwrap()(source.plugin) }, 1);
+    // Participating, and the tuning delay multiplier the host saves for it.
+    assert_eq!(unsafe { source.params().count.unwrap()(source.plugin) }, 2);
     let voices = unsafe {
         (*source.plugin).get_extension.unwrap()(
             source.plugin,
@@ -1576,7 +1581,7 @@ fn overlapping_setup_preparation_refuses_the_actual_restore_before_parameter_or_
     let other = shared.clone();
     let candidate = changed.clone();
     let worker = std::thread::spawn(move || {
-        let pending = setup::Adapter(other).prepare(&candidate).unwrap();
+        let pending = setup::Adapter(other, None).prepare(&candidate).unwrap();
         ready.send(()).unwrap();
         finish.recv().unwrap();
         drop(pending); // abandoning the first transaction releases its real slot
