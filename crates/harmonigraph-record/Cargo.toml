@@ -9,7 +9,7 @@ publish = false
 [features]
 # Lets dependent crates drive the real audio-thread Recorder into in-memory
 # rings without starting the file-writer thread. Never enabled in a bundle.
-test-support = []
+test-support = ["harmonigraph-take/test-support"]
 
 # Half of this crate runs on the audio thread, so nothing on the record path
 # may allocate or block: rtrb for the rings, parking_lot for the one mutex the

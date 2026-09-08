@@ -110,9 +110,10 @@
 //!
 //! The kernel is normalized by its own weights, so the fold answers in the
 //! analyzer's own units: a bucket reading power P surrounded by more of the
-//! same folds to P, exactly as
-//! [`footprint_mean`](super::spectral::spectrogram::footprint_mean) answers for the
-//! Spiral pane. That is what lets the result go through the shared
+//! same folds to P. A constant input stays constant just as it does in the
+//! Spiral pane's dB-domain
+//! [`footprint_mean_db`](super::spectral::spectrogram::footprint_mean_db).
+//! That is what lets the result go through the shared
 //! [`loudness`] curve and mean the same thing
 //! there as everywhere else, and it is what makes the width bar a TOLERANCE
 //! rather than a gain — a plain sum would brighten the whole lattice every time

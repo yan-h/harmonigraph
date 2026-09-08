@@ -17,7 +17,7 @@
 //! ```
 
 use super::fixtures::*;
-use super::golden::the_live_view;
+use super::golden::{the_live_view, the_live_view_on_the_distance_row};
 use crate::*;
 
 /// Wide enough that the names are about the size the lattice typesets them.
@@ -27,7 +27,9 @@ const FRAMES: usize = 120;
 #[test]
 #[ignore = "a probe: prints a timing and asserts nothing"]
 fn a_frame_of_names_costs_this_much() {
-    time_a_frame_of_names(the_live_view(), "the live view");
+    // Keep the existing single-kernel workload on Distance independently of
+    // which kernel the Gaussian golden fixture selects.
+    time_a_frame_of_names(the_live_view_on_the_distance_row(), "the live view (Distance)");
 }
 
 /// The same view with the Shadow at the top of its bar.
@@ -38,7 +40,7 @@ fn a_frame_of_names_costs_this_much() {
 #[test]
 #[ignore = "a probe: prints a timing and asserts nothing"]
 fn a_frame_of_names_at_the_top_of_the_shadow_bar_costs_this_much() {
-    let mut scene = the_live_view();
+    let mut scene = the_live_view_on_the_distance_row();
     for style in scene.shadow.groups_mut() {
         style.width = harmonigraph_scene::GLOW_SHADOW_MAX;
     }
@@ -104,7 +106,13 @@ fn a_frame_of_audio_rings_costs_this_much() {
             let n = &mut scene.nodes[112];
             n.activation = 1.0;
             n.octaves.fill(1.0);
-            n.glow = harmonigraph_scene::GlowStep { level: 1.0, row: 0, mix: 1.0, marked: 0.0 };
+            n.glow = harmonigraph_scene::GlowStep {
+                incarnation: 0,
+                level: 1.0,
+                row: 0,
+                mix: 1.0,
+                marked: 0.0,
+            };
         }
         scene.node_radius = 0.34;
         scene.glow_rows = 1;
@@ -118,6 +126,7 @@ fn a_frame_of_audio_rings_costs_this_much() {
 }
 
 fn time_a_frame_of_names(mut scene: Scene, what: &str) {
+    crate::shader_assets::initialize();
     if let Ok(value) = std::env::var("PROBE_BLOOM") {
         scene.bloom_strength = value.parse().expect("PROBE_BLOOM is a strength");
     }
@@ -301,6 +310,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         SIZE[1],
         samples.len(),
     );
+    eprintln!("METAL_TIMING_ASSETS {:?}", crate::shader_assets::statistics());
 }
 
 /// Device setup and pipeline compilation on successive fresh renderers.
@@ -310,6 +320,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
 #[test]
 #[ignore = "manual editor startup timing"]
 fn timing_editor_pipeline_startup() {
+    crate::shader_assets::initialize();
     for opening in 0..3 {
         let started = std::time::Instant::now();
         let instance = wgpu::Instance::default();

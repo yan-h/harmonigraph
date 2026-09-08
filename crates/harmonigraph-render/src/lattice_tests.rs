@@ -15,15 +15,15 @@ mod golden;
 mod labels;
 mod marks;
 #[cfg(target_os = "macos")]
+mod metal_assets;
+#[cfg(target_os = "macos")]
 mod metal_precompile;
 mod octaves;
 mod quantization;
 mod reload;
 mod shadow_staging;
 mod shadows;
-mod shimmer;
 mod ships;
-mod sweep;
 mod targets;
 mod timing;
 

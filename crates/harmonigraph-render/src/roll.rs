@@ -2464,3 +2464,12 @@ mod tests {
         assert!(near(at(206), BG), "the outline reaches further than it should: {:?}", at(206));
     }
 }
+
+#[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
+pub(super) fn asset_catalog(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    layouts: &crate::spectral_shadow::Layouts,
+) {
+    drop(RollResources::new(device, format, layouts));
+}

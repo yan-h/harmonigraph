@@ -10,6 +10,8 @@ license.workspace = true
 # Enabled by the standalone harness; release plugin bundles are built
 # per-package and never activate it.
 hot-reload = ["dep:naga"]
+# Export/strict validation of generated assets; no toolchain work during builds.
+shader-assets-tools = []
 
 [dependencies]
 harmonigraph-scene = { workspace = true }
@@ -21,6 +23,9 @@ naga = { workspace = true, optional = true }
 # Blocks on wgpu's async adapter/device setup in `SpectrogramHeadless`,
 # which is a library entry point rather than a test helper.
 pollster = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+harmonigraph-metal-assets = { workspace = true }
 
 [dev-dependencies]
 # The baked-shader validation test runs without the hot-reload feature.

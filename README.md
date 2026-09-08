@@ -109,6 +109,11 @@ Enable the tracked pre-push formatting check once per clone with `git config cor
 The hook stays cheap locally;
 GitHub Actions runs the full `./ci.sh` gate for pull requests and pushes to `main`, one job per gate group so the wall clock is the longest group rather than the sum of every gate.
 A bare `./ci.sh` still runs all of them, which is what it does locally.
+CI sets `HARMONIGRAPH_REQUIRE_GPU=1` so unavailable GPU adapters fail the renderer, UI and offline pixel tests instead of silently skipping their assertions.
+Local GPU tests may still skip without an adapter;
+set the same variable to require them locally.
+GPU test setup honors `WGPU_BACKEND`;
+an empty value disables all backends for checking the missing-adapter failure path.
 
 ## Getting a build into the DAW
 

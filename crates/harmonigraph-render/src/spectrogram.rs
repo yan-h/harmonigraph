@@ -683,7 +683,7 @@ impl CallbackTrait for SpectrogramCallback {
 /// caller says have moved) has to hand the same resources one frame after
 /// another, exactly as a pane does.
 ///
-/// `None` where the machine has no GPU adapter, which every caller returns on.
+/// `None` without an adapter only when GPU tests are optional; CI requires one.
 pub struct SpectrogramHeadless {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -1486,4 +1486,9 @@ mod tests {
             .frame(0, SIZE, full_quad(6), grid.clone(), read.clone(), shades());
         assert_eq!(through_entry, through_callback);
     }
+}
+
+#[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
+pub(super) fn asset_catalog(device: &wgpu::Device, format: wgpu::TextureFormat) {
+    drop(SpectrogramResources::new(device, format));
 }

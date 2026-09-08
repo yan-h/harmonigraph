@@ -1,0 +1,123 @@
+Measured probe commit: 06d3f0a8
+CI: https://github.com/yan-h/harmonigraph/actions/runs/34172958788
+Local: Apple M1 Pro, macOS 26.6.2 (25G83)
+Local instrumented binary SHA256: 6885ea140519efefb024793d2ab3029bd51cf3153fc2b0dab923b132be81ea47
+Local copy uses the same asset hook, without the later reflection logging.
+
+Asset corpus: 70 libraries, 676057 bytes
+
+export-bindings.log
+METAL_BINDING_LENGTH offset=0 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=0 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_LENGTH offset=256 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=256 count=7 result=[7, 11, 77, 77]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 250 filtered out; finished in 0.53s
+hits=0 sources=3
+log_sha256=3ee14569fefb81f25d001cbc034eac225945621e35919810fd328244e8017aa6
+
+export-offline-goldens.log
+test result: ok. 5 passed; 0 failed; 2 ignored; 0 measured; 57 filtered out; finished in 2.71s
+hits=0 sources=126
+log_sha256=f52bb4fe906fa0b69e129ce296afca3e564ece76fff29b8581858905f59aac1f
+
+export-renderer.log
+test result: ok. 243 passed; 0 failed; 8 ignored; 0 measured; 0 filtered out; finished in 73.25s
+hits=0 sources=11830
+log_sha256=12e0093f0f7ab9a2f73f59cc04b9635c581c830f667c81b6d6a91caccad854fd
+
+mismatch-fallback.log
+METAL_BINDING_LENGTH offset=0 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=0 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_LENGTH offset=256 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=256 count=7 result=[7, 11, 77, 77]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 250 filtered out; finished in 0.14s
+hits=2 sources=1
+log_sha256=748e0ddd009b52d3add7c81631a4647f4f658ef5ad9d533f713936a3f0a4ea1a
+
+mismatch-strict.log
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 250 filtered out; finished in 0.09s
+hits=2 sources=0
+log_sha256=fdb279cfa8153df27895cfc207d9a41d7e42c6fb039e359873fc63c6c2d85afa
+
+missing-fallback.log
+METAL_BINDING_LENGTH offset=0 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=0 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_LENGTH offset=256 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=256 count=7 result=[7, 11, 77, 77]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 250 filtered out; finished in 0.14s
+hits=2 sources=1
+log_sha256=748e0ddd009b52d3add7c81631a4647f4f658ef5ad9d533f713936a3f0a4ea1a
+
+missing-strict.log
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 250 filtered out; finished in 0.10s
+hits=2 sources=0
+log_sha256=ca27a5bb956c128623ef6513b0aef0592dff9bb0a51a2af0901d2b2539228ef5
+
+strict-bindings.log
+METAL_BINDING_LENGTH offset=0 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=0 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_LENGTH offset=256 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=256 count=7 result=[7, 11, 77, 77]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 250 filtered out; finished in 0.15s
+hits=3 sources=0
+log_sha256=a2d464f1ac9c8b02160a9cec5be2384fa23d42f547abd11ec89570dcaa035f7a
+
+strict-offline-goldens.log
+test result: ok. 5 passed; 0 failed; 2 ignored; 0 measured; 57 filtered out; finished in 2.54s
+hits=126 sources=0
+log_sha256=0d7eb59b23fbfed9eee1467a8f680553416bc60ae7ada31d4c3abfb4878965f7
+
+strict-renderer.log
+test result: ok. 243 passed; 0 failed; 8 ignored; 0 measured; 0 filtered out; finished in 60.79s
+hits=11830 sources=0
+log_sha256=9678b6d20403d12da0af455a2986bc8d7cf57896f812e94181b1223a722ad885
+
+harmonigraph-generated-assets-local-bindings.log
+METAL_BINDING_LENGTH offset=0 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=0 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_LENGTH offset=256 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=256 count=7 result=[7, 11, 77, 77]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 250 filtered out; finished in 0.45s
+hits=3 sources=0
+log_sha256=e701c7236ecd29bc0964d36d5d435b2d6f66df3b4d6cdcc7cac8c5faa1f1bc82
+
+harmonigraph-generated-assets-local-renderer.log
+test result: ok. 243 passed; 0 failed; 8 ignored; 0 measured; 0 filtered out; finished in 18.27s
+hits=11934 sources=0
+log_sha256=b36d074935be96b58fd64f32b70bf0dcbfea05d618b2058429fabafaf103a8f5
+
+Selected normal-path reflection during strict renderer replay:
+METAL_REFLECTION entry=fs_glow_gather sizes=[ResourceBinding { group: 2, binding: 0 }, ResourceBinding { group: 3, binding: 0 }] workgroup=[] immutable=7
+METAL_REFLECTION entry=fs_shadow_box sizes=[ResourceBinding { group: 3, binding: 0 }] workgroup=[] immutable=3
+METAL_REFLECTION entry=fs_shadow_box_plain sizes=[ResourceBinding { group: 3, binding: 0 }] workgroup=[] immutable=3
+METAL_REFLECTION entry=vs_shadow_box sizes=[ResourceBinding { group: 3, binding: 0 }] workgroup=[] immutable=3
+
+Startup runs:
+blocked-0-source {'device_ms': 378.243583, 'lattice_ms': 7185.120542}
+blocked-0-asset {'device_ms': 107.638375, 'lattice_ms': 646.321792}
+blocked-1-asset {'device_ms': 88.921458, 'lattice_ms': 684.634167}
+blocked-1-source {'device_ms': 121.373584, 'lattice_ms': 4041.125958}
+blocked-2-source {'device_ms': 91.742459, 'lattice_ms': 4565.552791}
+blocked-2-asset {'device_ms': 87.419417, 'lattice_ms': 737.340042}
+available-0-source {'device_ms': 26.14125, 'lattice_ms': 37.32125}
+available-0-asset {'device_ms': 19.426417, 'lattice_ms': 28.64475}
+available-1-asset {'device_ms': 19.42625, 'lattice_ms': 27.544709}
+available-1-source {'device_ms': 21.64675, 'lattice_ms': 26.538875}
+available-2-source {'device_ms': 22.587625, 'lattice_ms': 26.576584}
+available-2-asset {'device_ms': 19.599666, 'lattice_ms': 32.229666}
+cache-blocked source {'device_ms': 121.373584, 'lattice_ms': 4565.552791}
+cache-blocked asset {'device_ms': 88.921458, 'lattice_ms': 684.634167}
+cache-available source {'device_ms': 22.587625, 'lattice_ms': 26.576584}
+cache-available asset {'device_ms': 19.426417, 'lattice_ms': 28.64475}
+
+GPU runs:
+0 source {'Gaussian at the live view': '1.996', 'Gaussian at the top of the bar': '1.272', 'Distance at the live view': '0.957', 'Distance at the top of the bar': '0.732'}
+0 asset {'Gaussian at the live view': '0.911', 'Gaussian at the top of the bar': '0.641', 'Distance at the live view': '0.554', 'Distance at the top of the bar': '0.564'}
+1 asset {'Gaussian at the live view': '0.802', 'Gaussian at the top of the bar': '0.586', 'Distance at the live view': '0.575', 'Distance at the top of the bar': '0.577'}
+1 source {'Gaussian at the live view': '0.742', 'Gaussian at the top of the bar': '0.635', 'Distance at the live view': '0.537', 'Distance at the top of the bar': '0.649'}
+2 source {'Gaussian at the live view': '0.764', 'Gaussian at the top of the bar': '0.597', 'Distance at the live view': '0.520', 'Distance at the top of the bar': '0.543'}
+2 asset {'Gaussian at the live view': '0.750', 'Gaussian at the top of the bar': '0.665', 'Distance at the live view': '0.600', 'Distance at the top of the bar': '0.528'}
+Distance at the live view {'source': 0.537, 'asset': 0.575}
+Distance at the top of the bar {'source': 0.649, 'asset': 0.564}
+Gaussian at the live view {'source': 0.764, 'asset': 0.802}
+Gaussian at the top of the bar {'source': 0.635, 'asset': 0.641}

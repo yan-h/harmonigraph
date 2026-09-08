@@ -12,16 +12,31 @@
 
 use crate::wgpu;
 
-/// `None` where the machine has no usable GPU — CI containers, mostly.
-/// Every caller returns on it.
-pub(crate) fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::default();
-    let Ok(adapter) =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-    else {
-        eprintln!("no GPU adapter available; skipping");
-        return None;
-    };
+/// Shared GPU-test setup. CI sets `HARMONIGRAPH_REQUIRE_GPU=1`, so a missing
+/// adapter fails before a caller can return successfully without assertions.
+/// Local machines may still skip. `WGPU_BACKEND` selects test backends; an
+/// empty value disables all backends to exercise both failure policies.
+pub fn test_gpu_adapter() -> Option<(wgpu::Instance, wgpu::Adapter)> {
+    crate::shader_assets::initialize();
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = wgpu::Backends::from_env().unwrap_or_default();
+    let instance = wgpu::Instance::new(descriptor);
+    match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) {
+        Ok(adapter) => Some((instance, adapter)),
+        Err(error) => {
+            assert!(
+                std::env::var("HARMONIGRAPH_REQUIRE_GPU").as_deref() != Ok("1"),
+                "HARMONIGRAPH_REQUIRE_GPU=1: GPU tests require an adapter: {error}"
+            );
+            eprintln!("no GPU adapter available; skipping: {error}");
+            None
+        }
+    }
+}
+
+/// `None` only when no adapter is available and GPU tests are optional.
+pub fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    let (_, adapter) = test_gpu_adapter()?;
     let pair = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
         .expect("headless device");
     Some(pair)

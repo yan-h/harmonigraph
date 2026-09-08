@@ -126,9 +126,7 @@ fn startup_worker_preserves_pixels_and_reuses_its_completed_pipelines() {
 #[cfg(not(feature = "hot-reload"))]
 #[test]
 fn pipeline_cache_rebuilds_for_another_device_or_format() {
-    let instance = wgpu::Instance::default();
-    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
-        eprintln!("no GPU adapter available; skipping");
+    let Some((instance, adapter)) = crate::test_gpu_adapter() else {
         return;
     };
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
@@ -145,8 +143,7 @@ fn pipeline_cache_rebuilds_for_another_device_or_format() {
 
     // Separate instances can mint equal device IDs. Test that case explicitly.
     let _ = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
-    let other_instance = wgpu::Instance::default();
-    let adapter = pollster::block_on(other_instance.request_adapter(&Default::default())).unwrap();
+    let (other_instance, adapter) = crate::test_gpu_adapter().expect("second GPU instance");
     let (other, other_queue) =
         pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     assert_eq!(device, other, "this fixture must exercise colliding native device IDs");
@@ -162,13 +159,7 @@ fn pipeline_cache_rebuilds_for_another_device_or_format() {
 /// timer is `None` and any test about it would pass vacuously — hence a
 /// separate constructor rather than a flag on [`headless_device`].
 fn headless_device_with_timestamps() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::default();
-    let Ok(adapter) =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-    else {
-        eprintln!("no GPU adapter available; skipping");
-        return None;
-    };
+    let (_, adapter) = crate::test_gpu_adapter()?;
     if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
         eprintln!("adapter has no timestamp queries; skipping");
         return None;

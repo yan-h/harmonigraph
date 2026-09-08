@@ -639,7 +639,7 @@ fn a_gap_with_no_file_open_marks_the_take_that_opens_after_it() {
     opened.epoch = 1;
     let mut open = Some(opened);
     fanout.drain(&mut consumer, &mut open, &fence, &failure);
-    let sealed = open.take().unwrap().finish();
+    let sealed = open.take().unwrap().finish().unwrap();
     let take = harmonigraph_take::Take::read(&sealed).unwrap();
     let loss =
         take.incomplete.expect("the gap that had no file marks the one that opened after it");

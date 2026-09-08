@@ -1,0 +1,79 @@
+Initial production generator: https://github.com/yan-h/harmonigraph/actions/runs/34175684884
+Expanded production metadata/fallback controls: https://github.com/yan-h/harmonigraph/actions/runs/34176508889
+65 production libraries: 575815 library bytes; 1090702 total corpus bytes including inputs/manifest.
+
+export-bindings.log
+sha256=83c69f0a36b7e5dd88386fe7007f85bceb5a92dfaacd7e6f9647afa446e02a21
+test lattice_tests::metal_assets::generated_metal_assets_preserve_storage_binding_lengths ... METAL_BINDING_LENGTH offset=0 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=0 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_LENGTH offset=256 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=256 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_ASSETS Statistics { loaded: 0, source: 3, load_failed: 0, rejected: 0 }
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 251 filtered out; finished in 0.19s
+
+export-catalog.log
+sha256=aeafa874e47ea922a7071c0f979d56dd4f07b7d6df82b4c6d4c941ab4a6e2033
+test shader_assets::catalog::production_metal_asset_catalog ... METAL_ASSET_CATALOG Statistics { loaded: 0, source: 820, load_failed: 0, rejected: 0 }
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 251 filtered out; finished in 6.05s
+
+invalid-fallback.log
+sha256=61cfcad6670fd050776d1bcb31cbae03b3e0d81ea813fccbbce21b26adaddfdd
+METAL_BINDING_LENGTH offset=0 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=0 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_LENGTH offset=256 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=256 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_ASSETS Statistics { loaded: 2, source: 1, load_failed: 1, rejected: 0 }
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 251 filtered out; finished in 0.13s
+
+invalid-strict.log
+sha256=c6476ac85d7497fff9e2efc0e7239f64927f277c930dd8001461fb9000c081e2
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 251 filtered out; finished in 0.09s
+
+mismatched-fallback.log
+sha256=00f4ef8c5d8c7de3a156026c5e6b19669b1d736c53d6e0142b3e0eda6cdc7454
+METAL_BINDING_LENGTH offset=0 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=0 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_LENGTH offset=256 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=256 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_ASSETS Statistics { loaded: 2, source: 1, load_failed: 0, rejected: 0 }
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 251 filtered out; finished in 0.13s
+
+mismatched-strict.log
+sha256=7d7d0fb03ca0497c6bc6ac24fc81f7a8807f806f44bb2b412ca508dd341a465f
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 251 filtered out; finished in 0.09s
+
+missing-fallback.log
+sha256=ef69c142f755819f414ad17507e6b23b2147a8a1ce533a69e87fb3a4202a251b
+METAL_BINDING_LENGTH offset=0 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=0 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_LENGTH offset=256 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=256 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_ASSETS Statistics { loaded: 2, source: 1, load_failed: 0, rejected: 0 }
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 251 filtered out; finished in 0.12s
+
+missing-strict.log
+sha256=c07f299b7543d8fc81d3f72bc9a4bf18a35570d56b4a2b957a5fd22055e0688f
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 251 filtered out; finished in 0.08s
+
+strict-bindings.log
+sha256=c731eacdc9db25ca05db734a27347f1a1b5e05714afe8b4ba782d11c4395ba29
+test lattice_tests::metal_assets::generated_metal_assets_preserve_storage_binding_lengths ... METAL_BINDING_LENGTH offset=0 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=0 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_LENGTH offset=256 count=4 result=[4, 11, 44, 44]
+METAL_BINDING_LENGTH offset=256 count=7 result=[7, 11, 77, 77]
+METAL_BINDING_ASSETS Statistics { loaded: 3, source: 0, load_failed: 0, rejected: 0 }
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 251 filtered out; finished in 0.17s
+
+strict-catalog.log
+sha256=e362f9e589c76957d8aa5e64ab3e5a31d42a127c47515b32311a2d1ad3e07f81
+test shader_assets::catalog::production_metal_asset_catalog ... METAL_ASSET_CATALOG Statistics { loaded: 820, source: 0, load_failed: 0, rejected: 0 }
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 251 filtered out; finished in 0.59s
+
+strict-offline-goldens.log
+sha256=28d355205e2cc9c3e501a05b0f18fdefcecb72658d64a0c5d764f6db06746517
+test result: ok. 5 passed; 0 failed; 2 ignored; 0 measured; 57 filtered out; finished in 2.43s
+
+strict-renderer-goldens.log
+sha256=64b28a5b955ee50acb567dbcd50f27601a3541d2243f2fad79f4d88eddcd3508
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 238 filtered out; finished in 3.93s
+

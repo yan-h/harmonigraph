@@ -1,0 +1,402 @@
+[
+  {
+    "condition": "cache-blocked",
+    "pair": 0,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "first_ms": 648.728,
+        "full_ms": 5367.362
+      },
+      "1": {
+        "first_ms": 454.002,
+        "full_ms": 454.014
+      },
+      "2": {
+        "first_ms": 448.232,
+        "full_ms": 448.243
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 0, source: 106, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-blocked",
+    "pair": 0,
+    "mode": "strict",
+    "openings": {
+      "0": {
+        "first_ms": 155.145,
+        "full_ms": 745.438
+      },
+      "1": {
+        "first_ms": 59.624,
+        "full_ms": 59.638
+      },
+      "2": {
+        "first_ms": 59.068,
+        "full_ms": 59.081
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 106, source: 0, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-blocked",
+    "pair": 1,
+    "mode": "strict",
+    "openings": {
+      "0": {
+        "first_ms": 155.195,
+        "full_ms": 752.362
+      },
+      "1": {
+        "first_ms": 63.176,
+        "full_ms": 63.189
+      },
+      "2": {
+        "first_ms": 59.142,
+        "full_ms": 59.154
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 106, source: 0, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-blocked",
+    "pair": 1,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "first_ms": 301.726,
+        "full_ms": 4770.803
+      },
+      "1": {
+        "first_ms": 453.729,
+        "full_ms": 453.742
+      },
+      "2": {
+        "first_ms": 454.939,
+        "full_ms": 454.949
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 0, source: 106, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-blocked",
+    "pair": 2,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "first_ms": 308.829,
+        "full_ms": 4694.028
+      },
+      "1": {
+        "first_ms": 462.528,
+        "full_ms": 462.541
+      },
+      "2": {
+        "first_ms": 455.374,
+        "full_ms": 455.384
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 0, source: 106, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-blocked",
+    "pair": 2,
+    "mode": "strict",
+    "openings": {
+      "0": {
+        "first_ms": 141.204,
+        "full_ms": 785.075
+      },
+      "1": {
+        "first_ms": 59.061,
+        "full_ms": 59.071
+      },
+      "2": {
+        "first_ms": 59.18,
+        "full_ms": 59.191
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 106, source: 0, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-blocked",
+    "pair": 3,
+    "mode": "strict",
+    "openings": {
+      "0": {
+        "first_ms": 147.948,
+        "full_ms": 765.967
+      },
+      "1": {
+        "first_ms": 65.57,
+        "full_ms": 65.581
+      },
+      "2": {
+        "first_ms": 65.733,
+        "full_ms": 65.744
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 106, source: 0, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-blocked",
+    "pair": 3,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "first_ms": 298.035,
+        "full_ms": 5006.014
+      },
+      "1": {
+        "first_ms": 450.966,
+        "full_ms": 450.981
+      },
+      "2": {
+        "first_ms": 444.721,
+        "full_ms": 444.732
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 0, source: 106, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-blocked",
+    "pair": 4,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "first_ms": 305.674,
+        "full_ms": 4715.228
+      },
+      "1": {
+        "first_ms": 452.026,
+        "full_ms": 452.04
+      },
+      "2": {
+        "first_ms": 446.368,
+        "full_ms": 446.383
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 0, source: 106, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-blocked",
+    "pair": 4,
+    "mode": "strict",
+    "openings": {
+      "0": {
+        "first_ms": 146.369,
+        "full_ms": 795.696
+      },
+      "1": {
+        "first_ms": 59.561,
+        "full_ms": 59.571
+      },
+      "2": {
+        "first_ms": 59.006,
+        "full_ms": 59.018
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 106, source: 0, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-available",
+    "pair": 0,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "first_ms": 68.561,
+        "full_ms": 138.317
+      },
+      "1": {
+        "first_ms": 26.567,
+        "full_ms": 26.578
+      },
+      "2": {
+        "first_ms": 20.846,
+        "full_ms": 20.859
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 0, source: 106, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-available",
+    "pair": 0,
+    "mode": "strict",
+    "openings": {
+      "0": {
+        "first_ms": 95.389,
+        "full_ms": 95.402
+      },
+      "1": {
+        "first_ms": 21.842,
+        "full_ms": 21.853
+      },
+      "2": {
+        "first_ms": 20.818,
+        "full_ms": 20.831
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 106, source: 0, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-available",
+    "pair": 1,
+    "mode": "strict",
+    "openings": {
+      "0": {
+        "first_ms": 75.639,
+        "full_ms": 75.653
+      },
+      "1": {
+        "first_ms": 21.39,
+        "full_ms": 21.403
+      },
+      "2": {
+        "first_ms": 21.058,
+        "full_ms": 21.07
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 106, source: 0, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-available",
+    "pair": 1,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "first_ms": 93.909,
+        "full_ms": 93.925
+      },
+      "1": {
+        "first_ms": 21.316,
+        "full_ms": 21.328
+      },
+      "2": {
+        "first_ms": 21.399,
+        "full_ms": 21.41
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 0, source: 106, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-available",
+    "pair": 2,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "first_ms": 79.221,
+        "full_ms": 97.895
+      },
+      "1": {
+        "first_ms": 24.41,
+        "full_ms": 24.421
+      },
+      "2": {
+        "first_ms": 22.133,
+        "full_ms": 22.147
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 0, source: 106, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-available",
+    "pair": 2,
+    "mode": "strict",
+    "openings": {
+      "0": {
+        "first_ms": 67.685,
+        "full_ms": 95.152
+      },
+      "1": {
+        "first_ms": 21.646,
+        "full_ms": 21.658
+      },
+      "2": {
+        "first_ms": 22.134,
+        "full_ms": 22.146
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 106, source: 0, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-available",
+    "pair": 3,
+    "mode": "strict",
+    "openings": {
+      "0": {
+        "first_ms": 96.763,
+        "full_ms": 96.774
+      },
+      "1": {
+        "first_ms": 25.008,
+        "full_ms": 25.019
+      },
+      "2": {
+        "first_ms": 21.424,
+        "full_ms": 21.434
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 106, source: 0, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-available",
+    "pair": 3,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "first_ms": 69.939,
+        "full_ms": 87.151
+      },
+      "1": {
+        "first_ms": 28.411,
+        "full_ms": 28.423
+      },
+      "2": {
+        "first_ms": 20.893,
+        "full_ms": 20.907
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 0, source: 106, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-available",
+    "pair": 4,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "first_ms": 95.789,
+        "full_ms": 95.8
+      },
+      "1": {
+        "first_ms": 21.016,
+        "full_ms": 21.029
+      },
+      "2": {
+        "first_ms": 21.581,
+        "full_ms": 21.591
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 0, source: 106, load_failed: 0, rejected: 0 }"
+  },
+  {
+    "condition": "cache-available",
+    "pair": 4,
+    "mode": "strict",
+    "openings": {
+      "0": {
+        "first_ms": 62.509,
+        "full_ms": 83.106
+      },
+      "1": {
+        "first_ms": 33.157,
+        "full_ms": 33.169
+      },
+      "2": {
+        "first_ms": 20.953,
+        "full_ms": 20.963
+      }
+    },
+    "lifecycle": "NATIVE_LIFECYCLE openings=3 devices=1 dropped=3 Statistics { loaded: 106, source: 0, load_failed: 0, rejected: 0 }"
+  }
+]

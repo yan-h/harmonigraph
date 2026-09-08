@@ -4,6 +4,7 @@ members = [
     "crates/harmonigraph-core",
     "crates/harmonigraph-scene",
     "crates/harmonigraph-render",
+    "crates/harmonigraph-metal-assets",
     "crates/harmonigraph-golden",
     "crates/harmonigraph-perf",
     "crates/harmonigraph-ui",
@@ -15,7 +16,7 @@ members = [
     "xtask",
 ]
 # The vendored crates are their own workspaces, only referenced via [patch].
-exclude = ["vendor/baseview", "vendor/egui-baseview", "vendor/nice-plug"]
+exclude = ["vendor/baseview", "vendor/egui-baseview", "vendor/nice-plug", "vendor/wgpu-hal"]
 
 [workspace.package]
 version = "0.3.0"
@@ -28,6 +29,7 @@ license = "GPL-3.0-or-later"
 harmonigraph-core = { path = "crates/harmonigraph-core" }
 harmonigraph-scene = { path = "crates/harmonigraph-scene" }
 harmonigraph-render = { path = "crates/harmonigraph-render" }
+harmonigraph-metal-assets = { path = "crates/harmonigraph-metal-assets" }
 # Dev-only: the byte-exact frame gate, shared by every crate that keeps a set.
 harmonigraph-golden = { path = "crates/harmonigraph-golden" }
 harmonigraph-perf = { path = "crates/harmonigraph-perf" }
@@ -91,6 +93,7 @@ raw-window-handle = "0.5"
 baseview = { path = "vendor/baseview" }
 egui-baseview = { path = "vendor/egui-baseview" }
 nice-plug = { path = "vendor/nice-plug" }
+wgpu-hal = { path = "vendor/wgpu-hal" }
 
 [profile.release]
 # Cross-crate LTO reaches exactly one artifact here, and it is not the plugin.
