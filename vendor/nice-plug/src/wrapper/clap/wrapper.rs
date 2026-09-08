@@ -201,13 +201,6 @@ pub struct Wrapper<P: ClapPlugin> {
     /// `current_latency` keeps answering with the latency this activation is
     /// actually running until the next one adopts the replacement.
     pending_latency: AtomicU32,
-    /// The latency the host has been told to read. `changed()` is what makes a
-    /// published number the host's, so whether the host still needs telling is
-    /// decided by this value and not by whether the task carrying the request
-    /// has run: an activation can adopt a request the task has not delivered
-    /// yet, and the request that would have announced it is by then a
-    /// duplicate of one already adopted.
-    announced_latency: AtomicU32,
     trace_latency_queries: AtomicU64,
     /// A data structure that helps manage and create buffers for all of the plugin's inputs and
     /// outputs based on channel pointers provided by the host.
@@ -506,33 +499,24 @@ impl<P: ClapPlugin> MainThreadExecutor<Task<P>> for Wrapper<P> {
                 Some(_) => {
                     crate::nice_debug_assert!(is_gui_thread);
 
-                    // The plugin needs to be deactivated in order for the latency to change. If
-                    // it's already deactivated we can publish the request immediately, otherwise we
-                    // need to request a restart so the next activation adopts it.
-                    //
-                    // In practice, ignoring the activation status would be fine for many hosts, but
-                    // following the specification is probably a good idea regardless :)
-                    if self.is_activated.load(Ordering::SeqCst) {
-                        // An activation may have overtaken this task and adopted the
-                        // request already, in which case the number the host reads is
-                        // the one that was asked for and this task carries nothing:
-                        // restarting for it would answer a request that no longer exists.
-                        if self.pending_latency.load(Ordering::SeqCst)
+                    // The latency may only change during an activation, so all this
+                    // task can do is ask for one. A deactivated plugin is between
+                    // activations already and has nothing to restart; an active one
+                    // whose request some activation has overtaken and adopted has
+                    // nothing left to ask for either, since the number the host
+                    // reads is by then the one that was asked for.
+                    if self.is_activated.load(Ordering::SeqCst)
+                        && self.pending_latency.load(Ordering::SeqCst)
                             != self.current_latency.load(Ordering::SeqCst)
-                        {
-                            if P::CLAP_PROCESS_TRACE {
-                                eprintln!(
-                                    "[clap-probe lifecycle] pid={} class={} instance={:p} request_restart reason=latency_changed processing={}",
-                                    std::process::id(), P::CLAP_ID, self,
-                                    self.is_processing.load(Ordering::SeqCst),
-                                );
-                            }
-                            unsafe_clap_call! { &*self.host_callback=>request_restart(&*self.host_callback) };
+                    {
+                        if P::CLAP_PROCESS_TRACE {
+                            eprintln!(
+                                "[clap-probe lifecycle] pid={} class={} instance={:p} request_restart reason=latency_changed processing={}",
+                                std::process::id(), P::CLAP_ID, self,
+                                self.is_processing.load(Ordering::SeqCst),
+                            );
                         }
-                    } else {
-                        // Deactivated, so the request may be published, and
-                        // announced, now.
-                        self.publish_pending_latency();
+                        unsafe_clap_call! { &*self.host_callback=>request_restart(&*self.host_callback) };
                     }
                 }
                 None => {
@@ -743,7 +727,6 @@ impl<P: ClapPlugin> Wrapper<P> {
             last_process_status: AtomicCell::new(ProcessStatus::Normal),
             current_latency: AtomicU32::new(0),
             pending_latency: AtomicU32::new(0),
-            announced_latency: AtomicU32::new(0),
             trace_latency_queries: AtomicU64::new(0),
             // This is initialized just before calling `Plugin::initialize()` so that during the
             // process call buffers can be initialized without any allocations
@@ -1974,8 +1957,7 @@ impl<P: ClapPlugin> Wrapper<P> {
     /// compensating for the latency this activation is running, and moving the
     /// reported number out from under it would misalign everything already
     /// scheduled against it. Publishing belongs to `publish_pending_latency`,
-    /// at the two moments the host can be told in the same breath -- the task
-    /// below finding the plugin deactivated, and the activation that adopts
+    /// at the one moment the host may be told -- the activation that adopts
     /// the request -- so the number the host reads never moves in silence.
     pub fn set_latency_samples(&self, samples: u32) {
         // Only make a callback if it's actually needed
@@ -1989,16 +1971,18 @@ impl<P: ClapPlugin> Wrapper<P> {
     }
 
     /// Move the number the host reads to the one the plugin asked for, and tell
-    /// the host whenever that moves it off the last number it was told, which
-    /// is the only thing that makes the new one the host's. Deduplicating the
-    /// request is a separate question from announcing the publication: a
-    /// repeated request needs no restart, while an adopted one needs the
-    /// notification whether or not its restart was ever asked for. Only a
-    /// deactivated plugin, or the activation adopting the request, may do this.
+    /// the host whenever that moves it, which is the only thing that makes the
+    /// new number the host's. CLAP accepts `changed()` during `activate` and
+    /// nowhere else, so an activation is the only caller: publishing anywhere
+    /// else spends the notification at a moment the host may discard, and
+    /// leaves the activation that adopts the request with nothing to say.
+    /// That makes this the sole writer of `current_latency`, and the value the
+    /// host was last told is therefore the value it reads -- a deactivated
+    /// plugin keeps reporting the delay its host is still compensating for
+    /// until the next activation adopts a replacement.
     fn publish_pending_latency(&self) {
         let pending = self.pending_latency.load(Ordering::SeqCst);
-        self.current_latency.store(pending, Ordering::SeqCst);
-        if self.announced_latency.swap(pending, Ordering::SeqCst) != pending {
+        if self.current_latency.swap(pending, Ordering::SeqCst) != pending {
             if let Some(host_latency) = &*self.host_latency.borrow() {
                 unsafe_clap_call! { host_latency=>changed(&*self.host_callback) };
             }
@@ -2178,15 +2162,16 @@ impl<P: ClapPlugin> Wrapper<P> {
             // Also store this for later, so we can reinitialize the plugin after restoring state
             wrapper.current_buffer_config.store(Some(buffer_config));
 
-            // Deliver initialize's deferred latency request while still deactivated. Letting
-            // the context drop after this flag instead requests an unnecessary restart, which can
-            // stall Bitwig's next offline export. Release the plugin lock before host callbacks.
+            // Run initialize's deferred latency request while `is_activated` is still
+            // clear. Letting the context drop after this flag instead requests an
+            // unnecessary restart, which can stall Bitwig's next offline export.
+            // Release the plugin lock before host callbacks.
             drop(plugin);
             drop(init_context);
-            // Whatever this activation adopted is now the number the host reads,
-            // whether it was requested during this initialization or while the
-            // previous activation ran. Announcing it is not the queued task's to
-            // do: the request may be adopted before that task is ever delivered.
+            // The one place the reported latency moves and the one place the host
+            // is told it has. Whatever this activation adopts -- requested during
+            // this initialization or while the previous activation ran -- becomes
+            // the number the host reads, here.
             wrapper.publish_pending_latency();
             wrapper.is_activated.store(true, Ordering::SeqCst);
 

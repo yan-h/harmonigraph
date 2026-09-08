@@ -22,7 +22,7 @@ use nice_plug::plugin::{ParamValue, PluginState};
 use routing::{HubSetup, SavedUuid, SourceSetup};
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 #[path = "attachment_tests.rs"]
 mod attachment_tests;
@@ -44,6 +44,12 @@ struct Host {
     /// read the value the moment it is told there is a new one.
     plugin: AtomicPtr<clap_plugin>,
     observed_latency: AtomicUsize,
+    /// Set only across `clap_plugin::activate`. CLAP lets the latency change
+    /// during that call and nowhere else, so a host is entitled to discard a
+    /// notification that arrives with this clear.
+    activating: AtomicBool,
+    /// Notifications this host would have been right to discard.
+    out_of_phase: AtomicUsize,
 }
 unsafe extern "C" fn extension(_: *const clap_host, id: *const c_char) -> *const c_void {
     if unsafe { CStr::from_ptr(id) } == CLAP_EXT_LATENCY {
@@ -56,6 +62,9 @@ static HOST_LATENCY: clap_host_latency = clap_host_latency { changed: Some(laten
 unsafe extern "C" fn latency_changed(host: *const clap_host) {
     let stats = unsafe { &*((*host).host_data.cast::<Host>()) };
     stats.latency_changes.fetch_add(1, Ordering::Relaxed);
+    if !stats.activating.load(Ordering::Relaxed) {
+        stats.out_of_phase.fetch_add(1, Ordering::Relaxed);
+    }
     let plugin = stats.plugin.load(Ordering::Relaxed);
     if !plugin.is_null() {
         stats.observed_latency.store(latency_of(plugin) as usize, Ordering::Relaxed);
@@ -297,7 +306,10 @@ impl Device {
         self.activate_format(48000.0, 512);
     }
     fn activate_format(&mut self, rate: f64, frames: u32) {
-        assert!(unsafe { (*self.plugin).activate.unwrap()(self.plugin, rate, 1, frames) });
+        self._stats.activating.store(true, Ordering::Relaxed);
+        let activated = unsafe { (*self.plugin).activate.unwrap()(self.plugin, rate, 1, frames) };
+        self._stats.activating.store(false, Ordering::Relaxed);
+        assert!(activated);
         assert!(unsafe { (*self.plugin).start_processing.unwrap()(self.plugin) });
         self.active = true;
         if !self.tuner {

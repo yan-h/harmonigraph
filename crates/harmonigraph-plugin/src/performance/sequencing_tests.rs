@@ -2580,6 +2580,54 @@ fn restarts(device: &Device) -> usize {
     device._stats.restarts.load(Ordering::Relaxed)
 }
 
+/// Notifications that reached the host outside `activate`. CLAP allows the
+/// latency to change only there, so one delivered anywhere else is one a
+/// conforming host may discard -- and a plugin that spends its notification
+/// out of phase has told nobody anything.
+fn out_of_phase(device: &Device) -> usize {
+    device._stats.out_of_phase.load(Ordering::Relaxed)
+}
+
+#[test]
+fn an_activation_announces_a_delay_whose_task_ran_while_deactivated() {
+    // Two requests, the first serviced while the activation it cannot move is
+    // still running and the second serviced in the gap between deactivation
+    // and reactivation. Neither delivery is a moment the host may be told at,
+    // so the activation that adopts the second one is left holding the only
+    // notification the host will accept.
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut source) = production_pair();
+    assert_eq!(announced(&source), (1, 512), "the first activation published its own delay");
+    // 2x, requested and delivered while active: a restart and nothing else.
+    source.run_format(1536, vec![source.param_event(DELAY_PARAM, 1.0, 1)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    source.run_format(2048, vec![], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    source.main();
+    hub.main();
+    assert_eq!(restarts(&source), 1, "the active request asks for the restart that adopts it");
+    assert_eq!(announced(&source), (1, 512));
+    // 3x, and this time the host services the task after deactivating.
+    source.run_format(2560, vec![source.param_event(DELAY_PARAM, 2.0, 1)], None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    source.run_format(3072, vec![], None, None, 512);
+    hub.run_format(3072, vec![], None, None, 512);
+    source.deactivate();
+    source.main();
+    assert_eq!(out_of_phase(&source), 0, "a task between activations tells the host nothing");
+    assert_eq!(announced(&source), (1, 512), "so the host is still on the delay it read");
+    assert_eq!(source.latency(), 512, "and still reads the one it is compensating for");
+    assert_eq!(restarts(&source), 1, "a deactivated plugin asks for no restart");
+    hub.reactivate_format(44100.0, 512);
+    source.activate_format(44100.0, 512);
+    assert_eq!(source.latency(), 1536, "the activation adopts the last request");
+    assert_eq!(
+        announced(&source),
+        (2, 1536),
+        "and is the one that tells the host, at a moment the host may be told"
+    );
+}
+
 #[test]
 fn an_activation_that_adopts_a_pending_delay_announces_it() {
     // The host reactivates before it services `on_main_thread`, so the
@@ -2613,10 +2661,11 @@ fn an_activation_that_adopts_a_pending_delay_announces_it() {
 }
 
 #[test]
-fn a_delay_request_delivered_while_deactivated_is_announced_at_once() {
+fn a_delay_request_delivered_while_deactivated_waits_for_the_activation() {
     // The host services `on_main_thread` between the deactivation and the
-    // activation. There is no activation left to wait for: the number moves
-    // and the host is told, with no restart to ask for.
+    // activation. That is not a moment the latency may change at, so the
+    // request stays pending and the activation ahead of it is the one that
+    // adopts and announces it -- there is still no restart to ask for.
     let _scope = crate::test_scope::enter();
     let (mut hub, mut source) = production_pair();
     source.run_format(1536, vec![source.param_event(DELAY_PARAM, 1.0, 1)], None, None, 512);
@@ -2625,12 +2674,8 @@ fn a_delay_request_delivered_while_deactivated_is_announced_at_once() {
     hub.run_format(2048, vec![], None, None, 512);
     source.deactivate();
     source.main();
-    assert_eq!(source.latency(), 1024);
-    assert_eq!(
-        announced(&source),
-        (2, 1024),
-        "a deactivated plugin publishes and announces at once"
-    );
+    assert_eq!(source.latency(), 512, "a deactivated plugin publishes nothing");
+    assert_eq!(announced(&source), (1, 512), "and announces nothing");
     assert_eq!(restarts(&source), 0, "and asks for no restart it is already between");
     hub.reactivate_format(44100.0, 512);
     source.activate_format(44100.0, 512);
@@ -2638,7 +2683,7 @@ fn a_delay_request_delivered_while_deactivated_is_announced_at_once() {
     assert_eq!(
         announced(&source),
         (2, 1024),
-        "the activation that follows repeats neither the value nor the announcement"
+        "the activation that follows is the one that moves the value and tells the host"
     );
 }
 
