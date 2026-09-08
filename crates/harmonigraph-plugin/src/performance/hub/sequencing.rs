@@ -421,10 +421,8 @@ impl Hub {
             self.trace.input_wait = 2;
             return None;
         }
-        let cap = owner
-            .recording
-            .configuration_seed_frontier()
-            .checked_add(self.clock.calibration.offset)?;
+        let cap =
+            owner.recording.input_frontier().checked_add(self.clock.calibration.offset)?;
         let mut snapshot = Membership {
             clock: self.clock_id(),
             leases: [None; TUNERS],
@@ -555,7 +553,7 @@ impl Hub {
         }
     }
 
-    pub(super) fn sequence_inputs(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
+    pub(super) fn sequence_inputs(&mut self, owner: &mut Owner) {
         self.observe_terminal_faults();
         if self.sequencer.terminal_session {
             self.service_plans();
@@ -576,9 +574,6 @@ impl Hub {
             let sample = self.next_input_sample();
             let boundary = sample.map_or(membership.through, |sample| sample.max(membership.floor));
             let finalized = boundary.min(membership.through);
-            if owner.finalize_input(membership.clock, finalized, finalized, recorder).is_err() {
-                return;
-            }
             self.sequencer.finalized = Some(finalized);
             self.sequencer.copied = Some(finalized);
             let Some(sample) = sample.filter(|_| boundary < membership.through) else { return };
@@ -598,7 +593,9 @@ impl Hub {
             if self.input_work + owed > 4096 {
                 return;
             }
-            let Ok(config) = owner.bind_input_cohort(membership.clock, boundary) else {
+            // The block's one configuration, captured where this group's
+            // assignment starts and kept for the whole group.
+            let Some(config) = owner.block_configuration(membership.clock) else {
                 return;
             };
             self.batch.begin(sample);

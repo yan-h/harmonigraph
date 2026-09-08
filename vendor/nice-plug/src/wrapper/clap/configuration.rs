@@ -1,14 +1,12 @@
 //! Opt-in, fixed-value configuration ingress. The plugin owns musical reduction;
-//! this module owns off-thread transactions, prepared restore slots and input
-//! retention. It carries no assignment policy or performance output emitter.
+//! this module owns off-thread submission and input retention. It carries no
+//! assignment policy or performance output emitter.
 
 use parking_lot::Mutex;
-use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub const CONFIG_COMMANDS: usize = 128;
-pub const CONFIG_SLOTS: usize = 2;
 pub const INPUT_SCAN: usize = 2048;
 pub const CONFIG_PARAMETERS: usize = 5;
 pub const PAYLOAD_WORDS: usize = 16;
@@ -143,41 +141,8 @@ impl PublishedConfiguration {
     }
 }
 
-const EMPTY: u8 = 0;
-const WRITING: u8 = 1;
-const READY: u8 = 2;
-const READING: u8 = 3;
-const DONE: u8 = 4;
-
-struct RestoreSlot {
-    state: AtomicU8,
-    value: UnsafeCell<ConfigurationCommand>,
-}
-// The one producer writes only WRITING after acquiring EMPTY/DONE. The one
-// consumer copies only READING after acquiring READY. Release transitions
-// publish the payload and exclude reuse until the consumer has finished copying.
-unsafe impl Sync for RestoreSlot {}
-impl RestoreSlot {
-    fn new() -> Self {
-        Self {
-            state: AtomicU8::new(EMPTY),
-            value: UnsafeCell::new(ConfigurationCommand {
-                id: 0,
-                origin: ConfigurationOrigin::Restore,
-                edit: ConfigurationEdit::default(),
-            }),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum QueuedConfiguration {
-    Edit(ConfigurationCommand),
-    Restore { slot: u8, id: u64 },
-}
-
 struct Producer {
-    queue: rtrb::Producer<QueuedConfiguration>,
+    queue: rtrb::Producer<ConfigurationCommand>,
     next_id: u64,
     /// Accepted host restore intent, not another resolver. Retired only after an
     /// applied owner publication includes this restore, never on queue transfer.
@@ -193,7 +158,6 @@ pub enum SubmitError {
 
 pub struct ConfigurationMailbox {
     producer: Mutex<Producer>,
-    slots: [RestoreSlot; CONFIG_SLOTS],
     pub published: PublishedConfiguration,
     pub dirty: AtomicBool,
     pub notification_rejected: AtomicBool,
@@ -210,12 +174,11 @@ pub struct ConfigurationMailbox {
 impl ConfigurationMailbox {
     pub(crate) fn new(
         notify: Box<dyn Fn() + Send + Sync>,
-    ) -> (Arc<Self>, rtrb::Consumer<QueuedConfiguration>) {
+    ) -> (Arc<Self>, rtrb::Consumer<ConfigurationCommand>) {
         let (queue, consumer) = rtrb::RingBuffer::new(CONFIG_COMMANDS);
         (
             Arc::new(Self {
                 producer: Mutex::new(Producer { queue, next_id: 1, shadow: None }),
-                slots: std::array::from_fn(|_| RestoreSlot::new()),
                 published: PublishedConfiguration::default(),
                 dirty: AtomicBool::new(false),
                 notification_rejected: AtomicBool::new(false),
@@ -241,11 +204,7 @@ impl ConfigurationMailbox {
         let next = id.checked_add(1).ok_or(SubmitError::CounterExhausted)?;
         producer
             .queue
-            .push(QueuedConfiguration::Edit(ConfigurationCommand {
-                id,
-                origin: ConfigurationOrigin::Ui,
-                edit,
-            }))
+            .push(ConfigurationCommand { id, origin: ConfigurationOrigin::Ui, edit })
             .map_err(|_| {
                 self.submission_rejected.store(true, Ordering::Release);
                 SubmitError::Full
@@ -259,7 +218,7 @@ impl ConfigurationMailbox {
     }
 
     /// Preparation and generic visual restore happen off audio in `apply_visual`.
-    /// Reserve both resources first; failure changes no accepted musical state.
+    /// Reserve the queue slot first; failure changes no accepted musical state.
     pub(crate) fn restore(
         &self,
         prepare_and_apply: impl FnOnce() -> Result<
@@ -273,40 +232,15 @@ impl ConfigurationMailbox {
         }
         let id = producer.next_id;
         let next = id.checked_add(1).ok_or(SubmitError::CounterExhausted)?;
-        let slot_index = self
-            .slots
-            .iter()
-            .position(|slot| {
-                let state = slot.state.load(Ordering::Acquire);
-                (state == EMPTY || state == DONE)
-                    && slot
-                        .state
-                        .compare_exchange(state, WRITING, Ordering::Acquire, Ordering::Relaxed)
-                        .is_ok()
-            })
-            .ok_or(SubmitError::Full)?;
-        let slot = &self.slots[slot_index];
-        let (edit, mut shadow) = match prepare_and_apply() {
-            Ok(value) => value,
-            Err(error) => {
-                slot.state.store(EMPTY, Ordering::Release);
-                return Err(error);
-            }
-        };
-        let command = ConfigurationCommand { id, origin: ConfigurationOrigin::Restore, edit };
-        // SAFETY: producer owns WRITING; the consumer cannot access this payload.
-        unsafe {
-            *slot.value.get() = command;
-        }
+        let (edit, mut shadow) = prepare_and_apply()?;
         shadow.applied_id = id;
         producer.shadow = Some(shadow);
         self.accepted_restore.store(id, Ordering::Release);
         self.dirty.store(true, Ordering::Release);
-        slot.state.store(READY, Ordering::Release);
         // Reserved under the sole producer lock. A consumer can only free space.
         producer
             .queue
-            .push(QueuedConfiguration::Restore { slot: slot_index as u8, id })
+            .push(ConfigurationCommand { id, origin: ConfigurationOrigin::Restore, edit })
             .expect("reserved configuration command slot");
         producer.next_id = next;
         self.accepted_command.store(id, Ordering::Release);
@@ -332,30 +266,6 @@ impl ConfigurationMailbox {
             producer.shadow = None;
         }
         (applied, self.accepted_command.load(Ordering::Acquire) > applied.applied_id)
-    }
-
-    pub(crate) fn command(&self, queued: QueuedConfiguration) -> ConfigurationCommand {
-        match queued {
-            QueuedConfiguration::Edit(command) => command,
-            QueuedConfiguration::Restore { slot, id } => {
-                let slot = &self.slots[usize::from(slot)];
-                if slot.state.load(Ordering::Relaxed) == READY {
-                    slot.state
-                        .compare_exchange(READY, READING, Ordering::Acquire, Ordering::Relaxed)
-                        .expect("single restore consumer");
-                }
-                // SAFETY: this consumer owns READING until `retained` is called.
-                let command = unsafe { *slot.value.get() };
-                assert_eq!(command.id, id);
-                command
-            }
-        }
-    }
-
-    pub(crate) fn retained(&self, queued: QueuedConfiguration) {
-        if let QueuedConfiguration::Restore { slot, .. } = queued {
-            self.slots[usize::from(slot)].state.store(DONE, Ordering::Release);
-        }
     }
 }
 
@@ -407,8 +317,6 @@ pub struct OwnedInput {
     pub enclosing_start: Option<i64>,
     pub enclosing_frames: u32,
     pub flush: bool,
-    pub command_cut: u64,
-    pub command_sample: Option<i64>,
     pub batch: u64,
     pub value: InputValue,
 }
@@ -477,9 +385,6 @@ impl InputStorage {
             if input.sample.is_none() {
                 input.sample = Some(boundary);
             }
-            if input.command_sample.is_none() {
-                input.command_sample = Some(boundary);
-            }
         }
     }
 }
@@ -490,9 +395,8 @@ const _: () = assert!(std::mem::align_of::<OwnedInput>() <= 8);
 
 #[cfg(feature = "clap-boundary-tests")]
 pub fn print_test_memory_layout() {
-    println!("LEDGER configuration mailbox [queued,restore_slot,owner] {:?}",
-        [std::mem::size_of::<QueuedConfiguration>(), std::mem::size_of::<RestoreSlot>(),
-         std::mem::size_of::<ConfigurationMailbox>()]);
+    println!("LEDGER configuration mailbox [command,owner] {:?}",
+        [std::mem::size_of::<ConfigurationCommand>(), std::mem::size_of::<ConfigurationMailbox>()]);
 }
 #[cfg(feature = "clap-boundary-tests")]
 pub fn test_memory_mailbox() -> (Arc<ConfigurationMailbox>, impl Sized) {

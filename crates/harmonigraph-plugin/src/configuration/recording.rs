@@ -1,16 +1,18 @@
-//! Original sample-to-pass ownership for deferred configuration. This is a take
-//! publication fence, independent of the later session's timeline retirement.
+//! Which recording pass and time origin own an output sample. Configuration is
+//! block-granular, so a pass records the value adopted at each of its segments
+//! rather than a history keyed on the sample an edit was observed at.
 use harmonigraph_core::canonical::ClockId;
-use harmonigraph_core::configuration::{timeline::ConfigTimeline, ResolvedConfig};
+use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_record::{
     configuration::{RecordAddress, RECORD_PASSES},
     Recorder,
 };
 
-// Every unconsumed input or command may keep a different segment alive. Include
-// the current callback and a silent learning boundary; no heap growth on audio.
-const SEGMENTS: usize = 2048 + 128 + 2;
-const CHANGES: usize = 128;
+// A segment lives only while output inside it is still unpublished, and
+// contiguous callbacks on one pass and rate merge into one. Distinct spans
+// therefore need a transport discontinuity or a pass change each; exhaustion
+// is an explicit configuration failure, not growth on the audio thread.
+const SEGMENTS: usize = 64;
 
 #[derive(Clone, Copy)]
 struct Segment {
@@ -20,14 +22,14 @@ struct Segment {
     address: Option<RecordAddress>,
     origin: f64,
     rate: f64,
-    seeded: bool,
 }
 #[derive(Clone, Copy)]
 struct Pass {
     address: RecordAddress,
     end: Option<i64>,
-    seeded: bool,
-    last: Option<(i64, ResolvedConfig)>,
+    /// The last configuration written to this pass, so a stable block writes
+    /// nothing and a changed one writes once.
+    last: Option<ResolvedConfig>,
     configuration_complete: bool,
     source_complete: bool,
 }
@@ -39,7 +41,6 @@ pub(crate) struct Recording {
     source_prefix: Option<i64>,
     registered_through: i64,
     segments: [Option<Segment>; SEGMENTS],
-    changes: [Option<(i64, ResolvedConfig)>; CHANGES],
     passes: [Option<Pass>; RECORD_PASSES],
     current: Option<RecordAddress>,
     pub captured_intent: u64,
@@ -60,7 +61,6 @@ impl Default for Recording {
             source_prefix: None,
             registered_through: i64::MIN,
             segments: [None; SEGMENTS],
-            changes: [None; CHANGES],
             passes: [None; RECORD_PASSES],
             current: None,
             captured_intent: 0,
@@ -73,14 +73,10 @@ impl Default for Recording {
     }
 }
 impl Recording {
-    pub fn dispose_retired_configuration(
-        &mut self,
-        recorder: &mut Recorder,
-        timeline: &ConfigTimeline,
-    ) {
+    pub fn dispose_retired_configuration(&mut self, recorder: &mut Recorder) {
         let unfinished = self.retired_configuration.expect("joined configuration producer");
         // Retain every already-applied change at its original recording route.
-        self.finish(recorder, timeline);
+        self.finish(recorder);
         if unfinished
             && self
                 .segments
@@ -96,7 +92,6 @@ impl Recording {
     pub fn finish_retired_publication(&mut self, recorder: &mut Recorder, unknown_held: bool) {
         assert!(self.retired_configuration.is_some());
         if unknown_held
-            || self.changes.iter().any(Option::is_some)
             || self.passes.iter().flatten().any(|pass| !pass.configuration_complete)
             || self
                 .segments
@@ -107,7 +102,6 @@ impl Recording {
             recorder.fail_configuration();
         }
         self.segments.fill(None);
-        self.changes.fill(None);
         self.passes.fill(None);
         self.current = None;
         self.retirement_finished = true;
@@ -120,7 +114,6 @@ impl Recording {
     }
     pub fn publication_debt(&self) -> bool {
         self.segments.iter().any(Option::is_some)
-            || self.changes.iter().any(Option::is_some)
             || self.passes.iter().flatten().any(|pass| pass.end.is_some())
     }
     /// Commit only after the old canonical/configuration routes have drained.
@@ -135,7 +128,6 @@ impl Recording {
         self.registered_through = i64::MIN;
         for pass in self.passes.iter_mut().flatten() {
             pass.last = None;
-            pass.seeded = false;
         }
         true
     }
@@ -146,7 +138,6 @@ impl Recording {
     pub fn close_invalidated(&mut self, recorder: &mut Recorder) {
         recorder.fail_configuration();
         self.segments.fill(None);
-        self.changes.fill(None);
         for cell in &mut self.passes {
             if cell.is_some_and(|pass| Some(pass.address) != self.current) {
                 let pass = cell.take().unwrap();
@@ -159,8 +150,7 @@ impl Recording {
         if self.segments.iter().flatten().any(|s| {
             s.address.is_some()
                 && (s.end > self.prefix || self.source_prefix.is_none_or(|through| s.end > through))
-        }) || self.changes.iter().any(Option::is_some)
-        {
+        }) {
             recorder.fail_configuration();
         }
         let Some(epoch) = self.clock.epoch.checked_add(1) else {
@@ -209,19 +199,12 @@ impl Recording {
             time_offset: t - presentation_time,
         })
     }
-    pub fn change(&mut self, sample: i64, config: ResolvedConfig, recorder: &Recorder) {
-        if let Some(cell) = self.changes.iter_mut().find(|c| c.is_none()) {
-            *cell = Some((sample, config));
-        } else {
-            recorder.fail_configuration();
-        }
-    }
     pub fn segment(
         &mut self,
         recorder: &mut Recorder,
-        timeline: &ConfigTimeline,
         origin: Option<f64>,
         rate: f64,
+        config: ResolvedConfig,
     ) {
         let (start, end) = (self.block_start, self.block_start + i64::from(self.block_frames));
         let address = origin.and_then(|_| recorder.configuration_address());
@@ -245,7 +228,6 @@ impl Recording {
                     *cell = Some(Pass {
                         address,
                         end: None,
-                        seeded: false,
                         last: None,
                         configuration_complete: false,
                         source_complete: false,
@@ -267,7 +249,6 @@ impl Recording {
             address: recorded_address,
             origin: origin.unwrap_or(0.0),
             rate,
-            seeded: false,
         };
         if let Some(previous) = self.segments.iter_mut().flatten().find(|s| {
             s.clock == segment.clock
@@ -286,90 +267,35 @@ impl Recording {
         }
 
         self.registered_through = end;
-        self.finish(recorder, timeline);
-    }
-
-    /// Future subblocks have no segment yet. Existing unseeded recording spans
-    /// also retain the exact configuration at their original start.
-    pub fn configuration_seed_frontier(&self) -> i64 {
-        self.segments
-            .iter()
-            .flatten()
-            .filter(|segment| segment.address.is_some() && !segment.seeded)
-            .map(|segment| segment.start)
-            .fold(self.prefix.min(self.registered_through), i64::min)
-    }
-
-    pub fn finish(&mut self, recorder: &mut Recorder, timeline: &ConfigTimeline) {
-        // Seed the first segment and any resumed recording from the value at
-        // its actual start. Stable continuous callbacks write no repeated state.
-        for segment in self.segments.iter_mut().flatten() {
-            let Some(address) = segment.address else {
-                continue;
-            };
-            if !segment.seeded && self.prefix > segment.start {
-                let Some(pass) = self.passes.iter_mut().flatten().find(|p| p.address == address)
-                else {
-                    recorder.fail_configuration();
-                    continue;
-                };
-                match timeline.configuration_at(segment.start) {
-                    Ok(config) => {
-                        if pass
-                            .last
-                            .is_none_or(|(sample, old)| sample > segment.start || old != config)
-                            || !pass.seeded
-                        {
-                            recorder.configuration_at(address, segment.origin, config);
-                        }
-                        if pass.last.is_none_or(|(sample, _)| sample <= segment.start) {
-                            pass.last = Some((segment.start, config));
-                        }
-                        segment.seeded = true;
-                        pass.seeded = true;
-                    }
-                    Err(_) => recorder.fail_configuration(),
+        // The block's own adopted configuration, written once per pass per
+        // change. There is no historical lookup: the value in force over this
+        // segment IS the value the Hub used for every group it started here.
+        if let Some(address) = recorded_address {
+            if let Some(pass) = self.passes.iter_mut().flatten().find(|p| p.address == address) {
+                if pass.last != Some(config) {
+                    recorder.configuration_at(address, segment.origin, config);
+                    pass.last = Some(config);
                 }
+            } else {
+                recorder.fail_configuration();
             }
         }
+        self.finish(recorder);
+    }
 
-        // Route every change by the segment that originally owned its sample,
-        // including changes applied now for an earlier callback/pass.
-        for cell in &mut self.changes {
-            let Some((sample, config)) = *cell else {
-                continue;
-            };
-            if let Some(segment) =
-                self.segments.iter().flatten().find(|s| s.start <= sample && sample < s.end)
-            {
-                if let Some(address) = segment.address {
-                    let t = segment.origin + (sample - segment.start) as f64 / segment.rate;
-                    recorder.configuration_at(address, t, config);
-                    if let Some(pass) =
-                        self.passes.iter_mut().flatten().find(|p| p.address == address)
-                    {
-                        if pass.last.is_none_or(|(old, _)| old <= sample) {
-                            pass.last = Some((sample, config));
-                        }
-                    } else {
-                        recorder.fail_configuration();
-                    }
-                }
-                *cell = None;
-            }
-        }
+    /// How far input may be consumed: this callback is configured through its
+    /// end, but only registered segments carry a recording route.
+    pub fn input_frontier(&self) -> i64 {
+        self.prefix.min(self.registered_through)
+    }
+
+    pub fn finish(&mut self, recorder: &mut Recorder) {
         for cell in &mut self.passes {
             let Some(pass) = cell.as_mut() else {
                 continue;
             };
-            if pass.seeded
+            if pass.last.is_some()
                 && pass.end.is_some_and(|end| self.prefix >= end)
-                && !self.changes.iter().flatten().any(|(sample, _)| *sample < pass.end.unwrap())
-                && !self
-                    .segments
-                    .iter()
-                    .flatten()
-                    .any(|s| s.address == Some(pass.address) && !s.seeded)
                 && !pass.configuration_complete
             {
                 recorder.configuration_pass_complete(pass.address);
@@ -385,17 +311,12 @@ impl Recording {
                 *cell = None;
             }
         }
+        // A segment is only a route for output that has not been published
+        // yet; both frontiers past its end retire it.
         for cell in &mut self.segments {
             if cell.is_some_and(|s| {
-                s.end <= self.prefix
-                    && self.source_prefix.is_some_and(|through| s.end <= through)
-                    && (s.address.is_none() || s.seeded)
-            }) && !self
-                .changes
-                .iter()
-                .flatten()
-                .any(|(sample, _)| cell.is_some_and(|s| s.start <= *sample && *sample < s.end))
-            {
+                s.end <= self.prefix && self.source_prefix.is_some_and(|through| s.end <= through)
+            }) {
                 *cell = None;
             }
         }
@@ -435,10 +356,10 @@ mod tests {
             block_frames: 40,
             ..Default::default()
         };
-        let timeline = ConfigTimeline::new(ConfigReducer::default());
-        recording.segment(&mut recorder, &timeline, Some(20.0), 48000.0);
+        let config = ConfigReducer::default().resolved();
+        recording.segment(&mut recorder, Some(20.0), 48000.0, config);
         recording.source_frontier(clock, 1056).unwrap();
-        recording.finish(&mut recorder, &timeline);
+        recording.finish(&mut recorder);
         assert_eq!(recording.source_prefix, Some(1024));
         assert_eq!(
             recording.segments.iter().flatten().count(),
@@ -457,13 +378,13 @@ mod tests {
         recording.captured_intent = 2;
         recording.block_start = 1040;
         recording.block_frames = 40;
-        recording.segment(&mut recorder, &timeline, None, 48000.0);
+        recording.segment(&mut recorder, None, 48000.0, config);
         assert_eq!(recording.route(clock, 1072, 0.0).unwrap().address, None);
         capture.arm();
         recorder.is_armed();
         recording.captured_intent = recorder.capture_recording_intent();
         recording.block_start = 1080;
-        recording.segment(&mut recorder, &timeline, Some(5.0), 48000.0);
+        recording.segment(&mut recorder, Some(5.0), 48000.0, config);
         assert_eq!(recording.route(clock, 1072, 0.0).unwrap().address, None);
         let new_clock = ClockId { epoch: 4, ..clock };
         assert!(recording.route(new_clock, 1064, 0.0).is_err());
@@ -472,7 +393,7 @@ mod tests {
         recording.reset(&recorder);
         recording.block_start = 0;
         recording.block_frames = 64;
-        recording.segment(&mut recorder, &timeline, None, 48000.0);
+        recording.segment(&mut recorder, None, 48000.0, config);
         assert!(
             recording.route(clock, 32, 0.0).is_err(),
             "old epoch raw32 must not match new epoch [0,64)"

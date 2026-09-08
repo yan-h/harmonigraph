@@ -27,9 +27,6 @@ impl Runtime {
     pub fn get(&self, index: usize) -> Option<OwnedInput> {
         self.storage.get(self.configured + index)
     }
-    pub fn len(&self) -> usize {
-        self.storage.len() - self.configured
-    }
     pub fn ack_configuration(&mut self, performance: bool) {
         if performance {
             self.configured += 1;
@@ -97,17 +94,15 @@ impl<P: ClapPlugin> Wrapper<P> {
         let gui_snapshot = if P::CLAP_PERFORMANCE {
             self.output_parameter_events.borrow_mut().events.slots()
         } else { 0 };
-        let (cut, batch, original_len) = {
+        let (batch, original_len) = {
             let mut guard = self.owned_input.lock();
             let input = guard.as_mut().unwrap();
-            let Some(cut) = self.prepare_configuration_capture(input, boundary) else {
-                return InputStatus::Invalid;
-            };
+            self.prepare_configuration_capture(input, boundary);
             let Some(batch) = input.batch.checked_add(1) else {
                 return InputStatus::Invalid;
             };
             input.batch = batch;
-            (cut, batch, input.storage.len())
+            (batch, input.storage.len())
         };
         if boundary.is_some_and(|(start, frames)| {
             start < 0 || frames == 0 || start.checked_add(i64::from(frames)).is_none()
@@ -137,8 +132,6 @@ impl<P: ClapPlugin> Wrapper<P> {
             enclosing_start: boundary.map(|b| b.0),
             enclosing_frames: boundary.map_or(0, |b| b.1),
             flush: boundary.is_none(),
-            command_cut: cut,
-            command_sample: boundary.map(|b| b.0),
             batch,
             value,
         };

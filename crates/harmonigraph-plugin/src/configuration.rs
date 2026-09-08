@@ -1,9 +1,6 @@
 //! Audio-owned effective tuning and observed direct pitches. This is the
 //! configuration/confirmed-state part of #617, not session aggregation or an
 //! accepted performance-output model.
-use harmonigraph_core::configuration::timeline::{
-    ConfigCommand, ConfigOrigin, ConfigTimeline, ControlBudget, TimelineError,
-};
 use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, ResolvedConfig, TuningModes,
 };
@@ -170,11 +167,16 @@ mod recording;
 
 pub struct Owner {
     pub frozen: bool,
-    pub timeline: ConfigTimeline,
+    /// Every edit reduces here the moment it arrives, in arrival order, so the
+    /// reducer's own combined-edit/preset/unlock semantics are untouched.
+    pub(crate) reducer: ConfigReducer,
+    /// What the reducer held at this callback's boundary. One value for every
+    /// assignment group the Hub starts inside the block; edits that land during
+    /// the block are adopted by the next `begin`.
+    block: ResolvedConfig,
     pub(crate) confirmed: ConfirmedPitches,
     pub direct: crate::performance::direct::Direct,
     learning: LearningState,
-    budget: ControlBudget,
     learned: Option<LearnedTuning>,
     pub snapshot: ConfigurationSnapshot,
     boundary: ConfigurationBoundary,
@@ -183,27 +185,24 @@ pub struct Owner {
 impl Owner {
     pub fn new(params: &super::HarmonigraphParams) -> Self {
         let raw = ParamKey::TUNING.map(|key| params.param_for(key).value());
-        let timeline = ConfigTimeline::new(ConfigReducer::new(
-            tuning(raw),
-            MusicalSettings::default().modes(),
-        ));
+        let reducer = ConfigReducer::new(tuning(raw), MusicalSettings::default().modes());
         let snapshot = ConfigurationSnapshot {
             raw,
             unmodulated: raw,
             normalized: ParamKey::TUNING
                 .map(|key| params.param_for(key).unmodulated_normalized_value()),
-            payload: payload(timeline.reducer().resolved()),
+            payload: payload(reducer.resolved()),
             ..Default::default()
         };
 
         Self {
             frozen: false,
-            timeline,
+            block: reducer.resolved(),
+            reducer,
             recording: recording::Recording::default(),
             confirmed: ConfirmedPitches::default(),
             direct: crate::performance::direct::Direct::default(),
             learning: LearningState::default(),
-            budget: ControlBudget::default(),
             learned: None,
             snapshot,
             boundary: ConfigurationBoundary {
@@ -234,59 +233,27 @@ impl Owner {
         self.recording.captured_intent = recorder.capture_recording_intent();
         self.recording.block_start = boundary.steady_time;
         self.recording.block_frames = boundary.frames;
-        self.budget = ControlBudget::default();
-        self.retire_configuration();
+        // The whole callback's input is applied and observed inside the same
+        // `process_configuration` call, so configuration for it is settled here
+        // and never holds output publication behind an unconsumed event.
+        self.recording.prefix = boundary
+            .steady_time
+            .saturating_add(i64::from(boundary.frames))
+            .saturating_sub(self.recording.hub_offset);
+        // THE block boundary: everything the reducer took during the previous
+        // callback becomes effective now, all at once.
+        self.block = self.reducer.resolved();
     }
 
-    /// Only already-proven input/binding frontiers authorize this reclamation.
-    /// Spend the same enclosing grant before new commands can fill the timeline.
-    fn retire_configuration(&mut self) {
-        while matches!(self.timeline.retire_one(&mut self.budget), Ok(true)) {}
-    }
-
-    pub fn bind_input_cohort(
-        &mut self,
+    /// The one configuration for assignment groups started in this block. A
+    /// group that spans a boundary keeps the value it was handed here.
+    pub fn block_configuration(
+        &self,
         clock: harmonigraph_core::canonical::ClockId,
-        sample: i64,
-    ) -> Result<ResolvedConfig, TimelineError> {
-        if self.frozen || clock != self.recording.clock {
-            return Err(TimelineError::InvalidFrontier);
-        }
-        let raw =
-            sample.checked_sub(self.recording.hub_offset).ok_or(TimelineError::InvalidFrontier)?;
-        if raw >= self.recording.prefix {
-            return Err(TimelineError::PendingBoundary);
-        }
-        self.timeline.begin_cohort(raw)
+    ) -> Option<ResolvedConfig> {
+        (!self.frozen && clock == self.recording.clock).then_some(self.block)
     }
 
-    /// Called only after record() has registered this subblock's segments.
-    /// Seeding is a separate consumer of historical configuration, so it must
-    /// finish before even the logical lookup frontier can move past its start.
-    pub fn finalize_input(
-        &mut self,
-        clock: harmonigraph_core::canonical::ClockId,
-        finalized: i64,
-        bindings_copied: i64,
-        recorder: &mut harmonigraph_record::Recorder,
-    ) -> Result<(), TimelineError> {
-        if self.frozen || clock != self.recording.clock {
-            return Err(TimelineError::InvalidFrontier);
-        }
-        let raw = |sample: i64| {
-            sample.checked_sub(self.recording.hub_offset).ok_or(TimelineError::InvalidFrontier)
-        };
-        let finalized = raw(finalized)?;
-        let bindings_copied = raw(bindings_copied)?;
-        self.recording.finish(recorder, &self.timeline);
-        let cap = self.recording.configuration_seed_frontier();
-        if finalized > cap || bindings_copied > cap {
-            return Err(TimelineError::PendingBoundary);
-        }
-        self.timeline.advance_frontiers(finalized, bindings_copied)?;
-        self.retire_configuration();
-        Ok(())
-    }
     pub fn reset(&mut self, recorder: &harmonigraph_record::Recorder) {
         self.frozen = false;
         if self.direct.pending().is_some() {
@@ -296,7 +263,6 @@ impl Owner {
         self.confirmed.reset();
         self.learning = LearningState::default();
         self.learned = None;
-        self.timeline = ConfigTimeline::new(self.timeline.reducer().clone());
         self.snapshot.status = 0;
         self.recording.reset(recorder);
     }
@@ -308,7 +274,6 @@ impl Owner {
         self.confirmed.reset();
         self.learning = LearningState::default();
         self.learned = None;
-        self.timeline = ConfigTimeline::new(self.timeline.reducer().clone());
         self.snapshot.status = 0;
         self.frozen = false;
     }
@@ -319,12 +284,10 @@ impl Owner {
         &mut self,
         command: ConfigurationCommand,
         commit: ConfigurationCommit,
-        recorder: &harmonigraph_record::Recorder,
     ) -> Option<ConfigurationSnapshot> {
-        if self.frozen || self.snapshot.status & 2 != 0 || self.budget.remaining() < 2 {
+        if self.frozen || self.snapshot.status & 2 != 0 {
             return None;
         }
-        let previous = self.timeline.reducer().resolved();
         let raw = tuning(commit.raw);
         let mutation = match command.edit.payload[0] {
             RESTORE => ConfigMutation::Restore { raw, modes: modes(command.edit.payload[1]) },
@@ -344,57 +307,13 @@ impl Owner {
                 learning: decode_option(command.edit.payload[5]),
             }),
         };
-        let origin = match command.origin {
-            ConfigurationOrigin::Ui => ConfigOrigin::Ui,
-            ConfigurationOrigin::Restore => ConfigOrigin::Restore,
-            ConfigurationOrigin::Automation => ConfigOrigin::Automation,
-            ConfigurationOrigin::Flush => ConfigOrigin::Flush,
-            ConfigurationOrigin::Learning => ConfigOrigin::Learning,
-        };
-        let effective = match self.timeline.effective_at(commit.sample) {
-            Ok(sample) => sample,
-            Err(_) => {
-                self.fault();
-                return None;
-            }
-        };
-        match self.timeline.insert(
-            ConfigCommand { command_id: command.id, origin, mutation },
-            commit.sample,
-            effective,
-            &mut self.budget,
-        ) {
-            Ok(_) => {}
-            Err(TimelineError::StorageFull) => {
-                // UI/restore remain in producer storage. Required automation stays
-                // owned in the input pool, with an explicit configuration fault.
-                if matches!(
-                    command.origin,
-                    ConfigurationOrigin::Automation
-                        | ConfigurationOrigin::Flush
-                        | ConfigurationOrigin::Learning
-                ) {
-                    self.timeline.required_storage_fault();
-                    self.fault();
-                }
-                return None;
-            }
-            Err(_) => {
-                self.fault();
-                return None;
-            }
+        // Reduce in arrival order; the value only becomes the block's at the
+        // next boundary, so the effective sample is where this callback ends.
+        if !self.reducer.apply(mutation) {
+            self.fault();
+            return None;
         }
-        let marker = match self.timeline.apply_next(&mut self.budget) {
-            Ok(Some(marker)) => marker,
-            _ => {
-                self.fault();
-                return None;
-            }
-        };
-        let resolved = marker.resolved?;
-        if resolved != previous {
-            self.recording.change(marker.effective_sample, resolved, recorder);
-        }
+        let resolved = self.reducer.resolved();
         if command.edit.payload[0] == LEARN {
             self.learned = None;
         }
@@ -402,19 +321,14 @@ impl Owner {
             self.snapshot.applied_id = command.id;
         }
         self.snapshot.revision = resolved.revision;
-        self.snapshot.effective_sample = marker.effective_sample;
+        self.snapshot.effective_sample =
+            self.boundary.steady_time.saturating_add(i64::from(self.boundary.frames));
         self.snapshot.payload = payload(resolved);
         self.snapshot.raw = commit.raw;
         self.snapshot.unmodulated = commit.unmodulated;
         self.snapshot.normalized = commit.normalized;
         self.snapshot.modulation = commit.modulation;
         Some(self.snapshot)
-    }
-    pub fn prefix(&mut self, through: i64) {
-        if self.frozen {
-            return;
-        }
-        self.recording.prefix = through;
     }
     pub fn segment(&mut self, start: u32, frames: u32) {
         if self.frozen {
@@ -570,7 +484,7 @@ impl Owner {
         observation_time: f64,
     ) {
         self.recording.observation_time = observation_time;
-        self.recording.finish(recorder, &self.timeline);
+        self.recording.finish(recorder);
     }
     pub fn record(
         &mut self,
@@ -587,9 +501,9 @@ impl Owner {
         }
         self.recording.segment(
             recorder,
-            &self.timeline,
             origin,
             f64::from(self.boundary.sample_rate),
+            self.block,
         );
     }
 
@@ -611,7 +525,7 @@ impl Owner {
         }
         match self
             .learning
-            .infer(&self.confirmed, self.timeline.reducer().resolved().modes.learning)
+            .infer(&self.confirmed, self.reducer.resolved().modes.learning)
         {
             Ok(Some(learned)) => {
                 self.learned = Some(learned);
@@ -648,10 +562,10 @@ impl Owner {
     pub fn print_test_memory_layout(&self) {
         use std::mem::size_of;
         println!(
-            "LEDGER configuration [owner,timeline,confirmed,learning,recording,direct] {:?}",
+            "LEDGER configuration [owner,reducer,confirmed,learning,recording,direct] {:?}",
             [
                 size_of::<Self>(),
-                size_of::<ConfigTimeline>(),
+                size_of::<ConfigReducer>(),
                 size_of::<ConfirmedPitches>(),
                 size_of::<LearningState>(),
                 size_of::<recording::Recording>(),

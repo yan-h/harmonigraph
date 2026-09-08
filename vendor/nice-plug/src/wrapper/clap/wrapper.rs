@@ -2287,9 +2287,6 @@ impl<P: ClapPlugin> Wrapper<P> {
                         .map(|t| t.song_pos_seconds as f64 / CLAP_SECTIME_FACTOR as f64),
                     playing: transport.is_some_and(|t| t.flags & CLAP_TRANSPORT_IS_PLAYING != 0),
                 });
-                if input_status == performance::InputStatus::Complete {
-                    wrapper.publish_configuration_prefix(process.steady_time, process.frames_count);
-                }
                 wrapper.configuration_request_main();
             }
 

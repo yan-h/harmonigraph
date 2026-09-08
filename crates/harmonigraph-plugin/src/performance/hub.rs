@@ -205,7 +205,7 @@ impl Hub {
     }
     fn publish_diagnostics(&self, callback: api::Callback, owner: &Owner) {
         self.direct.publish_diagnostics(callback);
-        let config = owner.timeline.reducer().resolved();
+        let config = owner.reducer.resolved();
         self.shared.diagnostics.hub.as_ref().unwrap().publish([
             self.offer.as_ref().map_or(0, |offer| offer.session.runtime) as i64,
             self.publication_clock.epoch as i64,
@@ -1026,7 +1026,7 @@ impl Hub {
         // Incomplete publication may return early; sequencing still gets its
         // independent bounded turn to advance input/recovery ownership.
         self.publish_output(owner, recorder, observation);
-        self.sequence_inputs(owner, recorder);
+        self.sequence_inputs(owner);
     }
 
     fn publish_output(&mut self, owner: &mut Owner, recorder: &mut Recorder, observation: f64) {
@@ -1612,7 +1612,7 @@ impl Hub {
         self.sequencer.retired = true;
         self.direct.join_producer();
         recorder.hold_retired_publication();
-        owner.recording.dispose_retired_configuration(&mut recorder, &owner.timeline);
+        owner.recording.dispose_retired_configuration(&mut recorder);
         if self.shared.registration().is_none() {
             assert!(self.offer.is_none());
             owner.publish_retired_direct(&mut recorder, observation);

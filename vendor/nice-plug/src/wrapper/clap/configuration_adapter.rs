@@ -1,37 +1,25 @@
-//! Ordered configuration ownership sharing the acknowledged owned input pool
-//! with the independently opted-in performance boundary.
+//! Block-granular configuration ownership sharing the acknowledged owned input
+//! pool with the independently opted-in performance boundary. Every accepted
+//! edit reduces in arrival order; the plugin decides when a reduced value
+//! becomes effective, which is the next callback boundary.
 use super::*;
 use crate::wrapper::clap::configuration::*;
 
 pub(super) struct Runtime {
     pub mailbox: Arc<ConfigurationMailbox>,
-    commands: rtrb::Consumer<QueuedConfiguration>,
+    commands: rtrb::Consumer<ConfigurationCommand>,
     hashes: [Option<u32>; CONFIG_PARAMETERS],
     base: [f32; CONFIG_PARAMETERS],
     modulation: [f32; CONFIG_PARAMETERS],
     applied_id: u64,
-    group: Option<Group>,
     notifications: [Option<Notification>; 16],
     fault: bool,
     reset_generation: u64,
-    pending_learning: Option<(i64, ConfigurationEdit)>,
-    // One first-observation cell per queued command, independent of input drain.
-    observed_samples: [Option<(u64, Option<i64>)>; CONFIG_COMMANDS],
-    observed_through: u64,
     output_boundary: Option<(i64, u32)>,
     gesture_ends: [bool; CONFIG_PARAMETERS],
-    callback_cut: u64,
     notification_sequence: u64,
     notification_blocked: [bool; CONFIG_PARAMETERS],
     notification_blocked_at: [u32; CONFIG_PARAMETERS],
-}
-struct Group {
-    sample: i64,
-    count: usize,
-    parameter_cursor: usize,
-    note_cursor: usize,
-    learned: Option<ConfigurationEdit>,
-    learned_ready: bool,
 }
 #[derive(Clone, Copy)]
 struct Notification {
@@ -52,10 +40,7 @@ impl<P: ClapPlugin> Wrapper<P> {
     pub(super) fn retire_configuration(&self) {
         let runtime = self.configuration.lock().take();
         if let Some(runtime) = runtime {
-            let unfinished = runtime.group.is_some()
-                || runtime.pending_learning.is_some()
-                || !runtime.commands.is_empty()
-                || runtime.observed_samples.iter().any(Option::is_some)
+            let unfinished = !runtime.commands.is_empty()
                 || self.owned_input.lock().as_ref().is_some_and(|input| input.get(0).is_some());
             // All callbacks have joined. Dropping these original owners is an
             // explicit disposal, with no guessed application or completion cut.
@@ -97,16 +82,11 @@ impl<P: ClapPlugin> Wrapper<P> {
             base,
             modulation: [0.0; CONFIG_PARAMETERS],
             applied_id: 0,
-            group: None,
             notifications: [None; 16],
             fault: false,
             reset_generation: 0,
-            pending_learning: None,
-            observed_samples: [None; CONFIG_COMMANDS],
-            observed_through: 0,
             output_boundary: None,
             gesture_ends: [false; CONFIG_PARAMETERS],
-            callback_cut: 0,
             notification_sequence: 0,
             notification_blocked: [false; CONFIG_PARAMETERS],
             notification_blocked_at: [0; CONFIG_PARAMETERS],
@@ -217,60 +197,27 @@ impl<P: ClapPlugin> Wrapper<P> {
         true
     }
 
+    /// Every command accepted before this callback, applied at its boundary.
+    /// There is no per-command observation sample: an edit that arrives while a
+    /// block is in flight is simply drained by the next one.
     fn drain_configuration_commands(
         &self,
         runtime: &mut Runtime,
         plugin: &mut P,
-        cut: u64,
         sample: i64,
     ) -> bool {
-        if !self.apply_configuration_cut(runtime, plugin, cut, sample) {
-            return false;
-        }
-        true
-    }
-
-    fn apply_configuration_cut(
-        &self,
-        runtime: &mut Runtime,
-        plugin: &mut P,
-        cut: u64,
-        _sample: i64,
-    ) -> bool {
-        while let Ok(&queued) = runtime.commands.peek() {
-            let command = runtime.mailbox.command(queued);
-            if command.id > cut {
-                break;
-            }
-            let index = command.id as usize % CONFIG_COMMANDS;
-            let Some((id, Some(sample))) = runtime.observed_samples[index] else {
-                runtime.fault = true;
-                plugin.clap_configuration_fault();
-                return false;
-            };
-            if id != command.id {
-                runtime.fault = true;
-                plugin.clap_configuration_fault();
-                return false;
-            }
+        while let Ok(&command) = runtime.commands.peek() {
             if !self.apply_configuration(runtime, plugin, command, sample, None) {
                 return false;
             }
             runtime.commands.pop().expect("peeked configuration command");
-            runtime.mailbox.retained(queued);
-            runtime.observed_samples[index] = None;
         }
         true
     }
 
     pub(super) fn reset_configuration_walk(&self) {
         if let Some(runtime) = self.configuration.lock().as_mut() {
-            runtime.group = None;
-            runtime.pending_learning = None;
             runtime.fault = false;
-            for (_, sample) in runtime.observed_samples.iter_mut().flatten() {
-                *sample = None;
-            }
         }
     }
 
@@ -278,38 +225,18 @@ impl<P: ClapPlugin> Wrapper<P> {
         &self,
         input: &mut input_adapter::Runtime,
         boundary: Option<(i64, u32)>,
-    ) -> Option<u64> {
+    ) {
         let mut guard = self.configuration.lock();
         let Some(runtime) = guard.as_mut() else {
-            return Some(0);
+            return;
         };
         let reset = runtime.mailbox.reset_generation.load(Ordering::Acquire);
         if reset != runtime.reset_generation {
             input.reset();
-            runtime.group = None;
-            runtime.pending_learning = None;
-            for (_, sample) in runtime.observed_samples.iter_mut().flatten() {
-                *sample = None;
-            }
             runtime.fault = false;
             runtime.reset_generation = reset;
         }
-        let cut = runtime.mailbox.accepted_command.load(Ordering::Acquire);
-        runtime.callback_cut = cut;
         runtime.output_boundary = boundary;
-        if cut > runtime.observed_through {
-            for id in runtime.observed_through + 1..=cut {
-                let cell = &mut runtime.observed_samples[id as usize % CONFIG_COMMANDS];
-                if cell.is_some() {
-                    runtime.fault = true;
-                    self.plugin.lock().clap_configuration_fault();
-                    return None;
-                }
-                *cell = Some((id, boundary.map(|b| b.0)));
-            }
-            runtime.observed_through = cut;
-        }
-        Some(cut)
     }
 
     pub(super) fn process_configuration(&self, boundary: ConfigurationBoundary) {
@@ -323,173 +250,74 @@ impl<P: ClapPlugin> Wrapper<P> {
         let reset = runtime.mailbox.reset_generation.load(Ordering::Acquire);
         if reset != runtime.reset_generation {
             input.reset();
-            runtime.group = None;
-            runtime.pending_learning = None;
-            for (_, sample) in runtime.observed_samples.iter_mut().flatten() {
-                *sample = None;
-            }
             runtime.fault = false;
             runtime.reset_generation = reset;
         }
-        for (_, sample) in runtime.observed_samples.iter_mut().flatten() {
-            if sample.is_none() {
-                *sample = Some(boundary.steady_time);
-            }
-        }
+        // THE configuration boundary. Everything reduced during the previous
+        // callback is adopted here, once, for every group this block starts.
         plugin.clap_configuration_begin(boundary);
-        if let Some((sample, edit)) = runtime.pending_learning {
-            if !self.apply_configuration(
-                runtime,
-                &mut plugin,
-                ConfigurationCommand { id: 0, origin: ConfigurationOrigin::Learning, edit },
-                sample,
-                None,
-            ) {
-                return;
-            }
-            runtime.pending_learning = None;
-        }
         if boundary.steady_time < 0 || runtime.fault {
             plugin.clap_configuration_fault();
             return;
         }
+        if !self.drain_configuration_commands(runtime, &mut plugin, boundary.steady_time) {
+            return;
+        }
         input.storage.bind_untimed(boundary.steady_time);
-        loop {
-            let Some(first) = input.get(0) else {
-                break;
-            };
-            if !self.drain_configuration_commands(
-                runtime,
-                &mut plugin,
-                first.command_cut,
-                first.command_sample.unwrap(),
-            ) {
-                return;
-            }
-            if runtime.group.is_none() {
-                let count = (0..input.len())
-                    .take_while(|&i| {
-                        input.get(i).is_some_and(|input| {
-                            input.sample == first.sample && input.batch == first.batch
-                        })
-                    })
-                    .count();
-                runtime.group = Some(Group {
-                    sample: first.sample.unwrap(),
-                    count,
-                    parameter_cursor: 0,
-                    note_cursor: 0,
-                    learned: None,
-                    learned_ready: false,
-                });
-            }
-            // Every same-sample parameter retains its original order. All apply
-            // before the cohort's notes, whose own lifecycle order is unchanged.
-            while runtime.group.as_ref().unwrap().parameter_cursor
-                < runtime.group.as_ref().unwrap().count
-            {
-                let group = runtime.group.as_ref().unwrap();
-                let input = input.get(group.parameter_cursor).unwrap();
-                if let InputValue::Parameter { id, value, modulation } = input.value {
-                    if let Some(index) = runtime.hashes.iter().position(|hash| *hash == Some(id)) {
-                        if !value.is_finite() {
-                            runtime.fault = true;
-                            plugin.clap_configuration_fault();
-                            return;
-                        }
-                        let mut edit = ConfigurationEdit::default();
-                        let mut offset = None;
-                        if modulation {
-                            offset = Some((index, value as f32));
+        // One walk, in input order, with each event's sample-precise timestamp
+        // preserved. Automation reduces where it arrives and becomes effective
+        // at the next boundary, exactly like a queued UI edit.
+        while let Some(event) = input.get(0) {
+            if let InputValue::Parameter { id, value, modulation } = event.value {
+                if let Some(index) = runtime.hashes.iter().position(|hash| *hash == Some(id)) {
+                    if !value.is_finite() {
+                        runtime.fault = true;
+                        plugin.clap_configuration_fault();
+                        return;
+                    }
+                    let mut edit = ConfigurationEdit::default();
+                    let mut offset = None;
+                    if modulation {
+                        offset = Some((index, value as f32));
+                    } else {
+                        edit.values[index] = Some(unsafe {
+                            self.param_by_hash[&id].preview_plain((value as f32).clamp(0.0, 1.0))
+                        });
+                    }
+                    let command = ConfigurationCommand {
+                        id: 0,
+                        origin: if event.flush {
+                            ConfigurationOrigin::Flush
                         } else {
-                            edit.values[index] = Some(unsafe {
-                                self.param_by_hash[&id]
-                                    .preview_plain((value as f32).clamp(0.0, 1.0))
-                            });
-                        }
-                        let command = ConfigurationCommand {
-                            id: 0,
-                            origin: if input.flush {
-                                ConfigurationOrigin::Flush
-                            } else {
-                                ConfigurationOrigin::Automation
-                            },
-                            edit,
-                        };
-                        if !self.apply_configuration(
-                            runtime,
-                            &mut plugin,
-                            command,
-                            input.sample.unwrap(),
-                            offset,
-                        ) {
-                            return;
-                        }
+                            ConfigurationOrigin::Automation
+                        },
+                        edit,
+                    };
+                    if !self.apply_configuration(
+                        runtime,
+                        &mut plugin,
+                        command,
+                        event.sample.unwrap(),
+                        offset,
+                    ) {
+                        return;
                     }
                 }
-                runtime.group.as_mut().unwrap().parameter_cursor += 1;
             }
-            while runtime.group.as_ref().unwrap().note_cursor
-                < runtime.group.as_ref().unwrap().count
-            {
-                let cursor = runtime.group.as_ref().unwrap().note_cursor;
-                plugin.clap_configuration_observe(input.get(cursor).unwrap());
-                runtime.group.as_mut().unwrap().note_cursor += 1;
-            }
-            let group = runtime.group.as_mut().unwrap();
-            if !group.learned_ready {
-                group.learned = plugin.clap_configuration_group_end(group.sample);
-                group.learned_ready = true;
-            }
-            if let Some(edit) = group.learned {
-                let sample = group.sample;
-                let command =
-                    ConfigurationCommand { id: 0, origin: ConfigurationOrigin::Learning, edit };
-                if !self.apply_configuration(runtime, &mut plugin, command, sample, None) {
-                    return;
-                }
-            }
-            let count = runtime.group.take().unwrap().count;
-            for _ in 0..count {
-                input.ack_configuration(P::CLAP_PERFORMANCE);
-            }
+            plugin.clap_configuration_observe(event);
+            input.ack_configuration(P::CLAP_PERFORMANCE);
         }
-        // A silent callback still adopts UI/restore commands. Untimed flush never
-        // invents sample zero, and nothing waits for a GUI/background acknowledgement.
-        let cut = runtime.callback_cut;
-        if self.drain_configuration_commands(runtime, &mut plugin, cut, boundary.steady_time) {
-            if let Some(edit) = plugin.clap_configuration_group_end(boundary.steady_time) {
-                if !self.apply_configuration(
-                    runtime,
-                    &mut plugin,
-                    ConfigurationCommand { id: 0, origin: ConfigurationOrigin::Learning, edit },
-                    boundary.steady_time,
-                    None,
-                ) {
-                    runtime.pending_learning = Some((boundary.steady_time, edit));
-                }
-            }
+        // Learning reads the whole block's evidence and lands at the next
+        // boundary with everything else.
+        if let Some(edit) = plugin.clap_configuration_group_end(boundary.steady_time) {
+            self.apply_configuration(
+                runtime,
+                &mut plugin,
+                ConfigurationCommand { id: 0, origin: ConfigurationOrigin::Learning, edit },
+                boundary.steady_time,
+                None,
+            );
         }
-    }
-
-    pub(super) fn publish_configuration_prefix(&self, start: i64, frames: u32) {
-        let input_guard = self.owned_input.lock();
-        let input = input_guard.as_ref().unwrap();
-        let guard = self.configuration.lock();
-        let Some(runtime) = guard.as_ref() else {
-            return;
-        };
-        let mut through = start.saturating_add(i64::from(frames));
-        if let Some(input) = input.get(0) {
-            through = through.min(input.sample.unwrap_or(start));
-        }
-        for (_, sample) in runtime.observed_samples.iter().flatten() {
-            through = through.min(sample.unwrap_or(start));
-        }
-        if let Some((sample, _)) = runtime.pending_learning {
-            through = through.min(sample);
-        }
-        self.plugin.lock().clap_configuration_prefix(through);
     }
 
     pub(super) fn configuration_main_thread(&self) {
