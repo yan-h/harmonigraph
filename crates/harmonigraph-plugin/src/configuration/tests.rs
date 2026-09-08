@@ -1220,13 +1220,11 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
     let before: Vec<_> = confirmed.rows().copied().collect();
     let start = std::time::Instant::now();
     nice_assert_no_alloc::assert_no_alloc(|| {
-        publisher.baseline(0, &baseline, 1.0, Route::default()).unwrap();
-        publisher.baseline(0, &baseline, 1.0, Route::default()).unwrap();
-        assert_eq!(
-            publisher.baseline(0, &baseline, 1.0, Route::default()),
-            Err(PublishError::BaselineBusy)
-        );
-        for _ in 2..PUBLICATION_RING {
+        for _ in 0..SNAPSHOT_SLOTS {
+            publisher.baseline(&baseline, 1.0, Route::default()).unwrap();
+        }
+        assert_eq!(publisher.baseline(&baseline, 1.0, Route::default()), Err(PublishError::Busy));
+        for _ in SNAPSHOT_SLOTS..PUBLICATION_RING - 1 {
             publisher
                 .note(
                     harmonigraph_core::NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 0.8).into(),
@@ -1251,10 +1249,10 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
     // Consume outside the audio guard, then exercise payload reuse under it.
     consumer.drain(|_, _, _| true);
     nice_assert_no_alloc::assert_no_alloc(|| {
-        publisher.baseline(0, &baseline, 3.0, Route::default()).unwrap()
+        publisher.baseline(&baseline, 3.0, Route::default()).unwrap()
     });
     consumer.drain(|_, _, _| true);
-    eprintln!("canonical guarded fill: 2 complete 64-voice payloads + 4094 notes + Busy/Lost = {duration:?}; no allocation/deallocation");
+    eprintln!("canonical guarded fill: {SNAPSHOT_SLOTS} complete 64-voice payloads + {} notes + Busy/Lost = {duration:?}; no allocation/deallocation", PUBLICATION_RING - 1 - SNAPSHOT_SLOTS);
 }
 
 #[test]
@@ -1290,17 +1288,17 @@ fn direct_publication_loss_recovers_64_exact_lifetimes_without_new_attacks() {
     writer.drain(&mut capture);
     assert!(writer.failed(), "a real lost publication durably fails this take");
     let mut tracker = harmonigraph_core::NoteTracker::default();
-    for record in writer.display_events() {
+    for record in capture.display_events() {
         record.apply(&mut tracker).unwrap();
     }
     writer.drain(&mut capture);
-    for record in writer.display_events() {
+    for record in capture.display_events() {
         record.apply(&mut tracker).unwrap();
     }
     assert!(!tracker.publication_gaps().is_empty());
     device.run(66 * 64, vec![], false);
     writer.drain(&mut capture);
-    let recovered = writer.display_events();
+    let recovered = capture.display_events();
     let frame = recovered
         .iter()
         .find_map(|record| match record {
@@ -1362,7 +1360,7 @@ fn display_only_loss_requests_one_factual_direct_repair_after_capacity_returns()
     );
     writer.drain(&mut capture);
     let mut tracker = harmonigraph_core::NoteTracker::default();
-    for record in writer.display_events() {
+    for record in capture.display_events() {
         record.apply(&mut tracker).unwrap();
     }
     assert!(!tracker.publication_gaps().is_empty());
@@ -1370,7 +1368,7 @@ fn display_only_loss_requests_one_factual_direct_repair_after_capacity_returns()
     writer.drain(&mut capture); // capacity has returned; emit one reporting hint
     device.run(67 * 64, vec![], false);
     writer.drain(&mut capture);
-    let recovered = writer.display_events();
+    let recovered = capture.display_events();
     let frames: Vec<_> = recovered
         .iter()
         .filter_map(|r| match r {
@@ -1388,7 +1386,7 @@ fn display_only_loss_requests_one_factual_direct_repair_after_capacity_returns()
     assert_eq!(tracker.held_count(), 1);
     device.run(68 * 64, vec![id_tuning(20, 0.987654321)], false);
     writer.drain(&mut capture);
-    let later = writer.display_events();
+    let later = capture.display_events();
     assert!(
         !later.iter().any(|r| matches!(r, CanonicalRecord::Baseline(_))),
         "no repeated repair after a successful copy"

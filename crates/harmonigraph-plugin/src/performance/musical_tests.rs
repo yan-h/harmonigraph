@@ -878,7 +878,7 @@ fn production_musical_normal_phrase_overrides_bends_and_keeps_old_configuration_
         expected.assignment, wrong.assignment
     );
     writer.drain(&mut capture);
-    let display = writer.display_events();
+    let display = capture.display_events();
     let mut live = harmonigraph_core::NoteTracker::new();
     for record in &display {
         record.apply(&mut live).unwrap();
@@ -1040,7 +1040,7 @@ fn production_musical_off_is_excluded_from_display_and_the_take() {
         phrase.idle();
     }
     writer.drain(&mut capture);
-    let display = writer.display_events();
+    let display = capture.display_events();
     let deltas = |source: u64| {
         display
             .iter()
@@ -1073,7 +1073,7 @@ fn production_musical_off_is_excluded_from_display_and_the_take() {
         phrase.idle();
     }
     writer.drain(&mut capture);
-    let after = writer.display_events();
+    let after = capture.display_events();
     for record in &after {
         record.apply(&mut live).unwrap();
     }

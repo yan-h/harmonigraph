@@ -161,6 +161,64 @@ mod tests {
         NoteRecord { source: 0, t, channel: 0, note, kind: NoteKind::Off }
     }
 
+    /// #712: the same clear-and-refresh has to stop a release the outage
+    /// swallowed from leaving a held visual for the rest of the render. The
+    /// snapshot after the gap says the key is not sounding, and the note is
+    /// drawn to the gap rather than to the end of the take.
+    #[test]
+    fn a_release_lost_to_an_outage_does_not_stay_held_for_the_rest_of_a_replay() {
+        use harmonigraph_core::canonical::*;
+        use harmonigraph_core::{NoteEvent, SourceId};
+        use harmonigraph_take::{CanonicalRecord, Record};
+        let source = SourceId::DIRECT;
+        let silent = SourceBaseline::new(
+            source,
+            1,
+            3.0,
+            0.0,
+            0,
+            true,
+            &[],
+            [ChannelBaseline::default(); 16],
+        )
+        .unwrap();
+        let mut text = ron::to_string(&Record::Header(Header::default())).unwrap();
+        for record in [
+            CanonicalRecord::from_event(CanonicalEvent::Note(
+                NoteEvent::on(1.0, source, 0, 60, 0.8).into(),
+            )),
+            // The Off for key 60 never reaches the file: it is inside the gap.
+            CanonicalRecord::from_event(CanonicalEvent::Gap(PublicationGap {
+                source: None,
+                time: 2.0,
+                through: 2.0,
+                first: 2,
+                last: 2,
+                reason: GapReason::PublicationFull,
+            })),
+            CanonicalRecord::from_event(CanonicalEvent::Baseline(&silent)),
+        ] {
+            text.push('\n');
+            text.push_str(&ron::to_string(&Record::Canonical(record)).unwrap());
+        }
+        let take = Take::parse(std::io::Cursor::new(text)).unwrap();
+        let mut replay = Replay::new(take);
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut now = 0.0;
+        while now < 10.0 {
+            replay.advance_to(&mut state, now);
+            now += 1.0 / 24.0;
+        }
+        assert_eq!(state.tracker.held_count(), 0, "no key is left sounding");
+        let note = state.tracker.roll().notes().next().unwrap();
+        assert_eq!((note.start, note.end, note.observed_until), (1.0, None, Some(2.0)));
+        assert!(
+            note.segments(10.0).all(|segment| segment.1 .0 <= 2.0),
+            "nothing is drawn past the last time the note was actually observed"
+        );
+        assert_eq!(state.tracker.roll().notes().count(), 1, "the snapshot adds no second note");
+    }
+
     #[test]
     fn accepted_off_after_gap_is_retained_without_a_held_baseline() {
         use harmonigraph_core::canonical::*;

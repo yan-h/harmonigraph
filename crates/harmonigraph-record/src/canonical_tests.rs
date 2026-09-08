@@ -84,12 +84,12 @@ fn delayed_history_and_baseline_keep_original_pass_and_both_wav_tails() {
     let empty =
         SourceBaseline::new(source, 1, 2.0, 0.0, 3, true, &[], [ChannelBaseline::default(); 16])
             .unwrap();
-    recorder.publish_baseline(1, &empty, 10.0, route).unwrap();
+    recorder.publish_baseline(&empty, 10.0, route).unwrap();
     // Duplicated transfer must not write an already completed lifetime twice.
     for event in events {
         recorder.publish_note(event, 10.0, route).unwrap();
     }
-    recorder.publish_baseline(1, &empty, 10.0, route).unwrap();
+    recorder.publish_baseline(&empty, 10.0, route).unwrap();
     recorder
         .publish_note(accepted(NoteEvent::on(2.5, source, 0, 60, 0.7), 4), 10.0, route)
         .unwrap();
@@ -144,7 +144,9 @@ fn real_publication_ring_loss_is_durable_after_the_last_callback() {
     let mut writer = testing::FileWriter::new(&capture, file.clone(), None);
     let address = RecordAddress { epoch: 1, pass: 1 };
     let route = publication::Route { address: Some(address), time_offset: 0.0 };
-    for i in 0..publication::PUBLICATION_RING {
+    // One short of the ring: the last cell is reserved so the gap below has
+    // somewhere to go without another callback, which is this test's subject.
+    for i in 0..publication::PUBLICATION_RING - 1 {
         recorder
             .publish_note(
                 NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into(),
@@ -153,6 +155,7 @@ fn real_publication_ring_loss_is_durable_after_the_last_callback() {
             )
             .unwrap();
     }
+    assert_eq!(recorder.publication_free(), 0, "the fixture must actually fill the lane");
     assert_eq!(
         recorder.publish_note(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(), 1.0, route),
         Err(publication::PublishError::Lost)
@@ -167,9 +170,9 @@ fn real_publication_ring_loss_is_durable_after_the_last_callback() {
     let take = harmonigraph_take::Take::read(&file).unwrap();
     assert!(!take.truncated);
     let incomplete = take.incomplete.unwrap();
-    assert_eq!((incomplete.first_publication, incomplete.last_publication), (4097, 4097));
+    assert_eq!((incomplete.first_publication, incomplete.last_publication), (4096, 4096));
     assert!(matches!(take.events.last(), Some(harmonigraph_take::CanonicalRecord::Gap(_))));
-    assert_eq!(take.notes().count(), publication::PUBLICATION_RING);
+    assert_eq!(take.notes().count(), publication::PUBLICATION_RING - 1);
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }
 
@@ -208,7 +211,6 @@ fn all_128_passes_need_source_closure_before_the_129th_file() {
         } else {
             assert!(harmonigraph_take::Take::read(&file).unwrap().incomplete.is_some());
             // Refusal terminates recording ownership, not display publication.
-            // Three successive uses of one two-slot bank prove reclamation.
             for id in 1..=3 {
                 let baseline = SourceBaseline::new(
                     SourceId::DIRECT,
@@ -225,7 +227,7 @@ fn all_128_passes_need_source_closure_before_the_129th_file() {
                     address: Some(RecordAddress { epoch: 1, pass: 129 }),
                     time_offset: 0.0,
                 };
-                recorder.publish_baseline(0, &baseline, 11.0, route).unwrap();
+                recorder.publish_baseline(&baseline, 11.0, route).unwrap();
                 recorder
                     .publish_note(
                         NoteEvent::on(11.0, SourceId::DIRECT, 0, 60, 0.8).into(),
@@ -234,7 +236,7 @@ fn all_128_passes_need_source_closure_before_the_129th_file() {
                     )
                     .unwrap();
                 writer.drain(&mut capture);
-                let displayed = writer.display_events();
+                let displayed = capture.display_events();
                 assert_eq!(displayed.len(), 2);
                 assert!(
                     matches!(&displayed[0], harmonigraph_take::CanonicalRecord::Baseline(frame) if frame.id == id)
@@ -293,7 +295,6 @@ fn real_worker_materializes_pending_start_before_accounting_publication_loss() {
             0.0,
             harmonigraph_core::configuration::ConfigReducer::default().resolved(),
         );
-        let bank_released = recorder.publication.bank_observer();
         for id in 1..=2 {
             let baseline = SourceBaseline::new(
                 SourceId::DIRECT,
@@ -308,14 +309,13 @@ fn real_worker_materializes_pending_start_before_accounting_publication_loss() {
             .unwrap();
             recorder
                 .publish_baseline(
-                    0,
                     &baseline,
                     1.0,
                     publication::Route { address: Some(address), time_offset: 0.0 },
                 )
                 .unwrap();
         }
-        for i in 0..publication::PUBLICATION_RING - 2 {
+        for i in 0..publication::PUBLICATION_RING - 3 {
             recorder
                 .publish_note(
                     NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into(),
@@ -358,7 +358,7 @@ fn real_worker_materializes_pending_start_before_accounting_publication_loss() {
         let take = harmonigraph_take::Take::read(worker_take(&directory)).unwrap();
         assert_eq!(
             take.notes().count(),
-            4094,
+            4093,
             "pending Start still owns the complete successful prefix"
         );
         assert_eq!(
@@ -368,17 +368,13 @@ fn real_worker_materializes_pending_start_before_accounting_publication_loss() {
                 .count(),
             2
         );
-        assert!(
-            bank_released(),
-            "both primary baseline payloads returned after disk/display copies"
-        );
         assert_eq!(
             take.configurations.len(),
             1,
             "ordinary lane also waits for Start after failure"
         );
         let loss = take.incomplete.unwrap();
-        assert_eq!((loss.first_publication, loss.last_publication), (4097, 4097));
+        assert_eq!((loss.first_publication, loss.last_publication), (4096, 4096));
         assert!(matches!(take.events.last(), Some(harmonigraph_take::CanonicalRecord::Gap(_))));
         std::fs::remove_dir_all(directory).unwrap();
     }

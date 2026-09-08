@@ -2345,8 +2345,12 @@ fn host_rewind_keeps_old_routes_until_sealed_unmapped_termination_and_rejects_ol
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+/// #712's acceptance behaviour for a lost report: the display drops the held
+/// notes the gap covers and comes back from a snapshot of what is sounding
+/// NOW. Three sources, one of them Off, and only the take lane is drained, so
+/// the display lane is the one that overflows and the file stays complete.
 #[test]
-fn display_resync_arriving_during_hub_publication_repairs_every_source_without_poisoning_take() {
+fn a_lost_report_clears_held_notes_and_refreshes_every_source_from_a_snapshot() {
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
@@ -2383,37 +2387,29 @@ fn display_resync_arriving_during_hub_publication_repairs_every_source_without_p
         writer.drain(&mut capture);
     }
     let mut tracker = harmonigraph_core::NoteTracker::default();
-    for record in writer.display_events() {
-        record.apply(&mut tracker).unwrap();
-    }
+    let mut held_at_gap = None;
+    let mut gaps = 0;
+    capture.display_into(&mut tracker, |event, tracker| {
+        if let harmonigraph_core::canonical::CanonicalEvent::Gap(gap) = event {
+            assert_eq!(gap.source, None, "an overflow covers the whole lane");
+            held_at_gap = Some(tracker.held_count());
+            gaps += 1;
+        }
+    });
+    assert_eq!(gaps, 1, "the fixture must actually overflow the display lane");
+    assert_eq!(held_at_gap, Some(2), "the fixture must reach the gap holding notes");
+    assert_eq!(tracker.held_count(), 0, "the gap clears the stale held set");
     assert!(!tracker.publication_gaps().is_empty());
-    assert!(!writer.failed());
+    assert!(!writer.failed(), "a display outage cannot poison the take");
     a.run(68 * 64, vec![], None);
     b.run(68 * 64, vec![], None);
-    let shared = hub.shared();
-    shared.before_direct_repair.enabled.store(true, Ordering::Release);
-    std::thread::scope(|scope| {
-        struct Resume<'a>(&'a setup::TestPause);
-        impl Drop for Resume<'_> {
-            fn drop(&mut self) {
-                self.0.enabled.store(false, Ordering::Release);
-            }
-        }
-        let _resume = Resume(&shared.before_direct_repair);
-        let address = (&hub as *const Device) as usize;
-        let callback =
-            scope.spawn(move || unsafe { &*(address as *const Device) }.run(68 * 64, vec![], None));
-        wait_until(|| shared.before_direct_repair.entered.load(Ordering::Acquire));
-        writer.drain(&mut capture); // actual fanout requests all uncertain sources now that display has capacity
-        shared.before_direct_repair.enabled.store(false, Ordering::Release);
-        callback.join().unwrap();
-    });
+    hub.run(68 * 64, vec![], None);
     writer.drain(&mut capture);
     a.run(69 * 64, vec![], None);
     b.run(69 * 64, vec![], None);
     hub.run(69 * 64, vec![], None);
     writer.drain(&mut capture);
-    let repaired = writer.display_events();
+    let repaired = capture.display_events();
     let frames: Vec<_> = repaired
         .iter()
         .filter_map(|record| match record {
@@ -2424,7 +2420,7 @@ fn display_resync_arriving_during_hub_publication_repairs_every_source_without_p
     assert_eq!(
         frames.len(),
         3,
-        "a hint arriving after Hub dispatch must remain pending for all three sources"
+        "one lost report owes every source a snapshot, not only the row it hit"
     );
     assert!(frames.iter().all(|frame| frame.voices().len() == 1));
     assert_eq!(frames.iter().filter(|frame| frame.participating).count(), 2);
@@ -2435,6 +2431,8 @@ fn display_resync_arriving_during_hub_publication_repairs_every_source_without_p
             .collect::<std::collections::BTreeSet<_>>(),
         [10, 20, 30].into_iter().collect()
     );
+    // A snapshot is not a re-attack: no source publishes an On to get its
+    // voice back, so nothing reconstructs the attack the gap swallowed.
     assert!(!repaired.iter().any(|record| matches!(record, CanonicalRecord::Delta(delta) if matches!(delta.event.kind, NoteKind::On { .. }))));
     for record in repaired {
         record.apply(&mut tracker).unwrap();
@@ -2443,6 +2441,10 @@ fn display_resync_arriving_during_hub_publication_repairs_every_source_without_p
         tracker.held_count(),
         2,
         "Off retains its truthful baseline but is excluded from participating context"
+    );
+    assert!(
+        tracker.roll().notes().all(|note| note.start < 64.0 / 48000.0 * 2.0),
+        "the refreshed notes keep the onset they actually had"
     );
     assert!(!writer.failed());
     capture.stop();

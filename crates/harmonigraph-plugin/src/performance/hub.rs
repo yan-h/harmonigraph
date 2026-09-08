@@ -1119,7 +1119,10 @@ impl Hub {
                 through = through.min(coverage.through);
             }
         }
-        if recorder.take_resync_request() {
+        // One lost report clears the display's whole held set, so every source
+        // the Hub knows about owes a fresh snapshot — not just the row whose
+        // report did not fit.
+        if recorder.take_display_outage() {
             owner.direct.recovery = true;
             for row in self.rows.iter_mut().filter(|r| r.lease.is_some()) {
                 row.repair = true;
@@ -1328,8 +1331,6 @@ impl Hub {
         }
         // DIRECT repair is shared with the existing rich owner, after all of its
         // available earlier history has been merged and originally routed.
-        #[cfg(test)]
-        self.shared.before_direct_repair.reach();
         if owner.direct.pending().is_none() {
             owner.publish_direct_repair(recorder, observation);
         }
@@ -1431,7 +1432,7 @@ impl Hub {
             let timing =
                 EventTiming { clock, input: sample, planned: None, sample, sample_rate: self.rate };
             let route = owner.recording_route(timing, time).unwrap_or_default();
-            if recorder.publish_baseline(index + 1, &frame, observation, route).is_ok() {
+            if recorder.publish_baseline(&frame, observation, route).is_ok() {
                 row.baseline_id = id;
                 row.repair = false;
             }

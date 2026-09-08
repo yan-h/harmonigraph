@@ -281,6 +281,15 @@ pub struct Recorder {
     _writer_lifetime: Option<mpsc::Sender<Command>>,
     fence: Arc<RecordFence>,
     publication: publication::Publisher,
+    /// The display's own copy of every canonical report, published from here
+    /// rather than forwarded by the writer thread. #712 §4: the display must
+    /// not inherit the writer's idle sleep, and the two lanes fail apart —
+    /// a full display lane leaves the take intact and vice versa.
+    display: publication::Publisher,
+    /// A display gap covers every source, not the one report that overflowed:
+    /// the consumer clears its whole held set. So one lost report owes every
+    /// source a fresh snapshot, and this latch is how the Hub learns that.
+    display_outage: bool,
     record_epoch: u64,
     record_pass: u32,
     closed_epoch: u64,
@@ -330,20 +339,27 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    pub fn take_resync_request(&self) -> bool {
-        self.publication.take_resync_request()
-    }
+    /// What the tighter of the two lanes can still take, so one gate covers
+    /// publishing to both.
     pub fn publication_free(&self) -> usize {
-        self.publication.free()
+        self.publication.free().min(self.display.free())
     }
-    /// Consume a real publication serial and retain the loss independently of
-    /// the queue so an absent drainer cannot hide this missing historical cut.
+    /// Consume a real publication serial on both lanes. Each queues its own
+    /// gap immediately, so an absent drainer cannot hide this missing cut.
     pub fn publication_lost(&mut self, time: f64, route: publication::Route) {
         self.publication.discarded(time, route);
+        self.display.discarded(time, publication::Route::default());
+        self.display_outage = true;
         self.publication_result(Err(publication::PublishError::Lost), route);
+    }
+    /// Read and clear the outage latch. The caller owes every source it knows
+    /// about a fresh snapshot, because the gap cleared all of them.
+    pub fn take_display_outage(&mut self) -> bool {
+        std::mem::take(&mut self.display_outage)
     }
     pub fn publish_clock(&self, time: f64) {
         self.publication.observe_clock(time);
+        self.display.observe_clock(time);
     }
     pub fn enable_canonical(&self) {
         self.fence.canonical_enabled.store(true, Ordering::Release);
@@ -356,20 +372,26 @@ impl Recorder {
         route: publication::Route,
     ) -> Result<(), publication::PublishError> {
         let result = self.publication.note(note, observation_time, route);
+        // Only the take lane's own outcome accounts the take. A display lane
+        // that overflowed still returns Err, so the caller arms a snapshot,
+        // but it must not mark the file incomplete.
         self.publication_result(result, route);
-        result
+        let display = self.display.note(note, observation_time, publication::Route::default());
+        self.display_outage |= display == Err(publication::PublishError::Lost);
+        result.and(display)
     }
 
     pub fn publish_baseline(
         &mut self,
-        row: usize,
         baseline: &harmonigraph_core::canonical::SourceBaseline,
         observation_time: f64,
         route: publication::Route,
     ) -> Result<(), publication::PublishError> {
-        let result = self.publication.baseline(row, baseline, observation_time, route);
+        let result = self.publication.baseline(baseline, observation_time, route);
         self.publication_result(result, route);
-        result
+        let display =
+            self.display.baseline(baseline, observation_time, publication::Route::default());
+        result.and(display)
     }
 
     fn publication_result(
@@ -1037,7 +1059,7 @@ fn take_dir() -> std::path::PathBuf {
 pub fn channel() -> (Recorder, Control) {
     let (producer, mut consumer) = rtrb::RingBuffer::new(TAKE_RING_CAPACITY);
     let (publication, mut publications) = publication::channel();
-    let (mut display, display_consumer) = publication::channel();
+    let (display, display_consumer) = publication::channel();
     let (audio_producer, mut audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
     let (commands, orders) = mpsc::channel::<Command>();
     let armed = Arc::new(AtomicBool::new(false));
@@ -1129,14 +1151,13 @@ pub fn channel() -> (Recorder, Control) {
                 &mut consumer, Some(&mut audio_consumer), &mut open,
                 &thread_status, Some(&thread_fence), &failure,
                 |open| {
-                    fanout.drain(&mut publications, Some(&mut display), open, &thread_fence, &failure);
+                    fanout.drain(&mut publications, open, &thread_fence, &failure);
                 },
             );
             let had_audio = !thread_fence.enabled.load(Ordering::Acquire)
                 && drain_audio(&mut audio_consumer, &mut open);
-            let had_publications = fanout.drain(
-                &mut publications, Some(&mut display), &mut open, &thread_fence, &failure,
-            ) != 0;
+            let had_publications =
+                fanout.drain(&mut publications, &mut open, &thread_fence, &failure) != 0;
             #[cfg(feature = "test-support")]
             if pending_stop.is_some() { thread_fence.worker_after_stop.reach(); }
 
@@ -1218,6 +1239,8 @@ pub fn channel() -> (Recorder, Control) {
         Recorder {
             _writer_lifetime: Some(commands.clone()),
             publication,
+            display,
+            display_outage: false,
             fence: fence.clone(),
             record_epoch: 0,
             record_pass: 1,
@@ -1299,6 +1322,9 @@ pub mod testing {
 
     pub struct Capture {
         publications: publication::Consumer,
+        /// The editor's end of the second lane, so a test sees exactly what
+        /// the display would without standing a writer thread up.
+        displayed: publication::Consumer,
         fence: Arc<RecordFence>,
         _records: rtrb::Consumer<Entry>,
         audio: rtrb::Consumer<f32>,
@@ -1307,10 +1333,33 @@ pub mod testing {
     }
 
     impl Capture {
-        pub fn publication_loss(
-            &self,
-        ) -> Option<(harmonigraph_core::canonical::PublicationGap, publication::Route)> {
-            self.publications.test_loss()
+        pub fn display_events(&mut self) -> Vec<harmonigraph_take::CanonicalRecord> {
+            let mut events = Vec::new();
+            self.displayed.drain(|delivery, _, _| {
+                if let publication::Delivery::Event(event) = delivery {
+                    events.push(harmonigraph_take::CanonicalRecord::from_event(event));
+                }
+                true
+            });
+            events
+        }
+        /// Feed the display lane into a real tracker, exactly as the editor
+        /// does, and report what each delivery left behind.
+        pub fn display_into(
+            &mut self,
+            tracker: &mut harmonigraph_core::NoteTracker,
+            mut watch: impl FnMut(
+                &harmonigraph_core::canonical::CanonicalEvent<'_>,
+                &harmonigraph_core::NoteTracker,
+            ),
+        ) -> usize {
+            self.displayed.drain(|delivery, _, _| {
+                if let publication::Delivery::Event(event) = delivery {
+                    watch(&event, tracker);
+                    tracker.handle_canonical(event).unwrap();
+                }
+                true
+            })
         }
         pub fn pause_boundary(&self, enabled: bool) {
             self.fence.boundary_pause.enabled.store(enabled, Ordering::Release);
@@ -1373,8 +1422,6 @@ pub mod testing {
         pub finished: Option<std::path::PathBuf>,
         fanout: CanonicalFanout,
         failure: FailureAccount,
-        display: publication::Publisher,
-        displayed: publication::Consumer,
     }
     impl FileWriter {
         pub fn retained_passes(&self) -> usize {
@@ -1385,7 +1432,6 @@ pub mod testing {
         }
         pub fn new(capture: &Capture, path: std::path::PathBuf, spec: Option<AudioSpec>) -> Self {
             let status = Mutex::new(String::new());
-            let (display, displayed) = publication::channel();
             let mut open =
                 Open::create(harmonigraph_take::Header::default(), path, 1, spec, &status).unwrap();
             open.epoch = capture.fence.epoch();
@@ -1398,8 +1444,6 @@ pub mod testing {
                 finished: None,
                 fanout: CanonicalFanout::default(),
                 failure: FailureAccount::default(),
-                display,
-                displayed,
             }
         }
         pub fn stop(&mut self) {
@@ -1414,18 +1458,11 @@ pub mod testing {
                 Some(&self.fence),
                 &self.failure,
                 |open| {
-                    self.fanout.drain(
-                        &mut capture.publications,
-                        Some(&mut self.display),
-                        open,
-                        &self.fence,
-                        &self.failure,
-                    );
+                    self.fanout.drain(&mut capture.publications, open, &self.fence, &self.failure);
                 },
             );
             self.fanout.drain(
                 &mut capture.publications,
-                Some(&mut self.display),
                 &mut self.open,
                 &self.fence,
                 &self.failure,
@@ -1451,16 +1488,6 @@ pub mod testing {
                     .or_else(|| self.finished.take());
             }
         }
-        pub fn display_events(&mut self) -> Vec<harmonigraph_take::CanonicalRecord> {
-            let mut events = Vec::new();
-            self.displayed.drain(|delivery, _, _| {
-                if let publication::Delivery::Event(event) = delivery {
-                    events.push(harmonigraph_take::CanonicalRecord::from_event(event));
-                }
-                true
-            });
-            events
-        }
         pub fn failed(&self) -> bool {
             self.fence.failed.load(Ordering::Acquire)
         }
@@ -1469,6 +1496,7 @@ pub mod testing {
     pub fn channel() -> (Recorder, Capture) {
         let (producer, records) = rtrb::RingBuffer::new(TAKE_RING_CAPACITY);
         let (publication, publications) = publication::channel();
+        let (display, displayed) = publication::channel();
         let (audio, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
         let armed = Arc::new(AtomicBool::new(false));
         let with_audio = Arc::new(AtomicBool::new(false));
@@ -1480,6 +1508,8 @@ pub mod testing {
         let recorder = Recorder {
             _writer_lifetime: None,
             publication,
+            display,
+            display_outage: false,
             fence: fence.clone(),
             record_epoch: 0,
             record_pass: 1,
@@ -1504,6 +1534,7 @@ pub mod testing {
         let capture = Capture {
             fence,
             publications,
+            displayed,
             _records: records,
             audio: audio_consumer,
             armed,
@@ -1544,30 +1575,27 @@ impl FailureAccount {
     }
 }
 
+/// The take's half of publication. The display has its own lane straight off
+/// the audio thread (#712 §4), so nothing here forwards, repairs or requests
+/// anything on its behalf.
 #[derive(Default)]
 struct CanonicalFanout {
     waiting_file: bool,
     /// Non-RT deduplication only. These cuts authorize no musical reclamation.
     cursors: std::collections::BTreeMap<SourceId, (u64, u64, u64)>,
-    repair_needed: std::collections::BTreeSet<SourceId>,
-    repair_requested: std::collections::BTreeSet<SourceId>,
 }
 
 impl CanonicalFanout {
     fn drain(
         &mut self,
         publications: &mut publication::Consumer,
-        mut display: Option<&mut publication::Publisher>,
         open: &mut Option<Open>,
         fence: &RecordFence,
         failure: &FailureAccount,
     ) -> usize {
         use harmonigraph_core::canonical::CanonicalEvent;
         self.waiting_file = false;
-        if let (Some(clock), Some(display)) = (publications.clock(), display.as_deref_mut()) {
-            display.observe_clock(clock);
-        }
-        let drained = publications.drain(|delivery, observation_time, route| {
+        publications.drain(|delivery, _, route| {
             // A record can reach this lane before its independently queued
             // Start/NewPass control has drained. Retain its whole payload.
             let address = match delivery {
@@ -1650,8 +1678,6 @@ impl CanonicalFanout {
                         }
                         _ => {}
                     }
-                    // Disk serialization happens while the primary payload is
-                    // Reading. The display gets its OWN complete payload copy.
                     let mut record = harmonigraph_take::CanonicalRecord::from_event(event);
                     if let Some(address) = route.address.filter(|a| !failure.contains(a.epoch)) {
                         record.translate(route.time_offset);
@@ -1682,64 +1708,10 @@ impl CanonicalFanout {
                             fence.fail();
                         }
                     }
-                    if let Some(display) = display.as_deref_mut() {
-                        let result = match event {
-                            CanonicalEvent::Note(delta) => {
-                                display.note(delta, observation_time, publication::Route::default())
-                            }
-                            CanonicalEvent::Baseline(baseline) => {
-                                // Fanout has one serialized producer. Any free
-                                // publication pair can carry a complete frame;
-                                // these slots are not source musical leases.
-                                let mut result = Err(publication::PublishError::BaselineBusy);
-                                for row in 0..publication::SOURCE_ROWS {
-                                    result = display.baseline(
-                                        row,
-                                        baseline,
-                                        observation_time,
-                                        publication::Route::default(),
-                                    );
-                                    if result != Err(publication::PublishError::BaselineBusy) {
-                                        break;
-                                    }
-                                }
-                                result
-                            }
-                            CanonicalEvent::Gap(gap) => {
-                                display.gap(gap, observation_time, publication::Route::default())
-                            }
-                        };
-                        if result == Err(publication::PublishError::BaselineBusy) {
-                            display.discarded(event.time(), publication::Route::default());
-                        }
-                        if let CanonicalEvent::Baseline(frame) = event {
-                            self.repair_requested.remove(&frame.source);
-                            if result.is_ok() {
-                                self.repair_needed.remove(&frame.source);
-                            }
-                        }
-                        if result.is_err() {
-                            // Publication overflow emits a global gap, even
-                            // when the item that could not be copied belonged
-                            // to one source. Every previously observed source
-                            // therefore needs its own successful repair.
-                            self.repair_needed.extend(self.cursors.keys().copied());
-                        }
-                    }
                 }
             }
             true
-        });
-        // Coalesce an outage until the display has room again. Requesting a new
-        // baseline for every failed copy would fill the primary ring with repair
-        // traffic while the display is still stalled. This never delays music.
-        if !self.repair_needed.is_subset(&self.repair_requested)
-            && display.as_ref().is_some_and(|p| p.free() >= publication::PUBLICATION_RING / 2)
-        {
-            publications.request_resync();
-            self.repair_requested.extend(self.repair_needed.iter().copied());
-        }
-        drained
+        })
     }
 }
 
@@ -2739,6 +2711,8 @@ mod tests {
                 rec: Recorder {
                     _writer_lifetime: None,
                     publication: publication::channel().0,
+                    display: publication::channel().0,
+                    display_outage: false,
                     fence: Arc::new(RecordFence::default()),
                     record_epoch: 0,
                     record_pass: 1,
@@ -3884,7 +3858,7 @@ mod tests {
         writer.drain(&mut capture);
         assert_eq!(writer.current_pass(), Some(1), "empty lanes cannot close a held failed take");
         let route = publication::Route { address: Some(address), time_offset: 0.0 };
-        for i in 0..publication::PUBLICATION_RING {
+        for i in 0..publication::PUBLICATION_RING - 1 {
             let time = i as f64 / 48000.0;
             let event = if i % 2 == 0 {
                 harmonigraph_core::NoteEvent::on(time, SourceId::DIRECT, 0, 60, 0.8)
@@ -3913,9 +3887,9 @@ mod tests {
                 .iter()
                 .filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(_)))
                 .count(),
-            publication::PUBLICATION_RING
+            publication::PUBLICATION_RING - 1
         );
-        assert!(take.events.iter().any(|record| matches!(record, harmonigraph_take::CanonicalRecord::Gap(gap) if gap.first == 4097 && gap.last == 4097)));
+        assert!(take.events.iter().any(|record| matches!(record, harmonigraph_take::CanonicalRecord::Gap(gap) if gap.first == 4096 && gap.last == 4096)));
         std::fs::remove_dir_all(directory).unwrap();
     }
 

@@ -378,8 +378,8 @@ impl Owner {
         recorder: &mut harmonigraph_record::Recorder,
         observation_time: f64,
     ) {
-        // The Hub is the sole dispatcher of aggregation resync requests. A
-        // later hint must remain pending for its next all-source collection.
+        // A loss here only arms DIRECT's own snapshot. The Hub arms every
+        // other source from the same outage latch, once, in `publish_output`.
         for _ in 0..crate::performance::direct::OUTPUT_WINDOW {
             let Some(delta) = self.direct.pending() else {
                 break;
@@ -453,12 +453,12 @@ impl Owner {
         ) else {
             return;
         };
-        match recorder.publish_baseline(0, &frame, observation_time, route) {
+        match recorder.publish_baseline(&frame, observation_time, route) {
             Ok(()) => {
                 self.direct.baseline_id = id;
                 self.direct.recovery = false;
             }
-            Err(PublishError::BaselineBusy | PublishError::Lost) => {}
+            Err(PublishError::Busy | PublishError::Lost) => {}
             Err(PublishError::Invalid) => self.fault(),
         }
     }

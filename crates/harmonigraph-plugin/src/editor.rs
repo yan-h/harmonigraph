@@ -1330,7 +1330,7 @@ mod tests {
         )
         .unwrap();
         producer.observe_clock(12.0);
-        producer.baseline(0, &baseline, 12.0, Default::default()).unwrap();
+        producer.baseline(&baseline, 12.0, Default::default()).unwrap();
         shared.drain_into_tracker(22.2);
         let note = shared.ui.tracker.roll().notes().find(|n| n.source == SourceId::DIRECT).unwrap();
         assert_eq!(note.start, 12.0);
@@ -1383,7 +1383,7 @@ mod tests {
             [ChannelBaseline::default(); 16],
         )
         .unwrap();
-        producer.baseline(3, &resumed, 12.0, Default::default()).unwrap();
+        producer.baseline(&resumed, 12.0, Default::default()).unwrap();
         shared.drain_into_tracker(22.3);
         let voice = shared.ui.tracker.voices().find(|v| v.source == SourceId(3)).unwrap();
         let note = shared.ui.tracker.roll().notes().find(|v| v.source == SourceId(3)).unwrap();
