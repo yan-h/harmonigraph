@@ -100,7 +100,8 @@ pub(super) const ROW_FIELDS: &[&str] = &[
     "applied",
     "output_queued",
     "input_queued",
-    "baseline_cut",
+    // Bit 0 the take lane owes this row a snapshot, bit 1 the display lane.
+    "repair_lanes",
     "held",
     "membership",
     "input_membership",

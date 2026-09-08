@@ -286,10 +286,12 @@ pub struct Recorder {
     /// not inherit the writer's idle sleep, and the two lanes fail apart —
     /// a full display lane leaves the take intact and vice versa.
     display: publication::Publisher,
-    /// A display gap covers every source, not the one report that overflowed:
-    /// the consumer clears its whole held set. So one lost report owes every
-    /// source a fresh snapshot, and this latch is how the Hub learns that.
-    display_outage: bool,
+    /// A gap covers every source, not the one report that overflowed: the
+    /// consumer clears its whole held set. So one lost report owes every
+    /// source a fresh snapshot ON THE LANE THAT LOST IT, and these latches are
+    /// how the Hub learns that. Per lane, because the other lane lost nothing
+    /// and its consumer is still holding a set that is correct.
+    outage: publication::Lanes<bool>,
     record_epoch: u64,
     record_pass: u32,
     closed_epoch: u64,
@@ -339,23 +341,26 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// What the tighter of the two lanes can still take, so one gate covers
-    /// publishing to both.
-    pub fn publication_free(&self) -> usize {
-        self.publication.free().min(self.display.free())
+    /// What EACH lane can still take. There is deliberately no combined
+    /// number: a full display ring must not gate a snapshot an otherwise
+    /// healthy writer is waiting for, and the minimum of the two did exactly
+    /// that (#712).
+    pub fn publication_free(&self) -> publication::Lanes<usize> {
+        publication::Lanes { take: self.publication.free(), display: self.display.free() }
     }
     /// Consume a real publication serial on both lanes. Each queues its own
     /// gap immediately, so an absent drainer cannot hide this missing cut.
     pub fn publication_lost(&mut self, time: f64, route: publication::Route) {
         self.publication.discarded(time, route);
         self.display.discarded(time, publication::Route::default());
-        self.display_outage = true;
+        self.outage = publication::Lanes::both(true);
         self.publication_result(Err(publication::PublishError::Lost), route);
     }
-    /// Read and clear the outage latch. The caller owes every source it knows
-    /// about a fresh snapshot, because the gap cleared all of them.
-    pub fn take_display_outage(&mut self) -> bool {
-        std::mem::take(&mut self.display_outage)
+    /// Read and clear the outage latches. A lane that reports one owes every
+    /// source the caller knows about a fresh snapshot on that lane, because
+    /// its gap cleared all of them there.
+    pub fn take_publication_outage(&mut self) -> publication::Lanes<bool> {
+        std::mem::take(&mut self.outage)
     }
     pub fn publish_clock(&self, time: f64) {
         self.publication.observe_clock(time);
@@ -365,44 +370,75 @@ impl Recorder {
         self.fence.canonical_enabled.store(true, Ordering::Release);
     }
 
+    /// The same delta on both lanes, with an outcome for each. There is no
+    /// combined `Result`: a lane that lost the report owes a snapshot on that
+    /// lane alone, and the caller has to say which.
     pub fn publish_note(
         &mut self,
         note: harmonigraph_core::canonical::NoteDelta,
         route: publication::Route,
-    ) -> Result<(), publication::PublishError> {
-        let result = self.publication.note(note, route);
+    ) -> publication::Lanes<Result<(), publication::PublishError>> {
+        let take = self.publication.note(note, route);
         // Only the take lane's own outcome accounts the take. A display lane
-        // that overflowed still returns Err, so the caller arms a snapshot,
-        // but it must not mark the file incomplete.
-        self.publication_result(result, route);
+        // that overflowed still returns Err on its own half, so the caller
+        // arms a snapshot there, but it must not touch the file.
+        self.publication_result(take, route);
         let display = self.display.note(note, publication::Route::default());
-        self.display_outage |= display == Err(publication::PublishError::Lost);
-        result.and(display)
+        self.outage.take |= take == Err(publication::PublishError::Lost);
+        self.outage.display |= display == Err(publication::PublishError::Lost);
+        publication::Lanes { take, display }
     }
 
+    /// One lane at a time, because a snapshot carries an identity and each
+    /// lane's consumer deduplicates on it. Publishing the same `id` to both
+    /// and advancing the cursor only when both accepted left the lane that DID
+    /// accept rejecting the retry as a duplicate, with the source's voices
+    /// missing for good (#712).
     pub fn publish_baseline(
         &mut self,
+        lane: publication::Lane,
         baseline: &harmonigraph_core::canonical::SourceBaseline,
         route: publication::Route,
     ) -> Result<(), publication::PublishError> {
-        let result = self.publication.baseline(baseline, route);
-        self.publication_result(result, route);
-        let display = self.display.baseline(baseline, publication::Route::default());
-        result.and(display)
+        match lane {
+            publication::Lane::Take => {
+                let result = self.publication.baseline(baseline, route);
+                self.publication_result(result, route);
+                result
+            }
+            // The display's copy addresses no file, so it carries no route.
+            publication::Lane::Display => {
+                self.display.baseline(baseline, publication::Route::default())
+            }
+        }
     }
 
+    /// What a take-lane publication outcome costs the file.
+    ///
+    /// A hole in the note history is NOT a recording failure (#712): the take
+    /// keeps capturing, finalises normally and exports with a warning, and the
+    /// gap the lane queued on its reserved cell is what carries that warning
+    /// into the file as an `IncompleteRecord`. Refusal is left to failures
+    /// that are actually fatal to the recording — audio, ownership and I/O,
+    /// which reach the fence through [`Recorder::fail_configuration`] and the
+    /// writer's own paths — plus `Invalid` here, which is the one publication
+    /// outcome with NO gap to describe it and so the one that would otherwise
+    /// leave a silent hole.
     fn publication_result(
         &self,
         result: Result<(), publication::PublishError>,
         route: publication::Route,
     ) {
-        if matches!(
-            result,
-            Err(publication::PublishError::Lost | publication::PublishError::Invalid)
-        ) {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-            if route.address.is_some() || self.fence.finishing.load(Ordering::Acquire) {
-                self.fence.fail();
+        match result {
+            Ok(()) | Err(publication::PublishError::Busy) => {}
+            Err(publication::PublishError::Lost) => {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(publication::PublishError::Invalid) => {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+                if route.address.is_some() || self.fence.finishing.load(Ordering::Acquire) {
+                    self.fence.fail();
+                }
             }
         }
     }
@@ -1237,7 +1273,7 @@ pub fn channel() -> (Recorder, Control) {
             _writer_lifetime: Some(commands.clone()),
             publication,
             display,
-            display_outage: false,
+            outage: publication::Lanes::default(),
             fence: fence.clone(),
             record_epoch: 0,
             record_pass: 1,
@@ -1506,7 +1542,7 @@ pub mod testing {
             _writer_lifetime: None,
             publication,
             display,
-            display_outage: false,
+            outage: publication::Lanes::default(),
             fence: fence.clone(),
             record_epoch: 0,
             record_pass: 1,
@@ -1600,13 +1636,13 @@ impl CanonicalFanout {
                 publication::Delivery::EpochComplete(epoch) => {
                     Some(RecordAddress { epoch, pass: 0 })
                 }
-                publication::Delivery::Event(CanonicalEvent::Gap(_))
-                    if route.address.is_none()
-                        && fence.failed.load(Ordering::Acquire)
-                        && fence.epoch() != 0 =>
-                {
-                    Some(RecordAddress { epoch: fence.epoch(), pass: 0 })
-                }
+                // An unaddressed gap deliberately resolves to nothing and so
+                // never waits for a file. It names no pass because its outage
+                // spanned more than one, or because the caller could not route
+                // it at all; the marker below still lands on whatever file is
+                // open, which is the whole still-owned recording. Waiting
+                // instead would stall the lane behind a file that may never
+                // open, and a gap no longer fails the fence to unblock itself.
                 publication::Delivery::Event(_) => route.address,
             };
             if let Some(address) = address {
@@ -1691,18 +1727,19 @@ impl CanonicalFanout {
                             fence.fail();
                         }
                     }
+                    // #712: missing note history marks the recording and lets
+                    // the export warn. It does not fail the fence, so the take
+                    // finalises, `last_take` moves on and Stop-and-render still
+                    // reaches the renderer that was made permissive for exactly
+                    // this file. Audio, ownership and I/O failures are untouched
+                    // and still refuse.
                     if let CanonicalEvent::Gap(gap) = event {
-                        if route.address.is_some() || fence.failed.load(Ordering::Acquire) {
-                            if let Some(current) = open.as_mut() {
-                                let _ =
-                                    current.mark_incomplete(harmonigraph_take::IncompleteRecord {
-                                        first_publication: gap.first,
-                                        last_publication: gap.last,
-                                        reason: harmonigraph_take::canonical::GapRecord::from(gap)
-                                            .reason,
-                                    });
-                            }
-                            fence.fail();
+                        if let Some(current) = open.as_mut() {
+                            let _ = current.mark_incomplete(harmonigraph_take::IncompleteRecord {
+                                first_publication: gap.first,
+                                last_publication: gap.last,
+                                reason: harmonigraph_take::canonical::GapRecord::from(gap).reason,
+                            });
                         }
                     }
                 }
@@ -2748,7 +2785,7 @@ mod tests {
                     _writer_lifetime: None,
                     publication: publication::channel().0,
                     display: publication::channel().0,
-                    display_outage: false,
+                    outage: publication::Lanes::default(),
                     fence: Arc::new(RecordFence::default()),
                     record_epoch: 0,
                     record_pass: 1,
@@ -3950,14 +3987,14 @@ mod tests {
             } else {
                 harmonigraph_core::NoteEvent::off(time, SourceId::DIRECT, 0, 60)
             };
-            recorder.publish_note(event.into(), route).unwrap();
+            recorder.publish_note(event.into(), route).expect_both();
         }
-        assert_eq!(recorder.publication_free(), 0);
+        assert_eq!(recorder.publication_free(), publication::Lanes::both(0));
         recorder.publication_lost(4096.0 / 48000.0, route);
         recorder.retired_publication_complete();
         assert_eq!(
             recorder.publication_free(),
-            0,
+            publication::Lanes::both(0),
             "hold release needs no ordinary publication slot"
         );
         writer.drain(&mut capture);

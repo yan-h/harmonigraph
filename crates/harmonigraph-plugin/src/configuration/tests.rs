@@ -1274,7 +1274,10 @@ fn direct_publication_loss_recovers_64_exact_lifetimes_without_new_attacks() {
         );
     }
     writer.drain(&mut capture);
-    assert!(writer.failed(), "a real lost publication durably fails this take");
+    // Changed with #712's export decision: a real lost publication used to fail
+    // this take durably. It now marks it and keeps recording — the file below
+    // still carries `incomplete`, which is what the export warns from.
+    assert!(!writer.failed(), "a hole in the note history is not a recording failure");
     let mut tracker = harmonigraph_core::NoteTracker::default();
     for record in capture.display_events() {
         record.apply(&mut tracker).unwrap();
@@ -1393,6 +1396,81 @@ fn display_only_loss_requests_one_factual_direct_repair_after_capacity_returns()
         CanonicalRecord::Delta(d) if matches!(d.event.kind, harmonigraph_take::NoteKind::On { .. }))).count(), 2);
     drop(writer);
     device.finish_notes(70 * 64, &[(20, 60)]);
+    drop(device);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// #712, findings 2 and 3 on the DIRECT observer: a lane is gated on its own
+/// free cells and paid with its own identity.
+///
+/// Both lanes overflow together, then only the writer drains. The take's ring
+/// is healthy again while the editor's is still full, and DIRECT owes both a
+/// snapshot. `publication_free()` used to be the MINIMUM of the two, so the
+/// healthy take got nothing: its file kept the notes and lost the frame that
+/// says what is still sounding. The identity half is the second assertion --
+/// the take is paid with ITS next id, not with a number the display's refusal
+/// moved.
+#[test]
+fn a_full_display_lane_does_not_hold_back_directs_take_snapshot() {
+    let _scope = crate::test_scope::enter();
+    use harmonigraph_take::CanonicalRecord;
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    capture.arm();
+    let dir = std::env::temp_dir().join(format!("harmonigraph-direct-lane-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    device.run(0, vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)], false);
+    // Neither consumer runs, so both rings fill and both lose the same report.
+    for block in 1..=66 {
+        device.run(block * 64, (0..64).map(|_| id_tuning(10, 0.123456789)).collect(), false);
+    }
+    // Now the writer catches up and the editor does not.
+    writer.drain(&mut capture);
+    device.run(67 * 64, vec![], false);
+    writer.drain(&mut capture);
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    assert!(take.incomplete.is_some(), "the fixture must actually lose a report");
+    let frames: Vec<_> = take
+        .events
+        .iter()
+        .filter_map(|record| match record {
+            CanonicalRecord::Baseline(frame) => Some(frame.baseline().unwrap()),
+            _ => None,
+        })
+        .collect();
+    let restored = frames.last().expect("the take is owed a snapshot and its own lane has room");
+    assert_eq!(restored.voices().len(), 1, "and it says what is still sounding");
+    assert_eq!(restored.voices()[0].host_note_id, 10);
+    assert_eq!(
+        restored.id, 1,
+        "paid with the take lane's own next identity, which no refusal on the display moved"
+    );
+    // The editor comes back. Its lane starts from ITS cursor, so the frame it
+    // gets is not one its tracker has already seen and deduplicated away.
+    let mut tracker = harmonigraph_core::NoteTracker::default();
+    for record in capture.display_events() {
+        record.apply(&mut tracker).unwrap();
+    }
+    assert_eq!(tracker.held_count(), 0, "the gap cleared the display's held set");
+    device.run(68 * 64, vec![], false);
+    writer.drain(&mut capture);
+    let recovered = capture.display_events();
+    let display_frame = recovered
+        .iter()
+        .find_map(|record| match record {
+            CanonicalRecord::Baseline(frame) => Some(frame.baseline().unwrap()),
+            _ => None,
+        })
+        .expect("the display lane is owed its own snapshot once it has room again");
+    assert_eq!(display_frame.id, 1, "and its own next identity, independent of the take's");
+    for record in recovered {
+        record.apply(&mut tracker).unwrap();
+    }
+    assert_eq!(tracker.held_count(), 1, "so the sounding note comes back on the display too");
+    drop(writer);
+    device.finish_notes(69 * 64, &[(10, 60)]);
     drop(device);
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -6,6 +6,7 @@ use harmonigraph_core::configuration::{
 };
 use harmonigraph_core::confirmed::{ConfirmedPitches, LearningState};
 use harmonigraph_core::{LearnedTuning, SourceId, Tempered, Tuning};
+use harmonigraph_record::publication::{Lane, Lanes};
 use harmonigraph_ui::params::{ConfigurationView, ParamKey};
 use nice_plug::plugin::ParamValue;
 use nice_plug::prelude::*;
@@ -397,8 +398,9 @@ impl Owner {
                     Default::default()
                 }
             };
-            if recorder.publish_note(delta, route).is_err() {
-                self.direct.recovery = true;
+            let published = recorder.publish_note(delta, route);
+            for lane in Lane::ALL {
+                self.direct.recovery[lane] |= published[lane].is_err();
             }
             self.direct.published();
         }
@@ -412,7 +414,7 @@ impl Owner {
         // All available earlier history precedes this complete current-state
         // frame. Old onset metadata carries its original exact clock already;
         // only the baseline's present cut is routed through the current segment.
-        if self.direct.pending().is_some() || (!self.direct.lost && !self.direct.recovery) {
+        if self.direct.pending().is_some() || (!self.direct.lost && !self.direct.recovery.any()) {
             return;
         }
         let offset = self.recording.block_frames.saturating_sub(1);
@@ -434,27 +436,36 @@ impl Owner {
         if self.direct.lost {
             recorder.publication_lost(time, route);
             self.direct.lost = false;
-            self.direct.recovery = true;
+            self.direct.recovery = Lanes::both(true);
         }
-        if !self.direct.recovery || recorder.publication_free() < 2 {
-            return;
-        }
-        let Some(id) = self.direct.baseline_id.checked_add(1) else {
-            self.fault();
-            return;
-        };
-        let Some(frame) =
-            self.direct.state.baseline(SourceId::DIRECT, id, self.direct.sequence, time, true)
-        else {
-            return;
-        };
-        match recorder.publish_baseline(&frame, route) {
-            Ok(()) => {
-                self.direct.baseline_id = id;
-                self.direct.recovery = false;
+        // One lane at a time, gated on ITS OWN free cells and carrying ITS OWN
+        // next identity. A display ring the editor has stopped draining used to
+        // hold this frame back from a healthy take, and a frame one lane took
+        // while the other was Busy used to come back under the id the taker had
+        // already seen — silently, since a duplicate id is simply ignored.
+        for lane in Lane::ALL {
+            if !self.direct.recovery[lane] || recorder.publication_free()[lane] < 2 {
+                continue;
             }
-            Err(PublishError::Busy | PublishError::Lost) => {}
-            Err(PublishError::Invalid) => self.fault(),
+            let Some(id) = self.direct.baseline_id[lane].checked_add(1) else {
+                self.fault();
+                return;
+            };
+            // A source with nothing to say has nothing to say on either lane,
+            // so both exits leave the loop rather than trying the next one.
+            let Some(frame) =
+                self.direct.state.baseline(SourceId::DIRECT, id, self.direct.sequence, time, true)
+            else {
+                return;
+            };
+            match recorder.publish_baseline(lane, &frame, route) {
+                Ok(()) => {
+                    self.direct.baseline_id[lane] = id;
+                    self.direct.recovery[lane] = false;
+                }
+                Err(PublishError::Busy | PublishError::Lost) => {}
+                Err(PublishError::Invalid) => self.fault(),
+            }
         }
     }
     pub fn recording_route(

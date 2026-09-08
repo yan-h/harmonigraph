@@ -817,7 +817,8 @@ impl Hub {
                 // paired Tune reaches both.
                 if source != 0 {
                     self.rows[source - 1].participating = value;
-                    self.rows[source - 1].repair = true;
+                    self.rows[source - 1].repair =
+                        harmonigraph_record::publication::Lanes::both(true);
                 }
             }
             return true;

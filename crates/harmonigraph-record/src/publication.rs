@@ -28,6 +28,84 @@ pub const SNAPSHOT_SLOTS: usize = 20;
 /// than waiting for a later publication to carry it out.
 const GAP_RESERVE: usize = 1;
 
+/// Which of the two publication lanes a call is about.
+///
+/// The take's file and the editor's display each own a [`channel`] of their
+/// own, so one can fill without the other noticing. Snapshots are therefore
+/// published one lane at a time: each lane's consumer deduplicates on
+/// [`SourceBaseline::id`], so each lane needs an identity that advances when
+/// IT accepted a frame rather than when both did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lane {
+    Take,
+    Display,
+}
+
+impl Lane {
+    pub const ALL: [Lane; 2] = [Lane::Take, Lane::Display];
+}
+
+/// One value per lane, and the only shape anything in this path hands back.
+///
+/// The rule it exists to enforce: **no capacity, outcome or cursor on the
+/// publication path is a value derived from both lanes.** A `usize` of free
+/// cells or a `Result` for "the publication" is what let a full display ring
+/// gate a snapshot the take was waiting for, and what let one lane's refusal
+/// hold back the other lane's baseline identity (#712). Neither is
+/// expressible here without writing the fold by hand, which is what makes the
+/// separation structural instead of a habit each new caller has to keep.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Lanes<T> {
+    pub take: T,
+    pub display: T,
+}
+
+impl<T: Copy> Lanes<T> {
+    pub fn both(value: T) -> Self {
+        Self { take: value, display: value }
+    }
+}
+
+impl Lanes<bool> {
+    /// "Is either lane armed at all" — for a diagnostic count, or an early
+    /// return that still decides per lane afterwards. Deliberately the only
+    /// fold on this type, and named so a reviewer sees it happening.
+    pub fn any(self) -> bool {
+        self.take || self.display
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Lanes<Result<(), PublishError>> {
+    /// Both lanes accepted. Test-only, and it yields nothing: a fixture that
+    /// wants one `unwrap` over a publication should still be checking both
+    /// halves, but nothing may DECIDE from a folded pair.
+    #[track_caller]
+    pub fn expect_both(self) {
+        self.take.expect("the take lane accepted");
+        self.display.expect("the display lane accepted");
+    }
+}
+
+impl<T> std::ops::Index<Lane> for Lanes<T> {
+    type Output = T;
+    fn index(&self, lane: Lane) -> &T {
+        match lane {
+            Lane::Take => &self.take,
+            Lane::Display => &self.display,
+        }
+    }
+}
+
+impl<T> std::ops::IndexMut<Lane> for Lanes<T> {
+    fn index_mut(&mut self, lane: Lane) -> &mut T {
+        match lane {
+            Lane::Take => &mut self.take,
+            Lane::Display => &mut self.display,
+        }
+    }
+}
+
 /// Resolved on audio from the ORIGINAL actual-output recording segment. None
 /// is explicit disarmed provenance; a drainer never consults today's arm state.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

@@ -66,6 +66,12 @@ fn full_primary_publication_does_not_block_three_sources_actual_releases_and_cre
     b.run(36 * 64, vec![], None);
     hub.run(36 * 64, vec![], None);
     writer.drain(&mut capture);
+    // The take fails, and #712's export decision does not change that: what
+    // could not be published here is the pass CLOSURE, not note history. A file
+    // with no `PassComplete` can never seal, so there is no normal finalisation
+    // to preserve. The note gap on its own no longer refuses — see
+    // `an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with`
+    // in harmonigraph-record.
     assert!(writer.failed());
     let take = harmonigraph_take::Take::read(&path).unwrap();
     let incomplete = take.incomplete.as_ref().unwrap();

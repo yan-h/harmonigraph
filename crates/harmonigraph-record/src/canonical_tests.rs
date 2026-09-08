@@ -1,6 +1,7 @@
 use super::*;
 use harmonigraph_core::canonical::*;
 use harmonigraph_core::confirmed::PitchProvenance;
+use publication::Lane;
 
 fn path(name: &str) -> std::path::PathBuf {
     let directory =
@@ -79,23 +80,23 @@ fn delayed_history_and_baseline_keep_original_pass_and_both_wav_tails() {
     ];
     let route = publication::Route { address: Some(first), time_offset: 19.0 };
     for event in events {
-        recorder.publish_note(event, route).unwrap();
+        recorder.publish_note(event, route).expect_both();
     }
     let empty = SourceBaseline::new(source, 1, 2.0, 3, true, &[]).unwrap();
-    recorder.publish_baseline(&empty, route).unwrap();
+    recorder.publish_baseline(Lane::Take, &empty, route).unwrap();
     // Duplicated transfer must not write an already completed lifetime twice.
     for event in events {
-        recorder.publish_note(event, route).unwrap();
+        recorder.publish_note(event, route).expect_both();
     }
-    recorder.publish_baseline(&empty, route).unwrap();
-    recorder.publish_note(accepted(NoteEvent::on(2.5, source, 0, 60, 0.7), 4), route).unwrap();
+    recorder.publish_baseline(Lane::Take, &empty, route).unwrap();
+    recorder.publish_note(accepted(NoteEvent::on(2.5, source, 0, 60, 0.7), 4), route).expect_both();
     // Explicit disarmed provenance remains unrecorded despite the active file.
     recorder
         .publish_note(
             NoteEvent::on(3.0, SourceId::DIRECT, 0, 90, 0.8).into(),
             publication::Route::default(),
         )
-        .unwrap();
+        .expect_both();
     writer.drain(&mut capture);
     assert!(writer.finished.is_none());
     recorder.source_pass_complete(first, 10.0);
@@ -147,18 +148,31 @@ fn real_publication_ring_loss_is_durable_after_the_last_callback() {
                 NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into(),
                 route,
             )
-            .unwrap();
+            .expect_both();
     }
-    assert_eq!(recorder.publication_free(), 0, "the fixture must actually fill the lane");
+    assert_eq!(
+        recorder.publication_free(),
+        publication::Lanes::both(0),
+        "the fixture must actually fill both lanes"
+    );
     assert_eq!(
         recorder.publish_note(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(), route),
-        Err(publication::PublishError::Lost)
+        publication::Lanes::both(Err(publication::PublishError::Lost))
     );
     // Source and musical state never require this writer to acknowledge output.
-    // There are deliberately no further recorder/audio calls to deliver a gap.
+    // There are deliberately no further recorder/audio calls to deliver a gap:
+    // this drain is the only one, and it is what makes the loss durable.
+    writer.drain(&mut capture);
+    // Changed with #712's export decision: the gap used to fail the take here.
+    // It marks it instead, which is what the file below carries and what the
+    // export warns from. Asserted BEFORE the drop, because the drop is a
+    // separate failure and would hide this one.
+    assert!(!writer.failed(), "a hole in the note history is not a recording failure");
     drop(recorder);
     writer.stop();
     writer.drain(&mut capture);
+    // A producer that goes away with the take still open IS an ownership
+    // failure, and still refuses — which is why nothing finishes here.
     assert!(writer.failed());
     assert!(writer.finished.is_none());
     let take = harmonigraph_take::Take::read(&file).unwrap();
@@ -212,10 +226,11 @@ fn all_128_passes_need_source_closure_before_the_129th_file() {
                     address: Some(RecordAddress { epoch: 1, pass: 129 }),
                     time_offset: 0.0,
                 };
-                recorder.publish_baseline(&baseline, route).unwrap();
+                recorder.publish_baseline(Lane::Take, &baseline, route).unwrap();
+                recorder.publish_baseline(Lane::Display, &baseline, route).unwrap();
                 recorder
                     .publish_note(NoteEvent::on(11.0, SourceId::DIRECT, 0, 60, 0.8).into(), route)
-                    .unwrap();
+                    .expect_both();
                 writer.drain(&mut capture);
                 let displayed = capture.display_events();
                 assert_eq!(displayed.len(), 2);
@@ -253,8 +268,16 @@ fn worker_take(directory: &std::path::Path) -> std::path::PathBuf {
         .expect("actual worker created take")
 }
 
+/// The prefix a pending `Start` still owns, and — in the second case — what a
+/// Stop does once the recording really has failed.
+///
+/// The overflow no longer supplies that failure: #712 makes a hole in the note
+/// history a marker on the file rather than a refusal, so the second case names
+/// its own ownership failure. See
+/// `an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with`
+/// for what the overflow alone now does.
 #[test]
-fn real_worker_materializes_pending_start_before_accounting_publication_loss() {
+fn real_worker_materializes_pending_start_before_accounting_a_recording_failure() {
     for stop_after_failure in [false, true] {
         let directory = path(if stop_after_failure { "worker-start-stop" } else { "worker-start" })
             .parent()
@@ -280,6 +303,7 @@ fn real_worker_materializes_pending_start_before_accounting_publication_loss() {
             let baseline = SourceBaseline::new(SourceId::DIRECT, id, 0.0, 0, true, &[]).unwrap();
             recorder
                 .publish_baseline(
+                    Lane::Take,
                     &baseline,
                     publication::Route { address: Some(address), time_offset: 0.0 },
                 )
@@ -291,16 +315,19 @@ fn real_worker_materializes_pending_start_before_accounting_publication_loss() {
                     NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into(),
                     publication::Route { address: Some(address), time_offset: 0.0 },
                 )
-                .unwrap();
+                .expect_both();
         }
         assert_eq!(
-            recorder.publish_note(
-                NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(),
-                publication::Route { address: Some(address), time_offset: 0.0 }
-            ),
+            recorder
+                .publish_note(
+                    NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(),
+                    publication::Route { address: Some(address), time_offset: 0.0 }
+                )
+                .take,
             Err(publication::PublishError::Lost)
         );
         if stop_after_failure {
+            recorder.fail_configuration();
             fence.worker_after_empty.enabled.store(false, Ordering::Release);
             wait_for(&fence.worker_failure_accounted);
             fence.worker_after_stop.enabled.store(true, Ordering::Release);
@@ -348,6 +375,107 @@ fn real_worker_materializes_pending_start_before_accounting_publication_loss() {
     }
 }
 
+/// #712, finding 1: a take-lane overflow used to set `fence.failed`, so the
+/// worker accounted a failure, threw the pending Stop away and never moved
+/// `last_take`. Stop-and-render then had nothing to render, or rendered an
+/// EARLIER take — the permissive renderer 5B built for exactly this file was
+/// never reached.
+///
+/// The real worker, a real 4,096-cell overflow, and the real Stop the Video
+/// pane sends. `renderer_path` points at nothing, so the launch is observable
+/// (and instant) through the status line it leaves rather than by running a
+/// GPU render: the message only exists if `spawn_render` was reached at all,
+/// which is the assertion the old behaviour failed. That the resulting file
+/// warns rather than refuses is
+/// `a_take_missing_note_history_is_exported_with_a_warning` in
+/// harmonigraph-offline; this is the half that gets it there.
+#[test]
+fn an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with() {
+    let directory = path("worker-overflow-render").parent().unwrap().to_path_buf();
+    let (mut recorder, control) = channel();
+    recorder.enable_configuration();
+    recorder.enable_canonical();
+    *control.fence.test_directory.lock() = Some(directory.clone());
+    let fence = control.fence.clone();
+    let _resume_on_panic = WorkerPause(fence.clone());
+    control.start(48000.0, String::new(), false);
+    assert!(recorder.is_armed());
+    let address = RecordAddress { epoch: 1, pass: 1 };
+    let route = publication::Route { address: Some(address), time_offset: 0.0 };
+    recorder.configuration_at(
+        address,
+        0.0,
+        harmonigraph_core::configuration::ConfigReducer::default().resolved(),
+    );
+    // Published until the lane actually loses one rather than for a fixed count:
+    // the REAL worker is draining concurrently, so how many cells it takes to
+    // overflow is not a number this test may assume.
+    let mut published = 0;
+    let mut lost = false;
+    for i in 0..publication::PUBLICATION_RING * 4 {
+        let event = NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8);
+        match recorder.publish_note(event.into(), route).take {
+            Ok(()) => published += 1,
+            Err(publication::PublishError::Lost) => {
+                lost = true;
+                break;
+            }
+            other => panic!("unexpected publication outcome {other:?}"),
+        }
+    }
+    assert!(lost, "the fixture must actually lose a report");
+    assert!(published >= publication::PUBLICATION_RING - 1, "{published} reports were accepted");
+    // The worker drains it; the pass closures below need cells, and losing one
+    // of THOSE is an ownership failure that still refuses (see
+    // `full_primary_publication_...` in harmonigraph-plugin).
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while recorder.publication_free().take < publication::PUBLICATION_RING - 1
+        && std::time::Instant::now() < until
+    {
+        std::thread::yield_now();
+    }
+    assert!(!fence.failed.load(Ordering::Acquire), "the overflow alone must not fail the take");
+
+    let config = harmonigraph_take::RenderConfig {
+        renderer_path: directory.join("no-such-renderer").display().to_string(),
+        ..Default::default()
+    };
+    control.stop(RenderRequest::from_config(&config));
+    assert!(!recorder.is_armed());
+    recorder.configuration_pass_complete(address);
+    recorder.configuration_epoch_complete(1);
+    recorder.source_pass_complete(address, 1.0);
+    recorder.source_epoch_complete(1, 1.0);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while control.last_take().is_none() && std::time::Instant::now() < until {
+        std::thread::yield_now();
+    }
+    let finished = control.last_take().expect("the overflowed take still finalises");
+    assert!(!fence.failed.load(Ordering::Acquire));
+    assert_eq!(finished, worker_take(&directory), "Render targets THIS take, not an earlier one");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !control.status().contains("could not run") && std::time::Instant::now() < until {
+        std::thread::yield_now();
+    }
+    assert!(
+        control.status().contains("could not run"),
+        "Stop-and-render reached the renderer: {}",
+        control.status()
+    );
+    let take = harmonigraph_take::Take::read(&finished).unwrap();
+    let loss = take.incomplete.expect("the missing history is on the file, not silent");
+    assert_eq!(
+        loss.first_publication, loss.last_publication,
+        "exactly the one report that was lost"
+    );
+    assert_eq!(take.notes().count(), published, "and every surviving report is kept");
+    drop(recorder);
+    drop(control);
+    fence.worker_after_empty.enabled.store(false, Ordering::Release);
+    wait_for(&fence.worker_finished);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
     let directory = path("worker-stop").parent().unwrap().to_path_buf();
@@ -375,8 +503,10 @@ fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
     let route = publication::Route { address: Some(address), time_offset: 0.0 };
     recorder
         .publish_note(accepted(NoteEvent::on(0.01, SourceId(1), 0, 60, 0.8), 1), route)
-        .unwrap();
-    recorder.publish_note(accepted(NoteEvent::off(0.02, SourceId(1), 0, 60), 2), route).unwrap();
+        .expect_both();
+    recorder
+        .publish_note(accepted(NoteEvent::off(0.02, SourceId(1), 0, 60), 2), route)
+        .expect_both();
     recorder.source_pass_complete(address, 1.0);
     recorder.source_epoch_complete(1, 1.0);
     drop(recorder);
@@ -430,8 +560,10 @@ fn retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped() 
     let route = publication::Route { address: Some(address), time_offset: 0.0 };
     recorder
         .publish_note(accepted(NoteEvent::on(0.01, SourceId(1), 0, 60, 0.8), 1), route)
-        .unwrap();
-    recorder.publish_note(accepted(NoteEvent::off(0.02, SourceId(1), 0, 60), 2), route).unwrap();
+        .expect_both();
+    recorder
+        .publish_note(accepted(NoteEvent::off(0.02, SourceId(1), 0, 60), 2), route)
+        .expect_both();
     recorder.source_pass_complete(address, 1.0);
     recorder.source_epoch_complete(1, 1.0);
     drop(recorder);

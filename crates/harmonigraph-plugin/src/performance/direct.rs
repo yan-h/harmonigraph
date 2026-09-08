@@ -4,6 +4,7 @@
 use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta, VoiceBaseline};
 use harmonigraph_core::confirmed::{ConfirmedPitches, PitchProvenance};
 use harmonigraph_core::SourceId;
+use harmonigraph_record::publication::Lanes;
 use nice_plug::wrapper::clap::configuration::OwnedInput;
 
 use super::{
@@ -107,8 +108,16 @@ pub struct Direct {
     fence: u64,
     pub sequence: u64,
     lifetime: u64,
-    pub baseline_id: u64,
-    pub recovery: bool,
+    /// The last snapshot identity each lane accepted. Per lane, because each
+    /// lane's consumer deduplicates on it: a frame one lane took and the other
+    /// refused must not come back under an id the taker already has.
+    pub baseline_id: Lanes<u64>,
+    /// Which lane still owes DIRECT a snapshot. Per lane for the same reason
+    /// the ids are: a full display ring says nothing about the take's.
+    pub recovery: Lanes<bool>,
+    /// A report that never reached EITHER lane, so both owe a gap. Not per
+    /// lane: this is the observation failing before publication, not a lane
+    /// refusing it.
     pub lost: bool,
     anchor: Option<(ClockId, i64, f64, f64)>,
     pub offset: i64,
@@ -119,7 +128,7 @@ impl Direct {
         assert!(self.pending().is_none());
         self.offset = offset;
         self.anchor = None;
-        self.recovery = true;
+        self.recovery = Lanes::both(true);
     }
     pub fn begin(&mut self, clock: ClockId, raw: i64, time: f64, rate: f64) {
         match self.anchor {
@@ -188,7 +197,7 @@ impl Direct {
         self.carried_lost = None;
         self.fence = 0;
         self.anchor = None;
-        self.recovery = false;
+        self.recovery = Lanes::both(false);
         self.lost = false;
         // Source sequences/lifetimes do not repeat when the raw clock resets.
     }
@@ -295,7 +304,7 @@ impl Direct {
                 self.sequence = sequence;
                 if self.pending.push(delta.into()).is_err() {
                     self.lost = true;
-                    self.recovery = true;
+                    self.recovery = Lanes::both(true);
                 }
                 // A fenced voice is one the Hub scores from here rather than
                 // from a capture record, so every change to one is owed to the

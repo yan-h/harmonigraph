@@ -1490,7 +1490,7 @@ mod tests {
                 CoreNoteEvent::on(10.0, SourceId::DIRECT, 0, 60, 0.8).into(),
                 Default::default(),
             )
-            .unwrap();
+            .expect_both();
         plugin.reset();
         assert_eq!(plugin.samples_processed, 0);
         plugin.sample_rate = 96_000.0;
@@ -1501,7 +1501,7 @@ mod tests {
                 CoreNoteEvent::on(next, SourceId::DIRECT, 0, 60, 0.8).into(),
                 Default::default(),
             )
-            .unwrap();
+            .expect_both();
         plugin.take.publish_clock(12.0);
         let deadline = Instant::now() + ANALYSIS_DEADLINE;
         while shared.ui.tracker.roll().notes().count() < 2 && Instant::now() < deadline {
