@@ -36,7 +36,7 @@ impl Source {
         );
     }
     pub fn test_stale_prepare(&mut self, group: api::Group) {
-        if !(3..3 + work::CAPACITY as u64).contains(&group.token.0[3]) {
+        if !token::is_work(group.token) {
             return;
         }
         let replay = REPLAY.with(|state| *state.borrow());
@@ -61,9 +61,7 @@ impl Source {
         completion: api::Completion,
         output: &mut api::Output<'_>,
     ) {
-        if !(3..3 + work::CAPACITY as u64).contains(&completion.group.token.0[3])
-            || completion.accepted != 1
-        {
+        if !token::is_work(completion.group.token) || completion.accepted != 1 {
             return;
         }
         let replay = REPLAY.with(|state| {
@@ -73,7 +71,7 @@ impl Source {
             })?;
             if state.saved.is_none() {
                 state.saved = Some(completion);
-                state.lifetime = self.work.at((completion.group.token.0[3] - 3) as u16).serial;
+                state.lifetime = self.work.at(token::child(completion.group.token)).serial;
                 return None;
             }
             assert!(state.prepared);
@@ -86,21 +84,18 @@ impl Source {
         let saved = replay.saved.unwrap();
         self.check_reused_child(completion.group, saved, replay.lifetime);
         let before = self.test_snapshot();
-        let permit = self.permit.map(|p| (p.position, p.serial, p.credit, p.gate, p.emergency));
+        let permit = self.permit;
         assert!(permit.is_some());
         self.complete(saved, output);
         assert_eq!(self.test_snapshot(), before);
-        assert_eq!(
-            self.permit.map(|p| (p.position, p.serial, p.credit, p.gate, p.emergency)),
-            permit
-        );
+        assert_eq!(self.permit, permit);
         assert!(self.pending.at(completion.group.token.0[1] as usize).unwrap().staged);
     }
     fn check_reused_child(&self, current: api::Group, old: api::Completion, lifetime: u64) {
         assert_eq!(current.token.0[1], old.group.token.0[1], "the actual parent slot was reused");
         assert_eq!(current.token.0[3], old.group.token.0[3], "the actual child slot was reused");
         assert_ne!(current.token.0[2], old.group.token.0[2]);
-        assert_ne!(self.work.at((current.token.0[3] - 3) as u16).serial, lifetime);
+        assert_ne!(self.work.at(token::child(current.token)).serial, lifetime);
         assert!(self.pending.at(current.token.0[1] as usize).unwrap().staged);
     }
 }

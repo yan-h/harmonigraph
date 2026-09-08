@@ -26,6 +26,8 @@ mod debt;
 #[cfg(all(test, debug_assertions))]
 mod replay_tests;
 mod stop;
+mod token;
+use token::PREPAID_ONSET;
 mod wave;
 pub(super) mod work;
 
@@ -43,9 +45,6 @@ pub(super) const CHANNEL_RESETS: usize = 4;
 const PITCH_RESET: usize = 3;
 /// The 14-bit MIDI pitch bend that means no bend.
 const BEND_CENTER: u16 = 0x2000;
-// Token child selectors use 0 for inline, 1/2 for emergency, and u16 + 3
-// for work cells. This inline onset's completion was paid by its paired choke.
-const PREPAID_ONSET: u64 = u64::MAX;
 #[cfg(test)]
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
@@ -148,16 +147,32 @@ pub(super) struct Life {
 #[allow(clippy::large_enum_variant)]
 enum Plan {
     Skip,
-    Refused,
+    Wait(Wait),
     Ready(api::Group),
 }
+/// A note's own wait permits the pending walk to try later entries; a track
+/// wait ends that walk. Callback-wide output exhaustion remains in stage_full.
 #[derive(Clone, Copy)]
-struct Permit {
+enum Wait {
+    Note,
+    Track,
+}
+enum Staging {
+    Complete,
+    Wait(Wait),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Permit {
+    Ordinary(OrdinaryPermit),
+    Emergency,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OrdinaryPermit {
     position: usize,
     serial: u64,
     credit: bool,
     gate: bool,
-    emergency: bool,
     /// The silent note whose reservation this onset took over instead of
     /// claiming a fresh one, so an unaccepted onset can hand it straight back.
     inherited: u16,
@@ -279,11 +294,6 @@ pub struct Source {
     /// This callback's normal output allowance is spent, so no later staging
     /// attempt in it can succeed and the walk stops rather than scanning on.
     stage_full: bool,
-    /// The refusal `stage_work` just returned was one note's own wait, not the
-    /// track's: rule one's two waits, and an established note whose shifted
-    /// release is due in a later callback. Set per `stage_pending` call and
-    /// read only by `schedule_pending`.
-    note_wait: bool,
     capture_cursor: Option<usize>,
     /// Copies of the input event at `capture_group_position`, waiting for room
     /// in the intent ring. They are self-contained, so nothing remote depends
@@ -488,7 +498,6 @@ impl Source {
             draining_finished: false,
             pending_cursor: None,
             stage_full: false,
-            note_wait: false,
             capture_cursor: None,
             capture_group: Queue::default(),
             capture_group_position: 0,
@@ -1646,23 +1655,15 @@ impl Source {
             if pending.cleanup_queued || pending.staged {
                 continue;
             }
-            self.note_wait = false;
-            if !self.stage_pending(position, start, end, output) {
-                blocked = true;
-                // A refusal that belongs to one note holds that note and
-                // nothing else, so the walk steps over it: rule one's two
-                // waits, and an established note whose own shift puts its
-                // release in a later callback than the events queued behind
-                // it. An unaddressed raw MIDI event and a later onset on the
-                // same channel each keep their own input+D schedule past all
-                // three. Any other refusal is this callback's spent output
-                // allowance, a transport boundary or a track-wide fence, and
-                // stops the walk exactly as it always did. `stage_work` is
-                // what knows which it was, and says so in `note_wait`.
-                if !self.stage_full && self.note_wait {
+            match self.stage_pending(position, start, end, output) {
+                Staging::Complete => {}
+                Staging::Wait(Wait::Note) if !self.stage_full => {
+                    // Keep this cursor pinned, but let later raw events and
+                    // ready notes keep their own input+D schedule.
+                    blocked = true;
                     continue;
                 }
-                break;
+                Staging::Wait(_) => break,
             }
             if !blocked {
                 self.pending_cursor = next;
@@ -1683,33 +1684,37 @@ impl Source {
         start: i64,
         end: i64,
         output: &mut api::Output<'_>,
-    ) -> bool {
+    ) -> Staging {
         let Some(parent) = self.pending.at(position) else {
-            return true;
+            return Staging::Complete;
         };
         if parent.event.marker() {
-            return matches!(parent.channel.role, channel::Role::ReachedStop);
+            return if matches!(parent.channel.role, channel::Role::ReachedStop) {
+                Staging::Complete
+            } else {
+                Staging::Wait(Wait::Track)
+            };
         }
         if matches!(parent.channel.role, channel::Role::Header { .. }) {
             let channel = usize::from(parent.event.channel_control().unwrap());
             if self.channels.waves[channel].wire.serial != parent.serial {
                 self.remove_finished(position);
-                return true;
+                return Staging::Complete;
             }
             return self.stage_work(position, NONE, start, end, output);
         }
         if parent.inline_done && parent.work_remaining == 0 {
             self.remove_finished(position);
-            return true;
+            return Staging::Complete;
         }
         if parent.staged {
-            return true;
+            return Staging::Complete;
         }
         if !matches!(parent.channel.role, channel::Role::Header { .. }) {
             let mut child = parent.work_head;
             while child != NONE {
                 if !self.charge(1) {
-                    return false;
+                    return Staging::Wait(Wait::Track);
                 }
                 let cell = self.work.at(child);
                 if cell.phase == 0 {
@@ -1720,23 +1725,25 @@ impl Source {
             // A retrigger's old termination remains an obligation through its
             // cancellation acknowledgement, even after another child settles.
             if parent.work_remaining != 0 {
-                return false;
+                return Staging::Wait(Wait::Track);
             }
         }
         if parent.inline_done || parent.disposition {
-            return true;
+            return Staging::Complete;
         }
         self.stage_work(position, NONE, start, end, output)
     }
     /// Everything the replacement's own attack must clear before its
     /// predecessor may be choked for it. Timing is not here: both are due at
     /// the same sample, and `stage_work` refuses that for itself.
-    fn replacement_ready(&mut self, parent: Pending) -> bool {
+    fn replacement_ready(&self, parent: Pending) -> Staging {
         if !self.assignment_ready(parent.life) {
-            self.note_wait = true;
-            return false;
+            return Staging::Wait(Wait::Note);
         }
-        !self.stage_full && self.admitted(parent.generation)
+        if self.stage_full || !self.admitted(parent.generation) {
+            return Staging::Wait(Wait::Track);
+        }
+        Staging::Complete
     }
     /// Everything one group owes before it can be admitted, ending in the
     /// group itself. It stages nothing: a replacement's choke and onset are
@@ -1768,15 +1775,15 @@ impl Source {
             return Plan::Skip;
         }
         if (self.faults != 0 || pending.serial <= self.cancel_cut) && !pending.event.release() {
-            return Plan::Refused;
+            return Plan::Wait(Wait::Track);
         }
         if !pending.event.release()
             && pending.event.channel().is_some_and(|channel| self.channel_has_release_debt(channel))
         {
-            return Plan::Refused;
+            return Plan::Wait(Wait::Track);
         }
         if !self.channel_ready(pending) {
-            return Plan::Refused;
+            return Plan::Wait(Wait::Track);
         }
         let life = (pending.life != NONE).then(|| self.lives.at(pending.life).unwrap());
         if self.detaching
@@ -1786,7 +1793,7 @@ impl Source {
                 && self.transition_seen != 0
                 && pending.generation > self.direct_generation
         {
-            return Plan::Refused;
+            return Plan::Wait(Wait::Track);
         }
         if life.is_some_and(|life| {
             life.canceled
@@ -1802,29 +1809,29 @@ impl Source {
         // while its replacement was still unassigned or unadmitted. Both
         // staging paths reach it -- the predecessor's own indexed release scan
         // stages this child too, and it is the one that gets here first.
-        if child != NONE && parent.event.attack().is_some() && !self.replacement_ready(parent) {
-            return Plan::Refused;
+        if child != NONE && parent.event.attack().is_some() {
+            if let Staging::Wait(wait) = self.replacement_ready(parent) {
+                return Plan::Wait(wait);
+            }
         }
         if pending.event.attack().is_some() && !self.admitted(pending.generation) {
-            return Plan::Refused;
+            return Plan::Wait(Wait::Track);
         }
         if pending.event.attack().is_some() && !self.assignment_ready(pending.life) {
             if pending.input.checked_add(self.delay()).is_some_and(|deadline| deadline < end) {
                 self.timing_failure(pending.life);
             }
-            self.note_wait = true;
-            return Plan::Refused;
+            return Plan::Wait(Wait::Note);
         }
         let established = life.is_some_and(|life| life.sounded);
         if life.is_some() && !established && pending.event.attack().is_none() {
-            self.note_wait = true;
-            return Plan::Refused;
+            return Plan::Wait(Wait::Note);
         }
         if pending.event.attack().is_none()
             && !pending.event.release()
             && life.is_some_and(|life| life.ready_head != work::ready_reference(position, child))
         {
-            return Plan::Refused;
+            return Plan::Wait(Wait::Track);
         }
         // Rule: an established note keeps its own onset lateness for its own
         // later release and expression. Everything else — a fresh onset and
@@ -1840,7 +1847,7 @@ impl Source {
         };
         let Some(mut due) = pending.input.checked_add(shift) else {
             self.fault(CLOCK_FAULT);
-            return Plan::Refused;
+            return Plan::Wait(Wait::Track);
         };
         due = due.max(start);
         if due >= end || self.next_stop_sample().is_some_and(|stop| due >= stop) {
@@ -1848,15 +1855,14 @@ impl Source {
             // it: its release rides its own onset lateness while everything
             // else is input+D, which is monotonic in input order. A stop
             // boundary blocks the whole track and is not this note's wait.
-            self.note_wait |= established && due >= end;
-            return Plan::Refused;
+            return Plan::Wait(if established && due >= end { Wait::Note } else { Wait::Track });
         }
         let callback = self.callback.unwrap();
         let Some(offset) =
             due.checked_sub(callback.steady_time).and_then(|value| u32::try_from(value).ok())
         else {
             self.fault(CLOCK_FAULT);
-            return Plan::Refused;
+            return Plan::Wait(Wait::Track);
         };
         let time = offset.max(output.cursor());
         if pending.event.attack().is_some()
@@ -1871,15 +1877,10 @@ impl Source {
         }
         let Some(attempt) = self.attempt.checked_add(1) else {
             self.fault(STORAGE_FAULT);
-            return Plan::Refused;
+            return Plan::Wait(Wait::Track);
         };
         self.attempt = attempt;
-        let token = api::Token([
-            attempt,
-            position as u64,
-            pending.serial,
-            if child == NONE { 0 } else { u64::from(child) + 3 },
-        ]);
+        let token = token::ordinary(attempt, position, pending.serial, child);
         let wire = self.assigned_event(pending);
         // Only an adaptive onset carries an initial tuning. An Off onset has
         // no assignment to state, and stating the default would be a zero
@@ -1903,7 +1904,7 @@ impl Source {
         };
         let Ok(group) = group else {
             self.fault(INPUT_FAULT);
-            return Plan::Refused;
+            return Plan::Wait(Wait::Track);
         };
         Plan::Ready(group)
     }
@@ -1915,10 +1916,10 @@ impl Source {
         start: i64,
         end: i64,
         output: &mut api::Output<'_>,
-    ) -> bool {
+    ) -> Staging {
         let group = match self.plan_work(position, child, start, end, output) {
-            Plan::Skip => return true,
-            Plan::Refused => return false,
+            Plan::Skip => return Staging::Complete,
+            Plan::Wait(wait) => return Staging::Wait(wait),
             Plan::Ready(group) => group,
         };
         // Rule two ties the choke to the replacement's own emission, and the
@@ -1939,21 +1940,27 @@ impl Source {
                 // The replacement will never emit, so nothing is choked for it:
                 // the forced release retires with the onset instead of sounding
                 // alone, which is also what keeps the envelope retirable.
-                Plan::Skip => return self.dispose_work(position, child),
-                Plan::Refused => return false,
+                Plan::Skip => {
+                    return if self.dispose_work(position, child) {
+                        Staging::Complete
+                    } else {
+                        Staging::Wait(Wait::Track)
+                    };
+                }
+                Plan::Wait(wait) => return Staging::Wait(wait),
             }
         } else {
             output.stage(group)
         };
         if staged.is_err() {
             self.stage_full = true;
-            return false;
+            return Staging::Wait(Wait::Track);
         }
         let mut parent = self.pending.at(position).unwrap();
         parent.staged = true;
         parent.selected = child;
         self.pending.set(position, parent);
-        true
+        Staging::Complete
     }
 
     fn assigned_event(&self, pending: Pending) -> Event {
@@ -2033,15 +2040,11 @@ impl Source {
 
     pub fn prepare(&mut self, group: api::Group) -> bool {
         assert!(self.permit.is_none());
-        if matches!(group.token.0[3], 1 | 2) {
-            return self.prepare_emergency(group);
+        if token::is_emergency(group.token) {
+            return self.prepare_emergency();
         }
         let position = group.token.0[1] as usize;
-        let child = if matches!(group.token.0[3], 0 | PREPAID_ONSET) {
-            NONE
-        } else {
-            (group.token.0[3] - 3) as u16
-        };
+        let child = token::child(group.token);
         let Some(parent) = self.pending.at(position).filter(|parent| {
             parent.serial == group.token.0[2] && parent.staged && parent.selected == child
         }) else {
@@ -2104,12 +2107,11 @@ impl Source {
             self.fault(STORAGE_FAULT);
             return false;
         }
-        let mut permit = Permit {
+        let mut permit = OrdinaryPermit {
             position,
             serial: pending.serial,
             credit: false,
             gate: false,
-            emergency: false,
             inherited: NONE,
         };
         if !self.channel_ready(pending) || !self.channel_wire_bindings_available(pending) {
@@ -2202,12 +2204,12 @@ impl Source {
                 return false;
             }
         }
-        self.permit = Some(permit);
+        self.permit = Some(Permit::Ordinary(permit));
         true
     }
 
     pub fn complete(&mut self, completion: api::Completion, output: &mut api::Output<'_>) {
-        if matches!(completion.group.token.0[3], 1 | 2) {
+        if token::is_emergency(completion.group.token) {
             self.complete_emergency(completion);
             self.schedule_emergency(output);
             if self.faults == 0 {
@@ -2223,11 +2225,7 @@ impl Source {
             return;
         }
         let position = completion.group.token.0[1] as usize;
-        let child = if matches!(completion.group.token.0[3], 0 | PREPAID_ONSET) {
-            NONE
-        } else {
-            (completion.group.token.0[3] - 3) as u16
-        };
+        let child = token::child(completion.group.token);
         let Some(mut parent) = self.pending.at(position).filter(|parent| {
             parent.serial == completion.group.token.0[2]
                 && parent.staged
@@ -2248,7 +2246,10 @@ impl Source {
             parent.staged = false;
         }
         self.pending.set(position, parent);
-        let permit = self.permit.take();
+        let permit = self.permit.take().map(|permit| match permit {
+            Permit::Ordinary(permit) => permit,
+            Permit::Emergency => unreachable!("ordinary completion requires ordinary preparation"),
+        });
         if completion.accepted & 1 != 0 {
             let permit = permit.expect("accepted output requires durable preparation");
             assert_eq!((permit.position, permit.serial), (position, parent.serial));
@@ -2556,7 +2557,7 @@ impl Source {
                 continue;
             }
             let life = self.lives.at(release.life).unwrap();
-            let token = api::Token([self.attempt, index as u64, life.serial, 1]);
+            let token = token::release(self.attempt, index, life.serial);
             let event = if life.note_off_owed {
                 Event::note_off(life.id, life.channel, life.key, life.midi)
             } else {
@@ -2583,7 +2584,7 @@ impl Source {
                 }
                 let event = Self::channel_reset_event(channel as u8, bit);
                 let group = api::Group::single(
-                    api::Token([0, channel as u64, bit as u64, 2]),
+                    token::reset(channel, bit),
                     api::Lane::Emergency,
                     output.cursor().max(self.stops.emergency_start),
                     event.input(),
@@ -2609,26 +2610,14 @@ impl Source {
         }
         Event::Midi { port: 0, data: [0xb0 | channel, [64, 66, 69][bit], 0], flags: 0 }
     }
-    fn prepare_emergency(&mut self, group: api::Group) -> bool {
+    fn prepare_emergency(&mut self) -> bool {
         if self.sealed || self.emergency_output.free() == 0 || self.sequence == u64::MAX {
             return false;
         }
-        // `position` and `serial` are the ordinary lane's slot-reuse guard --
-        // `complete` asserts the pending cell it is about to write is still
-        // the one the permit was prepared for. The emergency lane compares
-        // neither, and cannot with what it carries: `complete_emergency`
-        // derives both from `completion.group.token`, the same token this
-        // prepared from, so an assertion here would compare a value to itself.
-        // A real check wants a serial on `Release`, which is a mechanism and
-        // an abort path rather than a deletion (#712).
-        self.permit = Some(Permit {
-            position: group.token.0[1] as usize,
-            serial: group.token.0[2],
-            credit: false,
-            gate: false,
-            emergency: true,
-            inherited: NONE,
-        });
+        // Release slots survive until completion records their accepted delta
+        // and acknowledgement covers it. Destruction can clear them sooner,
+        // but permanently prevents debt from being armed again.
+        self.permit = Some(Permit::Emergency);
         true
     }
     fn complete_emergency(&mut self, completion: api::Completion) {
@@ -2640,13 +2629,13 @@ impl Source {
         }
         let permit = self.permit.take();
         let index = completion.group.token.0[1] as usize;
-        if completion.group.token.0[3] == 1 {
+        if completion.group.token.0[3] == token::RELEASE {
             let Some(mut release) = self.debt.release(index) else {
                 return;
             };
             release.staged = false;
             if completion.accepted & 1 != 0 {
-                assert!(permit.is_some_and(|p| p.emergency));
+                assert_eq!(permit, Some(Permit::Emergency));
                 let life = self.lives.at(release.life).unwrap();
                 let pending_release = life.release;
                 let actual = self.callback.unwrap().steady_time + i64::from(completion.group.time);
@@ -3682,13 +3671,14 @@ impl Source {
             self.manifest.test_layout()
         );
         println!(
-            "LEDGER source inline [owner,state,release_option,channels,work_owner] {:?}",
+            "LEDGER source inline [owner,state,release_option,channels,work_owner,permit_option] {:?}",
             [
                 size_of::<Self>(),
                 size_of::<State>(),
                 size_of::<Option<Release>>(),
                 size_of::<channel::Channels>(),
-                size_of::<work::Work>()
+                size_of::<work::Work>(),
+                size_of::<Option<Permit>>()
             ]
         );
         println!(
