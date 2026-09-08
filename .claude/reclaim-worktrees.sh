@@ -84,8 +84,10 @@
 # is swept by the next one.
 #
 # A worktree is REMOVED (tier 2) only when ALL of these hold:
-#   - it is a direct child of .claude/worktrees/ (never touch a hand-made or
-#     Codex-managed worktree)
+#   - it is REGISTERED, and a direct child of .claude/worktrees/ (never touch a
+#     hand-made or Codex-managed worktree). Nothing unregistered is ever
+#     removed by this script at all — see ORPHANS
+
 #   - it is not the main checkout
 #   - it is not the worktree this session is running in
 #   - its work is RESOLVED by one of the three signals above, so the commits
@@ -102,19 +104,33 @@
 # live-lock checks, plus: `target/debug` itself has not been written in
 # PRUNE_IDLE_MINUTES. Merge state is deliberately not consulted.
 #
-# ORPHANS are swept last, and they are the miss no gate above could catch:
-# both tiers walk `git worktree list`, so a directory git no longer counts as a
-# worktree is not skipped for a reason — it is never looked at. Six of them
-# were sitting under .claude/worktrees on 2026-09-07, invisible to every
-# dry-run line. They arise when the admin entry in .git/worktrees is pruned
-# while the directory survives: a `git worktree prune` after the tree was moved
-# or partly deleted, or a session killed mid-teardown. The sweep runs AFTER the
-# `git worktree prune` below, so a stale admin entry is resolved into either a
-# real record or an orphan before anything is judged, and it removes only a
-# direct child that git does not list, holds no live `.git`, and has been idle
-# for MIN_IDLE_MINUTES. There is no merge question to ask: git has already
-# forgotten the worktree, so any branch it once held is reachable by name or
-# not at all, and nothing this script does changes that.
+# ORPHANS are NAMED last and removed by nobody, and they are the miss no gate
+# above could catch: both tiers walk `git worktree list`, so a directory git no
+# longer counts as a worktree is not skipped for a reason — it is never looked
+# at. Six were sitting under .claude/worktrees on 2026-09-07, invisible to
+# every dry-run line. They arise when the admin entry in .git/worktrees is
+# pruned while the directory survives: a `git worktree prune` after the tree
+# was moved or partly deleted, or a session killed mid-teardown.
+#
+# THIS TIER DELETES NOTHING, and the asymmetry is the point. The six held 20M
+# between them — 0.04% of the 48G this script exists to reclaim — while an
+# `rm -rf` aimed by nothing but "git does not list it" was worth three separate
+# ways to destroy live work, all found in review of the version that did delete:
+#   - a nested worktree of ANOTHER repository. `worktree list` names only THIS
+#     repo's worktrees, so a Codex `<id>/<other-repo>` leaves `<id>` matching
+#     no registration and holding no `.git` — an orphan by every test, and
+#     another repo's live session.
+#   - a symlinked `.claude/worktrees`. The registration is canonical and the
+#     candidate path is textual, so the containment guard compares two spellings
+#     of one directory, matches neither, and deletes through the alias.
+#   - uncommitted files. Tier 2 refuses on a dirty tree, but a directory git has
+#     forgotten cannot answer `status --porcelain` at all, so the check tier 2
+#     leans on is exactly the one unavailable here. A kept branch ref does not
+#     bring back an uncommitted edit.
+# Every one of those is a deletion bug and none of them survives not deleting.
+# What the miss actually cost was VISIBILITY — the directories were unnameable,
+# not unremovable — so naming them is the whole fix, and `rm -rf` stays a human
+# decision. A tier that only prints cannot destroy a repo it misidentifies.
 #
 # `git worktree remove` keeps the branch ref, so merged commits stay reachable
 # and the branch can be checked out again later.
@@ -227,9 +243,13 @@ fi
 # Sweep staging dirs a previous run left behind BEFORE the df gate: a killed
 # background delete is exactly the case where space is still held, so exiting
 # early on a "roomy" reading would strand it forever.
-# Both shapes: tier 1 stages a cache inside its own worktree's `target/`, tier 3
-# stages a whole orphan directory alongside its siblings in WT_DIR.
-for stale in "$WT_DIR"/*/target/.reclaiming-* "$WT_DIR"/.reclaiming-*; do
+# Only tier 1 stages anything, and it stages inside the worktree's own
+# `target/`. A `"$WT_DIR"/.reclaiming-*` arm was tried and removed: it would
+# have `rm -rf`'d anything at the top level whose NAME began `.reclaiming-`,
+# before every registration, session, lock and age check, so a Codex root
+# configured at `.claude/worktrees/.reclaiming-codex` would be deleted with all
+# its live worktrees on a name collision alone.
+for stale in "$WT_DIR"/*/target/.reclaiming-*; do
   [ -d "$stale" ] || continue
   if [ "$DRY_RUN" = 1 ]; then
     act "would sweep leftover $stale"
@@ -338,7 +358,13 @@ load_merged_heads() {
 # -F -x: the sha is data, not a pattern.
 pr_merged_at_head() {
   [ -n "$MERGED_HEADS" ] || return 1
-  printf '%s\n' "$MERGED_HEADS" | grep -Fxq "$1"
+  # Herestring for the same reason as the orphan guard below: `printf | grep -q`
+  # reports 141 under pipefail once the list outgrows the pipe buffer, because
+  # grep exits on the match and printf takes SIGPIPE. 530 shas is ~22K and fits
+  # today, and a false here is the safe direction anyway — containment is asked
+  # next and subsumes this test. Unified so the file holds one shape rather than
+  # a working one and a latent one that look alike.
+  grep -Fxq "$1" <<<"$MERGED_HEADS"
 }
 
 # True when every commit reachable from HEAD is already reachable from main or
@@ -621,59 +647,50 @@ flush
 
 git -C "$ROOT" worktree prune >/dev/null 2>&1
 
-# Tier 3: directories under .claude/worktrees that git does not list. Runs after
-# the prune above so a stale admin entry has already become one or the other.
-# See ORPHANS in the header for why neither tier above can reach these.
+# Tier 3: NAME the directories under .claude/worktrees that git does not list,
+# and remove none of them. Runs after the prune above so a stale admin entry has
+# already resolved into a real record or an orphan.
+# See ORPHANS in the header for why neither tier above can reach these, and why
+# this tier reports instead of deleting.
 REGISTERED=$(git -C "$ROOT" worktree list --porcelain | awk '/^worktree /{print substr($0, 10)}')
+ORPHAN_KB=0
+ORPHAN_N=0
+ORPHAN_NAMES=""
 for path in "$WT_DIR"/*; do
   [ -d "$path" ] || continue
   name=$(basename "$path")
-  case "$name" in .reclaiming-*) continue ;; esac
 
-  # -F -x: a path is data, and a worktree name may hold regex metacharacters
-  # (the harness mints names like `bridge-cse_01UJ...` and `claude+branch`).
-  printf '%s\n' "$REGISTERED" | grep -Fxq "$path" && continue
+  # A herestring, not `printf | grep`: under `set -o pipefail` a matching
+  # `grep -q` exits while printf is still writing, printf takes SIGPIPE, and
+  # the PIPELINE reports 141 even though the match succeeded. Every use of
+  # that shape here is a guard, so a false negative from a full pipe buffer
+  # inverts the guard rather than merely losing a line — measured at 141 with
+  # ~71KB of paths on bash 3.2. -F -x: a path is data, and a worktree name may
+  # hold regex metacharacters (`bridge-cse_01UJ...`, `claude+branch`).
+  grep -Fxq "$path" <<<"$REGISTERED" && continue
 
-  # "git does not list THIS path" is not "git lists nothing under it", and
-  # conflating the two deletes a live Codex worktree. Codex's managed shape is
-  # `<id>/<repo>`, so when its root is configured below .claude/worktrees the
-  # registered worktree is the CHILD and the `<id>` directory above it is
-  # listed by nobody — an orphan by the test one line up, and not ours to
-  # remove. Anything containing a registered worktree is somebody's tree.
-  # -F: the path is data here too.
-  printf '%s\n' "$REGISTERED" | grep -Fq "$path/" && {
-    note "skip orphan $name: contains a registered worktree, so it is not Claude's to remove"
-    continue
-  }
+  # "git does not list THIS path" is not "git lists nothing under it". Codex's
+  # managed shape is `<id>/<repo>`, so when its root is configured below
+  # .claude/worktrees the registered worktree is the CHILD and the `<id>`
+  # directory above it is listed by nobody — an orphan by the test one line up,
+  # and somebody else's tree. Reporting rather than removing is what makes this
+  # merely a wrong LINE rather than a wrong `rm`, which is the whole reason
+  # this tier does not delete.
+  grep -Fq "$path/" <<<"$REGISTERED" && continue
 
-  # Never saw off the branch we are sitting on, even when git has forgotten it.
   case "$SESSION_CWD/" in "$path"/*) continue ;; esac
-
-  # A live `.git` means git ought to know about this and something is wrong
-  # with the assumption, not with the directory. Leave it for a human.
-  if [ -e "$path/.git" ]; then
-    note "skip orphan $name: still has a .git, so git should be listing it"
-    continue
-  fi
+  [ -e "$path/.git" ] && continue
 
   if [ -n "$(find "$path" -maxdepth 2 -newermt "-${MIN_IDLE_MINUTES} minutes" -print -quit 2>/dev/null)" ]; then
-    note "no-remove orphan $name: touched in the last ${MIN_IDLE_MINUTES}m"
     continue
   fi
 
   size_kb=$(du -sk "$path" 2>/dev/null | awk '{print $1}')
   [ -n "$size_kb" ] || size_kb=0
-
-  if [ "$DRY_RUN" = 1 ]; then
-    act "would remove orphan $path ($(human "$size_kb")) — not a worktree git knows"
-    continue
-  fi
-
-  if detach_delete "$path"; then
-    removed=$((removed + 1))
-    freed_kb=$((freed_kb + size_kb))
-    names="$names $(printf '%s' "$name" | tr -cd 'A-Za-z0-9._-')"
-  fi
+  ORPHAN_KB=$((ORPHAN_KB + size_kb))
+  ORPHAN_N=$((ORPHAN_N + 1))
+  ORPHAN_NAMES="$ORPHAN_NAMES $(printf '%s' "$name" | tr -cd 'A-Za-z0-9._-')"
+  note "orphan $name ($(human "$size_kb")): not a worktree git knows — remove by hand"
 done
 
 if [ "$DRY_RUN" = 1 ]; then
@@ -690,17 +707,29 @@ if [ "$DRY_RUN" = 1 ]; then
   if [ "$HELD_RECENT_KB" -gt 0 ]; then
     note "  $(human "$HELD_RECENT_KB") was built inside the last ${PRUNE_IDLE_MINUTES}m (RECLAIM_PRUNE_IDLE_MINUTES lowers that)"
   fi
+  if [ "$ORPHAN_N" -gt 0 ]; then
+    note "  $ORPHAN_N unregistered director(ies) hold $(human "$ORPHAN_KB"):$ORPHAN_NAMES — this script does not remove those"
+  fi
   note "  ${free_gb}G free now, low water ${FREE_LOW_WATER_GB}G"
   exit 0
 fi
 
-# Stay silent on a no-op; SessionStart runs on every single session.
-if [ "$removed" -gt 0 ] || [ "$pruned" -gt 0 ]; then
+# Stay silent on a no-op; SessionStart runs on every single session. An orphan
+# is the exception worth breaking that for, because it is the one thing here
+# NOTHING will ever clear on its own — but only once past the df gate, so the
+# nudge appears when the disk is actually tight rather than every session.
+if [ "$removed" -gt 0 ] || [ "$pruned" -gt 0 ] || [ "$ORPHAN_N" -gt 0 ]; then
   detail=""
   [ "$removed" -gt 0 ] && detail="$removed resolved worktree(s):$names"
   if [ "$pruned" -gt 0 ]; then
     [ -n "$detail" ] && detail="$detail, "
     detail="${detail}${pruned} idle build cache(s)"
+  fi
+  if [ "$ORPHAN_N" -gt 0 ]; then
+    printf '{"systemMessage":"%s. %d unregistered director(ies) under .claude/worktrees hold %s and need removing by hand:%s"}\n' \
+      "$([ -n "$detail" ] && printf 'Reclaimed %s of disk from %s' "$(human "$freed_kb")" "$detail" || printf 'Nothing was reclaimable')" \
+      "$ORPHAN_N" "$(human "$ORPHAN_KB")" "$ORPHAN_NAMES"
+    exit 0
   fi
   printf '{"systemMessage":"Reclaimed %s of disk from %s"}\n' \
     "$(human "$freed_kb")" "$detail"

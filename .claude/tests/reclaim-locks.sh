@@ -325,8 +325,15 @@ SHIM
 # both walk `git worktree list` — so it is not skipped for a reason, it is
 # never examined. Six were on disk on 2026-09-07 and no dry-run line mentioned
 # them. The fixture is a plain directory: no `.git`, nothing registered.
-check_orphan_sweep() {
-  desc="an unregistered directory is swept"
+#
+# BOTH halves are asserted, and the second one carries the history: a
+# reviewed-away version of this tier deleted what it found, and "git does not
+# list it" turned out to be the wrong aim for an `rm -rf` in three separate
+# ways (see ORPHANS in the script). So "it is named" is paired with "it is
+# still there", and the pairing is what stops a future change from quietly
+# turning a report back into a deletion.
+check_orphan_report() {
+  desc="an unregistered directory is named, not removed"
   work="$TMP/orphan"
   main="$work/main"
   orphan="$main/.claude/worktrees/left-behind"
@@ -363,15 +370,22 @@ check_orphan_sweep() {
     RECLAIM_NO_NETWORK=1 RECLAIM_MIN_IDLE_MINUTES=0 \
     "$SCRIPT" </dev/null 2>&1)
 
-  # Removal is detached, so wait for the staging directory to drain rather
-  # than racing it.
+  # A detached `rm -rf` would land after the script exits, so give one a chance
+  # to run before concluding the directory survived.
   n=0
-  while [ -d "$orphan" ] && [ "$n" -lt 40 ]; do sleep 0.1; n=$((n + 1)); done
+  while [ -d "$orphan" ] && [ "$n" -lt 20 ]; do sleep 0.1; n=$((n + 1)); done
 
-  if [ ! -d "$orphan" ]; then
+  if [ ! -d "$orphan" ] || [ ! -f "$orphan/target/release/sentinel" ]; then
+    echo "✗ $desc: the orphan was REMOVED; this tier must only report" >&2
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    failures=$((failures + 1))
+    return
+  fi
+
+  if printf '%s\n' "$out" | grep -q "left-behind"; then
     echo "✓ $desc"
   else
-    echo "✗ $desc" >&2
+    echo "✗ $desc: survived but was never named, so it stays invisible" >&2
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     failures=$((failures + 1))
   fi
@@ -403,7 +417,7 @@ check "an unrecognised holder's lock is live" \
 check_codex_ownership
 check_handmade_lock
 check_containment
-check_orphan_sweep
+check_orphan_report
 
 echo
 if [ "$failures" -gt 0 ]; then
