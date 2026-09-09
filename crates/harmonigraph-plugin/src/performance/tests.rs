@@ -4554,6 +4554,7 @@ fn full_normal_attempt_lane_keeps_all_voice_and_pedal_emergency_attempts_availab
     assert_eq!(source.source_snapshot().emergency, 0);
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn defensive_old_child_completion_cannot_consume_the_reused_parents_live_permit() {
     let _scope = crate::test_scope::enter();
