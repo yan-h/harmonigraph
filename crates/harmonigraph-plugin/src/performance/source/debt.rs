@@ -138,7 +138,88 @@ impl Debt {
             self.releases[index] = Some(release);
         }
     }
-    pub(super) fn discharge_release(&mut self, index: usize) -> Option<Release> {
-        self.releases[index].take()
+    /// Accepted to acknowledged. Pending and staged owners cannot be removed
+    /// through this path, so a release slot cannot be reused underneath the
+    /// synchronous completion that owns it. Destruction uses [`Self::join`]
+    /// as its separate, permanently closing abandonment path.
+    pub(super) fn discharge_accepted_release(&mut self, index: usize) -> Option<Release> {
+        self.releases[index]
+            .is_some_and(|release| release.accepted.is_some())
+            .then(|| self.releases[index].take().unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::performance::{
+        event::Event,
+        protocol::{Outcome, OutputDelta},
+    };
+
+    fn accepted(sequence: u64) -> OutputDelta {
+        OutputDelta {
+            decision: 0,
+            player: 0.0,
+            incarnation: 1,
+            sequence,
+            lifetime: sequence,
+            input: 0,
+            actual: 0,
+            epoch: 1,
+            mapped: true,
+            discontinuity_generation: 0,
+            event: Event::Midi { port: 0, data: [0xf8, 0, 0], flags: 0 },
+            outcome: Outcome::wire(0, false),
+        }
+    }
+
+    #[test]
+    fn release_slots_reuse_only_after_accepted_acknowledgement() {
+        let mut debt = Debt::new();
+        assert!(debt.arm_release(7));
+        assert!(!debt.arm_release(7));
+        assert!(debt.discharge_accepted_release(0).is_none());
+        let mut first = debt.release(0).unwrap();
+        first.staged = true;
+        debt.update_release(0, first);
+        assert!(debt.arm_release(8));
+        assert_eq!((debt.release(0).unwrap().life, debt.release(1).unwrap().life), (7, 8));
+        assert!(debt.discharge_accepted_release(0).is_none());
+        first.accepted = Some(accepted(11));
+        debt.update_release(0, first);
+        assert_eq!(debt.discharge_accepted_release(0).unwrap().life, 7);
+        assert!(debt.arm_release(9));
+        assert_eq!(debt.release(0).unwrap().life, 9);
+    }
+
+    #[test]
+    fn destruction_vacates_release_slots_without_leaving_them_rearmable() {
+        let mut debt = Debt::new();
+        assert!(debt.arm_release(7));
+        assert!(debt.arm_release(8));
+        assert!(debt.arm_release(9));
+        let pending = debt.release(0).unwrap();
+        let mut staged = debt.release(1).unwrap();
+        staged.staged = true;
+        debt.update_release(1, staged);
+        let mut accepted_release = debt.release(2).unwrap();
+        accepted_release.accepted = Some(accepted(11));
+        debt.update_release(2, accepted_release);
+        let abandoned = debt.join();
+        assert_eq!(
+            abandoned.iter().flatten().map(|release| release.life).collect::<Vec<_>>(),
+            [7, 8, 9]
+        );
+        // A staged release exists only inside one synchronous process output
+        // drain, between prepare and its matching completion. CLAP destruction
+        // occurs after processing has stopped and the plugin is inactive, so
+        // this lower-level owner test is the only way to exercise that join
+        // input directly.
+        for (index, stale) in [pending, staged, accepted_release].into_iter().enumerate() {
+            assert!(!debt.arm_release(10 + index as u16));
+            debt.update_release(index, stale);
+            assert!(debt.release(index).is_none());
+        }
     }
 }

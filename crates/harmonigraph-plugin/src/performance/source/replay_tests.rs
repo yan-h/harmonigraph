@@ -58,9 +58,18 @@ impl Source {
     }
     pub fn test_stale_complete(
         &mut self,
-        completion: api::Completion,
+        mut completion: api::Completion,
         output: &mut api::Output<'_>,
     ) {
+        if let Some((first, _)) = completion.group.sequence_parts() {
+            completion = api::Completion {
+                group: first,
+                attempted: completion.attempted & 1,
+                accepted: completion.accepted & 1,
+                unattempted: completion.unattempted & 1,
+                disposition: completion.disposition,
+            };
+        }
         if !token::is_work(completion.group.token) || completion.accepted != 1 {
             return;
         }

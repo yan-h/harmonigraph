@@ -882,6 +882,46 @@ fn production_same_key_retrigger_chokes_its_predecessor_at_the_moment_of_emissio
 }
 
 #[test]
+fn production_membership_close_after_claim_cannot_split_a_replacement() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    assert_eq!(source.run_format(2048, vec![], None, None, 512).values.len(), 2);
+    hub.run_format(2048, vec![], None, None, 512);
+    source.run_format(2560, vec![note(2, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    let (lease, adopted, joined, coverage) =
+        inspect_source(&source, |source| source.test_stream_status());
+    assert!(adopted && joined && coverage.is_some());
+    let session = inspect_hub(&hub, |hub| hub.offer.as_ref().unwrap().session.clone());
+    let slot = usize::from(lease.unwrap().slot - 1);
+    super::SETUP_CLOSE.with(|hook| {
+        *hook.borrow_mut() = Some((session.clone(), slot, false, None));
+    });
+    let replacement = source.run_format(3072, vec![], None, None, 512);
+    let observed = super::SETUP_CLOSE.with(|hook| hook.borrow_mut().take().unwrap().3.unwrap());
+    assert_eq!(
+        observed,
+        source::BUSY,
+        "the one replacement preparation owns the emission gate before its first push"
+    );
+    assert!(session.rows[slot].withdrawn.load(Ordering::Acquire));
+    assert!(
+        matches!(
+            replacement.values.as_slice(),
+            [
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, .. }),
+                (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 2, .. }),
+                (0, Event::Expression { kind: 2, id: 2, .. }),
+            ]
+        ),
+        "a membership close after the atomic claim cannot strand the key: {:?}",
+        replacement.values
+    );
+}
+
+#[test]
 fn production_a_lifetime_born_and_ended_at_one_sample_leaves_no_tuning_context() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
@@ -4022,4 +4062,247 @@ fn production_replacement_keeps_its_onset_when_subblocks_spend_the_visit_budget(
     drop(source);
     drop(hub);
     assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
+
+#[test]
+fn production_sequence_exhaustion_cancels_before_a_replacement_choke_is_accepted() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    assert_eq!(source.run_format(2048, vec![], None, None, 512).values.len(), 2);
+    hub.run_format(2048, vec![], None, None, 512);
+    source.run_format(2560, vec![], None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    let prefix =
+        u64::MAX - nice_plug::wrapper::clap::performance::EMERGENCY_OUTPUT_ATTEMPTS as u64 - 1;
+    let source_wrapper = unsafe {
+        &*((*source.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
+    };
+    let hub_wrapper = unsafe {
+        &*((*hub.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+    };
+    let lease = source_wrapper.test_with_plugin(|plugin| {
+        plugin.source.as_mut().unwrap().test_rebase_output_prefix(prefix)
+    });
+    hub_wrapper.test_with_plugin(|plugin| {
+        plugin.aggregation.as_mut().unwrap().test_rebase_output_prefix(lease, prefix)
+    });
+    source.run_format(3072, vec![note(2, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(3072, vec![], None, None, 512);
+    let mut raw = 3584;
+    let canceled = loop {
+        assert!(raw < 8192, "the replacement never reached preparation");
+        let output = source.run_format(raw, vec![], None, None, 512);
+        if !output.values.is_empty() {
+            break output;
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+    };
+    assert_eq!(canceled.values.iter().filter(|(_, event)| event.release()).count(), 1);
+    assert!(!canceled.values.iter().any(|(_, event)| event.attack().is_some()));
+    let snapshot = source.source_snapshot();
+    assert_eq!(snapshot.faults, source::STORAGE_FAULT);
+    assert_eq!(
+        (snapshot.journal, snapshot.emergency),
+        (0, 4),
+        "the capacity fault precedes ordinary acceptance; its release is emergency cancellation"
+    );
+}
+
+#[test]
+fn production_journal_exhaustion_cancels_before_a_replacement_choke_is_accepted() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    assert_eq!(source.run_format(2048, vec![], None, None, 512).values.len(), 2);
+    hub.run_format(2048, vec![], None, None, 512);
+    source.run_format(2560, vec![note(2, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    let wrapper = unsafe {
+        &*((*source.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
+    };
+    wrapper.test_with_plugin(|plugin| plugin.source.as_mut().unwrap().test_fill_journal_to_free(1));
+    let mut raw = 3072;
+    let canceled = loop {
+        assert!(raw < 8192, "the replacement never reached preparation");
+        let output = source.run_format(raw, vec![], None, None, 512);
+        if !output.values.is_empty() {
+            break output;
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+    };
+    assert_eq!(canceled.values.iter().filter(|(_, event)| event.release()).count(), 1);
+    assert!(!canceled.values.iter().any(|(_, event)| event.attack().is_some()));
+    let snapshot = source.source_snapshot();
+    assert_eq!(snapshot.faults, source::STORAGE_FAULT);
+    assert_eq!(
+        (snapshot.journal, snapshot.emergency),
+        (protocol::OUTCOME_JOURNAL - 1, 4),
+        "the full journal is observed before ordinary acceptance, not after its choke"
+    );
+}
+
+#[test]
+fn replacement_pays_one_of_sixty_four_unreserved_physical_offs_before_its_onset() {
+    let _scope = crate::test_scope::enter();
+    for reject in [None, Some(1), Some(2)] {
+        let uuid = SavedUuid::default();
+        let mut hub = Device::aggregation(false);
+        hub.configure(uuid, true);
+        hub.activate();
+        let mut source = Device::aggregation(true);
+        source.configure(uuid, true);
+        source.activate();
+        source.run(0, vec![], None);
+        hub.run(0, vec![], None);
+        assert_eq!(
+            source
+                .run(64, (0..64).map(|key| note(key + 1, 0, key as i16, 0, true)).collect(), None)
+                .values
+                .len(),
+            64
+        );
+        hub.run(64, vec![], None);
+        source.run(128, vec![raw_midi([0xb0, 120, 0], 0)], None);
+        hub.run(128, vec![], None);
+        source.run(192, vec![], None);
+        hub.run(192, vec![], None);
+        let before = source.source_snapshot();
+        assert_eq!((before.held, before.note_off_owed), (0, 64));
+        let wire = source.run_select(256, vec![note(65, 0, 0, 7, true)], None, reject);
+        if reject.is_none() {
+            assert_eq!(wire.values.len(), 2);
+            assert!(matches!(
+                wire.values[0],
+                (7, Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 1, .. })
+            ));
+            assert!(matches!(
+                wire.values[1],
+                (7, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 65, .. })
+            ));
+            let after = source.source_snapshot();
+            assert_eq!((after.held, after.note_off_owed, after.faults), (1, 63, 0));
+        } else {
+            assert_eq!(wire.rejected.len(), 1);
+            assert_eq!(source.source_snapshot().faults, source::OUTPUT_FAULT);
+            assert!(!wire.values.iter().any(|(_, event)| event.attack().is_some()));
+        }
+        drop(source);
+        drop(hub);
+        assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+    }
+}
+
+#[test]
+fn production_replacement_refuses_each_preparation_boundary_before_its_choke() {
+    let _scope = crate::test_scope::enter();
+    use source::scheduler_tests::{self as probe, Boundary};
+    for boundary in [Boundary::Readiness, Boundary::Admission, Boundary::Gate] {
+        let (hub, source) = production_pair();
+        source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
+        hub.run_format(1536, vec![], None, None, 512);
+        assert_eq!(source.run_format(2048, vec![], None, None, 512).values.len(), 2);
+        hub.run_format(2048, vec![], None, None, 512);
+        source.run_format(2560, vec![note(2, 0, 60, 0, true)], None, None, 512);
+        hub.run_format(2560, vec![], None, None, 512);
+        probe::start_prepare(boundary);
+        let refused = source.run_format(3072, vec![], None, None, 512);
+        probe::finish_prepare();
+        assert!(refused.values.is_empty(), "{boundary:?} must not silence the predecessor");
+        let retry = source.run_format(3584, vec![], None, None, 512);
+        assert_eq!(retry.values.len(), 3, "{boundary:?} must preserve the whole replacement");
+        assert!(retry.values[0].1.release());
+        assert!(retry.values[1].1.attack().is_some());
+        assert!(retry.values.iter().all(|(time, _)| *time == retry.values[0].0));
+        drop(source);
+        drop(hub);
+        assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+    }
+}
+
+#[test]
+fn production_replacement_records_each_host_prefix_and_settles_its_permit() {
+    let _scope = crate::test_scope::enter();
+    for reject in 1..=3 {
+        let (hub, source) = production_pair();
+        source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
+        hub.run_format(1536, vec![], None, None, 512);
+        source.run_format(2048, vec![], None, None, 512);
+        hub.run_format(2048, vec![], None, None, 512);
+        source.run_format(2560, vec![note(2, 0, 60, 0, true)], None, None, 512);
+        hub.run_format(2560, vec![], None, None, 512);
+        let session = inspect_hub(&hub, |hub| hub.offer.as_ref().unwrap().session.clone());
+        let slot = inspect_source(&source, |source| {
+            usize::from(source.test_stream_status().0.unwrap().slot - 1)
+        });
+        let wire = source.run_format(3072, vec![], None, Some(reject), 512);
+        assert_eq!(wire.rejected.len(), 1);
+        let snapshot = inspect_source(&source, |source| source.test_snapshot());
+        assert_eq!(snapshot.faults, source::OUTPUT_FAULT);
+        assert_eq!(
+            snapshot.journal,
+            reject - 1,
+            "each accepted ordinary prefix has exactly one factual delta"
+        );
+        assert_eq!(
+            wire.values.iter().filter(|(_, event)| event.attack().is_some()).count(),
+            usize::from(reject == 3)
+        );
+        assert!(!inspect_source(&source, |source| source.test_permit_held()));
+        assert_eq!(session.rows[slot].emission_gate.load(Ordering::Acquire) & source::BUSY, 0);
+        assert_eq!(session.credits.load(Ordering::Acquire), 1);
+        for raw in (3072..=5632).step_by(512) {
+            hub.run_format(raw, vec![], None, None, 512);
+            source.run_format(raw + 512, vec![], None, None, 512);
+        }
+        let settled = source.source_snapshot();
+        assert_eq!((settled.held, settled.faults), (0, source::OUTPUT_FAULT));
+        assert!(!inspect_source(&source, |source| source.test_permit_held()));
+        drop(source);
+        drop(hub);
+        assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+    }
+}
+
+#[test]
+fn production_destruction_abandons_pending_and_accepted_release_owners_once() {
+    let _scope = crate::test_scope::enter();
+    for accepted in [false, true] {
+        let (hub, source) = production_pair();
+        source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
+        hub.run_format(1536, vec![], None, None, 512);
+        source.run_format(2048, vec![], None, None, 512);
+        hub.run_format(2048, vec![], None, None, 512);
+        let wrapper = unsafe {
+            &*((*source.plugin)
+                .plugin_data
+                .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
+        };
+        wrapper
+            .test_with_plugin(|plugin| plugin.source.as_mut().unwrap().fault(source::OUTPUT_FAULT));
+        if accepted {
+            let wire = source.run_format(2560, vec![], None, None, 512);
+            assert_eq!(wire.values.iter().filter(|(_, event)| event.release()).count(), 1);
+        }
+        let owners = wrapper
+            .test_inspect_plugin(|plugin| plugin.source.as_ref().unwrap().test_release_slots());
+        assert_eq!(owners.iter().flatten().count(), 1);
+        let owner = owners.into_iter().flatten().next().unwrap();
+        assert_eq!((owner.1, owner.2.is_some()), (false, accepted));
+        source::scheduler_tests::start_join();
+        drop(source);
+        source::scheduler_tests::finish_join(if accepted { (0, 0, 1) } else { (1, 0, 0) });
+        drop(hub);
+        assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+    }
 }

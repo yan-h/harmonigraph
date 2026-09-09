@@ -111,14 +111,105 @@ pub enum Lane {
     Emergency,
 }
 
+/// The output-only subset of [`InputValue`]. Keeping the retained form narrow
+/// lets one preparation own a short sequence without paying for three copies
+/// of the much larger transport-capable input enum in every scheduler cell.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Events {
-    Single(InputValue),
-    Pair { first: InputValue, second: InputValue },
+enum OutputValue {
+    Note {
+        kind: u16,
+        note_id: i32,
+        port: i16,
+        channel: i16,
+        key: i16,
+        velocity: f64,
+        flags: u32,
+    },
+    Expression {
+        expression: i32,
+        note_id: i32,
+        port: i16,
+        channel: i16,
+        key: i16,
+        value: f64,
+        flags: u32,
+    },
+    Midi {
+        port: u16,
+        data: [u8; 3],
+        flags: u32,
+    },
 }
 
-/// A single event or the one narrowly validated pair, note-on/tuning.
-/// Staging validates the enclosing output interval.
+impl OutputValue {
+    fn new(event: InputValue) -> Result<Self, StageError> {
+        Ok(match event {
+            InputValue::Note { kind, note_id, port, channel, key, velocity, flags }
+                if matches!(
+                    kind,
+                    CLAP_EVENT_NOTE_ON
+                        | CLAP_EVENT_NOTE_OFF
+                        | CLAP_EVENT_NOTE_CHOKE
+                        | CLAP_EVENT_NOTE_END
+                ) && velocity.is_finite() =>
+            {
+                Self::Note { kind, note_id, port, channel, key, velocity, flags }
+            }
+            InputValue::Expression {
+                expression,
+                note_id,
+                port,
+                channel,
+                key,
+                value,
+                flags,
+            } if value.is_finite() => {
+                Self::Expression { expression, note_id, port, channel, key, value, flags }
+            }
+            InputValue::Midi { port, data, flags } => Self::Midi { port, data, flags },
+            _ => return Err(StageError::Invalid),
+        })
+    }
+
+    fn input(self) -> InputValue {
+        match self {
+            Self::Note { kind, note_id, port, channel, key, velocity, flags } => {
+                InputValue::Note { kind, note_id, port, channel, key, velocity, flags }
+            }
+            Self::Expression { expression, note_id, port, channel, key, value, flags } => {
+                InputValue::Expression {
+                    expression,
+                    note_id,
+                    port,
+                    channel,
+                    key,
+                    value,
+                    flags,
+                }
+            }
+            Self::Midi { port, data, flags } => InputValue::Midi { port, data, flags },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Events {
+    Single(OutputValue),
+    Pair {
+        first: OutputValue,
+        second: OutputValue,
+    },
+    Sequence {
+        first: OutputValue,
+        second_token: Token,
+        second: OutputValue,
+        third: Option<OutputValue>,
+    },
+}
+
+/// One prepared output unit: a single event, a validated note-on/tuning pair,
+/// or a short sequence whose second group must be secured before the first is
+/// attempted. Staging validates the enclosing output interval.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Group {
     pub token: Token,
@@ -137,7 +228,24 @@ pub enum StageError {
 impl Group {
     pub fn initial_tuning(&self) -> Option<InputValue> {
         match self.events {
-            Events::Pair { second: tuning @ InputValue::Expression { expression: CLAP_NOTE_EXPRESSION_TUNING, .. }, .. } => Some(tuning),
+            Events::Pair {
+                second:
+                    tuning @ OutputValue::Expression {
+                        expression: CLAP_NOTE_EXPRESSION_TUNING,
+                        ..
+                    },
+                ..
+            }
+            | Events::Sequence {
+                third:
+                    Some(
+                        tuning @ OutputValue::Expression {
+                            expression: CLAP_NOTE_EXPRESSION_TUNING,
+                            ..
+                        },
+                    ),
+                ..
+            } => Some(tuning.input()),
             _ => None,
         }
     }
@@ -148,10 +256,7 @@ impl Group {
         time: u32,
         event: InputValue,
     ) -> Result<Self, StageError> {
-        if !valid_event(event) {
-            return Err(StageError::Invalid);
-        }
-        Ok(Self { token, lane, time, events: Events::Single(event) })
+        Ok(Self { token, lane, time, events: Events::Single(OutputValue::new(event)?) })
     }
 
     pub fn onset(
@@ -179,16 +284,76 @@ impl Group {
                     && i16::from(key) == tuning_key,
             _ => false,
         };
-        if !matching || !valid_event(note) || !valid_event(tuning) {
+        if !matching {
             return Err(StageError::Invalid);
         }
-        Ok(Self { token, lane: Lane::Normal, time, events: Events::Pair { first: note, second: tuning } })
+        Ok(Self {
+            token,
+            lane: Lane::Normal,
+            time,
+            events: Events::Pair {
+                first: OutputValue::new(note)?,
+                second: OutputValue::new(tuning)?,
+            },
+        })
+    }
+
+    /// Make two adjacent normal groups one preparation and one completion.
+    /// The first must be a single event and the second may be a single event
+    /// or an onset pair. This is the shape required when accepting the first
+    /// event without securing the second would make the wire state false.
+    pub fn sequence(first: Self, second: Self) -> Result<Self, StageError> {
+        if first.lane != Lane::Normal || second.lane != Lane::Normal || first.time != second.time {
+            return Err(StageError::Invalid);
+        }
+        let Events::Single(first_event) = first.events else {
+            return Err(StageError::Invalid);
+        };
+        let (second_event, third) = match second.events {
+            Events::Single(event) => (event, None),
+            Events::Pair { first, second } => (first, Some(second)),
+            Events::Sequence { .. } => return Err(StageError::Invalid),
+        };
+        Ok(Self {
+            token: first.token,
+            lane: Lane::Normal,
+            time: first.time,
+            events: Events::Sequence {
+                first: first_event,
+                second_token: second.token,
+                second: second_event,
+                third,
+            },
+        })
+    }
+
+    pub fn sequence_parts(&self) -> Option<(Self, Self)> {
+        let Events::Sequence { first, second_token, second, third } = self.events else {
+            return None;
+        };
+        let first = Self {
+            token: self.token,
+            lane: self.lane,
+            time: self.time,
+            events: Events::Single(first),
+        };
+        let second = Self {
+            token: second_token,
+            lane: self.lane,
+            time: self.time,
+            events: match third {
+                Some(third) => Events::Pair { first: second, second: third },
+                None => Events::Single(second),
+            },
+        };
+        Some((first, second))
     }
 
     pub fn event_count(&self) -> usize {
         match self.events {
             Events::Single(_) => 1,
             Events::Pair { .. } => 2,
+            Events::Sequence { third, .. } => 2 + usize::from(third.is_some()),
         }
     }
 
@@ -196,26 +361,12 @@ impl Group {
         match (self.events, index) {
             (Events::Single(e), 0)
             | (Events::Pair { first: e, .. }, 0)
-            | (Events::Pair { second: e, .. }, 1) => Some(e),
+            | (Events::Pair { second: e, .. }, 1)
+            | (Events::Sequence { first: e, .. }, 0)
+            | (Events::Sequence { second: e, .. }, 1)
+            | (Events::Sequence { third: Some(e), .. }, 2) => Some(e.input()),
             _ => None,
         }
-    }
-}
-
-fn valid_event(event: InputValue) -> bool {
-    match event {
-        InputValue::Note { kind, velocity, .. } => {
-            matches!(
-                kind,
-                CLAP_EVENT_NOTE_ON
-                    | CLAP_EVENT_NOTE_OFF
-                    | CLAP_EVENT_NOTE_CHOKE
-                    | CLAP_EVENT_NOTE_END
-            ) && velocity.is_finite()
-        }
-        InputValue::Expression { value, .. } => value.is_finite(),
-        InputValue::Midi { .. } => true,
-        _ => false,
     }
 }
 
@@ -228,10 +379,9 @@ pub enum Disposition {
     ProcessError,
 }
 
-/// Bits follow event order: single, note-on then tuning, CC88 then raw MIDI,
-/// or CC88 then raw note-on then tuning. A rejection suppresses the remaining
-/// events. Accepted prefixes continue under the SAME caller permit even if a
-/// fence closes inside a host call.
+/// Bits follow event order. A rejection suppresses the remaining events.
+/// Accepted prefixes continue under the SAME caller permit even if a fence
+/// closes inside a host call.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Completion {
     pub group: Group,
@@ -252,9 +402,10 @@ pub struct Summary {
 }
 
 /// All storage is allocated once during wrapper construction. Each admitted
-/// group keeps its cell through durable completion; pairs charge two event AND
-/// completion credits atomically. Unattempted reservations are not recycled in
-/// this callback, so repeatedly rejected claims cannot create unbounded work.
+/// group keeps its cell through durable completion and charges every retained
+/// event and its completion atomically. Unattempted reservations are not
+/// recycled in this callback, so repeatedly rejected claims cannot create
+/// unbounded work.
 pub(crate) struct Scheduler {
     cells: Box<[Option<Group>; OUTPUT_CELLS]>,
     ready: [u16; OUTPUT_CELLS],
