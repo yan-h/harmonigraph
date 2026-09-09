@@ -12,6 +12,10 @@ Everything below is what it cost to make that sentence true in a real DAW, and w
 
 ## Status
 
+The proposed replacement musical policy is recorded in [Adaptive tuning: a moving harmonic neighbourhood](adaptive-tuning-design.md).
+That document contains requirements and open design questions from discussion with Yan, not implemented behaviour;
+the implementation described below remains the current policy and transport.
+
 Built and merged in [#709](https://github.com/yan-h/harmonigraph/issues/709), then substantially simplified by [#712](https://github.com/yan-h/harmonigraph/issues/712), which removed the recovery transaction, the shared capture arena, the controller-history replay, the resumable cohort sort, the configuration timeline and the publication repair protocol.
 This document describes the tree it ships in, which is #712's stack —
 so until that stack lands, `main` is still the larger version.
