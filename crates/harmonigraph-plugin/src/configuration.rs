@@ -180,7 +180,6 @@ pub fn save(snapshot: ConfigurationSnapshot, state: &mut PluginState) {
 mod recording;
 
 pub struct Owner {
-    pub frozen: bool,
     /// Every edit reduces here the moment it arrives, in arrival order, so the
     /// reducer's own combined-edit/preset/unlock semantics are untouched.
     pub(crate) reducer: ConfigReducer,
@@ -209,7 +208,6 @@ impl Owner {
         };
 
         Self {
-            frozen: false,
             block: reducer.resolved(),
             reducer,
             recording: recording::Recording::default(),
@@ -232,9 +230,6 @@ impl Owner {
         recorder: &harmonigraph_record::Recorder,
         _presentation_time: f64,
     ) {
-        if self.frozen {
-            return;
-        }
         self.boundary = boundary;
         self.recording.captured_intent = recorder.capture_recording_intent();
         self.recording.block_start = boundary.steady_time;
@@ -250,9 +245,7 @@ impl Owner {
     /// reduced by now; this is where the whole of it becomes effective, and
     /// nothing later in the callback moves the value again.
     pub fn adopt(&mut self) {
-        if !self.frozen {
-            self.block = self.reducer.resolved();
-        }
+        self.block = self.reducer.resolved();
     }
 
     /// The one configuration for assignment groups started in this block. A
@@ -261,11 +254,10 @@ impl Owner {
         &self,
         clock: harmonigraph_core::canonical::ClockId,
     ) -> Option<ResolvedConfig> {
-        (!self.frozen && clock == self.recording.clock).then_some(self.block)
+        (clock == self.recording.clock).then_some(self.block)
     }
 
     pub fn reset(&mut self, recorder: &harmonigraph_record::Recorder) {
-        self.frozen = false;
         self.confirmed.reset();
         self.learning = LearningState::default();
         self.learned = None;
@@ -280,7 +272,7 @@ impl Owner {
         command: ConfigurationCommand,
         commit: ConfigurationCommit,
     ) -> Option<ConfigurationSnapshot> {
-        if self.frozen || self.snapshot.status & 2 != 0 {
+        if self.snapshot.status & 2 != 0 {
             return None;
         }
         let raw = tuning(commit.raw);
@@ -333,9 +325,6 @@ impl Owner {
         Some(self.snapshot)
     }
     pub fn segment(&mut self, start: u32, frames: u32) {
-        if self.frozen {
-            return;
-        }
         self.recording.block_start = self.boundary.steady_time + i64::from(start);
         self.recording.block_frames = frames;
     }
@@ -365,9 +354,6 @@ impl Owner {
         origin: Option<f64>,
         observation_time: f64,
     ) {
-        if self.frozen {
-            return;
-        }
         self.recording.observation_time = observation_time;
         if self.snapshot.status & 2 != 0 && recorder.recording_epoch() != 0 {
             recorder.fail_configuration();
@@ -376,9 +362,6 @@ impl Owner {
     }
 
     pub fn group_end(&mut self) -> Option<ConfigurationEdit> {
-        if self.frozen {
-            return None;
-        }
         if self.snapshot.status != 0 {
             return None;
         }

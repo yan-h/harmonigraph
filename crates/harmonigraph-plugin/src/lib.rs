@@ -606,11 +606,7 @@ impl Plugin for Harmonigraph {
         // state on the arming edge. Skipping it on a disarmed block means the
         // next arm edge never fires and recording silently never resumes.
         let armed = match self.configuration.as_ref() {
-            Some(owner) if !owner.frozen => self.take.is_armed_at(owner.recording_intent()),
-            Some(_) => {
-                self.take.is_armed();
-                false
-            }
+            Some(owner) => self.take.is_armed_at(owner.recording_intent()),
             None => self.take.is_armed(),
         };
         let take_origin =
