@@ -4,29 +4,9 @@ use nice_plug::wrapper::clap::configuration::InputValue;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
-    Note {
-        kind: u16,
-        id: i32,
-        port: i16,
-        channel: i16,
-        key: i16,
-        velocity: f64,
-        flags: u32,
-    },
-    Expression {
-        kind: i32,
-        id: i32,
-        port: i16,
-        channel: i16,
-        key: i16,
-        value: f64,
-        flags: u32,
-    },
-    Midi {
-        port: u16,
-        data: [u8; 3],
-        flags: u32,
-    },
+    Note { kind: u16, id: i32, port: i16, channel: i16, key: i16, velocity: f64, flags: u32 },
+    Expression { kind: i32, id: i32, port: i16, channel: i16, key: i16, value: f64, flags: u32 },
+    Midi { port: u16, data: [u8; 3], flags: u32 },
 }
 
 impl Event {
@@ -143,9 +123,6 @@ impl Event {
             _ => false,
         }
     }
-
-
-
 }
 
 const _: () = assert!(std::mem::size_of::<Event>() <= 48);

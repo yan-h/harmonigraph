@@ -17,9 +17,9 @@ mod configuration;
 mod editor;
 #[cfg(all(feature = "startup-probe", target_os = "macos"))]
 pub use editor::startup_probe::run as editor_startup_probe;
-mod tuning;
 #[cfg(test)]
 mod test_scope;
+mod tuning;
 use tuning::plugin::HarmonigraphTune;
 
 /// Capacity of the audio→GUI sample ring feeding the Spectral pane's
@@ -699,7 +699,7 @@ impl Plugin for Harmonigraph {
         }
 
         if let Some(owner) = self.configuration.as_mut() {
-            self.aggregation.as_mut().unwrap().publish_snapshots(owner, &mut self.take);
+            self.aggregation.as_mut().unwrap().publish(owner, &mut self.take);
             owner.finish_recording_publication(
                 &mut self.take,
                 ring_time(self.presentation_seconds, block_samples as u32, self.sample_rate),
@@ -791,12 +791,7 @@ impl ClapPlugin for Harmonigraph {
         self.aggregation.as_mut().unwrap().input(input);
     }
     fn clap_performance_input_boundary(&mut self) {
-        let observation = self.presentation_seconds;
-        self.aggregation.as_mut().unwrap().input_boundary(
-            self.configuration.as_mut().unwrap(),
-            &mut self.take,
-            observation,
-        );
+        self.aggregation.as_mut().unwrap().input_boundary(self.configuration.as_mut().unwrap());
     }
     fn clap_performance_process(
         &mut self,
@@ -844,7 +839,11 @@ impl ClapPlugin for Harmonigraph {
         callback: nice_plug::wrapper::clap::performance::Callback,
         _summary: nice_plug::wrapper::clap::performance::Summary,
     ) {
-        self.aggregation.as_mut().unwrap().end(callback);
+        let observation = self.presentation_seconds;
+        if let Some(owner) = self.configuration.as_mut() {
+            self.aggregation.as_mut().unwrap().end(callback, owner, &mut self.take);
+            owner.finish_recording_publication(&mut self.take, observation);
+        }
     }
     const CLAP_CONFIGURATION: bool = true;
     const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] =

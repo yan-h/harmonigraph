@@ -244,7 +244,6 @@ impl Recording {
         self.finish(recorder);
     }
 
-
     pub fn finish(&mut self, recorder: &mut Recorder) {
         for cell in &mut self.passes {
             let Some(pass) = cell.as_mut() else {

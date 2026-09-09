@@ -151,8 +151,8 @@ impl Shared {
     /// The multiplier this instance still owes the session, or none.
     fn pending_delay(&self) -> Option<u32> {
         let (generation, multiplier) = session::session().delay_request();
-        (generation != 0 && self.adopted_delay_request.swap(generation, Ordering::AcqRel)
-            != generation)
+        (generation != 0
+            && self.adopted_delay_request.swap(generation, Ordering::AcqRel) != generation)
             .then_some(multiplier)
     }
 }

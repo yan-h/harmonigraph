@@ -20,6 +20,9 @@ use super::{setup, CAPTURE_RING, CUT_EVENTS, HELD_PER_SOURCE, PENDING_EVENTS, RE
 /// outlive the note-offs beside them, so a cut that left one down would hold
 /// the very voices it just released.
 const PEDALS: [u8; 3] = [64, 66, 69];
+/// `CLAP_TRANSPORT_IS_PLAYING`, which the wrapper hands over as a bare flag
+/// word rather than as a clap-sys type.
+const IS_PLAYING: u32 = 1 << 4;
 
 /// One retained input, waiting for its own emission time.
 #[derive(Clone, Copy)]
@@ -212,8 +215,8 @@ impl Tune {
         if matches!(self.link, Link::Detached) {
             status |= session::NO_ROW;
         }
-        self.status = (self.status & (session::RING_FULL | session::CLOCK | session::DROPPED))
-            | status;
+        self.status =
+            (self.status & (session::RING_FULL | session::CLOCK | session::DROPPED)) | status;
     }
 
     /// True while this Tune has somewhere to send a copy and someone to answer
@@ -279,7 +282,7 @@ impl Tune {
         if let nice_plug::wrapper::clap::configuration::InputValue::Transport(transport) =
             input.value
         {
-            let playing = transport.flags & clap_sys::events::CLAP_TRANSPORT_IS_PLAYING != 0;
+            let playing = transport.flags & IS_PLAYING != 0;
             if self.playing && !playing {
                 self.take_cut(session::session().stop());
             }
@@ -396,9 +399,8 @@ impl Tune {
         self.drain_replies();
         let Some(callback) = self.callback else { return };
         let base = callback.steady_time;
-        let end = base
-            .saturating_add(i64::from(block.start))
-            .saturating_add(i64::from(block.frames));
+        let end =
+            base.saturating_add(i64::from(block.start)).saturating_add(i64::from(block.frames));
         while let Some(event) = self.cut.front() {
             let time = output.cursor().max(block.start).min(callback.frames.saturating_sub(1));
             if !self.emit(output, time, event, None, 0) {

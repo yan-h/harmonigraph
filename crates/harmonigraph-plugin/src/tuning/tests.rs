@@ -7,17 +7,14 @@ use clap_sys::{
     ext::{
         latency::{clap_host_latency, clap_plugin_latency, CLAP_EXT_LATENCY},
         params::{clap_plugin_params, CLAP_EXT_PARAMS},
-        state::{clap_plugin_state, CLAP_EXT_STATE},
     },
     factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID},
     host::clap_host,
     plugin::clap_plugin,
     process::*,
-    stream::{clap_istream, clap_ostream},
     version::CLAP_VERSION,
 };
 use event::Event;
-use nice_plug::plugin::PluginState;
 
 #[path = "musical_tests.rs"]
 mod musical_tests;
@@ -294,11 +291,6 @@ impl Device {
             (*self.plugin).on_main_thread.unwrap()(self.plugin);
         }
     }
-    fn state_api(&self) -> &clap_plugin_state {
-        unsafe {
-            &*((*self.plugin).get_extension.unwrap()(self.plugin, CLAP_EXT_STATE.as_ptr()).cast())
-        }
-    }
     fn params(&self) -> &clap_plugin_params {
         unsafe {
             &*((*self.plugin).get_extension.unwrap()(self.plugin, CLAP_EXT_PARAMS.as_ptr()).cast())
@@ -353,21 +345,6 @@ impl Device {
             wrapper
                 .test_inspect_plugin(|plugin| plugin.aggregation.as_ref().unwrap().shared.clone())
         }
-    }
-    fn load(&self, state: &PluginState) -> bool {
-        let bytes = serde_json::to_vec(state).unwrap();
-        let mut framed = (bytes.len() as u64).to_le_bytes().to_vec();
-        framed.extend(bytes);
-        let mut reader = (framed.as_slice(), 0usize);
-        let stream =
-            clap_istream { ctx: (&mut reader as *mut (&[u8], usize)).cast(), read: Some(read) };
-        unsafe { self.state_api().load.unwrap()(self.plugin, &stream) }
-    }
-    fn save(&self) -> PluginState {
-        let mut bytes = Vec::new();
-        let stream = clap_ostream { ctx: (&mut bytes as *mut Vec<u8>).cast(), write: Some(write) };
-        assert!(unsafe { self.state_api().save.unwrap()(self.plugin, &stream) });
-        serde_json::from_slice(&bytes[8..]).unwrap()
     }
     fn run(&self, raw: i64, events: Vec<Input>, reject_kind: Option<u16>) -> Sink {
         self.run_select(raw, events, reject_kind, None)
@@ -459,7 +436,12 @@ impl Device {
         let started = std::time::Instant::now();
         let status = unsafe { (*self.plugin).process.unwrap()(self.plugin, &process) };
         sink.callback_nanos = started.elapsed().as_nanos();
-        assert_eq!(status == CLAP_PROCESS_ERROR, expect_error);
+        assert_eq!(
+            status == CLAP_PROCESS_ERROR,
+            expect_error,
+            "tuner={} raw={raw} frames={frames}",
+            self.tuner
+        );
         sink
     }
 }
@@ -474,19 +456,358 @@ impl Drop for Device {
         }
     }
 }
-unsafe extern "C" fn read(stream: *const clap_istream, out: *mut c_void, size: u64) -> i64 {
-    let reader = unsafe { &mut *((*stream).ctx.cast::<(&[u8], usize)>()) };
-    let count = (size as usize).min(reader.0.len() - reader.1);
-    unsafe {
-        ptr::copy_nonoverlapping(reader.0[reader.1..].as_ptr(), out.cast(), count);
-    }
-    reader.1 += count;
-    count as i64
+
+/// One Hub and one Tune, at 48 kHz and 512-frame callbacks, so D is 512
+/// samples at the default 1x. `step` runs the Tune and then the Hub, which is
+/// the order that lets a 1x note make its own deadline.
+struct Pair {
+    hub: Device,
+    tune: Device,
+    raw: i64,
 }
-unsafe extern "C" fn write(stream: *const clap_ostream, input: *const c_void, size: u64) -> i64 {
-    unsafe { &mut *((*stream).ctx.cast::<Vec<u8>>()) }.extend_from_slice(unsafe {
-        std::slice::from_raw_parts(input.cast::<u8>(), size as usize)
-    });
-    size as i64
+impl Pair {
+    fn new() -> Self {
+        let mut hub = Device::new(false);
+        hub.activate();
+        let mut tune = Device::new(true);
+        tune.activate();
+        Self { hub, tune, raw: 0 }
+    }
+    fn step(&mut self, input: Vec<Input>) -> Vec<(u32, Event)> {
+        let sink = self.tune.run(self.raw, input, None);
+        self.hub.run(self.raw, vec![], None);
+        self.raw += 512;
+        sink.values
+    }
+    fn idle(&mut self) -> Vec<(u32, Event)> {
+        self.step(vec![])
+    }
+    fn misses(&self) -> u64 {
+        self.tune.shared().misses.load(Ordering::Relaxed)
+    }
+    fn status(&self) -> u32 {
+        self.tune.shared().status()
+    }
+}
+fn tuning_of(output: &[(u32, Event)]) -> Option<f64> {
+    output.iter().find_map(|(_, event)| match event {
+        Event::Expression { kind: 2, value, .. } => Some(*value),
+        _ => None,
+    })
 }
 
+/// The whole of the delay contract: an input emits at its own sample plus D,
+/// with the correction that came back for it.
+#[test]
+fn an_input_emits_at_its_own_sample_plus_the_delay_with_its_correction() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    assert!(pair.step(vec![note(1, 0, 60, 17, true)]).is_empty(), "nothing emits before D");
+    let output = pair.idle();
+    assert_eq!(output.len(), 2, "the note and the tuning expression that states it: {output:?}");
+    assert_eq!(output[0].0, 17, "input offset 17 plus D lands at offset 17 of the next callback");
+    assert!(tuning_of(&output).is_some());
+    assert_eq!(pair.misses(), 0);
+}
+
+/// An onset whose correction has not arrived by its own deadline emits at raw
+/// pitch and counts the miss. Nothing waits, and the next note is unaffected.
+#[test]
+fn an_onset_without_its_correction_emits_uncorrected_and_counts_the_miss() {
+    let _scope = crate::test_scope::enter();
+    // No Hub in the process at all: the request has nowhere to go, which is
+    // the cheapest way to reach the uncorrected path from outside.
+    let mut tune = Device::new(true);
+    tune.activate();
+    assert!(tune.run(0, vec![note(1, 0, 60, 0, true)], None).values.is_empty());
+    let output = tune.run(512, vec![], None).values;
+    assert_eq!(output.len(), 1, "the note goes out on time, alone: {output:?}");
+    assert!(tuning_of(&output).is_none(), "no correction is stated for a note that has none");
+    // An unpaired Tune is not a missed deadline: a larger delay is no remedy
+    // for a Hub that is not there, so the status says so instead.
+    assert_eq!(tune.shared().misses.load(Ordering::Relaxed), 0);
+    assert_ne!(tune.shared().status() & session::NO_HUB, 0);
+}
+
+/// #718, retargeted. An unpaired Tune is an ordinary delay line: it forwards
+/// everything it is given, at D, and never holds a note back for an answer
+/// that is not coming.
+#[test]
+fn an_unpaired_tune_passes_notes_through_uncorrected() {
+    let _scope = crate::test_scope::enter();
+    let mut tune = Device::new(true);
+    tune.activate();
+    let phrase = [60, 64, 67];
+    let mut emitted = Vec::new();
+    for step in 0..phrase.len() + 2 {
+        let input = phrase
+            .get(step)
+            .map(|key| vec![note(step as i32, 0, *key, 0, true)])
+            .unwrap_or_default();
+        emitted.extend(tune.run_format(step as i64 * 512, input, None, None, 512).values);
+    }
+    let keys: Vec<i16> = emitted
+        .iter()
+        .filter_map(|(_, event)| event.attack().map(|(_, _, key, _)| i16::from(key)))
+        .collect();
+    assert_eq!(keys, phrase, "every note reached the wire, in order: {emitted:?}");
+    assert!(tuning_of(&emitted).is_none());
+    assert_ne!(tune.shared().status() & session::NO_HUB, 0);
+}
+
+/// A full ring drops that note from the Hub's context, so it sounds
+/// uncorrected and counts as a miss. The ring is what overflows; the note is
+/// not held back and nothing latches.
+#[test]
+fn a_full_copy_ring_costs_a_correction_rather_than_a_note() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    let mut input: Vec<_> =
+        (0..CAPTURE_RING).map(|index| raw_midi([0xb0, 20, (index % 128) as u8], 0)).collect();
+    input.push(note(1, 0, 60, 0, true));
+    pair.step(input);
+    let mut output = Vec::new();
+    for _ in 0..6 {
+        output.extend(pair.idle());
+    }
+    let attacks: Vec<_> = output.iter().filter(|(_, event)| event.attack().is_some()).collect();
+    assert_eq!(attacks.len(), 1, "the note itself is never the thing that is dropped");
+    assert!(tuning_of(&output).is_none(), "its copy never reached the Hub");
+    assert_eq!(pair.misses(), 1);
+    assert_ne!(pair.status() & session::RING_FULL, 0);
+}
+
+/// A reply reaches the onset with its serial or it reaches nothing. After a
+/// cut the epoch has moved, so an answer minted before it is discarded rather
+/// than attached to whatever now holds that serial.
+#[test]
+fn a_reply_from_before_the_cut_is_discarded_rather_than_attached() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    // Ask, then cut before the answer can be drained.
+    pair.tune.run(pair.raw, vec![note(1, 0, 60, 0, true)], None);
+    pair.hub.run(pair.raw, vec![], None);
+    pair.raw += 512;
+    pair.tune.shared().request_reset();
+    pair.tune.main();
+    let output = pair.idle();
+    assert!(
+        tuning_of(&output).is_none(),
+        "the correction was minted under the epoch the cut ended: {output:?}"
+    );
+    // And the session is playable again immediately afterwards.
+    pair.step(vec![note(2, 0, 62, 0, true)]);
+    let resumed = pair.idle();
+    assert!(tuning_of(&resumed).is_some(), "the next note is corrected: {resumed:?}");
+}
+
+/// #787, retargeted. The Apply that used to park a row behind ten wait
+/// reasons is now one epoch bump: it cuts what is sounding, and the very next
+/// phrase is corrected again. Audio resuming is the whole assertion.
+#[test]
+fn reset_cuts_and_audio_resumes_within_two_callbacks() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    pair.step(vec![note(1, 0, 60, 0, true)]);
+    let sounding = pair.idle();
+    assert!(tuning_of(&sounding).is_some(), "the fixture reaches the Reset with a note held");
+    pair.tune.shared().request_reset();
+    pair.tune.main();
+    // The cut owes a Note-Off for the voice it just ended.
+    let cut = pair.idle();
+    assert!(
+        cut.iter().any(|(_, event)| event.release()),
+        "the cut releases what it forgot it was holding: {cut:?}"
+    );
+    for step in 0..2 {
+        pair.step(vec![note(10 + step, 0, 64, 0, true)]);
+        let output = pair.idle();
+        if tuning_of(&output).is_some() {
+            return;
+        }
+    }
+    panic!("audio must resume within two callbacks of the cut");
+}
+
+/// The cut ends every held voice and neutralises the pedals it left down.
+/// A pedal still holding after its note-off would hold the very voices the
+/// cut just released.
+#[test]
+fn the_cut_releases_every_held_voice_and_neutralises_the_pedals() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    pair.step(vec![raw_midi([0xb0, 64, 127], 0), note(1, 0, 60, 1, true), note(2, 0, 64, 2, true)]);
+    let sounding = pair.idle();
+    assert_eq!(
+        sounding.iter().filter(|(_, event)| event.attack().is_some()).count(),
+        2,
+        "the fixture reaches the cut with two voices and a pedal down: {sounding:?}"
+    );
+    pair.tune.shared().request_reset();
+    pair.tune.main();
+    let cut = pair.idle();
+    assert_eq!(
+        cut.iter().filter(|(_, event)| event.release()).count(),
+        2,
+        "one Note-Off per held voice: {cut:?}"
+    );
+    assert!(
+        cut.iter().any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 64, 0], .. })),
+        "sustain is put back down to neutral: {cut:?}"
+    );
+}
+
+/// No coverage wait. A record whose sample the Hub has already sequenced is
+/// assigned when it arrives, rather than establishing an interval nobody can
+/// complete.
+#[test]
+fn a_record_arriving_after_its_sample_was_sequenced_is_still_assigned() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    let mut early = Device::new(true);
+    early.activate();
+    let mut late = Device::new(true);
+    late.activate();
+    // The early Tune plays and the Hub sequences that sample.
+    early.run(0, vec![note(1, 0, 60, 0, true)], None);
+    hub.run(0, vec![], None);
+    // The late Tune's copy for the SAME sample only reaches the Hub now.
+    late.run(0, vec![note(2, 0, 64, 0, true)], None);
+    hub.run(512, vec![], None);
+    let output = late.run(512, vec![], None).values;
+    assert!(
+        tuning_of(&output).is_some(),
+        "the late record is assigned when it arrives, not refused: {output:?}"
+    );
+}
+
+/// Membership is the epoch. A Tune attaching cuts every paired track, which
+/// is the price of never having a hot-plug reconciliation to get wrong.
+#[test]
+fn a_tune_attaching_cuts_every_track_already_playing() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    pair.step(vec![note(1, 0, 60, 0, true)]);
+    assert!(tuning_of(&pair.idle()).is_some());
+    let mut joining = Device::new(true);
+    joining.activate();
+    let cut = pair.idle();
+    assert!(
+        cut.iter().any(|(_, event)| event.release()),
+        "the attach cut the voice the first Tune was holding: {cut:?}"
+    );
+    drop(joining);
+}
+
+/// #757 and #672, retargeted. Destruction is one main-thread release: the row
+/// goes back, and the next Tune takes it. There is nothing to settle, so
+/// there is nothing that can fail to.
+#[test]
+fn destroy_leaves_no_registry_entry() {
+    let _scope = crate::test_scope::enter();
+    let session = session::session();
+    let mut hub = Device::new(false);
+    hub.activate();
+    assert_ne!(session.hub(), 0);
+    for _ in 0..3 {
+        let mut tune = Device::new(true);
+        tune.activate();
+        let held: Vec<_> = (0..TUNERS as u8).filter(|slot| session.row(*slot).held()).collect();
+        assert_eq!(held.len(), 1, "exactly one row is claimed at a time");
+        tune.run(0, vec![note(1, 0, 60, 0, true)], None);
+        drop(tune);
+        assert!(
+            (0..TUNERS as u8).all(|slot| !session.row(slot).held()),
+            "the row goes back at destruction"
+        );
+    }
+    drop(hub);
+    assert_eq!(session.hub(), 0, "and so does the Hub's own slot");
+    assert_eq!(session.hubs(), 0);
+}
+
+/// A second Harmonigraph is a status on both rather than a pairing choice.
+/// Neither of them stops passing notes for it.
+#[test]
+fn a_second_hub_is_a_fault_status_and_never_a_silence() {
+    let _scope = crate::test_scope::enter();
+    let mut first = Device::new(false);
+    first.activate();
+    let mut second = Device::new(false);
+    second.activate();
+    let mut tune = Device::new(true);
+    tune.activate();
+    tune.run(0, vec![note(1, 0, 60, 0, true)], None);
+    first.run(0, vec![], None);
+    second.run(0, vec![], None);
+    let output = tune.run(512, vec![], None).values;
+    assert_eq!(output.len(), 2, "the note is still corrected by the Hub that owns the session");
+    assert_ne!(tune.shared().status() & session::SECOND_HUB, 0);
+    assert_ne!(first.shared().status() & session::SECOND_HUB, 0);
+}
+
+/// The delay is `multiplier x advertised maximum frames`, resolved at
+/// activation and reported to the host as latency before any Hub exists.
+#[test]
+fn the_delay_is_reported_as_latency_from_the_saved_multiplier_alone() {
+    let _scope = crate::test_scope::enter();
+    let mut tune = Device::new(true);
+    assert_eq!(tune.latency(), 0, "no activation has advertised a format yet");
+    tune.activate_format(48000.0, 256);
+    assert_eq!(tune.latency(), 256);
+    // A stepped parameter's CLAP value is its step index, so 3 is 4x buffer.
+    tune.run(0, vec![tune.param_event(DELAY_PARAM, 3.0, 0)], None);
+    tune.reactivate_format(48000.0, 256);
+    assert_eq!(tune.latency(), 4 * 256, "the new multiplier is adopted at the reactivation");
+    // The round trip is through a normalized f32, so this is the step index
+    // rather than an exact double.
+    assert_eq!(tune.param_value(DELAY_PARAM).round(), 3.0, "and the host reads back what it set");
+}
+
+/// A host format change is a cut: the notes standing in the line were
+/// scheduled against a delay that no longer exists.
+#[test]
+fn a_host_format_change_cuts_and_adopts_the_new_delay() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    pair.step(vec![note(1, 0, 60, 0, true)]);
+    assert!(tuning_of(&pair.idle()).is_some());
+    pair.tune.reactivate_format(48000.0, 128);
+    let after = pair.step(vec![note(2, 0, 62, 0, true)]);
+    assert!(
+        after.iter().any(|(_, event)| event.release()),
+        "reactivation released the voice it stopped being able to schedule: {after:?}"
+    );
+    let output = pair.idle();
+    assert!(tuning_of(&output).is_some(), "and the next note is corrected at the new D");
+}
+
+/// The two publication lanes stay independent, and the display shows what the
+/// Hub scheduled: input plus that source's D, not the sample it arrived at.
+#[test]
+fn the_display_shows_the_schedule_rather_than_the_input() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, capture) = Device::recorded_hub();
+    hub.activate();
+    let mut tune = Device::new(true);
+    tune.activate();
+    tune.run_format(0, vec![note(1, 0, 60, 64, true)], None, None, 512);
+    hub.run_format(0, vec![], None, None, 512);
+    let mut capture = capture;
+    let onset = capture
+        .display_events()
+        .into_iter()
+        .find_map(|record| match record {
+            harmonigraph_take::CanonicalRecord::Delta(delta)
+                if matches!(delta.event.kind, harmonigraph_take::NoteKind::On { .. }) =>
+            {
+                delta.timing
+            }
+            _ => None,
+        })
+        .expect("the onset reached the display lane with its own timing");
+    assert_eq!(onset.input, 64, "the sample it arrived at");
+    assert_eq!(onset.sample, 64 + 512, "and the sample it is scheduled to sound at");
+    assert_eq!(onset.planned, Some(onset.sample));
+}

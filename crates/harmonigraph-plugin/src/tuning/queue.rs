@@ -68,8 +68,4 @@ impl<T, const N: usize> Queue<T, N> {
 }
 
 #[cfg(test)]
-impl<T, const N: usize> Queue<T, N> {
-    pub fn test_layout(&self) -> [usize; 3] {
-        [std::mem::size_of::<Option<T>>(), self.cells.len(), std::mem::size_of_val(&*self.cells)]
-    }
-}
+impl<T, const N: usize> Queue<T, N> {}

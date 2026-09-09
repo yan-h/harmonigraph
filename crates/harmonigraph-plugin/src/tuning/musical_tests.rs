@@ -229,10 +229,7 @@ fn production_musical_ii_v_i_keeps_each_common_tone_through_the_change() {
 fn production_tune_preserves_player_pitch_and_freezes_only_the_adaptive_correction() {
     let _scope = crate::test_scope::enter();
     let mut phrase = Phrase::new();
-    phrase.step(
-        [vec![note(7, 0, 57, 0, true), expression(7, 0.25, 0)], vec![], vec![]],
-        [0, 1, 2],
-    );
+    phrase.step([vec![note(7, 0, 57, 0, true), expression(7, 0.25, 0)], vec![], vec![]], [0, 1, 2]);
     let output = phrase.idle();
     let onset = phrase.voice(0, 57, 0);
     let correction = onset.frozen_offset_microcents;

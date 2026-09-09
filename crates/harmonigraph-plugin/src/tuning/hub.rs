@@ -10,7 +10,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use harmonigraph_core::canonical::{ClockId, EventTiming, VoiceBaseline};
+use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
@@ -24,6 +24,17 @@ use super::tune::Tune;
 use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, HELD_SESSION, TUNERS};
 
 type Owner = crate::configuration::Owner;
+
+/// The identity one row's notes carry downstream. The Hub's own track keeps
+/// the reserved DIRECT id every consumer already knows it by; a Tune row is
+/// one past its own index, so no paired track can collide with it.
+fn identity(source: u8) -> SourceId {
+    if source == DIRECT {
+        SourceId::DIRECT
+    } else {
+        SourceId(u64::from(source) + 1)
+    }
+}
 
 /// One copied record staged for the ordering pass, with the row it came from.
 #[derive(Clone, Copy)]
@@ -60,6 +71,20 @@ struct Assigned {
     player: f64,
     channel_pitch: i64,
     configuration: ResolvedConfig,
+}
+
+/// One scheduled delta, waiting for the callback's own recording segment to
+/// exist. Sequencing runs at the input boundary, because that is where the
+/// replies have to be minted; the recorder does not register this block until
+/// `process`, so routing a delta before then would route it into nothing.
+#[derive(Clone, Copy)]
+struct Published {
+    source: u8,
+    delta: NoteDelta,
+    /// The sample the input arrived at, which is the one inside this block's
+    /// segment. The delta itself carries the time it is scheduled to sound.
+    input: i64,
+    timing: EventTiming,
 }
 
 /// A note the Hub believes is sounding, as far as the policy is concerned.
@@ -210,6 +235,7 @@ pub struct Hub {
     epoch: u64,
     rows: Box<[Row]>,
     batch: Vec<Record>,
+    pending: Vec<Published>,
     sequencer: Box<Sequencer>,
     rate: f64,
     callback: Option<api::Callback>,
@@ -233,6 +259,7 @@ impl Hub {
             epoch: 0,
             rows: (0..=TUNERS).map(|_| Row::default()).collect::<Vec<_>>().into_boxed_slice(),
             batch: Vec::with_capacity(BATCH_EVENTS),
+            pending: Vec::with_capacity(BATCH_EVENTS),
             sequencer: Box::default(),
             rate: 0.0,
             callback: None,
@@ -377,12 +404,7 @@ impl Hub {
 
     /// THE ordering pass. Drain every row, sort by sample, apply releases and
     /// controllers, assign onsets, reply. It runs to completion here.
-    pub fn input_boundary(
-        &mut self,
-        owner: &mut Owner,
-        recorder: &mut Recorder,
-        observation: f64,
-    ) {
+    pub fn input_boundary(&mut self, owner: &mut Owner) {
         self.collect();
         if self.batch.is_empty() {
             return;
@@ -401,7 +423,7 @@ impl Hub {
                 end += 1;
             }
             for position in index..end {
-                self.apply(position, index, end, config, owner, recorder, observation);
+                self.apply(position, index, end, config);
             }
             index = end;
         }
@@ -445,17 +467,7 @@ impl Hub {
     /// One record, in order: its effect on the policy's context, its decision
     /// if it is an onset, and its place in the schedule the display and the
     /// take draw.
-    #[allow(clippy::too_many_arguments)]
-    fn apply(
-        &mut self,
-        position: usize,
-        group: usize,
-        group_end: usize,
-        config: ResolvedConfig,
-        owner: &mut Owner,
-        recorder: &mut Recorder,
-        observation: f64,
-    ) {
+    fn apply(&mut self, position: usize, group: usize, group_end: usize, config: ResolvedConfig) {
         let record = self.batch[position];
         let source = usize::from(record.source);
         let scheduled = record.sample.saturating_add(self.rows[source].delay);
@@ -471,12 +483,12 @@ impl Hub {
             for (id, channel, key) in ended.into_iter().take(count) {
                 self.release_addressed(record, channel, key);
                 let off = Event::note_off(id, channel, key, false);
-                self.publish(off, record, scheduled, None, owner, recorder, observation);
+                self.schedule_delta(off, record, scheduled, None);
             }
         } else if !record.onset() && record.event.release() {
             self.release_matching(record);
         }
-        self.publish(record.event, record, scheduled, assignment, owner, recorder, observation);
+        self.schedule_delta(record.event, record, scheduled, assignment);
     }
 
     fn release_addressed(&mut self, record: Record, channel: u8, key: u8) {
@@ -606,20 +618,17 @@ impl Hub {
         }
     }
 
-    /// Fold one scheduled event into the source's state and out to both lanes.
-    #[allow(clippy::too_many_arguments)]
-    fn publish(
+    /// Fold one scheduled event into the source's state, and hold the delta it
+    /// produced for this callback's publication pass.
+    fn schedule_delta(
         &mut self,
         event: Event,
         record: Record,
         scheduled: i64,
         assignment: Option<Assigned>,
-        owner: &mut Owner,
-        recorder: &mut Recorder,
-        observation: f64,
     ) {
         let index = usize::from(record.source);
-        let identity = SourceId(u64::from(record.source) + 1);
+        let identity = identity(record.source);
         let time = self.presentation(scheduled);
         let timing = EventTiming {
             clock: self.clock,
@@ -650,7 +659,7 @@ impl Hub {
             );
         }
         let Some(mut delta) = delta else {
-            self.settle(index, observation, recorder);
+            self.rows[index].applied = self.rows[index].sequence;
             return;
         };
         // The voice now carries its frozen choice, so the delta states the
@@ -661,35 +670,69 @@ impl Hub {
                 delta.pitch_microcents = Some(voice.pitch_microcents);
             }
         }
-        let route = owner.recording_route(timing, time).unwrap_or_else(|_| {
-            recorder.fail_configuration();
-            Default::default()
-        });
-        let published = recorder.publish_note(delta, route);
-        for lane in publication::Lane::ALL {
-            if published[lane].is_err() {
-                self.rows[index].repair[lane] = true;
-                self.status |= session::PUBLICATION;
-            }
-        }
-        if published.take.is_ok() && published.display.is_ok() {
-            self.published += 1;
-        }
-        self.settle(index, observation, recorder);
-        Self::confirm(&self.rows[index], identity, &mut owner.confirmed);
-    }
-
-    fn settle(&mut self, index: usize, observation: f64, recorder: &mut Recorder) {
-        if !self.rows[index].state.complete {
-            recorder.fail_configuration();
-            recorder.publication_lost(observation, Default::default());
-            self.rows[index].repair = publication::Lanes::both(true);
-            self.status |= session::PUBLICATION;
-        }
         if self.rows[index].state.pitch_changed {
             self.rows[index].repair = publication::Lanes::both(true);
         }
         self.rows[index].applied = self.rows[index].sequence;
+        if self.pending.len() < BATCH_EVENTS {
+            self.pending.push(Published {
+                source: record.source,
+                delta,
+                input: record.sample,
+                timing,
+            });
+        } else {
+            self.rows[index].repair = publication::Lanes::both(true);
+            self.status |= session::PUBLICATION;
+        }
+    }
+
+    /// Everything this callback scheduled, out to both lanes. It runs from
+    /// `process`, after the recorder has registered that sub-block's own
+    /// segment: routing asks which pass an event belongs to, and before that
+    /// there is no pass for it to belong to.
+    ///
+    /// A callback's input is sequenced whole, before the first sub-block, so a
+    /// delta can be scheduled from input the recorder has not reached yet. It
+    /// waits for the sub-block that registers it, in order, and `force` at the
+    /// callback's end is what stops one waiting forever.
+    fn flush(&mut self, owner: &mut Owner, recorder: &mut Recorder, force: bool) {
+        let mut published = 0;
+        for position in 0..self.pending.len() {
+            let item = self.pending[position];
+            let index = usize::from(item.source);
+            // Routing takes the sample the input ARRIVED at, which is inside
+            // this block; the schedule runs D ahead of it and would fall in no
+            // segment at all.
+            let route = owner.recording_route(
+                EventTiming { sample: item.input, ..item.timing },
+                self.presentation(item.input),
+            );
+            let route = match route {
+                Ok(route) => route,
+                Err(()) if !force => break,
+                Err(()) => {
+                    recorder.fail_configuration();
+                    Default::default()
+                }
+            };
+            published += 1;
+            let outcome = recorder.publish_note(item.delta, route);
+            for lane in publication::Lane::ALL {
+                if outcome[lane].is_err() {
+                    self.rows[index].repair[lane] = true;
+                    self.status |= session::PUBLICATION;
+                }
+            }
+            if outcome.take.is_ok() && outcome.display.is_ok() {
+                self.published += 1;
+            }
+            Self::confirm(&self.rows[index], identity(item.source), &mut owner.confirmed);
+        }
+        // Compact in place. Taking the vector would leave an empty one behind
+        // and the reserve that refilled it would allocate, on audio.
+        self.pending.copy_within(published.., 0);
+        self.pending.truncate(self.pending.len() - published);
     }
 
     fn confirm(
@@ -710,7 +753,8 @@ impl Hub {
 
     /// The snapshot a display or take reads after a gap: what is sounding now,
     /// built from what the Hub itself scheduled. It reconstructs no history.
-    pub fn publish_snapshots(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
+    pub fn publish(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
+        self.flush(owner, recorder, false);
         let outage = recorder.take_publication_outage();
         for lane in publication::Lane::ALL {
             if outage[lane] {
@@ -735,7 +779,7 @@ impl Hub {
             if !self.rows[index].live || !self.rows[index].repair.any() {
                 continue;
             }
-            let identity = SourceId(index as u64 + 1);
+            let identity = identity(index as u8);
             // One lane at a time, on its own free cells and its own next
             // identity. A display ring nobody is draining must not hold this
             // frame back from a healthy take.
@@ -769,7 +813,10 @@ impl Hub {
         self.status |= session::POLICY;
     }
 
-    pub fn end(&mut self, callback: api::Callback) {
+    pub fn end(&mut self, callback: api::Callback, owner: &mut Owner, recorder: &mut Recorder) {
+        // Whatever no sub-block reached is published against whatever segment
+        // the recorder does have, and says so if there is none.
+        self.flush(owner, recorder, true);
         self.tune.end();
         self.status |= self.tune.status();
         self.shared.status.store(self.status, Ordering::Release);
@@ -826,18 +873,6 @@ impl Hub {
     #[cfg(test)]
     pub fn test_held(&self, source: u8) -> usize {
         self.rows[usize::from(source)].state.count()
-    }
-    #[cfg(test)]
-    pub fn test_context(&self) -> usize {
-        self.sequencer.context.iter().flatten().count()
-    }
-    #[cfg(test)]
-    pub fn test_status(&self) -> u32 {
-        self.status
-    }
-    #[cfg(test)]
-    pub fn test_decisions(&self) -> u64 {
-        self.decisions
     }
     #[cfg(test)]
     pub fn test_next_context(&self) -> policy::reach::Snapshot {

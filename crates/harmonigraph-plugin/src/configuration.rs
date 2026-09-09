@@ -414,18 +414,4 @@ pub(crate) fn inject_recorder(recorder: harmonigraph_record::Recorder) {
 mod tests;
 
 #[cfg(test)]
-impl Owner {
-    pub fn print_test_memory_layout(&self) {
-        use std::mem::size_of;
-        println!(
-            "LEDGER configuration [owner,reducer,confirmed,learning,recording] {:?}",
-            [
-                size_of::<Self>(),
-                size_of::<ConfigReducer>(),
-                size_of::<ConfirmedPitches>(),
-                size_of::<LearningState>(),
-                size_of::<recording::Recording>()
-            ]
-        );
-    }
-}
+impl Owner {}

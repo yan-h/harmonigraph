@@ -111,8 +111,16 @@ impl State {
         }
     }
 
-    /// What learning may read from this source. A source whose state has lost
-    /// an event has no confirmed pitches rather than an empty list of them.
+    /// What learning may read from this source: the pitch the PLAYER supplied,
+    /// with the adaptive correction taken back off.
+    ///
+    /// Every row is tuned now, the Hub's own included, so publishing what was
+    /// emitted would make Learn a fixed point — it would infer the axes it had
+    /// already chosen and never move. The old design got away with it only
+    /// because the Hub's own track was the one thing it did not retune.
+    ///
+    /// A source whose state has lost an event has no confirmed pitches rather
+    /// than an empty list of them.
     pub fn publish_confirmed(
         &self,
         source: SourceId,
@@ -131,7 +139,12 @@ impl State {
         let mut count = 0;
         if live {
             for voice in self.voices() {
-                rows[count] = voice.confirmed(source);
+                rows[count] = ConfirmedPitch {
+                    pitch_microcents: voice
+                        .pitch_microcents
+                        .saturating_sub(voice.frozen_offset_microcents),
+                    ..voice.confirmed(source)
+                };
                 count += 1;
             }
         }
@@ -189,19 +202,17 @@ impl State {
                 provenance: PitchProvenance::AcceptedOutput,
                 ..VoiceBaseline::default()
             });
-            result = Some((
-                stamp.lifetime,
-                channel,
-                note,
-                NoteEventKind::On { velocity },
-                Some(pitch),
-            ));
+            result =
+                Some((stamp.lifetime, channel, note, NoteEventKind::On { velocity }, Some(pitch)));
         } else if event.release() {
-            if let Some(cell) = self.voices.iter_mut().find(|cell| {
-                cell.is_some_and(|v| event.matches(v.host_note_id, v.channel, v.note))
-            }) {
+            if let Some(cell) = self
+                .voices
+                .iter_mut()
+                .find(|cell| cell.is_some_and(|v| event.matches(v.host_note_id, v.channel, v.note)))
+            {
                 let voice = cell.take().unwrap();
-                result = Some((voice.lifetime, voice.channel, voice.note, NoteEventKind::Off, None));
+                result =
+                    Some((voice.lifetime, voice.channel, voice.note, NoteEventKind::Off, None));
             }
         } else if let Event::Expression { kind: 2, value, .. } = event {
             if let Some(voice) = self

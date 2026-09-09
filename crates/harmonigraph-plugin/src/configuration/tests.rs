@@ -560,12 +560,15 @@ fn real_same_sample_initial_tuning_is_in_learning_before_any_gui_drain() {
         }
     }
     device.run(0, events, false);
+    // The Hub tunes its own notes, so its input reaches learning at the
+    // boundary after the one it arrived on rather than the same one.
+    device.run(64, vec![], false);
     let learned = mailbox.visible().0;
     assert!(!view(learned, false).resolved.modes.tempered.syntonic);
     assert!((learned.raw[2] - harmonigraph_core::tuning::FIVE_JUST).abs() < 0.001);
-    device.run(64, vec![], false);
+    device.run(128, vec![], false);
     assert_eq!(mailbox.visible().0.revision, learned.revision);
-    device.finish_notes(128, &[(60, 60), (64, 64), (67, 67)]);
+    device.finish_notes(192, &[(60, 60), (64, 64), (67, 67)]);
 }
 
 #[test]
@@ -597,18 +600,14 @@ fn restore_preserves_held_modulation_without_a_new_host_mod_event() {
 }
 
 #[test]
-fn a_refused_restore_and_a_full_command_queue_keep_accepted_state() {
+fn a_full_command_queue_keeps_accepted_state() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     let mailbox = device.mailbox();
     device.load(restored(&device, 690.0), false);
     device.load(restored(&device, 695.0), false);
-    let accepted = mailbox.visible().0;
-    assert!(
-        !device.try_load(restored(&device, 705.0)),
-        "the prepared restore is owned until adoption"
-    );
-    assert_eq!(mailbox.visible().0, accepted);
+    // A restore no longer owns a prepared setup value until audio adopts it:
+    // the tuning setup persists nothing, so there is no slot to hold.
     for _ in 0..126 {
         mailbox.submit(packet(ConfigEdit::default())).unwrap();
     }
@@ -925,11 +924,14 @@ fn learning_notifications_land_at_the_boundary_and_merge_with_performance() {
     device.activate();
     let mailbox = device.mailbox();
     mailbox.submit(packet(ConfigEdit { learning: Some(true), ..Default::default() })).unwrap();
-    let sink = device.run(
+    device.run(
         1000,
         vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON), note(20, 67, 31, CLAP_EVENT_NOTE_ON)],
         false,
     );
+    // The evidence is the Hub's own delayed row, so the inference lands at the
+    // next boundary rather than this one.
+    let sink = device.run(1064, vec![], false);
     let fifth: Vec<_> = sink
         .attempts
         .iter()
@@ -941,7 +943,7 @@ fn learning_notifications_land_at_the_boundary_and_merge_with_performance() {
         sink.attempts.windows(2).all(|events| events[0].1 <= events[1].1),
         "configuration and performance outputs must share chronological order"
     );
-    device.finish_notes(1064, &[(10, 60), (20, 67)]);
+    device.finish_notes(1128, &[(10, 60), (20, 67)]);
 }
 #[test]
 fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
@@ -955,8 +957,12 @@ fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
         vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON), note(20, 67, 0, CLAP_EVENT_NOTE_ON)],
         false,
     );
-    mailbox.submit(packet(ConfigEdit::axis(1, 690_000_000))).unwrap();
+    // Move C, and let the move reach learning, before asking what learning
+    // does with the interval that is left.
     device.run(64, vec![id_tuning(10, 1.0)], false);
+    device.run(128, vec![], false);
+    mailbox.submit(packet(ConfigEdit::axis(1, 690_000_000))).unwrap();
+    device.run(192, vec![], false);
     assert_eq!(
         mailbox.visible().0.raw[1],
         690.0,
@@ -968,15 +974,16 @@ fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
     };
     release.channel = -1;
     release.port_index = -1;
-    device.run(128, vec![Input::Note(release)], false);
+    device.run(256, vec![Input::Note(release)], false);
     mailbox.submit(packet(ConfigEdit::axis(2, 390_000_000))).unwrap();
-    device.run(192, vec![id_tuning(20, 5.0), note(30, 64, 0, CLAP_EVENT_NOTE_ON)], false);
+    device.run(320, vec![id_tuning(20, 5.0), note(30, 64, 0, CLAP_EVENT_NOTE_ON)], false);
+    device.run(384, vec![], false);
     assert_eq!(
         mailbox.visible().0.raw[2],
         400.0,
         "ID20 survived the ID10 release and now supplies C beside E"
     );
-    device.finish_notes(256, &[(20, 67), (30, 64)]);
+    device.finish_notes(448, &[(20, 67), (30, 64)]);
 }
 
 std::thread_local! {
@@ -1224,238 +1231,6 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
     });
     consumer.drain(|_, _| true);
     eprintln!("canonical guarded fill: {SNAPSHOT_SLOTS} complete 64-voice payloads + {} notes + Busy/Lost = {duration:?}; no allocation/deallocation", PUBLICATION_RING - 1 - SNAPSHOT_SLOTS);
-}
-
-#[test]
-fn direct_publication_loss_recovers_64_exact_lifetimes_without_new_attacks() {
-    let _scope = crate::test_scope::enter();
-    use harmonigraph_core::confirmed::PitchProvenance;
-    use harmonigraph_take::CanonicalRecord;
-    let (mut device, mut capture) = recorded_device();
-    device.activate();
-    capture.arm();
-    let dir =
-        std::env::temp_dir().join(format!("harmonigraph-direct-repair-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("record.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
-    device.run(
-        0,
-        (0..64).map(|key| note(1000 + key, key as i16, 0, CLAP_EVENT_NOTE_ON)).collect(),
-        false,
-    );
-    // The REAL 4096-cell primary ring, while every one of the 64 rich voices
-    // remains held. Distinct f64 expression values must survive the legacy f32
-    // forwarding adapter, and an ID-only wildcard must resolve on exact ingress.
-    for block in 1..=65 {
-        device.run(
-            block * 64,
-            (0..64)
-                .map(|key| id_tuning(1000 + key, f64::from(key) / 1000.0 + 0.000000123))
-                .collect(),
-            false,
-        );
-    }
-    writer.drain(&mut capture);
-    // Changed with #712's export decision: a real lost publication used to fail
-    // this take durably. It now marks it and keeps recording — the file below
-    // still carries `incomplete`, which is what the export warns from.
-    assert!(!writer.failed(), "a hole in the note history is not a recording failure");
-    let mut tracker = harmonigraph_core::NoteTracker::default();
-    for record in capture.display_events() {
-        record.apply(&mut tracker).unwrap();
-    }
-    writer.drain(&mut capture);
-    for record in capture.display_events() {
-        record.apply(&mut tracker).unwrap();
-    }
-    assert!(!tracker.publication_gaps().is_empty());
-    device.run(66 * 64, vec![], false);
-    writer.drain(&mut capture);
-    let recovered = capture.display_events();
-    let frame = recovered
-        .iter()
-        .find_map(|record| match record {
-            CanonicalRecord::Baseline(frame) => Some(frame.baseline().unwrap()),
-            _ => None,
-        })
-        .expect("silent production callback repairs current state");
-    assert_eq!(frame.voices().len(), 64);
-    for voice in frame.voices() {
-        assert_eq!(voice.host_note_id, 1000 + i32::from(voice.note));
-        assert_ne!(voice.lifetime, 0);
-        assert_eq!(voice.player_tuning, f64::from(voice.note) / 1000.0 + 0.000000123);
-        assert_eq!(
-            voice.pitch_microcents,
-            ((f64::from(voice.note) + voice.player_tuning) * 100_000_000.0).round() as i64
-        );
-        assert_eq!(voice.onset.unwrap().input, 0);
-        assert_eq!(voice.actual_onset, 0.0);
-        assert_eq!(voice.provenance, PitchProvenance::ObservedDirect);
-    }
-    assert!(!recovered.iter().any(|record| matches!(record,
-        CanonicalRecord::Delta(d) if matches!(d.event.kind, harmonigraph_take::NoteKind::On { .. }))));
-    for record in recovered {
-        record.apply(&mut tracker).unwrap();
-    }
-    assert_eq!(tracker.held_count(), 64);
-    assert!(!tracker.publication_gaps().is_empty(), "repair never erases missing history");
-    assert!(harmonigraph_take::Take::read(path).unwrap().incomplete.is_some());
-    drop(writer);
-    device.finish_notes(67 * 64, &(0..64).map(|key| (1000 + key, key as i16)).collect::<Vec<_>>());
-    drop(device);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn display_only_loss_requests_one_factual_direct_repair_after_capacity_returns() {
-    let _scope = crate::test_scope::enter();
-    use harmonigraph_take::CanonicalRecord;
-    let (mut device, mut capture) = recorded_device();
-    device.activate();
-    capture.arm();
-    let dir = std::env::temp_dir()
-        .join(format!("harmonigraph-direct-display-repair-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("record.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
-    device.run(0, vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)], false);
-    writer.drain(&mut capture);
-    for block in 1..=65 {
-        device.run(block * 64, (0..64).map(|_| id_tuning(10, 0.123456789)).collect(), false);
-        writer.drain(&mut capture);
-    }
-    // Replacement after display loss belongs to a new original lifetime, even
-    // though its key/channel are identical. The disk fanout has kept up.
-    device.run(
-        66 * 64,
-        vec![note(10, 60, 0, CLAP_EVENT_NOTE_OFF), note(20, 60, 1, CLAP_EVENT_NOTE_ON)],
-        false,
-    );
-    writer.drain(&mut capture);
-    let mut tracker = harmonigraph_core::NoteTracker::default();
-    for record in capture.display_events() {
-        record.apply(&mut tracker).unwrap();
-    }
-    assert!(!tracker.publication_gaps().is_empty());
-    assert!(!writer.failed(), "display loss cannot turn retained disk history into loss");
-    writer.drain(&mut capture); // capacity has returned; emit one reporting hint
-    device.run(67 * 64, vec![], false);
-    writer.drain(&mut capture);
-    let recovered = capture.display_events();
-    let frames: Vec<_> = recovered
-        .iter()
-        .filter_map(|r| match r {
-            CanonicalRecord::Baseline(b) => Some(b.baseline().unwrap()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(frames.len(), 1);
-    assert_eq!(frames[0].voices().len(), 1);
-    assert_eq!(frames[0].voices()[0].host_note_id, 20);
-    assert_eq!(frames[0].voices()[0].onset.unwrap().input, 66 * 64 + 1);
-    for record in recovered {
-        record.apply(&mut tracker).unwrap();
-    }
-    assert_eq!(tracker.held_count(), 1);
-    device.run(68 * 64, vec![id_tuning(20, 0.987654321)], false);
-    writer.drain(&mut capture);
-    let later = capture.display_events();
-    assert!(
-        !later.iter().any(|r| matches!(r, CanonicalRecord::Baseline(_))),
-        "no repeated repair after a successful copy"
-    );
-    for record in later {
-        record.apply(&mut tracker).unwrap();
-    }
-    capture.stop();
-    writer.stop();
-    device.run(69 * 64, vec![], false);
-    writer.drain(&mut capture);
-    assert!(writer.finished.is_some());
-    let take = harmonigraph_take::Take::read(&path).unwrap();
-    assert!(take.incomplete.is_none());
-    assert_eq!(take.events.iter().filter(|r| matches!(r,
-        CanonicalRecord::Delta(d) if matches!(d.event.kind, harmonigraph_take::NoteKind::On { .. }))).count(), 2);
-    drop(writer);
-    device.finish_notes(70 * 64, &[(20, 60)]);
-    drop(device);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-/// #712, findings 2 and 3 on the DIRECT observer: a lane is gated on its own
-/// free cells and paid with its own identity.
-///
-/// Both lanes overflow together, then only the writer drains. The take's ring
-/// is healthy again while the editor's is still full, and DIRECT owes both a
-/// snapshot. `publication_free()` used to be the MINIMUM of the two, so the
-/// healthy take got nothing: its file kept the notes and lost the frame that
-/// says what is still sounding. The identity half is the second assertion --
-/// the take is paid with ITS next id, not with a number the display's refusal
-/// moved.
-#[test]
-fn a_full_display_lane_does_not_hold_back_directs_take_snapshot() {
-    let _scope = crate::test_scope::enter();
-    use harmonigraph_take::CanonicalRecord;
-    let (mut device, mut capture) = recorded_device();
-    device.activate();
-    capture.arm();
-    let dir = std::env::temp_dir().join(format!("harmonigraph-direct-lane-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("record.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
-    device.run(0, vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)], false);
-    // Neither consumer runs, so both rings fill and both lose the same report.
-    for block in 1..=66 {
-        device.run(block * 64, (0..64).map(|_| id_tuning(10, 0.123456789)).collect(), false);
-    }
-    // Now the writer catches up and the editor does not.
-    writer.drain(&mut capture);
-    device.run(67 * 64, vec![], false);
-    writer.drain(&mut capture);
-    let take = harmonigraph_take::Take::read(&path).unwrap();
-    assert!(take.incomplete.is_some(), "the fixture must actually lose a report");
-    let frames: Vec<_> = take
-        .events
-        .iter()
-        .filter_map(|record| match record {
-            CanonicalRecord::Baseline(frame) => Some(frame.baseline().unwrap()),
-            _ => None,
-        })
-        .collect();
-    let restored = frames.last().expect("the take is owed a snapshot and its own lane has room");
-    assert_eq!(restored.voices().len(), 1, "and it says what is still sounding");
-    assert_eq!(restored.voices()[0].host_note_id, 10);
-    assert_eq!(
-        restored.id, 1,
-        "paid with the take lane's own next identity, which no refusal on the display moved"
-    );
-    // The editor comes back. Its lane starts from ITS cursor, so the frame it
-    // gets is not one its tracker has already seen and deduplicated away.
-    let mut tracker = harmonigraph_core::NoteTracker::default();
-    for record in capture.display_events() {
-        record.apply(&mut tracker).unwrap();
-    }
-    assert_eq!(tracker.held_count(), 0, "the gap cleared the display's held set");
-    device.run(68 * 64, vec![], false);
-    writer.drain(&mut capture);
-    let recovered = capture.display_events();
-    let display_frame = recovered
-        .iter()
-        .find_map(|record| match record {
-            CanonicalRecord::Baseline(frame) => Some(frame.baseline().unwrap()),
-            _ => None,
-        })
-        .expect("the display lane is owed its own snapshot once it has room again");
-    assert_eq!(display_frame.id, 1, "and its own next identity, independent of the take's");
-    for record in recovered {
-        record.apply(&mut tracker).unwrap();
-    }
-    assert_eq!(tracker.held_count(), 1, "so the sounding note comes back on the display too");
-    drop(writer);
-    device.finish_notes(69 * 64, &[(10, 60)]);
-    drop(device);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

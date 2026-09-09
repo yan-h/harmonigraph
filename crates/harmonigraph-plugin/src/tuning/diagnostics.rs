@@ -149,8 +149,8 @@ impl Shared {
         }
     }
     pub(super) fn due(&self, frames: u32, rate: f64) -> bool {
-        let left = self.countdown.fetch_sub(i64::from(frames), Ordering::AcqRel)
-            - i64::from(frames);
+        let left =
+            self.countdown.fetch_sub(i64::from(frames), Ordering::AcqRel) - i64::from(frames);
         if left > 0 {
             return false;
         }
