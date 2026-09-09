@@ -145,8 +145,6 @@ Those descriptive thresholds are not a visual acceptance criterion.
 The actual pinned `spectrogram::quantize` changed 1,457 bytes across the full suite, always by one byte (0.5 dB).
 On golden audio alone, 84 of 6,614,784 bytes changed, with maximum float-power error `5.215e-8` and maximum above-floor dB error `0.02338 dB`.
 The global peak-bucket winner changed in six golden-fixture columns; no peak-winner changes occurred in the other cases.
-These were near ties: the largest winner displacement was eight buckets (25 cents), with the two baseline powers differing by only `3.73e-9` in that case.
-This is a change of the selected maximum, not a rigid displacement of the spectrum by 25 cents.
 Exact silence had no float, byte or smoothed difference.
 
 The power recurrence uses the exact pinned UI `hop_alpha` helper with default 10 ms attack/150 ms release and the same per-bucket rise/fall choice.
