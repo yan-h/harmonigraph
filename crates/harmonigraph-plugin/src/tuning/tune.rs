@@ -161,7 +161,10 @@ impl Tune {
         self.frames = frames;
         self.delay = i64::from(multiplier) * i64::from(frames);
         self.callback = None;
-        self.take_cut(session::session().epoch());
+        // The bump is what makes this the session's cut rather than only this
+        // Tune's. The Note-Offs it stages go to the host, so without it the
+        // Hub would still be holding every voice this just ended.
+        self.take_cut(session::session().cut());
         self.claim();
         self.publish_delay();
     }
@@ -230,19 +233,24 @@ impl Tune {
     /// line, adopt the new epoch. Nothing waits on anyone, and a fault never
     /// reaches here — a fault is a status, not a cut.
     fn take_cut(&mut self, epoch: u64) {
+        // The queue is sized for one cut's worth: every held voice, and every
+        // pedal that is down. It can still overflow, because a cut whose
+        // Note-Offs did not all reach the wire leaves them queued and a second
+        // cut over voices played in between arrives on top of them. What must
+        // not happen is that a Note-Off goes missing in silence, so what did
+        // not fit is carried past the status reset below and reported.
+        let mut lost = 0;
         for cell in self.held.iter_mut() {
             if let Some(voice) = cell.take() {
-                let _ = self.cut.push(Event::note_off(voice.id, voice.channel, voice.key, false));
+                let off = Event::note_off(voice.id, voice.channel, voice.key, false);
+                lost += u64::from(self.cut.push(off).is_err());
             }
         }
         for channel in 0..16u8 {
             for (bit, cc) in PEDALS.iter().enumerate() {
                 if self.pedals[usize::from(channel)] & (1 << bit) != 0 {
-                    let _ = self.cut.push(Event::Midi {
-                        port: 0,
-                        data: [0xb0 | channel, *cc, 0],
-                        flags: 0,
-                    });
+                    let neutral = Event::Midi { port: 0, data: [0xb0 | channel, *cc, 0], flags: 0 };
+                    lost += u64::from(self.cut.push(neutral).is_err());
                 }
             }
             self.pedals[usize::from(channel)] = 0;
@@ -258,14 +266,21 @@ impl Tune {
             out.clear();
             back.clear();
         }
-        session::session().row_misses(self.slot(), 0);
+        // After the reset, because a Note-Off this cut could not queue is owed
+        // by the context the cut starts rather than by the one it ended.
+        if lost != 0 {
+            self.dropped += lost;
+            self.status |= session::DROPPED;
+        }
     }
 
-    /// Transport Stop and host Reset. Both are the cut under the same epoch:
-    /// there is no membership change to announce, only voices to end.
+    /// The audio engine stopping, or a host reset on this instance. Neither is
+    /// a transport Stop — that is the `IS_PLAYING` falling edge in
+    /// [`Self::input`] — so released memory is not theirs to clear. What they
+    /// owe is the cut every other trigger takes, announced so the Hub lets go
+    /// of the voices this ends.
     pub fn stop(&mut self) {
-        let epoch = self.epoch;
-        self.take_cut(epoch);
+        self.take_cut(session::session().cut());
     }
 
     pub fn begin(&mut self, callback: api::Callback) {
@@ -289,7 +304,18 @@ impl Tune {
         {
             let playing = transport.flags & IS_PLAYING != 0;
             if self.playing && !playing {
-                self.take_cut(session::session().stop());
+                // Every row sees the same falling edge in the same callback,
+                // so exactly one of them announces it: the Hub's own. A bump
+                // per Tune would make one Stop N+1 epochs, and every one of
+                // them a further cut over whatever the other tracks played in
+                // the callback that saw the edge. A plain Tune ends its own
+                // voices here and adopts the Hub's epoch on its next callback,
+                // like any other cut.
+                let epoch = match self.link {
+                    Link::Direct { .. } => session::session().stop(),
+                    _ => self.epoch,
+                };
+                self.take_cut(epoch);
             }
             self.playing = playing;
             return;
@@ -373,6 +399,18 @@ impl Tune {
     /// A reply reaches the onset with its serial or it reaches nothing. A
     /// wrong epoch is an answer to a session that has been cut away.
     fn drain_replies(&mut self) {
+        // Serials increase along the line, because input order is what fills
+        // it, and replies mostly arrive in that order too. So the scan carries
+        // on from where the last one landed rather than starting at the front
+        // for each reply, which is what makes a drain linear in the callback
+        // rather than in replies times line length.
+        //
+        // Mostly, not always: onsets sharing a sample are sequenced by key, so
+        // a reply can address a serial behind its predecessor's. The cursor is
+        // an optimisation and never an assumption — it is dropped whenever the
+        // entry under it is not one this reply could still be ahead of, which
+        // covers a cursor run off the end of the line as well.
+        let mut cursor = 0;
         loop {
             let reply = match &mut self.link {
                 Link::Detached => None,
@@ -383,15 +421,17 @@ impl Tune {
             if reply.epoch != self.epoch {
                 continue;
             }
-            for offset in 0..self.line.len() {
-                let Some(position) = self.line.position(offset) else { break };
+            if self.serial_at(cursor).is_none_or(|serial| serial > reply.serial) {
+                cursor = 0;
+            }
+            while let Some(position) = self.line.position(cursor) {
                 let Some(mut pending) = self.line.at(position) else { break };
-                // Serials increase along the line, because input order is what
-                // fills it. An answer to a note that has already emitted is
-                // therefore one comparison rather than a whole scan.
+                // An answer to a note that has already emitted is one
+                // comparison rather than a walk to the end.
                 if pending.serial > reply.serial {
                     break;
                 }
+                cursor += 1;
                 if pending.serial != reply.serial {
                     continue;
                 }
@@ -403,6 +443,10 @@ impl Tune {
                 break;
             }
         }
+    }
+
+    fn serial_at(&self, offset: usize) -> Option<u64> {
+        self.line.position(offset).and_then(|position| self.line.at(position)).map(|p| p.serial)
     }
 
     /// Emit everything whose time has come. An onset with a correction gets its
@@ -556,7 +600,6 @@ impl Tune {
     }
 
     pub fn end(&mut self) {
-        session::session().row_misses(self.slot(), self.misses);
         if let Some(callback) = self.callback.take() {
             self.shared.status.store(self.status, Ordering::Release);
             self.shared.misses.store(self.misses, Ordering::Release);

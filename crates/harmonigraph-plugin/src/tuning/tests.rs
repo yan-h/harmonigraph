@@ -281,6 +281,14 @@ impl Device {
         self.deactivate();
         self.activate_format(rate, frames);
     }
+    /// `clap_plugin::reset`, which a host calls on one instance when it wants
+    /// that instance's state discarded. It reaches this module as
+    /// `clap_performance_reset`.
+    fn host_reset(&self) {
+        unsafe {
+            (*self.plugin).reset.unwrap()(self.plugin);
+        }
+    }
     fn recorded_hub() -> (Self, harmonigraph_record::testing::Capture) {
         let (recorder, capture) = harmonigraph_record::testing::channel();
         crate::configuration::inject_recorder(recorder);
@@ -766,21 +774,96 @@ fn the_delay_is_reported_as_latency_from_the_saved_multiplier_alone() {
 }
 
 /// A host format change is a cut: the notes standing in the line were
-/// scheduled against a delay that no longer exists.
+/// scheduled against a delay that no longer exists. It is the SESSION's cut,
+/// not the reactivating Tune's own — the Note-Offs it owes go to the host and
+/// never into the ring, so the Hub learns what ended only from the epoch.
 #[test]
 fn a_host_format_change_cuts_and_adopts_the_new_delay() {
     let _scope = crate::test_scope::enter();
     let mut pair = Pair::new();
     pair.step(vec![note(1, 0, 60, 0, true)]);
     assert!(tuning_of(&pair.idle()).is_some());
-    pair.tune.reactivate_format(48000.0, 128);
-    let after = pair.step(vec![note(2, 0, 62, 0, true)]);
-    assert!(
-        after.iter().any(|(_, event)| event.release()),
-        "reactivation released the voice it stopped being able to schedule: {after:?}"
+    assert_eq!(
+        inspect_hub(&pair.hub, |hub| hub.test_held(0)),
+        1,
+        "the fixture reaches the format change with the Hub holding that voice"
     );
+    pair.tune.reactivate_format(48000.0, 128);
+    let cut = pair.idle();
+    assert!(
+        cut.iter().any(|(_, event)| event.release()),
+        "reactivation released the voice it stopped being able to schedule: {cut:?}"
+    );
+    assert_eq!(
+        inspect_hub(&pair.hub, |hub| hub.test_held(0)),
+        0,
+        "and the Hub let go of it rather than drawing a note that has ended"
+    );
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0);
+    pair.step(vec![note(2, 0, 62, 0, true)]);
     let output = pair.idle();
     assert!(tuning_of(&output).is_some(), "and the next note is corrected at the new D");
+}
+
+/// A host reset on one Tune is the same cut by another trigger, and owes the
+/// Hub the same news. Nothing else in the process is being reset.
+#[test]
+fn a_host_reset_on_one_tune_cuts_it_out_of_the_hubs_context() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    pair.step(vec![note(1, 0, 60, 0, true)]);
+    assert!(tuning_of(&pair.idle()).is_some());
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), 1, "the Hub is holding the voice");
+    pair.tune.host_reset();
+    let cut = pair.idle();
+    assert!(
+        cut.iter().any(|(_, event)| event.release()),
+        "the reset released what the Tune was holding: {cut:?}"
+    );
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), 0);
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0);
+    pair.step(vec![note(2, 0, 62, 0, true)]);
+    assert!(tuning_of(&pair.idle()).is_some(), "and the session plays on");
+}
+
+/// The Reset classification is "has one happened since I adopted", not "is the
+/// newest bump a Reset". A Reset and an attach landing between two Hub
+/// callbacks is still a Reset, and the memory it was pressed to clear must not
+/// ride out on the attach's epoch.
+#[test]
+fn a_reset_with_an_attach_behind_it_still_clears_released_memory() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    pair.step(vec![note(1, 0, 60, 0, true), note(2, 0, 64, 1, true)]);
+    pair.idle();
+    pair.step(vec![note(1, 0, 60, 0, false), note(2, 0, 64, 1, false)]);
+    for _ in 0..2 {
+        pair.idle();
+    }
+    // Nothing is held any more, so what the Hub still publishes as context is
+    // exactly the released memory a Reset is meant to clear.
+    let remembered = inspect_hub(&pair.hub, |hub| hub.test_next_context());
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0, "no voice is still held");
+    assert!(
+        !remembered.context.is_empty(),
+        "the fixture reaches the Reset with released memory to clear: {remembered:?}"
+    );
+    // The Reset and the attach land in the same window: the Tune turns the
+    // request into the session's Reset on its callback, a second Tune joins,
+    // and only then does the Hub get a callback to adopt any of it.
+    pair.tune.shared().request_reset();
+    pair.tune.main();
+    pair.tune.run(pair.raw, vec![], None);
+    let mut joining = Device::new(true);
+    joining.activate();
+    pair.hub.run(pair.raw, vec![], None);
+    pair.raw += 512;
+    let after = inspect_hub(&pair.hub, |hub| hub.test_next_context());
+    assert!(
+        after.context.is_empty(),
+        "the attach behind the Reset did not reclassify it: {after:?}"
+    );
+    drop(joining);
 }
 
 /// The two publication lanes stay independent, and the display shows what the

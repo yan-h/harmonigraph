@@ -24,7 +24,7 @@ The cause was structural: a graceful-settlement protocol between Tunes and the H
 Stage 8 deleted it.
 What replaced it is **the fault cut**: a note emits on time with the correction that came back or without one, a fault is a status bit that never silences a track, and the only lifecycle event is a cut that nothing waits for.
 
-The transport is now 3,253 production lines where it was 12,981, and its tests 1,425 where they were 12,040.
+The transport is now 3,305 production lines where it was 12,981, and its tests 1,518 where they were 12,040.
 The module is `crates/harmonigraph-plugin/src/tuning/` rather than `performance/`.
 Policy v2 is untouched: the same scorer, the same controls, the same fixtures.
 
@@ -307,10 +307,10 @@ Nothing waits on anyone, and no second party has to agree that it happened.
 | Trigger | How it reaches everyone |
 |---|---|
 | Explicit Reset, from either editor | Bumps the session epoch and marks it a Reset. Every Tune cuts on its next callback; the Hub clears its context and its released memory |
-| Transport Stop | The falling edge of the host's playing flag, seen by whichever Tune the host gives the transport to. Bumps the epoch and marks it a Stop; released memory then follows the **Reset context on stop** control |
-| The audio engine stopping, or a host reset | The same as Stop, from `clap_plugin.reset` and `stop_processing` |
+| Transport Stop | The falling edge of the host's playing flag. Every row sees the same edge in the same callback, so exactly one of them announces it — the Hub's own — and the rest end their own voices and adopt that epoch. It is marked a Stop; released memory then follows the **Reset context on stop** control |
+| The audio engine stopping, or a host reset | The same cut, from `clap_plugin.reset` and `stop_processing`. Marked as neither a Reset nor a Stop, so released memory survives it |
 | A Tune attaching or detaching | Bumps the epoch, so every paired track cuts. This is what buys the absence of a hot-plug reconciliation protocol |
-| Host reactivation, or a latency or format change | That Tune cuts locally and adopts D from the saved multiplier and the new format |
+| Host reactivation, or a latency or format change | That Tune adopts D from the saved multiplier and the new format, and bumps. It bumps because its own Note-Offs go to the host rather than into the ring, so the epoch is the only way the Hub hears that those voices ended |
 | Destruction | The row goes back to the session on the main thread. Records the departing Tune left in its ring carry an epoch the Hub has already moved past, so they are refused where they are found |
 
 A **fault is not a cut**.
@@ -456,7 +456,7 @@ and shrinking a buffer does not make its overflow path unreachable.
 | `PENDING_EVENTS` | 8,192 | Retained events in one Tune's delay line, including unrelated MIDI |
 | `CAPTURE_RING` / `REPLY_RING` | 1,024 / 1,024 | The two rings per row. A full capture ring costs that note its correction |
 | `BATCH_EVENTS` | 2,048 | Records one ordering pass holds across every source, and deltas one callback may publish |
-| `CUT_EVENTS` | 128 | Note-offs and pedal neutralisations one cut may owe |
+| `CUT_EVENTS` | 112 | Note-offs and pedal neutralisations one cut may owe: every held voice, plus sustain, sostenuto and legato on each of sixteen channels. What does not fit is reported as a dropped event |
 | `MAX_CONTEXT` / `MAX_MEMORY` / `MAX_CANDIDATES` | 256 / 24 / 4,096 | Held policy references, released contributions and the complete local candidate union |
 | `PUBLICATION_RING` / `SNAPSHOT_SLOTS` / `GAP_RESERVE` | 4,096 / 20 / 1 | Publication items, snapshot frames, and the one cell an outage may always spend |
 | `DELAY_MULTIPLIER_MAX` | 16 | Steps on the Tuning delay parameter |
@@ -621,6 +621,7 @@ branch latency is not corrected.
 6. A second Harmonigraph in the process is a fault status on both;
 there is no pairing choice, and the first one loaded keeps the session.
 7. A ring overflow drops that note from the Hub's context and it sounds uncorrected.
+If what it drops is a note-OFF rather than a note-on, the Hub goes on holding a voice that has already ended — in its context, its display and its take — until the next cut clears it.
 8. An unpaired Tune passes notes through with the delay and no correction, and its status says there is no Hub.
 9. Off is gone;
 an unbypass mid-note is Bitwig's bypass behaviour, as for any note effect.

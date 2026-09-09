@@ -35,7 +35,6 @@ struct Pass {
 }
 pub(crate) struct Recording {
     pub clock: ClockId,
-    pub hub_offset: i64,
     /// Continuous presentation clock for publication controls and loss markers.
     pub observation_time: f64,
     source_prefix: Option<i64>,
@@ -56,7 +55,6 @@ impl Default for Recording {
     fn default() -> Self {
         Self {
             clock: ClockId::default(),
-            hub_offset: 0,
             observation_time: 0.0,
             source_prefix: None,
             registered_through: i64::MIN,
@@ -123,31 +121,32 @@ impl Recording {
     }
 
     /// ONLY the canonical audio owner may supply this proof: every actual
-    /// output strictly before mapped_through has acquired an immutable recording
+    /// output strictly before `through` has acquired an immutable recording
     /// route or an explicit publication-failure disposition. Source receipt,
     /// held baseline and configuration progress are insufficient.
-    pub fn source_frontier(&mut self, clock: ClockId, mapped_through: i64) -> Result<(), ()> {
+    ///
+    /// A sample here is the Hub's own steady timeline, the same one the
+    /// segments below are cut on, so there is no offset between them to apply.
+    pub fn source_frontier(&mut self, clock: ClockId, through: i64) -> Result<(), ()> {
         if clock != self.clock {
             return Err(());
         }
-        let raw = mapped_through.checked_sub(self.hub_offset).ok_or(())?;
-        if self.source_prefix.is_some_and(|old| raw < old) {
+        if self.source_prefix.is_some_and(|old| through < old) {
             return Err(());
         }
-        self.source_prefix = Some(raw);
+        self.source_prefix = Some(through);
         Ok(())
     }
 
     pub fn route(
         &self,
         clock: ClockId,
-        mapped_actual: i64,
+        sample: i64,
         presentation_time: f64,
     ) -> Result<harmonigraph_record::publication::Route, ()> {
         if clock != self.clock || !presentation_time.is_finite() {
             return Err(());
         }
-        let sample = mapped_actual.checked_sub(self.hub_offset).ok_or(())?;
         let segment = self
             .segments
             .iter()
@@ -293,8 +292,11 @@ mod tests {
     use super::*;
     use harmonigraph_core::configuration::ConfigReducer;
 
+    /// Every sample crossing this boundary is already on the Hub's own steady
+    /// timeline, which is the timeline the segments are cut on: a route asks
+    /// for the sample it means, with nothing subtracted on the way in.
     #[test]
-    fn mapped_output_frontier_and_recording_routes_use_the_adopted_hub_clock_once() {
+    fn output_frontier_and_recording_routes_read_samples_on_the_adopted_hub_clock() {
         let (mut recorder, capture) = harmonigraph_record::testing::channel();
         recorder.enable_configuration();
         recorder.enable_canonical();
@@ -304,7 +306,6 @@ mod tests {
         let clock = ClockId { runtime_session: 7, epoch: 3 };
         let mut recording = Recording {
             clock,
-            hub_offset: 32,
             captured_intent: 3,
             prefix: 1040,
             block_start: 1000,
@@ -313,7 +314,7 @@ mod tests {
         };
         let config = ConfigReducer::default().resolved();
         recording.segment(&mut recorder, Some(20.0), 48000.0, config);
-        recording.source_frontier(clock, 1056).unwrap();
+        recording.source_frontier(clock, 1024).unwrap();
         recording.finish(&mut recorder);
         assert_eq!(recording.source_prefix, Some(1024));
         assert_eq!(
@@ -321,12 +322,12 @@ mod tests {
             1,
             "configuration prefix1040 cannot retire source prefix1024"
         );
-        // source raw1000 +source offset64 = mapped1064; subtract HUB offset32
-        // once to find raw1032 in the original hub recording segment.
-        let route = recording.route(clock, 1064, 1064.0 / 48000.0).unwrap();
+        // Sample 1032 is offset 32 into the segment that starts at 1000, so it
+        // is 32 samples past that segment's 20.0 s origin.
+        let route = recording.route(clock, 1032, 1032.0 / 48000.0).unwrap();
         assert_eq!(route.address, Some(RecordAddress { epoch: 1, pass: 1 }));
-        assert!((1064.0 / 48000.0 + route.time_offset - (20.0 + 32.0 / 48000.0)).abs() < 1e-12);
-        assert!(recording.route(clock, 1071, 0.0).unwrap().address.is_some());
+        assert!((1032.0 / 48000.0 + route.time_offset - (20.0 + 32.0 / 48000.0)).abs() < 1e-12);
+        assert!(recording.route(clock, 1039, 0.0).unwrap().address.is_some());
         // Explicit disarmed span stays distinct from a later recording segment.
         capture.stop();
         recorder.is_armed();
@@ -334,15 +335,15 @@ mod tests {
         recording.block_start = 1040;
         recording.block_frames = 40;
         recording.segment(&mut recorder, None, 48000.0, config);
-        assert_eq!(recording.route(clock, 1072, 0.0).unwrap().address, None);
+        assert_eq!(recording.route(clock, 1040, 0.0).unwrap().address, None);
         capture.arm();
         recorder.is_armed();
         recording.captured_intent = recorder.capture_recording_intent();
         recording.block_start = 1080;
         recording.segment(&mut recorder, Some(5.0), 48000.0, config);
-        assert_eq!(recording.route(clock, 1072, 0.0).unwrap().address, None);
+        assert_eq!(recording.route(clock, 1040, 0.0).unwrap().address, None);
         let new_clock = ClockId { epoch: 4, ..clock };
-        assert!(recording.route(new_clock, 1064, 0.0).is_err());
+        assert!(recording.route(new_clock, 1032, 0.0).is_err());
         assert!(recording.source_frontier(new_clock, 2000).is_err());
         assert_eq!(recording.source_prefix, Some(1024));
         recording.reset(&recorder);

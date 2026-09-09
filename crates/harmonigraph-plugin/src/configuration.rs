@@ -412,6 +412,3 @@ pub(crate) fn inject_recorder(recorder: harmonigraph_record::Recorder) {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-impl Owner {}

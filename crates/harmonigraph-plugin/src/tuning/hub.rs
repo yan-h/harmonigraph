@@ -355,9 +355,12 @@ impl Hub {
                 self.rows[source].repair = publication::Lanes::both(true);
             }
             // Every epoch change ends every voice. What it does to released
-            // memory is the only thing that depends on which change it was.
-            if session.is_reset(epoch)
-                || session.is_stop(epoch) && self.sequencer.config.policy.reset_stop
+            // memory is the only thing that depends on which change it was —
+            // and the question is what has happened since the epoch this Hub
+            // was running under, not what the newest bump happens to be. A
+            // Reset with an attach behind it is still a Reset.
+            if session.is_reset(self.epoch)
+                || session.is_stop(self.epoch) && self.sequencer.config.policy.reset_stop
             {
                 self.sequencer.memory.clear();
                 self.sequencer.last_release = None;
@@ -440,13 +443,12 @@ impl Hub {
         self.tune.schedule(block, output);
     }
 
-    /// Transport Stop and host Reset. Every source's voices end, and released
-    /// memory follows the control rather than the transport.
     /// The audio engine stopping, or a host reset. Both are a session cut,
-    /// which is the same mechanism a transport Stop takes.
+    /// which is the same mechanism a transport Stop takes — but neither IS a
+    /// transport Stop, so released memory stays. One trigger, one cut: the
+    /// Hub's own row takes it and every other row adopts its epoch.
     pub fn stop(&mut self) {
         self.tune.stop();
-        session::session().stop();
     }
 
     /// THE ordering pass. Drain every row, sort by sample, apply releases and
@@ -458,6 +460,12 @@ impl Hub {
         }
         self.batch.sort_unstable_by_key(|record| (record.sample, record.order()));
         let Some(config) = owner.block_configuration(self.clock) else {
+            // No configuration to assign against, so this batch is discarded
+            // rather than held: every onset in it sounds uncorrected and the
+            // Tunes that sent them count the misses. The one thing that must
+            // not happen is that it goes unsaid, which is what the fault bit
+            // is for — an evaluation that never ran is a refused one.
+            self.status |= session::POLICY;
             self.batch.clear();
             return;
         };

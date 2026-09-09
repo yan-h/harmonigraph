@@ -106,19 +106,12 @@ pub struct Row {
     /// writer; the Hub reads it for the time it reports each sequenced input
     /// was scheduled for, which is that Tune's own input plus D.
     pub delay: AtomicI64,
-    /// Onsets that emitted without a correction, since the last cut.
-    pub misses: AtomicU64,
     ends: Mutex<Ends>,
 }
 
 impl Row {
     fn new() -> Self {
-        Self {
-            owner: AtomicU64::new(0),
-            delay: AtomicI64::new(0),
-            misses: AtomicU64::new(0),
-            ends: Mutex::new(Ends::new()),
-        }
+        Self { owner: AtomicU64::new(0), delay: AtomicI64::new(0), ends: Mutex::new(Ends::new()) }
     }
     pub fn held(&self) -> bool {
         self.owner.load(Ordering::Acquire) != 0
@@ -179,13 +172,19 @@ impl Session {
     pub fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::Acquire)
     }
-    /// True when `epoch` is the one an explicit Reset produced, as opposed to
-    /// a membership change. Both cut; only this one clears musical memory.
-    pub fn is_reset(&self, epoch: u64) -> bool {
-        self.reset_epoch.load(Ordering::Acquire) == epoch
+    /// True when an explicit Reset happened after `adopted`, as opposed to a
+    /// membership change. Both cut; only this one clears musical memory.
+    ///
+    /// The question is "has one happened since I last looked", never "is the
+    /// newest bump a Reset". Keying it on the latest epoch is a key too
+    /// narrow to hold the answer: a Reset and an attach landing between two
+    /// Hub callbacks would classify as the attach, and the memory the Reset
+    /// was pressed to clear would survive it.
+    pub fn is_reset(&self, adopted: u64) -> bool {
+        self.reset_epoch.load(Ordering::Acquire) > adopted
     }
-    pub fn is_stop(&self, epoch: u64) -> bool {
-        self.stop_epoch.load(Ordering::Acquire) == epoch
+    pub fn is_stop(&self, adopted: u64) -> bool {
+        self.stop_epoch.load(Ordering::Acquire) > adopted
     }
     pub fn register(&self) -> u64 {
         self.next.fetch_add(1, Ordering::AcqRel) + 1
@@ -198,9 +197,19 @@ impl Session {
         let epoch = self.bump();
         self.reset_epoch.store(epoch, Ordering::Release);
     }
-    /// Transport Stop. The transport is global, so one Tune seeing its falling
+    /// A cut that changes no membership: a host format change, or a host reset
+    /// on one instance. It is still every track's cut, because the Hub holds
+    /// context for voices the cutting Tune has just ended and the cut's
+    /// Note-Offs go to the host rather than into the ring. Taking one without
+    /// bumping would leave those voices sounding in the policy, the display
+    /// and the take until something unrelated bumped.
+    pub fn cut(&self) -> u64 {
+        self.bump()
+    }
+    /// Transport Stop. The transport is global, so one row seeing its falling
     /// edge is the whole session seeing it — which is also why this needs no
-    /// lane of its own. Released memory follows the `reset_stop` control.
+    /// lane of its own, and why only the Hub's own row calls it. Released
+    /// memory follows the `reset_stop` control.
     pub fn stop(&self) -> u64 {
         let epoch = self.bump();
         self.stop_epoch.store(epoch, Ordering::Release);
@@ -242,7 +251,6 @@ impl Session {
                     row.owner.store(0, Ordering::Release);
                     continue;
                 };
-                row.misses.store(0, Ordering::Release);
                 self.bump();
                 return Some((slot as u8, ends));
             }
@@ -271,14 +279,6 @@ impl Session {
         (value >> 32, value as u32)
     }
 
-    /// The Tune's own miss counter, mirrored where the editor and the Hub's
-    /// diagnostics can read it without touching the audio owner.
-    pub fn row_misses(&self, slot: Option<u8>, misses: u64) {
-        if let Some(slot) = slot {
-            self.rows[usize::from(slot)].misses.store(misses, Ordering::Release);
-        }
-    }
-
     /// Between fixtures. A panicking test can leave a row claimed by a Tune
     /// that never reached its destructor, so the rings are rebuilt rather than
     /// merely released: the half that Tune took is not coming back.
@@ -287,7 +287,6 @@ impl Session {
         for row in &self.rows {
             row.owner.store(0, Ordering::Release);
             row.delay.store(0, Ordering::Release);
-            row.misses.store(0, Ordering::Release);
             *row.ends.lock().unwrap_or_else(|e| e.into_inner()) = Ends::new();
         }
         self.hub.store(0, Ordering::Release);

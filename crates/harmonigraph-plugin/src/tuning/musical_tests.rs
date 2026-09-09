@@ -108,10 +108,27 @@ impl Phrase {
     /// the transport to each plugin it calls, and the Hub is the one that
     /// reads it: a seek is a musical boundary, not a per-track one.
     fn seek(&mut self, seconds: i64) {
+        self.transport_all(|| position(seconds));
+    }
+    /// Play or stop, to every device in the graph. The same reason as `seek`,
+    /// and the Hub matters more here than anywhere: it is the one row that
+    /// turns a transport Stop into the session's cut, so a fixture that gave
+    /// the transport only to the sources would be testing a graph no host
+    /// produces.
+    fn transport_edge(&mut self, playing: bool) {
+        self.transport_all(|| {
+            let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+            if !playing {
+                value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+            }
+            Input::Transport(value)
+        });
+    }
+    fn transport_all(&mut self, event: impl Fn() -> Input) {
         for index in 0..3 {
-            self.sources[index].run_format(self.raw, vec![position(seconds)], None, None, 512);
+            self.sources[index].run_format(self.raw, vec![event()], None, None, 512);
         }
-        self.hub.run_format(self.raw, vec![position(seconds)], None, None, 512);
+        self.hub.run_format(self.raw, vec![event()], None, None, 512);
         self.raw += 512;
     }
     /// What the Hub scheduled for that voice. It is the only authority there
@@ -296,15 +313,8 @@ fn production_silence_and_stop_reset_settings_clear_only_the_musical_memory() {
             phrase.idle();
         }
         assert_eq!(phrase.held(0), 2, "the fixture reaches the reset with voices held");
-        phrase.step(std::array::from_fn(|_| vec![transport(0, 120.0)]), [0, 1, 2]);
-        phrase.step(
-            std::array::from_fn(|_| {
-                let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
-                value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
-                vec![Input::Transport(value)]
-            }),
-            [0, 1, 2],
-        );
+        phrase.transport_edge(true);
+        phrase.transport_edge(false);
         for _ in 0..8 {
             phrase.idle();
         }

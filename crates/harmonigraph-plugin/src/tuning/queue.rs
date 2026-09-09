@@ -1,10 +1,7 @@
 //! Callback-owned retained storage. Construction is off audio, operations move
-//! owned values, and a full queue returns the caller's still-owned value.
-//!
-//! Capacity is the backing's length rather than `N`, so a queue can start
-//! DETACHED — no cells, no allocation — and be given its backing later at an
-//! off-audio boundary. A detached queue is simply always full: it accepts
-//! nothing and holds nothing, which is what an unpaired row needs.
+//! owned values, and a full queue returns the caller's still-owned value. The
+//! backing is allocated once at `N` cells and never resized, so capacity is
+//! `N` and a queue is never anything but its own fixed size.
 pub struct Queue<T, const N: usize> {
     cells: Box<[Option<T>]>,
     head: usize,
@@ -16,8 +13,8 @@ impl<T, const N: usize> Default for Queue<T, N> {
     }
 }
 impl<T, const N: usize> Queue<T, N> {
-    fn capacity(&self) -> usize {
-        self.cells.len()
+    const fn capacity(&self) -> usize {
+        N
     }
     pub fn position(&self, offset: usize) -> Option<usize> {
         (offset < self.len).then(|| (self.head + offset) % self.capacity())
@@ -66,6 +63,3 @@ impl<T, const N: usize> Queue<T, N> {
         Some(value)
     }
 }
-
-#[cfg(test)]
-impl<T, const N: usize> Queue<T, N> {}

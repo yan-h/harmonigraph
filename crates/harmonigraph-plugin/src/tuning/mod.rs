@@ -39,6 +39,7 @@ pub const CAPTURE_RING: usize = 1024;
 pub const REPLY_RING: usize = 1024;
 /// Records the Hub orders in one pass across every source.
 pub const BATCH_EVENTS: usize = 2048;
-/// Note-offs and pedal neutralisations one cut may owe: every held voice plus
-/// the three pedals and a recentred bend on each of sixteen channels.
-pub const CUT_EVENTS: usize = HELD_PER_SOURCE + 16 * 4;
+/// Note-offs and pedal neutralisations one cut may owe: every held voice, plus
+/// sustain, sostenuto and legato on each of sixteen channels. A cut does not
+/// recentre the bend, because a Tune does not track one.
+pub const CUT_EVENTS: usize = HELD_PER_SOURCE + 16 * 3;
