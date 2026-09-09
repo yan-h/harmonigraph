@@ -39,6 +39,12 @@ Performance expectation is neutral steady-frame cost.
 This extraction removes an ownership maintenance contract;
 it makes no FPS or steady-frame speedup claim.
 
+Validation passed 243 renderer tests (eight manual probes ignored), all five offline golden frames (two manual probes ignored), and ten hot-reload tests with real Metal pipelines, including accepted and rejected edits.
+All thirteen lattice golden frames remain unchanged.
+No golden was blessed, and no GPU-adapter skip was used as validation.
+Renderer clippy passed with all targets, hot reload enabled and warnings denied;
+private rustdoc links, Rust formatting and Markdown clause breaks also passed.
+
 ## Measurement method
 
 The existing `lattice_tests::timing::a_frame_of_names_at_each_kernel_costs_this_much` probe supplies four workloads:
@@ -58,6 +64,31 @@ native Metal allocations are not intercepted.
 The counting executable's timings are excluded from CPU comparisons.
 The scratch allocator and instrumented fixture remain verification artifacts in `/private/tmp/compiled-lattice-alloc.rs` and `/private/tmp/compiled-lattice-alloc-timing.rs`.
 
-Initial validation passed 243 renderer tests (eight manual probes ignored), all five offline golden frames (two manual probes ignored), and ten hot-reload tests with real Metal pipelines.
-All thirteen lattice golden frames remain unchanged.
-No golden was blessed, and no GPU-adapter skip was used as validation.
+## Paired results — 2026-09-09
+
+Baseline `0c32443a` and implementation `cec89adc` ran in four alternating AB/BA pairs on Apple M1 Pro Metal with strict bundled shader assets.
+Every workload loaded its assets without a source fallback or rejected asset.
+The coordinator reserved this window with no concurrent compilation or other batch probes.
+Bitwig/plugin hosts and WindowServer remained active;
+earlier samples collected during compilation are excluded.
+
+The CPU columns report the median of four per-run medians, in milliseconds.
+Allocation columns are the eleventh-frame Rust allocation/reallocation calls and requested bytes, identical on both sides at both shadow widths.
+
+| Workload | Baseline CPU ms | Candidate CPU ms | Rust allocation calls, both | Requested bytes, both |
+| --- | ---: | ---: | ---: | ---: |
+| Gaussian, live width | 0.2855 | 0.2885 | 153 | 335,786 |
+| Gaussian, maximum width | 0.2800 | 0.2855 | 153 | 335,786 |
+| Distance, live width | 0.2860 | 0.2890 | 145 | 335,098 |
+| Distance, maximum width | 0.2920 | 0.2915 | 145 | 335,098 |
+
+The largest absolute difference between these CPU summaries is 0.0055 ms.
+All sixteen paired GPU p10–p90 intervals overlap.
+The allocation check finds no added steady-frame allocation, and these timings support the expected neutral preparation cost;
+ongoing host activity limits conclusions about small timing differences.
+They do not establish a frame-rate improvement or exact performance equality.
+
+Raw logs, run metadata and parsed per-run samples are retained in `/private/tmp/compiled-lattice-pairs/`.
+The preserved executables are `/private/tmp/compiled-lattice-{baseline,candidate}-tests` and separate `-alloc-tests` variants.
+The scratch driver is `/private/tmp/compiled-lattice-measure.py`.
+These are verification artifacts, not additional maintained test fixtures.
