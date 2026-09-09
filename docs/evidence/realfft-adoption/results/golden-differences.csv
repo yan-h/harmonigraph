@@ -1,0 +1,4 @@
+case,pixels,channels,mean_abs_channel_delta,max_channel_delta
+spectrogram-short-pane,1,1,7.62939453125e-06,1
+spectrogram-tall-pane,1,1,2.5431315104166665e-06,1
+spectrogram-whole-song,4,4,1.0172526041666666e-05,1

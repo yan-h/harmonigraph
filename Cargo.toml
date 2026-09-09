@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/harmonigraph-core",
+    "crates/harmonigraph-analysis",
     "crates/harmonigraph-scene",
     "crates/harmonigraph-render",
     "crates/harmonigraph-metal-assets",
@@ -27,6 +28,7 @@ license = "GPL-3.0-or-later"
 [workspace.dependencies]
 # Internal crates
 harmonigraph-core = { path = "crates/harmonigraph-core" }
+harmonigraph-analysis = { path = "crates/harmonigraph-analysis" }
 harmonigraph-scene = { path = "crates/harmonigraph-scene" }
 harmonigraph-render = { path = "crates/harmonigraph-render" }
 harmonigraph-metal-assets = { path = "crates/harmonigraph-metal-assets" }

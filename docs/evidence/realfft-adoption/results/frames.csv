@@ -1,0 +1,8 @@
+case,frames,changed_frames,changed_pixels,changed_channels,max_delta,mean_abs_channel_delta,max_frame
+default-fold,192,172,578,621,76,4.69970703125e-06,84
+default-spectrum,192,172,607,655,76,4.872639973958334e-06,84
+largest-fold,192,98,478,541,57,3.570556640625e-06,94
+largest-spectrum,192,96,291,310,57,2.3956298828125e-06,94
+boundary-8192-3-fold,10,6,17104,35497,13,0.00679111328125,2
+boundary-16384-5-fold,10,6,45572,122830,25,0.02546953125,2
+boundary-16384-1-spectrum,10,5,50856,138966,59,0.03281328125,4

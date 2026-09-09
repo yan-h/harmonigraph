@@ -1,0 +1,73 @@
+--- lib.rs
++++ lib.rs
+@@ -9,3 +9 @@
+-use harmonigraph_core::spectrum::{
+-    midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI,
+-};
++use harmonigraph_core::spectrum::{midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
+@@ -303,9 +301,3 @@
+-            self.fft
+-                .as_ref()
+-                .unwrap()
+-                .process_with_scratch(
+-                    &mut self.fft_input,
+-                    &mut self.fft_output,
+-                    &mut self.fft_scratch,
+-                )
+-                .unwrap();
++            self.fft.as_ref().unwrap().process_with_scratch(
++                &mut self.fft_input, &mut self.fft_output, &mut self.fft_scratch,
++            ).unwrap();
+@@ -701,0 +694 @@
++    use harmonigraph_core::spectrum::hz_to_midi;
+@@ -703 +695,0 @@
+-    use harmonigraph_core::spectrum::hz_to_midi;
+@@ -1157,0 +1150 @@
++
+@@ -1167,8 +1160,6 @@
+-                let input: Vec<_> = (0..n + 997)
+-                    .map(|i| {
+-                        let t = i as f64 / 48_000.0;
+-                        ((std::f64::consts::TAU * 440.0 * t).sin() * 0.4
+-                            + (std::f64::consts::TAU * 7137.0 * t).cos() * 0.2
+-                            + if i % 113 == 0 { 0.3 } else { 0.0 }) as f32
+-                    })
+-                    .collect();
++                let input: Vec<_> = (0..n + 997).map(|i| {
++                    let t = i as f64 / 48_000.0;
++                    ((std::f64::consts::TAU * 440.0 * t).sin() * 0.4
++                        + (std::f64::consts::TAU * 7137.0 * t).cos() * 0.2
++                        + if i % 113 == 0 { 0.3 } else { 0.0 }) as f32
++                }).collect();
+@@ -1178,4 +1169,4 @@
+-                assert_eq!(a.write, 997);
+-                let peak = a.bin_power.iter().copied().fold(0.0f32, f32::max) as f64;
+-                for bin in [2, 3, 7, 37, 75, 113, 301, 554, 555, n / 4, n / 2 - 2] {
+-                    let mut expected = 0.0;
++                assert_eq!(a.write,997);
++                let peak = a.bin_power.iter().copied().fold(0.0f32,f32::max) as f64;
++                for bin in [2,3,7,37,75,113,301,554,555,n/4,n/2-2] {
++                    let mut expected=0.0;
+@@ -1183 +1174 @@
+-                        let (mut re, mut im) = (0.0, 0.0);
++                        let (mut re,mut im)=(0.0,0.0);
+@@ -1185,4 +1176,3 @@
+-                            let x = (a.ring[(a.write + i) % n] * a.tapers[k * n + i]) as f64;
+-                            let angle = std::f64::consts::TAU * bin as f64 * i as f64 / n as f64;
+-                            re += x * angle.cos();
+-                            im -= x * angle.sin();
++                            let x=(a.ring[(a.write+i)%n]*a.tapers[k*n+i]) as f64;
++                            let angle=std::f64::consts::TAU*bin as f64*i as f64/n as f64;
++                            re+=x*angle.cos(); im-=x*angle.sin();
+@@ -1190 +1180 @@
+-                        expected += re * re + im * im;
++                        expected+=re*re+im*im;
+@@ -1192,6 +1182,2 @@
+-                    let error = (a.bin_power[bin] as f64 - expected).abs();
+-                    assert!(
+-                        error / peak < 1e-6,
+-                        "N={n}, tapers={count}, bin={bin}: scaled error {}",
+-                        error / peak
+-                    );
++                    let error=(a.bin_power[bin] as f64-expected).abs();
++                    assert!(error/peak < 1e-6,"N={n}, tapers={count}, bin={bin}: scaled error {}",error/peak);

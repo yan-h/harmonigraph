@@ -1,4 +1,4 @@
-//! Pure lattice/tuning/note-tracking/analysis logic. No I/O, no GUI, and
+//! Pure lattice/tuning/note-tracking and spectrum-history logic. No I/O, no GUI, and
 //! no dependencies at all — everything here is unit-testable and shared
 //! verbatim between the standalone dev harness and the plugin.
 //!
@@ -10,8 +10,8 @@
 //!   completes, so the scene can mark where the music has been.
 //! - [`tuning`] — pitch classes in integer microcents, the tuning of each
 //!   prime axis, and learning a tuning from what's played.
-//! - [`spectrum`] — a hand-rolled FFT and the analyzer that buckets it
-//!   onto a MIDI-pitch axis for the Spectral pane.
+//! - [`spectrum`] — the shared pitch axis and Hz/MIDI conversions.
+//!   Rolling audio analysis lives in `harmonigraph-analysis`.
 //! - [`spectrogram`] — those spectra kept over time, quantized and
 //!   age-tiered so a long history stays affordable.
 //!

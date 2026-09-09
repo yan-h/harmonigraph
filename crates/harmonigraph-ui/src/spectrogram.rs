@@ -4790,7 +4790,7 @@ mod tests {
         /// this fixture picked. An empty `notes` leaves the noise alone.
         fn analysed_column(notes: &[f32]) -> Vec<BucketDb> {
             let sr = 48_000.0f32;
-            let mut an = harmonigraph_core::spectrum::SpectrumAnalyzer::new(sr);
+            let mut an = harmonigraph_analysis::SpectrumAnalyzer::new(sr);
             let mut seed = 0x1234_5678u32;
             let mut noise = move || {
                 seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);

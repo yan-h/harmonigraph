@@ -1,0 +1,17 @@
+  PID  %CPU COMM
+85262  63.0 /Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+  412  35.3 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+42337  22.6 /Applications/GeForceNOW.app/Contents/Frameworks/GeForceNOW Helper (Renderer).app/Contents/MacOS/GeForceNOW Helper (Renderer)
+83396  14.0 /Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+42320   9.3 /Applications/GeForceNOW.app/Contents/Frameworks/GeForceNOW Helper (GPU).app/Contents/MacOS/GeForceNOW Helper (GPU)
+83584   9.1 /Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+41952   6.8 /Applications/GeForceNOW.app/Contents/MacOS/GeForceNOW
+  699   4.7 /System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+  425   3.4 /usr/sbin/coreaudiod
+53666   3.1 /Applications/ChatGPT.app/Contents/Resources/codex
+  877   2.7 /usr/libexec/sysmond
+  670   2.1 /Users/yan/Applications/iTerm.app/Contents/MacOS/iTerm2
+  404   2.0 /usr/sbin/bluetoothd
+  680   1.7 /Applications/Zed.app/Contents/MacOS/zed
+  387   1.5 /usr/libexec/locationd
+17655   1.4 /System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU

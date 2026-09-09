@@ -277,7 +277,7 @@ mod tests {
 
     /// Channels come through INTACT — the analyzer combines them in the power
     /// domain and cannot do that with an average it never saw
-    /// ([`ChannelBank`](harmonigraph_core::spectrum::ChannelBank)). Alignment also
+    /// (`ChannelBank` in `harmonigraph-analysis`). Alignment also
     /// measures their energy before combining channels.
     #[test]
     fn float32_stereo_keeps_its_channels() {

@@ -1,0 +1,11 @@
+[package]
+name = "harmonigraph-analysis"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license = "MIT OR Apache-2.0"
+description = "Rolling real-input audio analysis on Harmonigraph's pitch axis."
+
+[dependencies]
+harmonigraph-core = { workspace = true }
+realfft = "=3.5.0"

@@ -24,8 +24,8 @@ pub struct AudioSpectrum {
     #[cfg(test)]
     pub(crate) fold_measurements: usize,
     /// One analyzer per input channel, combined in the power domain — see
-    /// [`ChannelBank`](harmonigraph_core::spectrum::ChannelBank).
-    pub(crate) analyzer: harmonigraph_core::spectrum::ChannelBank,
+    /// [`ChannelBank`](harmonigraph_analysis::ChannelBank).
+    pub(crate) analyzer: harmonigraph_analysis::ChannelBank,
     /// Smoothed display buckets (power; the pane maps to height).
     pub(crate) display: SpectrumBuckets,
     /// FRAMES pushed since this analyzer was made, and the count at which the
@@ -186,7 +186,7 @@ impl WholeSong {
     ///
     /// The feeder supplies interleaved frames, `channels` per frame; channels are
     /// combined exactly as the live path combines them — same
-    /// [`ChannelBank`](harmonigraph_core::spectrum::ChannelBank), same power sum. That
+    /// [`ChannelBank`](harmonigraph_analysis::ChannelBank), same power sum. That
     /// is the point of sharing the type rather than repeating the arithmetic: a
     /// render that summed its channels differently from the pane would differ
     /// from the look that was dialed in, and only for stereo-wide material, which
@@ -206,10 +206,10 @@ impl WholeSong {
         config: &SpectrumConfig,
         mut feed: impl FnMut(
             std::ops::Range<usize>,
-            &mut harmonigraph_core::spectrum::ChannelBank,
+            &mut harmonigraph_analysis::ChannelBank,
         ) -> Result<(), E>,
     ) -> Result<WholeSong, E> {
-        let mut analyzer = harmonigraph_core::spectrum::ChannelBank::new(sample_rate, channels);
+        let mut analyzer = harmonigraph_analysis::ChannelBank::new(sample_rate, channels);
         analyzer.set_fft_size(config.window.samples());
         analyzer.set_tapers(config.tapers.count());
         let sr = (sample_rate as f64).max(1.0);
@@ -310,7 +310,7 @@ impl Default for AudioSpectrum {
             frame_fold: None,
             #[cfg(test)]
             fold_measurements: 0,
-            analyzer: harmonigraph_core::spectrum::ChannelBank::new(48_000.0, 1),
+            analyzer: harmonigraph_analysis::ChannelBank::new(48_000.0, 1),
             display: [0.0; harmonigraph_core::spectrum::SPECTRUM_BINS],
             frames_seen: 0,
             next_hop: 0,
@@ -443,7 +443,7 @@ impl AudioSpectrum {
     /// Start a new retained source run after loss, reset or a format change.
     /// Keep historical columns, but never combine samples across the boundary.
     pub fn restart_source(&mut self, channels: usize, sample_rate: f32) {
-        self.analyzer = harmonigraph_core::spectrum::ChannelBank::new(sample_rate, channels);
+        self.analyzer = harmonigraph_analysis::ChannelBank::new(sample_rate, channels);
         self.frames_seen = 0;
         self.next_hop = 0;
         self.anchor = None;
@@ -670,7 +670,7 @@ impl AudioSpectrum {
     /// How far behind `now` the newest column sits even when nothing is wrong:
     /// half the analysis window, because that is where a spectrum belongs on a
     /// time axis (see
-    /// [`window_center_offset`](harmonigraph_core::spectrum::SpectrumAnalyzer::window_center_offset)).
+    /// [`window_center_offset`](harmonigraph_analysis::SpectrumAnalyzer::window_center_offset)).
     ///
     /// The heatmap's near edge has to allow for this or it reads a perfectly
     /// healthy stream as stale and stops the strip short of the now-line — by

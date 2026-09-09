@@ -1,0 +1,181 @@
+   Compiling serde_core v1.0.228
+   Compiling syn v2.0.119
+   Compiling core-foundation-sys v0.8.7
+   Compiling harmonigraph-core v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-core)
+   Compiling objc2 v0.5.2
+   Compiling dispatch v0.2.0
+   Compiling foreign-types-shared v0.3.1
+   Compiling winit v0.30.13
+   Compiling dpi v0.1.2
+   Compiling core-foundation v0.9.4
+   Compiling smol_str v0.2.2
+   Compiling cursor-icon v1.2.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling writeable v0.6.3
+   Compiling litemap v0.8.2
+   Compiling core-graphics-types v0.1.3
+   Compiling harmonigraph-analysis v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-analysis)
+   Compiling serde_json v1.0.150
+   Compiling icu_normalizer_data v2.2.0
+   Compiling block2 v0.5.1
+   Compiling zune-core v0.5.1
+   Compiling utf8_iter v1.0.4
+   Compiling icu_properties_data v2.2.0
+   Compiling zune-jpeg v0.5.15
+   Compiling quick-error v2.0.1
+   Compiling weezl v0.1.12
+   Compiling fax v0.2.7
+   Compiling nice-assert-no-alloc v1.0.0
+   Compiling core-foundation v0.10.1
+   Compiling percent-encoding v2.3.2
+   Compiling form_urlencoded v1.2.2
+   Compiling coremidi-sys v3.2.0
+   Compiling camino v1.2.4
+   Compiling winnow v1.0.4
+   Compiling plain v0.2.3
+   Compiling bitflags v2.13.1
+   Compiling uuid v1.24.0
+   Compiling glam v0.33.6
+   Compiling objc2-core-foundation v0.3.2
+   Compiling objc2-foundation v0.2.2
+   Compiling synstructure v0.13.2
+   Compiling proc-macro2-diagnostics v0.10.1
+   Compiling png v0.18.1
+   Compiling objc2-foundation v0.3.2
+   Compiling objc2-core-graphics v0.3.2
+   Compiling serde_derive v1.0.228
+   Compiling bytemuck_derive v1.11.0
+   Compiling zerocopy-derive v0.8.54
+   Compiling bytemuck v1.25.1
+   Compiling thiserror-impl v2.0.18
+   Compiling zerocopy v0.8.54
+   Compiling color v0.3.3
+   Compiling serde v1.0.228
+   Compiling thiserror v2.0.18
+   Compiling objc2-core-video v0.3.2
+   Compiling wgpu-types v29.0.4
+   Compiling smallvec v1.15.2
+   Compiling parking_lot_core v0.9.12
+   Compiling ron v0.12.2
+   Compiling parking_lot v0.12.5
+   Compiling kurbo v0.13.1
+   Compiling font-types v0.11.3
+   Compiling read-fonts v0.39.2
+   Compiling peniko v0.6.1
+   Compiling vello_common v0.0.9
+   Compiling half v2.7.1
+   Compiling naga v29.0.4
+   Compiling emath v0.35.0
+   Compiling ecolor v0.35.0
+   Compiling vello_cpu v0.0.9
+   Compiling ahash v0.8.12
+   Compiling enumn v0.1.14
+   Compiling foreign-types-macros v0.2.3
+   Compiling accesskit v0.24.1
+   Compiling foreign-types v0.5.0
+   Compiling objc2-app-kit v0.2.2
+   Compiling tracing-attributes v0.1.31
+   Compiling core-graphics v0.23.2
+   Compiling tracing v0.1.41
+   Compiling harmonigraph-scene v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-scene)
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling skrifa v0.42.1
+   Compiling harfrust v0.7.0
+   Compiling objc2-metal v0.3.2
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling epaint v0.35.0
+   Compiling zerofrom v0.1.8
+   Compiling objc2-quartz-core v0.3.2
+   Compiling raw-window-metal v1.1.0
+   Compiling wgpu-hal v29.0.4 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/vendor/wgpu-hal)
+   Compiling egui v0.35.0
+   Compiling wgpu-core-deps-apple v29.0.4
+   Compiling wgpu-core v29.0.4
+   Compiling yoke v0.8.3
+   Compiling harmonigraph-take v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-take)
+   Compiling zerovec-derive v0.11.3
+   Compiling displaydoc v0.2.6
+   Compiling wgpu v29.0.4
+   Compiling zerovec v0.11.6
+   Compiling duplicate v2.0.1
+   Compiling tinystr v0.8.3
+   Compiling egui_dock v0.20.1
+   Compiling icu_locale_core v2.2.0
+   Compiling egui-wgpu v0.35.0
+   Compiling potential_utf v0.1.5
+   Compiling zerotrie v0.2.4
+   Compiling objc2-app-kit v0.3.2
+   Compiling harmonigraph-render v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-render)
+   Compiling icu_provider v2.2.0
+   Compiling harmonigraph-perf v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-perf)
+   Compiling harmonigraph-ui v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-ui)
+   Compiling icu_collections v2.2.0
+   Compiling tiff v0.11.3
+   Compiling image v0.25.10
+   Compiling icu_properties v2.2.0
+   Compiling icu_normalizer v2.2.0
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling harmonigraph-golden v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-golden)
+   Compiling url v2.5.8
+   Compiling baseview v0.1.4 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/vendor/baseview)
+   Compiling harmonigraph-record v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-record)
+   Compiling copypasta v0.10.2
+   Compiling nice-plug-core v0.1.5
+   Compiling scroll_derive v0.13.1
+   Compiling scroll v0.13.0
+   Compiling nice-plug v0.1.10 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/vendor/nice-plug)
+   Compiling egui-baseview v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/vendor/egui-baseview)
+   Compiling webbrowser v1.2.4
+   Compiling arboard v3.6.1
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling semver v1.0.28
+   Compiling serde_spanned v1.1.1
+   Compiling cargo-platform v0.3.3
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling midir v0.11.0
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling cargo_metadata v0.23.1
+   Compiling egui-winit v0.35.0
+   Compiling goblin v0.10.7
+   Compiling coremidi v0.9.1
+   Compiling reflink-copy v0.1.30
+   Compiling hct-cam16 v0.1.0
+   Compiling home v0.5.12
+   Compiling eframe v0.35.0
+error[E0412]: cannot find type `AllocDisabler` in crate `nice_assert_no_alloc`
+   --> crates/harmonigraph-record/src/audio_tests.rs:7:41
+    |
+  7 | static ALLOCATOR: nice_assert_no_alloc::AllocDisabler = nice_assert_no_alloc::AllocDisabler;
+    |                                         ^^^^^^^^^^^^^ not found in `nice_assert_no_alloc`
+    |
+note: found an item that was configured out
+   --> /Users/yan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nice-assert-no-alloc-1.0.0/src/lib.rs:156:12
+    |
+145 | #[cfg(not(all(feature = "disable_release", not(debug_assertions))))] // if not disabled
+    |          --------------------------------------------------------- the item is gated here
+...
+156 | pub struct AllocDisabler;
+    |            ^^^^^^^^^^^^^
+
+error[E0425]: cannot find value `AllocDisabler` in crate `nice_assert_no_alloc`
+   --> crates/harmonigraph-record/src/audio_tests.rs:7:79
+    |
+  7 | static ALLOCATOR: nice_assert_no_alloc::AllocDisabler = nice_assert_no_alloc::AllocDisabler;
+    |                                                                               ^^^^^^^^^^^^^ not found in `nice_assert_no_alloc`
+    |
+note: found an item that was configured out
+   --> /Users/yan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nice-assert-no-alloc-1.0.0/src/lib.rs:156:12
+    |
+145 | #[cfg(not(all(feature = "disable_release", not(debug_assertions))))] // if not disabled
+    |          --------------------------------------------------------- the item is gated here
+...
+156 | pub struct AllocDisabler;
+    |            ^^^^^^^^^^^^^
+
+Some errors have detailed explanations: E0412, E0425.
+For more information about an error, try `rustc --explain E0412`.
+error: could not compile `harmonigraph-record` (lib test) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

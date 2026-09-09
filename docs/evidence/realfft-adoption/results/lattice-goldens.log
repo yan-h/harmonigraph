@@ -1,0 +1,73 @@
+   Compiling bitflags v2.13.1
+   Compiling num-traits v0.2.19
+   Compiling smallvec v1.15.2
+   Compiling syn v2.0.119
+   Compiling once_cell v1.21.4
+   Compiling ahash v0.8.12
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling objc2-core-foundation v0.3.2
+   Compiling parking_lot_core v0.9.12
+   Compiling kurbo v0.13.1
+   Compiling parking_lot v0.12.5
+   Compiling uuid v1.24.0
+   Compiling accesskit v0.24.1
+   Compiling objc2-foundation v0.3.2
+   Compiling euclid v0.22.14
+   Compiling png v0.18.1
+   Compiling guillotiere v0.7.0
+   Compiling harmonigraph-golden v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-golden)
+   Compiling objc2-metal v0.3.2
+   Compiling glam v0.33.6
+   Compiling objc2-quartz-core v0.3.2
+   Compiling raw-window-metal v1.1.0
+   Compiling bytemuck_derive v1.11.0
+   Compiling zerocopy-derive v0.8.54
+   Compiling thiserror-impl v2.0.18
+   Compiling serde_derive v1.0.228
+   Compiling bytemuck v1.25.1
+   Compiling wgpu-types v29.0.4
+   Compiling font-types v0.11.3
+   Compiling color v0.3.3
+   Compiling thiserror v2.0.18
+   Compiling read-fonts v0.39.2
+   Compiling peniko v0.6.1
+   Compiling emath v0.35.0
+   Compiling vello_common v0.0.9
+   Compiling ecolor v0.35.0
+   Compiling zerocopy v0.8.54
+   Compiling vello_cpu v0.0.9
+   Compiling harmonigraph-scene v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-scene)
+   Compiling half v2.7.1
+   Compiling naga v29.0.4
+   Compiling harfrust v0.7.0
+   Compiling skrifa v0.42.1
+   Compiling epaint v0.35.0
+   Compiling egui v0.35.0
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling wgpu-hal v29.0.4 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/vendor/wgpu-hal)
+   Compiling wgpu-core-deps-apple v29.0.4
+   Compiling wgpu-core v29.0.4
+   Compiling wgpu v29.0.4
+   Compiling egui-wgpu v0.35.0
+   Compiling harmonigraph-render v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-render)
+    Finished `test` profile [optimized + debuginfo] target(s) in 1m 00s
+     Running unittests src/lib.rs (target/debug/deps/harmonigraph_render-16b962bea3a32dfb)
+
+running 14 tests
+test lattice_tests::golden::a_name_on_a_nodes_band_draws_the_frame_on_record ... ok
+test lattice_tests::golden::a_node_in_its_own_shadow_draws_the_frame_on_record ... ok
+test lattice_tests::golden::the_live_view_goldens_exercise_both_shadow_kernels ... ok
+test lattice_tests::golden::a_name_at_render_scale_2_draws_the_frame_on_record ... ok
+test lattice_tests::golden::the_live_view_at_the_top_of_the_distance_row_draws_the_frame_on_record ... ok
+test lattice_tests::golden::a_chord_at_the_fresh_view_draws_the_frame_on_record ... ok
+test lattice_tests::golden::a_sheet_behind_a_node_draws_the_frame_on_record ... ok
+test lattice_tests::golden::names_overlapping_on_one_sheet_draw_the_frame_on_record ... ok
+test lattice_tests::golden::the_live_view_draws_the_frame_on_record ... ok
+test lattice_tests::golden::the_live_view_on_the_distance_row_draws_the_frame_on_record ... ok
+test lattice_tests::golden::a_chord_at_a_wide_reach_draws_the_frame_on_record ... ok
+test lattice_tests::golden::the_resting_marker_field_draws_the_frame_on_record ... ok
+test lattice_tests::golden::the_zoomed_out_view_on_the_distance_row_draws_the_frame_on_record ... ok
+test lattice_tests::golden::two_strokes_of_one_name_draw_the_frame_on_record ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 237 filtered out; finished in 0.25s

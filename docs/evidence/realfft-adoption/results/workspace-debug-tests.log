@@ -1,0 +1,534 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling cfg-if v1.0.4
+   Compiling libc v0.2.186
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling objc2-encode v4.1.0
+   Compiling log v0.4.33
+   Compiling version_check v0.9.5
+   Compiling once_cell v1.21.4
+   Compiling objc2 v0.6.4
+   Compiling num-traits v0.2.19
+   Compiling cfg_aliases v0.2.2
+   Compiling zerocopy v0.8.54
+   Compiling syn v2.0.119
+   Compiling thiserror v2.0.18
+   Compiling parking_lot_core v0.9.12
+   Compiling scopeguard v1.2.0
+   Compiling foldhash v0.2.0
+   Compiling arrayvec v0.7.8
+   Compiling lock_api v0.4.14
+   Compiling memchr v2.8.3
+   Compiling hashbrown v0.17.1
+   Compiling block2 v0.6.2
+   Compiling typeid v1.0.3
+   Compiling bitflags v2.13.1
+   Compiling zmij v1.0.23
+   Compiling objc2-core-foundation v0.3.2
+   Compiling harmonigraph-core v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-core)
+   Compiling core-foundation-sys v0.8.7
+   Compiling itoa v1.0.18
+   Compiling objc-sys v0.3.5
+   Compiling polycool v0.4.0
+   Compiling generic-array v0.14.7
+   Compiling profiling v1.0.18
+   Compiling raw-window-handle v0.6.2
+   Compiling euclid v0.22.14
+   Compiling naga v29.0.4
+   Compiling objc2-foundation v0.3.2
+   Compiling objc2-core-graphics v0.3.2
+   Compiling unicode-width v0.2.2
+   Compiling bit-vec v0.9.1
+   Compiling typenum v1.20.1
+   Compiling linebender_resource_handle v0.1.1
+   Compiling equivalent v1.0.2
+   Compiling simd-adler32 v0.3.10
+   Compiling indexmap v2.14.0
+   Compiling bit-set v0.9.1
+   Compiling codespan-reporting v0.13.1
+   Compiling guillotiere v0.7.0
+   Compiling objc2 v0.5.2
+   Compiling objc2-core-video v0.3.2
+   Compiling hashbrown v0.16.1
+   Compiling ahash v0.8.12
+   Compiling rustc-hash v1.1.0
+   Compiling adler2 v2.0.1
+   Compiling unicode-general-category v1.1.0
+   Compiling hexf-parse v0.2.1
+   Compiling bitflags v1.3.2
+   Compiling fearless_simd v0.4.1
+   Compiling miniz_oxide v0.8.9
+   Compiling block2 v0.5.1
+   Compiling wgpu-hal v29.0.4 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/vendor/wgpu-hal)
+   Compiling dispatch v0.2.0
+   Compiling objc2-foundation v0.2.2
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling core-foundation v0.9.4
+   Compiling uuid v1.24.0
+   Compiling epaint_default_fonts v0.35.0
+   Compiling serde_json v1.0.150
+   Compiling either v1.16.0
+   Compiling self_cell v1.3.0
+   Compiling unicode-segmentation v1.13.3
+   Compiling nohash-hasher v0.2.0
+   Compiling foreign-types-shared v0.3.1
+   Compiling itertools v0.14.0
+   Compiling core-graphics-types v0.1.3
+   Compiling cpufeatures v0.2.17
+   Compiling digest v0.10.7
+   Compiling wgpu-core v29.0.4
+   Compiling winit v0.30.13
+   Compiling tracing-core v0.1.36
+   Compiling pin-project-lite v0.2.17
+   Compiling litrs v1.0.0
+   Compiling objc2-app-kit v0.2.2
+   Compiling sha2 v0.10.9
+   Compiling wgpu v29.0.4
+   Compiling document-features v0.2.12
+   Compiling cursor-icon v1.2.0
+   Compiling smol_str v0.2.2
+   Compiling dpi v0.1.2
+   Compiling rustc-hash v2.1.3
+   Compiling static_assertions v1.1.0
+   Compiling web-time v1.1.0
+   Compiling type-map v0.5.1
+   Compiling synstructure v0.13.2
+   Compiling glam v0.33.6
+   Compiling color_space v0.5.4
+   Compiling pollster v0.4.0
+   Compiling num-integer v0.1.47
+   Compiling crc32fast v1.5.0
+   Compiling harmonigraph-metal-assets v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-metal-assets)
+   Compiling stable_deref_trait v1.2.1
+   Compiling strength_reduce v0.2.4
+   Compiling transpose v0.2.3
+   Compiling primal-check v0.3.4
+   Compiling num-complex v0.4.6
+   Compiling flate2 v1.1.9
+   Compiling rustfft v6.4.1
+   Compiling proc-macro2-diagnostics v0.10.1
+   Compiling harmonigraph-perf v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-perf)
+   Compiling fdeflate v0.3.7
+   Compiling paste v1.0.15
+   Compiling png v0.18.1
+   Compiling objc2-metal v0.3.2
+   Compiling realfft v3.5.0
+   Compiling heck v0.5.0
+   Compiling harmonigraph-analysis v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-analysis)
+   Compiling crossbeam-utils v0.8.22
+   Compiling objc2-quartz-core v0.3.2
+   Compiling litemap v0.8.2
+   Compiling object v0.37.3
+   Compiling writeable v0.6.3
+   Compiling raw-window-metal v1.1.0
+   Compiling objc2-app-kit v0.3.2
+   Compiling icu_properties_data v2.2.0
+   Compiling icu_normalizer_data v2.2.0
+   Compiling zune-core v0.5.1
+   Compiling gimli v0.32.3
+   Compiling utf8_iter v1.0.4
+   Compiling zune-jpeg v0.5.15
+   Compiling rustc-demangle v0.1.28
+   Compiling quick-error v2.0.1
+   Compiling weezl v0.1.12
+   Compiling addr2line v0.25.1
+   Compiling fax v0.2.7
+   Compiling pxfm v0.1.30
+   Compiling crossbeam-epoch v0.9.20
+   Compiling byteorder-lite v0.1.0
+   Compiling anyhow v1.0.103
+   Compiling backtrace v0.3.76
+   Compiling syn v1.0.109
+   Compiling moxcms v0.8.1
+   Compiling nice-assert-no-alloc v1.0.0
+   Compiling core-foundation v0.10.1
+   Compiling crossbeam-deque v0.8.7
+   Compiling raw-window-handle v0.5.2
+   Compiling num-conv v0.2.2
+   Compiling rtrb v0.3.5
+   Compiling time-core v0.1.9
+   Compiling time-macros v0.2.31
+   Compiling num_threads v0.1.7
+   Compiling deranged v0.5.8
+   Compiling percent-encoding v2.3.2
+   Compiling serde_derive v1.0.228
+   Compiling bytemuck_derive v1.11.0
+   Compiling thiserror-impl v2.0.18
+   Compiling zerocopy-derive v0.8.54
+   Compiling enumn v0.1.14
+   Compiling foreign-types-macros v0.2.3
+   Compiling tracing-attributes v0.1.31
+   Compiling foreign-types v0.5.0
+   Compiling core-graphics v0.23.2
+   Compiling bytemuck v1.25.1
+   Compiling zerofrom-derive v0.1.7
+   Compiling color v0.3.3
+   Compiling wgpu-types v29.0.4
+   Compiling yoke-derive v0.8.2
+   Compiling zerovec-derive v0.11.3
+   Compiling displaydoc v0.2.6
+   Compiling duplicate v2.0.1
+   Compiling smallvec v1.15.2
+   Compiling parking_lot v0.12.5
+   Compiling ron v0.12.2
+   Compiling kurbo v0.13.1
+   Compiling half v2.7.1
+   Compiling font-types v0.11.3
+   Compiling emath v0.35.0
+   Compiling read-fonts v0.39.2
+   Compiling ecolor v0.35.0
+   Compiling peniko v0.6.1
+   Compiling vello_common v0.0.9
+   Compiling accesskit v0.24.1
+   Compiling vello_cpu v0.0.9
+   Compiling tracing v0.1.41
+   Compiling harmonigraph-scene v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-scene)
+   Compiling harmonigraph-take v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-take)
+   Compiling tiff v0.11.3
+   Compiling powerfmt v0.2.0
+   Compiling zerofrom v0.1.8
+   Compiling time v0.3.53
+   Compiling yoke v0.8.3
+   Compiling zerovec v0.11.6
+   Compiling harfrust v0.7.0
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling skrifa v0.42.1
+   Compiling tinystr v0.8.3
+   Compiling potential_utf v0.1.5
+   Compiling zerotrie v0.2.4
+   Compiling icu_locale_core v2.2.0
+   Compiling icu_collections v2.2.0
+   Compiling epaint v0.35.0
+   Compiling wgpu-core-deps-apple v29.0.4
+   Compiling icu_provider v2.2.0
+   Compiling icu_normalizer v2.2.0
+   Compiling egui v0.35.0
+   Compiling icu_properties v2.2.0
+   Compiling image v0.25.10
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling nice-plug-derive v0.1.2
+   Compiling egui-wgpu v0.35.0
+   Compiling harmonigraph-render v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-render)
+   Compiling egui_dock v0.20.1
+   Compiling harmonigraph-ui v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-ui)
+   Compiling form_urlencoded v1.2.2
+   Compiling crossbeam-queue v0.3.13
+   Compiling crossbeam-channel v0.5.16
+   Compiling harmonigraph-golden v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-golden)
+   Compiling keyboard-types v0.6.2
+   Compiling com-scrape-types v0.1.1
+   Compiling midi-consts v0.1.0
+   Compiling termcolor v1.4.1
+   Compiling coremidi-sys v3.2.0
+   Compiling atomic_refcell v0.1.14
+   Compiling getrandom v0.3.4
+   Compiling atomic_float v1.1.0
+   Compiling camino v1.2.4
+   Compiling nice-plug-core v0.1.5
+   Compiling nice-log v0.2.4
+   Compiling vst3 v0.3.0
+   Compiling baseview v0.1.4 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/vendor/baseview)
+   Compiling crossbeam v0.8.4
+   Compiling url v2.5.8
+   Compiling harmonigraph-record v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-record)
+   Compiling scroll_derive v0.13.1
+   Compiling copypasta v0.10.2
+   Compiling open v5.4.0
+   Compiling winnow v1.0.4
+   Compiling widestring v1.2.1
+   Compiling clap-sys v0.5.0
+   Compiling anymap3 v1.1.0
+   Compiling nice-plug v0.1.10 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/vendor/nice-plug)
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling egui-baseview v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/vendor/egui-baseview)
+   Compiling webbrowser v1.2.4
+   Compiling scroll v0.13.0
+   Compiling arboard v3.6.1
+   Compiling serde_spanned v1.1.1
+   Compiling semver v1.0.28
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling cargo-platform v0.3.3
+   Compiling midir v0.11.0
+   Compiling plain v0.2.3
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling goblin v0.10.7
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling cargo_metadata v0.23.1
+   Compiling egui-winit v0.35.0
+   Compiling coremidi v0.9.1
+   Compiling reflink-copy v0.1.30
+   Compiling hct-cam16 v0.1.0
+   Compiling home v0.5.12
+   Compiling nice-plug-xtask v0.1.1
+   Compiling eframe v0.35.0
+   Compiling xtask v0.1.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/xtask)
+   Compiling harmonigraph-plugin v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-plugin)
+   Compiling harmonigraph-offline v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-offline)
+   Compiling harmonigraph-standalone v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-standalone)
+    Finished `test` profile [optimized + debuginfo] target(s) in 3m 18s
+     Running unittests src/lib.rs (target/debug/deps/harmonigraph_analysis-0503c4c04225b76e)
+
+running 22 tests
+test tests::empty_analyzer_reports_nothing ... ok
+test tests::a440_lands_on_a4 ... ok
+test tests::dyad_shows_both_pitches ... ok
+test tests::octaves_show_as_separate_peaks ... ok
+test tests::one_taper_is_the_hann_window_and_the_arithmetic_under_it ... ok
+test tests::every_channel_of_a_bank_measures_through_the_same_tapers ... ok
+test tests::sample_rate_change_resets_the_window ... ok
+test tests::out_of_range_partials_are_dropped_not_wrapped ... ok
+test tests::an_anti_phase_pair_reads_at_full_level_where_a_mixdown_would_see_silence ... ok
+test tests::set_fft_size_resets_the_window_and_noops_at_the_current_size ... ok
+test tests::the_lowest_buckets_draw_at_every_window_length ... ok
+test tests::set_tapers_resets_the_window_and_noops_at_the_current_count ... ok
+test tests::silent_windows_keep_readiness_retained_audio_and_resume ... ok
+test tests::the_reconstruction_never_overshoots_the_bins_it_reads ... ok
+test tests::the_reconstruction_has_no_seam_at_a_bin ... ok
+test tests::the_taper_table ... ignored
+test tests::the_power_sum_keeps_the_full_scale_calibration_and_drops_pan_from_it ... ok
+test tests::a_full_scale_sine_reads_unity_at_every_taper_count ... ok
+test tests::the_noise_floor_reads_higher_as_tapers_are_added ... ok
+test tests::configured_analyzer_matches_direct_dft_after_ring_wrap ... ok
+test tests::more_tapers_steady_a_bucket_against_noise ... ok
+test tests::the_reconstruction_beats_a_straight_line_between_bins ... ok
+
+test result: ok. 21 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running unittests src/lib.rs (target/debug/deps/harmonigraph_core-efdf49bedaef6c50)
+
+running 99 tests
+test configuration::tests::learning_can_release_with_complete_evidence_but_not_a_bare_fifth ... ok
+test confirmed::tests::direct_exhaustion_disables_learning_until_complete_replacement ... ok
+test configuration::tests::explicit_release_dependency_keys_and_auto_recheck_are_distinct ... ok
+test canonical::tests::matching_baseline_preserves_held_ends_and_bends_without_an_attack ... ok
+test canonical::tests::empty_baseline_keeps_completed_history_and_duplicates_do_not_replay ... ok
+test canonical::tests::a_full_bend_buffer_preserves_the_gap_after_a_later_expression ... ok
+test coords::tests::a_sevens_step_no_longer_spells_like_two_fifths_down ... ok
+test coords::tests::adjacency_is_one_step_on_one_axis ... ok
+test canonical::tests::complete_64_voice_replacement_validates_before_touching_any_source ... ok
+test coords::tests::both_commas_compose_into_septimal_meantone ... ok
+test coords::tests::marks_are_readable_separately_for_stacked_labels ... ok
+test coords::tests::marvel_spelling_folds_the_sevens_axis_onto_the_home_sheet ... ok
+test confirmed::tests::complete_maximum_rows_reach_all_32640_pairs_and_cache_exact_classes ... ok
+test coords::tests::meantone_spelling_drops_commas ... ok
+test coords::tests::note_names_count_accidentals_and_commas ... ok
+test coords::tests::note_names_walk_the_lattice ... ok
+test coords::tests::a_tempered_comma_apart_is_one_pitch_and_one_name ... ok
+test coords::tests::positions_within_counts ... ok
+test history::tests::a_bent_voice_is_remembered_at_its_sounding_pitch ... ok
+test history::tests::a_note_enters_history_when_its_fade_completes_not_before ... ok
+test history::tests::clear_forgets_everything ... ok
+test history::tests::distinct_pitches_stay_distinct ... ok
+test history::tests::repeats_of_one_pitch_fold_into_a_single_visit ... ok
+test notes::tests::a_carried_level_lands_exactly_on_its_target ... ok
+test notes::tests::a_carried_level_walks_the_curve_the_attack_does ... ok
+test notes::tests::a_higher_shape_front_loads_the_fade ... ok
+test history::tests::visits_come_back_lowest_pitch_first ... ok
+test notes::tests::a_non_finite_carry_steps_rather_than_hangs ... ok
+test notes::tests::a_non_finite_envelope_ends_rather_than_hangs ... ok
+test notes::tests::a_note_shorter_than_its_arrival_still_reaches_full ... ok
+test history::tests::the_oldest_pitch_is_forgotten_once_the_cap_is_reached ... ok
+test notes::tests::a_zero_length_note_survives_its_first_prune ... ok
+test notes::tests::a_zero_length_ramp_steps_at_its_start ... ok
+test notes::tests::activation_is_full_while_held_then_decays_over_the_fade ... ok
+test notes::tests::all_off_releases_every_channel ... ok
+test notes::tests::carrying_a_level_in_steps_lands_where_one_step_does ... ok
+test notes::tests::display_octave_uses_bitwig_c3_convention ... ok
+test notes::tests::every_shape_starts_and_finishes_exactly ... ok
+test notes::tests::held_then_released_then_pruned ... ok
+test notes::tests::no_channel_is_dropped_on_the_way_in ... ok
+test notes::tests::retrigger_without_off_replaces_the_held_voice ... ok
+test notes::tests::all_notes_off_releases_the_voices_in_that_same_order ... ok
+test notes::tests::octave_is_derived_from_note_number ... ok
+test notes::tests::same_key_sources_keep_independent_lifetimes_bends_and_ends ... ok
+test notes::tests::the_attack_and_the_release_are_the_same_curve ... ok
+test notes::tests::the_ends_are_stamped_when_they_change_hands_and_not_otherwise ... ok
+test notes::tests::tuning_bends_pitch_class_and_octave ... ok
+test notes::tests::held_voices_come_back_in_channel_note_order ... ok
+test policy::tests::channel_bend_and_rpn_sensitivity_are_resolved_before_attack ... ok
+test policy::tests::hard_boundary_and_configured_axes_ignore_exact_remote_pitch ... ok
+test policy::tests::memory_refreshes_actual_register_pitch_and_new_release_order ... ok
+test roll::tests::a_note_is_in_the_roll_the_moment_it_sounds ... ok
+test roll::tests::a_held_note_reaches_the_present_moment ... ok
+test roll::tests::a_note_settles_on_the_pitch_its_tuning_lands_it_at ... ok
+test roll::tests::a_note_switched_off_the_instant_it_started_never_sounded ... ok
+test roll::tests::a_ramp_that_fills_the_breakpoints_cannot_move_the_settled_pitch ... ok
+test policy::tests::resource_exhaustion_is_explicit_and_never_truncates_to_a_winner ... ok
+test roll::tests::a_retrigger_without_an_off_closes_the_previous_entry ... ok
+test roll::tests::a_staccato_note_is_kept_however_brief ... ok
+test roll::tests::all_off_closes_every_sounding_note ... ok
+test roll::tests::an_unbent_note_is_one_flat_segment ... ok
+test roll::tests::bends_become_breakpoints_and_interpolate ... ok
+test roll::tests::breakpoints_are_capped_and_the_newest_wins ... ok
+test roll::tests::clear_forgets_everything ... ok
+test roll::tests::every_channel_reaches_the_roll ... ok
+test roll::tests::old_notes_age_out_but_sounding_ones_never_do ... ok
+test roll::tests::one_press_delivered_as_on_off_on_is_one_note ... ok
+test roll::tests::repeats_of_one_pitch_stay_separate_entries ... ok
+test roll::tests::sounding_notes_come_back_in_channel_note_order ... ok
+test roll::tests::the_settle_window_has_edges ... ok
+test spectrogram::tests::quantizing_preserves_order ... ok
+test spectrogram::tests::quantizing_round_trips_to_half_a_step ... ok
+test policy::tests::simulator_fixture_parity_includes_register_memory_and_precision ... ok
+test roll::tests::the_note_cap_drops_the_oldest_releases_first ... ok
+test spectrum::tests::midi_to_hz_anchors_a440_and_doubles_each_octave ... ok
+test tuning::tests::c_offset_learns_negative_from_a_flat_c ... ok
+test tuning::tests::distance_wraps_around ... ok
+test tuning::tests::every_comma_answers_for_itself ... ok
+test tuning::tests::fourth_implies_fifth ... ok
+test tuning::tests::is_marvel_accepts_12tet_rejects_just ... ok
+test tuning::tests::is_meantone_accepts_meantone_rejects_just ... ok
+test policy::tests::analytic_reachability_covers_direct_selection_across_registers ... ok
+test tuning::tests::just_fifth_stack ... ok
+test tuning::tests::kleisma_comma_equivalents_are_bit_identical ... ok
+test tuning::tests::learns_just_intervals_from_a_chord ... ok
+test tuning::tests::matching_respects_tolerance ... ok
+test tuning::tests::meantone_comma_equivalents_are_bit_identical ... ok
+test tuning::tests::nothing_close_learns_nothing ... ok
+test tuning::tests::pitch_class_wraps_at_octave ... ok
+test policy::tests::repeated_controller_chords_cross_one_hundred_dieses_without_wrapping ... ok
+test tuning::tests::quarter_comma_meantone_third_is_just ... ok
+test tuning::tests::the_septimal_kleisma_is_the_gap_it_says_it_is ... ok
+test tuning::tests::tempering_sets_the_exact_derived_axis ... ok
+test tuning::tests::tiny_negative_cents_fold_to_the_origin_not_a_full_octave ... ok
+test spectrogram::tests::a_merged_column_is_timestamped_inside_the_pair_it_replaced ... ok
+test spectrogram::tests::trimming_drops_the_oldest_first_and_clear_empties_it ... ok
+test spectrogram::tests::the_flat_view_stays_in_time_order_across_tiers ... ok
+test spectrogram::tests::a_peak_survives_being_merged_into_the_coarse_tiers ... ok
+test spectrogram::tests::the_column_count_is_bounded_however_long_it_runs ... ok
+
+test result: ok. 99 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running unittests src/lib.rs (target/debug/deps/harmonigraph_golden-efe5f28fe78e8e26)
+
+running 1 test
+test tests::golden_requires_a_complete_frame_even_when_the_prefix_matches ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/harmonigraph_metal_assets-edaa003be8ccb600)
+
+running 1 test
+test tests::embedded_inputs_round_trip_and_reject_edits ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/main.rs (target/debug/deps/harmonigraph_offline-b0ac9ff85b084e1c)
+
+running 73 tests
+test align::tests::failed_recording_alignment_reuses_the_clean_onsets_for_midi ... ok
+test align::tests::envelope_boundaries_survive_physical_chunks_and_a_partial_final_bin ... ok
+test align::tests::too_little_audio_declines_rather_than_guessing ... ok
+test frames::tests::a_released_note_lets_go_of_its_light ... ignored, a probe: writes PNGs and asserts nothing
+test frames::tests::row_stride_is_padded_to_wgpus_alignment ... ok
+test frames::tests::the_audio_ring_draws_a_picture ... ignored, a probe: writes PNGs and asserts nothing
+test frames::tests::the_clear_color_is_the_gamma_space_byte_not_a_linear_one ... ok
+test frames::tests::the_lattice_shadows_draw_a_picture ... ignored, a probe: writes PNGs and asserts nothing
+test frames::tests::the_marker_depth_order_draws_a_picture ... ignored, a probe: writes PNGs and asserts nothing
+test frames::tests::the_node_glow_draws_a_picture ... ignored, a probe: writes PNGs and asserts nothing
+test frames::tests::the_resting_markers_draw_a_picture ... ignored, a probe: writes PNGs and asserts nothing
+test frames::tests::the_shadow_against_the_octave_gap ... ignored, a probe: writes PNGs and asserts nothing
+test align::tests::recovers_a_clean_file_with_a_pre_roll ... ok
+test align::tests::recovers_a_positive_offset_too ... ok
+test align::tests::recovers_a_clean_file_that_starts_at_take_zero ... ok
+test align::tests::crackle_does_not_throw_the_alignment_off ... ok
+test align::tests::stereo_polarity_does_not_change_alignment ... ok
+test golden::what_the_heatmap_costs_a_frame ... ignored
+test golden::what_the_spectral_shadow_routes_cost_a_frame ... ignored
+test render::tests::a_render_window_with_no_audio_in_it_says_so ... ok
+test align::tests::aligns_a_bounce_to_midi_onsets_with_no_reference_recording ... ok
+test render::tests::export_selects_one_complete_appearance_and_defaults_a_refused_replacement ... ok
+test frames::tests::a_node_with_a_sheet_behind_it_is_still_a_lamp ... ok
+test golden::a_zoomed_in_pane_draws_the_frame_on_record ... ok
+test render::tests::a_take_renders_the_expected_number_of_frames_and_they_are_not_blank ... ok
+test golden::a_short_pane_zoomed_out_draws_the_frame_on_record ... FAILED
+test golden::mixed_spectral_shadows_draw_the_frame_on_record ... ok
+test golden::a_tall_pane_zoomed_out_draws_the_frame_on_record ... FAILED
+test golden::the_whole_song_layout_draws_the_frame_on_record ... FAILED
+test replay::tests::a_note_keeps_its_own_timestamp_not_the_frames ... ok
+test replay::tests::a_release_lost_to_an_outage_does_not_stay_held_for_the_rest_of_a_replay ... ok
+test replay::tests::accepted_off_after_gap_is_retained_without_a_held_baseline ... ok
+test replay::tests::an_unknown_parameter_id_is_skipped_rather_than_fatal ... ok
+test replay::tests::canonical_serialization_has_one_history_at_every_replay_cadence ... ok
+test replay::tests::events_arrive_on_the_frame_that_passes_them_and_not_before ... ok
+test replay::tests::parameter_automation_is_applied_in_time_order ... ok
+test replay::tests::params_start_at_their_defaults ... ok
+test replay::tests::resolved_configuration_round_trip_is_independent_of_replay_cadence ... ok
+test replay::tests::source_scopes_and_bends_round_trip_into_incremental_and_full_replay ... ok
+test replay::tests::visibility_boundaries_keep_pitch_history_independent_of_prune_cadence ... ok
+test sink::tests::a_blank_explicit_path_falls_through_to_the_search ... ok
+test render::tests::the_picture_moves_as_the_take_plays ... ok
+test sink::tests::an_explicit_ffmpeg_that_does_not_exist_is_reported_not_ignored ... ok
+test render::tests::whole_song_playhead_render_is_deterministic_and_moves ... ok
+test sink::tests::the_search_list_covers_both_homebrew_prefixes ... ok
+test tests::a_plain_command_line_renders_at_the_resolution_the_take_was_composed_at ... ok
+test tests::a_repeated_size_keeps_the_last_one ... ok
+test tests::a_size_at_the_frames_own_aspect_is_not_a_mismatch ... ok
+test tests::a_take_missing_note_history_is_exported_with_a_warning ... ok
+test tests::an_explicit_start_beats_the_lead ... ok
+test render::tests::scrolling_audio_uses_the_supplied_sample_grid ... ok
+test tests::default_scale_keeps_the_ui_the_same_relative_size ... ok
+test tests::size_accepts_the_forms_people_actually_type ... ok
+test tests::start_zero_is_distinguishable_from_no_start ... ok
+test tests::the_default_size_puts_the_short_edge_at_1080_with_even_dimensions ... ok
+test tests::the_render_starts_where_the_recording_did ... ok
+test wav::tests::a_compressed_wav_says_what_to_do_about_it ... ok
+test wav::tests::a_non_wav_file_is_rejected_clearly ... ok
+test wav::tests::a_stereo_slice_is_cut_on_frame_boundaries ... ok
+test wav::tests::all_encodings_extensible_padding_and_truncated_channel_frames ... ok
+test wav::tests::float32_stereo_keeps_its_channels ... ok
+test wav::tests::io_failure_is_returned_instead_of_silently_ending_a_range ... ok
+test wav::tests::large_ranges_seeks_and_final_chunks_keep_frames_and_bound_storage ... ok
+test wav::tests::pcm16_and_pcm24_decode_to_the_same_signal ... ok
+test wav::tests::seconds_and_slicing_line_up_with_the_sample_rate ... ok
+test wav::tests::unknown_chunks_between_fmt_and_data_are_skipped ... ok
+test render::tests::spectral_shadows_agree_with_the_shared_editor_path_at_every_export_scale ... ok
+test render::tests::rendering_a_take_with_a_carried_light_twice_is_byte_identical ... ok
+test sink::tests::an_encoder_that_closes_the_pipe_early_stops_the_render_without_failing_it ... ok
+test render::tests::rendering_sliced_audio_twice_is_byte_identical ... ok
+test render::tests::rendering_the_same_take_twice_is_byte_identical ... ok
+test tests::appearance_files_replace_recorded_output_and_picture_together ... ok
+test sink::tests::every_frame_handed_over_reaches_the_encoder_in_order ... ok
+
+failures:
+
+---- golden::a_short_pane_zoomed_out_draws_the_frame_on_record stdout ----
+
+thread 'golden::a_short_pane_zoomed_out_draws_the_frame_on_record' (32471886) panicked at crates/harmonigraph-golden/src/lib.rs:121:13:
+spectrogram-short-pane moved: mean 0.000/255, max 1/255
+expected | actual | difference at 8x: /Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-offline/../../target/golden-diff/spectrogram-short-pane.png
+If the change is intended, re-baseline and say what moved in the PR body:
+HARMONIGRAPH_BLESS=1 cargo test --workspace golden
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- golden::a_tall_pane_zoomed_out_draws_the_frame_on_record stdout ----
+
+thread 'golden::a_tall_pane_zoomed_out_draws_the_frame_on_record' (32471890) panicked at crates/harmonigraph-golden/src/lib.rs:121:13:
+spectrogram-tall-pane moved: mean 0.000/255, max 1/255
+expected | actual | difference at 8x: /Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-offline/../../target/golden-diff/spectrogram-tall-pane.png
+If the change is intended, re-baseline and say what moved in the PR body:
+HARMONIGRAPH_BLESS=1 cargo test --workspace golden
+
+---- golden::the_whole_song_layout_draws_the_frame_on_record stdout ----
+
+thread 'golden::the_whole_song_layout_draws_the_frame_on_record' (32471897) panicked at crates/harmonigraph-golden/src/lib.rs:121:13:
+spectrogram-whole-song moved: mean 0.000/255, max 1/255
+expected | actual | difference at 8x: /Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-offline/../../target/golden-diff/spectrogram-whole-song.png
+If the change is intended, re-baseline and say what moved in the PR body:
+HARMONIGRAPH_BLESS=1 cargo test --workspace golden
+
+
+failures:
+    golden::a_short_pane_zoomed_out_draws_the_frame_on_record
+    golden::a_tall_pane_zoomed_out_draws_the_frame_on_record
+    golden::the_whole_song_layout_draws_the_frame_on_record
+
+test result: FAILED. 61 passed; 3 failed; 9 ignored; 0 measured; 0 filtered out; finished in 0.67s
+
+error: test failed, to rerun pass `-p harmonigraph-offline --bin harmonigraph-offline`
