@@ -23,6 +23,7 @@ mod fold;
 /// defaults behind them. The render settings persist too but live in
 /// `harmonigraph-take` — see the re-export below.
 mod config;
+mod runtime;
 /// The spectrogram heatmap's texture-ring/cache machinery. The pane that
 /// draws it, `panes::spectral::spectrogram`, holds only the mesh and the
 /// draw call.
@@ -31,6 +32,7 @@ mod spectrogram;
 mod spectrum;
 /// [`SharedState`] and the blob it saves itself into.
 mod state;
+pub use runtime::VisualRuntime;
 
 pub use layout::{Layout, Placement, PRESETS};
 
@@ -73,19 +75,19 @@ pub use harmonigraph_take::{
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory, WholeSong};
 pub(crate) use state::default_dock;
-pub use state::{CameraPreset, Console, SharedState, TakeState};
+pub use state::{
+    CameraPreset, Console, Interaction, PictureState, SharedState, SurfaceState, TakeState,
+};
 pub use text::use_renderer_font_texture;
 
-use harmonigraph_core::{Comma, PitchClass};
 // The overlay's model. `ShellTimings` — the one piece of it a windowed shell
 // writes — is deliberately not re-exported from here: the contract runs from
 // the shell to the model, and routing it through the crate that only passes it
 // along is what made the UI look like its owner.
 use harmonigraph_perf::{FrameCosts, Workload};
-use harmonigraph_scene::FrameParams;
 use params::ParamBackend;
 
-use egui_dock::{DockArea, DockState};
+use egui_dock::DockArea;
 
 /// End a drag whose release is never coming, because it is holding every
 /// scroll area in the editor hostage.
@@ -216,8 +218,8 @@ fn kept_focus(ctx: &egui::Context) -> bool {
 /// shells call rather than keep in step by hand.
 ///
 /// The one step still owed by the caller: before calling this, feed the
-/// frame's MIDI into `state.tracker` and its audio samples into
-/// `state.spectrum`. `now` is seconds on the shell's clock, and must be the
+/// frame's MIDI into `state.picture.runtime.tracker` and its audio samples into
+/// `state.picture.runtime.spectrum`. `now` is seconds on the shell's clock, and must be the
 /// SAME clock that timestamped those `NoteEvent`s — envelopes are derived from
 /// the difference.
 ///
@@ -229,18 +231,18 @@ fn kept_focus(ctx: &egui::Context) -> bool {
 /// Both shells therefore feed first and hand over what they fed.
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
     // Loading frames still receive notes and automation from the shell.
-    begin_frame(state, params, now);
+    begin_frame(&mut state.picture, params, now);
     if startup::draw(ui, state) {
         return;
     }
-    if !state.tracker.publication_gaps().is_empty() {
+    if !state.picture.runtime.tracker.publication_gaps().is_empty() {
         ui.colored_label(
             egui::Color32::from_rgb(240, 180, 70),
             "Some note history is missing. Current notes may be incomplete until their source recovers.",
         );
     }
     if let Some(stranded) = end_stranded_drag(ui.ctx()) {
-        state.console.log(stranded);
+        state.picture.runtime.console.log(stranded);
     }
 
     // The chrome scale, before anything lays out at the old one. The shell
@@ -249,7 +251,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // would be behind on is the one being dragged, where every intermediate
     // size shows. `reset_style` takes the rebuilt one from the context, which
     // `set_ui_scale` has already put there.
-    if theme::set_ui_scale(ui.ctx(), state.ui_scale) {
+    if theme::set_ui_scale(ui.ctx(), state.workspace.interaction.ui_scale) {
         ui.reset_style();
     }
     // Read back rather than reused: `set_ui_scale` clamps, and the dock has to
@@ -259,7 +261,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Cleared before the panes run, so a frame with the roll hidden (or the
     // Spectral pane not on screen at all) reports zero notes rather than
     // whatever the last frame that had one reported.
-    state.instruments.roll_notes.store(0, std::sync::atomic::Ordering::Relaxed);
+    state.picture.instruments.roll_notes.store(0, std::sync::atomic::Ordering::Relaxed);
 
     // Frameless mode hides every tab bar (the Lattice and Spectral panes
     // meet with no chrome between them — clean for captures). The pane
@@ -279,32 +281,15 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     if !ui.ctx().text_edit_focused()
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
     {
-        state.appearance.view.frameless = !state.appearance.view.frameless;
+        state.picture.appearance.view.frameless = !state.picture.appearance.view.frameless;
         ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
     let mut dock_style = theme::dock_style(ui.style(), ui_scale);
-    if state.appearance.view.frameless {
+    if state.picture.appearance.view.frameless {
         dock_style.tab_bar.height = 0.0;
     }
 
-    // DockState has to be moved out while panes borrow the rest of `state`.
-    //
-    // Grouping the layout into `Workspace` does not lift this and cannot. The
-    // borrow is the whole state — a pane is handed `&mut SharedState`, so a
-    // field one struct deeper is no freer than a field at the top level — and
-    // the tree is wanted for exactly as long as the panes are drawing into it.
-    // That is what singles the dock out: every other member of the group is
-    // read before the pass or after it, and this one is read DURING.
-    //
-    // Moving the whole `Workspace` out in its place is the tidier-looking
-    // version and is wrong, because the pass writes back into the group. The
-    // System page's "Reset layout" sets `reset_layout` on the state, which
-    // would be the emptied default left standing here, and restoring the
-    // lifted copy afterwards would drop that write — the button going quiet
-    // with everything still compiling and every other test green. See
-    // `the_reset_layout_button_resets_the_layout_when_it_is_clicked`, which is
-    // what says so out loud.
-    let mut dock = std::mem::replace(&mut state.workspace.dock, DockState::new(vec![]));
+    let workspace = &mut state.workspace;
     // Before the dock lays out: a pane collapsed inside a horizontal split
     // folds sideways to a rail, which is a split fraction, which is layout's
     // input. egui_dock's own vertical folds need nothing from us.
@@ -327,20 +312,20 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     let (gesturing, at) = ui.input(|i| {
         (i.pointer.any_down() || i.pointer.any_released(), i.pointer.latest_pos().map(|at| at.x))
     });
-    state.workspace.dial.watch_pointer(gesturing && kept_focus(ui.ctx()), at);
+    workspace.dial.watch_pointer(gesturing && kept_focus(ui.ctx()), at);
     let area = fold::area_width(ui, &dock_style);
-    state.workspace.window_width_change += state.workspace.folds.apply(
-        &mut dock,
+    workspace.window_width_change += workspace.folds.apply(
+        &mut workspace.dock,
         &dock_style,
         area,
-        state.workspace.min_window_width,
-        &mut state.workspace.dial,
+        workspace.min_window_width,
+        &mut workspace.dial,
     );
     // Time the whole dock build — every pane's layout and the scene
     // derivation — as the GUI thread's own per-frame CPU cost. The wgpu draw
     // is submitted inside and finishes off-thread, so this is CPU, not GPU.
     let cpu_start = std::time::Instant::now();
-    DockArea::new(&mut dock)
+    DockArea::new(&mut workspace.dock)
         // Cloned because the rails are painted from the same style afterwards.
         .style(dock_style.clone())
         // The pane set is fixed, so closing chrome stays off — but the
@@ -349,16 +334,22 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         .show_close_buttons(false)
         .show_leaf_close_all_buttons(false)
         .show_leaf_collapse_buttons(true)
-        .show_inside(ui, &mut panes::Viewer { state, params, now });
+        .show_inside(
+            ui,
+            &mut panes::Viewer {
+                state: &mut state.picture,
+                interaction: &mut workspace.interaction,
+                params,
+                now,
+            },
+        );
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
     // After it: the rails the folds left behind, which only this frame's
     // rectangles can place — and the separators those folds pinned, which
     // resize the panes a user sees them dividing (see `fold::shove_target`).
-    fold::paint(ui, &mut dock, &dock_style, &state.workspace.dial);
-    state.workspace.dock = dock;
-    // Deferred from the System page's button: replacing the dock BEFORE the
-    // write-back above would be silently undone.
-    if std::mem::take(&mut state.workspace.reset_layout) {
+    fold::paint(ui, &mut workspace.dock, &dock_style, &workspace.dial);
+    // Apply the explicit request after the dock traversal has finished.
+    if std::mem::take(&mut state.workspace.interaction.reset_layout) {
         // The default layout has every pane open, so the window gets back
         // whatever the folds being thrown away were holding — priced off the
         // dock they are in, so before it is replaced.
@@ -387,15 +378,15 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Flowing audio counts too: the spectrum and spectrogram advance every
     // frame off the analyzer, so with audio playing but no MIDI they'd
     // otherwise crawl at the 50 ms idle poll.
-    let animating = state.tracker.voices().next().is_some()
-        || state.learn_active
+    let animating = state.picture.runtime.tracker.voices().next().is_some()
+        || state.picture.runtime.learn_active
         || roll_scrolling(state, now)
-        || state.spectrum.is_flowing(now);
+        || state.picture.runtime.spectrum.is_flowing(now);
     if animating {
         // Uncapped means "as fast as the shell offers"; a cap turns that into
         // a minimum spacing between repaints. Only the request changes — the
         // frame that does get drawn is identical either way.
-        match frame_interval(state.fps_cap) {
+        match frame_interval(state.workspace.interaction.fps_cap) {
             Some(interval) => ui.ctx().request_repaint_after(interval),
             None => ui.ctx().request_repaint(),
         }
@@ -406,33 +397,33 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Performance overlay: fold this frame's numbers in and, if it's on, draw
     // the HUD. Interactive path only — the offline renderer never reaches
     // root_ui, so nothing here touches a recorded frame.
-    state.instruments.perf.record(
+    state.picture.instruments.perf.record(
         FrameCosts::assemble(
-            state.instruments.timings,
+            state.picture.instruments.timings,
             cpu_ms,
-            &state.instruments.lattice_stats,
-            state.instruments.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
-            state.spectrum.spectrogram_fallbacks(),
+            &state.picture.instruments.lattice_stats,
+            state.picture.instruments.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
+            state.picture.surfaces.spectrogram.spectrogram_fallbacks(),
         ),
         now,
         Workload {
-            active_voices: state.tracker.voices().count(),
-            held_voices: state.tracker.held_count(),
-            visible_nodes: state.drawn_this_frame.map_or(0, |w| w.count()),
-            render_scale: state.appearance.view.render_scale,
+            active_voices: state.picture.runtime.tracker.voices().count(),
+            held_voices: state.picture.runtime.tracker.held_count(),
+            visible_nodes: state.picture.surfaces.drawn_this_frame.map_or(0, |w| w.count()),
+            render_scale: state.picture.appearance.view.render_scale,
             animating,
         },
     );
-    if state.appearance.view.show_perf {
+    if state.picture.appearance.view.show_perf {
         // The whole editor, which is the region the HUD may be dragged around
         // in — where inside it the HUD sits is the user's, and `perf_pos` is
         // where that answer lives.
         perf::draw_overlay(
             ui.ctx(),
             ui.max_rect(),
-            &mut state.perf_pos,
-            &state.instruments.perf,
-            state.appearance.view.show_perf_detail,
+            &mut state.workspace.interaction.perf_pos,
+            &state.picture.instruments.perf,
+            state.picture.appearance.view.show_perf_detail,
         );
     }
 }
@@ -445,8 +436,8 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
 /// their own layout instead of using the dock — the offline renderer
 /// draws [`Pane`]s directly, and skipping this would leave it rendering
 /// last frame's tuning against never-pruned voices.
-pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
-    resolve_tuning(state, params);
+pub fn begin_frame(state: &mut PictureState, params: &dyn ParamBackend, now: f64) {
+    state.runtime.advance(&mut state.appearance, params, now);
 
     // Rotated here so the window belongs to a whole frame rather than to a
     // point in the dock's draw order: the lattice publishes as it builds, and
@@ -456,112 +447,7 @@ pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64)
     // small to draw — reports no window rather than going on showing the last
     // one that was. A diagnostic that holds its last good reading is the one
     // that misleads.
-    state.drawn = state.drawn_this_frame.take();
-
-    state.frame_params = FrameParams {
-        fade_time: params.get(params::ParamKey::Fade),
-        darkest_pitch: params.get(params::ParamKey::DarkestPitch),
-        brightest_pitch: params.get(params::ParamKey::BrightestPitch),
-    };
-    // Every layer of a node fades on this one envelope, so a voice is dead to
-    // the display exactly when its release reaches zero.
-    state.tracker.prune(now, &state.appearance.view.envelope(&state.frame_params));
-}
-
-/// Resolve current musical values without advancing drawing or envelope state.
-/// Synchronous shells also call this after edits, before capturing their frame.
-pub fn resolve_tuning(state: &mut SharedState, params: &dyn ParamBackend) {
-    let owned = params.configuration();
-    if owned.is_none() && state.replayed_configuration.is_none() {
-        learn_step(state, params);
-    }
-
-    if let Some(owned) = owned {
-        apply_resolved(state, owned.resolved);
-        state.configuration_status = owned.status;
-        state.configuration_pending = owned.pending;
-    } else if let Some(recorded) = state.replayed_configuration {
-        apply_resolved(state, recorded);
-    } else {
-        let modes = tuning_modes(state);
-        state.config_reducer.sync_display(
-            params::tuning_from_params(params),
-            modes,
-            state.temper_judged,
-        );
-        state.temper_judged = state.config_reducer.judged();
-        apply_resolved(state, state.config_reducer.resolved());
-    }
-}
-
-pub(crate) fn tuning_modes(state: &SharedState) -> harmonigraph_core::configuration::TuningModes {
-    harmonigraph_core::configuration::TuningModes {
-        tempered: harmonigraph_core::Tempered {
-            syntonic: state.appearance.view.meantone,
-            septimal_kleisma: state.appearance.view.marvel,
-        },
-        auto: [state.appearance.view.meantone_auto, state.appearance.view.marvel_auto],
-        learning: state.learn_active,
-    }
-}
-
-pub(crate) fn apply_resolved(
-    state: &mut SharedState,
-    config: harmonigraph_core::configuration::ResolvedConfig,
-) {
-    state.tuning = config.tuning;
-    state.adaptive_policy = config.policy;
-    state.appearance.view.meantone = config.modes.tempered.syntonic;
-    state.appearance.view.marvel = config.modes.tempered.septimal_kleisma;
-    state.appearance.view.meantone_auto = config.modes.auto[0];
-    state.appearance.view.marvel_auto = config.modes.auto[1];
-    state.learn_active = config.modes.learning;
-}
-
-/// One semantic action, including every axis and explicit unlock in a preset.
-/// CLAP submits it once; standalone/legacy writes synchronously through the same
-/// pure reducer at the next frame boundary.
-pub(crate) fn tuning_edit(
-    state: &mut SharedState,
-    params: &dyn ParamBackend,
-    edit: harmonigraph_core::configuration::ConfigEdit,
-) {
-    if let Some(accepted) = params.submit_tuning(edit) {
-        state.configuration_pending = accepted;
-        if !accepted {
-            state.console.log("Tuning command refused: configuration storage is full");
-        }
-        return;
-    }
-    if let Some(policy) = edit.policy {
-        state.config_reducer.apply(harmonigraph_core::configuration::ConfigMutation::Edit(
-            harmonigraph_core::configuration::ConfigEdit {
-                policy: Some(policy),
-                ..Default::default()
-            },
-        ));
-        state.adaptive_policy = policy;
-    }
-    for (key, value) in params::ParamKey::TUNING.into_iter().zip(edit.axes) {
-        if let Some(value) = value {
-            params.set(key, value as f32 / 1_000_000.0);
-        }
-    }
-    for comma in Comma::ALL {
-        let i = comma.index();
-        if let Some(on) = edit.tempered[i] {
-            *state.appearance.view.temper_mut(comma) = on;
-        }
-        if let Some(on) = edit.auto[i] {
-            *state.appearance.view.temper_auto_mut(comma) = on;
-            if on {
-                state.temper_judged[i] = None;
-            }
-        }
-    }
-    if let Some(on) = edit.learning {
-        state.learn_active = on;
-    }
+    state.surfaces.drawn = state.surfaces.drawn_this_frame.take();
 }
 
 /// A pane that stands on its own, outside the dock.
@@ -601,7 +487,13 @@ pub enum Pane {
 /// names. [`Layout::resolve`] drops a placement too small to draw, so the index
 /// is into what it returned rather than into the file — which is the same list
 /// every frame of a render, the size being fixed for the whole of one.
-pub fn draw_pane(ui: &mut egui::Ui, pane: Pane, state: &mut SharedState, now: f64, surface: usize) {
+pub fn draw_pane(
+    ui: &mut egui::Ui,
+    pane: Pane,
+    state: &mut PictureState,
+    now: f64,
+    surface: usize,
+) {
     match pane {
         Pane::Lattice => panes::lattice::lattice_pane(ui, state, now, surface),
         // Text sizes itself off the pane, here as everywhere.
@@ -635,55 +527,16 @@ fn frame_interval(fps_cap: Option<f32>) -> Option<std::time::Duration> {
 /// reaches back to a note that was sounding. Goes quiet once the last note
 /// has scrolled off the far edge, so an idle plugin still idles.
 fn roll_scrolling(state: &SharedState, now: f64) -> bool {
-    let cfg = &state.appearance.spectrum;
+    let cfg = &state.picture.appearance.spectrum;
     cfg.show_roll
         && cfg.roll_fraction > 0.0
         && state
+            .picture
+            .runtime
             .tracker
             .roll()
             .latest_activity(now)
             .is_some_and(|last| now - last <= cfg.roll_seconds as f64)
-}
-
-/// One tick of learn mode (v1 semantics): while armed, whenever the set of
-/// held pitch classes changes, re-infer the tuning and write it through the
-/// param backend. Change-detected so the host only sees parameter sets when
-/// something actually changed. No egui types — testable with a stub
-/// backend.
-fn learn_step(state: &mut SharedState, params: &dyn ParamBackend) {
-    if !state.learn_active {
-        state.last_learned_classes = None;
-        return;
-    }
-    let mut classes: Vec<PitchClass> = state
-        .tracker
-        .voices()
-        .filter(|v| v.state == harmonigraph_core::VoiceState::Held)
-        .map(|v| v.pitch_class)
-        .collect();
-    classes.sort_unstable();
-    classes.dedup();
-    if state.last_learned_classes.as_ref() == Some(&classes) {
-        return;
-    }
-    if !classes.is_empty() {
-        let learned = harmonigraph_core::learn_tuning(&classes);
-        for (value, key) in [
-            (learned.c_offset, params::ParamKey::COffset),
-            (learned.three, params::ParamKey::Three),
-            (learned.five, params::ParamKey::Five),
-            (learned.seven, params::ParamKey::Seven),
-        ] {
-            if let Some(value) = value {
-                params.set(key, value);
-            }
-        }
-        let modes = harmonigraph_core::configuration::learned_modes(learned, tuning_modes(state));
-        state.appearance.view.meantone = modes.tempered.syntonic;
-        state.appearance.view.marvel = modes.tempered.septimal_kleisma;
-        state.console.log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
-    }
-    state.last_learned_classes = Some(classes);
 }
 
 #[cfg(test)]

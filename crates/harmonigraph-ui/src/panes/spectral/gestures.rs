@@ -16,7 +16,7 @@
 
 use super::axes::{spectrum_share, widest_span, Axes};
 use crate::panes::{zoom_gesture, DOCKED_SURFACE};
-use crate::SharedState;
+use crate::PictureState;
 use egui::Sense;
 
 /// Half-width of the divider's grab band, in points. Wider than the hairline
@@ -118,7 +118,7 @@ fn lean_is_depth(
 pub(super) fn drag_split(
     ui: &mut egui::Ui,
     axes: &Axes,
-    state: &mut SharedState,
+    state: &mut PictureState,
     surface: usize,
     split: f32,
 ) -> egui::Response {
@@ -216,10 +216,10 @@ pub(super) const FAR_REGION_FLOOR_PT: f32 = 64.0;
 /// Every layer of the pane takes its split from here, so the divider's grab
 /// band, the curve, the heatmap and the ribbons cannot disagree about where the
 /// boundary is.
-pub(super) fn spectrum_split(state: &SharedState, surface: usize) -> f32 {
+pub(super) fn spectrum_split(state: &PictureState, surface: usize) -> f32 {
     let cfg = &state.appearance.spectrum;
     let dialled = spectrum_share(cfg);
-    match state.spectrum_hold.0 {
+    match state.surfaces.spectrum_hold.0 {
         // A dial of the WHOLE axis is a state rather than a size: the far
         // region turned off, or the divider dragged shut — which the pane
         // keeps grabbable precisely so that shutting it is not one-way (see
@@ -253,7 +253,7 @@ pub(super) fn spectrum_split(state: &SharedState, surface: usize) -> f32 {
 ///   proportional split, which is what a pane with no hold on it draws at every
 ///   size. So it degrades toward sharing the squeeze rather than toward a
 ///   spectrum filling the pane edge to edge.
-pub(crate) fn hold_spectrum(state: &mut SharedState, pane: egui::Vec2) {
+pub(crate) fn hold_spectrum(state: &mut PictureState, pane: egui::Vec2) {
     let cfg = state.appearance.spectrum;
     // No far region is no divider — there is nothing to take a resize. The hold
     // is left standing rather than dropped, so turning the spectrogram back on
@@ -266,7 +266,7 @@ pub(crate) fn hold_spectrum(state: &mut SharedState, pane: egui::Vec2) {
     // keep (see [`spectrum_split`]). Dropped rather than left standing: what
     // re-opens it is a drag, which re-dials anyway.
     if share >= 1.0 {
-        state.spectrum_hold.0 = None;
+        state.surfaces.spectrum_hold.0 = None;
         return;
     }
     let vertical = cfg.orientation.is_time_vertical();
@@ -280,14 +280,14 @@ pub(crate) fn hold_spectrum(state: &mut SharedState, pane: egui::Vec2) {
     if !depth.is_finite() || depth <= 0.0 {
         return;
     }
-    let held = match state.spectrum_hold.0 {
+    let held = match state.surfaces.spectrum_hold.0 {
         Some(held) if held.dial == cfg.roll_fraction && held.vertical == vertical => held,
         // Dialled since this last looked — so THIS is the picture to keep, at
         // the size and along the axis it was set on. A dial is already the
         // answer for the pane it was made on, so nothing is derived from it
         // until that pane changes.
         _ => {
-            state.spectrum_hold.0 =
+            state.surfaces.spectrum_hold.0 =
                 Some(Held { dial: cfg.roll_fraction, depth, vertical, held: share });
             return;
         }
@@ -299,7 +299,7 @@ pub(crate) fn hold_spectrum(state: &mut SharedState, pane: egui::Vec2) {
     // its share of a pane it is supposed to be filling more of.
     let kept = share * held.depth;
     let keep = kept.min((depth - FAR_REGION_FLOOR_PT).max(share * depth)) / depth;
-    state.spectrum_hold.0 = Some(Held { held: keep.clamp(0.0, 1.0), ..held });
+    state.surfaces.spectrum_hold.0 = Some(Held { held: keep.clamp(0.0, 1.0), ..held });
 }
 
 /// How much one point of scroll zooms, as an exponent — a full notch of a
@@ -385,7 +385,7 @@ pub(super) fn drag_zoom(
     ui: &egui::Ui,
     axes: &Axes,
     response: &egui::Response,
-    state: &mut SharedState,
+    state: &mut PictureState,
     surface: usize,
     // Where the far region begins on the pane being drawn, and so which drags
     // have a time axis under them and which a dB one. The caller's reading, for

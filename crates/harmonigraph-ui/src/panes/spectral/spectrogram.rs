@@ -21,7 +21,7 @@ use super::axes::{power_db, Axes, PitchScale, TimeAxis};
 use crate::spectrogram::{
     frame_data, hold_time, read_of, run_for, slab_drawn, Columns, PaneView, Plan, TexLayout,
 };
-use crate::SharedState;
+use crate::PictureState;
 use harmonigraph_scene::Gradient;
 
 /// The MEAN OF dB over the buckets a pixel covers — the operator the heatmap's
@@ -184,22 +184,23 @@ pub(crate) fn draw_spectrogram(
     painter: &egui::Painter,
     axes: &Axes,
     scale: &PitchScale,
-    state: &mut SharedState,
+    state: &mut PictureState,
     split: f32,
     now: f64,
     // Which surface this is (0 the docked pane / offline render, 1 the Render
     // preview) — two live spectrograms in a frame need their own grid.
     surface: usize,
 ) {
-    // Small copies, so `state.spectrum` is then free to take mutably without
+    // Small copies, so `state.runtime.spectrum` is then free to take mutably without
     // fighting the config reads.
     let cfg = state.appearance.spectrum;
-    let target_format = state.target_format;
+    let target_format = state.surfaces.target_format;
     // Shared time<->depth mapping: a `now`-anchored scrolling window live, or
     // the whole take laid out statically (offline playhead mode).
     let time = TimeAxis::new(state, split, now);
-    let whole = state.whole_song.as_ref();
-    let spectrum = &mut state.spectrum;
+    let whole = state.runtime.whole_song.as_ref();
+    let spectrum = &state.runtime.spectrum;
+    let surfaces = &mut state.surfaces.spectrogram;
     // Columns come from the precomputed render-window set (playhead mode) or
     // the live store.
     let enough = match whole {
@@ -234,12 +235,12 @@ pub(crate) fn draw_spectrogram(
             }
         }
     };
-    let plan = Plan::new(&view, &columns, spectrum.spectrogram.at(surface).held_bucket);
+    let plan = Plan::new(&view, &columns, surfaces.at(surface).held_bucket);
 
     // The run on the GPU when the plan's key still names it, and a fresh fold
     // otherwise. The pitch axis, the rows and the colours are uniforms, so a
     // zoom, a resize or a palette drag reaches neither.
-    let Some(layout) = run_for(spectrum, whole, surface, &plan, &view) else {
+    let Some(layout) = run_for(spectrum.history(), surfaces, whole, surface, &plan, &view) else {
         return;
     };
 
@@ -274,7 +275,7 @@ pub(crate) fn draw_spectrogram(
     };
 
     let vertices = heatmap_vertices(axes, &time, &layout, d_near, d_far);
-    let Some((grid, shades)) = frame_data(spectrum, surface, &cfg) else {
+    let Some((grid, shades)) = frame_data(surfaces, surface, &cfg) else {
         return;
     };
     // The painter's own clip is what bounds the heatmap: the quads reach past
@@ -331,18 +332,21 @@ mod gap_tests {
         let ctx = egui::Context::default();
         let mut fresh_generation = 0;
         for cold in [false, true] {
-            let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+            let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
             state.appearance.spectrum.roll_seconds = 12.0;
             let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
             for i in 0..160 {
-                state.spectrum.push_history(100.0 + i as f64 * 0.008, &[1.0; SPECTRUM_BINS]);
+                state
+                    .runtime
+                    .spectrum
+                    .push_history(100.0 + i as f64 * 0.008, &[1.0; SPECTRUM_BINS]);
             }
             for (step, now) in [101.28, 701.27, 701.28, 701.40, 701.53].into_iter().enumerate() {
                 if step == 0 && cold {
                     continue;
                 }
                 if step > 0 {
-                    state.spectrum.push_history(now, &[0.25; SPECTRUM_BINS]);
+                    state.runtime.spectrum.push_history(now, &[0.25; SPECTRUM_BINS]);
                 }
                 if step == 3 {
                     state.appearance.spectrum.roll_seconds = 24.0; // rung-change rebuild
@@ -365,7 +369,7 @@ mod gap_tests {
                     "the first resumed occupied slab must already produce a callback"
                 );
                 let time = TimeAxis::new(&state, 0.0, now);
-                let hist = state.spectrum.history();
+                let hist = state.runtime.spectrum.history();
                 let columns = Columns {
                     first: hist.partition_point(|c| c.time < time.oldest()).saturating_sub(1),
                     len: hist.len(),
@@ -381,13 +385,21 @@ mod gap_tests {
                     whole: false,
                 };
                 let plan = Plan::new(&view, &columns, None);
-                let layout = run_for(&mut state.spectrum, None, 0, &plan, &view).unwrap();
+                let layout = run_for(
+                    state.runtime.spectrum.history(),
+                    &mut state.surfaces.spectrogram,
+                    None,
+                    0,
+                    &plan,
+                    &view,
+                )
+                .unwrap();
                 let far = time.depth_of(layout.t_origin);
                 if step > 0 {
                     assert_eq!(far, 1.0, "a long gap must not regrow the far edge like startup");
                 }
                 let vertices = heatmap_vertices(&axes, &time, &layout, 0.0, far);
-                let (grid, shades) = frame_data(&mut state.spectrum, 0, &cfg).unwrap();
+                let (grid, shades) = frame_data(&mut state.surfaces.spectrogram, 0, &cfg).unwrap();
                 let read = read_of(&view, plan.rows);
                 let delta = gpu.frame(
                     0,
@@ -430,11 +442,15 @@ mod gap_tests {
 
         // Once retention has removed every old column, the cold pane retains
         // its established startup rule: wait for two columns and two slabs.
-        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         state.appearance.spectrum.roll_seconds = 12.0;
-        state.spectrum.push_history(1.0, &[1.0; SPECTRUM_BINS]);
-        state.spectrum.push_history(622.0, &[0.25; SPECTRUM_BINS]);
-        assert_eq!(state.spectrum.history().len(), 1, "the fixture must exceed history retention");
+        state.runtime.spectrum.push_history(1.0, &[1.0; SPECTRUM_BINS]);
+        state.runtime.spectrum.push_history(622.0, &[0.25; SPECTRUM_BINS]);
+        assert_eq!(
+            state.runtime.spectrum.history().len(),
+            1,
+            "the fixture must exceed history retention"
+        );
         let axes = Axes::new(rect, &state.appearance.spectrum);
         let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
         let output =

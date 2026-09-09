@@ -17,13 +17,13 @@
 
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
-use crate::SharedState;
+use crate::PictureState;
 use harmonigraph_core::NoteTracker;
 use harmonigraph_scene::{NoteNames, ViewConfig};
 
 /// What a label says, which nodes carry one, how big it draws and how bright
 /// it is while its note sounds.
-pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut SharedState) {
+pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut PictureState) {
     section(ui, "Note labels");
     ui.checkbox(&mut state.appearance.view.show_labels, "Show note names")
         .on_hover_text("Show note names on lattice nodes.");
@@ -58,7 +58,7 @@ pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut SharedState) {
                 "Brightness of note labels while sounding: 0% is black, 100% is white. \
                  Released labels return to Idle label brightness over the Note fade time.",
             );
-        clear_button(ui, &state.appearance.view, &mut state.tracker);
+        clear_button(ui, &state.appearance.view, &mut state.runtime.tracker);
     });
 }
 

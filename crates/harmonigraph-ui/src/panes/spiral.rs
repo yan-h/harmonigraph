@@ -45,7 +45,7 @@ use egui::Color32;
 use super::spectral::axes::{power_db, spectrogram_level_db};
 use super::spectral::roll::note_color;
 use super::spectral::spectrogram::{cell_color, footprint_mean_db};
-use crate::SharedState;
+use crate::PictureState;
 
 /// How much of the disc's radius the hole in the middle keeps, as a share of
 /// the outer radius.
@@ -528,7 +528,7 @@ impl Spiral {
 /// its index (see [`draw_pane`](crate::draw_pane)), so a `.ron` naming the
 /// spiral twice grows a chain per rect instead of tearing one down and
 /// rebuilding it between the two.
-pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, surface: usize) {
+pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64, surface: usize) {
     let cfg = state.appearance.spectrum;
     let (rect, response) =
         ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
@@ -552,7 +552,7 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, 
             rect,
             marks.clone(),
             dot_shadow,
-            state.target_format,
+            state.surfaces.target_format,
             crate::panes::lattice::pane_id(surface),
             crate::text::spiral_shadow_surface(surface),
             painter.ctx().cumulative_pass_nr(),
@@ -585,7 +585,7 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, 
             rect,
             marks,
             bloom,
-            state.target_format,
+            state.surfaces.target_format,
             crate::panes::lattice::pane_id(surface),
             painter.ctx().cumulative_pass_nr(),
         ));
@@ -696,13 +696,13 @@ fn navigate(ui: &egui::Ui, response: &egui::Response, fit: &Spiral, view: &mut S
 /// pane is an empty rectangle with no spiral in it to start reading.
 fn strip(
     spiral: &Spiral,
-    state: &SharedState,
+    state: &PictureState,
     cfg: &crate::SpectrumConfig,
     now: f64,
 ) -> egui::Mesh {
     use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
-    let levels = state.spectrum.display(now);
+    let levels = state.runtime.spectrum.display(now);
     let span = spiral.max_midi - spiral.min_midi;
 
     // One step per SEGMENT_PT of arc, capped at the analyzer's own resolution:
@@ -838,13 +838,13 @@ struct Sounding {
 /// A voice outside the displayed pitch range is dropped rather than pinned to
 /// the nearest end — the disc has no place for it, and drawing it at the rim
 /// would put a mark on a pitch nothing is playing.
-fn sounding(spiral: &Spiral, state: &SharedState, now: f64) -> Vec<Sounding> {
-    let mut voices: Vec<&harmonigraph_core::Voice> = state.tracker.voices().collect();
+fn sounding(spiral: &Spiral, state: &PictureState, now: f64) -> Vec<Sounding> {
+    let mut voices: Vec<&harmonigraph_core::Voice> = state.runtime.tracker.voices().collect();
     voices.sort_unstable_by(|a, b| a.pitch.total_cmp(&b.pitch).then(a.key().cmp(&b.key())));
     // One envelope for the whole pane, as every other caller takes it: it is a
     // property of the view and the frame, and rebuilding it per voice would
     // read as if it could vary between them.
-    let env = state.appearance.view.envelope(&state.frame_params);
+    let env = state.appearance.view.envelope(&state.runtime.frame_params);
     voices
         .into_iter()
         .filter(|v| v.pitch >= spiral.min_midi && v.pitch <= spiral.max_midi)
@@ -877,7 +877,7 @@ fn sounding(spiral: &Spiral, state: &SharedState, now: f64) -> Vec<Sounding> {
 /// coloured disc does grow, which is the rule the roll's outline follows too.
 fn dots(
     spiral: &Spiral,
-    state: &SharedState,
+    state: &PictureState,
     sounding: &[Sounding],
 ) -> Vec<harmonigraph_render::GlowDot> {
     let fill = spiral.dot();
@@ -914,7 +914,7 @@ fn dots(
 fn names(
     painter: &egui::Painter,
     spiral: &Spiral,
-    state: &SharedState,
+    state: &PictureState,
     sounding: &[Sounding],
     batch: &mut crate::text::TextBatch,
 ) {
@@ -951,7 +951,7 @@ fn names(
         let name = super::spectral::names::note_name(
             &state.appearance.view,
             &shown,
-            &state.tuning,
+            &state.runtime.tuning,
             voice.pitch,
         );
         crate::marks::draw_stacked_name(
@@ -976,7 +976,7 @@ fn names(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::probe::{events_into, fresh, painted_into, press, themed};
+    use crate::tests::probe::{events_into, fresh_picture as fresh, painted_into, press, themed};
     use crate::SpectrumConfig;
     use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
@@ -1031,7 +1031,7 @@ mod tests {
 
     /// One frame of the whole pane on a context of `frames`' own, with events
     /// delivered — what every gesture fixture below is built from.
-    fn frame(ctx: &egui::Context, state: &mut SharedState, events: Vec<egui::Event>) {
+    fn frame(ctx: &egui::Context, state: &mut PictureState, events: Vec<egui::Event>) {
         let _ = events_into(ctx, SCREEN, PANE, events, |ui| spiral_pane(ui, state, 100.0, 0));
     }
 
@@ -1105,7 +1105,7 @@ mod tests {
         state.appearance.spiral
     }
 
-    fn painted(state: &mut SharedState, now: f64) -> Vec<egui::Shape> {
+    fn painted(state: &mut PictureState, now: f64) -> Vec<egui::Shape> {
         painted_into(SCREEN, PANE, |ui| spiral_pane(ui, state, now, 0))
             .shapes
             .into_iter()
@@ -1120,7 +1120,7 @@ mod tests {
     /// what a test reads — and the batch is the only place a name's letter and
     /// its drawn marks meet, those being cut from two different sheets.
     fn rim_names(
-        state: &SharedState,
+        state: &PictureState,
         rect: egui::Rect,
         now: f64,
     ) -> (crate::text::TextBatch, Spiral) {
@@ -1244,7 +1244,7 @@ mod tests {
         let samples: Vec<f32> =
             (0..48_000).map(|i| (std::f32::consts::TAU * 1_000.0 * i as f32 / sr).sin()).collect();
         let cfg = state.appearance.spectrum;
-        state.spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
+        state.runtime.spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
         let tone_midi = 69.0 + 12.0 * (1_000.0f32 / 440.0).log2();
 
         let meshes: Vec<egui::Mesh> = painted(&mut state, 1.0)
@@ -1387,7 +1387,7 @@ mod tests {
             let mut state = fresh();
             state.appearance.spectrum.low_midi = low;
             state.appearance.spectrum.high_midi = high;
-            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
             let shapes = painted(&mut state, 0.1);
             assert!(!shapes.is_empty(), "{low}..{high} drew nothing at all");
             for shape in &shapes {
@@ -1407,7 +1407,7 @@ mod tests {
             state.appearance.spectrum.low_midi = 48.0;
             state.appearance.spectrum.high_midi = 84.0;
             let fill = Spiral::new(PANE, &state.appearance.spectrum).dot();
-            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
             // The COLOURED disc of the pair, not its backing: both are circles,
             // and counting either alone counts the notes once.
             painted(&mut state, 0.1)
@@ -1433,7 +1433,7 @@ mod tests {
     fn the_halo_grows_from_the_dots_that_were_painted() {
         let mut state = fresh();
         for note in [55u8, 60, 67, 76] {
-            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
         }
         let spiral = Spiral::new(PANE, &state.appearance.spectrum);
         let lit = sounding(&spiral, &state, 0.1);
@@ -1457,7 +1457,13 @@ mod tests {
             let mut state = fresh();
             state.appearance.view.bloom_strength = bloom;
             if sounding {
-                state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+                state.runtime.tracker.handle_event(NoteEvent::on(
+                    0.0,
+                    SourceId::DIRECT,
+                    0,
+                    60,
+                    1.0,
+                ));
             }
             painted(&mut state, 0.1)
                 .iter()
@@ -1560,7 +1566,13 @@ mod tests {
             state.appearance.spectrum.low_midi = 48.0;
             state.appearance.spectrum.high_midi = 84.0;
             for note in 60..72 {
-                state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
+                state.runtime.tracker.handle_event(NoteEvent::on(
+                    0.0,
+                    SourceId::DIRECT,
+                    0,
+                    note,
+                    1.0,
+                ));
             }
             let (batch, spiral) = rim_names(&state, rect, 0.1);
             assert_eq!(batch.pieces().len(), 12, "{name}: twelve pitch classes, twelve names");
@@ -1611,7 +1623,7 @@ mod tests {
         state.appearance.spectrum.low_midi = 48.0;
         state.appearance.spectrum.high_midi = 84.0;
         for note in [48, 60, 72] {
-            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
         }
         let (batch, _) = rim_names(&state, PANE, 0.1);
         assert_eq!(batch.pieces().len(), 1, "three Cs are one name");
@@ -1635,9 +1647,9 @@ mod tests {
         let mut state = fresh();
         state.appearance.spectrum.low_midi = 48.0;
         state.appearance.spectrum.high_midi = 84.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 72, 1.0));
-        state.tracker.handle_event(NoteEvent {
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 72, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent {
             source: SourceId::DIRECT,
             time: 0.0,
             channel: 0,
@@ -1662,8 +1674,8 @@ mod tests {
         let mut state = fresh();
         state.appearance.spectrum.low_midi = 48.0;
         state.appearance.spectrum.high_midi = 84.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 24, 1.0));
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 120, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 24, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 120, 1.0));
         let (batch, _) = rim_names(&state, PANE, 0.1);
         assert_eq!(batch.pieces().len(), 0, "nothing on the disc, nothing on the rim");
     }

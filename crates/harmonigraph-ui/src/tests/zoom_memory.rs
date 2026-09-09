@@ -68,9 +68,9 @@ fn zoom_distances() -> Vec<f32> {
 
 fn played() -> SharedState {
     let mut state = fresh();
-    state.appearance.view.show_labels = true;
+    state.picture.appearance.view.show_labels = true;
     for key in 48..72 {
-        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+        state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
             0.0,
             harmonigraph_core::SourceId::DIRECT,
             0,
@@ -89,7 +89,7 @@ fn played() -> SharedState {
 /// variants rather than an idle pane that never reached the growing path.
 fn assert_repeated_zooms_settle(label_scale: f32, expected_maximum: [usize; 2]) {
     let mut state = played();
-    state.appearance.view.label_scale = label_scale;
+    state.picture.appearance.view.label_scale = label_scale;
     let mut zoom = Zoom::new();
     for _ in 0..8 {
         let _ = zoom.frame(&mut state);
@@ -105,7 +105,7 @@ fn assert_repeated_zooms_settle(label_scale: f32, expected_maximum: [usize; 2]) 
         };
         let mut previous_fill = zoom.fill();
         for &distance in walk {
-            state.appearance.camera.distance = distance;
+            state.picture.appearance.camera.distance = distance;
             let frame = zoom.frame(&mut state);
             if frame.size[0] * frame.size[1] > maximum[0] * maximum[1] {
                 maximum = frame.size;

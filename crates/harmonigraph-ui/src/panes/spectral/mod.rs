@@ -36,7 +36,7 @@ pub(crate) use gestures::{hold_spectrum, SpectrumHold};
 pub(super) use settings::spectrum_settings_pane;
 
 use crate::panes::window_shows_node;
-use crate::{theme, SharedState};
+use crate::{theme, PictureState};
 use axes::{
     frequency_grid, label_anchor, level_grid, loudness_db, plot_budget, spectrogram_level_db,
     text_scales, Axes, PitchScale, TimeAxis, LABEL_GAP_PT, LABEL_INSET_PT, MARKING_PT, PROFILE_PT,
@@ -155,7 +155,7 @@ fn level_label_into(joined: bool) -> f32 {
 /// whole picture, too loud an answer to a pointer resting somewhere else.
 pub(crate) fn spectral_pane(
     ui: &mut egui::Ui,
-    state: &mut SharedState,
+    state: &mut PictureState,
     now: f64,
     // Which live copy of the pane this is (see `crate::draw_pane`): two live
     // spectrograms in a frame need their own grid.
@@ -182,7 +182,7 @@ pub(crate) fn spectral_pane(
     // sweeping playhead. It takes the whole pane (split = 0), which also drops
     // the live curve and voice bars via their `split > 0` guards — leaving the
     // spectrogram, roll, and playhead.
-    let whole_song = state.whole_song.is_some();
+    let whole_song = state.runtime.whole_song.is_some();
     // The divider is grabbable whenever the far region is turned ON, even
     // where it has been dragged shut (`roll_fraction` 0 or 1) — otherwise
     // shutting it would be one-way. Whole-song has no divider: the spectrum
@@ -360,7 +360,7 @@ pub(crate) fn spectral_pane(
     // at its actual pitch. Fundamentals line up under their voice bars;
     // the harmonic series marches up the axis from each note.
     if split > 0.0 {
-        if let Some(levels) = state.spectrum.display(now) {
+        if let Some(levels) = state.runtime.spectrum.display(now) {
             // Only the buckets inside the pitch range.
             // One slab per pitch PIXEL, each reading the whole run of buckets
             // that falls in it — not one slab per bucket. The axis holds
@@ -457,9 +457,10 @@ pub(crate) fn spectral_pane(
     if split > 0.0 && !whole_song {
         let shown = state.shown();
         let mut voices: Vec<&harmonigraph_core::Voice> = state
+            .runtime
             .tracker
             .voices()
-            .filter(|v| !window_shows_node(&shown, &state.tuning, v.pitch_class))
+            .filter(|v| !window_shows_node(&shown, &state.runtime.tuning, v.pitch_class))
             .collect();
         // Translucent bands accumulate where they overlap, so the paint
         // order is part of the picture. The tracker's own order is stable —
@@ -470,7 +471,7 @@ pub(crate) fn spectral_pane(
         // One envelope for the whole roll, as every other caller takes it: it
         // is a property of the view and the frame, and rebuilding it per voice
         // would read as if it could vary between them.
-        let env = state.appearance.view.envelope(&state.frame_params);
+        let env = state.appearance.view.envelope(&state.runtime.frame_params);
         for voice in voices {
             let strength = voice.activation(now, &env);
             if strength <= 0.0 || !scale.contains(voice.pitch) {

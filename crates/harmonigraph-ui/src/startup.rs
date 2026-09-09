@@ -93,8 +93,8 @@ pub(crate) fn draw(ui: &mut egui::Ui, state: &SharedState) -> bool {
     if matches!(status, Status::Preparing(_)) {
         ui.painter().add(loading.progress.callback(
             rect,
-            state.lattice_pipelines.clone(),
-            state.target_format,
+            state.picture.surfaces.lattice_pipelines.clone(),
+            state.picture.surfaces.target_format,
         ));
     }
     if status != Status::Failed {
@@ -127,18 +127,37 @@ mod tests {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
         state.workspace.dock = egui_dock::DockState::new(vec![Tab::Lattice]);
         use harmonigraph_core::{NoteEvent, SourceId};
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
-        state.tracker.handle_event(NoteEvent::on(4.0, SourceId::DIRECT, 0, 64, 1.0));
-        state.tracker.handle_event(NoteEvent::off(4.99, SourceId::DIRECT, 0, 64));
-        state.tracker.handle_event(NoteEvent::on(4.0, SourceId::DIRECT, 0, 67, 1.0));
-        assert_eq!(state.tracker.voices().count(), 3);
+        state.picture.runtime.tracker.handle_event(NoteEvent::on(
+            0.0,
+            SourceId::DIRECT,
+            0,
+            60,
+            1.0,
+        ));
+        state.picture.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
+        state.picture.runtime.tracker.handle_event(NoteEvent::on(
+            4.0,
+            SourceId::DIRECT,
+            0,
+            64,
+            1.0,
+        ));
+        state.picture.runtime.tracker.handle_event(NoteEvent::off(4.99, SourceId::DIRECT, 0, 64));
+        state.picture.runtime.tracker.handle_event(NoteEvent::on(
+            4.0,
+            SourceId::DIRECT,
+            0,
+            67,
+            1.0,
+        ));
+        assert_eq!(state.picture.runtime.tracker.voices().count(), 3);
         begin_editor_loading(&ctx);
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             crate::root_ui(ui, &mut state, &Defaults, 5.0);
         });
         assert!(matches!(editor_loading_status(&ctx), Some(Status::Preparing(_))));
-        let remaining: Vec<_> = state.tracker.voices().map(|voice| voice.note).collect();
+        let remaining: Vec<_> =
+            state.picture.runtime.tracker.voices().map(|voice| voice.note).collect();
         assert_eq!(remaining, vec![67, 64], "only the expired release should be pruned");
     }
 

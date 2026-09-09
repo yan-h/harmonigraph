@@ -3,7 +3,7 @@
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
-use crate::SharedState;
+use crate::AppearanceDocument;
 use harmonigraph_scene::{
     SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
     SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
@@ -11,11 +11,15 @@ use harmonigraph_scene::{
 };
 
 /// Sizes and timing first, then the audio and MIDI layers and their accents.
-pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
-    note_section(ui, &mut state.appearance.view, params);
-    audio_section(ui, &mut state.appearance.view);
-    octaves_section(ui, &mut state.appearance.view);
-    melody_bass_section(ui, &mut state.appearance.view);
+pub(super) fn nodes_pane(
+    ui: &mut egui::Ui,
+    appearance: &mut AppearanceDocument,
+    params: &dyn ParamBackend,
+) {
+    note_section(ui, &mut appearance.view, params);
+    audio_section(ui, &mut appearance.view);
+    octaves_section(ui, &mut appearance.view);
+    melody_bass_section(ui, &mut appearance.view);
 }
 
 /// Octaves: which octaves of the pitch class are sounding, shown as arcs of a

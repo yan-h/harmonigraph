@@ -368,7 +368,7 @@ fn a_pinned_separator_resizes_in_frameless_mode_too() {
         h.settle(&mut state);
         let _ = h.collapse_click(&mut state, panes::Tab::Spectral);
         let _ = h.settle_folds(&mut state);
-        state.appearance.view.frameless = true;
+        state.picture.appearance.view.frameless = true;
         let _ = h.settle_folds(&mut state);
 
         let gone = pane_rect(&state, panes::Tab::Spectral);
@@ -557,7 +557,7 @@ fn reset_layout_puts_the_dialled_pane_widths_back() {
          {fresh:?} -> {dragged:?}"
     );
 
-    state.workspace.reset_layout = true;
+    state.workspace.interaction.reset_layout = true;
     h.settle_folds(&mut state);
     let reset: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
     for (index, tab) in LAID_OUT_TABS.iter().enumerate() {
@@ -623,7 +623,7 @@ fn the_reset_layout_button_resets_the_layout_when_it_is_clicked() {
     let mut h = DockHarness::new();
     // The button lives on the Display tab's System page, which shares its leaf
     // with the other settings tabs and is not the one that opens selected.
-    state.display_page = panes::display::DisplayPage::System;
+    state.workspace.interaction.display_page = panes::display::DisplayPage::System;
     let path = state.workspace.dock.find_tab(&panes::Tab::Display).expect("Display is docked");
     state.workspace.dock.set_active_tab(path).expect("selecting the tab");
     h.settle_folds(&mut state);

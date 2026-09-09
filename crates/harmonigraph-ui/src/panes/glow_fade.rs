@@ -11,7 +11,7 @@
 //! Not a pane, though it sits with them, and the same shape as its neighbour
 //! [`spectral_fold`](super::spectral_fold): a post-pass the Lattice pane runs
 //! over a derived scene, with the state that has to outlive a frame kept in
-//! [`SharedState`] — which is exactly what the offline renderer carries between
+//! [`PictureState`] — which is exactly what the offline renderer carries between
 //! frames, so a light carried anywhere else would draw one picture live and
 //! another in an export.
 //!
@@ -63,7 +63,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use harmonigraph_core::LatticePos;
 use harmonigraph_scene::{GlowStep, GlowTiming, Scene, ViewConfig};
 
-use crate::SharedState;
+use crate::PictureState;
 
 static NEXT_INCARNATION: AtomicU64 = AtomicU64::new(1);
 
@@ -152,14 +152,14 @@ struct Lit {
 /// With the light off nothing is stepped and nothing is allocated — the state
 /// is dropped instead, so the frame the Reach bar comes back off 0 seeds rather
 /// than fading up out of levels nobody has seen since.
-pub(crate) fn apply(scene: &mut Scene, state: &mut SharedState, surface: usize, now: f64) {
+pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize, now: f64) {
     // The renderer's own test for whether the light draws at all, asked of the
     // scene's clamped copies so the two cannot disagree about the boundary.
     if scene.glow_reach <= 0.0 || scene.glow_strength <= 0.0 {
-        state.glow_fade.remove(&surface);
+        state.surfaces.glow_fade.remove(&surface);
         return;
     }
-    state.glow_fade.entry(surface).or_default().step(scene, &state.appearance.view, now);
+    state.surfaces.glow_fade.entry(surface).or_default().step(scene, &state.appearance.view, now);
 }
 
 impl GlowFade {
@@ -283,16 +283,16 @@ mod tests {
     use harmonigraph_core::{LatticePos, NoteEvent, SourceId};
 
     use super::*;
-    use crate::tests::probe::fresh;
+    use crate::tests::probe::fresh_picture as fresh;
 
     /// The lattice the pane derives, at `now`.
-    fn scene_at(state: &SharedState, now: f64) -> Scene {
+    fn scene_at(state: &PictureState, now: f64) -> Scene {
         harmonigraph_scene::derive_scene(
-            &state.tracker,
-            &state.tuning,
+            &state.runtime.tracker,
+            &state.runtime.tuning,
             &state.appearance.view,
             &state.appearance.view.reach(),
-            &state.frame_params,
+            &state.runtime.frame_params,
             state.appearance.camera,
             None,
             now,
@@ -307,12 +307,12 @@ mod tests {
     /// A state with the light on and both of its times named, and the note
     /// Fade at nothing so what a layer does is a step and what the LIGHT does
     /// is the only thing being filtered.
-    fn lit(attack: f32, release: f32) -> SharedState {
+    fn lit(attack: f32, release: f32) -> PictureState {
         let mut state = fresh();
         state.appearance.view.glow_reach = 0.8;
         state.appearance.view.glow_attack = attack;
         state.appearance.view.glow_release = release;
-        state.frame_params.fade_time = 0.0;
+        state.runtime.frame_params.fade_time = 0.0;
         state
     }
 
@@ -327,7 +327,7 @@ mod tests {
     fn a_nodes_light_outlives_every_layer_that_lit_it() {
         const TAU: f64 = 0.5;
         let mut state = lit(0.0, TAU as f32);
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut fade = GlowFade::default();
         let mut scene = scene_at(&state, 0.0);
         fade.step(&mut scene, &state.appearance.view, 0.0);
@@ -336,8 +336,8 @@ mod tests {
 
         // The key comes up, and with no Fade under it the node draws nothing
         // at all from the next frame on.
-        state.tracker.handle_event(NoteEvent::off(0.0, SourceId::DIRECT, 0, 60));
-        let level = |fade: &mut GlowFade, state: &SharedState, now: f64| {
+        state.runtime.tracker.handle_event(NoteEvent::off(0.0, SourceId::DIRECT, 0, 60));
+        let level = |fade: &mut GlowFade, state: &PictureState, now: f64| {
             let mut scene = scene_at(state, now);
             fade.step(&mut scene, &state.appearance.view, now);
             let node = node_at(&scene, LatticePos::ORIGIN);
@@ -372,10 +372,10 @@ mod tests {
         // A fifth up is one step along the threes axis, which is a node of its
         // own on the same sheet.
         let neighbour = LatticePos::new(1, 0, 0);
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut fade = GlowFade::default();
         let mut rows = Vec::new();
-        let step = |fade: &mut GlowFade, state: &SharedState, now: f64| {
+        let step = |fade: &mut GlowFade, state: &PictureState, now: f64| {
             let mut scene = scene_at(state, now);
             fade.step(&mut scene, &state.appearance.view, now);
             let held = node_at(&scene, LatticePos::ORIGIN).glow;
@@ -383,11 +383,11 @@ mod tests {
         };
         rows.push(step(&mut fade, &state, 0.0));
         // The neighbour arrives...
-        state.tracker.handle_event(NoteEvent::on(0.1, SourceId::DIRECT, 0, 67, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::on(0.1, SourceId::DIRECT, 0, 67, 1.0));
         rows.push(step(&mut fade, &state, 0.1));
         rows.push(step(&mut fade, &state, 0.2));
         // ...and leaves, long enough ago for its light to be over.
-        state.tracker.handle_event(NoteEvent::off(0.2, SourceId::DIRECT, 0, 67));
+        state.runtime.tracker.handle_event(NoteEvent::off(0.2, SourceId::DIRECT, 0, 67));
         rows.push(step(&mut fade, &state, 1.0));
         assert!(
             rows[1].1.level > 0.0 && rows[2].1.level > 0.0,
@@ -428,10 +428,13 @@ mod tests {
         const TAU: f64 = 0.5;
         let mut state = lit(0.0, TAU as f32);
         assert!(state.appearance.view.mark_melody, "the fresh view marks the melody end");
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut fade = GlowFade::default();
-        let size = |fade: &mut GlowFade, state: &mut SharedState, now: f64| {
-            state.tracker.prune(now, &state.appearance.view.envelope(&state.frame_params));
+        let size = |fade: &mut GlowFade, state: &mut PictureState, now: f64| {
+            state
+                .runtime
+                .tracker
+                .prune(now, &state.appearance.view.envelope(&state.runtime.frame_params));
             let mut scene = scene_at(state, now);
             let bit = node_at(&scene, LatticePos::ORIGIN).glow.marked;
             fade.step(&mut scene, &state.appearance.view, now);
@@ -440,7 +443,7 @@ mod tests {
         let (bit, held) = size(&mut fade, &mut state, 0.0);
         assert_eq!((bit, held), (1.0, 1.0), "a marked node's light is sized against it");
 
-        state.tracker.handle_event(NoteEvent::off(0.0, SourceId::DIRECT, 0, 60));
+        state.runtime.tracker.handle_event(NoteEvent::off(0.0, SourceId::DIRECT, 0, 60));
         let (bit, just_after) = size(&mut fade, &mut state, 0.05);
         assert_eq!(bit, 0.0, "the node's own bit has to have stepped, or this proves nothing");
         assert!(just_after > 0.5, "the light's size left with the mark: {just_after}");
@@ -490,20 +493,20 @@ mod tests {
     #[test]
     fn a_view_with_no_light_carries_nothing() {
         let mut state = lit(0.3, 2.5);
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut scene = scene_at(&state, 0.0);
         let before = node_at(&scene, LatticePos::ORIGIN).glow;
         state.appearance.view.glow_reach = 0.0;
         scene.glow_reach = 0.0;
         apply(&mut scene, &mut state, 0, 0.0);
         assert_eq!(node_at(&scene, LatticePos::ORIGIN).glow, before);
-        assert!(state.glow_fade.is_empty(), "a light that is off kept state");
+        assert!(state.surfaces.glow_fade.is_empty(), "a light that is off kept state");
     }
 
     #[test]
     fn discarded_layout_passes_keep_the_row_owner_until_the_light_ends() {
         let mut state = lit(0.3, 2.5);
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let ctx = egui::Context::default();
         let mut steps = Vec::new();
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {

@@ -90,13 +90,13 @@ impl DockHarness {
     /// sweep is also a sweep over how much overflows.
     ///
     /// The STATE is where the scale really lives, which is why this takes one:
-    /// `root_ui` calls `set_ui_scale` from `state.ui_scale` on every frame, so
+    /// `root_ui` calls `set_ui_scale` from `state.workspace.interaction.ui_scale` on every frame, so
     /// a context dialled up on its own is reset by the first frame drawn on it
     /// and the sweep silently measures the design size at every step. Dialling
     /// the context as well is what puts the first frame at the scale rather
     /// than one frame behind it.
     pub(super) fn scaled(size: egui::Vec2, scale: f32, state: &mut SharedState) -> Self {
-        state.ui_scale = scale;
+        state.workspace.interaction.ui_scale = scale;
         let mut harness = DockHarness::at(size);
         harness.ctx = super::probe::themed_scaled(scale);
         harness
@@ -255,7 +255,7 @@ impl SettingsPane {
         match self {
             SettingsPane::Tab(tab) => tab,
             SettingsPane::Page(page) => {
-                state.display_page = page;
+                state.workspace.interaction.display_page = page;
                 panes::Tab::Display
             }
         }
@@ -300,12 +300,16 @@ pub(super) fn settings_pane_at_width(
     projection: harmonigraph_scene::Projection,
 ) -> Vec<egui::epaint::ClippedShape> {
     let mut state = fresh();
-    state.take.supported = true;
-    state.take.last_ready = true;
-    state.take.render_progress = Some(FIXTURE_RENDER);
-    state.appearance.camera.projection = projection;
+    state.workspace.interaction.take.supported = true;
+    state.workspace.interaction.take.last_ready = true;
+    state.workspace.interaction.take.render_progress = Some(FIXTURE_RENDER);
+    state.picture.appearance.camera.projection = projection;
     // A saved angle, so the Angle row has the button a real session gives it.
-    state.camera_presets.push(CameraPreset { name: "Front".into(), yaw: 0.0, pitch: 0.0 });
+    state.workspace.interaction.camera_presets.push(CameraPreset {
+        name: "Front".into(),
+        yaw: 0.0,
+        pitch: 0.0,
+    });
     let tab = pane.install(&mut state);
     tab_body(&mut state, tab, width, PANE_HEIGHT).shapes
 }
@@ -350,7 +354,12 @@ pub(super) fn tab_body_on(
             // ui inside it is inset, exactly as the dock's Frame leaves it.
             let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
             let mut tab = tab;
-            let mut viewer = panes::Viewer { state, params: &backend, now };
+            let mut viewer = panes::Viewer {
+                state: &mut state.picture,
+                interaction: &mut state.workspace.interaction,
+                params: &backend,
+                now,
+            };
             egui_dock::TabViewer::ui(&mut viewer, &mut body_ui, &mut tab);
         },
     )

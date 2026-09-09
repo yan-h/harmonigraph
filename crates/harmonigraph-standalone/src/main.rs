@@ -133,7 +133,7 @@ impl Recorder {
         let path = std::env::var("LATTICE_TAKE").ok()?;
         let header = harmonigraph_take::Header {
             sample_rate: SYNTH_RATE as f32,
-            appearance: Some(state.appearance.serialize()),
+            appearance: Some(state.picture.appearance.serialize()),
             source: "harmonigraph-standalone".into(),
             ..Default::default()
         };
@@ -159,8 +159,8 @@ impl Recorder {
 
     /// Write any parameter that moved since the last frame.
     fn params(&mut self, params: &StandaloneParams, state: &mut SharedState, now: f64) {
-        harmonigraph_ui::resolve_tuning(state, params);
-        let configuration = state.resolved_configuration();
+        state.picture.runtime.observe_configuration(&mut state.picture.appearance, params);
+        let configuration = state.picture.runtime.resolved_configuration();
         if self.configuration != Some(configuration) {
             let _ = self
                 .writer
@@ -510,6 +510,8 @@ impl App {
             recorder.note(&event);
         }
         self.state
+            .picture
+            .runtime
             .tracker
             .handle_canonical(harmonigraph_core::canonical::CanonicalEvent::Note(event.into()))
             .expect("validated direct observation");
@@ -585,9 +587,15 @@ impl eframe::App for App {
 
         // The harness has no real audio; synthesize the held notes so the
         // Spectral pane's audio overlay is demoable without a DAW.
-        self.synth.render(&self.state.tracker, now, &mut self.synth_buf);
-        let config = self.state.appearance.spectrum;
-        self.state.spectrum.push_samples(&self.synth_buf, 1, SYNTH_RATE as f32, now, &config);
+        self.synth.render(&self.state.picture.runtime.tracker, now, &mut self.synth_buf);
+        let config = self.state.picture.appearance.spectrum;
+        self.state.picture.runtime.spectrum.push_samples(
+            &self.synth_buf,
+            1,
+            SYNTH_RATE as f32,
+            now,
+            &config,
+        );
 
         // `viewport_rect` is eframe's window in the same points the fold
         // measures in, which is what a fold has to be priced against.
@@ -795,7 +803,7 @@ mod tests {
             configuration: None,
         };
         recorder.params(&app.params, &mut app.state, 0.0);
-        let first = app.state.tuning;
+        let first = app.state.picture.runtime.tuning;
         assert_eq!(
             first.three,
             harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST)
@@ -804,13 +812,13 @@ mod tests {
         app.params.set(ParamKey::Three, 690.0);
         app.params.set(ParamKey::Five, 390.0);
         recorder.params(&app.params, &mut app.state, 1.0);
-        let edited = app.state.tuning;
-        app.state.learn_active = true;
+        let edited = app.state.picture.runtime.tuning;
+        app.state.picture.runtime.learn_active = true;
         for note in [60, 64, 67] {
             app.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, note, 0.8));
         }
         recorder.params(&app.params, &mut app.state, 2.0);
-        let learned = app.state.tuning;
+        let learned = app.state.picture.runtime.tuning;
         assert_eq!(learned.three, 700_000_000);
         assert_eq!(learned.five, 400_000_000);
         drop(recorder);
@@ -855,7 +863,7 @@ mod tests {
                 .map(|voice| (voice.key(), voice.pitch, voice.on_time))
                 .collect::<Vec<_>>()
         };
-        let live = held(&app.state.tracker);
+        let live = held(&app.state.picture.runtime.tracker);
         assert_eq!(live.len(), CHORDS[0].0.len(), "the replacement chord is held live");
         let mut replay = NoteTracker::new();
         for record in &take.events {

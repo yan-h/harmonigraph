@@ -2,7 +2,7 @@
 
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{RangeBar, ValueBar};
-use crate::SharedState;
+use crate::PictureState;
 
 pub mod color;
 pub mod display;
@@ -130,7 +130,8 @@ impl Tab {
 }
 
 pub struct Viewer<'a> {
-    pub state: &'a mut SharedState,
+    pub state: &'a mut PictureState,
+    pub interaction: &'a mut crate::Interaction,
     pub params: &'a dyn ParamBackend,
     pub now: f64,
 }
@@ -240,8 +241,8 @@ impl egui_dock::TabViewer for Viewer<'_> {
         match tab {
             Tab::Lattice => lattice_pane(ui, self.state, self.now, DOCKED_SURFACE),
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
-            Tab::Display => display_pane(ui, self.state, self.params),
-            Tab::Console => console_pane(ui, self.state),
+            Tab::Display => display_pane(ui, self.state, self.interaction, self.params),
+            Tab::Console => console_pane(ui, &mut self.state.runtime),
             Tab::Spectral => {
                 // The docked analyzer, and the reason the hold is applied HERE
                 // rather than inside the pane: this is the one copy of it whose
@@ -256,7 +257,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             }
             Tab::Spiral => spiral_pane(ui, self.state, self.now, DOCKED_SURFACE),
             Tab::Notes => notes_pane(ui, self.state),
-            Tab::Video => render_pane(ui, self.state, self.now),
+            Tab::Video => render_pane(ui, self.state, self.interaction, self.now),
         }
     }
 
@@ -313,7 +314,7 @@ pub(super) fn display_note_name(
 /// `Tuning::tolerance` is load-bearing in both — a note off every node is a
 /// note the lattice cannot show, and saying so is the point.
 ///
-/// `window` is [`SharedState::shown`](crate::SharedState::shown) for both of
+/// `window` is [`PictureState::shown`](crate::PictureState::shown) for both of
 /// them, which is the picture's own window and not the view's reach. Taking a
 /// window rather than a view is what makes that a choice a caller has to make
 /// rather than one it can fall into.

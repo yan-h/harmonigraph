@@ -171,3 +171,7 @@ pub(crate) fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
         modifiers: egui::Modifiers::default(),
     }
 }
+
+pub(crate) fn fresh_picture() -> crate::PictureState {
+    fresh().picture
+}

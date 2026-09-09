@@ -697,43 +697,43 @@ fn clearing_everything_empties_all_four_accumulations() {
 
     // A note played and released; `prune` past its fade turns the released
     // voice into trail history and leaves the roll's record of it.
-    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+    state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
         0.0,
         harmonigraph_core::SourceId::DIRECT,
         0,
         60,
         1.0,
     ));
-    state.tracker.handle_event(harmonigraph_core::NoteEvent::off(
+    state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::off(
         0.5,
         harmonigraph_core::SourceId::DIRECT,
         0,
         60,
     ));
     let env = harmonigraph_core::Envelope { fade_time: 0.1, ..Default::default() };
-    state.tracker.prune(600.0, &env);
+    state.picture.runtime.tracker.prune(600.0, &env);
     // One analyzed column is enough; how audio becomes columns is the
     // spectrogram's own business and tested there.
-    state.spectrum.history.push(harmonigraph_core::SpectrogramColumn::from_power(
+    state.picture.runtime.spectrum.history.push(harmonigraph_core::SpectrogramColumn::from_power(
         0.0,
         &[1.0; harmonigraph_core::spectrum::SPECTRUM_BINS],
     ));
     // A surface's glow state, standing in for whatever a lit lattice pane
     // would have handed a row by now — how it gets there is `glow_fade`'s
     // own business and tested there.
-    state.glow_fade.insert(0, Default::default());
+    state.picture.surfaces.glow_fade.insert(0, Default::default());
 
-    assert!(!state.tracker.history().is_empty(), "no trail to clear");
-    assert!(!state.tracker.roll().is_empty(), "no roll to clear");
-    assert!(!state.spectrum.history().is_empty(), "no spectrogram to clear");
-    assert!(!state.glow_fade.is_empty(), "no glow to clear");
+    assert!(!state.picture.runtime.tracker.history().is_empty(), "no trail to clear");
+    assert!(!state.picture.runtime.tracker.roll().is_empty(), "no roll to clear");
+    assert!(!state.picture.runtime.spectrum.history().is_empty(), "no spectrogram to clear");
+    assert!(!state.picture.surfaces.glow_fade.is_empty(), "no glow to clear");
 
-    state.clear_accumulated();
+    state.picture.clear_accumulated();
 
-    assert!(state.tracker.history().is_empty(), "the lattice trail survived");
-    assert!(state.tracker.roll().is_empty(), "the piano roll survived");
-    assert!(state.spectrum.history().is_empty(), "the spectrogram survived");
-    assert!(state.glow_fade.is_empty(), "the lattice glow survived");
+    assert!(state.picture.runtime.tracker.history().is_empty(), "the lattice trail survived");
+    assert!(state.picture.runtime.tracker.roll().is_empty(), "the piano roll survived");
+    assert!(state.picture.runtime.spectrum.history().is_empty(), "the spectrogram survived");
+    assert!(state.picture.surfaces.glow_fade.is_empty(), "the lattice glow survived");
 }
 
 /// Two placements of one pane in a layout fold a grid each, keyed on the
@@ -758,12 +758,12 @@ fn two_placements_of_one_pane_fold_a_grid_each() {
 
     let seeded = || {
         let mut state = fresh();
-        state.appearance.spectrum.show_spectrogram = true;
-        state.appearance.spectrum.roll_seconds = 10.0;
+        state.picture.appearance.spectrum.show_spectrogram = true;
+        state.picture.appearance.spectrum.roll_seconds = 10.0;
         let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
         bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 2] = 1.0;
         for i in 0..80 {
-            state.spectrum.push_history(90.0 + f64::from(i) * 0.125, &bins);
+            state.picture.runtime.spectrum.push_history(90.0 + f64::from(i) * 0.125, &bins);
         }
         state
     };
@@ -772,12 +772,19 @@ fn two_placements_of_one_pane_fold_a_grid_each() {
         super::probe::painted_full(screen, |ui| {
             for (surface, rect) in &placements {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                crate::draw_pane(&mut child, crate::Pane::Spectral, state, 100.0, *surface);
+                crate::draw_pane(
+                    &mut child,
+                    crate::Pane::Spectral,
+                    &mut state.picture,
+                    100.0,
+                    *surface,
+                );
             }
         });
     };
-    let slabs =
-        |state: &mut SharedState, surface| state.spectrum.spectrogram.at(surface).gpu.run_slabs();
+    let slabs = |state: &mut SharedState, surface| {
+        state.picture.surfaces.spectrogram.at(surface).gpu.run_slabs()
+    };
 
     let mut alone = seeded();
     draw(&mut alone, &[(0, narrow)]);
@@ -795,4 +802,125 @@ fn two_placements_of_one_pane_fold_a_grid_each() {
     draw(&mut both, &[(0, narrow), (1, wide)]);
     assert_eq!(slabs(&mut both, 0), want_narrow, "the first placement is drawing the second's run");
     assert_eq!(slabs(&mut both, 1), want_wide, "the second placement has no grid of its own");
+}
+
+#[test]
+fn runtime_advances_histories_without_a_surface() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+    let mut runtime = VisualRuntime::default();
+    let appearance = AppearanceDocument::default();
+    let samples: Vec<_> = (0..appearance.spectrum.window.samples() * 2)
+        .map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin() * 0.5)
+        .collect();
+    runtime.spectrum.push_samples(&samples, 1, 48_000.0, 1.0, &appearance.spectrum);
+    runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 0.8));
+    runtime.tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 60));
+    runtime.tracker.handle_event(NoteEvent::on(0.5, SourceId::DIRECT, 0, 64, 0.8));
+    assert!(runtime.spectrum.history().len() > 2, "fixture must produce real FFT columns");
+    assert_eq!(runtime.tracker.voices().count(), 2);
+    runtime.advance_time(10.0, &appearance);
+    assert_eq!(runtime.tracker.voices().count(), 1, "old released tail must be pruned");
+    let columns = runtime.spectrum.history().len();
+    runtime.advance_time(10.0, &appearance);
+    assert_eq!(runtime.spectrum.history().len(), columns, "advancement must not repeat analysis");
+    runtime.advance_time(1.0 + AudioSpectrum::HISTORY_MAX_SECONDS + 1.0, &appearance);
+    assert!(runtime.spectrum.history().is_empty(), "silent history also ages without drawing");
+    assert_eq!(runtime.tracker.held_count(), 1, "a held note survives age pruning");
+}
+
+#[test]
+fn fold_is_shared_by_real_dock_preview_and_discarded_passes() {
+    use super::harness::RecordingBackend;
+    let mut state = fresh();
+    state.picture.appearance.view.spectral_ring_width = 0.15;
+    state.picture.appearance.view.spectral_reading = harmonigraph_scene::SpectralReading::Fold;
+    let path = state.workspace.dock.find_tab(&panes::Tab::Video).unwrap();
+    state.workspace.dock.set_active_tab(path).unwrap();
+    let cfg = state.picture.appearance.spectrum;
+    let samples: Vec<_> = (0..cfg.window.samples() * 2)
+        .map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin() * 0.5)
+        .collect();
+    state.picture.runtime.spectrum.push_samples(&samples, 1, 48_000.0, 1.0, &cfg);
+    assert!(state.picture.runtime.spectrum.history().len() > 2);
+    let ctx = super::probe::themed();
+    let mut passes = 0;
+    let _ = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1600.0, 1000.0),
+            )),
+            time: Some(1.0),
+            ..Default::default()
+        },
+        |ui| {
+            egui::Grid::new("runtime-discarded-pass").show(ui, |ui| {
+                ui.label("Force a real sizing pass");
+            });
+            root_ui(ui, &mut state, &RecordingBackend::default(), 1.0);
+            if passes == 0 {
+                state.picture.appearance.camera.yaw += 0.2;
+                state.picture.appearance.view.pitch_gradient =
+                    state.picture.appearance.spectrum.spectrogram_gradient;
+            }
+            passes += 1;
+        },
+    );
+    assert!(passes >= 2, "the fixture must actually discard a pass");
+    assert!(state.picture.surfaces.glow_fade.len() >= 2, "both lattice surfaces must draw");
+    assert_eq!(state.picture.runtime.spectrum.fold_measurements, 1);
+}
+
+#[test]
+fn fold_measurement_observes_same_time_audio_and_width_edits() {
+    let cfg = SpectrumConfig::default();
+    let mut spectrum = AudioSpectrum::default();
+    let tone = |frequency: f32| {
+        (0..cfg.window.samples() * 2)
+            .map(|i| (std::f32::consts::TAU * frequency * i as f32 / 48_000.0).sin() * 0.5)
+            .collect::<Vec<_>>()
+    };
+    spectrum.push_samples(&tone(440.0), 1, 48_000.0, 1.0, &cfg);
+    let first = spectrum.folded(1.0, 2.0).unwrap().to_vec();
+    assert!(first.iter().any(|v| *v > 0.0), "the fixture must contain measured energy");
+    assert_eq!(spectrum.folded(1.0, 2.0).unwrap().as_slice(), first);
+    assert_eq!(spectrum.fold_measurements, 1);
+    let wide = spectrum.folded(1.0, 50.0).unwrap().to_vec();
+    assert_ne!(wide, first, "a changed width must change this fixture's measurement");
+    spectrum.push_samples(&tone(660.0), 1, 48_000.0, 1.0, &cfg);
+    let next = spectrum.folded(1.0, 50.0).unwrap().to_vec();
+    assert_ne!(next, wide, "same-time audio must invalidate the measured grid");
+    assert_eq!(spectrum.fold_measurements, 3);
+    assert!(spectrum.folded(2.0, 50.0).is_none(), "expired audio must not reuse a Fold");
+    assert_eq!(spectrum.fold_measurements, 3);
+}
+
+#[test]
+fn frame_observes_a_longer_fade_before_pruning() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+    struct Fade(f32);
+    impl ParamBackend for Fade {
+        fn get(&self, key: params::ParamKey) -> f32 {
+            if key == params::ParamKey::Fade {
+                self.0
+            } else {
+                0.0
+            }
+        }
+        fn set(&self, _: params::ParamKey, _: f32) {}
+    }
+    let mut picture = super::probe::fresh_picture();
+    picture.runtime.frame_params.fade_time = 0.1;
+    picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 0.8));
+    picture.runtime.tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 60));
+    begin_frame(&mut picture, &Fade(2.0), 1.0);
+    assert_eq!(
+        picture.runtime.tracker.voices().count(),
+        1,
+        "new fade must preserve the released voice"
+    );
+    // Arrival lasts two seconds too; release follows it, so five seconds
+    // is beyond both halves of the new envelope.
+    begin_frame(&mut picture, &Fade(2.0), 5.0);
+    assert_eq!(picture.runtime.tracker.voices().count(), 0);
 }

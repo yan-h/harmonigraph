@@ -5,7 +5,9 @@ use super::axes::*;
 use super::gestures::*;
 use super::settings::*;
 use super::*;
-use crate::tests::probe::{events_into, fresh, painted_full, painted_into, press, themed};
+use crate::tests::probe::{
+    events_into, fresh_picture as fresh, painted_full, painted_into, press, themed,
+};
 use crate::{SpectralOrientation, SpectrumConfig};
 use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
@@ -32,7 +34,7 @@ impl crate::params::ParamBackend for SettingsParams {
 
 /// One frame of the whole Spectral pane into `rect` at `now`, on a themed
 /// context of its own.
-fn painted_pane(rect: egui::Rect, state: &mut SharedState, now: f64) -> egui::FullOutput {
+fn painted_pane(rect: egui::Rect, state: &mut PictureState, now: f64) -> egui::FullOutput {
     painted_into(SCREEN, rect, |ui| spectral_pane(ui, state, now, 0))
 }
 
@@ -529,7 +531,7 @@ fn pane_of(orientation: SpectralOrientation, depth: f32) -> egui::Vec2 {
 /// its boundary from. Reading `roll_fraction` instead would be asking the dial
 /// what the hold answered, and the whole point of the hold is that those two
 /// differ once the pane has been resized.
-fn regions(state: &SharedState, depth: f32) -> (f32, f32) {
+fn regions(state: &PictureState, depth: f32) -> (f32, f32) {
     let split = spectrum_split(state, DOCKED);
     (split * depth, (1.0 - split) * depth)
 }
@@ -541,7 +543,7 @@ const DOCKED: usize = 0;
 /// A state whose divider has been dialled to the fresh split on a pane
 /// `depth` points deep — the hold's starting point, and the picture every
 /// resize below is measured against.
-fn dialled_at(orientation: SpectralOrientation, depth: f32) -> SharedState {
+fn dialled_at(orientation: SpectralOrientation, depth: f32) -> PictureState {
     let mut state = fresh();
     state.appearance.spectrum.orientation = orientation;
     hold_spectrum(&mut state, pane_of(orientation, depth));
@@ -799,7 +801,7 @@ fn drag_pane(
     // is bounded by the pane rather than by the screen's edge.
     let screen = egui::vec2(900.0, 900.0);
     let at = Axes::new(rect, &cfg).at(0.5, grab);
-    let frame = |events: Vec<egui::Event>, state: &mut SharedState| {
+    let frame = |events: Vec<egui::Event>, state: &mut PictureState| {
         let _ = events_into(&ctx, screen, rect, events, |ui| {
             spectral_pane(ui, state, 100.0, 0);
         });
@@ -1696,7 +1698,7 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
     let samples: Vec<f32> = (0..48_000)
         .map(|i| 100.0 * (std::f32::consts::TAU * 1_000.0 * i as f32 / sr).sin())
         .collect();
-    state.spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
+    state.runtime.spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
 
     // A screen of its own: `rect` here runs to 1200x400, which SCREEN could
     // not hold, and this fixture is about what the curve reaches inside the
@@ -1800,7 +1802,7 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
         state.appearance.spectrum.low_midi = 60.0;
         state.appearance.spectrum.high_midi = 72.0;
         if sounding {
-            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
         }
         let out = painted_pane(WIDE, &mut state, 0.1);
         let callbacks: Vec<usize> = out
@@ -1869,15 +1871,15 @@ fn a_whole_song_pane_draws_a_window_of_a_longer_take_inside_the_slab_cap() {
     // A four-second window a minute into it — short enough that the slab
     // floors at `MIN_BUCKET`, which is what makes the whole take's fold
     // several times the limit rather than merely wider than the window's.
-    state.whole_song = Some(crate::WholeSong {
+    state.runtime.whole_song = Some(crate::WholeSong {
         start: 60.0,
         span: 4.0,
         columns,
-        roll: state.tracker.roll().clone(),
+        roll: state.runtime.tracker.roll().clone(),
     });
     let _ = painted_pane(WIDE, &mut state, 61.0);
 
-    let slabs = state.spectrum.spectrogram.at(0).gpu.run_slabs();
+    let slabs = state.surfaces.spectrogram.at(0).gpu.run_slabs();
     assert!(slabs > 0, "no heatmap in the frame, so it never reached the fold this is about");
     // The cap, plus the slab each end of the window can spend by falling
     // mid-slab.
@@ -1904,16 +1906,16 @@ fn the_whole_song_playhead_paints_over_the_roll_it_sweeps_across() {
         state.appearance.spectrum.low_midi = 60.0;
         state.appearance.spectrum.high_midi = 72.0;
         if sounding {
-            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
         }
         // The take laid out statically, the way the offline renderer sets it
         // up. No columns: the heatmap is not what this is about, and the roll
         // reads `whole_song.roll` rather than the live tracker here.
-        state.whole_song = Some(crate::WholeSong {
+        state.runtime.whole_song = Some(crate::WholeSong {
             start: 0.0,
             span: 2.0,
             columns: Vec::new(),
-            roll: state.tracker.roll().clone(),
+            roll: state.runtime.tracker.roll().clone(),
         });
         let out = painted_pane(WIDE, &mut state, 1.0);
         let callbacks = out
@@ -1968,10 +1970,10 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
         // in — a fraction of any real arrival. No envelope at all, so what is
         // counted is whether the flag is DRAWN rather than how far its note
         // has eased in.
-        state.frame_params.fade_time = 0.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.frame_params.fade_time = 0.0;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         if tuning_offset != 0.0 {
-            state.tracker.handle_event(NoteEvent {
+            state.runtime.tracker.handle_event(NoteEvent {
                 source: SourceId::DIRECT,
                 time: 0.0,
                 channel: 0,
@@ -2028,17 +2030,17 @@ fn a_note_lit_on_the_lattice_is_not_flagged_off_it() {
 
     let bands = |shown: Option<harmonigraph_scene::DrawnWindow>| {
         let mut state = fresh();
-        state.tuning = harmonigraph_core::Tuning::just();
+        state.runtime.tuning = harmonigraph_core::Tuning::just();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 55.0;
         state.appearance.spectrum.high_midi = 73.0;
-        state.frame_params.fade_time = 0.0;
-        state.drawn = shown;
+        state.runtime.frame_params.fade_time = 0.0;
+        state.surfaces.drawn = shown;
         // Bent onto that node's own pitch exactly, which is what a retuned
         // keyboard or an MPE part does and the only way to sound one.
-        let cents = state.tuning.pitch_class(far).to_cents();
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent {
+        let cents = state.runtime.tuning.pitch_class(far).to_cents();
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent {
             source: SourceId::DIRECT,
             time: 0.0,
             channel: 0,
@@ -2372,11 +2374,11 @@ fn level_label_room_answers_to_the_axis_the_depth_runs_on() {
 fn whole_song_mode_rules_no_levels() {
     let mut state = fresh();
     state.appearance.spectrum.orientation = SpectralOrientation::Left;
-    state.whole_song = Some(crate::WholeSong {
+    state.runtime.whole_song = Some(crate::WholeSong {
         start: 0.0,
         span: 2.0,
         columns: Vec::new(),
-        roll: state.tracker.roll().clone(),
+        roll: state.runtime.tracker.roll().clone(),
     });
     let out = painted_pane(WIDE, &mut state, 1.0);
     let ruled = out.shapes.iter().any(
@@ -2436,12 +2438,12 @@ fn only_the_decade_boundaries_take_the_stronger_ink() {
 fn whole_song_mode_rules_no_frequencies() {
     let mut state = fresh();
     state.appearance.spectrum.orientation = SpectralOrientation::Left;
-    state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
-    state.whole_song = Some(crate::WholeSong {
+    state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
+    state.runtime.whole_song = Some(crate::WholeSong {
         start: 0.0,
         span: 2.0,
         columns: Vec::new(),
-        roll: state.tracker.roll().clone(),
+        roll: state.runtime.tracker.roll().clone(),
     });
     let out = painted_pane(WIDE, &mut state, 1.0);
     let ruled = out.shapes.iter().any(
@@ -2584,30 +2586,30 @@ fn paint(
     spectrum_bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 2] = 0.5;
     spectrum_bins[harmonigraph_core::spectrum::SPECTRUM_BINS - 1] = 0.3;
     for i in 0..80 {
-        state.spectrum.push_history(90.0 + f64::from(i) * 0.125, &spectrum_bins);
+        state.runtime.spectrum.push_history(90.0 + f64::from(i) * 0.125, &spectrum_bins);
     }
 
     let on = |time, note| NoteEvent::on(time, SourceId::DIRECT, 0, note, 0.7);
     let off = |time, note| NoteEvent::off(time, SourceId::DIRECT, 0, note);
     // Long past the window; inside it; bent across it; off the top of
     // the pitch range; and one still held at `now`.
-    state.tracker.handle_event(on(0.0, 60));
-    state.tracker.handle_event(off(1.0, 60));
-    state.tracker.handle_event(on(95.0, 62));
-    state.tracker.handle_event(off(96.0, 62));
-    state.tracker.handle_event(on(96.0, 64));
-    state.tracker.handle_event(NoteEvent {
+    state.runtime.tracker.handle_event(on(0.0, 60));
+    state.runtime.tracker.handle_event(off(1.0, 60));
+    state.runtime.tracker.handle_event(on(95.0, 62));
+    state.runtime.tracker.handle_event(off(96.0, 62));
+    state.runtime.tracker.handle_event(on(96.0, 64));
+    state.runtime.tracker.handle_event(NoteEvent {
         source: SourceId::DIRECT,
         time: 97.0,
         channel: 0,
         note: 64,
         kind: NoteEventKind::Tuning { semitones: 7.5 },
     });
-    state.tracker.handle_event(off(99.0, 64));
-    state.tracker.handle_event(on(97.0, 127));
-    state.tracker.handle_event(on(99.0, 67));
+    state.runtime.tracker.handle_event(off(99.0, 64));
+    state.runtime.tracker.handle_event(on(97.0, 127));
+    state.runtime.tracker.handle_event(on(99.0, 67));
     let now = 100.0;
-    state.tracker.prune(now, &harmonigraph_core::Envelope::default());
+    state.runtime.tracker.prune(now, &harmonigraph_core::Envelope::default());
 
     let output = painted_pane(rect, &mut state, now);
     output.shapes.into_iter().map(|s| s.shape).collect()
@@ -2656,7 +2658,7 @@ fn the_rolls_ink_stops_at_the_now_line() {
             state.appearance.spectrum.roll_lead_fade = lead;
             state.appearance.view.bloom_strength = 1.2;
             // Held at `now`, so its leading end sits exactly on the line.
-            state.tracker.handle_event(NoteEvent::on(99.0, SourceId::DIRECT, 0, 60, 0.8));
+            state.runtime.tracker.handle_event(NoteEvent::on(99.0, SourceId::DIRECT, 0, 60, 0.8));
 
             let a = axes(WIDE, orientation);
             let split = spectrum_share(&state.appearance.spectrum);
@@ -2785,7 +2787,7 @@ fn a_divider_dragged_shut_stays_shut_through_a_resize() {
     for (shut, name) in [(0.0, "the far region"), (1.0, "the spectrum")] {
         let mut state = fresh();
         state.appearance.spectrum.roll_fraction = shut;
-        let split_at = |state: &mut SharedState, depth| {
+        let split_at = |state: &mut PictureState, depth| {
             hold_spectrum(state, pane_of(SpectralOrientation::Left, depth));
             spectrum_split(state, DOCKED)
         };

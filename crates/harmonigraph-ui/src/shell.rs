@@ -57,7 +57,7 @@ pub fn limit_font_atlas(input: &mut egui::RawInput) {
 /// A context, rather than a process or a window, is the unit: the plugin
 /// editor builds a new one every time its window opens while the state it
 /// draws lives on across all of them, and that gap is what
-/// [`SharedState::release_context_resources`] exists to close.
+/// [`crate::PictureState::release_context_resources`] exists to close.
 pub struct Opening<'a> {
     /// The context that has just been built. [`open`](Self::open) themes it,
     /// so a shell with styling of its own applies that afterwards.
@@ -92,7 +92,7 @@ impl Opening<'_> {
     /// with.
     pub fn open(self) {
         crate::theme::apply_theme(self.ctx);
-        self.state.release_context_resources();
+        self.state.picture.release_context_resources();
         self.state.workspace.min_window_width = MIN_WINDOW_WIDTH;
         if let Some(persist) = self.persist.filter(|blob| !blob.is_empty()) {
             self.state.load_persist(persist);
@@ -289,11 +289,15 @@ mod tests {
         let ctx = egui::Context::default();
         let mut state = fresh();
         Opening { ctx: &ctx, state: &mut state, persist: Some("") }.open();
-        assert_eq!(state.console.lines().count(), 0, "an empty blob is not a parse failure");
+        assert_eq!(
+            state.picture.runtime.console.lines().count(),
+            0,
+            "an empty blob is not a parse failure"
+        );
 
         Opening { ctx: &ctx, state: &mut state, persist: Some("not a blob at all") }.open();
         assert!(
-            state.console.lines().any(|line| line.contains("persist ignored")),
+            state.picture.runtime.console.lines().any(|line| line.contains("persist ignored")),
             "a blob that really is broken still says so",
         );
     }
@@ -305,12 +309,12 @@ mod tests {
         let ctx = egui::Context::default();
         let mut state = fresh();
         Opening { ctx: &ctx, state: &mut state, persist: None }.open();
-        state.ui_scale = 1.25;
+        state.workspace.interaction.ui_scale = 1.25;
         let saved = close(&state);
 
         let mut reopened = fresh();
         Opening { ctx: &ctx, state: &mut reopened, persist: Some(&saved) }.open();
-        assert_eq!(reopened.ui_scale, 1.25);
+        assert_eq!(reopened.workspace.interaction.ui_scale, 1.25);
         assert_eq!(
             reopened.workspace.min_window_width, MIN_WINDOW_WIDTH,
             "and the floor survives a load",

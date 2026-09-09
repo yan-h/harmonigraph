@@ -3,13 +3,13 @@
 
 use super::{display_note_name, nearest_shown_node, KEY_NAMES};
 use crate::widgets::button_row;
-use crate::{theme, SharedState};
+use crate::{theme, PictureState};
 
-pub(super) fn console_pane(ui: &mut egui::Ui, state: &mut SharedState) {
+pub(super) fn console_pane(ui: &mut egui::Ui, runtime: &mut crate::VisualRuntime) {
     button_row(ui, |ui| {
-        ui.label(format!("{} held", state.tracker.held_count()));
+        ui.label(format!("{} held", runtime.tracker.held_count()));
         if ui.button("Clear").clicked() {
-            state.console.clear();
+            runtime.console.clear();
         }
     });
     // Its own area rather than the dock's, because it sticks to the bottom and
@@ -17,7 +17,7 @@ pub(super) fn console_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // reserved out of its width (see [`theme::reserve_scroll_gutter`]).
     theme::reserve_scroll_gutter(ui);
     egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
-        for line in state.console.lines() {
+        for line in runtime.console.lines() {
             ui.monospace(line);
         }
     });
@@ -30,9 +30,13 @@ pub(super) fn console_pane(ui: &mut egui::Ui, state: &mut SharedState) {
 /// tuning); the node column shows which lattice position the pitch class
 /// lights up under the current tuning/tolerance and view extents ("--"
 /// = sounding but not represented anywhere on the visible lattice).
-pub(super) fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    let mut voices: Vec<_> =
-        state.tracker.voices().filter(|v| v.state == harmonigraph_core::VoiceState::Held).collect();
+pub(super) fn notes_pane(ui: &mut egui::Ui, state: &mut PictureState) {
+    let mut voices: Vec<_> = state
+        .runtime
+        .tracker
+        .voices()
+        .filter(|v| v.state == harmonigraph_core::VoiceState::Held)
+        .collect();
     if voices.is_empty() {
         ui.weak("No held notes.");
         return;
@@ -52,7 +56,7 @@ pub(super) fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         // is never listed as having none.
         let shown = state.shown();
         for voice in voices {
-            let node = nearest_shown_node(&shown, &state.tuning, voice.pitch_class)
+            let node = nearest_shown_node(&shown, &state.runtime.tuning, voice.pitch_class)
                 .map(|pos| display_note_name(pos, state.appearance.view.tempered()).to_string());
             let line = format!(
                 "{name:<4} {oct:>4} {cents:>8.2}\u{a2}  {node:<7} {ch:>2}  {source}",

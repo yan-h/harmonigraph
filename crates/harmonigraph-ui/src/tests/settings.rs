@@ -8,10 +8,10 @@ use crate::*;
 #[test]
 fn opening_analyzer_settings_does_not_change_loaded_values() {
     let mut state = fresh();
-    state.appearance.spectrum.tilt = -2.0;
+    state.picture.appearance.spectrum.tilt = -2.0;
     assert!(state.load_persist(&state.save_persist()));
-    assert_eq!(state.appearance.spectrum.tilt, -1.5);
-    let before = ron::to_string(&state.appearance.spectrum).unwrap();
+    assert_eq!(state.picture.appearance.spectrum.tilt, -1.5);
+    let before = ron::to_string(&state.picture.appearance.spectrum).unwrap();
     let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
     let path = state.workspace.dock.find_tab(&tab).unwrap();
     state.workspace.dock.set_active_tab(path).unwrap();
@@ -23,7 +23,7 @@ fn opening_analyzer_settings_does_not_change_loaded_values() {
         }),
         "the no-input frame must reach the tilt controls"
     );
-    assert_eq!(ron::to_string(&state.appearance.spectrum).unwrap(), before);
+    assert_eq!(ron::to_string(&state.picture.appearance.spectrum).unwrap(), before);
 }
 
 /// Put the Notes/Console leaf back on screen, which is what the two wheel
@@ -259,7 +259,7 @@ fn the_glow_curve_bar_draws_the_curve_the_scene_receives() {
 /// skips it cannot see the difference — see `section`.
 fn video_pane_shapes(supported: bool) -> (Vec<egui::epaint::ClippedShape>, egui::Color32) {
     let mut state = fresh();
-    state.take.supported = supported;
+    state.workspace.interaction.take.supported = supported;
     // Soloed so the Video pane's body is the only settings body on screen and
     // the first heading found is unambiguously its own.
     state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Video]);
@@ -519,7 +519,7 @@ fn the_picker_draws_the_page_it_holds_and_only_that_page() {
     ];
     for (page, needle) in CASES {
         let mut state = fresh();
-        state.display_page = page;
+        state.workspace.interaction.display_page = page;
         let shapes = tab_body(&mut state, panes::Tab::Display, 400.0, PANE_HEIGHT).shapes;
         let drawn = |text: &str| {
             shapes.iter().any(|cs| match &cs.shape {
@@ -676,8 +676,8 @@ fn the_render_bar_fills_to_the_share_of_frames_done() {
 #[test]
 fn the_cancel_stands_with_the_render_bar_and_asks_for_the_stop() {
     let mut state = fresh();
-    state.take.supported = true;
-    state.take.last_ready = true;
+    state.workspace.interaction.take.supported = true;
+    state.workspace.interaction.take.last_ready = true;
     // Soloed and tall, like `video_pane_shapes`: the whole control column on
     // screen, so a button that is missing is missing rather than scrolled off.
     state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Video]);
@@ -693,7 +693,7 @@ fn the_cancel_stands_with_the_render_bar_and_asks_for_the_stop() {
     let idle = h.frame(&mut state, vec![]).shapes;
     assert!(find(&idle).is_none(), "a cancel drawn with no render to cancel");
 
-    state.take.render_progress = Some(FIXTURE_RENDER);
+    state.workspace.interaction.take.render_progress = Some(FIXTURE_RENDER);
     // Two frames: egui resolves the widget under the pointer from the previous
     // pass, so the button has to have been drawn before the press.
     h.frame(&mut state, vec![]);
@@ -706,7 +706,7 @@ fn the_cancel_stands_with_the_render_bar_and_asks_for_the_stop() {
     h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
     h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
     h.frame(&mut state, vec![press(at, false)]);
-    assert!(state.take.cancel_render, "the press never reached the shell");
+    assert!(state.workspace.interaction.take.cancel_render, "the press never reached the shell");
 }
 
 /// Before the renderer has said how many frames it is composing there is no
@@ -966,7 +966,7 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
     assert!(!deltas.is_empty(), "the settings pane drew no text to measure");
     deltas.sort_by(f32::total_cmp);
     let moved = deltas[deltas.len() / 2];
-    (moved, state.console.lines().map(str::to_owned).collect())
+    (moved, state.picture.runtime.console.lines().map(str::to_owned).collect())
 }
 
 /// A bar dragged off the window keeps the bar, and the release outside gives
@@ -1026,12 +1026,12 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     let name =
         bar_named(&out, "Spectrum release").expect("the Release bar is drawn on the Analyzer page");
     let on_the_bar = name + egui::vec2(2.0, 4.0);
-    let before = state.appearance.spectrum.release;
+    let before = state.picture.appearance.spectrum.release;
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar)]);
     frame(&mut state, vec![press(on_the_bar, true)]);
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar + egui::vec2(60.0, 0.0))]);
     assert!(ctx.dragged_id().is_some(), "the press on the Release bar started no drag");
-    let inside = state.appearance.spectrum.release;
+    let inside = state.picture.appearance.spectrum.release;
     assert!(inside != before, "the bar did not follow the pointer inside the window");
 
     // Out past the right edge of the window, with the button still down: the
@@ -1042,7 +1042,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
         "the bar let go of the drag when the pointer left the window",
     );
     assert_eq!(
-        state.appearance.spectrum.release, 0.5,
+        state.picture.appearance.spectrum.release, 0.5,
         "the bar stopped following the pointer at the window edge (it reads {inside} still)",
     );
 
@@ -1150,14 +1150,18 @@ fn scrolling_settings_pane(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::
     // brings its record row and its progress bar — the two controls
     // `widgets::bar_width` calls out as having nowhere to wrap to, and so the
     // two likeliest to reach the lane.
-    state.take.supported = true;
-    state.take.last_ready = true;
-    state.take.render_progress = Some(FIXTURE_RENDER);
+    state.workspace.interaction.take.supported = true;
+    state.workspace.interaction.take.last_ready = true;
+    state.workspace.interaction.take.render_progress = Some(FIXTURE_RENDER);
     for i in 0..40 {
-        state.console.log(format!("{i:02} a log line long enough to run the width of the pane"));
+        state
+            .picture
+            .runtime
+            .console
+            .log(format!("{i:02} a log line long enough to run the width of the pane"));
     }
     for note in 40..80 {
-        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+        state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
             0.5,
             harmonigraph_core::SourceId::DIRECT,
             0,
@@ -1406,8 +1410,8 @@ fn audio_section_shapes(
     width: f32,
 ) -> Vec<egui::epaint::ClippedShape> {
     let mut state = fresh();
-    state.appearance.view.spectral_reading = reading;
-    state.appearance.view.spectral_ring_width = width;
+    state.picture.appearance.view.spectral_reading = reading;
+    state.picture.appearance.view.spectral_ring_width = width;
     let tab = SettingsPane::Page(DisplayPage::Lattice).install(&mut state);
     tab_body(&mut state, tab, 320.0, PANE_HEIGHT).shapes
 }
@@ -1457,8 +1461,8 @@ fn track_color(shapes: &[egui::epaint::ClippedShape], y: f32) -> egui::Color32 {
 fn history_stays_editable_without_midi_ribbons() {
     let colors = |show_roll| {
         let mut state = fresh();
-        state.appearance.spectrum.show_roll = show_roll;
-        state.appearance.spectrum.show_spectrogram = true;
+        state.picture.appearance.spectrum.show_roll = show_roll;
+        state.picture.appearance.spectrum.show_spectrogram = true;
         let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
         let shapes = tab_body(&mut state, tab, 420.0, PANE_HEIGHT).shapes;
         ["History duration", "Ribbon width", "Extension release"]

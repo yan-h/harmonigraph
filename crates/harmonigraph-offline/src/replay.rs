@@ -16,7 +16,8 @@ use std::cell::Cell;
 
 use harmonigraph_take::Take;
 use harmonigraph_ui::params::{ParamBackend, ParamKey};
-use harmonigraph_ui::SharedState;
+#[cfg(test)]
+use harmonigraph_ui::PictureState;
 
 /// The parameter values at one instant of the replay.
 ///
@@ -56,7 +57,7 @@ impl ParamBackend for ReplayParams {
     fn end_set(&self, _key: ParamKey) {}
 }
 
-/// Walks a take forward in time, feeding a [`SharedState`].
+/// Walks a take forward in time, feeding a [`VisualRuntime`](harmonigraph_ui::VisualRuntime).
 pub struct Replay {
     take: Take,
     pub params: ReplayParams,
@@ -86,12 +87,12 @@ impl Replay {
     /// Deliver everything that happens at or before `now` and has not
     /// been delivered yet. Call once per frame with a strictly increasing
     /// `now`; seeking backwards is not supported (use [`Replay::new`]).
-    pub fn advance_to(&mut self, state: &mut SharedState, now: f64) {
+    pub fn advance_to(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, now: f64) {
         while let Some(record) = self.take.configurations.get(self.next_configuration) {
             if record.t > now {
                 break;
             }
-            state.replayed_configuration = Some(record.resolved());
+            runtime.replayed_configuration = Some(record.resolved());
             self.next_configuration += 1;
         }
 
@@ -99,7 +100,7 @@ impl Replay {
             if record.time() > now {
                 break;
             }
-            record.apply(&mut state.tracker).expect("validated canonical take");
+            record.apply(&mut runtime.tracker).expect("validated canonical take");
             self.next_note += 1;
         }
 
@@ -194,20 +195,24 @@ mod tests {
         }
         let take = Take::parse(std::io::Cursor::new(text)).unwrap();
         let mut replay = Replay::new(take);
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = PictureState::new(TextureFormat::Bgra8Unorm);
         let mut now = 0.0;
         while now < 10.0 {
-            replay.advance_to(&mut state, now);
+            replay.advance_to(&mut state.runtime, now);
             now += 1.0 / 24.0;
         }
-        assert_eq!(state.tracker.held_count(), 0, "no key is left sounding");
-        let note = state.tracker.roll().notes().next().unwrap();
+        assert_eq!(state.runtime.tracker.held_count(), 0, "no key is left sounding");
+        let note = state.runtime.tracker.roll().notes().next().unwrap();
         assert_eq!((note.start, note.end, note.observed_until), (1.0, None, Some(2.0)));
         assert!(
             note.segments(10.0).all(|segment| segment.1 .0 <= 2.0),
             "nothing is drawn past the last time the note was actually observed"
         );
-        assert_eq!(state.tracker.roll().notes().count(), 1, "the snapshot adds no second note");
+        assert_eq!(
+            state.runtime.tracker.roll().notes().count(),
+            1,
+            "the snapshot adds no second note"
+        );
     }
 
     #[test]
@@ -256,18 +261,18 @@ mod tests {
         let take = Take::parse(std::io::Cursor::new(text)).unwrap();
         for cadence in [0.001, 1.0 / 24.0, 1.0 / 60.0] {
             let mut replay = Replay::new(take.clone());
-            let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+            let mut state = PictureState::new(TextureFormat::Bgra8Unorm);
             let mut now = 0.0;
             while now < 4.5 {
-                replay.advance_to(&mut state, now);
+                replay.advance_to(&mut state.runtime, now);
                 now += cadence;
             }
             assert!(
-                !state.tracker.source_current_certain(source),
+                !state.runtime.tracker.source_current_certain(source),
                 "actual Off does not repair source completeness"
             );
-            replay.advance_to(&mut state, 5.0);
-            for roll in [state.tracker.roll(), &replay.full_roll()] {
+            replay.advance_to(&mut state.runtime, 5.0);
+            for roll in [state.runtime.tracker.roll(), &replay.full_roll()] {
                 let note = roll.notes().next().unwrap();
                 assert_eq!(
                     (note.start, note.end, note.observed_until),
@@ -304,7 +309,7 @@ mod tests {
         let take = Take::parse(std::io::Cursor::new(text)).unwrap();
         for cadence in [0.001, 1.0 / 24.0, 1.0 / 60.0] {
             let mut replay = Replay::new(take.clone());
-            let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+            let mut state = PictureState::new(TextureFormat::Bgra8Unorm);
             let envelope = harmonigraph_core::Envelope {
                 attack_time: 0.0,
                 fade_time: 0.0,
@@ -312,14 +317,14 @@ mod tests {
             };
             let mut now = 0.0;
             while now < 0.1 {
-                replay.advance_to(&mut state, now);
-                state.tracker.prune(now, &envelope);
+                replay.advance_to(&mut state.runtime, now);
+                state.runtime.tracker.prune(now, &envelope);
                 now += cadence;
             }
-            replay.advance_to(&mut state, 0.1);
-            state.tracker.prune(0.1, &envelope);
+            replay.advance_to(&mut state.runtime, 0.1);
+            state.runtime.tracker.prune(0.1, &envelope);
             let history: Vec<_> =
-                state.tracker.history().visits().map(|v| (v.pitch, v.last_off)).collect();
+                state.runtime.tracker.history().visits().map(|v| (v.pitch, v.last_off)).collect();
             assert_eq!(history, [(60.0, 0.02)], "cadence {cadence}");
         }
     }
@@ -434,15 +439,15 @@ mod tests {
         let mut expected = None;
         for cadence in [0.001, 1.0 / 24.0, 1.0 / 60.0] {
             let mut replay = Replay::new(take.clone());
-            let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+            let mut state = PictureState::new(TextureFormat::Bgra8Unorm);
             let mut now = 0.0;
             while now < 0.5 {
-                replay.advance_to(&mut state, now);
+                replay.advance_to(&mut state.runtime, now);
                 now += cadence;
             }
-            replay.advance_to(&mut state, 0.5);
+            replay.advance_to(&mut state.runtime, 0.5);
             assert!(replay.is_spent());
-            let snapshot = roll_snapshot(state.tracker.roll());
+            let snapshot = roll_snapshot(state.runtime.tracker.roll());
             assert_eq!(snapshot, roll_snapshot(&replay.full_roll()));
             assert_eq!(snapshot.len(), 2);
             assert_eq!((snapshot[0].2, snapshot[0].3, snapshot[0].6), (0.01, Some(0.07), 60.25));
@@ -455,8 +460,8 @@ mod tests {
                 !snapshot[1].7.iter().any(|segment| segment.0 .0 < 0.3 && segment.1 .0 > 0.2),
                 "one recovered lifetime preserves the gap without a duplicate cache identity"
             );
-            assert_eq!(state.tracker.publication_gaps().len(), 1);
-            assert_eq!(state.tracker.source_baseline(source).unwrap(), &recovered);
+            assert_eq!(state.runtime.tracker.publication_gaps().len(), 1);
+            assert_eq!(state.runtime.tracker.source_baseline(source).unwrap(), &recovered);
             if let Some(ref expected) = expected {
                 assert_eq!(&snapshot, expected);
             } else {
@@ -500,31 +505,31 @@ mod tests {
             let take = Take::parse(std::io::Cursor::new(&encoded)).unwrap();
             assert!(!take.truncated);
             let mut replay = Replay::new(take);
-            let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+            let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
             for frame in 0..=100 {
                 let now = f64::from(frame) * cadence;
-                replay.advance_to(&mut state, now);
+                replay.advance_to(&mut state.runtime, now);
                 harmonigraph_ui::begin_frame(&mut state, &replay.params, now);
                 let config = expected.iter().rev().find(|(t, _)| *t <= now).unwrap().1;
-                assert_eq!(state.tuning, config.tuning);
+                assert_eq!(state.runtime.tuning, config.tuning);
                 assert_eq!(state.appearance.view.meantone, config.modes.tempered.syntonic);
-                assert_eq!(state.learn_active, config.modes.learning);
-                assert_eq!(state.replayed_configuration, Some(config));
+                assert_eq!(state.runtime.learn_active, config.modes.learning);
+                assert_eq!(state.runtime.replayed_configuration, Some(config));
             }
         }
     }
 
     #[test]
     fn events_arrive_on_the_frame_that_passes_them_and_not_before() {
-        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         let mut replay = Replay::new(take_with(vec![on(0.5, 60), on(1.5, 64)], vec![]));
 
-        replay.advance_to(&mut state, 0.25);
-        assert_eq!(state.tracker.held_count(), 0, "not yet");
-        replay.advance_to(&mut state, 0.75);
-        assert_eq!(state.tracker.held_count(), 1);
-        replay.advance_to(&mut state, 2.0);
-        assert_eq!(state.tracker.held_count(), 2);
+        replay.advance_to(&mut state.runtime, 0.25);
+        assert_eq!(state.runtime.tracker.held_count(), 0, "not yet");
+        replay.advance_to(&mut state.runtime, 0.75);
+        assert_eq!(state.runtime.tracker.held_count(), 1);
+        replay.advance_to(&mut state.runtime, 2.0);
+        assert_eq!(state.runtime.tracker.held_count(), 2);
         assert!(replay.is_spent());
     }
 
@@ -533,10 +538,10 @@ mod tests {
     /// where it actually started.
     #[test]
     fn a_note_keeps_its_own_timestamp_not_the_frames() {
-        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         let mut replay = Replay::new(take_with(vec![on(0.5, 60), off(0.6, 60)], vec![]));
-        replay.advance_to(&mut state, 1.0);
-        let voice = *state.tracker.voices().next().unwrap();
+        replay.advance_to(&mut state.runtime, 1.0);
+        let voice = *state.runtime.tracker.voices().next().unwrap();
         assert_eq!(voice.on_time, 0.5);
         // Released at 0.6 with a 1 s straight-line fade: 40% gone by t=1.0.
         // The envelope is spelled out rather than taken from the state's view
@@ -582,20 +587,21 @@ mod tests {
         assert!(!take.truncated);
         assert_eq!(take.notes().map(NoteEvent::from).collect::<Vec<_>>(), events);
         let mut replay = Replay::new(take);
-        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
-        replay.advance_to(&mut state, 0.5);
-        assert_eq!(state.tracker.held_count(), 2);
-        let pitches: Vec<_> = state.tracker.voices().map(|v| (v.source, v.pitch)).collect();
+        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
+        replay.advance_to(&mut state.runtime, 0.5);
+        assert_eq!(state.runtime.tracker.held_count(), 2);
+        let pitches: Vec<_> = state.runtime.tracker.voices().map(|v| (v.source, v.pitch)).collect();
         assert_eq!(pitches, vec![(a, 60.25), (b, 59.75)]);
-        replay.advance_to(&mut state, 1.9);
-        let held: Vec<_> = state.tracker.voices().filter(|v| v.state == VoiceState::Held).collect();
+        replay.advance_to(&mut state.runtime, 1.9);
+        let held: Vec<_> =
+            state.runtime.tracker.voices().filter(|v| v.state == VoiceState::Held).collect();
         assert_eq!(held.len(), 1);
         assert_eq!((held[0].source, held[0].pitch, held[0].on_time), (b, 59.5, 0.25));
-        replay.advance_to(&mut state, 3.0);
-        assert_eq!(state.tracker.held_count(), 0);
+        replay.advance_to(&mut state.runtime, 3.0);
+        assert_eq!(state.runtime.tracker.held_count(), 0);
         assert!(replay.is_spent());
 
-        for roll in [state.tracker.roll(), &replay.full_roll()] {
+        for roll in [state.runtime.tracker.roll(), &replay.full_roll()] {
             let notes: Vec<_> =
                 roll.notes().map(|n| (n.source, n.start, n.end, n.end_pitch())).collect();
             assert_eq!(
@@ -618,7 +624,7 @@ mod tests {
 
     #[test]
     fn parameter_automation_is_applied_in_time_order() {
-        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         let id = ParamKey::Fade.id().to_string();
         // Two values a bar can actually reach, so what the test replays is a
         // lane that could have been recorded (`ParamKey::Fade.range()`).
@@ -629,20 +635,20 @@ mod tests {
                 ParamRecord { t: 1.0, id: id.clone(), value: 0.75 },
             ],
         ));
-        replay.advance_to(&mut state, 0.5);
+        replay.advance_to(&mut state.runtime, 0.5);
         assert_eq!(replay.params.get(ParamKey::Fade), 0.25);
-        replay.advance_to(&mut state, 1.5);
+        replay.advance_to(&mut state.runtime, 1.5);
         assert_eq!(replay.params.get(ParamKey::Fade), 0.75);
     }
 
     #[test]
     fn an_unknown_parameter_id_is_skipped_rather_than_fatal() {
-        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         let mut replay = Replay::new(take_with(
             vec![],
             vec![ParamRecord { t: 0.0, id: "invented-by-a-later-build".into(), value: 9.0 }],
         ));
-        replay.advance_to(&mut state, 1.0);
+        replay.advance_to(&mut state.runtime, 1.0);
         assert!(replay.is_spent());
         assert_eq!(replay.params.get(ParamKey::Fade), ParamKey::Fade.default_value());
     }

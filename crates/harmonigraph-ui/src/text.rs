@@ -659,7 +659,7 @@ impl TextBatch {
         &mut self,
         painter: &egui::Painter,
         rect: egui::Rect,
-        state: &crate::SharedState,
+        state: &crate::PictureState,
         pane_id: u64,
         slide: harmonigraph_render::SlideAxis,
         shadow: Option<harmonigraph_scene::ShadowStyle>,
@@ -693,7 +693,7 @@ impl TextBatch {
             marks,
             sdf,
             slide,
-            state.target_format,
+            state.surfaces.target_format,
             pane_id,
             shadow_surface_id,
             painter.ctx().cumulative_pass_nr(),
@@ -716,7 +716,7 @@ impl TextBatch {
         &mut self,
         painter: &egui::Painter,
         rect: egui::Rect,
-        state: &crate::SharedState,
+        state: &crate::PictureState,
     ) -> harmonigraph_render::LatticeLabels {
         #[cfg(test)]
         {
@@ -841,7 +841,7 @@ impl AtlasMirror {
     ///
     /// All four guards above read one egui `Context`, and a shell that builds
     /// a second one leaves them answering for an atlas nobody is drawing from.
-    /// See [`release_context_resources`](crate::SharedState::release_context_resources),
+    /// See [`release_context_resources`](crate::PictureState::release_context_resources),
     /// which is the one caller.
     ///
     /// `key` is deliberately kept: it counts publications rather than
@@ -1513,7 +1513,7 @@ mod tests {
     fn the_mark_sheet_is_published_when_it_moves_and_not_otherwise() {
         let ctx = egui::Context::default();
         let state = crate::tests::probe::fresh();
-        let mirror = &state.instruments.font_atlas;
+        let mirror = &state.picture.instruments.font_atlas;
 
         // Nothing packed: there is no sheet to publish, on any frame.
         assert!(marks_if_changed(&ctx, mirror).is_none(), "an empty sheet publishes nothing");
@@ -1534,7 +1534,7 @@ mod tests {
         // each mirror answers for ONE renderer's texture, and a sheet
         // published to the text callback is not in the lattice's copy.
         assert!(
-            marks_if_changed(&ctx, &state.instruments.lattice_atlas).is_some(),
+            marks_if_changed(&ctx, &state.picture.instruments.lattice_atlas).is_some(),
             "a second renderer must be shown the sheet too, not told it already has it",
         );
     }
@@ -1681,7 +1681,7 @@ mod tests {
                 .enumerate()
         {
             let surface = spectral_shadow_surface(slot);
-            let mut state = crate::SharedState::new(FORMAT);
+            let mut state = crate::PictureState::new(FORMAT);
             state.appearance.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
                 width: 1.0,
                 depth: 1.0,
@@ -1905,7 +1905,7 @@ mod tests {
                 let labels = batch.lattice_labels(
                     ui.painter(),
                     egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
-                    &state,
+                    &state.picture,
                 );
                 published += usize::from(labels.atlas.is_some());
             });
@@ -1936,7 +1936,7 @@ mod tests {
             let labels = batch.lattice_labels(
                 ui.painter(),
                 egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
-                &state,
+                &state.picture,
             );
             result = (labels.glyphs.len(), labels.atlas.is_some());
         });
@@ -1956,7 +1956,7 @@ mod tests {
 
         let state = crate::tests::probe::fresh();
         let first = batch_keys(&ctx, &font, "Ai");
-        let mirror = &state.instruments.font_atlas;
+        let mirror = &state.picture.instruments.font_atlas;
         assert!(atlas_if_changed(&ctx, mirror, first.clone()).is_some(), "the first mirror");
         assert!(atlas_if_changed(&ctx, mirror, first.clone()).is_none(), "nothing has moved");
 
@@ -1983,7 +1983,7 @@ mod tests {
     /// Every field the mirror compares describes ONE egui context, so the
     /// mirror belongs to that context and dies with it.
     ///
-    /// [`SharedState`](crate::SharedState) outlives the context — the plugin's
+    /// [`PictureState`](crate::PictureState) outlives the context — the plugin's
     /// editor builds a fresh one per window — while the atlas texture and the
     /// per-pane bind groups the mirror is a mirror OF live in the renderer,
     /// which the new window builds fresh alongside it. A mirror carried across
@@ -1993,7 +1993,7 @@ mod tests {
     /// analyzer's, the learn badge — with no frame that recovers them, because
     /// the mirror is itself the only thing that would ask.
     ///
-    /// [`release_context_resources`](crate::SharedState::release_context_resources)
+    /// [`release_context_resources`](crate::PictureState::release_context_resources)
     /// is where a shell says the context is gone, and clearing the mirror
     /// there is what bounds this to the window that opened it.
     ///
@@ -2014,21 +2014,21 @@ mod tests {
         batch_keys(&ctx, &font, "C4 Eb5 G7");
         let opened = batch_keys(&ctx, &font, "C4 Eb5 G7");
         {
-            let mirror = &state.instruments.font_atlas;
+            let mirror = &state.picture.instruments.font_atlas;
             assert!(atlas_if_changed(&ctx, mirror, opened.clone()).is_some(), "the first mirror");
             assert!(atlas_if_changed(&ctx, mirror, opened.clone()).is_none(), "nothing has moved");
         }
 
         // The window closes and another opens: a new context, and a new
         // renderer holding no atlas at all.
-        state.release_context_resources();
+        state.picture.release_context_resources();
         let reopened = egui::Context::default();
         batch_keys(&reopened, &font, "C4 Eb5 G7");
         let drawn = batch_keys(&reopened, &font, "C4 Eb5 G7");
         assert_eq!(drawn, opened, "the same labels rasterize to the same texels");
 
         assert!(
-            atlas_if_changed(&reopened, &state.instruments.font_atlas, drawn).is_some(),
+            atlas_if_changed(&reopened, &state.picture.instruments.font_atlas, drawn).is_some(),
             "a context that has never been handed the atlas must be handed it",
         );
     }
@@ -2244,7 +2244,7 @@ mod tests {
         let font = egui::FontId::proportional(12.0);
 
         let (size_1x, drawn_1x) = draw_at(&ctx, &font, "Ag1", 1.0);
-        let mirror = &state.instruments.font_atlas;
+        let mirror = &state.picture.instruments.font_atlas;
         assert!(atlas_if_changed(&ctx, mirror, drawn_1x.clone()).is_some(), "the first mirror");
         assert!(
             atlas_if_changed(&ctx, mirror, drawn_1x.clone()).is_none(),

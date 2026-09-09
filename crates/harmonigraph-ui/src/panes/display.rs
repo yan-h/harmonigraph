@@ -12,7 +12,7 @@ use super::system::system_pane;
 use super::view::view_pane;
 use crate::params::ParamBackend;
 use crate::theme;
-use crate::SharedState;
+use crate::PictureState;
 
 /// Picture settings first, then shared appearance and system controls.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -65,18 +65,23 @@ impl DisplayPage {
 /// pane's right margin — one built here starts at the content box, and a
 /// floating bar draws over the content it has no room beside, which is the
 /// right end of every bar on every page.
-pub(super) fn display_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
+pub(super) fn display_pane(
+    ui: &mut egui::Ui,
+    state: &mut PictureState,
+    interaction: &mut crate::Interaction,
+    params: &dyn ParamBackend,
+) {
     // Copied out and written back, so the picker can hold the choice while the
     // page body borrows the whole state.
-    let mut page = state.display_page;
+    let mut page = interaction.display_page;
     page_picker(ui, &mut page);
-    state.display_page = page;
+    interaction.display_page = page;
     match page {
-        DisplayPage::Colors => color_pane(ui, state, params),
-        DisplayPage::Lattice => lattice_page(ui, state, params),
+        DisplayPage::Colors => color_pane(ui, &mut state.appearance, params),
+        DisplayPage::Lattice => lattice_page(ui, state, interaction, params),
         DisplayPage::Analyzer => spectrum_settings_pane(ui, state, params),
-        DisplayPage::Lighting => lighting_pane(ui, state),
-        DisplayPage::System => system_pane(ui, state),
+        DisplayPage::Lighting => lighting_pane(ui, &mut state.appearance),
+        DisplayPage::System => system_pane(ui, &mut state.appearance, interaction),
     }
 }
 
@@ -186,11 +191,16 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
 /// [`view_pane`] leads, so its own first heading is the page's and stays plain
 /// — see [`section`](super::section) for the rule that separates a section from
 /// the one above it.
-fn lattice_page(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
-    view_pane(ui, state);
-    nodes_pane(ui, state, params);
+fn lattice_page(
+    ui: &mut egui::Ui,
+    state: &mut PictureState,
+    interaction: &mut crate::Interaction,
+    params: &dyn ParamBackend,
+) {
+    view_pane(ui, &mut state.appearance, interaction);
+    nodes_pane(ui, &mut state.appearance, params);
     labels_pane(ui, state);
-    plus_pane(ui, state);
+    plus_pane(ui, &mut state.appearance);
 }
 
 #[cfg(test)]
