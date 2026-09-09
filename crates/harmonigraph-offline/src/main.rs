@@ -339,18 +339,21 @@ fn size_matches_frame(size: [u32; 2], frame: &harmonigraph_ui::RenderFrame) -> b
 /// when neither can place it.
 fn align_replacement(
     recorded: Option<&std::path::Path>,
-    soundtrack: Option<&crate::wav::Audio>,
+    soundtrack: Option<&mut crate::wav::Audio>,
     reference_start: f64,
     midi_onsets: &[(f64, f32)],
     span: f64,
 ) -> Result<f64, String> {
     let Some(soundtrack) = soundtrack else { return Ok(0.0) };
+    let clean_onsets = crate::align::audio_onsets(soundtrack)?;
 
     // Most robust: the take\'s own recording, stamped to the same clock as the
     // notes. Fall through only if it is missing or too short to lock onto.
     if let Some(recorded) = recorded {
-        let reference = crate::wav::read(recorded)?;
-        if let Some(found) = crate::align::align(&reference, reference_start, soundtrack) {
+        let mut reference = crate::wav::read(recorded)?;
+        let reference_onsets = crate::align::audio_onsets(&mut reference)?;
+        if let Some(found) = crate::align::align(&reference_onsets, reference_start, &clean_onsets)
+        {
             eprintln!(
                 "aligned audio to the take\'s recording: soundtrack starts at \
                  {:.3}s (confidence {:.2})",
@@ -368,7 +371,7 @@ fn align_replacement(
 
     // No usable recording: line the bounce up against the MIDI note onsets.
     // Great for clear attacks; soft or legato onsets match weakly, so say so.
-    match crate::align::align_to_notes(midi_onsets, span, soundtrack) {
+    match crate::align::align_to_notes(midi_onsets, span, &clean_onsets) {
         Some(found) if found.confidence >= 0.25 => {
             eprintln!(
                 "aligned audio to the MIDI note onsets: soundtrack starts at \
@@ -518,7 +521,7 @@ fn export(args: Args) -> Result<(), String> {
             recorded.clone()
         }
     };
-    let audio = audio_path.as_deref().map(crate::wav::read).transpose()?;
+    let mut audio = audio_path.as_deref().map(crate::wav::read).transpose()?;
 
     if args.playhead && audio.is_none() {
         eprintln!(
@@ -555,7 +558,7 @@ fn export(args: Args) -> Result<(), String> {
         Align::Auto if !is_replacement => reference_start,
         Align::Auto => align_replacement(
             recorded.as_deref(),
-            audio.as_ref(),
+            audio.as_mut(),
             reference_start,
             &midi_onsets,
             take.duration(),
@@ -623,7 +626,7 @@ fn export(args: Args) -> Result<(), String> {
 
     let mut replay = Replay::new(take);
     let mut done = 0u64;
-    let rendered = render::render(&mut replay, audio.as_ref(), &settings, appearance, |frame| {
+    let rendered = render::render(&mut replay, audio.as_mut(), &settings, appearance, |frame| {
         if !sink.push(frame)? {
             // ffmpeg closed the pipe (e.g. -shortest, the soundtrack ending
             // before the visuals). Stop feeding; finish() below reads whether
