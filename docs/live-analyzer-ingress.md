@@ -78,3 +78,63 @@ It now follows the correction through a full newly silent FFT window and recover
 checks strict timestamp order,
 compares every incremental aggregate with a fresh complete-history fold,
 and covers exact equality with the old tail.
+
+## Cost measurements — 2026-09-09
+
+A quiet-window native CPU probe ran on an 8-core Apple M1 Pro with Rust 1.92.0.
+The scratch executable used `rustc -O` and the repository's compiled dependencies (dev profile opt-level 2,
+dependencies opt-level 3).
+It compared the old ring publication plus per-sample pop into reusable scratch with the new publication plus bulk copy,
+using mono/stereo callbacks of 32,
+128,
+512 and 2048 frames and one/eight callbacks per drain.
+Queues and scratch were preallocated on both sides to measure steady state.
+Each case ran 10000 iterations;
+a counting allocator observed zero publication/drain allocations in every case.
+These are synthetic in-process CPU costs,
+not host callback scheduling or display latency measurements.
+The original callback's latest-channel atomic store was outside the baseline probe.
+
+Representative stereo results,
+with eight callbacks per drain:
+
+| Callback frames | Publication p50 old → new | Publication p99 old → new | Raw drain p50 old → new | Raw drain p99 old → new |
+| --- | --- | --- | --- | --- |
+| 128 | 0.333 → 0.343 µs | 0.447 → 0.416 µs | 7.208 → 0.208 µs | 15.041 → 0.292 µs |
+| 512 | 1.291 → 1.333 µs | 3.151 → 2.864 µs | 28.834 → 0.667 µs | 57.083 → 1.416 µs |
+
+The reduced raw drain cost comes from bulk copying instead of per-sample ring pops.
+Copy volume is unchanged:
+one float written to the ring and one copied to scratch per retained channel sample (384000 bytes/s per copy at 48 kHz stereo).
+`size_of::<Block>()` measured 48 bytes,
+so 4096 descriptors add 196608 bytes (192 KiB).
+The sample ring remains 512 KiB;
+scratch now allocates its bounded 512 KiB eagerly instead of growing as before.
+This is additional metadata memory,
+not a memory saving.
+
+A separate probe included the full public analyzer feed after draining,
+so the new per-descriptor analyzer setup was inside the measurement.
+Both sides used the default 8192-frame window,
+stereo power combination and the same continuous source grid at 48 kHz.
+Each case warmed 100 drains and timed 400 further drains.
+Publication,
+note mapping,
+window scheduling and rendering were excluded from this second measurement.
+The small single-callback median often contains no FFT;
+the tails and grouped drains are more informative.
+
+| Frames × callbacks per drain | Full drain p50 old → new | Full drain p95 old → new | Full drain p99 old → new |
+| --- | --- | --- | --- |
+| 128 × 1 | 0.0021 → 0.0015 ms | 0.172 → 0.233 ms | 0.213 → 0.267 ms |
+| 128 × 8 | 0.471 → 0.462 ms | 0.576 → 0.531 ms | 0.644 → 0.608 ms |
+| 512 × 1 | 0.171 → 0.159 ms | 0.352 → 0.346 ms | 0.403 → 0.399 ms |
+| 512 × 8 | 1.751 → 1.729 ms | 1.923 → 1.958 ms | 2.068 → 2.163 ms |
+
+Full-path tails are mixed,
+so these single paired CPU runs do not establish a general analyzer speedup or regression.
+No end-to-end DAW FPS,
+frame-time tail or input-to-display latency claim follows from them.
+No native DAW comparison was run and the shared plugin slot was not changed.
+The implementation adds no waiting/batching stage;
+its timestamp behavior improves retained delayed audio while actual delivery latency still depends on the existing host and display schedules.
