@@ -372,7 +372,10 @@ impl Hub {
         }
         for slot in 0..TUNERS {
             let row = session.row(slot as u8);
-            let live = row.held();
+            // A second Harmonigraph holds no rings, so a row a Tune holds is
+            // not one it sequences. Calling it live would publish an empty
+            // snapshot for a source this instance has never seen.
+            let live = self.ends.is_some() && row.held();
             if !live && self.rows[slot].live {
                 self.sequencer.release_source(slot as u8, sample);
                 self.rows[slot].state.clear();
