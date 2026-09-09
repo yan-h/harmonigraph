@@ -492,3 +492,91 @@ fn a_take_lane_gap_owes_every_source_its_own_snapshot() {
     drop(phrase);
     std::fs::remove_dir_all(&directory).unwrap();
 }
+
+/// Custom axis sizes go through the same score, and the player's own attack
+/// expression is preserved beside the correction rather than replaced by it.
+#[test]
+fn production_musical_nonjust_axes_select_locally_and_preserve_attack_expression() {
+    let _scope = crate::test_scope::enter();
+    let mut phrase = Phrase::new();
+    configure(
+        &phrase.hub,
+        Tuning { three: 720_000_000, five: 360_000_000, seven: 960_000_000, ..Tuning::just() },
+    );
+    phrase.idle();
+    phrase
+        .step([vec![note(1, 0, 63, 0, true), expression(1, 0.375, 0)], vec![], vec![]], [0, 1, 2]);
+    let output = phrase.idle();
+    let voice = phrase.voice(0, 63, 0);
+    assert!(voice.attack_node.is_some());
+    assert_ne!(voice.decision, 0);
+    assert_eq!(voice.player_tuning, 0.375);
+    assert_eq!(voice.pitch_microcents, 6_337_500_000 + voice.frozen_offset_microcents);
+    assert!(output[0].iter().any(|(_, event)| matches!(event, Event::Expression { .. })));
+    phrase.release_all();
+}
+
+/// The other half of the lane contract. A lane that refuses a snapshot must
+/// not hold back the lane that would take it, and must not spend the identity
+/// it refused: a retry under an id the other lane has already seen is dropped
+/// as a duplicate, silently. The fixture stops draining the display and keeps
+/// draining the take, so the refusal is on the display and the take is whole.
+#[test]
+fn a_snapshot_one_lane_refused_does_not_freeze_the_other_lanes_identity() {
+    use harmonigraph_take::CanonicalRecord;
+    let _scope = crate::test_scope::enter();
+    let (recorder, mut capture) = harmonigraph_record::testing::channel();
+    crate::configuration::inject_recorder(recorder);
+    let mut phrase = Phrase::new();
+    capture.arm();
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-partial-frame-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("partial.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    // Each Reset is a cut, and a cut owes every row a fresh snapshot on both
+    // lanes. Well past SNAPSHOT_SLOTS, so the display is refusing long before
+    // the end while the writer keeps up.
+    const RESETS: usize = 30;
+    for _ in 0..RESETS {
+        phrase.hub.shared().request_reset();
+        phrase.hub.main();
+        for _ in 0..4 {
+            phrase.idle();
+            writer.drain(&mut capture);
+        }
+    }
+    writer.drain(&mut capture);
+    let of_source = |records: &[CanonicalRecord], source: u64| -> Vec<u64> {
+        records
+            .iter()
+            .filter_map(|record| match record {
+                CanonicalRecord::Baseline(frame) => frame.baseline().ok(),
+                _ => None,
+            })
+            .filter(|frame| frame.source.0 == source)
+            .map(|frame| frame.id)
+            .collect()
+    };
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let written = of_source(&take.events, 1);
+    let displayed = of_source(&capture.display_events(), 1);
+    assert!(
+        displayed.len() < RESETS,
+        "the fixture must actually reach a refusal on the display: {} of {RESETS}",
+        displayed.len()
+    );
+    assert!(
+        written.len() >= RESETS,
+        "every refresh the row owed reached the take: {} of {RESETS}",
+        written.len()
+    );
+    assert!(
+        written.windows(2).all(|pair| pair[1] > pair[0]),
+        "each one under a fresh identity, so none is deduplicated away"
+    );
+    phrase.release_all();
+    drop(writer);
+    drop(phrase);
+    std::fs::remove_dir_all(&directory).unwrap();
+}
