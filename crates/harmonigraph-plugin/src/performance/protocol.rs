@@ -354,11 +354,15 @@ pub enum Control {
         cut: u64,
     },
     /// Callback join fixes the last actually accepted output, even when a
-    /// missing physical release still pins musical credit. No sample coverage.
+    /// physical release is unknown. Allows destruction settlement after the
+    /// final facts are applied, without claiming a musical seal or coverage.
     ProducerJoined {
         incarnation: u64,
         epoch: u64,
         cut: u64,
+        /// Last captured input serial. Authorizes disposal of this destroyed
+        /// producer's input, not receipt of its copies or extra coverage.
+        input_cut: u64,
         unknown_wire: bool,
     },
     Detach {

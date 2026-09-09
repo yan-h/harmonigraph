@@ -1655,23 +1655,8 @@ fn overlapping_setup_preparation_refuses_the_actual_restore_before_parameter_or_
 }
 
 #[test]
-fn sixty_four_unresolved_retired_sources_refuse_next_registration_without_eviction() {
+fn sixty_four_destroyed_sources_return_capacity_without_claiming_wire_termination() {
     let _scope = crate::test_scope::enter();
-    const CHILD: &str = "HARMONIGRAPH_RETIRED_CAPACITY_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        // This fixture intentionally leaves all counted retired owners pinned.
-        // A separate actual test process preserves normal suite independence.
-        let result = std::process::Command::new(std::env::current_exe().unwrap())
-            .arg("performance::tests::sixty_four_unresolved_retired_sources_refuse_next_registration_without_eviction")
-            .arg("--exact").arg("--nocapture").env(CHILD, "1").output().unwrap();
-        assert!(
-            result.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&result.stdout),
-            String::from_utf8_lossy(&result.stderr)
-        );
-        return;
-    }
     let mut hubs = Vec::new();
     let mut sessions = Vec::new();
     for _ in 0..4 {
@@ -1694,24 +1679,42 @@ fn sixty_four_unresolved_retired_sources_refuse_next_registration_without_evicti
         }
         hub.run(64, vec![], None);
         for source in &sources {
+            // Leave an ordinary Note-Off queued as well as emergency debt.
+            // While live, refusing every output still retains all credits.
+            ACCEPTANCE_SCRIPT.with(|script| *script.borrow_mut() = vec![false; 640]);
+            let refused = source.run(128, vec![note(1, 0, 60, 0, false)], None);
+            assert!(refused.values.is_empty());
+            assert!(!refused.rejected.is_empty());
+            assert!(source.source_snapshot().pending != 0);
             source.main();
         }
-        drop(sources); // callback join does not prove these 16 downstream notes terminated
-        hub.run(128, vec![], None);
-        hub.main();
         assert_eq!(session.credits.load(Ordering::Acquire), 16);
+        drop(sources); // ownership can end while downstream wire state remains unknown
+        for raw in (128..640).step_by(64) {
+            hub.run(raw, vec![], None);
+            hub.main();
+        }
+        assert_eq!(session.credits.load(Ordering::Acquire), 0);
+        let wrapper = unsafe {
+            &*((*hub.plugin)
+                .plugin_data
+                .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+        };
+        assert!(wrapper.test_inspect_plugin(|plugin| {
+            let hub = plugin.aggregation.as_ref().unwrap();
+            hub.test_joined_rows().iter().all(|row| row.1 == Some(1) && row.2 && row.3 == 1)
+                && (0..16).all(|slot| hub.test_row_receiver(slot, 0).1 == 1)
+        }));
         sessions.push(session);
         hubs.push(hub);
     }
-    assert_eq!(registry::global().lock().unwrap().test_counts(), (4, 64, 64));
-    let refused = Device::aggregation(true);
-    assert!(refused.shared().registration().is_none());
-    assert_eq!(
-        refused.shared().source.as_ref().unwrap().status.load(Ordering::Acquire),
-        registry::OVERCAPACITY
-    );
-    assert_eq!(registry::global().lock().unwrap().test_counts(), (4, 64, 64));
-    assert!(sessions.iter().all(|session| session.credits.load(Ordering::Acquire) == 16));
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (4, 0, 0));
+    let next = Device::aggregation(true);
+    assert!(next.shared().registration().is_some());
+    assert!(sessions.iter().all(|session| session.credits.load(Ordering::Acquire) == 0));
+    drop(next);
+    drop(hubs);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
 }
 
 #[test]
@@ -1893,8 +1896,8 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
         }
         return;
     }
-    // Unknown wire state intentionally pins its musical owner after the actual
-    // recording stream closes. Each case owns a separate process.
+    // Every mode must preserve its exact accepted history and report unknown
+    // wire state even though destruction now reclaims the musical owner.
     let mode: usize =
         std::env::var("HARMONIGRAPH_JOINED_RECORDING_CHILD").unwrap().parse().unwrap();
     let unknown_held = mode == 1;
@@ -1993,7 +1996,7 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
     };
     wait_until(|| writer.finished());
     assert_eq!(writer.failed(), unknown_wire);
-    assert_eq!(session.credits.load(Ordering::Acquire), usize::from(unknown_held));
+    assert_eq!(session.credits.load(Ordering::Acquire), 0);
     let file = std::fs::read_dir(&directory)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -2032,10 +2035,7 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
         }
     }
     drop(source);
-    assert_eq!(
-        registry::global().lock().unwrap().test_counts(),
-        if unknown_wire { (1, 1, 1) } else { (0, 0, 0) }
-    );
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
     std::fs::remove_dir_all(directory).unwrap();
 }
 

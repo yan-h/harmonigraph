@@ -3858,3 +3858,168 @@ fn production_destroying_a_tune_with_an_unreached_toggle_still_reclaims_its_entr
     drop(hub);
     assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
 }
+
+#[test]
+fn production_destruction_settles_held_direct_without_fabricating_releases() {
+    destruction_settlement(true);
+}
+
+#[test]
+fn production_destruction_settles_held_pedal_without_fabricating_releases() {
+    destruction_settlement(false);
+}
+
+#[test]
+fn production_destroyed_empty_toggle_disposes_its_final_input_at_the_frozen_front() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    source.run_format(1536, vec![source.participation(false, 0)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    for raw in [2048, 2560] {
+        assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let setup::Routing::Source(setup) = source.shared().value().routing else { unreachable!() };
+    source.configure_format(setup.selected.unwrap(), true, Calibration { offset: 0 });
+    assert!(source.run_format(3072, vec![], None, None, 512).values.is_empty());
+    hub.run_format(3072, vec![], None, None, 512);
+    let final_input = source.source_snapshot().input_cut;
+    let (coverage, covered_input) = inspect_hub(&hub, |h| h.test_input_row(0).3.unwrap());
+    let inputs = inspect_hub(&hub, |h| h.test_inputs(1));
+    assert_eq!((coverage.through, covered_input, final_input), (3584, 1, 2));
+    assert_eq!(inputs.len(), 1);
+    assert_eq!((inputs[0].sample, inputs[0].serial), (coverage.through, final_input));
+    assert!(matches!(
+        inputs[0].kind,
+        crate::performance::protocol::CaptureKind::Participation(true)
+    ));
+    let snapshot = source.source_snapshot();
+    assert_eq!(
+        (snapshot.held, snapshot.note_off_owed, snapshot.emergency, snapshot.faults),
+        (0, 0, 0, 0)
+    );
+    assert!(!snapshot.pedals_held);
+    assert!(inspect_source(&source, |s| s
+        .state
+        .channels()
+        .iter()
+        .all(|ch| ch.pitch_bend.is_none())));
+
+    // A live source still needs coverage strictly beyond this sample.
+    hub.run_format(3584, vec![], None, None, 512);
+    hub.main();
+    assert_eq!(inspect_hub(&hub, |h| h.test_inputs(1)).len(), 1);
+    assert_eq!(inspect_hub(&hub, |h| h.test_joined_rows()[0].1), None);
+    drop(source);
+    for raw in (4096..8192).step_by(512) {
+        hub.run_format(raw, vec![], None, None, 512);
+        hub.main();
+    }
+    let joined = inspect_hub(&hub, |h| h.test_joined_rows()[0]);
+    let terminal_cut = inspect_hub(&hub, |h| h.test_row_identity(0).terminal_cut);
+    let pending = inspect_hub(&hub, |h| h.test_inputs(1)).len();
+    let counts = registry::global().lock().unwrap().test_counts();
+    drop(hub);
+    assert_eq!((joined.1, joined.2, joined.3), (Some(0), false, 0));
+    assert_eq!(terminal_cut, Some(final_input));
+    assert_eq!(pending, 0, "destruction disposes the final input without inventing coverage");
+    assert_eq!(counts, (1, 0, 0));
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
+
+fn destruction_settlement(direct: bool) {
+    let _scope = crate::test_scope::enter();
+    use harmonigraph_take::{CanonicalRecord, NoteKind};
+    let directory = std::env::temp_dir()
+        .join(format!("harmonigraph-destruction-{}-{direct}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let (recorder, control) = harmonigraph_record::channel();
+    let writer = harmonigraph_record::testing::worker_probe(&control, directory.clone());
+    crate::configuration::inject_recorder(recorder);
+    let (hub, source) = production_pair();
+    control.start(44100.0, String::new(), false);
+    source.run_format(1536, vec![], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    source.run_format(
+        2048,
+        if direct { vec![] } else { vec![raw_midi([0xb0, 64, 127], 0)] },
+        None,
+        None,
+        512,
+    );
+    hub.run_format(
+        2048,
+        if direct { vec![note(1, 0, 60, 0, true)] } else { vec![] },
+        None,
+        None,
+        512,
+    );
+    source.run_format(2560, vec![], None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    if direct {
+        assert_eq!(inspect_hub(&hub, |hub| hub.direct.state.count()), 1);
+    } else {
+        assert!(source.source_snapshot().pedals_held);
+    }
+    // No output callback follows either destroy. Deletion is not proof
+    // that the downstream instrument released the note or pedal.
+    drop(control);
+    drop(hub);
+    drop(source);
+    wait_until(|| writer.finished());
+    assert!(writer.failed());
+    let file = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension().is_some_and(|extension| extension == harmonigraph_take::EXTENSION)
+        })
+        .unwrap();
+    let take = harmonigraph_take::Take::read(&file).unwrap();
+    assert!(take.incomplete.is_some(), "unknown wire state survives reclamation");
+    let notes: Vec<_> = take
+        .events
+        .iter()
+        .filter_map(|record| match record {
+            CanonicalRecord::Delta(delta) => Some(delta),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notes.len(), usize::from(direct));
+    if direct {
+        assert!(matches!(notes[0].event.kind, NoteKind::On { .. }));
+    }
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn production_replacement_keeps_its_onset_when_subblocks_spend_the_visit_budget() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    source.run_format(1536, vec![], None, None, 512);
+    let established = hub.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
+    assert_eq!(established.values.iter().filter(|(_, event)| event.attack().is_some()).count(), 1);
+    source.run_format(2048, vec![], None, None, 512);
+    // These subblocks and raw clocks leave enough work budget to prepare the
+    // choke, but its completion spends the last visit before the paired onset.
+    let mut events: Vec<_> =
+        (0..23).map(|i| transport(1 + 12 * i, 120.0 + f64::from(i % 2))).collect();
+    events.extend((0..37).map(|_| raw_midi([0xf8, 0, 0], 479)));
+    events.push(note(2, 0, 60, 480, true));
+    let output = hub.run_format(2048, events, None, None, 512);
+    let musical: Vec<_> = output
+        .values
+        .iter()
+        .filter(|(_, event)| event.attack().is_some() || event.release())
+        .copied()
+        .collect();
+    assert_eq!(musical.len(), 2, "a replacement must not choke its predecessor alone");
+    assert_eq!((musical[0].0, musical[1].0), (480, 480));
+    assert!(musical[0].1.release());
+    assert!(musical[1].1.attack().is_some());
+    assert_eq!(inspect_hub(&hub, |h| h.direct.test_snapshot().faults), 0);
+    drop(source);
+    drop(hub);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
