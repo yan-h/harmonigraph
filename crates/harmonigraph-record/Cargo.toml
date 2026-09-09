@@ -25,3 +25,6 @@ harmonigraph-take = { workspace = true }
 
 rtrb = { workspace = true }
 parking_lot = { workspace = true }
+
+[dev-dependencies]
+nice-assert-no-alloc = "1.0"

@@ -847,3 +847,144 @@ fn a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports() {
     assert!(!fence.failed.load(Ordering::Acquire), "a hole warns, it does not refuse");
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }
+
+#[test]
+fn a_marker_flush_failure_refuses_stop_and_render() {
+    let directory = path("marker-flush-failure").parent().unwrap().to_path_buf();
+    let (mut recorder, control) = channel();
+    recorder.enable_configuration();
+    recorder.enable_canonical();
+    let fence = control.fence.clone();
+    *fence.test_directory.lock() = Some(directory.clone());
+    *fence.test_marker_failure.lock() = Some(1);
+    let _resume_on_panic = WorkerPause(fence.clone());
+    fence.worker_after_empty.enabled.store(true, Ordering::Release);
+    wait_for(&fence.worker_after_empty.entered);
+    control.start(48000.0, String::new(), false);
+    assert!(recorder.is_armed());
+    let address = RecordAddress { epoch: 1, pass: 1 };
+    let route = publication::Route { address: Some(address), time_offset: 0.0 };
+    for i in 0..publication::PUBLICATION_RING - 1 {
+        recorder
+            .publish_note(
+                NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into(),
+                route,
+            )
+            .take
+            .unwrap();
+    }
+    assert_eq!(
+        recorder.publish_note(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(), route).take,
+        Err(publication::PublishError::Lost),
+    );
+    let config = harmonigraph_take::RenderConfig {
+        renderer_path: directory.join("no-such-renderer").display().to_string(),
+        ..Default::default()
+    };
+    control.stop(RenderRequest::from_config(&config));
+    assert!(!recorder.is_armed());
+    fence.worker_after_empty.enabled.store(false, Ordering::Release);
+    wait_for(&fence.worker_stop_processed);
+    assert!(fence.failed.load(Ordering::Acquire), "marker I/O failure must refuse export");
+    wait_for(&fence.worker_failure_accounted);
+    assert!(control.last_take().is_none(), "failed marker must not finalise as a complete take");
+    let file = worker_take(&directory);
+    let take = harmonigraph_take::Take::read(&file).unwrap();
+    assert_eq!(take.notes().count(), publication::PUBLICATION_RING - 1);
+    assert!(
+        !std::fs::read_to_string(&file)
+            .unwrap()
+            .lines()
+            .any(|line| line.starts_with("Incomplete(")),
+        "the injected flush really failed to write the marker",
+    );
+    assert!(matches!(take.events.last(), Some(harmonigraph_take::CanonicalRecord::Gap(_))));
+    let cause = control.status();
+    assert!(cause.contains("cannot write incomplete marker"), "{cause}");
+    assert!(cause.contains(&file.display().to_string()), "{cause}");
+    assert!(cause.contains("Bad file descriptor"), "the OS write error remains visible: {cause}");
+    control.tick(false, 0);
+    assert_eq!(control.status(), cause, "UI refresh must retain the original I/O cause");
+    assert!(!cause.contains("could not run"), "the renderer must not be launched");
+    drop(recorder);
+    drop(control);
+    wait_for(&fence.worker_finished);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn carried_marker_failure_visits_retained_passes_and_keeps_the_first_error() {
+    let file = path("carried-marker-failure");
+    let status = Mutex::new(String::new());
+    let mut current = Open::create(Default::default(), file.clone(), 3, None, &status).unwrap();
+    current.fail_marker_on_pass = Some(3);
+    for pass in 1..3 {
+        let mut old = Open::create(Default::default(), file.clone(), pass, None, &status).unwrap();
+        old.fail_marker_on_pass = Some(pass);
+        current.retained.push(old);
+    }
+    let mut open = Some(current);
+    let mut fanout = CanonicalFanout { unplaced: Some(Default::default()), ..Default::default() };
+    let fence = RecordFence::default();
+    let failure = FailureAccount::default();
+    let (_publisher, mut consumer) = publication::channel();
+    fanout.drain(&mut consumer, &mut open, &fence, &failure);
+    assert!(fence.failed.load(Ordering::Acquire));
+    let cause = fence.failure_message.lock().clone().unwrap();
+    assert!(cause.contains("capture-3.take"), "first error must survive retained errors: {cause}");
+    let current = open.as_ref().unwrap();
+    for pass in std::iter::once(current).chain(current.retained.iter()) {
+        assert_eq!(pass.fail_marker_on_pass, None, "every retained writer must be visited");
+        assert!(pass.incomplete.is_none());
+        assert!(harmonigraph_take::Take::read(pass.path()).unwrap().incomplete.is_none());
+    }
+    failure.account(&mut open, 1, &status, Some(&fence), Default::default());
+    assert_eq!(fence.failure_message.lock().as_ref(), Some(&cause));
+    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn rollover_marker_failure_keeps_the_old_owner_until_failure_accounting() {
+    let file = path("rollover-marker-failure");
+    let status = Mutex::new(String::new());
+    let mut current = Open::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+    current.epoch = 1;
+    current.mark_incomplete(Default::default()).unwrap();
+    current.fail_marker_on_pass = Some(2);
+    let mut open = Some(current);
+    let fence = RecordFence::default();
+    fence.intent.store(3, Ordering::Release);
+    let failure = FailureAccount::default();
+    let (mut producer, mut consumer) = rtrb::RingBuffer::new(1);
+    producer.push(Entry::NewPass).unwrap();
+    drain_with_boundaries(&mut consumer, None, &mut open, &status, Some(&fence), &failure, |_| {});
+    assert!(fence.failed.load(Ordering::Acquire));
+    assert!(failure.contains(1), "the previous epoch owner must reach failure accounting");
+    assert!(open.is_none());
+    assert!(fence.failure_message.lock().as_ref().unwrap().contains("capture-2.take"));
+    assert!(harmonigraph_take::Take::read(&file).unwrap().incomplete.is_some());
+    assert!(harmonigraph_take::Take::read(file.with_file_name("capture-2.take"))
+        .unwrap()
+        .incomplete
+        .is_none());
+    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn failure_accounting_latches_its_marker_io_error() {
+    let file = path("accounting-marker-failure");
+    let status = Mutex::new(String::new());
+    let mut current = Open::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+    current.fail_marker_on_pass = Some(1);
+    let mut open = Some(current);
+    let fence = RecordFence::default();
+    fence.fail(); // An audio-thread failure has no allocated message yet.
+    FailureAccount::default().account(&mut open, 1, &status, Some(&fence), Default::default());
+    assert_eq!(*status.lock(), CONFIGURATION_FAILURE);
+    let cause = fence.failure_message.lock().clone().unwrap();
+    assert!(cause.contains("cannot write incomplete marker"), "{cause}");
+    assert!(cause.contains(&file.display().to_string()), "{cause}");
+    assert!(cause.contains("Bad file descriptor"), "{cause}");
+    assert!(open.is_none());
+    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}
