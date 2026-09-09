@@ -300,7 +300,12 @@ impl Direct {
             } else {
                 Some(event)
             };
-            if let Some(delta) = applied.and_then(|event| self.state.apply(event, stamp)) {
+            let delta = applied.and_then(|event| self.state.apply(event, stamp));
+            if self.state.pitch_changed {
+                self.recovery = Lanes::both(true);
+                self.sequence = sequence;
+            }
+            if let Some(delta) = delta {
                 self.sequence = sequence;
                 if self.pending.push(delta.into()).is_err() {
                     self.lost = true;

@@ -177,6 +177,8 @@ pub struct SharedState {
     pub(crate) config_reducer: harmonigraph_core::configuration::ConfigReducer,
     /// Offline replay supplies recorded resolved boundaries, never frame-driven detection.
     pub replayed_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
+    pub neighbourhood: crate::adaptive::Neighbourhood,
+    pub adaptive_policy: harmonigraph_core::configuration::PolicyConfig,
     pub configuration_status: u32,
     pub configuration_pending: bool,
     /// Held pitch classes the last learn ran against (change detection).
@@ -717,6 +719,8 @@ impl SharedState {
             background: harmonigraph_scene::skin::well_color(),
             learn_active: false,
             config_reducer: Default::default(),
+            adaptive_policy: Default::default(),
+            neighbourhood: Default::default(),
             replayed_configuration: None,
             configuration_status: 0,
             configuration_pending: false,

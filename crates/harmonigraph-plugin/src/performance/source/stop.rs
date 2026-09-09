@@ -108,39 +108,11 @@ impl Source {
         }
     }
 
-    /// A marker cell leaves the queue exactly two ways: output reaches it, or
-    /// a stronger reset disposes it where it stands. Both come through here,
-    /// because the pitch obligation a participation toggle carries belongs to
-    /// the toggle and not to whichever of the two wins.
-    ///
-    /// The losing case is real: `apply_setup` captures the marker for a
-    /// restored participation value and, when that same restore also changes
-    /// the routing, immediately calls `stop()`, whose cut covers the marker's
-    /// own serial. The local mode has already moved, so nothing else would
-    /// ever recentre the wire and every adaptive note afterwards would sound
-    /// at the bend the Off phrase left behind.
+    /// Unlink a consumed or cancelled marker. Player pitch survives the toggle;
+    /// note and pedal cleanup retain their existing stop-frontier ownership.
     pub(super) fn retire_marker(&mut self, pending: Pending) {
         let channel::Role::Stop { previous, next } = pending.channel.role else { unreachable!() };
         self.unlink_stop(previous, next);
-        if matches!(pending.event, Event::Participation(_)) {
-            self.arm_pitch_center();
-        }
-    }
-
-    /// A participation toggle output has not reached. Whichever way its cell
-    /// leaves the queue, `retire_marker` will owe the wire a recentre for it,
-    /// so a teardown that can no longer send one has to account for it before
-    /// it publishes what it left behind.
-    pub(super) fn participation_marker_queued(&self) -> bool {
-        let mut index = self.stops.head;
-        while let Some(pending) = self.pending.at(usize::from(index)) {
-            if matches!(pending.event, Event::Participation(_)) {
-                return true;
-            }
-            let channel::Role::Stop { next, .. } = pending.channel.role else { unreachable!() };
-            index = next;
-        }
-        false
     }
 
     #[cfg(test)]

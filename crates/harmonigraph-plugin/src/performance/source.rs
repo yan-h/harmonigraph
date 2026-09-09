@@ -36,16 +36,8 @@ pub(super) const NONE: u16 = u16::MAX;
 /// Records one input event can address: at most every held note plus the
 /// controller or onset itself. Copies are emitted one per addressed target.
 pub(super) const CAPTURE_GROUP: usize = 68;
-/// The per-channel wire state a reset may owe: sustain, sostenuto and soft
-/// neutralized, and the pitch bend recentered. `channel_reset` holds one
-/// pending bit and one staged bit for each, so this is half of a `u8`.
-pub(super) const CHANNEL_RESETS: usize = 4;
-/// The recentering slot. Unlike the three pedals it is never armed by
-/// `arm_release_debt`, because ending a phrase does not change who owns
-/// pitch; only a participation toggle does.
-const PITCH_RESET: usize = 3;
-/// The 14-bit MIDI pitch bend that means no bend.
-const BEND_CENTER: u16 = 0x2000;
+/// Reset owes the three pedal releases. Player pitch is retained.
+pub(super) const CHANNEL_RESETS: usize = 3;
 #[cfg(test)]
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
@@ -130,6 +122,8 @@ pub(super) struct Life {
     pub(super) generation: u64,
     pub(super) midi: bool,
     pub(super) adaptive: bool,
+    pub(super) channel_pitch: i64,
+    pub(super) policy_reset: i64,
     pub(super) assignment: Assignment,
     pub(super) assignment_held: bool,
     pub(super) note_off_owed: bool,
@@ -243,11 +237,6 @@ pub struct Source {
     cancel_cursor: Option<usize>,
     pub faults: u32,
     reset_armed: bool,
-    /// A participation toggle's recenter, retired with its marker while the
-    /// lease it belonged to was already sealed. Held rather than armed: a seal
-    /// refuses fresh output, and the bend it would neutralize is on the wire
-    /// rather than in the lease.
-    pitch_center_owed: bool,
     pub participating: bool,
     timing_failed: bool,
     generation: u64,
@@ -268,6 +257,9 @@ pub struct Source {
     sealed_ack: Option<u64>,
     stopping: bool,
     transport_playing: bool,
+    policy_transport: Option<(i64, i64, bool)>,
+    policy_reset: i64,
+    input_pitch: [harmonigraph_core::policy::channel::ChannelPitch; 16],
     producer_joined: bool,
     joined_published: bool,
     joined_unknown_wire: bool,
@@ -459,7 +451,6 @@ impl Source {
             cancel_cursor: None,
             faults: 0,
             reset_armed: false,
-            pitch_center_owed: false,
             participating: true,
             timing_failed: false,
             generation: 1,
@@ -475,6 +466,9 @@ impl Source {
             sealed_ack: None,
             stopping: false,
             transport_playing: false,
+            policy_transport: None,
+            policy_reset: i64::MIN,
+            input_pitch: [Default::default(); 16],
             producer_joined: false,
             joined_published: false,
             joined_unknown_wire: false,
@@ -619,15 +613,7 @@ impl Source {
     /// assertion. Retirement never invokes a host or increments sequence.
     pub fn join_producer(&mut self) {
         assert!(!self.producer_joined);
-        // A participation marker still standing in the queue is disposed after
-        // this, by the retirement pump, and the recentre its disposal owes can
-        // no longer reach output. Resolve it here, into the evidence this
-        // publishes, rather than leaving it to arm debt nothing will clear:
-        // the bend stays on the wire either way, and that is exactly what
-        // unknown joined wire state means.
-        self.joined_unknown_wire = self.unknown_joined_wire_state()
-            || (self.pitch_center_owed || self.participation_marker_queued())
-                && self.owes_pitch_center();
+        self.joined_unknown_wire = self.unknown_joined_wire_state();
         self.producer_joined = true;
         // This is ownership settlement, not a musical seal: abandon the
         // obligations no callback can deliver, preserving State, the final
@@ -858,13 +844,6 @@ impl Source {
         }
         self.drain_finished();
         self.drain_ready_work();
-        // A recenter the seal refused, now that the lease it waited on has
-        // returned. Placed after the drain because that is where a cancelled
-        // marker is disposed, so an obligation raised this callback is armed
-        // in it rather than in the next one.
-        if self.pitch_center_owed {
-            self.arm_pitch_center();
-        }
         if let Some(session) = self.session() {
             let faults = session.faults.load(Ordering::Acquire)
                 | self.offer.as_ref().map_or(0, |o| {
@@ -963,6 +942,25 @@ impl Source {
             // Observe it only here, in original order: a newer callback's raw
             // flag cannot move the cancellation cut ahead of retained input.
             let playing = transport.flags & (1 << 4) != 0;
+            // This is musical metadata only: no stop or output obligation is
+            // created. A loop/seek clears context immediately before the first
+            // subsequent attack, once across all participating sources.
+            if transport.flags & (1 << 2) != 0 {
+                if let Some(sample) = input.sample {
+                    if let Some((previous_sample, previous_position, was_playing)) =
+                        self.policy_transport
+                    {
+                        let elapsed = sample.saturating_sub(previous_sample) as f64 / self.rate;
+                        let position_change =
+                            transport.song_pos_seconds.saturating_sub(previous_position) as f64
+                                / (1u64 << 31) as f64;
+                        if was_playing && playing && (position_change - elapsed).abs() > 0.002 {
+                            self.policy_reset = sample;
+                        }
+                    }
+                    self.policy_transport = Some((sample, transport.song_pos_seconds, playing));
+                }
+            }
             if self.transport_playing && !playing {
                 let Some(sample) = input.sample else {
                     self.fault(INPUT_FAULT);
@@ -973,27 +971,11 @@ impl Source {
             self.transport_playing = playing;
             return;
         }
-        let Some(mut event) = Event::from_input(input.value) else {
+        let Some(event) = Event::from_input(input.value) else {
             return;
         };
-        if self.participating && self.delay() != 0 {
-            // A PARTICIPATING musical Tune owns pitch. Normalize before capture
-            // so both prospective scoring and factual output see the same
-            // pitch; DIRECT observation still forwards its original input.
-            //
-            // Off owns nothing, so its bend and its per-note tuning are the
-            // player's and go out unchanged. `participating` moves at this
-            // event's own place in the input order, which is what makes the
-            // note after the toggle the first one in the new mode.
-            match &mut event {
-                Event::Expression { kind: 2, value, .. } => *value = 0.0,
-                Event::Midi { data, .. } if data[0] & 0xf0 == 0xe0 => {
-                    data[1] = 0;
-                    data[2] = 64;
-                }
-                _ => {}
-            }
-        }
+        // Player expression reaches capture and output unchanged. The frozen
+        // adaptive correction is composed by assigned_event at emission.
         // A terminal latch rejects new performance. Essential original releases
         // can still discharge an existing physical lifetime.
         if self.faults != 0 && !event.release() {
@@ -1054,6 +1036,9 @@ impl Source {
         } else {
             None
         };
+        if let Event::Midi { port: 0, data, .. } = event {
+            self.input_pitch[usize::from(data[0] & 15)].apply(data);
+        }
         let life = if let Some((id, channel, key, _)) = attack {
             let index = self.free_lives.pop().unwrap();
             self.next_lifetime += 1;
@@ -1077,6 +1062,8 @@ impl Source {
                     generation: self.generation,
                     midi: matches!(event, Event::Midi { .. }),
                     adaptive: self.participating && self.delay() != 0,
+                    channel_pitch: self.input_pitch[usize::from(channel)].microcents(),
+                    policy_reset: self.policy_reset,
                     assignment: Assignment::default(),
                     assignment_held: false,
                     note_off_owed: false,
@@ -1585,48 +1572,6 @@ impl Source {
                 }
             }
         }
-    }
-
-    /// Participating means the Tune owns pitch again, so the wire cannot be
-    /// left holding a bend an Off phrase passed through: every note the Tune
-    /// tunes afterwards would sound at that offset. Recenter the channels
-    /// this Tune has actually bent -- one it never bent, or already left at
-    /// center, owes nothing and costs no event.
-    ///
-    /// Only a participation toggle arms this. Stop and a terminal fault end a
-    /// phrase without changing who owns pitch, and the recenter would be an
-    /// event no reset before this one sent.
-    fn arm_pitch_center(&mut self) {
-        // Past the producer join `Debt` refuses everything this arms, and
-        // `join_producer` has already put the bend into the teardown evidence
-        // instead. That rule is not restated here, deliberately: restating it
-        // per caller is what let the same leak reappear through `fault`.
-        //
-        // Behind the final cut `schedule_emergency` stages nothing, so a bit
-        // armed here would never leave and `output_settled` would wait on it
-        // for good. The obligation outlives the lease, though -- the wire keeps
-        // the bend across the seal -- so it waits rather than being dropped,
-        // and `begin` arms it on the far side.
-        if self.sealed {
-            self.pitch_center_owed = true;
-            return;
-        }
-        self.pitch_center_owed = false;
-        for channel in 0..16 {
-            if self.owes_pitch_center_on(channel) {
-                self.debt.arm(channel, PITCH_RESET);
-            }
-        }
-    }
-
-    /// A channel this Tune has actually bent and has not already recentred.
-    /// One it never bent, or already left at center, owes nothing.
-    fn owes_pitch_center_on(&self, channel: usize) -> bool {
-        self.state.channels()[channel].pitch_bend.is_some_and(|value| value != BEND_CENTER)
-            && !self.debt.staged(channel, PITCH_RESET)
-    }
-    fn owes_pitch_center(&self) -> bool {
-        (0..16).any(|channel| self.owes_pitch_center_on(channel))
     }
 
     fn channel_has_release_debt(&self, channel: u8) -> bool {
@@ -2737,17 +2682,8 @@ impl Source {
             }
         }
     }
-    /// The neutral wire value for one channel reset slot. The three pedals go
-    /// out as their controller at zero; the recenter is the only one that is
-    /// not a CC, and it carries the 14-bit center split the way MIDI does.
+    /// Neutral pedal value; the stop frontier owns these three obligations.
     fn channel_reset_event(channel: u8, bit: usize) -> Event {
-        if bit == PITCH_RESET {
-            return Event::Midi {
-                port: 0,
-                data: [0xe0 | channel, (BEND_CENTER & 0x7f) as u8, (BEND_CENTER >> 7) as u8],
-                flags: 0,
-            };
-        }
         Event::Midi { port: 0, data: [0xb0 | channel, [64, 66, 69][bit], 0], flags: 0 }
     }
     fn prepare_emergency(&mut self) -> bool {
@@ -3122,7 +3058,7 @@ impl Source {
             self.trace.last_output_pitch,
             self.trace.assignments as i64,
             self.trace.decision as i64,
-            i64::from(self.trace.correction),
+            self.trace.correction,
             self.committed_assignment as i64,
             self.sequence as i64,
             self.transfer_cut as i64,
@@ -3223,6 +3159,8 @@ impl Source {
             channel: 0,
             key: 0,
             adaptive: false,
+            channel_pitch: 0,
+            policy_reset: i64::MIN,
         };
         let addressed = |base: Capture, kind: CaptureKind, index: u16, life: Life| Capture {
             kind,
@@ -3231,6 +3169,12 @@ impl Source {
             channel: life.channel,
             key: life.key,
             adaptive: life.adaptive,
+            channel_pitch: life.channel_pitch,
+            policy_reset: if life.policy_reset == i64::MIN {
+                i64::MIN
+            } else {
+                life.policy_reset.saturating_add(self.clock.calibration.offset)
+            },
             ..base
         };
         // A same-key predecessor and every note a channel termination ends

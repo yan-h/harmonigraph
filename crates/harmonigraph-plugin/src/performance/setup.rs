@@ -222,6 +222,7 @@ impl Adoption {
 }
 pub struct Shared {
     pub(super) diagnostics: super::diagnostics::Shared,
+    pub(super) neighbourhood: super::neighbourhood::Published,
     #[cfg(test)]
     pub before_transfer: TestPause,
     #[cfg(test)]
@@ -246,6 +247,9 @@ pub struct Shared {
     pub active_multiplier: AtomicU32,
 }
 impl Shared {
+    pub fn neighbourhood(&self) -> Option<harmonigraph_core::policy::reach::Snapshot> {
+        self.neighbourhood.read()
+    }
     pub fn hub() -> Arc<Self> {
         Self::new(Routing::Hub(HubSetup::default()))
     }
@@ -255,6 +259,7 @@ impl Shared {
     fn new(routing: Routing) -> Arc<Self> {
         Arc::new(Self {
             diagnostics: super::diagnostics::Shared::new(matches!(routing, Routing::Hub(_))),
+            neighbourhood: Default::default(),
             #[cfg(test)]
             before_transfer: TestPause::default(),
             #[cfg(test)]

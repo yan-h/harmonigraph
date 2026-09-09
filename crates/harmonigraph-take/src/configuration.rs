@@ -4,16 +4,69 @@ use harmonigraph_core::configuration::{PolicyConfig, ResolvedConfig, TuningModes
 use harmonigraph_core::{Tempered, Tuning};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PolicyRecord {
     pub version: u32,
-    pub domain: [u16; 3],
-    pub candidate_radius: u32,
-    pub context_radius: u32,
-    pub context_weight: u16,
-    pub history_weight: u16,
-    pub origin_weight: u16,
+    pub radius: u8,
+    pub axes: u8,
+    pub memory: u8,
+    pub harmonic: u16,
+    pub pitch_scale: u16,
+    pub released: u16,
+    pub recency: u16,
+    pub register_floor: u16,
+    pub register_falloff: u16,
+    pub tolerance: u32,
+    pub silence_ms: u32,
+    pub reset_stop: bool,
+    pub reset_loop: bool,
+}
+impl Default for PolicyRecord {
+    fn default() -> Self {
+        PolicyConfig::default().into()
+    }
+}
+impl From<PolicyConfig> for PolicyRecord {
+    fn from(p: PolicyConfig) -> Self {
+        Self {
+            version: p.version,
+            radius: p.radius,
+            axes: p.axes,
+            memory: p.memory,
+            harmonic: p.harmonic,
+            pitch_scale: p.pitch_scale,
+            released: p.released,
+            recency: p.recency,
+            register_floor: p.register_floor,
+            register_falloff: p.register_falloff,
+            tolerance: p.tolerance,
+            silence_ms: p.silence_ms,
+            reset_stop: p.reset_stop,
+            reset_loop: p.reset_loop,
+        }
+    }
+}
+impl From<PolicyRecord> for PolicyConfig {
+    fn from(p: PolicyRecord) -> Self {
+        Self {
+            version: p.version,
+            radius: p.radius,
+            axes: p.axes,
+            memory: p.memory,
+            harmonic: p.harmonic,
+            pitch_scale: p.pitch_scale,
+            released: p.released,
+            recency: p.recency,
+            register_floor: p.register_floor,
+            register_falloff: p.register_falloff,
+            tolerance: p.tolerance,
+            silence_ms: p.silence_ms,
+            reset_stop: p.reset_stop,
+            reset_loop: p.reset_loop,
+        }
+        .sanitize()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -48,15 +101,7 @@ impl ConfigurationRecord {
             tempered: [config.modes.tempered.syntonic, config.modes.tempered.septimal_kleisma],
             auto: config.modes.auto,
             learning: config.modes.learning,
-            policy: PolicyRecord {
-                version: p.version,
-                domain: p.domain,
-                candidate_radius: p.candidate_radius,
-                context_radius: p.context_radius,
-                context_weight: p.context_weight,
-                history_weight: p.history_weight,
-                origin_weight: p.origin_weight,
-            },
+            policy: p.into(),
         }
     }
     pub fn resolved(self) -> ResolvedConfig {
@@ -78,15 +123,7 @@ impl ConfigurationRecord {
                 auto: self.auto,
                 learning: self.learning,
             },
-            policy: PolicyConfig {
-                version: p.version,
-                domain: p.domain,
-                candidate_radius: p.candidate_radius,
-                context_radius: p.context_radius,
-                context_weight: p.context_weight,
-                history_weight: p.history_weight,
-                origin_weight: p.origin_weight,
-            },
+            policy: p.into(),
         }
     }
 }

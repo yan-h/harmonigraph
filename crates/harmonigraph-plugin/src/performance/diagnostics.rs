@@ -344,7 +344,7 @@ pub(super) struct Counts {
     pub last_output_correction: i64,
     pub assignments: u64,
     pub decision: u64,
-    pub correction: i32,
+    pub correction: i64,
     pub last_source: u64,
     pub setup_wait: i64,
     pub publication_wait: i64,

@@ -22,6 +22,7 @@ pub(super) fn configure(hub: &Device, tuning: Tuning) {
             tempered: [Some(false); 2],
             auto: [Some(false); 2],
             learning: Some(false),
+            ..Default::default()
         }))
         .unwrap();
 }
@@ -167,9 +168,8 @@ fn production_musical_setup_is_automatic_when_three_sources_precede_hub_audio() 
 }
 
 #[test]
-fn production_tune_overrides_incoming_pitch_but_preserves_other_expression() {
+fn production_tune_preserves_player_pitch_and_freezes_only_adaptive_correction() {
     let _scope = crate::test_scope::enter();
-    let mut expected = None;
     for incoming in [0.0, -0.12446594] {
         let mut phrase = Phrase::new();
         for (source, key) in [60, 64, 67].into_iter().enumerate() {
@@ -182,14 +182,14 @@ fn production_tune_overrides_incoming_pitch_but_preserves_other_expression() {
         }
         let pitches = std::array::from_fn::<_, 3, _>(|index| {
             let voice = phrase.voice(index, [60, 64, 67][index], 0);
-            assert_eq!(voice.player_tuning, 0.0);
-            (voice.pitch_microcents, voice.attack_node)
+            assert_eq!(voice.player_tuning, incoming);
+            (
+                voice.pitch_microcents,
+                voice.attack_node,
+                voice.frozen_offset_microcents,
+                voice.onset_pitch_microcents,
+            )
         });
-        if let Some(expected) = expected {
-            assert_eq!(pitches, expected, "upstream tuning must not alter adaptive choices");
-        } else {
-            expected = Some(pitches);
-        }
         let Input::Expression(mut pressure) = expression(1, 0.7, 2) else { unreachable!() };
         pressure.expression_id = 6;
         let mut accepted = phrase.step(
@@ -208,13 +208,22 @@ fn production_tune_overrides_incoming_pitch_but_preserves_other_expression() {
         for _ in 0..8 {
             accepted.extend(phrase.idle()[1].iter().copied());
         }
-        assert_eq!(phrase.voice(1, 64, 0).pitch_microcents, pitches[1].0);
+        let after = phrase.voice(1, 64, 0);
+        assert_eq!(after.frozen_offset_microcents, pitches[1].2);
+        assert_eq!(after.onset_pitch_microcents, pitches[1].3);
+        assert_eq!(after.attack_node, pitches[1].1);
+        assert_eq!(after.player_tuning, 0.5);
+        assert!(
+            (after.pitch_microcents - (6_400_000_000 + pitches[1].2 + 50_000_000 + 199_975_585))
+                .abs()
+                <= 2
+        );
         assert!(accepted
             .iter()
             .any(|(_, event)| matches!(event, Event::Expression { kind: 6, value: 0.7, .. })));
         assert!(accepted
             .iter()
-            .any(|(_, event)| matches!(event, Event::Midi { data: [0xe0, 0, 64], .. })));
+            .any(|(_, event)| matches!(event, Event::Midi { data: [0xe0, 127, 127], .. })));
         phrase.release_all();
     }
 }
@@ -449,7 +458,7 @@ fn production_diagnostics_identify_three_sources_and_apply_history_wait() {
         phrase.idle();
     }
     let source_values = phrase.sources[0].shared().diagnostics.source.read().unwrap();
-    assert_eq!(field(SOURCE_FIELDS, &source_values, "last_output_player_mc"), 0);
+    assert_eq!(field(SOURCE_FIELDS, &source_values, "last_output_player_mc"), 50_000_000);
     assert_eq!(
         field(SOURCE_FIELDS, &source_values, "last_output_correction_mc"),
         phrase.voice(0, 60, 0).frozen_offset_microcents
@@ -602,7 +611,7 @@ fn production_musical_ii_v_i_keeps_each_common_tone_through_the_change() {
 }
 
 #[test]
-fn production_musical_released_history_is_source_channel_specific_and_off_clears_it() {
+fn production_musical_new_harmony_replaces_released_memory_across_sources_and_channels() {
     let _scope = crate::test_scope::enter();
     let mut phrase = Phrase::new();
     // C/G establish this Source/channel's E at 5/4, then all three release.
@@ -633,8 +642,8 @@ fn production_musical_released_history_is_source_channel_specific_and_off_clears
     phrase.idle();
     assert_eq!(
         phrase.voice(2, 52, 0).attack_node,
-        Some(LatticePos::new(0, 1, 0)),
-        "release retained the exact key history"
+        Some(LatticePos::new(4, 0, 0)),
+        "the new held D can outweigh released just-E memory"
     );
     assert_eq!(
         phrase.voice(2, 52, 0).assignment.unwrap().revision,
@@ -648,7 +657,7 @@ fn production_musical_released_history_is_source_channel_specific_and_off_clears
     assert_eq!(
         phrase.voice(1, 52, 0).attack_node,
         Some(LatticePos::new(4, 0, 0)),
-        "another Source has no E history"
+        "another Source uses the same shared harmonic context"
     );
     phrase.step([vec![], vec![note(6, 0, 52, 0, false)], vec![]], [0, 1, 2]);
     phrase.idle();
@@ -657,7 +666,7 @@ fn production_musical_released_history_is_source_channel_specific_and_off_clears
     assert_eq!(
         phrase.voice(2, 52, 1).attack_node,
         Some(LatticePos::new(4, 0, 0)),
-        "another channel has no E history"
+        "another channel uses the same shared harmonic context"
     );
     phrase.step([vec![], vec![], vec![note(7, 1, 52, 0, false)]], [0, 1, 2]);
     phrase.idle();
@@ -678,7 +687,7 @@ fn production_musical_released_history_is_source_channel_specific_and_off_clears
 }
 
 #[test]
-fn production_musical_no_candidate_uses_unbent_midi_pitch() {
+fn production_musical_nonjust_axes_select_locally_and_preserve_attack_expression() {
     let _scope = crate::test_scope::enter();
     let mut phrase = Phrase::new();
     configure(
@@ -690,14 +699,11 @@ fn production_musical_no_candidate_uses_unbent_midi_pitch() {
         .step([vec![note(1, 0, 63, 0, true), expression(1, 0.375, 0)], vec![], vec![]], [0, 1, 2]);
     let output = phrase.idle();
     let voice = phrase.voice(0, 63, 0);
-    assert_eq!(voice.attack_node, None);
-    assert_ne!(voice.decision, 0, "NoCandidate is a completed assignment");
-    assert_eq!(voice.frozen_offset_microcents, 0);
-    assert_eq!(voice.player_tuning, 0.0);
-    assert_eq!(voice.pitch_microcents, 6_300_000_000);
-    assert!(output[0]
-        .iter()
-        .any(|(_, event)| matches!(event, Event::Expression { value: 0.0, .. })));
+    assert!(voice.attack_node.is_some());
+    assert_ne!(voice.decision, 0);
+    assert_eq!(voice.player_tuning, 0.375);
+    assert_eq!(voice.pitch_microcents, 6_337_500_000 + voice.frozen_offset_microcents);
+    assert!(output[0].iter().any(|(_, event)| matches!(event, Event::Expression { .. })));
     phrase.release_all();
 }
 
@@ -778,8 +784,7 @@ fn production_musical_a_toggle_drops_the_context_of_what_it_ended() {
 }
 
 #[test]
-fn production_musical_normal_phrase_overrides_bends_and_keeps_old_configuration_and_take_metadata()
-{
+fn production_musical_normal_phrase_preserves_bends_onset_context_and_take_metadata() {
     use harmonigraph_take::CanonicalRecord;
     let _scope = crate::test_scope::enter();
     let (recorder, mut capture) = harmonigraph_record::testing::channel();
@@ -819,7 +824,9 @@ fn production_musical_normal_phrase_overrides_bends_and_keeps_old_configuration_
             assert_eq!(old.frozen_offset_microcents, now.frozen_offset_microcents);
             assert_eq!(old.attack_node, now.attack_node);
             assert_eq!(old.assignment, now.assignment);
-            assert_eq!(now.pitch_microcents, old.pitch_microcents);
+            assert_eq!(now.onset_pitch_microcents, old.onset_pitch_microcents);
+            let bend = if source == 0 && old.note == 48 { 700_000_000 } else { 0 };
+            assert_eq!(now.pitch_microcents, old.pitch_microcents + bend);
         }
     }
     let wrapper = unsafe {
@@ -829,38 +836,21 @@ fn production_musical_normal_phrase_overrides_bends_and_keeps_old_configuration_
     };
     let config = wrapper
         .test_inspect_plugin(|plugin| plugin.configuration.as_ref().unwrap().reducer.resolved());
-    let context: Vec<_> = current
+    let snapshot = inspect_hub(&phrase.hub, |hub| hub.test_next_context());
+    assert_eq!(snapshot.config, config.into());
+    assert!(snapshot.context.iter().all(|context| current
         .iter()
         .flatten()
-        .map(|v| harmonigraph_core::policy::ContextPitch {
-            pitch: harmonigraph_core::PitchClass::from_microcents(v.pitch_microcents),
-            node: v.attack_node,
-        })
-        .collect();
-    let stale: Vec<_> = current
-        .iter()
-        .flatten()
-        .map(|v| harmonigraph_core::policy::ContextPitch {
-            pitch: config.tuning.pitch_class(v.attack_node.unwrap()),
-            node: v.attack_node,
-        })
-        .collect();
-    let choose = |key, context: &[_]| {
-        harmonigraph_core::policy::assign_new_note(
-            config.into(),
-            context,
-            None,
-            harmonigraph_core::policy::OrderedOnset { key },
-            &mut Default::default(),
-        )
-        .unwrap()
-    };
-    // F# selects (2,1) from the actual phrase, versus (-2,-1) if the old
-    // attack nodes were incorrectly interpreted as current pitch authority.
+        .any(|v| v.onset_pitch_microcents == context.pitch)));
     let key = 66;
-    let expected = choose(key, &context);
-    let wrong = choose(key, &stale);
-    assert_ne!(expected.assignment, wrong.assignment);
+    let expected = harmonigraph_core::policy::assign_new_note(
+        config.into(),
+        &snapshot.context,
+        snapshot.reference,
+        harmonigraph_core::policy::OrderedOnset { pitch: i64::from(key) * 100_000_000 },
+        &mut Default::default(),
+    )
+    .unwrap();
     phrase.step([vec![], vec![], vec![note(15, 0, i16::from(key), 0, true)]], [0, 1, 2]);
     phrase.idle();
     let added = phrase.voice(2, key, 0);
@@ -869,14 +859,7 @@ fn production_musical_normal_phrase_overrides_bends_and_keeps_old_configuration_
         panic!("selected candidate")
     };
     assert_eq!(added.attack_node, Some(node));
-    assert_eq!(
-        added.frozen_offset_microcents,
-        i64::from(expected.assignment.correction_microcents())
-    );
-    println!(
-        "MUSICAL actual context key{key} expected {:?}, stale {:?}",
-        expected.assignment, wrong.assignment
-    );
+    assert_eq!(added.frozen_offset_microcents, expected.assignment.correction_microcents());
     writer.drain(&mut capture);
     let display = capture.display_events();
     let mut live = harmonigraph_core::NoteTracker::new();
@@ -919,7 +902,7 @@ fn production_musical_normal_phrase_overrides_bends_and_keeps_old_configuration_
     writer.drain(&mut capture);
     let take = harmonigraph_take::Take::read(&path).unwrap();
     assert!(take.incomplete.is_none());
-    assert!(take.configurations.iter().all(|c| c.policy.version == 1));
+    assert!(take.configurations.iter().all(|c| c.policy.version == 2));
     let mut replay = harmonigraph_core::NoteTracker::new();
     for record in &take.events {
         if matches!(record,CanonicalRecord::Delta(d) if matches!(d.event.kind,harmonigraph_take::NoteKind::Off))
@@ -944,7 +927,7 @@ fn production_musical_normal_phrase_overrides_bends_and_keeps_old_configuration_
 }
 
 #[test]
-fn production_musical_a_configuration_edit_clears_history_and_a_transport_stop_does_not() {
+fn production_musical_configuration_edits_and_default_stop_preserve_context() {
     let _scope = crate::test_scope::enter();
     for stop in [false, true] {
         let mut phrase = Phrase::new();
@@ -993,16 +976,11 @@ fn production_musical_a_configuration_edit_clears_history_and_a_transport_stop_d
         }
         phrase.step([vec![], vec![], vec![note(4, 0, 52, 0, true)]], [0, 1, 2]);
         phrase.idle();
-        // Measured with a probe on `assign_new_note`: the configuration edit
-        // hands the policy `history=None` and E is re-derived against the
-        // sounding D, while the Stop hands it `Some(0,1,0)` and E is recalled.
-        // Both branches read (4,0,0) until the Hub stopped leaving a Stop's
-        // released voice in its context: the duplicate D outweighed the recall.
-        let node = if stop { LatticePos::new(0, 1, 0) } else { LatticePos::new(4, 0, 0) };
+        let node = LatticePos::new(0, 1, 0);
         assert_eq!(
             phrase.voice(2, 52, 0).attack_node,
             Some(node),
-            "stop={stop}: only a configuration revision clears released E history"
+            "stop={stop}: neither event resets the moving musical context by default"
         );
         phrase.release_all();
     }
@@ -1404,4 +1382,164 @@ fn a_take_lane_gap_owes_every_source_its_own_snapshot() {
     drop(writer);
     drop(phrase);
     std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn production_moving_major_thirds_cross_old_coordinate_and_correction_limits() {
+    let _scope = crate::test_scope::enter();
+    let mut phrase = Phrase::new();
+    for chord in 0..304 {
+        if chord != 0 {
+            phrase.release_all();
+        }
+        let root = 48 + (chord % 3) * 4;
+        phrase.step(
+            [
+                vec![
+                    note(1, 0, root, 0, true),
+                    note(2, 0, root + 4, 1, true),
+                    note(3, 0, root + 7, 2, true),
+                ],
+                vec![],
+                vec![],
+            ],
+            [0, 1, 2],
+        );
+        for _ in 0..8 {
+            phrase.idle();
+        }
+        let voice = phrase.voice(0, root as u8, 0);
+        assert_eq!(
+            voice.attack_node,
+            Some(LatticePos::new(0, i32::from(chord), 0)),
+            "chord {chord}"
+        );
+        assert_eq!(voice.onset_pitch_microcents, voice.pitch_microcents);
+        if chord == 303 {
+            assert!(voice.frozen_offset_microcents < -4_000_000_000);
+        }
+    }
+    phrase.release_all();
+}
+
+pub(super) fn configure_policy(
+    hub: &Device,
+    policy: harmonigraph_core::configuration::PolicyConfig,
+) {
+    let wrapper = unsafe {
+        &*((*hub.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+    };
+    wrapper
+        .configuration_handle()
+        .unwrap()
+        .submit(crate::configuration::packet(ConfigEdit {
+            policy: Some(policy),
+            ..Default::default()
+        }))
+        .unwrap();
+}
+#[test]
+fn production_silence_and_stop_reset_settings_clear_only_the_musical_memory() {
+    let _scope = crate::test_scope::enter();
+    for reset_stop in [false, true] {
+        let mut phrase = Phrase::new();
+        configure_policy(
+            &phrase.hub,
+            harmonigraph_core::configuration::PolicyConfig { reset_stop, ..Default::default() },
+        );
+        phrase.idle();
+        phrase.step(
+            [vec![note(1, 0, 48, 0, true), note(2, 0, 52, 1, true)], vec![], vec![]],
+            [0, 1, 2],
+        );
+        for _ in 0..4 {
+            phrase.idle();
+        }
+        phrase.step(std::array::from_fn(|_| vec![transport(0, 120.0)]), [0, 1, 2]);
+        phrase.step(
+            std::array::from_fn(|_| {
+                let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+                value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+                vec![Input::Transport(value)]
+            }),
+            [0, 1, 2],
+        );
+        for _ in 0..24 {
+            phrase.idle();
+        }
+        assert!(phrase.sources.iter().all(|s| s.source_snapshot().held == 0));
+        let remembered = inspect_hub(&phrase.hub, |h| h.test_next_context());
+        assert_eq!(remembered.context.is_empty(), reset_stop);
+        assert_eq!(remembered.reference == 0, reset_stop);
+        if !reset_stop {
+            configure_policy(
+                &phrase.hub,
+                harmonigraph_core::configuration::PolicyConfig {
+                    silence_ms: 500,
+                    ..Default::default()
+                },
+            );
+            for _ in 0..64 {
+                phrase.idle();
+            }
+            let expired = inspect_hub(&phrase.hub, |h| h.test_next_context());
+            assert!(expired.context.is_empty());
+            assert_eq!(expired.reference, 0);
+        }
+    }
+}
+
+#[test]
+fn production_loop_reset_is_applied_once_across_sources_before_the_next_attack() {
+    let _scope = crate::test_scope::enter();
+    let position = |seconds: i64| {
+        let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+        value.flags |= CLAP_TRANSPORT_HAS_SECONDS_TIMELINE;
+        value.song_pos_seconds = seconds * (1i64 << 31);
+        Input::Transport(value)
+    };
+    for reset_loop in [false, true] {
+        let mut phrase = Phrase::new();
+        configure_policy(
+            &phrase.hub,
+            harmonigraph_core::configuration::PolicyConfig { reset_loop, ..Default::default() },
+        );
+        phrase.idle();
+        for root in [48, 52, 56] {
+            phrase.step(
+                [
+                    vec![
+                        note(1, 0, root, 0, true),
+                        note(2, 0, root + 4, 1, true),
+                        note(3, 0, root + 7, 2, true),
+                    ],
+                    vec![],
+                    vec![],
+                ],
+                [0, 1, 2],
+            );
+            for _ in 0..4 {
+                phrase.idle();
+            }
+            phrase.release_all();
+        }
+        phrase.step(std::array::from_fn(|_| vec![position(10)]), [0, 1, 2]);
+        phrase.step(
+            [vec![position(1), note(4, 0, 48, 1, true)], vec![position(1)], vec![position(1)]],
+            [2, 1, 0],
+        );
+        for _ in 0..4 {
+            phrase.idle();
+        }
+        let root = if reset_loop { 0 } else { 3 };
+        assert_eq!(phrase.voice(0, 48, 0).attack_node, Some(LatticePos::new(0, root, 0)));
+        phrase.step([vec![], vec![note(5, 0, 52, 0, true)], vec![]], [1, 0, 2]);
+        for _ in 0..4 {
+            phrase.idle();
+        }
+        assert_eq!(phrase.voice(1, 52, 0).attack_node, Some(LatticePos::new(0, root + 1, 0)));
+        phrase.release_all();
+    }
 }

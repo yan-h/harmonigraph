@@ -40,6 +40,8 @@ impl Default for ChannelBaseline {
 pub struct State {
     voices: [Option<VoiceBaseline>; HELD_PER_SOURCE],
     channels: [ChannelBaseline; 16],
+    pitch: [harmonigraph_core::policy::channel::ChannelPitch; 16],
+    pub pitch_changed: bool,
     pub complete: bool,
 }
 
@@ -48,6 +50,8 @@ impl Default for State {
         Self {
             voices: [None; HELD_PER_SOURCE],
             channels: [ChannelBaseline::default(); 16],
+            pitch: [Default::default(); 16],
+            pitch_changed: false,
             complete: true,
         }
     }
@@ -129,8 +133,14 @@ impl State {
         if let Some(voice) =
             self.voices.iter_mut().flatten().find(|voice| voice.lifetime == lifetime)
         {
+            if voice.decision == 0 && binding.decision != 0 {
+                voice.onset_pitch_microcents = i64::from(voice.note) * 100_000_000
+                    + binding.correction
+                    + binding.initial_channel
+                    + (binding.initial_player * 100_000_000.0).round() as i64;
+            }
             voice.player_tuning = player;
-            voice.frozen_offset_microcents = i64::from(binding.correction);
+            voice.frozen_offset_microcents = binding.correction;
             if binding.decision != 0 && binding.selection.musical() {
                 voice.assignment = Some(binding.configuration);
                 voice.decision = binding.decision;
@@ -203,6 +213,7 @@ impl State {
     /// accepted output, settled host acceptance. A wildcard is applied to the
     /// lifetime set resolved at its original stream position by that caller.
     pub fn apply(&mut self, event: Event, stamp: Stamp) -> Option<NoteDelta> {
+        self.pitch_changed = false;
         let mut result = None;
         if let Some((id, channel, note, velocity)) = event.attack() {
             let index = self
@@ -214,7 +225,8 @@ impl State {
                 self.complete = false;
                 return None;
             };
-            let pitch = i64::from(note) * 100_000_000;
+            let pitch =
+                i64::from(note) * 100_000_000 + self.pitch[usize::from(channel)].microcents();
             self.voices[index] = Some(VoiceBaseline {
                 channel,
                 note,
@@ -225,6 +237,7 @@ impl State {
                 onset: stamp.timing,
                 velocity,
                 pitch_microcents: pitch,
+                onset_pitch_microcents: pitch,
                 provenance: stamp.provenance,
                 ..VoiceBaseline::default()
             });
@@ -242,7 +255,8 @@ impl State {
             if let Some(voice) =
                 self.voices.iter_mut().flatten().find(|v| v.lifetime == stamp.lifetime)
             {
-                let pitch = (f64::from(voice.note) + value) * 100_000_000.0;
+                let pitch = (f64::from(voice.note) + value) * 100_000_000.0
+                    + self.pitch[usize::from(voice.channel)].microcents() as f64;
                 if !value.is_finite()
                     || !pitch.is_finite()
                     || pitch < i64::MIN as f64
@@ -253,6 +267,14 @@ impl State {
                 }
                 voice.player_tuning = value;
                 voice.pitch_microcents = pitch.round() as i64;
+                if voice.decision == 0
+                    && voice
+                        .onset
+                        .zip(stamp.timing)
+                        .is_some_and(|(on, now)| on.sample == now.sample)
+                {
+                    voice.onset_pitch_microcents = voice.pitch_microcents;
+                }
                 result = Some((
                     voice.channel,
                     voice.note,
@@ -262,6 +284,17 @@ impl State {
             }
         }
         if let Event::Midi { port: 0, data, .. } = event {
+            let index = usize::from(data[0] & 15);
+            let before = self.pitch[index].microcents();
+            self.pitch_changed = self.pitch[index].apply(data);
+            let change = self.pitch[index].microcents() - before;
+            if change != 0 {
+                for voice in
+                    self.voices.iter_mut().flatten().filter(|v| usize::from(v.channel) == index)
+                {
+                    voice.pitch_microcents = voice.pitch_microcents.saturating_add(change);
+                }
+            }
             let channel = &mut self.channels[usize::from(data[0] & 15)];
             match data[0] & 0xf0 {
                 0xb0 if data[1] < 128 && data[2] < 128 => {

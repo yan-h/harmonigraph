@@ -384,10 +384,85 @@ pub(super) fn tuning_pane(
         ui.weak("Tuning change pending audio adoption");
     }
 
+    adaptive_controls(ui, state, params);
+
     // Hovering a lattice node deliberately reports NOTHING here. Growing a
     // "Hovered: (t, f, s) = pitch" line whenever the pointer is over a node
     // makes the controls below it jump down and back as the pointer crosses
     // the lattice — a readout in one pane moving another pane's buttons.
     // `state.hovered` drives the lattice's own highlight, which is where a
     // hover belongs.
+}
+
+fn adaptive_controls(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
+    section(ui, "Adaptive tuning");
+    let mut p = state.adaptive_policy;
+    let before = p;
+    p.harmonic =
+        adaptive_value(ui, p.harmonic.into(), 20_000, 1000.0, "Harmonic weight", "") as u16;
+    ui.checkbox(&mut state.neighbourhood.visible, "Show reachable neighbourhood (input C2–C7)");
+    p.pitch_scale =
+        adaptive_value(ui, p.pitch_scale.into(), 100, 1.0, "Pitch scale", "¢").max(1) as u16;
+    p.radius = adaptive_value(ui, p.radius.into(), 5, 1.0, "Neighbourhood steps", "").max(1) as u8;
+    ui.label("Allowed axes");
+    theme::reserve_scroll_gutter(ui);
+    egui::ScrollArea::horizontal().id_salt("adaptive-axes-scroll").show(ui, |ui| {
+        egui::ComboBox::from_id_salt("adaptive-axes")
+            .selected_text(match p.axes {
+                1 => "Fifths",
+                2 => "Fifths + thirds",
+                _ => "Fifths + thirds + sevenths",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut p.axes, 1, "Fifths");
+                ui.selectable_value(&mut p.axes, 2, "Fifths + thirds");
+                ui.selectable_value(&mut p.axes, 3, "Fifths + thirds + sevenths");
+            });
+    });
+    ui.collapsing("Memory, register and resets", |ui| {
+        p.memory = adaptive_value(ui, p.memory.into(), 24, 1.0, "Released pitches", "") as u8;
+        for (value, label, max) in [
+            (&mut p.released, "Released weight", 1000),
+            (&mut p.recency, "Release carry-over", 1000),
+            (&mut p.register_floor, "Register floor", 1000),
+            (&mut p.register_falloff, "Register falloff", 4000),
+        ] {
+            *value = adaptive_value(ui, (*value).into(), max, 1000.0, label, "") as u16;
+        }
+        p.tolerance =
+            adaptive_value(ui, p.tolerance, 20_000_000, 1_000_000.0, "Same-note tolerance", "¢");
+        p.silence_ms = adaptive_value(ui, p.silence_ms, 120_000, 1000.0, "Silence reset", "s");
+        ui.weak("Silence reset: zero means never.");
+        ui.checkbox(&mut p.reset_stop, "Reset context on stop");
+        ui.checkbox(&mut p.reset_loop, "Reset context on loop / seek");
+    });
+    ui.weak(
+        "New attacks follow the moving context. Sounding notes keep their adaptive correction.",
+    );
+    if p != before {
+        crate::tuning_edit(
+            state,
+            params,
+            ConfigEdit { policy: Some(p.sanitize()), ..Default::default() },
+        );
+    }
+}
+
+/// Use the dock's width-aware value bars so long labels elide rather than widening the pane.
+fn adaptive_value(
+    ui: &mut egui::Ui,
+    raw: u32,
+    max: u32,
+    scale: f32,
+    label: &str,
+    unit: &str,
+) -> u32 {
+    let mut value = raw as f32 / scale;
+    let mut bar = ValueBar::new(&mut value, 0.0..=max as f32 / scale, label).unit(1.0, unit);
+    bar = if scale == 1.0 { bar.integer() } else { bar.decimals(2) };
+    if bar.show(ui).changed() {
+        (value * scale).round() as u32
+    } else {
+        raw
+    }
 }

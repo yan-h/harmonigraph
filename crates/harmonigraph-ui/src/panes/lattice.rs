@@ -210,6 +210,41 @@ pub(crate) fn draw_lattice(
             state.lattice_pipelines.clone(),
         ),
     );
+    if response.is_some() && state.neighbourhood.visible && state.neighbourhood.has_context() {
+        // Selection-style outlines are live UI annotations, like hover. They
+        // describe next input over C2–C7, not a recorded video ornament.
+        let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
+        let painter = ui.painter().with_clip_rect(rect);
+        for node in &scene.nodes {
+            if !state.neighbourhood.nodes.contains(&node.lattice_pos) {
+                continue;
+            }
+            if let Some(p) = projector.project(node.world_pos) {
+                painter.circle_stroke(
+                    egui::pos2(rect.min.x + p.x, rect.min.y + p.y),
+                    8.0,
+                    egui::Stroke::new(
+                        1.0,
+                        egui::Color32::from_rgba_unmultiplied(115, 190, 225, 160),
+                    ),
+                );
+            }
+        }
+        let label = if state.neighbourhood.computing {
+            "Reachable C2–C7 · computing".to_owned()
+        } else if let Some(error) = &state.neighbourhood.error {
+            format!("Neighbourhood unavailable: {error}")
+        } else {
+            format!("Reachable C2–C7 · {} nodes", state.neighbourhood.nodes.len())
+        };
+        painter.text(
+            rect.left_bottom() + egui::vec2(10.0, -10.0),
+            egui::Align2::LEFT_BOTTOM,
+            label,
+            egui::FontId::proportional(11.0),
+            egui::Color32::LIGHT_BLUE,
+        );
+    }
     if let Some(mut badge) = badge {
         draw_learn_overlay(ui, rect, state, now, surface, &mut badge);
     }
