@@ -25,6 +25,10 @@ use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, HELD_SESSION, TUNERS};
 
 type Owner = crate::configuration::Owner;
 
+/// `CLAP_TRANSPORT_HAS_SECONDS_TIMELINE`, which the wrapper hands over as a
+/// bare flag word rather than as a clap-sys type.
+const HAS_SECONDS: u32 = 1 << 2;
+
 /// The identity one row's notes carry downstream. The Hub's own track keeps
 /// the reserved DIRECT id every consumer already knows it by; a Tune row is
 /// one past its own index, so no paired track can collide with it.
@@ -395,13 +399,23 @@ impl Hub {
     /// timeline and elapsed sample time is a loop or a seek. What it does then
     /// is the `reset_loop` control's business, at the next attack.
     fn detect_loop(&mut self, callback: api::Callback) {
-        let Some(transport) = callback.transport.filter(|_| self.rate > 0.0) else {
-            self.seconds = None;
+        let Some(transport) = callback.transport else {
             return;
         };
-        let seconds = transport.song_pos_seconds as f64 / 2_147_483_648.0;
-        let elapsed = callback.steady_time as f64 / self.rate;
-        let offset = seconds - elapsed;
+        self.observe_seconds(
+            transport.flags,
+            transport.song_pos_seconds,
+            Some(callback.steady_time),
+        );
+    }
+
+    /// One observation of the host's seconds timeline against elapsed samples.
+    /// `song_pos_seconds` is CLAP fixed point, 1/2^31 of a second.
+    fn observe_seconds(&mut self, flags: u32, song_pos_seconds: i64, sample: Option<i64>) {
+        let (Some(sample), true) = (sample, self.rate > 0.0 && flags & HAS_SECONDS != 0) else {
+            return;
+        };
+        let offset = song_pos_seconds as f64 / 2_147_483_648.0 - sample as f64 / self.rate;
         if self.seconds.is_some_and(|previous| (offset - previous).abs() > 0.002) {
             self.sequencer.loop_pending = true;
         }
@@ -409,6 +423,14 @@ impl Hub {
     }
 
     pub fn input(&mut self, input: OwnedInput) {
+        // A host may supply the transport as the callback's own value, as an
+        // input event, or as both. The seek this is looking for has to be
+        // found in whichever one arrives.
+        if let nice_plug::wrapper::clap::configuration::InputValue::Transport(transport) =
+            input.value
+        {
+            self.observe_seconds(transport.flags, transport.song_pos_seconds, input.sample);
+        }
         self.tune.input(input);
     }
     pub fn schedule(&mut self, block: api::Block, output: &mut api::Output<'_>) {

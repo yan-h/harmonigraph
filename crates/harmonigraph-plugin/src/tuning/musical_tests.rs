@@ -32,6 +32,14 @@ fn configure_policy(hub: &Device, policy: PolicyConfig) {
     submit(hub, ConfigEdit { policy: Some(policy), ..Default::default() });
 }
 
+/// A transport carrying the host's seconds timeline at `seconds`.
+fn position(seconds: i64) -> Input {
+    let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+    value.flags |= CLAP_TRANSPORT_HAS_SECONDS_TIMELINE;
+    value.song_pos_seconds = seconds * (1i64 << 31);
+    Input::Transport(value)
+}
+
 fn submit(hub: &Device, edit: ConfigEdit) {
     hub_wrapper(hub)
         .configuration_handle()
@@ -95,6 +103,16 @@ impl Phrase {
     }
     fn idle(&mut self) -> [Vec<(u32, Event)>; 3] {
         self.step(std::array::from_fn(|_| vec![]), [0, 1, 2])
+    }
+    /// The host's seconds timeline, to every device in the graph. A DAW gives
+    /// the transport to each plugin it calls, and the Hub is the one that
+    /// reads it: a seek is a musical boundary, not a per-track one.
+    fn seek(&mut self, seconds: i64) {
+        for index in 0..3 {
+            self.sources[index].run_format(self.raw, vec![position(seconds)], None, None, 512);
+        }
+        self.hub.run_format(self.raw, vec![position(seconds)], None, None, 512);
+        self.raw += 512;
     }
     /// What the Hub scheduled for that voice. It is the only authority there
     /// is: display, take and the next decision all read this one table.
@@ -345,4 +363,132 @@ fn production_moving_major_thirds_cross_old_coordinate_and_correction_limits() {
         }
     }
     phrase.release_all();
+}
+
+/// A loop or seek clears released memory once, before the next attack, and
+/// only when the control says so. This is the whole of what the transport can
+/// do to the policy that a Stop cannot.
+#[test]
+fn production_a_loop_clears_released_memory_once_before_the_next_attack() {
+    let _scope = crate::test_scope::enter();
+    for reset_loop in [false, true] {
+        let mut phrase = Phrase::new();
+        configure_policy(&phrase.hub, PolicyConfig { reset_loop, ..Default::default() });
+        phrase.idle();
+        // Three chords of moving thirds, so the reference has travelled and a
+        // cleared memory is distinguishable from a kept one.
+        let mut node = None;
+        for root in [48, 52, 56] {
+            phrase.step(
+                [
+                    vec![
+                        note(1, 0, root, 0, true),
+                        note(2, 0, root + 4, 1, true),
+                        note(3, 0, root + 7, 2, true),
+                    ],
+                    vec![],
+                    vec![],
+                ],
+                [0, 1, 2],
+            );
+            for _ in 0..2 {
+                phrase.idle();
+            }
+            node = phrase.voice(0, root as u8, 0).attack_node;
+            phrase.release_all();
+        }
+        assert_ne!(node, Some(LatticePos::ORIGIN), "the fixture travelled before the loop");
+        // The host's seconds timeline jumps backwards while sample time keeps
+        // running forward. That discontinuity is the loop.
+        phrase.seek(10);
+        phrase.seek(1);
+        phrase.step(
+            [
+                vec![note(1, 0, 48, 0, true), note(2, 0, 52, 1, true), note(3, 0, 55, 2, true)],
+                vec![],
+                vec![],
+            ],
+            [0, 1, 2],
+        );
+        for _ in 0..2 {
+            phrase.idle();
+        }
+        let after = phrase.voice(0, 48, 0).attack_node;
+        if reset_loop {
+            assert_eq!(after, Some(LatticePos::ORIGIN), "the loop cleared the travelled memory");
+        } else {
+            assert_ne!(after, Some(LatticePos::ORIGIN), "without the control it keeps travelling");
+        }
+        phrase.release_all();
+    }
+}
+
+/// The two publication lanes are independent, and a lane that loses a report
+/// owes EVERY source a snapshot rather than only the one whose report it lost.
+/// The fixture stops draining the take while the display keeps up, so only the
+/// take ring overflows.
+#[test]
+fn a_take_lane_gap_owes_every_source_its_own_snapshot() {
+    use harmonigraph_take::CanonicalRecord;
+    let _scope = crate::test_scope::enter();
+    let (recorder, mut capture) = harmonigraph_record::testing::channel();
+    crate::configuration::inject_recorder(recorder);
+    let mut phrase = Phrase::new();
+    capture.arm();
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-take-gap-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("gap.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    phrase.step(
+        [
+            vec![note(1, 0, 50, 0, true)],
+            vec![note(2, 0, 57, 0, true)],
+            vec![note(3, 0, 62, 0, true)],
+        ],
+        [0, 1, 2],
+    );
+    for _ in 0..8 {
+        phrase.idle();
+        writer.drain(&mut capture);
+        capture.display_events();
+    }
+    // The editor keeps up; the writer has stopped. Only the take ring fills,
+    // and the report it loses is one source's expression.
+    for _ in 0..80 {
+        phrase.step(
+            [(0..64).map(|t| expression(1, 0.1234567890123, t)).collect(), vec![], vec![]],
+            [0, 1, 2],
+        );
+        capture.display_events();
+    }
+    for _ in 0..8 {
+        phrase.idle();
+        writer.drain(&mut capture);
+        capture.display_events();
+    }
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let gap = take
+        .events
+        .iter()
+        .position(|record| matches!(record, CanonicalRecord::Gap(_)))
+        .expect("the fixture must actually overflow the take lane");
+    let refreshed: std::collections::BTreeSet<u64> = take.events[gap..]
+        .iter()
+        .filter_map(|record| match record {
+            CanonicalRecord::Baseline(frame) => frame.baseline().ok(),
+            _ => None,
+        })
+        .map(|frame| frame.source.0)
+        .collect();
+    for source in 1..=3u64 {
+        assert!(
+            refreshed.contains(&source),
+            "source {source} owes the take a snapshot after the gap: got {refreshed:?}"
+        );
+    }
+    phrase.release_all();
+    drop(writer);
+    drop(phrase);
+    std::fs::remove_dir_all(&directory).unwrap();
 }
