@@ -82,6 +82,9 @@ and covers exact equality with the old tail.
 ## Cost measurements — 2026-09-09
 
 A quiet-window native CPU probe ran on an 8-core Apple M1 Pro with Rust 1.92.0.
+Other batch builds and probes were paused;
+Bitwig and WindowServer remained active,
+so this was not an otherwise idle machine.
 The scratch executable used `rustc -O` and the repository's compiled dependencies (dev profile opt-level 2,
 dependencies opt-level 3).
 It compared the old ring publication plus per-sample pop into reusable scratch with the new publication plus bulk copy,
