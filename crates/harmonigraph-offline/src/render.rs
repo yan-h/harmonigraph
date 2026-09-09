@@ -117,7 +117,7 @@ fn frame_input(screen: egui::Rect, now: f64, max_texture_side: usize) -> egui::R
 /// and the caller reads the true verdict from the encoder's exit status.
 pub fn render(
     replay: &mut Replay,
-    audio: Option<&Audio>,
+    mut audio: Option<&mut Audio>,
     settings: &Settings,
     appearance: AppearanceDocument,
     mut emit: impl FnMut(&[u8]) -> Result<bool, String>,
@@ -161,18 +161,19 @@ pub fn render(
     // `--playhead` on the command line, or the take's own "Whole-song
     // playhead" render setting — either turns it on.
     if settings.whole_song_spectrogram || state.appearance.render.playhead {
-        if let Some(audio) = audio {
+        if let Some(audio) = audio.as_deref_mut() {
             let span = (settings.end - settings.start).max(0.0);
             if span > 0.0 {
                 state.runtime.whole_song = Some(harmonigraph_ui::WholeSong::precompute(
-                    &audio.samples,
+                    audio.frames(),
                     audio.channels,
                     audio.sample_rate,
                     settings.audio_start,
                     settings.start,
                     span,
                     &state.appearance.spectrum,
-                ));
+                    |range, analyzer| audio.for_frames(range, |chunk| analyzer.push_frames(chunk)),
+                )?);
             }
         }
         // The whole take's notes, laid out from the start — the roll shows the
@@ -180,7 +181,7 @@ pub fn render(
         if let Some(ws) = state.runtime.whole_song.as_mut() {
             ws.roll = replay.full_roll();
         }
-        if let (Some(ws), Some(audio)) = (state.runtime.whole_song.as_ref(), audio) {
+        if let (Some(ws), Some(audio)) = (state.runtime.whole_song.as_ref(), audio.as_deref()) {
             if let Some(warning) = empty_window_warning(
                 ws,
                 settings.audio_start,
@@ -214,7 +215,7 @@ pub fn render(
 
     let frames = settings.frame_count();
     for frame in 0..frames {
-        let now = prepare_frame(replay, &mut state, audio, settings, frame);
+        let now = prepare_frame(replay, &mut state, audio.as_deref_mut(), settings, frame)?;
 
         // No panels and no dock: the layout owns the frame, and the
         // background is the render pass's clear color rather than a
@@ -253,32 +254,33 @@ pub fn render(
 fn prepare_frame(
     replay: &mut Replay,
     state: &mut PictureState,
-    audio: Option<&Audio>,
+    audio: Option<&mut Audio>,
     settings: &Settings,
     frame: u64,
-) -> f64 {
+) -> Result<f64, String> {
     // Frame-index time avoids accumulated floating-point drift.
     let step = 1.0 / settings.fps;
     let now = settings.start + frame as f64 * step;
     replay.advance_to(&mut state.runtime, now);
     if let Some(audio) = audio {
         let from = settings.start + frame.saturating_sub(1) as f64 * step;
-        let (chunk, end) =
-            audio.slice_seconds(from - settings.audio_start, now - settings.audio_start);
-        if !chunk.is_empty() {
+        let range = audio.range_seconds(from - settings.audio_start, now - settings.audio_start);
+        if !range.is_empty() {
+            let end = range.end;
             let newest = settings.audio_start + (end - 1) as f64 / f64::from(audio.sample_rate);
             let config = state.appearance.spectrum;
-            state.runtime.spectrum.push_samples(
-                chunk,
+            state.runtime.spectrum.push_sample_chunks(
+                range.len(),
                 audio.channels,
                 audio.sample_rate,
                 newest,
                 &config,
-            );
+                |feed| audio.for_frames(range, feed),
+            )?;
         }
     }
     begin_frame(state, &replay.params, now);
-    now
+    Ok(now)
 }
 
 #[cfg(test)]
@@ -332,7 +334,7 @@ mod tests {
         let mut samples = vec![0.0; 62_271 * 2];
         samples[38_400 * 2] = 1.0;
         samples[38_400 * 2 + 1] = -1.0;
-        Audio { sample_rate: 48_000.0, samples, channels: 2 }
+        Audio::from_samples(48_000.0, samples, 2)
     }
 
     fn transient_take(origin: f64) -> Take {
@@ -363,7 +365,7 @@ mod tests {
         const SR: f64 = 48_000.0;
         const FRAMES: usize = 62_271;
         const HOP: usize = 384;
-        let audio = transient_audio();
+        let mut audio = transient_audio();
         for (origin, offset, first) in
             [(0.0, 0.0, 0usize), (7.125, 0.0, 0), (7.125, 0.41731, 20_031), (7.125, -0.00713, 0)]
         {
@@ -386,7 +388,8 @@ mod tests {
                 for frame in 0..settings.frame_count() {
                     let before = state.runtime.spectrum.history().len();
                     let now =
-                        prepare_frame(&mut replay, &mut state, Some(&audio), &settings, frame);
+                        prepare_frame(&mut replay, &mut state, Some(&mut audio), &settings, frame)
+                            .unwrap();
                     let from = settings.start + frame.saturating_sub(1) as f64 / fps;
                     if from < audio_end && now > audio_end {
                         partial_tail = true;
@@ -465,7 +468,7 @@ mod tests {
 
     #[test]
     fn rendering_sliced_audio_twice_is_byte_identical() {
-        let audio = transient_audio();
+        let mut audio = transient_audio();
         let mut take = transient_take(7.125);
         let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         state.appearance.spectrum.roll_seconds = 1.0;
@@ -480,7 +483,7 @@ mod tests {
             audio_start: 7.125,
             ..settings()
         };
-        let run = |audio| {
+        let run = |audio: Option<&mut Audio>| {
             let mut frames = Vec::new();
             let result = render(
                 &mut Replay::new(take.clone()),
@@ -501,8 +504,8 @@ mod tests {
                 Err(e) => panic!("{e}"),
             }
         };
-        let Some(first) = run(Some(&audio)) else { return };
-        assert_eq!(first, run(Some(&audio)).unwrap());
+        let Some(first) = run(Some(&mut audio)) else { return };
+        assert_eq!(first, run(Some(&mut audio)).unwrap());
         assert_ne!(first, run(None).unwrap(), "the audio must change the rendered picture");
     }
 
@@ -794,17 +797,17 @@ mod tests {
         let n = (sr as f64) as usize; // one second
         let samples: Vec<f32> =
             (0..n).map(|i| 0.6 * (std::f32::consts::TAU * 440.0 * i as f32 / sr).sin()).collect();
-        let audio = Audio { sample_rate: sr, samples, channels: 1 };
+        let mut audio = Audio::from_samples(sr, samples, 1);
 
         let mut settings = settings();
         settings.whole_song_spectrogram = true;
         settings.layout = Layout::preset("spectral").unwrap();
 
-        let run = || -> Option<Vec<Vec<u8>>> {
+        let mut run = || -> Option<Vec<Vec<u8>>> {
             let mut replay = Replay::new(take());
             let mut frames = Vec::new();
             let appearance = appearance_for(replay.take(), None);
-            match render(&mut replay, Some(&audio), &settings, appearance, |bytes| {
+            match render(&mut replay, Some(&mut audio), &settings, appearance, |bytes| {
                 frames.push(bytes.to_vec());
                 Ok(true)
             }) {

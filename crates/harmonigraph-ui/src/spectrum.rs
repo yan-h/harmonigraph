@@ -166,7 +166,7 @@ impl WholeSong {
     /// much regardless, so the picture reaches past what was asked for.
     pub const MIN_WINDOW: f64 = 0.05;
 
-    /// Analyze the part of `samples` needed by the drawn window, one raw column
+    /// Analyze the part of the source needed by the drawn window, one raw column
     /// per hop, `time`-stamped in take time (`time_origin` is the take time of
     /// sample 0). One FFT window before `start` is fed as history, and half a
     /// window after the far edge lets the last measurement be centered on that
@@ -184,7 +184,7 @@ impl WholeSong {
     /// the live path has — every slab still gets a column, none goes empty — for
     /// a quarter of the memory.
     ///
-    /// `samples` is INTERLEAVED, `channels` per frame, and the channels are
+    /// The feeder supplies interleaved frames, `channels` per frame; channels are
     /// combined exactly as the live path combines them — same
     /// [`ChannelBank`](harmonigraph_core::spectrum::ChannelBank), same power sum. That
     /// is the point of sharing the type rather than repeating the arithmetic: a
@@ -192,28 +192,31 @@ impl WholeSong {
     /// from the look that was dialed in, and only for stereo-wide material, which
     /// is the hardest kind of difference to attribute.
     ///
-    /// Pure: `(samples, channels, rate, time_origin, start, span, config)` in,
-    /// columns out, no clock or RNG, so a render built on it stays byte-identical
-    /// between runs.
-    pub fn precompute(
-        samples: &[f32],
+    /// The feeder must push every frame in each absolute source range, in order,
+    /// into the supplied analyzer. It may split I/O into bounded chunks; only
+    /// this loop chooses measurement boundaries. Errors discard the partial result.
+    #[allow(clippy::too_many_arguments)] // Source metadata plus independent drawn-window inputs.
+    pub fn precompute<E>(
+        total: usize,
         channels: usize,
         sample_rate: f32,
         time_origin: f64,
         start: f64,
         span: f64,
         config: &SpectrumConfig,
-    ) -> WholeSong {
+        mut feed: impl FnMut(
+            std::ops::Range<usize>,
+            &mut harmonigraph_core::spectrum::ChannelBank,
+        ) -> Result<(), E>,
+    ) -> Result<WholeSong, E> {
         let mut analyzer = harmonigraph_core::spectrum::ChannelBank::new(sample_rate, channels);
         analyzer.set_fft_size(config.window.samples());
         analyzer.set_tapers(config.tapers.count());
-        let channels = analyzer.channels();
         let sr = (sample_rate as f64).max(1.0);
         let hop = (span
             / crate::spectrogram::WHOLE_SONG_SLAB_CAP as f64
             / crate::spectrogram::COLUMNS_PER_SLAB)
             .max(AudioSpectrum::FFT_INTERVAL);
-        let total = samples.len() / channels; // frames
         let mut columns = Vec::new();
         // Frame indices stay relative to sample 0, even though the analyzer
         // sees only this render's slice. That keeps the column grid and its
@@ -228,7 +231,7 @@ impl WholeSong {
         while fed < last {
             let end = ((k as f64 * hop_frames).round() as usize).min(last);
             if end > fed {
-                analyzer.push_frames(&samples[fed * channels..end * channels]);
+                feed(fed..end, &mut analyzer)?;
                 fed = end;
             }
             if let Some(power) = analyzer.power_sum() {
@@ -247,7 +250,7 @@ impl WholeSong {
         }
         // The roll is filled in separately by the renderer (it needs the notes,
         // not the audio); the bounce preview leaves it empty.
-        WholeSong { start, span, columns, roll: harmonigraph_core::NoteRoll::default() }
+        Ok(WholeSong { start, span, columns, roll: harmonigraph_core::NoteRoll::default() })
     }
 
     /// The columns the depth axis can actually draw: those stamped inside
@@ -423,6 +426,34 @@ impl AudioSpectrum {
         if samples.is_empty() {
             return;
         }
+        self.push_sample_chunks(
+            samples.len() / channels.max(1),
+            channels,
+            sample_rate,
+            now,
+            config,
+            |feed| {
+                feed(samples);
+                Ok::<_, std::convert::Infallible>(())
+            },
+        )
+        .unwrap();
+    }
+
+    /// Feed one logical batch through bounded physical chunks. Update the clock
+    /// anchor once from the complete batch's newest frame, exactly as
+    /// `push_samples` does: I/O boundaries must not add smoothing steps or move
+    /// column timestamps. The producer supplies exactly `batch` complete frames
+    /// in order; an error aborts its caller rather than using a partial render.
+    pub fn push_sample_chunks<E>(
+        &mut self,
+        batch: usize,
+        channels: usize,
+        sample_rate: f32,
+        now: f64,
+        config: &SpectrumConfig,
+        consume: impl FnOnce(&mut dyn FnMut(&[f32])) -> Result<(), E>,
+    ) -> Result<(), E> {
         // Any of the four empties the analyzers' rings, so nothing comes out
         // until they have refilled. The hop grid keeps its phase across that gap
         // rather than restarting on it.
@@ -436,9 +467,8 @@ impl AudioSpectrum {
         // time. A partial frame at the end is left for the next batch, so the
         // de-interleaving in `push_frames` can never slip a channel.
         let channels = self.analyzer.channels();
-        let batch = samples.len() / channels;
         if batch == 0 {
-            return;
+            return Ok(());
         }
         let sr = f64::from(sample_rate.max(1.0));
         let hop = ((Self::FFT_INTERVAL * sr).round() as u64).max(1);
@@ -466,50 +496,53 @@ impl AudioSpectrum {
         };
         self.anchor = Some(anchor);
 
-        let mut fed = 0usize; // frames
-        while fed < batch {
-            // Feed exactly up to the next hop boundary, so a spectrum is taken
-            // at every multiple of `hop` frames and nowhere else. `max(1)`
-            // keeps the loop moving if a sample-rate change ever leaves the
-            // boundary behind us; the next line puts the grid back on its feet.
-            let want = self.next_hop.saturating_sub(self.frames_seen).max(1) as usize;
-            let take = want.min(batch - fed);
-            self.analyzer.push_frames(&samples[fed * channels..(fed + take) * channels]);
-            self.frames_seen += take as u64;
-            fed += take;
-            if self.frames_seen < self.next_hop {
-                break; // The batch ran out before the boundary.
-            }
-            self.next_hop = self.frames_seen + hop;
-            let Some(fresh) = self.analyzer.power_sum() else { continue };
+        consume(&mut |samples| {
+            let batch = samples.len() / channels;
+            let mut fed = 0usize; // frames
+            while fed < batch {
+                // Feed exactly up to the next hop boundary, so a spectrum is taken
+                // at every multiple of `hop` frames and nowhere else. `max(1)`
+                // keeps the loop moving if a sample-rate change ever leaves the
+                // boundary behind us; the next line puts the grid back on its feet.
+                let want = self.next_hop.saturating_sub(self.frames_seen).max(1) as usize;
+                let take = want.min(batch - fed);
+                self.analyzer.push_frames(&samples[fed * channels..(fed + take) * channels]);
+                self.frames_seen += take as u64;
+                fed += take;
+                if self.frames_seen < self.next_hop {
+                    break; // The batch ran out before the boundary.
+                }
+                self.next_hop = self.frames_seen + hop;
+                let Some(fresh) = self.analyzer.power_sum() else { continue };
 
-            // Two coefficients, chosen per bucket by which way it is moving.
-            // Derived from the hop actually in use rather than set on the bar,
-            // so the times mean seconds at any hop this loop runs at.
-            self.display_revision = self.display_revision.wrapping_add(1);
-            let step = hop as f64 / sr;
-            let attack = hop_alpha(config.attack, step);
-            let release = hop_alpha(config.release, step);
-            for (shown, new) in self.display.iter_mut().zip(&fresh) {
-                // POWER, so "louder" is the same comparison in dB — the levels
-                // are mapped through `loudness` well downstream of here.
-                let alpha = if *new > *shown { attack } else { release };
-                *shown += (new - *shown) * alpha;
+                // Two coefficients, chosen per bucket by which way it is moving.
+                // Derived from the hop actually in use rather than set on the bar,
+                // so the times mean seconds at any hop this loop runs at.
+                self.display_revision = self.display_revision.wrapping_add(1);
+                let step = hop as f64 / sr;
+                let attack = hop_alpha(config.attack, step);
+                let release = hop_alpha(config.release, step);
+                for (shown, new) in self.display.iter_mut().zip(&fresh) {
+                    // POWER, so "louder" is the same comparison in dB — the levels
+                    // are mapped through `loudness` well downstream of here.
+                    let alpha = if *new > *shown { attack } else { release };
+                    *shown += (new - *shown) * alpha;
+                }
+                // Keep the RAW spectrum for the spectrogram (the smoothed
+                // `display` would smear one column into the next). Retention is
+                // span-INDEPENDENT (see `push_history`): shrinking the span and
+                // widening it again must not lose the history in between.
+                //
+                // Stamped at the middle of the window it measured, not at the
+                // boundary itself — see `window_center_offset`. This is what lets a
+                // ridge sit under the note ribbon that made it, which is the entire
+                // point of drawing the two on one time axis. The boundary is where
+                // the newest frame fed so far sits on the anchored grid, so
+                // consecutive columns are exactly `hop` frames apart.
+                let boundary = anchor + self.frames_seen.saturating_sub(1) as f64 / sr;
+                self.push_history(boundary - self.analyzer.window_center_offset(), &fresh);
             }
-            // Keep the RAW spectrum for the spectrogram (the smoothed
-            // `display` would smear one column into the next). Retention is
-            // span-INDEPENDENT (see `push_history`): shrinking the span and
-            // widening it again must not lose the history in between.
-            //
-            // Stamped at the middle of the window it measured, not at the
-            // boundary itself — see `window_center_offset`. This is what lets a
-            // ridge sit under the note ribbon that made it, which is the entire
-            // point of drawing the two on one time axis. The boundary is where
-            // the newest frame fed so far sits on the anchored grid, so
-            // consecutive columns are exactly `hop` frames apart.
-            let boundary = anchor + self.frames_seen.saturating_sub(1) as f64 / sr;
-            self.push_history(boundary - self.analyzer.window_center_offset(), &fresh);
-        }
+        })
     }
 
     /// The curve to draw, or None while no audio is flowing. The levels are

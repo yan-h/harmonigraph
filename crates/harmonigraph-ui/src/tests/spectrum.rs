@@ -323,7 +323,7 @@ fn the_live_path_and_the_offline_precompute_agree_on_stereo() {
     let live: Vec<_> = spectrum.history().iter().map(|c| (c.time, c.db.clone())).collect();
 
     // Offline: the same buffer, the whole-song build.
-    let ws = WholeSong::precompute(&samples, 2, sr, 0.0, 0.0, span, &cfg);
+    let ws = precompute(&samples, 2, sr, 0.0, 0.0, span, &cfg);
     let offline: Vec<_> = ws.columns.iter().map(|c| (c.time, c.db.clone())).collect();
 
     assert!(live.len() > 50, "only {} live columns for a second of audio", live.len());
@@ -382,7 +382,7 @@ fn a_tones_energy_lands_at_the_time_the_tone_started() {
         })
         .collect();
     let cfg = SpectrumConfig::default();
-    let ws = WholeSong::precompute(&samples, 1, sr, 0.0, 0.0, seconds, &cfg);
+    let ws = precompute(&samples, 1, sr, 0.0, 0.0, seconds, &cfg);
 
     // The bin the tone sits in, and how loud it reads once fully sounding.
     // Columns are stored as bytes of dB, so "half power" is 3 dB down from the
@@ -485,7 +485,7 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
         (0..n).map(|i| 0.8 * (std::f32::consts::TAU * freq * i as f32 / sr).sin()).collect();
     let cfg = SpectrumConfig::default();
 
-    let ws = WholeSong::precompute(&samples, 1, sr, 0.0, 0.0, seconds, &cfg);
+    let ws = precompute(&samples, 1, sr, 0.0, 0.0, seconds, &cfg);
     assert_eq!(ws.span, seconds);
     assert_eq!(ws.start, 0.0);
     assert!(ws.columns.len() > 10, "a 2 s take yields many columns, got {}", ws.columns.len());
@@ -516,7 +516,7 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
     assert!(peak.abs_diff(a4) <= 1, "peak bin {peak} should be A4 (bin {a4})");
 
     // `time_origin` shifts every column onto the take's timeline.
-    let shifted = WholeSong::precompute(&samples, 1, sr, 5.0, 5.0, seconds, &cfg);
+    let shifted = precompute(&samples, 1, sr, 5.0, 5.0, seconds, &cfg);
     assert!(
         (shifted.columns[0].time - ws.columns[0].time - 5.0).abs() < 1e-6,
         "time_origin offsets the columns"
@@ -524,7 +524,7 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
 
     // Pure: same inputs in, byte-identical columns out (the render leans on
     // this for reproducibility).
-    let again = WholeSong::precompute(&samples, 1, sr, 0.0, 0.0, seconds, &cfg);
+    let again = precompute(&samples, 1, sr, 0.0, 0.0, seconds, &cfg);
     assert_eq!(ws.columns.len(), again.columns.len());
     for (a, b) in ws.columns.iter().zip(&again.columns) {
         assert_eq!(a.time, b.time);
@@ -563,17 +563,10 @@ fn a_late_window_precomputes_only_its_audio_on_the_take_grid() {
         })
         .collect();
     let cfg = SpectrumConfig { window: SpectrumWindow::Fast, ..SpectrumConfig::default() };
-    let full = WholeSong::precompute(&samples, 1, sr, time_origin, time_origin, take_seconds, &cfg);
-    let late = WholeSong::precompute(&samples, 1, sr, time_origin, start, span, &cfg);
-    let past_audio = WholeSong::precompute(
-        &samples,
-        1,
-        sr,
-        time_origin,
-        time_origin + take_seconds + 1.0,
-        span,
-        &cfg,
-    );
+    let full = precompute(&samples, 1, sr, time_origin, time_origin, take_seconds, &cfg);
+    let late = precompute(&samples, 1, sr, time_origin, start, span, &cfg);
+    let past_audio =
+        precompute(&samples, 1, sr, time_origin, time_origin + take_seconds + 1.0, span, &cfg);
     assert!(past_audio.columns.is_empty(), "a disjoint window still analyzed the take");
 
     let window = cfg.window.samples() as f64 / f64::from(sr);
@@ -923,4 +916,114 @@ fn frame_observes_a_longer_fade_before_pruning() {
     // is beyond both halves of the new envelope.
     begin_frame(&mut picture, &Fade(2.0), 5.0);
     assert_eq!(picture.runtime.tracker.voices().count(), 0);
+}
+
+fn precompute(
+    samples: &[f32],
+    channels: usize,
+    sample_rate: f32,
+    time_origin: f64,
+    start: f64,
+    span: f64,
+    config: &crate::SpectrumConfig,
+) -> WholeSong {
+    WholeSong::precompute(
+        samples.len() / channels,
+        channels,
+        sample_rate,
+        time_origin,
+        start,
+        span,
+        config,
+        |range, analyzer| {
+            analyzer.push_frames(&samples[range.start * channels..range.end * channels]);
+            Ok::<_, std::convert::Infallible>(())
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn physical_chunks_preserve_the_complete_logical_batch() {
+    let samples: Vec<f32> = (0..62_271)
+        .flat_map(|i| {
+            let x = (i as f32 * 0.047).sin();
+            [x, -x]
+        })
+        .collect();
+    let cfg = SpectrumConfig::default();
+    for sr in [48_000.0, 192_000.0] {
+        for origin in [0.0, 7.125, 1_000_000_000.417_31] {
+            for chunk_frames in [1, 7, 4093, 16_384] {
+                let mut whole = AudioSpectrum::default();
+                let mut chunked = AudioSpectrum::default();
+                for range in [0..20_031, 20_031..62_271] {
+                    let now = origin + (range.end - 1) as f64 / f64::from(sr);
+                    let input = &samples[range.start * 2..range.end * 2];
+                    whole.push_samples(input, 2, sr, now, &cfg);
+                    chunked
+                        .push_sample_chunks(range.len(), 2, sr, now, &cfg, |feed| {
+                            for chunk in input.chunks(chunk_frames * 2) {
+                                feed(chunk);
+                            }
+                            Ok::<_, ()>(())
+                        })
+                        .unwrap();
+                    assert_eq!(whole.anchor, chunked.anchor);
+                    assert_eq!(whole.display, chunked.display);
+                    assert_eq!(whole.frames_seen, chunked.frames_seen);
+                    assert_eq!(whole.last_samples, chunked.last_samples);
+                    let columns = |s: &AudioSpectrum| {
+                        s.history().iter().map(|c| (c.time, c.db.clone())).collect::<Vec<_>>()
+                    };
+                    assert_eq!(columns(&whole), columns(&chunked));
+                }
+                assert!(whole.history().len() > 10, "fixture must reach measurements");
+            }
+        }
+    }
+}
+
+#[test]
+fn whole_song_feeding_preserves_margins_grid_and_large_logical_hops() {
+    let sr = 48_000.0;
+    let frames = 300_017;
+    let samples: Vec<f32> = (0..frames).map(|i| (i as f32 * 0.047).sin()).collect();
+    let cfg = SpectrumConfig::default();
+    for (start, span) in [(10.0, 6.0), (14.013, 0.157), (10.0, 1_000_000.0), (20.0, 1.0)] {
+        let whole = precompute(&samples, 1, sr, 10.0, start, span, &cfg);
+        let mut ranges = Vec::new();
+        let mut physical = 0;
+        let chunked =
+            WholeSong::precompute(frames, 1, sr, 10.0, start, span, &cfg, |range, analyzer| {
+                ranges.push(range.clone());
+                for chunk in samples[range].chunks(997) {
+                    analyzer.push_frames(chunk);
+                    physical += 1;
+                }
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        let columns =
+            |ws: &WholeSong| ws.columns.iter().map(|c| (c.time, c.db.clone())).collect::<Vec<_>>();
+        assert_eq!(columns(&whole), columns(&chunked));
+        if start == 20.0 {
+            assert!(ranges.is_empty());
+            continue;
+        }
+        assert!(physical > 1);
+        let window = cfg.window.samples() as f64 / f64::from(sr);
+        let expected_first = ((start - window - 10.0) * f64::from(sr)).floor().max(0.0) as usize;
+        let expected_last =
+            (((start + span + window / 2.0 - 10.0) * f64::from(sr)).ceil() as usize).min(frames);
+        assert_eq!(ranges[0].start, expected_first);
+        assert_eq!(ranges.last().unwrap().end, expected_last);
+        assert!(ranges.windows(2).all(|pair| pair[0].end == pair[1].start));
+        if span > 100.0 {
+            assert_eq!(ranges.len(), 1, "huge logical hop must be segmented only by the feeder");
+        }
+    }
+    let failed =
+        WholeSong::precompute(frames, 1, sr, 10.0, 10.0, 1.0, &cfg, |_, _| Err("read failed"));
+    assert!(matches!(failed, Err("read failed")));
 }

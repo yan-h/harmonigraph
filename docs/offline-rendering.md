@@ -69,6 +69,15 @@ a refused replacement does not fall back to the recorded look.
 A missing appearance or missing settings groups use their normal defaults.
 No older format is migrated or partially recovered.
 
+## Audio input memory
+
+The renderer reads uncompressed WAV input through bounded decoding buffers.
+Alignment scans the source into onset envelopes;
+playhead precomputation reads the render window with its FFT margins, and frame analysis then advances through that window.
+A long source therefore does not require a decoded copy of the whole file in memory.
+Notes, onset envelopes, spectrogram columns and the encoder have their own storage costs.
+See [the input design and measurements](offline-audio-input.md) for the scope and measured limits.
+
 ## Pass 1 — recording a take
 
 ### From the DAW

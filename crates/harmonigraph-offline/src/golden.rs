@@ -158,7 +158,7 @@ fn probe_audio() -> Audio {
             tones + BED * bed(&mut rng)
         })
         .collect();
-    Audio { sample_rate: SAMPLE_RATE, samples, channels: 1 }
+    Audio::from_samples(SAMPLE_RATE, samples, 1)
 }
 
 /// One golden frame: the pane's size and what it is dialled to.
@@ -303,11 +303,11 @@ fn check(name: &str, shot: Shot) {
 
 fn check_take(name: &str, shot: Shot, take: Take) {
     let settings = shot.settings();
-    let audio = probe_audio();
+    let mut audio = probe_audio();
     let mut replay = Replay::new(take);
     let mut last = Vec::new();
     let appearance = crate::render::appearance_for(replay.take(), None);
-    match render(&mut replay, Some(&audio), &settings, appearance, |bytes| {
+    match render(&mut replay, Some(&mut audio), &settings, appearance, |bytes| {
         last.clear();
         last.extend_from_slice(bytes);
         Ok(true)
@@ -486,7 +486,7 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
         audio_start: 0.0,
         whole_song_spectrogram: false,
     };
-    let audio = probe_audio();
+    let mut audio = probe_audio();
     let mut replay = Replay::new(take);
     // The clock starts past [`WARMUP`] frames and not at the call: standing a
     // renderer up costs a few hundred milliseconds of adapter and pipeline
@@ -498,7 +498,7 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
     let mut last = None;
     let mut frames = 0u64;
     let appearance = crate::render::appearance_for(replay.take(), None);
-    match render(&mut replay, Some(&audio), &settings, appearance, |_| {
+    match render(&mut replay, Some(&mut audio), &settings, appearance, |_| {
         seen += 1;
         if seen <= WARMUP {
             return Ok(true);
@@ -578,14 +578,14 @@ fn spectral_shadow_frame_ms(
         audio_start: 0.0,
         whole_song_spectrogram: false,
     };
-    let audio = probe_audio();
+    let mut audio = probe_audio();
     let mut replay = Replay::new(take);
     let mut seen = 0u64;
     let mut first: Option<std::time::Instant> = None;
     let mut last = None;
     let mut frames = 0u64;
     let appearance = crate::render::appearance_for(replay.take(), None);
-    match render(&mut replay, Some(&audio), &settings, appearance, |_| {
+    match render(&mut replay, Some(&mut audio), &settings, appearance, |_| {
         seen += 1;
         if seen <= WARMUP {
             return Ok(true);

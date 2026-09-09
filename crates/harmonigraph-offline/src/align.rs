@@ -61,20 +61,24 @@ pub struct Alignment {
 /// smear the correlation. Placing boundaries by time keeps both files on
 /// one grid, which is what lets a reference and a bounce at different
 /// rates line up at all.
-fn envelope(audio: &Audio) -> Vec<f32> {
+fn envelope(audio: &mut Audio) -> Result<Vec<f32>, String> {
     let sr = f64::from(audio.sample_rate);
-    let channels = audio.channels.max(1);
+    let channels = audio.channels;
     let frames = (audio.seconds() / HOP).floor() as usize;
     (0..frames)
         .map(|k| {
             let start = (k as f64 * HOP * sr) as usize;
-            let end = (((k + 1) as f64 * HOP * sr) as usize).min(audio.frames());
-            let frame = &audio.samples[start * channels..end.max(start) * channels];
-            if frame.is_empty() {
-                return 0.0;
-            }
-            let sum_sq: f64 = frame.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
-            (sum_sq / frame.len() as f64).sqrt() as f32
+            let end = (((k + 1) as f64 * HOP * sr) as usize).min(audio.frames()).max(start);
+            let mut sum_sq = 0.0;
+            audio.for_frames(start..end, |chunk| {
+                // Preserve the original sample-by-sample accumulation order,
+                // including across physical decoding boundaries.
+                for &x in chunk {
+                    sum_sq += f64::from(x) * f64::from(x);
+                }
+            })?;
+            let count = (end - start) * channels;
+            Ok(if count == 0 { 0.0 } else { (sum_sq / count as f64).sqrt() as f32 })
         })
         .collect()
 }
@@ -158,14 +162,11 @@ fn best_lag(template: &[f32], template_norm: f64, haystack: &[f32]) -> (usize, f
     (best_lag, best as f32)
 }
 
-/// Find where `clean` sits on the take's timeline by matching it against
-/// `reference`, the take's own recording (which starts at take-time
-/// `reference_start`). Returns `None` when either file is too short to
-/// correlate.
-pub fn align(reference: &Audio, reference_start: f64, clean: &Audio) -> Option<Alignment> {
-    let reference_onsets = onset_strength(&envelope(reference));
-    let clean_onsets = onset_strength(&envelope(clean));
-    align_onsets(&reference_onsets, reference_start, &clean_onsets)
+/// Reduce a source once for every alignment attempt that needs its attacks.
+/// The replacement path reuses this small sequence for recording and MIDI
+/// references, so a failed recording match does not decode the source again.
+pub fn audio_onsets(audio: &mut Audio) -> Result<Vec<f32>, String> {
+    Ok(onset_strength(&envelope(audio)?))
 }
 
 /// Find where `clean` sits on the take's timeline by matching its onsets
@@ -178,11 +179,10 @@ pub fn align(reference: &Audio, reference_start: f64, clean: &Audio) -> Option<A
 /// transients up against them. Reliable when the material has clear attacks
 /// (percussive, plucked); soft or legato material gives a low confidence and
 /// is better nudged by eye.
-pub fn align_to_notes(onsets: &[(f64, f32)], span: f64, clean: &Audio) -> Option<Alignment> {
+pub fn align_to_notes(onsets: &[(f64, f32)], span: f64, clean_onsets: &[f32]) -> Option<Alignment> {
     let reference_onsets = note_onset_envelope(onsets, span);
-    let clean_onsets = onset_strength(&envelope(clean));
     // The note train is on the take clock, so its frame 0 is take-time 0.
-    align_onsets(&reference_onsets, 0.0, &clean_onsets)
+    align(&reference_onsets, 0.0, clean_onsets)
 }
 
 /// An onset-strength envelope synthesized from MIDI note-on times, on the same
@@ -208,10 +208,10 @@ fn note_onset_envelope(onsets: &[(f64, f32)], span: f64) -> Vec<f32> {
     env
 }
 
-/// The correlation core shared by [`align`] and [`align_to_notes`]: slide the
+/// Correlate source onset sequences (from [`audio_onsets`]): slide the
 /// reference's strongest window over the clean file's onsets and read off the
 /// best lag. `reference_start` is the take-time of the reference's frame 0.
-fn align_onsets(
+pub fn align(
     reference_onsets: &[f32],
     reference_start: f64,
     clean_onsets: &[f32],
@@ -248,6 +248,22 @@ fn align_onsets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn align(
+        reference: &mut Audio,
+        reference_start: f64,
+        clean: &mut Audio,
+    ) -> Result<Option<Alignment>, String> {
+        Ok(super::align(&audio_onsets(reference)?, reference_start, &audio_onsets(clean)?))
+    }
+
+    fn align_to_notes(
+        onsets: &[(f64, f32)],
+        span: f64,
+        clean: &mut Audio,
+    ) -> Result<Option<Alignment>, String> {
+        Ok(super::align_to_notes(onsets, span, &audio_onsets(clean)?))
+    }
 
     /// A cheap deterministic pseudo-random stream, so "crackle" is
     /// reproducible without a dependency or the real RNG.
@@ -299,17 +315,16 @@ mod tests {
     fn scenario(clean_start: f64, reference_start: f64, span: f64) -> (Audio, Audio) {
         let events = beat(span);
         let clean_rate = 48_000.0;
-        let clean = Audio {
-            sample_rate: clean_rate,
-            // clean sample 0 is at take-time clean_start, so an event at
-            // take-time e sits at clean-relative time e - clean_start.
-            samples: clicks(
+        // Clean sample 0 is at take-time clean_start; events use bounce-relative time.
+        let clean = Audio::from_samples(
+            clean_rate,
+            clicks(
                 &events.iter().map(|&e| e - clean_start).collect::<Vec<_>>(),
                 span - clean_start + 1.0,
                 clean_rate,
             ),
-            channels: 1,
-        };
+            1,
+        );
 
         let ref_rate = 44_100.0;
         let ref_events: Vec<f64> =
@@ -324,15 +339,15 @@ mod tests {
                 *sample += 0.7 * lcg.next_unit().signum();
             }
         }
-        let reference = Audio { sample_rate: ref_rate, samples: ref_samples, channels: 1 };
+        let reference = Audio::from_samples(ref_rate, ref_samples, 1);
         (reference, clean)
     }
 
     #[test]
     fn recovers_a_clean_file_that_starts_at_take_zero() {
         // Reference armed 2 s in; clean bounce is the whole song from 0.
-        let (reference, clean) = scenario(0.0, 2.0, 24.0);
-        let alignment = align(&reference, 2.0, &clean).expect("enough signal");
+        let (mut reference, mut clean) = scenario(0.0, 2.0, 24.0);
+        let alignment = align(&mut reference, 2.0, &mut clean).unwrap().expect("enough signal");
         assert!(
             alignment.start.abs() < 0.02,
             "clean starts at ~0, got {:.4}s (confidence {:.2})",
@@ -346,8 +361,8 @@ mod tests {
     fn recovers_a_clean_file_with_a_pre_roll() {
         // The bounce has half a second of count-in before song zero, so
         // its sample 0 is at take-time -0.5.
-        let (reference, clean) = scenario(-0.5, 1.5, 22.0);
-        let alignment = align(&reference, 1.5, &clean).expect("enough signal");
+        let (mut reference, mut clean) = scenario(-0.5, 1.5, 22.0);
+        let alignment = align(&mut reference, 1.5, &mut clean).unwrap().expect("enough signal");
         assert!(
             (alignment.start - (-0.5)).abs() < 0.02,
             "expected ~-0.5s, got {:.4}s",
@@ -357,22 +372,28 @@ mod tests {
 
     #[test]
     fn stereo_polarity_does_not_change_alignment() {
-        let (reference, clean) = scenario(-0.35, 0.5, 4.0);
-        let expected = align(&reference, 0.5, &clean).expect("mono reference aligns");
+        let (mut reference, mut clean) = scenario(-0.35, 0.5, 4.0);
+        let expected =
+            align(&mut reference, 0.5, &mut clean).unwrap().expect("mono reference aligns");
         assert!((expected.start + 0.35).abs() < 0.02);
         let onsets: Vec<_> = beat(4.0).into_iter().map(|t| (t, 0.8)).collect();
-        let expected_notes = align_to_notes(&onsets, 4.0, &clean).expect("MIDI reference aligns");
+        let expected_notes =
+            align_to_notes(&onsets, 4.0, &mut clean).unwrap().expect("MIDI reference aligns");
         for sign in [1.0, -1.0] {
-            let stereo = |audio: &Audio| Audio {
-                sample_rate: audio.sample_rate,
-                samples: audio.samples.iter().flat_map(|&x| [x, sign * x]).collect(),
-                channels: 2,
+            let stereo = |audio: &mut Audio| {
+                Audio::from_samples(
+                    audio.sample_rate,
+                    audio.all_samples().iter().flat_map(|&x| [x, sign * x]).collect(),
+                    2,
+                )
             };
-            let (reference, clean) = (stereo(&reference), stereo(&clean));
-            let actual = align(&reference, 0.5, &clean).expect("stereo attacks survive");
+            let (mut reference, mut clean) = (stereo(&mut reference), stereo(&mut clean));
+            let actual =
+                align(&mut reference, 0.5, &mut clean).unwrap().expect("stereo attacks survive");
             assert_eq!(actual.start, expected.start);
             assert!((actual.confidence - expected.confidence).abs() < 1e-6);
-            let notes = align_to_notes(&onsets, 4.0, &clean).expect("stereo aligns to notes");
+            let notes =
+                align_to_notes(&onsets, 4.0, &mut clean).unwrap().expect("stereo aligns to notes");
             assert_eq!(notes.start, expected_notes.start);
             assert!((notes.confidence - expected_notes.confidence).abs() < 1e-6);
         }
@@ -381,8 +402,8 @@ mod tests {
     #[test]
     fn recovers_a_positive_offset_too() {
         // The bounce starts 0.75 s into the song.
-        let (reference, clean) = scenario(0.75, 0.75, 22.0);
-        let alignment = align(&reference, 0.75, &clean).expect("enough signal");
+        let (mut reference, mut clean) = scenario(0.75, 0.75, 22.0);
+        let alignment = align(&mut reference, 0.75, &mut clean).unwrap().expect("enough signal");
         assert!(
             (alignment.start - 0.75).abs() < 0.02,
             "expected ~0.75s, got {:.4}s",
@@ -394,16 +415,17 @@ mod tests {
     fn crackle_does_not_throw_the_alignment_off() {
         // The confidence should stay high despite the reference being
         // the quiet, speckled one — that is the whole premise.
-        let (reference, clean) = scenario(0.0, 0.0, 26.0);
-        let alignment = align(&reference, 0.0, &clean).expect("enough signal");
+        let (mut reference, mut clean) = scenario(0.0, 0.0, 26.0);
+        let alignment = align(&mut reference, 0.0, &mut clean).unwrap().expect("enough signal");
         assert!(alignment.start.abs() < 0.02, "got {:.4}s", alignment.start);
         assert!(alignment.confidence > 0.5, "confidence {:.2}", alignment.confidence);
     }
 
     #[test]
     fn too_little_audio_declines_rather_than_guessing() {
-        let tiny = Audio { sample_rate: 48_000.0, samples: vec![0.0; 32], channels: 1 };
-        assert!(align(&tiny, 0.0, &tiny).is_none());
+        let mut tiny = Audio::from_samples(48_000.0, vec![0.0; 32], 1);
+        let mut other = Audio::from_samples(48_000.0, vec![0.0; 32], 1);
+        assert!(align(&mut tiny, 0.0, &mut other).unwrap().is_none());
     }
 
     #[test]
@@ -420,12 +442,12 @@ mod tests {
             // bounce starts aren't captured.
             let bounce_events: Vec<f64> =
                 events.iter().map(|&e| e - offset).filter(|&t| t >= 0.0).collect();
-            let clean = Audio {
-                sample_rate: 48_000.0,
-                samples: clicks(&bounce_events, span - offset + 1.0, 48_000.0),
-                channels: 1,
-            };
-            let a = align_to_notes(&onsets, span, &clean).expect("enough signal");
+            let mut clean = Audio::from_samples(
+                48_000.0,
+                clicks(&bounce_events, span - offset + 1.0, 48_000.0),
+                1,
+            );
+            let a = align_to_notes(&onsets, span, &mut clean).unwrap().expect("enough signal");
             assert!(
                 (a.start - offset).abs() < 0.03,
                 "offset {offset}: got {:.4}s (confidence {:.2})",
@@ -433,5 +455,41 @@ mod tests {
                 a.confidence,
             );
         }
+    }
+    #[test]
+    fn envelope_boundaries_survive_physical_chunks_and_a_partial_final_bin() {
+        let channels = 3;
+        let samples: Vec<f32> = (0..70_003 * channels).map(|i| (i as f32 * 0.013).sin()).collect();
+        // The high rate makes one 5 ms energy bin larger than the decoder's
+        // physical buffer, so this reaches segmentation *inside* a measurement.
+        for rate in [44_100.0, 48_000.0, 4_000_000.0] {
+            let mut audio = Audio::from_samples(rate, samples.clone(), channels);
+            let expected: Vec<f32> = (0..(audio.seconds() / HOP).floor() as usize)
+                .map(|k| {
+                    let start = (k as f64 * HOP * f64::from(rate)) as usize;
+                    let end =
+                        (((k + 1) as f64 * HOP * f64::from(rate)) as usize).min(audio.frames());
+                    let slice = &samples[start * channels..end * channels];
+                    let sum: f64 = slice.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+                    (sum / slice.len() as f64).sqrt() as f32
+                })
+                .collect();
+            assert!(expected.len() >= 3);
+            assert_eq!(envelope(&mut audio).unwrap(), expected);
+        }
+    }
+    #[test]
+    fn failed_recording_alignment_reuses_the_clean_onsets_for_midi() {
+        let (_, mut clean) = scenario(-0.35, 0.5, 4.0);
+        let notes: Vec<_> = beat(4.0).into_iter().map(|t| (t, 0.8)).collect();
+        let clean_onsets = audio_onsets(&mut clean).unwrap();
+        let silent_reference = vec![0.0; clean_onsets.len()];
+        assert!(super::align(&silent_reference, 0.5, &clean_onsets).is_none());
+        // Both correlations take only envelopes: retrying cannot read any WAV.
+        let fallback = super::align_to_notes(&notes, 4.0, &clean_onsets).unwrap();
+        let direct = align_to_notes(&notes, 4.0, &mut clean).unwrap().unwrap();
+        assert!((fallback.start + 0.35).abs() < 0.02);
+        assert_eq!(fallback.start, direct.start);
+        assert_eq!(fallback.confidence, direct.confidence);
     }
 }
