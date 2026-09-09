@@ -45,8 +45,18 @@ Forget old contributions when they cease to be useful, using straightforward bou
 The exact replacement and weighting rules remain open.
 
 Repeating a note refreshes its existing contribution rather than accumulating copies or increasing its weight merely through repetition.
-The exact identity used to recognize a repeat still needs to be defined for continuous input and drifted lattice positions.
-Do not assume that repeating the same controller key always means repeating the same sounding lattice node.
+If the same keyboard C returns one diesis lower, it is an entirely separate new pitch and must be treated as such.
+Identity follows the resulting pitch/lattice placement, not controller-key identity.
+Yan suggested a tolerance setting for deciding when a new note counts as the same as an old one.
+The proposed tolerance concerns memory matching, not permission to retune a sounding note.
+Its comparison domain, units, default, interaction with lattice spelling and eventual register-sensitive matching still need to be specified.
+Do not choose a default that conflates the motivating diesis-separated pitches or the desired minor-seventh alternatives.
+
+For the initial version, Yan accepts remembering the last N distinct contributions, refreshing repeats and evicting the least recently used released contribution when capacity is exceeded.
+Held notes remain represented rather than being evicted to meet the remembered-note budget.
+The capacity may be configurable; its value and accounting for held versus released entries remain open.
+**This is explicitly a temporary simplification.** Yan wants to move away from this fixed recent-note scheme eventually, toward a more musically informed replacement policy.
+Do not turn the initial capacity rule into a permanent musical contract or implement the more elaborate successor before it is designed.
 
 Giving held notes stronger influence remains a working proposal, not an absolute anchoring rule.
 A sustained bass may keep the neighbourhood nearby or be left behind by the newer harmony, depending on the sequence of notes and harmonic heuristics.
@@ -55,8 +65,11 @@ Forgetting individual old notes must not itself erase the accumulated tuning dis
 Ordinary releases between chords must not destroy continuity.
 
 Octave placement should influence the final algorithm, but Yan explicitly accepts ignoring it in the initial version for simplicity.
-Defer register weighting rather than declaring permanent octave equivalence.
-Output register and accumulated tuning displacement still need to be preserved even while harmonic scoring ignores register.
+The eventual harmonic context must store notes by register, and evaluate an incoming note using its register relative to those context notes.
+This is more than giving bass notes a fixed extra weight: relationships between input and context registers belong in the eventual decision.
+The exact register-sensitive heuristic is deferred, not a requirement to introduce it in the first version.
+Do not declare permanent octave equivalence or make a pitch-class-only representation the final context model.
+Output register and accumulated tuning displacement still need to be preserved even while initial harmonic scoring ignores register.
 
 Provide a configurable time before reset after silence, with a proposed “Never” option.
 The working proposal measures silence from the release of the last sounding note and clears both harmonic memory and accumulated drift at timeout.
@@ -129,8 +142,10 @@ Context and balance changes may move those ranges and make nodes enter or leave 
 | Harmonic preference ↔ Pitch fidelity | Balance eligible candidates' harmonic suitability and input-pitch closeness | Requested; scoring, range and default open |
 | Reset after silence | Set when context and accumulated drift reset, optionally never | Requested; timing semantics, range and default open |
 | Allowed lattice axes / interval families | Control which harmonic relationships may supply candidates, including whether seventh-based relationships are allowed | Requested; UI, combinations and default open |
+| Same-note tolerance | Decide when a new pitch refreshes an existing memory contribution | Suggested by Yan; matching semantics, units, range and default open |
+| Remembered-note capacity | Set N for the temporary recent-note replacement scheme | Scheme accepted for initial version; exposing N as a setting remains proposed |
 
-Memory replacement might need a capacity or activity-based control, or might use a fixed rule.
+The initial memory replacement scheme is intentionally temporary; its successor remains to be designed.
 Do not add gradual time decay as the default interpretation of forgetting.
 Replacement must not be conflated with the silence reset: one lets new harmony take over, while the other intentionally ends the journey.
 
@@ -138,10 +153,10 @@ Replacement must not be conflated with the silence reset: one lets new harmony t
 
 1. **Moving reference.** What establishes and advances the input-to-lattice reference? How are register and accumulated unwrapped displacement carried separately? Note-order dependence is accepted, but updates still need a coherent musical interpretation.
 2. **Harmonic distance and vocabulary setting.** Which axis combinations should the setting offer, and how are permitted connections weighted? Is remoteness measured from one centre, the whole context or nearby individual voices? How is a widely spread context handled without admitting arbitrary bridges or leaving no candidates?
-3. **Memory replacement and weights.** Repetitions refresh rather than accumulate: what identifies the same contribution under continuous input and drift? Which new activity supersedes other old contributions, and should sustained notes or chord density affect weighting? A held bass has no categorical anchoring privilege; its effect should emerge from the sequence and heuristics. Register influence is required eventually but deferred from the initial version.
+3. **Memory matching and weights.** Different resulting pitches remain distinct even when played by the same key. How should the proposed same-note tolerance work, and what is N for the accepted temporary recent-note scheme? Should sustained notes or chord density affect weighting? A held bass has no categorical anchoring privilege; its effect should emerge from the sequence and heuristics. The eventual successor to fixed-capacity recency remains open.
 4. **Reset.** What counts as silence under sustain? What should Stop, playback loops and explicit Reset do? What timeout range and default feel useful?
 5. **Continuous pitch and expression.** Which incoming pitch controls describe the pitch to quantize at attack? Should subsequent player-authored bends be forwarded, and if so should they affect future notes' context? Automatic reselection of sounding notes is forbidden. The current participating path does not use incoming expression to choose its assignment, so continuous input requires an explicit change to that contract.
-6. **Selection and indicator.** How strong can pitch fidelity become within the boundary, and how are ties and simultaneous attacks ordered stably? Later, how should register influence context and selection, and how should the indicator express any register-dependent reachability?
+6. **Selection and indicator.** How strong can pitch fidelity become within the boundary, and how are ties and simultaneous attacks ordered stably? Later, how should the incoming note's register relative to register-bearing context influence selection, and how should the indicator express register-dependent reachability?
 
 Joint chord selection was an earlier suggestion; the subsequent decision favours simplicity and accepts route dependence.
 A fixed twelve-node keyboard mapping was explicitly rejected in favour of continuous pitch input.
@@ -153,12 +168,15 @@ Do not restore that assumption merely to simplify the indicator.
 - Ordinary gaps between chords preserve the journey until the configured reset.
 - A lone remembered note remains useful after waiting, provided the silence timeout has not expired; new musical activity, rather than gradual time decay, replaces its influence.
 - Repetition refreshes one remembered contribution without multiplying its weight by the number of attacks.
+- Replaying a keyboard pitch at a diesis-shifted output creates a distinct contribution; any memory tolerance must have deliberately stated matching behaviour.
+- In the temporary N-entry scheme, new distinct activity evicts the least recently used released contribution, while held notes remain represented.
 - Later notes never cause an already sounding note to be adaptively retuned.
 - Fine pitch input can distinguish 9/5 and 16/9 when both are eligible.
 - An exact pitch match outside the harmonic boundary never wins.
 - The allowed-vocabulary setting controls candidate generation without retuning notes already sounding.
 - Reachable nodes shown in the indicator agree with actual next-note selection under the same context.
 - Note-order dependence is accepted for inversions and arpeggios; simultaneous attacks must still have a deterministic order, sustained-anchor behaviour needs explicit heuristics, and register weighting may be deferred initially.
+- The eventual register-sensitive version stores context notes by register and evaluates incoming notes in relation to those registers; this is deferred rather than claimed by the initial version.
 
 These are design checks, not claims of implemented or tested behaviour.
 The existing policy's fixed origin domain, 50-cent candidate window and per-note sequential decisions are useful comparison points, not constraints on this redesign.
