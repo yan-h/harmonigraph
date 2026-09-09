@@ -433,6 +433,12 @@ impl Tune {
             if !self.emit(output, time, event, tuning, correction) {
                 break;
             }
+            // Counted where the note actually leaves, not where it is
+            // resolved: a staging failure re-resolves the same entry next
+            // callback, and one note must not count as two misses.
+            if pending.awaiting && pending.correction.is_none() {
+                self.misses += 1;
+            }
             self.line.pop();
         }
     }
@@ -440,7 +446,7 @@ impl Tune {
     /// What actually goes on the wire for one retained input: the frozen
     /// correction composed into a later per-note expression, and the initial
     /// expression that states it for a new voice.
-    fn resolve(&mut self, pending: Pending) -> (Event, Option<Event>, i64) {
+    fn resolve(&self, pending: Pending) -> (Event, Option<Event>, i64) {
         if let Some((id, channel, key, _)) = pending.event.attack() {
             let tuning = pending.correction.map(|correction| Event::Expression {
                 kind: 2,
@@ -451,20 +457,19 @@ impl Tune {
                 value: pending.player + correction as f64 / 100_000_000.0,
                 flags: 0,
             });
-            if pending.correction.is_none() && pending.awaiting {
-                self.misses += 1;
-            }
             return (pending.event, tuning, pending.correction.unwrap_or(0));
         }
+        // The same addressing rule the Hub applies to the same event, so the
+        // pitch this composes and the pitch the Hub draws are one voice's.
+        let correction = self
+            .held
+            .iter()
+            .flatten()
+            .find(|voice| pending.event.matches(voice.id, voice.channel, voice.key))
+            .map_or(0, |voice| voice.correction);
         let mut event = pending.event;
-        if let Event::Expression { kind: 2, id, channel, key, value, .. } = &mut event {
-            if let Some(voice) = self.held.iter().flatten().find(|voice| {
-                (*id == -1 || voice.id == -1 || *id == voice.id)
-                    && (*channel == -1 || *channel == i16::from(voice.channel))
-                    && (*key == -1 || *key == i16::from(voice.key))
-            }) {
-                *value += voice.correction as f64 / 100_000_000.0;
-            }
+        if let Event::Expression { kind: 2, value, .. } = &mut event {
+            *value += correction as f64 / 100_000_000.0;
         }
         (event, None, 0)
     }
@@ -483,13 +488,19 @@ impl Tune {
             Some(tuning) => api::Group::onset(token, time, event.input(), tuning.input()),
             None => api::Group::single(token, api::Lane::Normal, time, event.input()),
         };
-        let Ok(group) = group else {
-            // A value the wrapper refuses is a value no host would take. It is
-            // dropped rather than retried, and the counter says a note left
-            // without its correction.
-            self.dropped += 1;
-            self.status |= session::DROPPED;
-            return true;
+        let group = match group {
+            Ok(group) => group,
+            // A pair the wrapper refuses costs the correction, not the note.
+            // Losing both would be the one thing this design exists to stop.
+            Err(_) if tuning.is_some() => {
+                self.status |= session::DROPPED;
+                return self.emit(output, time, event, None, 0);
+            }
+            Err(_) => {
+                self.dropped += 1;
+                self.status |= session::DROPPED;
+                return true;
+            }
         };
         if output.stage(group).is_err() {
             return false;
