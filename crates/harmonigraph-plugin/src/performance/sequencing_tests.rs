@@ -4278,3 +4278,92 @@ fn production_destruction_abandons_pending_and_accepted_release_owners_once() {
         assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
     }
 }
+
+/// Apply / Reinitialize while a Tune is playing: the Hub's transition never
+/// commits and every paired track goes silent for good.
+///
+/// A setup transition fences every row, and the row's membership only ends
+/// when the Tune's lease settles and both sides detach. `Source::lease_settled`
+/// waits on `old_pending`, which counts obligations minted at or before the
+/// lease generation -- and `enqueue_cell` mints a record against the
+/// GENERATION OF THE LIFE IT ADDRESSES, so every later release of a voice born
+/// before the fence is minted old. The withdrawal cancels once, at a
+/// `cancel_cut` taken when the fence is observed, so those later records sit
+/// above the cut, owed by a row that can no longer emit anything. `old_pending`
+/// never reaches zero, the Tune never seals or detaches, and
+/// `Hub::commit_transition` parks on `setup_wait` 7 for the rest of the
+/// session with every row withdrawn behind a closed gate.
+///
+/// That is exactly what Yan's Bitwig `engine.log` shows: `transition_wait=7`,
+/// `source_detached=0`, `hub_detached=0` and a row frozen for 154 s across two
+/// Apply clicks, with the Tune counting 242 note-ons in and 97 out.
+///
+/// IGNORED, and deliberately not fixed: the fix is one more clause on one more
+/// settle predicate, and #786 (stage 8 of #712) replaces this whole graceful
+/// settlement with the fault cut the fault path already implements. This test
+/// is meant to be the first regression that cut has to satisfy.
+#[test]
+#[ignore = "reproduces the Apply stall #786 removes the mechanism behind; see that issue"]
+fn production_apply_commits_with_a_tunes_uncovered_records_staged() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let (hub, source) = production_pair();
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    // The Tune a block ahead of the Hub is what leaves a copied record above
+    // the merge frontier: the Hub owns it and cannot yet sequence it, which is
+    // the `input_queued=3` the log shows on the frozen row.
+    let mut raw = 1536;
+    source.run_format(raw, vec![], None, None, 512);
+    for step in 0..6 {
+        let played = if step % 2 == 0 {
+            note(step + 1, 0, 60 + step as i16, 3, true)
+        } else {
+            note(step, 0, 59 + step as i16, 3, false)
+        };
+        source.run_format(raw + 512, vec![played], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+    }
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_inputs(1).len()),
+        1,
+        "the fixture must reach the Apply holding a staged record; with none the row \
+         settles for the wrong reason and this test proves nothing"
+    );
+    hub.shared()
+        .apply(
+            setup::Routing::Hub(HubSetup { uuid, calibration: Calibration { offset: 64 } }),
+            true,
+        )
+        .unwrap();
+    // The player keeps playing across the Apply, which is what keeps minting
+    // records against lives born before the fence.
+    let mut emitted = 0;
+    for step in 0..96 {
+        let input = match step % 4 {
+            0 => vec![note(64 + step, 0, 67, 3, true)],
+            2 => vec![note(62 + step, 0, 67, 3, false)],
+            _ => vec![],
+        };
+        emitted += source
+            .run_format(raw + 512, input, None, None, 512)
+            .values
+            .iter()
+            .filter(|(_, event)| event.attack().is_some())
+            .count();
+        hub.run_format(raw, vec![], None, None, 512);
+        source.main();
+        hub.main();
+        raw += 512;
+    }
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.direct.test_snapshot().epoch),
+        2,
+        "the Apply must reach a committed boundary rather than parking on a row whose \
+         lease can never settle; it stopped at {:?} (setup_wait, held generation, row \
+         withdrawn/source_detached/hub_detached)",
+        inspect_hub(&hub, |hub| hub.test_transition(0)),
+    );
+    assert!(emitted > 0, "and the Tune's notes reach the wire again after it");
+    settle(&hub, &source, raw, vec![]);
+}

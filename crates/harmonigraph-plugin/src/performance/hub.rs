@@ -1854,6 +1854,20 @@ impl Hub {
     pub fn test_context(&self) -> Vec<(u8, u64)> {
         self.sequencer.test_context()
     }
+    /// Why `commit_transition` last returned, the generation it is holding,
+    /// and the row flags that decide it: `(withdrawn, source_detached,
+    /// hub_detached)`.
+    pub fn test_transition(&self, slot: usize) -> (i64, Option<u64>, (bool, bool, bool)) {
+        let flags = self.offer.as_ref().map_or((false, false, false), |offer| {
+            let row = &offer.session.rows[slot];
+            (
+                row.withdrawn.load(Ordering::Acquire),
+                row.source_detached.load(Ordering::Acquire),
+                row.hub_detached.load(Ordering::Acquire),
+            )
+        });
+        (self.trace.setup_wait, self.transition.map(|update| update.generation), flags)
+    }
     /// Copied records this row is holding, oldest first.
     pub fn test_inputs(&self, source: usize) -> Vec<Capture> {
         let queue = if source == 0 { &self.direct_inputs } else { &self.rows[source - 1].inputs };
