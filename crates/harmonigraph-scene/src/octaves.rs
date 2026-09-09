@@ -101,10 +101,10 @@ pub const MIN_COUNT: u32 = 1;
 /// smallest.
 pub const MAX_EXTRAS: u32 = (MAX_SPAN - MIN_COUNT) / 2;
 
-/// The count a fresh view starts on: five octaves to the turn, an octave worth
-/// 72 degrees, and — centered on middle C — C1..C5 in the DAW's numbering,
-/// which is the register a keyboard part actually lives in.
-pub const DEFAULT_COUNT: u32 = 5;
+/// The count a fresh view starts on: seven octaves to the turn, an octave worth
+/// about 51 degrees, and — centered on middle C — the keyboard's full C0..C6
+/// span in the DAW's numbering.
+pub const DEFAULT_COUNT: u32 = 7;
 
 /// The pitch a fresh view puts at the top: middle C, MIDI 60, which the UI
 /// spells C3 in Bitwig's numbering. The wheel then reads like a keyboard, with
@@ -121,16 +121,18 @@ pub const MIN_EXTRA_SIZE: f32 = 0.1;
 /// enough to read as fringe at a glance rather than as a slightly short
 /// octave, wide enough to see what pitch it is lighting. What
 /// [`octave_layout`] falls back to for a non-finite size, plus the size most
-/// test fixtures build on — NOT the fresh look, which opens on a wider fringe
-/// of its own, and NOT what `ViewConfig::sanitize` repairs to, which is that
-/// fresh value (see [`ViewConfig`](crate::ViewConfig)).
+/// test fixtures build on — NOT the fresh view's persisted setting, which
+/// rides inert while that view has no extras, and NOT what
+/// `ViewConfig::sanitize` repairs to, which is that persisted value (see
+/// [`ViewConfig`](crate::ViewConfig)).
 pub const DEFAULT_EXTRA_SIZE: f32 = 0.35;
 
 /// The blend an extra falls back to: none, so every extra is the same size
-/// and the wheel is exactly two tiers. The alternative is a graded ramp, and
-/// that is what a fresh view opens on — this is what [`octave_layout`] falls
-/// back to for a non-finite blend, where `ViewConfig::sanitize` repairs to
-/// the fresh value instead. See [`ViewConfig`](crate::ViewConfig).
+/// and the wheel is exactly two tiers. The alternative is a graded ramp, which
+/// a fresh view carries as an inert persisted value while its extras are off —
+/// this is what [`octave_layout`] falls back to for a non-finite blend, where
+/// `ViewConfig::sanitize` repairs to the persisted fresh value instead. See
+/// [`ViewConfig`](crate::ViewConfig).
 pub const DEFAULT_EXTRA_BLEND: f32 = 0.0;
 
 /// Semitones to the octave, as a float: this module is all pitch arithmetic
@@ -943,17 +945,14 @@ mod tests {
         }
     }
 
-    /// The wheel the plugin actually opens on: five full-size octaves around
-    /// middle C with a two-octave fringe either end, so the ring reaches
-    /// nine octaves while the five in the middle keep most of the turn.
+    /// The wheel the plugin actually opens on: seven full-size octaves around
+    /// middle C, with no smaller fringe at either end.
     ///
     /// Read off [`ViewConfig`](crate::ViewConfig) rather than
-    /// `OctaveLayout::default()`, which passes a literal `0` for the extras
-    /// and so answers for a wheel nothing ships — it is the fixture most of
-    /// the tests above build on, and asserting the fringe against it is
-    /// asserting a constant against itself.
+    /// `OctaveLayout::default()`, so the fixture proves the composed fresh view
+    /// still agrees with the octave module's defaults.
     #[test]
-    fn the_wheel_a_fresh_view_opens_on_is_five_octaves_and_a_fringe() {
+    fn the_wheel_a_fresh_view_opens_on_is_seven_full_octaves() {
         let v = crate::ViewConfig::default();
         let l = octave_layout(
             v.octave_count,
@@ -962,8 +961,8 @@ mod tests {
             v.octave_extra_size,
             v.octave_extra_blend,
         );
-        assert_eq!((l.count, l.extras), (5, 2), "the wheel a fresh view opens on has moved");
-        assert_eq!(l.slots(0.0), (1, 9), "the fringe is what buys the reach past C1..C5");
+        assert_eq!((l.count, l.extras), (7, 0), "the wheel a fresh view opens on has moved");
+        assert_eq!(l.slots(0.0), (2, 8), "the fresh wheel does not cover C0..C6");
         assert_eq!(l.slot_pitch(MIDDLE_C_SLOT as i32, 0.0), 60.0);
 
         let width = |slot: i32| {
@@ -973,14 +972,14 @@ mod tests {
         let full = width(MIDDLE_C_SLOT as i32);
         let (e0, e1) = l.sector(MIDDLE_C_SLOT as i32, 0.0);
         assert!((0.5 * (e0 + e1) - UP).abs() < 1e-5, "middle C is not straight up");
-        assert!(full < TAU / 5.0, "a fringed wheel spends part of the turn on the fringe");
-
-        // Graded, not two flat tiers: the outermost octave is the narrowest
-        // thing on the wheel and the one inboard of it sits between that and
-        // full size. A blend of 0 would make the two equal.
-        let (outer, inner) = (width(MIDDLE_C_SLOT as i32 + 4), width(MIDDLE_C_SLOT as i32 + 3));
-        assert!(outer < inner, "the fringe is a flat tier, not a ramp");
-        assert!(inner < full, "the inboard extra is not narrower than a full-size octave");
+        assert!(
+            (full - TAU / 7.0).abs() < 1e-5,
+            "seven full octaves do not divide the turn evenly"
+        );
+        assert!(
+            (width(MIDDLE_C_SLOT as i32 + 3) - full).abs() < 1e-5,
+            "the outer octave is not full-size",
+        );
         assert!(
             (l.bounds[l.span as usize] - l.bounds[0] - TAU).abs() < 1e-4,
             "the wheel does not close",

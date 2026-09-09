@@ -27,25 +27,24 @@ fn audio_spectrum_shows_while_flowing_and_hides_after() {
     assert!(spectrum.display(1.0 + AudioSpectrum::HOLD_SECONDS + 0.1).is_none());
 }
 
-/// Music fills most of the analyzer's height, rather than half of it.
+/// Quiet music fills most of the analyzer's height, rather than disappearing
+/// into its lower half.
 ///
-/// The ceiling used to be full scale, and nothing musical puts full scale in
-/// ONE bucket: a chord splits its power across its partials, and the default
-/// tilt takes another 10 dB off anything well under the 1 kHz pivot. The curve
-/// topped out halfway up and the top half of the pane was empty in normal use.
+/// Nothing musical puts its whole level in ONE bucket: a chord splits its
+/// power across its partials, and the default tilt takes another cut below the
+/// 1 kHz pivot. The captured ceiling spends the pane on that profile rather
+/// than reserving most of it for a full-scale test tone.
 ///
-/// So the defaults are held to a chord rather than to a test tone. This one
-/// reads 0.90 of the pane as they stand and 0.60 against a full-scale ceiling,
-/// so 0.75 is the line between the two — what it catches is the ceiling
-/// drifting back up, not a shift of a few dB either way. The upper bound is
-/// the other failure: a curve clipped flat against the top has lost the shape
-/// of its own peaks, which is worse than empty space above it.
+/// So the defaults are held to a quiet chord rather than to a test tone. The
+/// lower bound catches the ceiling drifting back up; the upper bound catches
+/// the other failure, where a curve clipped flat against the top has lost the
+/// shape of its own peaks.
 #[test]
 fn a_chord_fills_most_of_the_analyzers_height() {
     let sr = 48_000.0;
     let cfg = SpectrumConfig::default();
-    // Six partials sharing the headroom, peaking about -12 dBFS — a mix, not a
-    // tone. Two seconds, so the smoothing has long settled.
+    // Six partials sharing the headroom, peaking about -20 dBFS — a quiet mix,
+    // not a tone. Half a second, so the smoothing has long settled.
     let samples: Vec<f32> = (0..24_000)
         .map(|i| {
             let t = i as f32 / sr;
@@ -53,7 +52,7 @@ fn a_chord_fills_most_of_the_analyzers_height() {
                 .iter()
                 .map(|f| (std::f32::consts::TAU * f * t).sin())
                 .sum();
-            0.25 * mix / 6.0_f32.sqrt()
+            0.1 * mix / 6.0_f32.sqrt()
         })
         .collect();
     let mut spectrum = AudioSpectrum::default();

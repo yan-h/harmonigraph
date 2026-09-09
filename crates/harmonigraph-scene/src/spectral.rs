@@ -1095,9 +1095,9 @@ mod tests {
         );
     }
 
-    /// The fresh wheel, which every gate claim below is read on: five octaves
-    /// to the turn around middle C with a fringe either end, so a node's ring
-    /// names slots 3..=9 and a partial can be put on one of them by name.
+    /// The fresh wheel, which every gate claim below is read on: seven full
+    /// octaves to the turn around middle C, so a node's ring names slots 2..=8
+    /// and a partial can be put on one of them by name.
     fn wheel() -> OctaveLayout {
         let view = ViewConfig::default();
         crate::octave_layout(

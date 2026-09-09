@@ -2134,12 +2134,12 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 /// in terms of it, the way it is written in terms of `octaves::DEFAULT_COUNT`.
 ///
 /// Where on the chrome's ladder this grey sits is said at the `Default` below.
-const DEFAULT_RING_GROUND: f32 = 11.0;
+const DEFAULT_RING_GROUND: f32 = 8.0;
 
 /// The `L*` a fresh [`ViewConfig::marker_ink`] opens on. Kept beside the ring
 /// ground because the accessors repair the two independently without building
 /// a fresh view to read either field.
-const DEFAULT_MARKER_INK: f32 = 28.0;
+const DEFAULT_MARKER_INK: f32 = 37.0;
 
 /// The `L*` a fresh [`ViewConfig::sounding_ink`] opens on: the top of the axis,
 /// so a sounding name is white and the fresh distance between the two ends of
@@ -2213,11 +2213,11 @@ impl Default for ViewConfig {
             // converted, which `the_defaults_are_the_retired_arc_converted`
             // holds it to, and what a gradient assembled in code opens on.
             // The composed look is free to differ, and does: a shorter arc,
-            // a dimmer middle over a shallower brightness ramp, and a little
+            // a brighter middle over a steeper brightness ramp, and a little
             // less chroma.
             pitch_gradient: Gradient {
                 hue_start: 257.842_65,
-                hue_span: 190.0,
+                hue_span: 170.496,
                 // Brighter in the middle and over a much steeper ramp than
                 // the arc opened on (53.0 over 31.0): the low end stays dark
                 // enough to sit back while the top of the range carries real
@@ -2258,18 +2258,14 @@ impl Default for ViewConfig {
             // person can meet by dialling neither.
             ring_gap: 0.05,
             octave_gap: 0.05,
-            // Where the DAW look was captured on 2026-09-07, a step DOWN from
-            // the `L*` 20.0 the fresh view stood on before: just above the
-            // chrome's panel (8.8) and well short of its faint surface (20.0),
-            // so a quiet ring is a dim reading barely raised off the pane and
-            // still clear of the well grey (4.7) the lattice pane stands on.
-            // Nothing ties this to the skin any more — the chrome's ladder and
-            // the ground are dialled apart.
+            // Where the DAW look was captured on 2026-09-08, just below the
+            // chrome's panel (8.8) and clear of the well grey (4.7) the lattice
+            // pane stands on. Nothing ties this to the skin — the chrome's
+            // ladder and the ground are dialled apart.
             lattice_ground: DEFAULT_RING_GROUND,
-            // Well above the ring ground — 17 `L*` clear of it since the
-            // capture moved the ground down — so the resting positions stay
-            // legible through the broad glow without competing with a sounding
-            // node's white name.
+            // Well above the ring ground — 29 `L*` clear of it — so the
+            // resting positions stay legible through the broad glow without
+            // competing with a sounding node's white name.
             marker_ink: DEFAULT_MARKER_INK,
             // The other end of the label pair, as far from that grey as the
             // axis goes: type on a sounding node is white, and what says a node
@@ -2278,14 +2274,12 @@ impl Default for ViewConfig {
             // the bar is doing something — it is a look to dial down from
             // rather than one to discover.
             sounding_ink: DEFAULT_SOUNDING_INK,
-            // Five octaves to the turn with middle C straight up — C1..C5 in
-            // the DAW's numbering, the register a keyboard part lives in, at
-            // 72 degrees an octave, with a two-octave fringe either end (see
-            // octave_extras) narrower than a full-size slice and graded from
-            // the outer edge in.
+            // Seven full-size octaves to the turn with middle C straight up —
+            // the keyboard's C0..C6 span in the DAW's numbering, with no
+            // smaller fringe at either end.
             octave_count: crate::octaves::DEFAULT_COUNT,
             octave_center: crate::octaves::DEFAULT_CENTER,
-            octave_extras: 2,
+            octave_extras: 0,
             octave_extra_size: 0.387_534_47,
             octave_extra_blend: 0.562_241_4,
             // The fold, which is the reading to look at a screenful of nodes
@@ -2371,11 +2365,10 @@ impl Default for ViewConfig {
             // more of that job — see `glow_blend` and `glow_wash` below.
             bloom_strength: 0.482_142_87,
             // A reach spanning several lattice steps turns each node's light
-            // into a shared field, laid down at about half strength — where
-            // the DAW look was captured on 2026-09-07, up from the quarter the
-            // view opened on before.
+            // into a shared field, laid down at about two fifths strength —
+            // where the DAW look was captured on 2026-09-08.
             glow_reach: 4.546_375,
-            glow_strength: 0.484_285_7,
+            glow_strength: 0.408_223_2,
             glow_curve: GlowCurve::default(),
             // Four groups at four styles, which is the picture as captured
             // from the DAW: the numbers themselves live in `impl Default for

@@ -186,8 +186,7 @@ pub enum SpectrogramPreset {
     Mono,
     /// Navy through blue to cyan. The cool ramp.
     Ice,
-    /// Violet through teal and green to yellow (viridis-like) — what a fresh
-    /// install opens on.
+    /// Violet through teal and green to yellow (viridis-like).
     Aurora,
     /// Indigo through magenta and orange to cream: [`Self::Aurora`]'s warm
     /// counterpart, over the other half of the circle.
@@ -787,10 +786,9 @@ pub(crate) const ROLL_SECONDS_MAX: f32 = 600.0;
 /// and start reading as a comb laid over the curve — and the curve is what they
 /// are reaching INTO, so covering it defeats the whole errand.
 ///
-/// The default sits at half of this, so the bar opens with as much travel above
-/// the dialled lead as below it: how far a note should reach is a matter of
-/// taste and of how busy the music is, and a bound that barely cleared the
-/// default left only one direction to explore.
+/// The captured default sits a little past three fifths of this: how far a note
+/// should reach is a matter of taste and of how busy the music is, and the bar
+/// still leaves useful travel on either side.
 ///
 /// A fraction, so this is a bound on the COMPOSITION rather than on a length:
 /// whatever the pane size, the pitch zoom or where the divider sits, half is
@@ -823,21 +821,21 @@ pub(crate) const LEVEL_MAX_DB: f32 = 0.0;
 /// would push the bar past its own end.
 pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;
 
-/// Where the curve's window ends, and it is NOT full scale, because nothing
-/// musical gets near full scale in one bucket.
+/// Where the live analyzer's curve window ends, captured from the DAW on
+/// 2026-09-08.
 ///
-/// Measured: a chord of six partials mixed to peak at -12 dBFS reads -23.8 dB
-/// in its loudest bucket once the default -4.5 dB/oct tilt has taken its cut,
-/// because a chord splits its power across its partials and one bucket only
-/// ever holds a share of it. Against a full-scale ceiling that is 0.60 of the
-/// pane, so the top two fifths of an analyzer are empty in normal use.
-///
-/// -20 puts the same chord at 0.90 and a quiet passage where the curve can
-/// still be read. A full-scale sine now runs off the top, which is the right
-/// trade: the pane is read against material, not against a test tone.
+/// This is deliberately independent of the heatmap's volume ceiling below:
+/// one maps the current profile's height, while the other maps stored history
+/// into colour. Dialling the curve against the current material should not
+/// silently regrade the spectrogram beside it.
 ///
 /// The bar still offers [`LEVEL_MAX_DB`], so 0 is one drag away.
-const DEFAULT_CEILING_DB: f32 = -20.0;
+const DEFAULT_ANALYZER_CEILING_DB: f32 = -26.344_88;
+
+/// The top of the heatmap's own colour window.
+/// Kept separate from the analyzer ceiling because both were dialled to their
+/// own values in the live capture.
+const DEFAULT_VOLUME_CEILING_DB: f32 = -23.533_836;
 
 /// The tilt settings offered, per analyzer convention (-1.5 dB/oct
 /// increments; see [`SpectrumConfig::tilt`]).
@@ -856,8 +854,11 @@ impl Default for SpectrumConfig {
             // which of them is worth it is a judgement about material, and the
             // fresh look is the one that presumes nothing.
             tapers: SpectrumTapers::One,
-            floor_db: -60.0,
-            ceiling_db: DEFAULT_CEILING_DB,
+            // The analyzer's level window as captured from the DAW on
+            // 2026-09-08. Its floor and ceiling are independent of the
+            // heatmap's colour window below.
+            floor_db: -84.436_09,
+            ceiling_db: DEFAULT_ANALYZER_CEILING_DB,
             // Meter ballistics: quick enough up that a note's arrival is not
             // behind the ear, slow enough down that the estimator's own noise
             // wobbling between columns does not draw. 10 ms is inside one hop,
@@ -880,32 +881,29 @@ impl Default for SpectrumConfig {
             low_midi: harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI,
             high_midi: harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
             show_roll: true,
-            // Most of the pane to the roll, as captured from the DAW on
-            // 2026-09-07; the analyzer's own display keeps the rest.
-            roll_fraction: 0.704_143_05,
-            // Three minutes, which is a whole piece rather than a glimpse of
-            // the hands: the roll and the heatmap are read for the SHAPE of
-            // what has been played, and a dozen seconds only ever shows the
-            // last phrase of it. Well inside the history the store keeps
-            // (`AudioSpectrum::HISTORY_MAX_SECONDS`), so the heatmap fills the
-            // whole span rather than fading out partway back. The bar's scale
-            // is logarithmic and gives the short spans most of its travel, so
-            // a close-up is one drag away.
-            roll_seconds: 180.0,
+            // Three quarters of the pane to the roll, as captured from the
+            // DAW on 2026-09-08; the analyzer's own display keeps the rest.
+            roll_fraction: 0.751_650_15,
+            // About seventy-two seconds, as captured from the DAW on
+            // 2026-09-08: enough history to read the recent section while the
+            // notes still have useful separation along the roll. The bar's
+            // logarithmic scale keeps both a phrase and a whole piece within
+            // easy reach from here.
+            roll_seconds: 71.899_99,
             // Thin: a note is a line through the spectrogram at its own
             // pitch, not a slab over it. At 0.3 semitones a semitone of pitch
             // axis still separates two neighbouring keys, which is what makes
             // the roll readable when the pitch range is zoomed out over the
             // whole spectrum.
             roll_thickness: 0.3,
-            // A long tongue that stays solid nearly the whole way: a quarter of
-            // the analyzer, with the last fifth of that spent fading. A
-            // sounding note reaches well into the curve it is making and ends
-            // by softening rather than by stopping, so which notes are down is
-            // legible from across the room and the ribbon still lets go of the
-            // spectrum instead of ruling a line across it.
-            roll_lead: 0.25,
-            roll_lead_fade: 0.05,
+            // A long tongue whose fade spans nearly its whole reach: about a
+            // third of the analyzer, softening almost from the note itself. A
+            // sounding note reaches well into the curve it is making, so which
+            // notes are down is legible from across the room, while the long
+            // fade lets the ribbon go of the spectrum instead of ruling a hard
+            // line across it.
+            roll_lead: 0.320_209_26,
+            roll_lead_fade: 0.300_844_37,
             // Long enough to read as the note letting go rather than as ink
             // disappearing, short enough that the tongue is gone before the eye
             // goes looking for the note that made it.
@@ -914,13 +912,21 @@ impl Default for SpectrumConfig {
             // The leading edge: a held note's name waits where you can read it
             // while you play, which is what the naming was dialled in against.
             note_names_travel: false,
-            note_name_scale: 1.0,
+            note_name_scale: 1.276_662_3,
             show_spectrogram: true,
-            // The even ramp, which is the one that reads a heatmap's quiet
-            // detail honestly — and now even in `L*` rather than in bytes.
-            spectrogram_gradient: SpectrogramPreset::Aurora.gradient(),
-            volume_floor_db: -60.0,
-            volume_ceiling_db: DEFAULT_CEILING_DB,
+            // Aurora retuned in the DAW on 2026-09-08: a shorter violet-to-
+            // green arc, the full lightness axis, and more colour at both ends
+            // than the preset button itself writes.
+            spectrogram_gradient: Gradient {
+                hue_start: 302.0,
+                hue_span: -181.224_01,
+                lightness: 50.0,
+                lightness_ramp: 100.0,
+                chroma: 0.794_999_96,
+                chroma_ramp: 0.410_000_03,
+            },
+            volume_floor_db: -81.221_8,
+            volume_ceiling_db: DEFAULT_VOLUME_CEILING_DB,
         }
     }
 }

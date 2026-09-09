@@ -617,7 +617,7 @@ mod tests {
         /// whole reason the constellation is exact: a partial of a just-tuned
         /// note lands ON its node rather than near it.
         ///
-        /// The widest wheel rather than the fresh five slices, because these
+        /// The widest wheel rather than the fresh seven slices, because these
         /// tests are about the fold and not about the wheel: a narrow wheel
         /// would leave "the octaves below every partial stay dark" true of
         /// slots that are not drawn at all, which is no claim about the

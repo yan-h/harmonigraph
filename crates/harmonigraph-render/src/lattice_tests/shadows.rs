@@ -58,6 +58,9 @@ fn on_ground(shadow: f32, depth: f32) -> Scene {
         pitch: 0.0,
         ..Default::default()
     };
+    // These low-resolution shadow probes need stable, wide wedges; the fresh
+    // look is free to change its octave composition independently.
+    scene.octave_layout = probe_octave_layout();
     scene.glow_reach = 0.0;
     for style in scene.shadow.groups_mut() {
         style.width = shadow;
