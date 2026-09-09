@@ -291,6 +291,10 @@ impl Hub {
         self.adopt();
         self.detect_loop(callback);
         self.sequencer.publish_neighbourhood(&self.shared, owner.reducer.resolved().into());
+        // Silence expires released memory against the completed input
+        // frontier, which is this callback's start: everything before it has
+        // been sequenced, and nothing after it has arrived.
+        self.sequencer.expire(callback.steady_time, self.rate);
     }
 
     /// One atomic load of the epoch. A different value is the cut: a Tune came
@@ -305,7 +309,11 @@ impl Hub {
                 self.rows[source].state.clear();
                 self.rows[source].repair = publication::Lanes::both(true);
             }
-            if session.is_reset(epoch) {
+            // Every epoch change ends every voice. What it does to released
+            // memory is the only thing that depends on which change it was.
+            if session.is_reset(epoch)
+                || session.is_stop(epoch) && self.sequencer.config.policy.reset_stop
+            {
                 self.sequencer.memory.clear();
                 self.sequencer.last_release = None;
             }
@@ -360,18 +368,11 @@ impl Hub {
 
     /// Transport Stop and host Reset. Every source's voices end, and released
     /// memory follows the control rather than the transport.
+    /// The audio engine stopping, or a host reset. Both are a session cut,
+    /// which is the same mechanism a transport Stop takes.
     pub fn stop(&mut self) {
         self.tune.stop();
-        let sample = self.callback.map_or(0, |callback| callback.steady_time);
-        for source in 0..=TUNERS {
-            self.sequencer.release_source(source as u8, sample);
-            self.rows[source].state.clear();
-            self.rows[source].repair = publication::Lanes::both(true);
-        }
-        if self.sequencer.config.policy.reset_stop {
-            self.sequencer.memory.clear();
-            self.sequencer.last_release = None;
-        }
+        session::session().stop();
     }
 
     /// THE ordering pass. Drain every row, sort by sample, apply releases and
@@ -399,7 +400,6 @@ impl Hub {
             while end < self.batch.len() && self.batch[end].sample == sample {
                 end += 1;
             }
-            self.sequencer.expire(sample, self.rate);
             for position in index..end {
                 self.apply(position, index, end, config, owner, recorder, observation);
             }
@@ -813,6 +813,20 @@ impl Hub {
         owner.recording.finish_retired_publication(&mut recorder, held);
     }
 
+    /// The one authority on what is sounding. There is no second copy to
+    /// agree with it any more, which is most of why this file is short.
+    #[cfg(test)]
+    pub fn test_voice(&self, source: u8, channel: u8, key: u8) -> Option<VoiceBaseline> {
+        self.rows[usize::from(source)]
+            .state
+            .voices()
+            .find(|voice| voice.channel == channel && voice.note == key)
+            .copied()
+    }
+    #[cfg(test)]
+    pub fn test_held(&self, source: u8) -> usize {
+        self.rows[usize::from(source)].state.count()
+    }
     #[cfg(test)]
     pub fn test_context(&self) -> usize {
         self.sequencer.context.iter().flatten().count()

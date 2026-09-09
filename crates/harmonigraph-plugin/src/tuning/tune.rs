@@ -79,6 +79,9 @@ pub struct Tune {
     pedals: [u8; 16],
     status: u32,
     attempt: u64,
+    /// The transport was playing at the last callback. A falling edge is a
+    /// Stop, and a Stop is a cut for the whole session.
+    playing: bool,
     pub misses: u64,
     pub dropped: u64,
     pub notes_in: u64,
@@ -113,6 +116,7 @@ impl Tune {
             pedals: [0; 16],
             status: 0,
             attempt: 0,
+            playing: false,
             misses: 0,
             dropped: 0,
             notes_in: 0,
@@ -269,6 +273,19 @@ impl Tune {
     /// too, unless the ring was full — which is the one case that costs a
     /// correction rather than a note.
     pub fn input(&mut self, input: OwnedInput) {
+        // `clap_performance_stop` is the audio engine stopping, not the
+        // transport. A transport Stop reaches a plugin only as this flag, so
+        // its falling edge is where the cut for one has to be taken.
+        if let nice_plug::wrapper::clap::configuration::InputValue::Transport(transport) =
+            input.value
+        {
+            let playing = transport.flags & clap_sys::events::CLAP_TRANSPORT_IS_PLAYING != 0;
+            if self.playing && !playing {
+                self.take_cut(session::session().stop());
+            }
+            self.playing = playing;
+            return;
+        }
         let (Some(sample), Some(event)) = (input.sample, Event::from_input(input.value)) else {
             return;
         };

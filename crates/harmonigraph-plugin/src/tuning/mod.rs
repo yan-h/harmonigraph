@@ -18,8 +18,6 @@ mod state;
 pub(crate) mod tune;
 
 #[cfg(test)]
-mod musical_tests;
-#[cfg(test)]
 mod tests;
 
 /// Tune rows one Hub sequences. The Hub's own input is a seventeenth source

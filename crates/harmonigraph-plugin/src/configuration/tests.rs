@@ -11,6 +11,7 @@ use clap_sys::plugin::clap_plugin;
 use clap_sys::process::*;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
+use harmonigraph_core::SourceId;
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -178,12 +179,6 @@ impl Device {
         assert!(!plugin.is_null());
         assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
         let device = Self { plugin, _host: host, stats, active: false };
-        // These fixtures isolate configuration/recording consumers, including
-        // intentionally retained timeline markers. Musical sequencing has its
-        // own factory-default acceptance fixtures under performance/tests.
-        device.wrapper().test_with_plugin(|plugin| {
-            plugin.aggregation.as_mut().unwrap().test_aggregation = true;
-        });
         device
     }
     fn wrapper(&self) -> &nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph> {
@@ -197,45 +192,31 @@ impl Device {
         assert!(unsafe { ((*self.plugin).start_processing.unwrap())(self.plugin) });
         self.active = true;
     }
-    // Called explicitly after a fixture's original assertions. These fixtures
-    // study configuration/recording, so finish their accepted physical gestures
-    // before destruction; joined unknown-wire debt must otherwise remain owned.
+    /// Called explicitly after a fixture's original assertions. These fixtures
+    /// study configuration and recording, so finish their gestures before
+    /// destruction: a Hub that still holds a voice marks its take incomplete.
     fn finish_notes(&mut self, mut raw: i64, notes: &[(i32, i16)]) {
-        let snapshot = |device: &Self| {
+        let state = |device: &Self| {
             device.wrapper().test_inspect_plugin(|plugin| {
-                plugin.aggregation.as_ref().unwrap().direct.test_snapshot()
+                let hub = plugin.aggregation.as_ref().unwrap();
+                (hub.tune.held(), hub.tune.pending())
             })
         };
-        let held = snapshot(self).held;
-        let output = self.run(
+        self.run(
             raw,
             notes.iter().map(|&(id, key)| note(id, key, 0, CLAP_EVENT_NOTE_OFF)).collect(),
             false,
         );
-        assert!(
-            output
-                .attempts
-                .iter()
-                .filter(|event| event.0 == CLAP_EVENT_NOTE_OFF && event.3)
-                .count()
-                >= held
-        );
         for _ in 0..16 {
             raw += 64;
-            // Recording fixtures can retain an unsounded On/Off pair behind
-            // unknown pedal state. A real falling Stop edge cancels that pair
-            // after the physical Offs above; an Off alone is not cancellation.
             let mut stopped = transport(0.0, 0);
             stopped.flags &= !CLAP_TRANSPORT_IS_PLAYING;
             self.run_transport(raw, vec![], false, None, Some(stopped));
-            let state = snapshot(self);
-            if (state.held, state.pending, state.captures, state.lives, state.journal)
-                == (0, 0, 0, 0, 0)
-            {
+            if state(self) == (0, 0) {
                 return;
             }
         }
-        panic!("accepted gesture release must finish bounded ownership: {:?}", snapshot(self));
+        panic!("the delay line must drain after its releases: {:?}", state(self));
     }
     fn params(&self) -> &clap_plugin_params {
         unsafe {

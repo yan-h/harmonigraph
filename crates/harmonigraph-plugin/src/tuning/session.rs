@@ -84,10 +84,19 @@ pub struct HubEnds {
     pub replies: rtrb::Producer<Reply>,
 }
 
-#[derive(Default)]
 struct Ends {
     tune: Option<TuneEnds>,
     hub: Option<HubEnds>,
+}
+impl Ends {
+    fn new() -> Self {
+        let (captures, hub_captures) = rtrb::RingBuffer::new(CAPTURE_RING);
+        let (replies, hub_replies) = rtrb::RingBuffer::new(REPLY_RING);
+        Self {
+            tune: Some(TuneEnds { captures, replies: hub_replies }),
+            hub: Some(HubEnds { captures: hub_captures, replies }),
+        }
+    }
 }
 
 pub struct Row {
@@ -104,16 +113,11 @@ pub struct Row {
 
 impl Row {
     fn new() -> Self {
-        let (captures, hub_captures) = rtrb::RingBuffer::new(CAPTURE_RING);
-        let (replies, hub_replies) = rtrb::RingBuffer::new(REPLY_RING);
         Self {
             owner: AtomicU64::new(0),
             delay: AtomicI64::new(0),
             misses: AtomicU64::new(0),
-            ends: Mutex::new(Ends {
-                tune: Some(TuneEnds { captures, replies: hub_replies }),
-                hub: Some(HubEnds { captures: hub_captures, replies }),
-            }),
+            ends: Mutex::new(Ends::new()),
         }
     }
     pub fn held(&self) -> bool {
@@ -131,9 +135,11 @@ pub struct Session {
     /// Bumped by every attach, detach and explicit Reset. A Tune that adopts a
     /// new value cuts; that is the entire lifecycle protocol.
     epoch: AtomicU64,
-    /// The epoch an explicit Reset produced. The Hub clears released memory
-    /// for that one and keeps it across a membership change.
+    /// The epoch an explicit Reset produced, and the epoch a transport Stop
+    /// produced. Every epoch change is the same cut; these two say which one
+    /// it was, because only they decide what happens to released memory.
     reset_epoch: AtomicU64,
+    stop_epoch: AtomicU64,
     /// The Hub's "apply this multiplier to every Tune", as generation in the
     /// high half and multiplier in the low. A generation rather than a value
     /// to consume, so every Tune sees the same request.
@@ -152,6 +158,7 @@ pub fn session() -> &'static Session {
         hubs: AtomicUsize::new(0),
         epoch: AtomicU64::new(1),
         reset_epoch: AtomicU64::new(0),
+        stop_epoch: AtomicU64::new(0),
         delay_request: AtomicU64::new(0),
         next: AtomicU64::new(0),
         rows: std::array::from_fn(|_| Row::new()),
@@ -177,6 +184,9 @@ impl Session {
     pub fn is_reset(&self, epoch: u64) -> bool {
         self.reset_epoch.load(Ordering::Acquire) == epoch
     }
+    pub fn is_stop(&self, epoch: u64) -> bool {
+        self.stop_epoch.load(Ordering::Acquire) == epoch
+    }
     pub fn register(&self) -> u64 {
         self.next.fetch_add(1, Ordering::AcqRel) + 1
     }
@@ -187,6 +197,14 @@ impl Session {
     pub fn reset(&self) {
         let epoch = self.bump();
         self.reset_epoch.store(epoch, Ordering::Release);
+    }
+    /// Transport Stop. The transport is global, so one Tune seeing its falling
+    /// edge is the whole session seeing it — which is also why this needs no
+    /// lane of its own. Released memory follows the `reset_stop` control.
+    pub fn stop(&self) -> u64 {
+        let epoch = self.bump();
+        self.stop_epoch.store(epoch, Ordering::Release);
+        epoch
     }
 
     /// Main thread. The first Harmonigraph to register owns the session; a
@@ -261,13 +279,20 @@ impl Session {
         }
     }
 
+    /// Between fixtures. A panicking test can leave a row claimed by a Tune
+    /// that never reached its destructor, so the rings are rebuilt rather than
+    /// merely released: the half that Tune took is not coming back.
     #[cfg(test)]
     pub fn test_reset(&self) {
         for row in &self.rows {
             row.owner.store(0, Ordering::Release);
+            row.delay.store(0, Ordering::Release);
+            row.misses.store(0, Ordering::Release);
+            *row.ends.lock().unwrap_or_else(|e| e.into_inner()) = Ends::new();
         }
         self.hub.store(0, Ordering::Release);
         self.hubs.store(0, Ordering::Release);
+        self.bump();
     }
 }
 
