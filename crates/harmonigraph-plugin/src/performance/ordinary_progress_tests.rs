@@ -288,6 +288,143 @@ fn production_calibrated_direct_requires_valid_reset_after_clock_failure() {
 }
 
 #[test]
+fn production_valid_reset_supersedes_invalid_routing_after_clock_failure() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, Calibration { offset: 0 });
+    hub.activate_format(48000.0, 64);
+    assert_eq!(
+        hub.run(0, vec![note(1, 0, 60, 1, true), note(1, 0, 60, 3, false)], None).values.len(),
+        2
+    );
+    hub.run(64, vec![], None);
+    hub.run(128, vec![], None);
+    assert!(hub.run(256, vec![note(2, 0, 62, 0, true)], None).values.is_empty());
+    assert_ne!(inspect_hub(&hub, |hub| hub.direct.test_snapshot().faults) & source::CLOCK_FAULT, 0);
+    let failed_epoch = inspect_hub(&hub, |hub| hub.direct.test_snapshot().epoch);
+    let valid = hub.shared().value().routing;
+    hub.shared()
+        .apply(
+            setup::Routing::Hub(HubSetup { uuid, calibration: Calibration { offset: i64::MAX } }),
+            true,
+        )
+        .unwrap();
+    let invalid_generation = hub.shared().value().generation;
+    for block in 5..13 {
+        assert!(
+            hub.run(block * 64, vec![note(3, 0, 64, 1, true)], None).values.is_empty(),
+            "an invalid clock must not reopen forwarding"
+        );
+        assert_ne!(
+            inspect_hub(&hub, |hub| hub.direct.test_snapshot().faults) & source::CLOCK_FAULT,
+            0
+        );
+    }
+    assert!(
+        hub.shared().applied.load(Ordering::Acquire) < invalid_generation,
+        "the overflowing offset is a rejected candidate, not an adopted clock"
+    );
+    assert_eq!(hub.shared().adopted().unwrap().calibration, Calibration { offset: 0 });
+    hub.shared().apply(valid, true).unwrap();
+    let mut raw = 13 * 64;
+    for _ in 0..32 {
+        hub.run(raw, vec![], None);
+        raw += 64;
+        if inspect_hub(&hub, |hub| hub.direct.test_snapshot().faults) == 0 {
+            break;
+        }
+    }
+    assert_eq!(inspect_hub(&hub, |hub| hub.direct.test_snapshot().faults), 0);
+    let adopted = hub.shared().adopted().unwrap();
+    assert!(adopted.valid);
+    assert_eq!(adopted.calibration, Calibration { offset: 0 });
+    assert_eq!(hub.shared().applied.load(Ordering::Acquire), hub.shared().value().generation);
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.direct.test_snapshot().epoch),
+        failed_epoch + 1,
+        "only the valid Reset establishes a new epoch"
+    );
+    assert_eq!(
+        hub.run(raw, vec![note(4, 0, 65, 1, true), note(4, 0, 65, 3, false)], None).values.len(),
+        2
+    );
+    hub.run(raw + 64, vec![], None);
+    hub.run(raw + 128, vec![], None);
+    let snapshot = inspect_hub(&hub, |hub| hub.direct.test_snapshot());
+    assert_eq!((snapshot.pending, snapshot.captures, snapshot.lives, snapshot.held), (0, 0, 0, 0));
+}
+
+#[test]
+fn production_valid_supersession_preserves_input_after_the_invalid_transition_cut() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, Calibration { offset: 0 });
+    hub.activate_format(48000.0, 64);
+    assert_eq!(
+        hub.run(0, vec![note(1, 0, 60, 1, true), note(1, 0, 60, 3, false)], None).values.len(),
+        2
+    );
+    hub.run(64, vec![], None);
+    hub.run(128, vec![], None);
+    let valid = hub.shared().value().routing;
+    hub.shared()
+        .apply(
+            setup::Routing::Hub(HubSetup { uuid, calibration: Calibration { offset: i64::MAX } }),
+            true,
+        )
+        .unwrap();
+    assert!(hub.run(192, vec![], None).values.is_empty());
+    let boundary = inspect_hub(&hub, |hub| hub.direct.test_snapshot());
+    let cut = boundary.cancel_cut;
+    assert_eq!(boundary.input_cut, cut);
+    assert!(hub.shared().applied.load(Ordering::Acquire) < hub.shared().value().generation);
+    assert!(
+        hub.run(256, vec![note(2, 0, 62, 1, true), note(2, 0, 62, 3, false)], None)
+            .values
+            .is_empty(),
+        "input above the transition cut waits for the prospective clock"
+    );
+    let queued = inspect_hub(&hub, |hub| hub.direct.test_snapshot());
+    assert_eq!((queued.input_cut, queued.cancel_cut), (cut + 2, cut));
+    assert!(queued.pending > 0, "the fixture must retain post-cut input");
+    hub.shared().apply(valid, true).unwrap();
+    let mut accepted = hub.run(320, vec![], None).values;
+    assert_eq!(
+        inspect_hub(&hub, |hub| {
+            let snapshot = hub.direct.test_snapshot();
+            (snapshot.input_cut, snapshot.cancel_cut)
+        }),
+        (cut + 2, cut),
+        "the valid supersession inherits the existing cut"
+    );
+    let mut raw = 384;
+    for _ in 0..32 {
+        accepted.extend(hub.run(raw, vec![], None).values);
+        raw += 64;
+        let snapshot = inspect_hub(&hub, |hub| hub.direct.test_snapshot());
+        if accepted.len() == 2
+            && (snapshot.pending, snapshot.captures, snapshot.lives, snapshot.held) == (0, 0, 0, 0)
+        {
+            break;
+        }
+    }
+    assert_eq!(accepted.len(), 2);
+    assert!(matches!(
+        accepted[0],
+        (0, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 2, key: 62, .. })
+    ));
+    assert!(matches!(
+        accepted[1],
+        (2, Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 2, key: 62, .. })
+    ));
+    let snapshot = inspect_hub(&hub, |hub| hub.direct.test_snapshot());
+    assert_eq!((snapshot.pending, snapshot.captures, snapshot.lives, snapshot.held), (0, 0, 0, 0));
+    assert_eq!(snapshot.faults, 0);
+}
+
+#[test]
 fn production_healthy_direct_reanchor_preserves_observed_pitch_until_its_real_input_off() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();

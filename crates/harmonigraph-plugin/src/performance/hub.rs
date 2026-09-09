@@ -402,8 +402,21 @@ impl Hub {
         offer.session.closing.store(0, Ordering::Release);
     }
     pub fn input_boundary(&mut self, owner: &mut Owner) {
-        if let Some(update) = self.direct.apply_setup_with_clock(false) {
-            if self.transition.is_none() {
+        let handed = self.transition.map(|update| update.generation);
+        if let Some(update) = self.direct.apply_setup_with_clock(false, handed) {
+            if let Some(previous) = self.transition {
+                if update.generation > previous.generation
+                    && !self.valid_transition(previous)
+                    && update.reset
+                    && self.valid_transition(update)
+                {
+                    // The first transition already owns the one fence and cut.
+                    // Replace only its clock candidate, then free its setup
+                    // slot; repeating the fences would discard later input.
+                    self.transition = Some(update);
+                    self.direct.release_setup(previous.generation);
+                }
+            } else {
                 self.transition = Some(update);
                 if !self.invalidated {
                     self.fence_rows(update.generation);
@@ -554,18 +567,17 @@ impl Hub {
             self.trace.setup_wait = 1;
             return;
         }
-        if !update.routing.calibration().matches(self.rate, self.max_frames)
+        if !self.valid_transition(update)
             || !self.direct.transition_settled()
             || owner.direct.pending().is_some()
         {
-            self.trace.setup_wait =
-                if !update.routing.calibration().matches(self.rate, self.max_frames) {
-                    3
-                } else if !self.direct.transition_settled() {
-                    4
-                } else {
-                    5
-                };
+            self.trace.setup_wait = if !self.valid_transition(update) {
+                3
+            } else if !self.direct.transition_settled() {
+                4
+            } else {
+                5
+            };
             return;
         }
         let Some(offer) = &self.offer else {
@@ -626,6 +638,16 @@ impl Hub {
         offer.session.epoch.store(epoch, Ordering::Release);
         offer.session.closing.store(0, Ordering::Release);
         self.shared.request_main();
+    }
+    fn valid_transition(&self, update: setup::Update) -> bool {
+        self.callback.is_some_and(|callback| {
+            update.routing.calibration().supports_next_callback(
+                self.rate,
+                self.max_frames,
+                callback.steady_time,
+                callback.frames,
+            )
+        })
     }
     fn clock_id(&self) -> ClockId {
         self.publication_clock

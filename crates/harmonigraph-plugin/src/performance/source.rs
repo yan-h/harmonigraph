@@ -57,6 +57,7 @@ pub struct Snapshot {
     pub old_obligations: usize,
     pub reference_high_water: usize,
     pub input_cut: u64,
+    pub cancel_cut: u64,
     pub pedals_held: bool,
     pub note_off_owed: usize,
     pub intent_slots: usize,
@@ -383,6 +384,7 @@ impl Source {
             old_obligations: self.old_pending,
             reference_high_water: self.work.high_water,
             input_cut: self.next_event,
+            cancel_cut: self.cancel_cut,
             pedals_held: self.state.pedals_held(),
             note_off_owed: self.owed_note_off.iter().filter(|index| **index != NONE).count(),
             intent_slots: self
@@ -1172,10 +1174,14 @@ impl Source {
     }
 
     pub fn apply_setup(&mut self) {
-        self.apply_setup_with_clock(true);
+        self.apply_setup_with_clock(true, None);
     }
 
-    pub fn apply_setup_with_clock(&mut self, allow_clock: bool) -> Option<setup::Update> {
+    pub fn apply_setup_with_clock(
+        &mut self,
+        allow_clock: bool,
+        handed_clock: Option<u64>,
+    ) -> Option<setup::Update> {
         self.trace.setup_wait = 0;
         self.input_complete = true;
         self.fence_transition();
@@ -1203,10 +1209,43 @@ impl Source {
         }) {
             self.setup_pending.swap(0, 1);
         }
+        let valid_clock = |update: setup::Update| {
+            self.callback.is_some_and(|callback| {
+                update.routing.calibration().supports_next_callback(
+                    self.rate,
+                    self.max_frames,
+                    callback.steady_time,
+                    callback.frames,
+                )
+            })
+        };
+        // The Hub already owns the fence/cut for `handed_clock`. Only a newer
+        // valid Reset may replace an invalid clock candidate, and returning it
+        // below preserves the FIFO setup side effects before that replacement.
+        let superseding_clock = handed_clock.and_then(|generation| {
+            let handed = self
+                .setup_pending
+                .iter()
+                .flatten()
+                .find(|slot| slot.value.generation == generation)?;
+            if valid_clock(handed.value) {
+                return None;
+            }
+            self.setup_pending
+                .iter()
+                .flatten()
+                .map(|slot| slot.value)
+                .filter(|update| {
+                    update.generation > generation && update.reset && valid_clock(*update)
+                })
+                .map(|update| update.generation)
+                .min()
+        });
         for index in 0..2 {
             let Some(update) = self.setup_pending[index].as_ref().map(|slot| slot.value) else {
                 continue;
             };
+            let inherits_transition_cut = superseding_clock == Some(update.generation);
             if update.generation <= self.shared.applied.load(Ordering::Acquire) {
                 self.setup_pending[index] = None;
                 continue;
@@ -1222,7 +1261,10 @@ impl Source {
                         break;
                     }
                 }
-                if update.reset {
+                // A valid Reset superseding the handed invalid clock inherits
+                // its cut. Repeating Stop here would widen that cut to include
+                // input retained while the first candidate waited.
+                if update.reset && !inherits_transition_cut {
                     self.stop();
                 }
                 self.setup_started = update.generation;
@@ -1230,6 +1272,11 @@ impl Source {
             let changes_clock =
                 update.reset || update.routing.calibration() != self.clock.calibration;
             if changes_clock && !allow_clock {
+                if handed_clock == Some(update.generation)
+                    && superseding_clock.is_some_and(|generation| generation > update.generation)
+                {
+                    continue;
+                }
                 self.trace.setup_wait = 2;
                 return Some(update);
             }
@@ -1284,6 +1331,18 @@ impl Source {
             self.setup_pending[index] = None;
         }
         None
+    }
+
+    /// Release only the prepared setup payload superseded by a newer Hub
+    /// clock. Its transition fence and cancellation ownership live elsewhere
+    /// and deliberately survive this slot release.
+    pub(super) fn release_setup(&mut self, generation: u64) {
+        for slot in &mut self.setup_pending {
+            if slot.as_ref().is_some_and(|slot| slot.value.generation == generation) {
+                *slot = None;
+                return;
+            }
+        }
     }
 
     pub fn fence_transition(&mut self) {
