@@ -133,7 +133,7 @@ impl Recorder {
         let path = std::env::var("LATTICE_TAKE").ok()?;
         let header = harmonigraph_take::Header {
             sample_rate: SYNTH_RATE as f32,
-            ui_state: Some(state.save_persist()),
+            appearance: Some(state.appearance.serialize()),
             source: "harmonigraph-standalone".into(),
             ..Default::default()
         };
@@ -586,7 +586,7 @@ impl eframe::App for App {
         // The harness has no real audio; synthesize the held notes so the
         // Spectral pane's audio overlay is demoable without a DAW.
         self.synth.render(&self.state.tracker, now, &mut self.synth_buf);
-        let config = self.state.spectrum_config;
+        let config = self.state.appearance.spectrum;
         self.state.spectrum.push_samples(&self.synth_buf, 1, SYNTH_RATE as f32, now, &config);
 
         // `viewport_rect` is eframe's window in the same points the fold

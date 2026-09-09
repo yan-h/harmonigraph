@@ -53,7 +53,7 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             (Projection::Orthographic, "Orthographic"),
             (Projection::Cabinet, "Cabinet"),
         ] {
-            ui.selectable_value(&mut state.camera.projection, proj, label).on_hover_text(
+            ui.selectable_value(&mut state.appearance.camera.projection, proj, label).on_hover_text(
                 match proj {
                     Projection::Perspective => "Depth converges and shrinks, like a real camera",
                     Projection::Orthographic => {
@@ -66,11 +66,11 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             );
         }
     });
-    if state.camera.projection == Projection::Cabinet {
+    if state.appearance.camera.projection == Projection::Cabinet {
         // Cabinet's two drafting knobs: where the sevens axis points on
         // screen, and how long a seventh-step draws relative to a
         // front-plane step (0.5 = classic cabinet, 1.0 = cavalier).
-        let mut degrees = state.camera.cabinet_angle.to_degrees();
+        let mut degrees = state.appearance.camera.cabinet_angle.to_degrees();
         if ValueBar::new(&mut degrees, 0.0..=90.0, "Depth angle")
             .unit(1.0, "°")
             .decimals(1)
@@ -78,9 +78,9 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             .on_hover_text("Direction of the depth axis, in degrees above horizontal.")
             .changed()
         {
-            state.camera.cabinet_angle = degrees.to_radians();
+            state.appearance.camera.cabinet_angle = degrees.to_radians();
         }
-        ValueBar::new(&mut state.camera.cabinet_scale, 0.1..=1.0, "Depth step scale")
+        ValueBar::new(&mut state.appearance.camera.cabinet_scale, 0.1..=1.0, "Depth step scale")
             .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
@@ -91,11 +91,11 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     }
     // Camera angles are meaningless under cabinet (fixed viewpoint), so
     // this whole block hides there (the cabinet knobs show instead).
-    if state.camera.projection != Projection::Cabinet {
+    if state.appearance.camera.projection != Projection::Cabinet {
         // The two numbers that fully determine an orthographic view (and
         // the orbit of the other projections) — the same state orbit
         // drags edit, exposed numerically so a view is reproducible.
-        let mut yaw_deg = normalize_deg(state.camera.yaw.to_degrees());
+        let mut yaw_deg = normalize_deg(state.appearance.camera.yaw.to_degrees());
         if ValueBar::new(&mut yaw_deg, -180.0..=180.0, "Horizontal angle")
             .unit(1.0, "°")
             .decimals(1)
@@ -105,10 +105,10 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             )
             .changed()
         {
-            state.camera.yaw = yaw_deg.to_radians();
+            state.appearance.camera.yaw = yaw_deg.to_radians();
         }
         let pitch_limit_deg = Camera::PITCH_LIMIT.to_degrees();
-        let mut pitch_deg = state.camera.pitch.to_degrees();
+        let mut pitch_deg = state.appearance.camera.pitch.to_degrees();
         if ValueBar::new(&mut pitch_deg, -pitch_limit_deg..=pitch_limit_deg, "Vertical angle")
             .unit(1.0, "°")
             .decimals(1)
@@ -116,12 +116,13 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             .on_hover_text("Tilt the view up or down. 0° looks straight at the lattice.")
             .changed()
         {
-            state.camera.pitch = pitch_deg.to_radians();
+            state.appearance.camera.pitch = pitch_deg.to_radians();
         }
         // Under orthographic, the readable meaning of an angle pair: how
         // long a unit step along each lattice axis draws on screen.
-        if state.camera.projection == Projection::Orthographic {
-            let d = (state.camera.target - state.camera.eye()).normalize_or_zero();
+        if state.appearance.camera.projection == Projection::Orthographic {
+            let d = (state.appearance.camera.target - state.appearance.camera.eye())
+                .normalize_or_zero();
             let f = |c: f32| (1.0 - c * c).max(0.0).sqrt();
             ui.weak(format!(
                 "Axis scale: thirds {:.2}× · fifths {:.2}× · sevenths {:.2}×",
@@ -136,16 +137,16 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             ui.label("Angle");
             if ui.button("Flat").on_hover_text("Face the fifths/thirds sheet straight on").clicked()
             {
-                state.camera.yaw = 0.0;
-                state.camera.pitch = 0.0;
+                state.appearance.camera.yaw = 0.0;
+                state.appearance.camera.pitch = 0.0;
             }
             if ui
                 .button("Isometric")
                 .on_hover_text("Classic isometric angle: all three axes equally foreshortened")
                 .clicked()
             {
-                state.camera.yaw = std::f32::consts::FRAC_PI_4;
-                state.camera.pitch = (1.0 / 2f32.sqrt()).atan();
+                state.appearance.camera.yaw = std::f32::consts::FRAC_PI_4;
+                state.appearance.camera.pitch = (1.0 / 2f32.sqrt()).atan();
             }
             let mut delete = None;
             for (i, preset) in state.camera_presets.iter().enumerate() {
@@ -153,8 +154,8 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
                     .button(&preset.name)
                     .on_hover_text("Apply this saved angle (right-click to delete)");
                 if response.clicked() {
-                    state.camera.yaw = preset.yaw;
-                    state.camera.pitch = preset.pitch;
+                    state.appearance.camera.yaw = preset.yaw;
+                    state.appearance.camera.pitch = preset.pitch;
                 }
                 response.context_menu(|ui| {
                     if ui.button("Delete").clicked() {
@@ -185,16 +186,16 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
                     // Nameless saves still get a self-describing label.
                     format!(
                         "y{:.0} p{:.0}",
-                        normalize_deg(state.camera.yaw.to_degrees()),
-                        state.camera.pitch.to_degrees()
+                        normalize_deg(state.appearance.camera.yaw.to_degrees()),
+                        state.appearance.camera.pitch.to_degrees()
                     )
                 } else {
                     trimmed.to_string()
                 };
                 state.camera_presets.push(CameraPreset {
                     name,
-                    yaw: state.camera.yaw,
-                    pitch: state.camera.pitch,
+                    yaw: state.appearance.camera.yaw,
+                    pitch: state.appearance.camera.pitch,
                 });
                 state.preset_name.clear();
             }
@@ -239,14 +240,14 @@ fn sevens_section(ui: &mut egui::Ui, state: &mut SharedState) {
         // Ranges must contain the ViewConfig defaults or the bar could never
         // drag back to them.
         (
-            &mut state.view.extent_sevens,
+            &mut state.appearance.view.extent_sevens,
             0.0..=4.0,
             "Layers each side",
             "Number of seventh layers on each side of the center. 0 shows only the center layer; 1 shows three layers total.",
         ),
         // Which sheet is home, in lattice steps from C (v1's Grid Z).
         (
-            &mut state.view.center_sevens,
+            &mut state.appearance.view.center_sevens,
             -20.0..=20.0,
             "Center layer",
             "Center layer, counted in seventh steps from the layer containing C.",
@@ -258,9 +259,9 @@ fn sevens_section(ui: &mut egui::Ui, state: &mut SharedState) {
             *extent = value as i32;
         }
     }
-    let has_depth = state.view.extent_sevens != 0;
+    let has_depth = state.appearance.view.extent_sevens != 0;
     ui.add_enabled_ui(has_depth, |ui| {
-        ValueBar::new(&mut state.view.sevens_size, 0.15..=1.0, "Size per layer")
+        ValueBar::new(&mut state.appearance.view.sevens_size, 0.15..=1.0, "Size per layer")
         .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
@@ -269,7 +270,7 @@ fn sevens_section(ui: &mut egui::Ui, state: &mut SharedState) {
         choice_row(
             ui,
             "Outer layer labels",
-            &mut state.view.sevens_label,
+            &mut state.appearance.view.sevens_label,
             &[
                 (
                     SevensLabel::Name,

@@ -13,6 +13,7 @@ The exact values are recoverable:
 ```sh
 ./read-plugin-state.py            # newest project: params, camera, view
 ./read-plugin-state.py --rust     # view fields as an impl Default body
+./read-plugin-state.py --appearance project.bwproject > appearance.ron
 ```
 
 **The trap, which costs a round trip with Yan every time it's missed:** the UI state (dock, camera, ViewConfig) is written into the plugin state ONLY when the editor WINDOW is closed (`impl Drop for LatticeEditorHandle`, `crates/harmonigraph-plugin/src/editor.rs`).
@@ -58,6 +59,9 @@ defaults.
 
 `.bwproject` is a "BtWg" tagged binary.
 Plugin state sits in a raw-DEFLATE section (wbits=-15, no zlib header) as nice-plug's plain JSON `{"version","params","fields"}`, and `fields["ui-state"]` is the RON from `SharedState::save_persist`.
+The version-7 editor save nests camera, view, spectrum, spiral framing and the whole video configuration under `appearance`.
+`--appearance` extracts that document for `harmonigraph-offline --appearance FILE`, requiring exactly one editor appearance in the project.
+The take carries that appearance independently of dock layout and editor organization.
 nice-plug can also zstd the JSON.
 The script's own header documents this too.
 

@@ -44,9 +44,9 @@ VST3 still exports full Harmonigraph only.
 See [`docs/adaptive-tuning.md`](docs/adaptive-tuning.md) for the behavior, protocol and deliberately deferred alternatives.
 
 Every tracked note carries a [source identity](docs/adaptive-tuning.md#voice-identity), so tracking and replay have independent source keys and explicit source/session resets.
-Takes use format v4, including source/reset scope, resolved configurations, canonical baselines and accepted pitch provenance;
-v1–v3 takes are refused with a version error and must be recorded again.
-The current musical integration adds optional assignment metadata within v4.
+Takes use format v5, including source/reset scope, resolved configurations, canonical baselines and accepted pitch provenance;
+v1–v4 takes are refused with a version error and must be recorded again.
+The current musical integration adds optional assignment metadata within the current format.
 
 Almost every line here was written by Claude Code sessions, directed and reviewed by one human.
 [`CLAUDE.md`](CLAUDE.md) is the house style they work under;

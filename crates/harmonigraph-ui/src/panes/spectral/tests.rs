@@ -543,7 +543,7 @@ const DOCKED: usize = 0;
 /// resize below is measured against.
 fn dialled_at(orientation: SpectralOrientation, depth: f32) -> SharedState {
     let mut state = fresh();
-    state.spectrum_config.orientation = orientation;
+    state.appearance.spectrum.orientation = orientation;
     hold_spectrum(&mut state, pane_of(orientation, depth));
     state
 }
@@ -621,7 +621,7 @@ fn the_spectrogram_gives_way_down_to_its_floor_and_then_the_spectrum_yields() {
     // proportion it was dialled at, which is what a pane with no hold on it
     // draws at any size.
     let share =
-        spectrum_share(&dialled_at(SpectralOrientation::Left, DIALLED_DEPTH).spectrum_config);
+        spectrum_share(&dialled_at(SpectralOrientation::Left, DIALLED_DEPTH).appearance.spectrum);
     for depth in [banded - 10.0, banded * 0.5, banded * 0.2] {
         hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, depth));
         let (spectrum, _) = regions(&state, depth);
@@ -654,7 +654,7 @@ fn a_pane_squeezed_and_opened_again_comes_back_to_its_picture() {
     /// The pane the split is dialled on, before the squeezes below.
     const DIALLED_DEPTH: f32 = 400.0;
     let mut state = dialled_at(SpectralOrientation::Left, DIALLED_DEPTH);
-    let dialled = state.spectrum_config.roll_fraction;
+    let dialled = state.appearance.spectrum.roll_fraction;
     let (spectrum, _) = regions(&state, DIALLED_DEPTH);
     // Forty points inside the crossover, so the far region is on its floor and
     // the spectrum has given up those forty.
@@ -673,7 +673,7 @@ fn a_pane_squeezed_and_opened_again_comes_back_to_its_picture() {
     }
     hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, DIALLED_DEPTH));
     let (back, _) = regions(&state, DIALLED_DEPTH);
-    let split = state.spectrum_config.roll_fraction;
+    let split = state.appearance.spectrum.roll_fraction;
     assert!(
         (back - spectrum).abs() < 0.5 && (split - dialled).abs() < 1e-3,
         "the split came back at {split} holding {back} points, not {dialled} holding {spectrum}",
@@ -690,12 +690,12 @@ fn a_pane_squeezed_and_opened_again_comes_back_to_its_picture() {
 fn a_divider_dialled_at_the_new_size_is_the_size_that_is_kept() {
     let mut state = dialled_at(SpectralOrientation::Left, 400.0);
     hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, 800.0));
-    state.spectrum_config.roll_fraction = 0.5;
+    state.appearance.spectrum.roll_fraction = 0.5;
     let (dialled, _) = regions(&state, 800.0);
     // The frame the dial lands on keeps it exactly: a dial is already the
     // answer for the pane it was made on.
     hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, 800.0));
-    assert_eq!(state.spectrum_config.roll_fraction, 0.5, "the dial itself was overwritten");
+    assert_eq!(state.appearance.spectrum.roll_fraction, 0.5, "the dial itself was overwritten");
     hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, 1600.0));
     let (spectrum, _) = regions(&state, 1600.0);
     assert!(
@@ -712,7 +712,7 @@ fn a_divider_dialled_at_the_new_size_is_the_size_that_is_kept() {
 fn resizing_across_the_pitch_axis_leaves_the_split_alone() {
     for orientation in EVERY_ORIENTATION {
         let mut state = dialled_at(orientation, 400.0);
-        let before = state.spectrum_config.roll_fraction;
+        let before = state.appearance.spectrum.roll_fraction;
         for pitch in [50.0, 900.0] {
             let pane = if orientation.is_time_vertical() {
                 egui::vec2(pitch, 400.0)
@@ -721,7 +721,7 @@ fn resizing_across_the_pitch_axis_leaves_the_split_alone() {
             };
             hold_spectrum(&mut state, pane);
             assert_eq!(
-                state.spectrum_config.roll_fraction, before,
+                state.appearance.spectrum.roll_fraction, before,
                 "{orientation:?}: a {pitch}-point pitch axis moved the split",
             );
         }
@@ -736,17 +736,17 @@ fn resizing_across_the_pitch_axis_leaves_the_split_alone() {
 fn a_pane_with_no_far_region_holds_nothing_and_forgets_nothing() {
     let mut state = dialled_at(SpectralOrientation::Left, 400.0);
     let (dialled, _) = regions(&state, 400.0);
-    let split = state.spectrum_config.roll_fraction;
-    state.spectrum_config.show_roll = false;
-    state.spectrum_config.show_spectrogram = false;
+    let split = state.appearance.spectrum.roll_fraction;
+    state.appearance.spectrum.show_roll = false;
+    state.appearance.spectrum.show_spectrogram = false;
     for depth in [800.0, 1600.0] {
         hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, depth));
         assert_eq!(
-            state.spectrum_config.roll_fraction, split,
+            state.appearance.spectrum.roll_fraction, split,
             "the split moved on a pane that has no divider on it",
         );
     }
-    state.spectrum_config.show_spectrogram = true;
+    state.appearance.spectrum.show_spectrogram = true;
     hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, 1600.0));
     let (spectrum, _) = regions(&state, 1600.0);
     assert!(
@@ -761,10 +761,10 @@ fn a_pane_with_no_far_region_holds_nothing_and_forgets_nothing() {
 #[test]
 fn a_pane_with_no_depth_writes_nothing() {
     let mut state = dialled_at(SpectralOrientation::Left, 400.0);
-    let split = state.spectrum_config.roll_fraction;
+    let split = state.appearance.spectrum.roll_fraction;
     for depth in [0.0, -10.0, f32::NAN] {
         hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, depth));
-        let after = state.spectrum_config.roll_fraction;
+        let after = state.appearance.spectrum.roll_fraction;
         assert_eq!(after, split, "a {depth}-point pane moved the split");
     }
 }
@@ -793,7 +793,7 @@ fn drag_pane(
     delta: egui::Vec2,
 ) -> SpectrumConfig {
     let mut state = fresh();
-    state.spectrum_config = cfg;
+    state.appearance.spectrum = cfg;
     let ctx = themed();
     // A window big enough for the widest `rect` a caller passes, so the drag
     // is bounded by the pane rather than by the screen's edge.
@@ -808,7 +808,7 @@ fn drag_pane(
     frame(vec![egui::Event::PointerMoved(at), press(at, true)], &mut state);
     frame(vec![egui::Event::PointerMoved(at + delta)], &mut state);
     frame(vec![press(at + delta, false)], &mut state);
-    state.spectrum_config
+    state.appearance.spectrum
 }
 
 /// Where the curve grows from its baseline, as a screen direction: away
@@ -1691,7 +1691,7 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
 /// fixture's job is only to peg the curve at the top of it.
 fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
     let mut state = fresh();
-    state.spectrum_config = cfg;
+    state.appearance.spectrum = cfg;
     let sr = 48_000.0;
     let samples: Vec<f32> = (0..48_000)
         .map(|i| 100.0 * (std::f32::consts::TAU * 1_000.0 * i as f32 / sr).sin())
@@ -1741,9 +1741,9 @@ fn the_pane_paints_in_every_orientation() {
 #[test]
 fn the_strip_holds_its_leading_sliver_instead_of_running_past_the_run() {
     let mut state = fresh();
-    state.spectrum_config.orientation = SpectralOrientation::Left;
-    state.spectrum_config.roll_seconds = 2.0; // zoomed in: the sliver is widest
-    let cfg = state.spectrum_config;
+    state.appearance.spectrum.orientation = SpectralOrientation::Left;
+    state.appearance.spectrum.roll_seconds = 2.0; // zoomed in: the sliver is widest
+    let cfg = state.appearance.spectrum;
     let axes = Axes::new(WIDE, &cfg);
     // Twenty slabs ending a slab and a half before the now-line, which is the
     // analyzer's lag: several slabs at this Span, so the sliver is real.
@@ -1796,9 +1796,9 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
     // which the spectrogram breaks — it draws through one of its own.
     let frame = |sounding: bool| {
         let mut state = fresh();
-        state.spectrum_config.orientation = SpectralOrientation::Left;
-        state.spectrum_config.low_midi = 60.0;
-        state.spectrum_config.high_midi = 72.0;
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.low_midi = 60.0;
+        state.appearance.spectrum.high_midi = 72.0;
         if sounding {
             state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
         }
@@ -1854,7 +1854,7 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
 #[test]
 fn a_whole_song_pane_draws_a_window_of_a_longer_take_inside_the_slab_cap() {
     let mut state = fresh();
-    state.spectrum_config.orientation = SpectralOrientation::Left;
+    state.appearance.spectrum.orientation = SpectralOrientation::Left;
     // Three minutes of columns, sampled far more sparsely than the analyzer
     // would: an empty slab still takes a texel of its own, so the image's
     // width follows the columns' EXTENT and not their number.
@@ -1900,9 +1900,9 @@ fn the_whole_song_playhead_paints_over_the_roll_it_sweeps_across() {
     // it has to move.
     let frame = |sounding: bool| {
         let mut state = fresh();
-        state.spectrum_config.orientation = SpectralOrientation::Left;
-        state.spectrum_config.low_midi = 60.0;
-        state.spectrum_config.high_midi = 72.0;
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.low_midi = 60.0;
+        state.appearance.spectrum.high_midi = 72.0;
         if sounding {
             state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
         }
@@ -1961,9 +1961,9 @@ fn the_whole_song_playhead_paints_over_the_roll_it_sweeps_across() {
 fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
     let bands = |tuning_offset: f32| {
         let mut state = fresh();
-        state.spectrum_config.orientation = SpectralOrientation::Left;
-        state.spectrum_config.low_midi = 55.0;
-        state.spectrum_config.high_midi = 67.0;
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.low_midi = 55.0;
+        state.appearance.spectrum.high_midi = 67.0;
         // The band rides the note's envelope, and the pane below is drawn 50ms
         // in — a fraction of any real arrival. No envelope at all, so what is
         // counted is whether the flag is DRAWN rather than how far its note
@@ -2029,9 +2029,9 @@ fn a_note_lit_on_the_lattice_is_not_flagged_off_it() {
     let bands = |shown: Option<harmonigraph_scene::DrawnWindow>| {
         let mut state = fresh();
         state.tuning = harmonigraph_core::Tuning::just();
-        state.spectrum_config.orientation = SpectralOrientation::Left;
-        state.spectrum_config.low_midi = 55.0;
-        state.spectrum_config.high_midi = 73.0;
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.low_midi = 55.0;
+        state.appearance.spectrum.high_midi = 73.0;
         state.frame_params.fade_time = 0.0;
         state.drawn = shown;
         // Bent onto that node's own pitch exactly, which is what a retuned
@@ -2074,8 +2074,8 @@ fn a_note_lit_on_the_lattice_is_not_flagged_off_it() {
 #[test]
 fn the_axis_labels_are_rimmed() {
     let mut state = fresh();
-    state.spectrum_config.orientation = SpectralOrientation::Left;
-    state.spectrum_config.roll_fraction = 0.55;
+    state.appearance.spectrum.orientation = SpectralOrientation::Left;
+    state.appearance.spectrum.roll_fraction = 0.55;
     let out = painted_pane(WIDE, &mut state, 0.05);
     // The labels leave the shape list as one paint callback; what is
     // checkable from here is that the pane emitted one at all, and the
@@ -2371,7 +2371,7 @@ fn level_label_room_answers_to_the_axis_the_depth_runs_on() {
 #[test]
 fn whole_song_mode_rules_no_levels() {
     let mut state = fresh();
-    state.spectrum_config.orientation = SpectralOrientation::Left;
+    state.appearance.spectrum.orientation = SpectralOrientation::Left;
     state.whole_song = Some(crate::WholeSong {
         start: 0.0,
         span: 2.0,
@@ -2435,7 +2435,7 @@ fn only_the_decade_boundaries_take_the_stronger_ink() {
 #[test]
 fn whole_song_mode_rules_no_frequencies() {
     let mut state = fresh();
-    state.spectrum_config.orientation = SpectralOrientation::Left;
+    state.appearance.spectrum.orientation = SpectralOrientation::Left;
     state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
     state.whole_song = Some(crate::WholeSong {
         start: 0.0,
@@ -2538,8 +2538,8 @@ fn the_settings_pane_paints_at_either_extreme_of_the_pitch_range() {
     );
     for (low, high) in [axis, (40.5, 40.5 + crate::PITCH_RANGE_MIN_SPAN), (axis.0, axis.0)] {
         let mut state = fresh();
-        state.spectrum_config.low_midi = low;
-        state.spectrum_config.high_midi = high;
+        state.appearance.spectrum.low_midi = low;
+        state.appearance.spectrum.high_midi = high;
         // A settings column rather than a picture: narrow and tall, and the
         // pane takes the whole of it.
         let column = egui::vec2(320.0, 700.0);
@@ -2555,8 +2555,8 @@ fn the_settings_pane_paints_at_either_extreme_of_the_pitch_range() {
 fn a_degenerate_pitch_range_still_paints() {
     for (low, high) in [(60.0, 60.0), (90.0, 30.0)] {
         let mut state = fresh();
-        state.spectrum_config.low_midi = low;
-        state.spectrum_config.high_midi = high;
+        state.appearance.spectrum.low_midi = low;
+        state.appearance.spectrum.high_midi = high;
         let output = painted_pane(WIDE, &mut state, 100.0);
         assert!(!output.shapes.is_empty(), "{low}..{high} drew nothing");
     }
@@ -2570,15 +2570,15 @@ fn paint(
     roll_fraction: f32,
 ) -> Vec<egui::Shape> {
     let mut state = fresh();
-    state.spectrum_config.orientation = orientation;
-    state.spectrum_config.roll_fraction = roll_fraction;
-    state.spectrum_config.roll_seconds = 10.0;
-    state.view.bloom_strength = 1.2; // exercise the note-glow passes
+    state.appearance.spectrum.orientation = orientation;
+    state.appearance.spectrum.roll_fraction = roll_fraction;
+    state.appearance.spectrum.roll_seconds = 10.0;
+    state.appearance.view.bloom_strength = 1.2; // exercise the note-glow passes
 
     // Exercise the spectrogram's mesh path in every orientation too, with
     // energy at both axis extremes (where cell clamping is most likely to
     // fold a quad to zero area — which egui panics on).
-    state.spectrum_config.show_spectrogram = true;
+    state.appearance.spectrum.show_spectrogram = true;
     let mut spectrum_bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
     spectrum_bins[0] = 1.0;
     spectrum_bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 2] = 0.5;
@@ -2647,19 +2647,19 @@ fn the_rolls_ink_stops_at_the_now_line() {
             SpectralOrientation::Bottom,
         ] {
             let mut state = fresh();
-            state.spectrum_config.orientation = orientation;
-            state.spectrum_config.roll_fraction = 0.55;
+            state.appearance.spectrum.orientation = orientation;
+            state.appearance.spectrum.roll_fraction = 0.55;
             // The widest outline there is, so the reach that would cross the
             // line is as big as the setting allows, and a bloom over it.
-            state.view.shadow.spectral_geometry.width = 1.0;
-            state.spectrum_config.roll_lead = lead;
-            state.spectrum_config.roll_lead_fade = lead;
-            state.view.bloom_strength = 1.2;
+            state.appearance.view.shadow.spectral_geometry.width = 1.0;
+            state.appearance.spectrum.roll_lead = lead;
+            state.appearance.spectrum.roll_lead_fade = lead;
+            state.appearance.view.bloom_strength = 1.2;
             // Held at `now`, so its leading end sits exactly on the line.
             state.tracker.handle_event(NoteEvent::on(99.0, SourceId::DIRECT, 0, 60, 0.8));
 
             let a = axes(WIDE, orientation);
-            let split = spectrum_share(&state.spectrum_config);
+            let split = spectrum_share(&state.appearance.spectrum);
             // Where the roll's ink may reach, as a depth: the now-line, less
             // whatever the lead is allowed to carry past it — which is the set
             // share of the spectrum's own share, and so a share of `split`.
@@ -2784,7 +2784,7 @@ fn roll_axes_match_what_axes_derives_for_the_same_orientation() {
 fn a_divider_dragged_shut_stays_shut_through_a_resize() {
     for (shut, name) in [(0.0, "the far region"), (1.0, "the spectrum")] {
         let mut state = fresh();
-        state.spectrum_config.roll_fraction = shut;
+        state.appearance.spectrum.roll_fraction = shut;
         let split_at = |state: &mut SharedState, depth| {
             hold_spectrum(state, pane_of(SpectralOrientation::Left, depth));
             spectrum_split(state, DOCKED)
@@ -2810,11 +2810,11 @@ fn turning_the_pane_over_re_dials_rather_than_carrying_points_across() {
     // The default dock's analyzer column, 207 across by 676 down.
     let column = egui::vec2(207.0, 676.0);
     let mut state = fresh();
-    state.spectrum_config.orientation = SpectralOrientation::Left;
+    state.appearance.spectrum.orientation = SpectralOrientation::Left;
     hold_spectrum(&mut state, column);
-    let dialled = spectrum_share(&state.spectrum_config);
+    let dialled = spectrum_share(&state.appearance.spectrum);
     for orientation in EVERY_ORIENTATION {
-        state.spectrum_config.orientation = orientation;
+        state.appearance.spectrum.orientation = orientation;
         hold_spectrum(&mut state, column);
         let split = spectrum_split(&state, DOCKED);
         // Near rather than equal: a pane held at the size it was dialled on
@@ -2840,12 +2840,12 @@ fn turning_the_pane_over_re_dials_rather_than_carrying_points_across() {
 fn resizing_the_editors_pane_leaves_the_exported_split_alone() {
     for orientation in EVERY_ORIENTATION {
         let mut state = dialled_at(orientation, 207.0);
-        let dialled = state.spectrum_config.roll_fraction;
+        let dialled = state.appearance.spectrum.roll_fraction;
         // Enlarged, squeezed, and squeezed past what the hold can keep.
         for depth in [373.0, 800.0, 150.0, 40.0] {
             hold_spectrum(&mut state, pane_of(orientation, depth));
             assert_eq!(
-                state.spectrum_config.roll_fraction, dialled,
+                state.appearance.spectrum.roll_fraction, dialled,
                 "{orientation:?}: a {depth}-point editor pane moved the exported split",
             );
         }
@@ -2854,7 +2854,7 @@ fn resizing_the_editors_pane_leaves_the_exported_split_alone() {
         let preview = spectrum_split(&state, 1);
         assert_eq!(
             preview,
-            spectrum_share(&state.spectrum_config),
+            spectrum_share(&state.appearance.spectrum),
             "{orientation:?}: the Video preview followed the editor's hold",
         );
     }

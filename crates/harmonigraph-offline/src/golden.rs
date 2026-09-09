@@ -256,7 +256,7 @@ impl Shot {
     /// and the roll is not what #503 moves.
     fn take(&self) -> Take {
         let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
-        let cfg = &mut state.spectrum_config;
+        let cfg = &mut state.appearance.spectrum;
         cfg.show_roll = false;
         // The whole depth to the spectrogram's region, which also drops the
         // live curve and its axis rulings through their own `split > 0`
@@ -265,7 +265,7 @@ impl Shot {
         cfg.roll_seconds = WINDOW;
         (cfg.low_midi, cfg.high_midi) = self.range;
         Take {
-            header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
+            header: Header { appearance: Some(state.appearance.serialize()), ..Default::default() },
             events: Vec::new(),
             params: Vec::new(),
             configurations: Vec::new(),
@@ -306,7 +306,8 @@ fn check_take(name: &str, shot: Shot, take: Take) {
     let audio = probe_audio();
     let mut replay = Replay::new(take);
     let mut last = Vec::new();
-    match render(&mut replay, Some(&audio), &settings, |bytes| {
+    let appearance = crate::render::appearance_for(replay.take(), None);
+    match render(&mut replay, Some(&audio), &settings, appearance, |bytes| {
         last.clear();
         last.extend_from_slice(bytes);
         Ok(true)
@@ -364,17 +365,17 @@ fn the_whole_song_layout_draws_the_frame_on_record() {
 fn mixed_spectral_shadows_draw_the_frame_on_record() {
     let shot = Shot { size: [320, 200], range: (48.0, 84.0), whole: false };
     let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
-    state.spectrum_config.show_roll = true;
-    state.spectrum_config.roll_fraction = 0.65;
-    state.spectrum_config.roll_seconds = WINDOW;
-    (state.spectrum_config.low_midi, state.spectrum_config.high_midi) = shot.range;
-    state.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
+    state.appearance.spectrum.show_roll = true;
+    state.appearance.spectrum.roll_fraction = 0.65;
+    state.appearance.spectrum.roll_seconds = WINDOW;
+    (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi) = shot.range;
+    state.appearance.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
         kernel: harmonigraph_scene::ShadowKernel::Gaussian,
         width: 0.75,
         depth: 0.85,
         ..Default::default()
     };
-    state.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
+    state.appearance.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
         kernel: harmonigraph_scene::ShadowKernel::Distance,
         width: 0.75,
         depth: 0.85,
@@ -391,7 +392,7 @@ fn mixed_spectral_shadows_draw_the_frame_on_record() {
         })
         .collect();
     let take = Take {
-        header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
+        header: Header { appearance: Some(state.appearance.serialize()), ..Default::default() },
         events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
         params: Vec::new(),
         configurations: Vec::new(),
@@ -450,13 +451,13 @@ enum Drawn {
 /// Milliseconds a frame takes end to end, and how many were rendered.
 fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
     let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
-    let cfg = &mut state.spectrum_config;
+    let cfg = &mut state.appearance.spectrum;
     cfg.show_roll = false;
     cfg.roll_fraction = if drawn == Drawn::Heatmap { 1.0 } else { 0.0 };
     cfg.roll_seconds = WINDOW;
     (cfg.low_midi, cfg.high_midi) = whole_axis();
     let take = Take {
-        header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
+        header: Header { appearance: Some(state.appearance.serialize()), ..Default::default() },
         events: Vec::new(),
         params: Vec::new(),
         configurations: Vec::new(),
@@ -496,7 +497,8 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
     let mut first: Option<std::time::Instant> = None;
     let mut last = None;
     let mut frames = 0u64;
-    match render(&mut replay, Some(&audio), &settings, |_| {
+    let appearance = crate::render::appearance_for(replay.take(), None);
+    match render(&mut replay, Some(&audio), &settings, appearance, |_| {
         seen += 1;
         if seen <= WARMUP {
             return Ok(true);
@@ -532,17 +534,17 @@ fn spectral_shadow_frame_ms(
     text: harmonigraph_scene::ShadowKernel,
 ) -> Option<(f64, u64)> {
     let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
-    state.spectrum_config.show_roll = true;
-    state.spectrum_config.roll_fraction = 0.65;
-    state.spectrum_config.roll_seconds = WINDOW;
-    (state.spectrum_config.low_midi, state.spectrum_config.high_midi) = (48.0, 84.0);
-    state.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
+    state.appearance.spectrum.show_roll = true;
+    state.appearance.spectrum.roll_fraction = 0.65;
+    state.appearance.spectrum.roll_seconds = WINDOW;
+    (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi) = (48.0, 84.0);
+    state.appearance.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
         kernel: geometry,
         width: 0.75,
         depth: 0.85,
         ..Default::default()
     };
-    state.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
+    state.appearance.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
         kernel: text,
         width: 0.75,
         depth: 0.85,
@@ -559,7 +561,7 @@ fn spectral_shadow_frame_ms(
         })
         .collect();
     let take = Take {
-        header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
+        header: Header { appearance: Some(state.appearance.serialize()), ..Default::default() },
         events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
         params: Vec::new(),
         configurations: Vec::new(),
@@ -582,7 +584,8 @@ fn spectral_shadow_frame_ms(
     let mut first: Option<std::time::Instant> = None;
     let mut last = None;
     let mut frames = 0u64;
-    match render(&mut replay, Some(&audio), &settings, |_| {
+    let appearance = crate::render::appearance_for(replay.take(), None);
+    match render(&mut replay, Some(&audio), &settings, appearance, |_| {
         seen += 1;
         if seen <= WARMUP {
             return Ok(true);

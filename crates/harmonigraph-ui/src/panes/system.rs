@@ -26,7 +26,7 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // edge is already soft-banded before the extra samples see it. Described as
     // "higher supersamples" it read as a quality knob that did nothing.
     ui.heading("Performance");
-    ValueBar::new(&mut state.view.render_scale, 0.5..=2.0, "Render resolution")
+    ValueBar::new(&mut state.appearance.view.render_scale, 0.5..=2.0, "Render resolution")
         .percent()
         .show(ui)
         .on_hover_text(
@@ -56,12 +56,12 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             (Some(144.0), "144", "For a high-refresh display."),
         ],
     );
-    ui.checkbox(&mut state.view.show_perf, "Performance overlay").on_hover_text(
+    ui.checkbox(&mut state.appearance.view.show_perf, "Performance overlay").on_hover_text(
         "A draggable HUD: frame rate, worst recent frame, memory, and the \
          voice/node workload.",
     );
-    if state.view.show_perf {
-        ui.checkbox(&mut state.view.show_perf_detail, "Frame breakdown").on_hover_text(
+    if state.appearance.view.show_perf {
+        ui.checkbox(&mut state.appearance.view.show_perf_detail, "Frame breakdown").on_hover_text(
             "Expands the overlay into every stage of the frame, to see which \
              one is costing you.",
         );
@@ -82,7 +82,7 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         .on_hover_text(
             "Size of interface text, controls and tab bars. 100% is the reference size. Picture scale and exported videos are unaffected.",
         );
-    ui.checkbox(&mut state.view.frameless, "Hide tab bars (Tab)").on_hover_text(
+    ui.checkbox(&mut state.appearance.view.frameless, "Hide tab bars (Tab)").on_hover_text(
         "Hide dock tab bars for a continuous picture. Press Tab to toggle while not editing text.",
     );
     button_row(ui, |ui| {

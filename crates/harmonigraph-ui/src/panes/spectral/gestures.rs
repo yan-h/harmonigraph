@@ -132,7 +132,7 @@ pub(super) fn drag_split(
         // stops following the cursor on the way back. The band is a few pixels
         // wide, so grabbing it off-center snaps imperceptibly. Depth runs away
         // from the spectrum, so the roll gets what is left.
-        state.spectrum_config.roll_fraction = (1.0 - axes.depth_at(pointer)).clamp(0.0, 1.0);
+        state.appearance.spectrum.roll_fraction = (1.0 - axes.depth_at(pointer)).clamp(0.0, 1.0);
     }
     response
 }
@@ -154,7 +154,7 @@ pub(super) fn drag_split(
 /// **The dial is not touched.** `roll_fraction` stays exactly what was dragged,
 /// and this carries the answer the docked pane draws from
 /// ([`spectrum_split`]) instead. Which matters because that field is what a take
-/// EXPORTS with (`save_persist` rides the config into every take, and the
+/// EXPORTS with (the appearance document carries the config into every take, and the
 /// offline renderer composes the frame from it): written through, the editor
 /// window's size would decide a video's composition, and dragging the plugin
 /// wider would restyle a render nobody touched. The Video tab is where a
@@ -217,7 +217,7 @@ pub(super) const FAR_REGION_FLOOR_PT: f32 = 64.0;
 /// band, the curve, the heatmap and the ribbons cannot disagree about where the
 /// boundary is.
 pub(super) fn spectrum_split(state: &SharedState, surface: usize) -> f32 {
-    let cfg = &state.spectrum_config;
+    let cfg = &state.appearance.spectrum;
     let dialled = spectrum_share(cfg);
     match state.spectrum_hold.0 {
         // A dial of the WHOLE axis is a state rather than a size: the far
@@ -254,7 +254,7 @@ pub(super) fn spectrum_split(state: &SharedState, surface: usize) -> f32 {
 ///   size. So it degrades toward sharing the squeeze rather than toward a
 ///   spectrum filling the pane edge to edge.
 pub(crate) fn hold_spectrum(state: &mut SharedState, pane: egui::Vec2) {
-    let cfg = state.spectrum_config;
+    let cfg = state.appearance.spectrum;
     // No far region is no divider — there is nothing to take a resize. The hold
     // is left standing rather than dropped, so turning the spectrogram back on
     // returns the picture it was turned off at.
@@ -400,7 +400,7 @@ pub(super) fn drag_zoom(
     if surface != DOCKED_SURFACE {
         return;
     }
-    let cfg = &mut state.spectrum_config;
+    let cfg = &mut state.appearance.spectrum;
     let mut low = cfg.low_midi;
     let mut span = (cfg.high_midi - cfg.low_midi).max(crate::PITCH_RANGE_MIN_SPAN);
     // Nothing is written unless a gesture actually moved something. The range

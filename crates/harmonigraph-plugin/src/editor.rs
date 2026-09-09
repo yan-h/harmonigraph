@@ -215,20 +215,20 @@ impl EditorShared {
             // render uses the selected analysis input as the spectrogram,
             // aligned to the picture by construction (no bounce, no offset).
             // Silent-but-harmless if no audio reaches that input.
-            self.take.start(sample_rate, self.ui.save_persist(), true);
+            self.take.start(sample_rate, self.ui.appearance.serialize(), true);
         } else if !self.ui.take.recording && recording {
             self.take
-                .stop(harmonigraph_record::RenderRequest::from_config(&self.ui.take.render_config));
+                .stop(harmonigraph_record::RenderRequest::from_config(&self.ui.appearance.render));
         }
 
         // "Re-render take": render the last finished take with the CURRENT settings.
-        // The persist blob rides along as --ui-state, so the frame, bounce, and
+        // The appearance rides along as --appearance, so the frame, bounce, and
         // offset dialed in after recording all reach the video.
         self.ui.take.last_ready = self.take.last_take().is_some();
         if std::mem::take(&mut self.ui.take.render_now) {
             self.take.render_now(harmonigraph_record::RenderRequest::render_now(
-                &self.ui.take.render_config,
-                self.ui.save_persist(),
+                &self.ui.appearance.render,
+                self.ui.appearance.serialize(),
             ));
         }
 
@@ -245,7 +245,7 @@ impl EditorShared {
         self.take_rolling = self.take.is_rolling();
 
         // Whether a backward jump ends the take on the audio thread.
-        let ends_at_rewind = self.ui.take.render_config.trigger.ends_at_rewind();
+        let ends_at_rewind = self.ui.appearance.render.trigger.ends_at_rewind();
         self.take.set_end_at_rewind(ends_at_rewind);
 
         // The audio thread saw the transport go backwards and ended the take
@@ -258,14 +258,14 @@ impl EditorShared {
         if self.take.is_recording() && ends_at_rewind && self.take.hit_rewind() {
             self.ui.take.recording = false;
             self.take
-                .stop(harmonigraph_record::RenderRequest::from_config(&self.ui.take.render_config));
+                .stop(harmonigraph_record::RenderRequest::from_config(&self.ui.appearance.render));
         }
 
         // "The take is done" as soon as the transport stops, if asked —
         // so a play-through or an audio export yields a video with
         // nothing further to click.
         if self.take.is_recording()
-            && self.ui.take.render_config.trigger == harmonigraph_ui::RenderTrigger::OnTransportStop
+            && self.ui.appearance.render.trigger == harmonigraph_ui::RenderTrigger::OnTransportStop
         {
             // Only after something was actually captured: arming ahead of
             // the downbeat must not immediately end the take.
@@ -276,7 +276,7 @@ impl EditorShared {
                 if self.take_still_frames >= Self::STOP_FRAMES {
                     self.ui.take.recording = false;
                     self.take.stop(harmonigraph_record::RenderRequest::from_config(
-                        &self.ui.take.render_config,
+                        &self.ui.appearance.render,
                     ));
                 }
             }
@@ -342,7 +342,7 @@ impl EditorShared {
         if !self.audio_buf.is_empty() {
             let sample_rate = self.sample_rate();
             let channels = self.audio_channels();
-            let config = self.ui.spectrum_config;
+            let config = self.ui.appearance.spectrum;
             self.ui.spectrum.push_samples(&self.audio_buf, channels, sample_rate, now, &config);
         }
     }
@@ -409,7 +409,7 @@ impl EditorShared {
     /// [`prune`]: harmonigraph_core::NoteTracker::prune
     pub(crate) fn catch_up_unwatched(&mut self, now: f64) {
         self.catch_up(now);
-        let envelope = self.ui.view.envelope(&self.ui.frame_params);
+        let envelope = self.ui.appearance.view.envelope(&self.ui.frame_params);
         self.ui.tracker.prune(now, &envelope);
     }
 }
@@ -1100,6 +1100,59 @@ mod tests {
     #[allow(unused_imports)]
     use harmonigraph_core::notes::{NoteEvent, SourceId};
     use std::sync::Arc;
+
+    /// The real arm path snapshots live appearance even when workspace state
+    /// is unrelated, and later knob edits cannot rewrite the starting look.
+    #[test]
+    fn arming_captures_the_whole_live_appearance_without_workspace_state() {
+        let (_notes, consumer) = harmonigraph_record::publication::channel();
+        let (_audio, audio_consumer) = rtrb::RingBuffer::new(64);
+        let (recorder, control) = harmonigraph_record::channel();
+        let directory =
+            std::env::temp_dir().join(format!("appearance-capture-{}", std::process::id()));
+        let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
+        let mut shared = EditorShared::new(
+            consumer,
+            audio_consumer,
+            Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
+            Arc::new(super::AtomicU32::new(1)),
+            control,
+            Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        );
+        shared.ui.appearance.camera.yaw = 1.23;
+        shared.ui.appearance.view.extent_sevens = 3;
+        shared.ui.appearance.spectrum.low_midi = 40.5;
+        shared.ui.appearance.spiral.zoom = 2.75;
+        shared.ui.appearance.render.short_edge = 2160;
+        shared.ui.appearance.render.renderer_path = "a renderer (with, punctuation)".into();
+        shared.ui.ui_scale = 1.25;
+        let expected = shared.ui.appearance.serialize();
+        shared.ui.take.recording = true;
+        shared.sync_take(44_100.0);
+        assert!(shared.take.is_recording(), "{}", shared.take.status());
+        shared.ui.appearance = Default::default();
+        // Closing the producer finalizes the writer without launching an export.
+        drop(shared);
+        drop(recorder);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !probe.finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(probe.finished(), "the writer must close before reading its take");
+        let path = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "take"))
+            .unwrap();
+        let take = harmonigraph_take::Take::read(path).unwrap();
+        let blob = take.header.appearance.unwrap();
+        assert_eq!(take.header.sample_rate, 44_100.0);
+        assert_eq!(blob, expected);
+        assert!(!blob.contains("dock:") && !blob.contains("ui_scale:"));
+        let appearance = harmonigraph_ui::AppearanceDocument::parse(&blob).unwrap();
+        assert_eq!(appearance.serialize(), expected);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     /// The floor this window is held to and the floor the pane layout dials to
     /// are one number, and the cast into window pixels is where they could

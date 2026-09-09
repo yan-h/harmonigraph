@@ -199,10 +199,10 @@ pub struct RenderRequest {
     pub audio: Option<String>,
     /// `--align` value (take-time the audio starts), if set; else auto-align.
     pub align: Option<String>,
-    /// A persist blob passed as `--ui-state`, overriding the take's record-time
+    /// A appearance document passed as `--appearance`, overriding the take's record-time
     /// look — set for "Re-render take" so post-record settings reach the video;
     /// `None` for auto-render (which uses the take's own recorded look).
-    pub ui_state: Option<String>,
+    pub appearance: Option<String>,
     /// Output pixels, from the Video pane's Aspect and Resolution.
     ///
     /// Passed rather than left to the renderer's own default because that
@@ -230,16 +230,22 @@ impl RenderRequest {
     }
 
     /// Build a request for an explicit "Re-render take": always built, and it
-    /// carries the CURRENT `ui_state` blob so the render reflects the frame,
+    /// carries the CURRENT `appearance` blob so the render reflects the frame,
     /// bounce, and offset dialed in *after* recording — not the take's
     /// record-time snapshot.
-    pub fn render_now(config: &harmonigraph_take::RenderConfig, ui_state: String) -> RenderRequest {
-        Self::build(config, Some(ui_state))
+    pub fn render_now(
+        config: &harmonigraph_take::RenderConfig,
+        appearance: String,
+    ) -> RenderRequest {
+        Self::build(config, Some(appearance))
     }
 
     /// A blank renderer path means "use the default" rather than an empty
     /// argument the renderer would reject.
-    fn build(config: &harmonigraph_take::RenderConfig, ui_state: Option<String>) -> RenderRequest {
+    fn build(
+        config: &harmonigraph_take::RenderConfig,
+        appearance: Option<String>,
+    ) -> RenderRequest {
         let program = if config.renderer_path.trim().is_empty() {
             default_renderer_path()
         } else {
@@ -252,7 +258,7 @@ impl RenderRequest {
             // no --audio replacement and no --align override.
             audio: None,
             align: None,
-            ui_state,
+            appearance,
             size: config.frame.pixels(config.short_edge),
             // Not forced: the take carries the Video pane's Spectrogram choice
             // and the renderer reads it, so passing `--playhead` here would
@@ -914,10 +920,10 @@ impl Control {
         }
     }
 
-    /// Begin a take. `ui_state` is the persist blob that decides how the
+    /// Begin a take. `appearance` is the appearance document that decides how the
     /// replay will look; `sample_rate` stamps the header. `audio`
     /// records the selected audio stream alongside the notes.
-    pub fn start(&self, sample_rate: f32, ui_state: String, audio: bool) {
+    pub fn start(&self, sample_rate: f32, appearance: String, audio: bool) {
         if self.is_recording() {
             return;
         }
@@ -945,7 +951,7 @@ impl Control {
         let base =
             dir.join(format!("take-{}.{}", stamp_for(epoch_secs), harmonigraph_take::EXTENSION));
         let path = disambiguate(base);
-        let header = header_for(sample_rate, ui_state);
+        let header = header_for(sample_rate, appearance);
 
         self.dropped.store(0, Ordering::Relaxed);
         self.with_audio.store(audio, Ordering::Relaxed);
@@ -1013,22 +1019,16 @@ impl Control {
 /// The take's opening line: everything constant for the whole recording,
 /// decided before the first event is written and not revisable afterwards.
 ///
-/// Split out of [`Control::start`] because it is the part of arming that is
-/// PURE. `start` itself cannot be reached from a test without either writing
-/// into the real takes directory — `~/Music/Harmonigraph Takes`, which a
-/// `cargo test` run would then litter on every invocation — or setting
-/// `LATTICE_TAKE_DIR`, which means a process-global `set_var` racing the
-/// writer and render threads this crate's own tests spawn. Everything `start`
-/// decides that is not the filesystem is decided here instead, where a test
-/// can simply call it.
+/// Shared by the recording control and capture probes; the UI supplies the
+/// serialized appearance while this layer remains independent of its types.
 ///
 /// Each field fails SILENTLY rather than loudly if it stops being set, which
 /// is what makes the three of them worth a function and a test of their own
 /// rather than a struct literal inline:
 ///
-/// - `ui_state` is the persist blob that decides how the replay LOOKS. Unset,
+/// - `appearance` is the appearance document that decides how the replay LOOKS. Unset,
 ///   the take still records and the render still succeeds — and the video is
-///   of the default palette, camera and tuning instead of the ones the take
+///   of the default palette and camera instead of the ones the take
 ///   was recorded under.
 /// - `sample_rate` is the take's whole time base. Unset it falls back to
 ///   [`harmonigraph_take::Header::default`], which is 48 kHz rather than a
@@ -1040,10 +1040,10 @@ impl Control {
 ///   is holding a take and asking where it came from, and the reason it
 ///   belongs here is that a shell which forgets to stamp it leaves that
 ///   question unanswerable later, with nothing at the time to notice.
-pub fn header_for(sample_rate: f32, ui_state: String) -> harmonigraph_take::Header {
+pub fn header_for(sample_rate: f32, appearance: String) -> harmonigraph_take::Header {
     harmonigraph_take::Header {
         sample_rate,
-        ui_state: Some(ui_state),
+        appearance: Some(appearance),
         source: "harmonigraph".into(),
         ..Default::default()
     }
@@ -2727,11 +2727,11 @@ fn spawn_render(
         // run means the straggler writes somewhere nobody is reading, and
         // the file at `out` is only ever produced whole, by rename.
         let partial = take_path.with_extension(format!("rendering-{generation}.mp4"));
-        // A "Re-render take" carries the current look as a persist blob; write
-        // it beside the take and pass --ui-state so post-record settings
+        // A "Re-render take" carries the current look as a appearance document; write
+        // it beside the take and pass --appearance so post-record settings
         // override the take's record-time snapshot. Per-run for the same
         // reason as `partial`, and removed after the run.
-        let ui_state_file = request.ui_state.as_ref().and_then(|blob| {
+        let appearance_file = request.appearance.as_ref().and_then(|blob| {
             let path = take_path.with_extension(format!("rendernow-{generation}.ron"));
             std::fs::write(&path, blob).ok().map(|()| path)
         });
@@ -2744,8 +2744,8 @@ fn spawn_render(
         if let Some(align) = &request.align {
             command.arg("--align").arg(align);
         }
-        if let Some(file) = &ui_state_file {
-            command.arg("--ui-state").arg(file);
+        if let Some(file) = &appearance_file {
+            command.arg("--appearance").arg(file);
         }
         let [w, h] = request.size;
         command.arg("--size").arg(format!("{w}x{h}"));
@@ -2767,7 +2767,7 @@ fn spawn_render(
         *status.lock() = format!("rendering {}...", out.display());
         let spawned = command.spawn();
         let cleanup = || {
-            if let Some(file) = &ui_state_file {
+            if let Some(file) = &appearance_file {
                 let _ = std::fs::remove_file(file);
             }
             let _ = std::fs::remove_file(&partial);
@@ -2833,7 +2833,7 @@ fn spawn_render(
                         *status.lock() = format!("rendered, but could not move into place: {err}")
                     }
                 }
-                if let Some(file) = &ui_state_file {
+                if let Some(file) = &appearance_file {
                     let _ = std::fs::remove_file(file);
                 }
             }
@@ -2880,7 +2880,7 @@ mod tests {
         );
         assert_eq!(header.sample_rate, 44_100.0, "the take's time base is the one it was given");
         assert_eq!(
-            header.ui_state.as_deref(),
+            header.appearance.as_deref(),
             Some(blob.as_str()),
             "the look the take was recorded under has to reach the replay",
         );
@@ -3294,7 +3294,7 @@ mod tests {
                     program: fake.clone(),
                     audio: None,
                     align: None,
-                    ui_state: None,
+                    appearance: None,
                     size: [16, 16],
                     playhead: None,
                 },
@@ -3341,7 +3341,7 @@ mod tests {
     /// that is a fragment of one — lives entirely in the killing and the
     /// cleanup.
     ///
-    /// The fixture asks for a `ui_state` blob as well, so the sweep covers both
+    /// The fixture asks for a `appearance` blob as well, so the sweep covers both
     /// things a run leaves beside the take: a partial that is only ever renamed
     /// into place on success, and the look a "Re-render take" wrote out for it.
     #[cfg(unix)]
@@ -3369,7 +3369,7 @@ mod tests {
                 program: fake.clone(),
                 audio: None,
                 align: None,
-                ui_state: Some("(dummy)".into()),
+                appearance: Some("(dummy)".into()),
                 size: [16, 16],
                 playhead: None,
             },
@@ -3441,7 +3441,7 @@ mod tests {
                     program: fake.clone(),
                     audio: None,
                     align: None,
-                    ui_state: None,
+                    appearance: None,
                     size: [16, 16],
                     playhead: None,
                 },

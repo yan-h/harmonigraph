@@ -94,7 +94,7 @@ impl Worker {
             program,
             audio: None,
             align: None,
-            ui_state: None,
+            appearance: None,
             size: [16, 16],
             playhead: None,
         }));

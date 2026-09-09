@@ -920,7 +920,7 @@ impl TimeAxis {
                 depth_span,
                 // The same floor on the live arm's own input, for the same
                 // reason — a window of nothing maps every time to one depth.
-                window: (state.spectrum_config.roll_seconds as f64)
+                window: (state.appearance.spectrum.roll_seconds as f64)
                     .max(crate::WholeSong::MIN_WINDOW),
                 origin: now,
                 now,

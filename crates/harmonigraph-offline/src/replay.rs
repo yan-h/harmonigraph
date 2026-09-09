@@ -78,6 +78,7 @@ impl Replay {
         }
     }
 
+    #[cfg(test)]
     pub fn take(&self) -> &Take {
         &self.take
     }
@@ -506,7 +507,7 @@ mod tests {
                 harmonigraph_ui::begin_frame(&mut state, &replay.params, now);
                 let config = expected.iter().rev().find(|(t, _)| *t <= now).unwrap().1;
                 assert_eq!(state.tuning, config.tuning);
-                assert_eq!(state.view.meantone, config.modes.tempered.syntonic);
+                assert_eq!(state.appearance.view.meantone, config.modes.tempered.syntonic);
                 assert_eq!(state.learn_active, config.modes.learning);
                 assert_eq!(state.replayed_configuration, Some(config));
             }

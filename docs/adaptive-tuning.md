@@ -527,8 +527,8 @@ A snapshot restores **what is sounding now**;
 it does not reconstruct missing attacks, releases or trajectories, and the test that pins it asserts no note-on appears among the refresh records.
 A gap clears every source, so one lost report owes every source a snapshot.
 
-Takes are format v4;
-v1–v3 are refused whole with a version error rather than half-read.
+Takes are format v5;
+v1–v4 are refused whole with a version error rather than half-read.
 Every record carries a container-level `#[serde(default)]` and none denies unknown fields, which is what makes dropping a field safe without touching the format version —
 and is why a take written today is refused by a pre-prune build rather than misread by one.
 Policy-v2 settings are saved in musical settings and take configuration metadata, and tuned onset pitch is a saved voice fact.
@@ -702,4 +702,4 @@ The code seams:
 - [`harmonigraph-core/src/notes.rs`](../crates/harmonigraph-core/src/notes.rs) and [`roll.rs`](../crates/harmonigraph-core/src/roll.rs) — source-aware tracking and live history, off the audio thread;
 - [`harmonigraph-plugin/src/configuration.rs`](../crates/harmonigraph-plugin/src/configuration.rs) — effective CLAP tuning on audio, including editor-independent learning;
 - [`harmonigraph-record/src/publication.rs`](../crates/harmonigraph-record/src/publication.rs) — the two independent lanes;
-- [`harmonigraph-take/src/lib.rs`](../crates/harmonigraph-take/src/lib.rs) — format v4, source and reset scope, actual sample and pitch provenance.
+- [`harmonigraph-take/src/lib.rs`](../crates/harmonigraph-take/src/lib.rs) — format v5, source and reset scope, actual sample and pitch provenance.

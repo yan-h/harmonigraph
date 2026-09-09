@@ -1682,7 +1682,7 @@ mod tests {
         {
             let surface = spectral_shadow_surface(slot);
             let mut state = crate::SharedState::new(FORMAT);
-            state.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
+            state.appearance.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
                 width: 1.0,
                 depth: 1.0,
                 kernel,
@@ -1727,7 +1727,7 @@ mod tests {
                         &state,
                         spectral_labels(slot),
                         harmonigraph_render::SlideAxis::default(),
-                        Some(state.view.shadow.spectral_text),
+                        Some(state.appearance.view.shadow.spectral_text),
                         Some(surface),
                     );
                     painter.add(harmonigraph_render::spectral_shadow_prepare_callback(

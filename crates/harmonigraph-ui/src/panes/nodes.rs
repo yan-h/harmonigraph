@@ -12,10 +12,10 @@ use harmonigraph_scene::{
 
 /// Sizes and timing first, then the audio and MIDI layers and their accents.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
-    note_section(ui, &mut state.view, params);
-    audio_section(ui, &mut state.view);
-    octaves_section(ui, &mut state.view);
-    melody_bass_section(ui, &mut state.view);
+    note_section(ui, &mut state.appearance.view, params);
+    audio_section(ui, &mut state.appearance.view);
+    octaves_section(ui, &mut state.appearance.view);
+    melody_bass_section(ui, &mut state.appearance.view);
 }
 
 /// Octaves: which octaves of the pitch class are sounding, shown as arcs of a

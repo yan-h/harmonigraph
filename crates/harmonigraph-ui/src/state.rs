@@ -8,10 +8,10 @@ use egui_dock::{DockState, NodeIndex};
 use harmonigraph_core::{Comma, LatticePos, NoteTracker, PitchClass, Tuning};
 use harmonigraph_perf::{PerfStats, ShellTimings};
 use harmonigraph_render::wgpu::TextureFormat;
-use harmonigraph_scene::{Camera, DrawnWindow, FrameParams, ViewConfig};
+use harmonigraph_scene::{Camera, DrawnWindow, FrameParams};
 
 use crate::{fold, panes, text};
-use crate::{AudioSpectrum, RenderConfig, RenderProgress, SpectrumConfig, WholeSong};
+use crate::{AudioSpectrum, RenderProgress, WholeSong};
 
 /// Scrollback for the debug console pane. Shells and panes log via
 /// [`SharedState::log`].
@@ -50,8 +50,7 @@ impl Console {
 /// reaches the recorder itself, which is why the pane compiles in a shell that
 /// has none.
 ///
-/// Runtime-only but for [`render_config`](Self::render_config), which is a
-/// setting rather than a live flag and persists with the rest of them. A take
+/// Runtime-only. A take
 /// is a deliberate act, so nothing else here is ever resumed on load — an
 /// editor that reopened armed would record a session nobody asked it to.
 ///
@@ -83,9 +82,6 @@ pub struct TakeState {
     /// it had written. The take itself is kept, so
     /// [`render_now`](Self::render_now) can start over from it.
     pub cancel_render: bool,
-    /// What to do with a take once it is finished. The one persisted field
-    /// here — see [`UiPersist`], which carries it as `render`.
-    pub render_config: RenderConfig,
     /// How far the video render running in the background has got, or `None`
     /// when none is. Shell-set every frame, like [`status`](Self::status).
     pub render_progress: Option<RenderProgress>,
@@ -99,12 +95,11 @@ pub struct SharedState {
     /// Snapshot of the tuning parameters, refreshed each frame in
     /// [`root_ui`](crate::root_ui) so core/scene code never touches the param system.
     pub tuning: Tuning,
-    pub view: ViewConfig,
+    pub appearance: crate::AppearanceDocument,
     /// Per-frame mirrors of the appearance parameters, refreshed alongside
     /// `tuning` (the param system owns the real values; these are never
     /// persisted).
     pub frame_params: FrameParams,
-    pub camera: Camera,
     /// The lattice node the pointer is over, if any.
     ///
     /// Shared state that one pane writes and one pane reads: the lattice
@@ -211,9 +206,6 @@ pub struct SharedState {
     pub take: TakeState,
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
     pub spectrum: AudioSpectrum,
-    /// The Spectral pane's settings (the Display tab's Analyzer page;
-    /// persisted).
-    pub spectrum_config: SpectrumConfig,
     /// How far open the audio ring's Gate stands at each bucket of the
     /// analyzer's grid, so a ring arrives and leaves on the note Fade rather
     /// than at the instant the spectrum crosses the bar
@@ -248,22 +240,10 @@ pub struct SharedState {
     /// difference. See [`panes::spectral::SpectrumHold`].
     ///
     /// Runtime-only, and it is the answer rather than the setting: the dial
-    /// itself stays in [`spectrum_config`](Self::spectrum_config), because that
+    /// itself stays in [`appearance.spectrum`](crate::AppearanceDocument::spectrum), because that
     /// is what a project saves and a take renders from, and a length in POINTS
     /// is a fact about the window this session happens to be open in.
     pub(crate) spectrum_hold: panes::spectral::SpectrumHold,
-    /// How the Spiral pane is FRAMED — how far its disc is magnified past the
-    /// fit, and which point of it the pane is looking at (persisted; see
-    /// [`panes::spiral::SpiralView`]).
-    ///
-    /// Beside `spectrum_config` rather than inside it, because the two answer
-    /// different questions about one analyzer: that says what is being shown —
-    /// pitch range, level window, tilt, gradient — and both panes read it whole,
-    /// which is what makes "loud" and "high" mean the same thing in each. This
-    /// says how closely one of the two pictures is being looked at, and is the
-    /// lattice's [`camera`](Self::camera) with a disc in front of it rather than
-    /// a lattice.
-    pub spiral_view: panes::spiral::SpiralView,
     /// Offline playhead render: the whole take's spectrogram laid out
     /// statically with a playhead at `now`, instead of the live scrolling
     /// window. `Some` only in the offline renderer. Runtime-only, never
@@ -324,10 +304,9 @@ pub struct SharedState {
     /// Here rather than in `view` for the reason `ui_scale` above it is: the
     /// overlay is a development instrument over the picture and never part of
     /// one, so where it was pushed to on this screen has no business in
-    /// [`ViewConfig`], which is what a recorded frame is composed from. The
-    /// blob itself does travel — a take carries one — but nothing but
-    /// [`root_ui`](crate::root_ui) reads this, and the offline renderer never
-    /// draws the HUD at all, so no render can be composed from it.
+    /// [`ViewConfig`](harmonigraph_scene::ViewConfig). This editor preference
+    /// stays outside recorded appearance; only [`root_ui`](crate::root_ui)
+    /// reads it and the offline renderer never draws the HUD.
     pub perf_pos: Option<egui::Pos2>,
 }
 
@@ -707,9 +686,8 @@ impl SharedState {
         SharedState {
             tracker: NoteTracker::new(),
             tuning: Tuning::default(),
-            view: ViewConfig::default(),
+            appearance: crate::AppearanceDocument::default(),
             frame_params: FrameParams::default(),
-            camera: Camera::default(),
             hovered: None,
             drawn: None,
             drawn_this_frame: None,
@@ -730,12 +708,10 @@ impl SharedState {
             preset_name: String::new(),
             take: TakeState::default(),
             spectrum: AudioSpectrum::default(),
-            spectrum_config: SpectrumConfig::default(),
             ring_fade: harmonigraph_scene::RingFade::default(),
             glow_fade: std::collections::HashMap::new(),
             ring_levels: crate::panes::spectral_fold::RingLevels::default(),
             spectrum_hold: panes::spectral::SpectrumHold::default(),
-            spiral_view: panes::spiral::SpiralView::default(),
             whole_song: None,
             workspace: Workspace::default(),
             display_page: panes::display::DisplayPage::default(),
@@ -769,15 +745,9 @@ impl SharedState {
     /// (dock layout, camera, view settings). Parameters are NOT included —
     /// they live in the host's plugin state.
     ///
-    /// Called from more than one place — `sync_take` rides a fresh
-    /// serialization along with a take, on every start-recording and
-    /// Re-render, so a render reproduces the look it was dialed in at rather
-    /// than whatever the editor happens to show by the time it runs. But
-    /// only ONE caller writes the result into `params.ui_state`, the field
-    /// the host actually persists with the project: `LatticeEditorHandle`'s
-    /// `Drop`. So `params.ui_state` reads the CLOSE of the last session that
-    /// had the editor open, not whatever the current one — or a take in
-    /// flight — is doing.
+    /// `LatticeEditorHandle::Drop` writes this enclosing editor document into
+    /// `params.ui_state` when the window closes. Recording instead serializes
+    /// the live appearance directly, so capture never depends on that last save.
     pub fn save_persist(&self) -> String {
         // RON rather than JSON: dock layout rects can be NaN (before first
         // layout), which JSON cannot round-trip.
@@ -786,17 +756,21 @@ impl SharedState {
             dock: self.workspace.dock.clone(),
             folds: self.workspace.folds.clone(),
             display_page: self.display_page,
-            camera: self.camera,
-            view: self.view.clone(),
+            appearance: self.appearance.clone(),
             camera_presets: self.camera_presets.clone(),
-            spectrum: self.spectrum_config,
-            spiral: self.spiral_view,
-            render: self.take.render_config.clone(),
             fps_cap: self.fps_cap,
             ui_scale: self.ui_scale,
             perf_pos: self.perf_pos,
         })
         .unwrap_or_default()
+    }
+
+    /// Install an already normalized appearance at a load boundary.
+    pub fn install_appearance(&mut self, appearance: crate::AppearanceDocument) {
+        self.appearance = appearance;
+        // A restored project must judge its comma modes again even at the
+        // tuning the previous project already showed.
+        self.temper_judged = [None; Comma::COUNT];
     }
 
     /// Drop everything that belongs to a particular egui context. Shells MUST
@@ -826,51 +800,9 @@ impl SharedState {
         }
     }
 
-    /// Restore state saved by [`save_persist`](Self::save_persist). Unknown or
-    /// corrupt input is ignored (fresh defaults win over a broken restore), and
-    /// so is anything older than [`UI_PERSIST_VERSION`].
-    ///
-    /// Answers whether the blob was APPLIED, and says why on the console when
-    /// it was not. Both refusals cost the whole document — dock, camera, view,
-    /// spectrum and render at once — so a caller with nowhere to show a
-    /// console (the offline renderer) has to say so itself, and the return
-    /// value is what lets it.
-    ///
-    /// Refusing an older blob rather than migrating it is cheap for the DEEP
-    /// past because none of it can reach this build THROUGH THE HOST. The
-    /// version reached 2 on 2026-07-23; the plugin's `CLAP_ID` and
-    /// `VST3_CLASS_ID` changed on 2026-07-26, three days later. A project saved
-    /// before that names a plugin identity this binary does not claim, so the
-    /// host never loads us into that slot and its state never arrives here.
-    ///
-    /// Every bump SINCE has no such gate under it, and this is the ordinary
-    /// case rather than the exception: a project saved by yesterday's build
-    /// carries yesterday's identity, arrives here, and is refused whole. That
-    /// is a real project opening at defaults, which is the price of the floor
-    /// and is why it is loud.
-    ///
-    /// That argument covers the editor and nothing else, and this has two
-    /// other callers with no identity gate behind them: the offline renderer
-    /// reading a `.take` header, and the standalone reading its `app.ron`. A
-    /// take is an archive — `harmonigraph-take` refuses only takes from the
-    /// FUTURE — so an old one opens and hands its `ui_state` straight here.
-    /// That case is live rather than hypothetical: a take recorded before the
-    /// floor was last raised carries a below-floor blob that is refused whole,
-    /// so the video renders at the default camera, view, spectrum AND
-    /// frame rather than the ones it was recorded with. The floor is mirrored
-    /// in [`render_config_from_persist`] so the two doors into one blob at
-    /// least agree, and a refused take renders wholly at defaults rather than a
-    /// recorded frame wrapped around them.
-    ///
-    /// What makes that acceptable is that it is LOUD on both doors — this
-    /// returns whether it applied and writes the reason to the console, and the
-    /// offline renderer prints to stderr — not that it cannot happen.
-    ///
-    /// That is what the identity change bought and what a future one would
-    /// buy again: a clean floor under the format. A bump WITHOUT one strands
-    /// real projects at defaults, which is a cost worth naming in the PR
-    /// rather than a reason not to — but it is loud, and a blob half-read is
-    /// the thing this floor exists to prevent.
+    /// Restore the whole editor document. Refused input leaves the current state
+    /// intact and reports why on the console. Appearance normalization is shared
+    /// with recording/export; workspace restoration remains editor-only.
     pub fn load_persist(&mut self, serialized: &str) -> bool {
         let persist = match ron::from_str::<UiPersist>(serialized) {
             Ok(persist) => persist,
@@ -899,6 +831,13 @@ impl SharedState {
             ));
             return false;
         }
+        let appearance = match persist.appearance.normalize() {
+            Ok(appearance) => appearance,
+            Err(err) => {
+                self.log(format!("persist ignored — {err}"));
+                return false;
+            }
+        };
         // The dock being installed is not the one the dial's points were
         // measured against, and its node count cannot say so (see
         // [`fold::Dial::forget`]) — so the load has to. What the incoming
@@ -908,36 +847,11 @@ impl SharedState {
         self.workspace.folds = persist.folds;
         self.workspace.dock = persist.dock;
         self.display_page = persist.display_page;
-        self.camera = persist.camera;
-        self.view = persist.view;
-        // The incoming project's comma modes are its own, so the verdicts
-        // this session reached about the tuning it was showing say nothing
-        // about them, and the detect has to look again. Held back, an
-        // editor that loads a project at the tuning it already had would
-        // never look (see `temper_judged`); a host pushing state into a
-        // live editor, on undo or a preset change, is exactly that case.
-        self.temper_judged = [None; Comma::COUNT];
-        // All of these fit a deserialized blob to what its own controls can
-        // produce, which a hand-edited RON need not have. The presets are in
-        // the list because a preset button writes its two fields straight into
-        // the camera, so they are a second way into fields `camera.sanitize()`
-        // has already repaired once.
-        self.camera.sanitize();
-        self.view.sanitize();
+        self.install_appearance(appearance);
         self.camera_presets = persist.camera_presets;
         for preset in &mut self.camera_presets {
             preset.sanitize();
         }
-        self.spectrum_config = persist.spectrum;
-        self.spectrum_config.sanitize();
-        // The Spiral pane's framing, repaired for the reason the camera beside it
-        // is: it multiplies the geometry that pane paints, and a NaN out of a
-        // hand-edited blob is a panic in egui's tessellator rather than a wrong
-        // picture.
-        self.spiral_view = persist.spiral;
-        self.spiral_view.sanitize();
-        self.take.render_config = persist.render;
-        self.take.render_config.sanitize();
         self.fps_cap = persist.fps_cap;
         // Clamped here rather than only where it is drawn, so the control
         // cannot read out a number the chrome is not at: `set_ui_scale`
@@ -1023,10 +937,13 @@ fn default_ui_scale() -> f32 {
 /// it reachable only by "Reset layout". That is the same silent break 5's
 /// addition is, from the subtraction side, and it is the same floor that
 /// answers it.
-pub(crate) const UI_PERSIST_VERSION: u32 = 6;
+///
+/// 7: camera, view, spectrum, spiral and render moved into one appearance
+/// document. Previous editor saves are refused whole, with no migration.
+pub(crate) const UI_PERSIST_VERSION: u32 = 7;
 
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
-/// failed deserialize silently falls back to defaults.
+/// failed deserialize reports refusal and leaves the current state intact.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct UiPersist {
     /// serde(default) reads a pre-versioning blob as version 0, which is below
@@ -1034,36 +951,16 @@ pub(crate) struct UiPersist {
     #[serde(default)]
     pub(crate) version: u32,
     pub(crate) dock: DockState<panes::Tab>,
-    // EVERY section below carries `serde(default)`, so a blob missing one
-    // costs that section alone rather than the whole document. The reachable
-    // case is a HAND-AUTHORED blob — `harmonigraph-offline --ui-state FILE`,
-    // the standalone's `app.ron`, anything `read-plugin-state.py` produced —
-    // and such a file is written to set ONE thing, so the section it omits is
-    // most of them. `a_persist_blob_missing_any_one_section_keeps_the_rest`
-    // is what holds it, per section rather than once, because nothing at a
-    // declaration says whether the attribute is there.
-    //
-    // `dock` is the deliberate exception: it has no `impl Default` to fall
-    // back to, and a blob with no dock has no layout to restore, which is the
-    // one case where reverting the whole document is the honest answer.
+    // Workspace sections default independently. The dock is required because
+    // it has no Default; appearance has its own container-level defaults.
     #[serde(default)]
     pub(crate) folds: fold::Folds,
     #[serde(default)]
     pub(crate) display_page: panes::display::DisplayPage,
     #[serde(default)]
-    pub(crate) camera: Camera,
-    #[serde(default)]
-    pub(crate) view: ViewConfig,
+    pub(crate) appearance: crate::AppearanceDocument,
     #[serde(default)]
     pub(crate) camera_presets: Vec<CameraPreset>,
-    #[serde(default)]
-    pub(crate) spectrum: SpectrumConfig,
-    /// The Spiral pane's framing, beside the analyzer settings both panes share
-    /// — see [`SharedState::spiral_view`] for why it is not one of them.
-    #[serde(default)]
-    pub(crate) spiral: panes::spiral::SpiralView,
-    #[serde(default)]
-    pub(crate) render: RenderConfig,
     /// A missing cap reads as uncapped.
     #[serde(default)]
     pub(crate) fps_cap: Option<f32>,
@@ -1079,37 +976,6 @@ pub(crate) struct UiPersist {
     /// it where an undragged HUD opens. See [`SharedState::perf_pos`].
     #[serde(default)]
     pub(crate) perf_pos: Option<egui::Pos2>,
-}
-
-/// Parse just the render settings out of a persisted UI-state blob — so the
-/// offline renderer can default its size and layout to what the take was
-/// composed for, without building a whole [`SharedState`].
-///
-/// The whole [`RenderConfig`] rather than the frame alone, because more than
-/// the frame is wanted out here: `main` sizes and lays out from
-/// [`frame`](RenderConfig::frame). One door into the blob, so a setting the
-/// renderer honours cannot be one somebody forgot to add an accessor for.
-///
-/// Floored like [`SharedState::load_persist`], and it has to be: the offline
-/// renderer reads one blob through BOTH, this for the frame it composes at and
-/// that for the lattice it draws. Honour it here alone and an old take renders
-/// at its recorded size and aspect around a scene nobody dialled in, which
-/// reads as a working render rather than a refused blob. Refusing here instead
-/// leaves `main`'s `unwrap_or_default` composing at a frame it can see.
-///
-/// Sanitized like `load_persist` too, and for the same reason: this is the
-/// door a hand-edited or corrupted `--ui-state` file comes through, and
-/// `frame.split` feeds `Layout::split` straight into `main`'s default layout,
-/// whose own clamp cannot repair a NaN — see
-/// [`RenderFrame::sanitize`](crate::RenderFrame::sanitize).
-pub fn render_config_from_persist(serialized: &str) -> Option<RenderConfig> {
-    ron::from_str::<UiPersist>(serialized).ok().filter(|p| p.version >= UI_PERSIST_VERSION).map(
-        |persist| {
-            let mut render = persist.render;
-            render.sanitize();
-            render
-        },
-    )
 }
 
 impl SharedState {
@@ -1137,7 +1003,7 @@ impl SharedState {
     /// all. There is no picture to describe there, and the reach is the only
     /// window that does not depend on one.
     pub fn shown(&self) -> DrawnWindow {
-        self.drawn.unwrap_or_else(|| self.view.reach())
+        self.drawn.unwrap_or_else(|| self.appearance.view.reach())
     }
 
     /// Tell the state what ground the lattice pane stands on — what it paints,

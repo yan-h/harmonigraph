@@ -1,5 +1,5 @@
-//! Print a UI-state blob (`SharedState::save_persist`) with chosen view and
-//! camera fields overridden — the offline renderer's `--ui-state` input,
+//! Print an appearance document with chosen view and
+//! camera fields overridden — the offline renderer's `--appearance` input,
 //! synthesized instead of recovered from a DAW project.
 //!
 //! `read-plugin-state.py` is the usual way to get one of these, but it needs
@@ -9,9 +9,9 @@
 //! a before/after for a settings change, a regression picture.
 //!
 //! ```text
-//! cargo run -p harmonigraph-ui --example ui-state -- \
+//! cargo run -p harmonigraph-ui --example appearance -- \
 //!     extent_sevens=1 sevens_size=0.55 cabinet_scale=0.71 > view.ron
-//! harmonigraph-offline chord.take --ui-state view.ron --layout lattice -o frame.png
+//! harmonigraph-offline chord.take --appearance view.ron --layout lattice -o frame.png
 //! ```
 //!
 //! Unknown keys are an error rather than a shrug: a typo that silently
@@ -30,14 +30,13 @@
 //! replaces: `cabinet_angle` now takes radians, matching every other field,
 //! rather than degrees converted on the way in.
 
-use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_scene::{Camera, ViewConfig};
-use harmonigraph_ui::SharedState;
+use harmonigraph_ui::AppearanceDocument;
 
 fn main() -> Result<(), String> {
-    let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
-    let mut view_text = ron::to_string(&state.view).map_err(|e| e.to_string())?;
-    let mut camera_text = ron::to_string(&state.camera).map_err(|e| e.to_string())?;
+    let mut appearance = AppearanceDocument::default();
+    let mut view_text = ron::to_string(&appearance.view).map_err(|e| e.to_string())?;
+    let mut camera_text = ron::to_string(&appearance.camera).map_err(|e| e.to_string())?;
 
     for arg in std::env::args().skip(1) {
         let (key, value) =
@@ -53,10 +52,10 @@ fn main() -> Result<(), String> {
         }
     }
 
-    state.view = ron::from_str(&view_text).map_err(|e| e.to_string())?;
-    state.camera = ron::from_str(&camera_text).map_err(|e| e.to_string())?;
+    appearance.view = ron::from_str(&view_text).map_err(|e| e.to_string())?;
+    appearance.camera = ron::from_str(&camera_text).map_err(|e| e.to_string())?;
 
-    println!("{}", state.save_persist());
+    println!("{}", appearance.normalize()?.serialize());
     Ok(())
 }
 

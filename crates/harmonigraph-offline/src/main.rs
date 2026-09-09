@@ -67,8 +67,8 @@ OPTIONS:
         --tail <SEC>       Extra time after the last event, for fades and
                            the roll to clear.  [default: 4]
         --crf <N>          x264 quality, lower is better.  [default: 16]
-        --ui-state <FILE>  Override the look recorded in the take with a
-                           persist blob (see read-plugin-state.py).
+        --appearance <FILE>  Override the look recorded in the take with a
+                           versioned appearance RON (read-plugin-state.py --appearance).
         --ffmpeg <PATH>    ffmpeg to run. Normally found automatically, on
                            PATH or in the usual install locations.
         --align <MODE>     How to line a --audio file up with the picture:
@@ -121,7 +121,7 @@ struct Args {
     end: Option<f64>,
     tail: f64,
     crf: u32,
-    ui_state: Option<String>,
+    appearance: Option<String>,
     ffmpeg: Option<String>,
     align: Align,
     dump_layout: bool,
@@ -156,7 +156,7 @@ impl Default for Args {
             end: None,
             tail: 4.0,
             crf: 16,
-            ui_state: None,
+            appearance: None,
             ffmpeg: None,
             align: Align::Auto,
             dump_layout: false,
@@ -210,7 +210,7 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
             "--end" => args.end = Some(parse_number("--end", &value("--end")?)?),
             "--tail" => args.tail = parse_number("--tail", &value("--tail")?)?,
             "--crf" => args.crf = parse_number::<f64>("--crf", &value("--crf")?)? as u32,
-            "--ui-state" => args.ui_state = Some(value("--ui-state")?),
+            "--appearance" => args.appearance = Some(value("--appearance")?),
             "--ffmpeg" => args.ffmpeg = Some(value("--ffmpeg")?),
             "--align" => args.align = parse_align(&value("--align")?)?,
             "--playhead" => args.playhead = true,
@@ -433,7 +433,10 @@ fn take_warnings(take_path: &str, take: &harmonigraph_take::Take) -> Vec<String>
 
 fn run() -> Result<(), String> {
     let Some(args) = parse_args()? else { return Ok(()) };
+    export(args)
+}
 
+fn export(args: Args) -> Result<(), String> {
     if args.dump_layout {
         // Without a take there's no frame to compose, so dump the named preset
         // (or the default) as a starting point for a custom .ron.
@@ -444,11 +447,12 @@ fn run() -> Result<(), String> {
     }
 
     let take_path = args.take.ok_or("no take file given (--help for usage)")?;
-    let mut take = harmonigraph_take::Take::read(&take_path).map_err(|e| e.to_string())?;
-    if let Some(path) = &args.ui_state {
-        take.header.ui_state =
-            Some(std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?);
-    }
+    let take = harmonigraph_take::Take::read(&take_path).map_err(|e| e.to_string())?;
+    let replacement = args
+        .appearance
+        .as_ref()
+        .map(|path| std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}")))
+        .transpose()?;
     // Ahead of anything the command line can complain about, so the take's own
     // trouble is the warning that reaches the Video pane's status line.
     for warning in take_warnings(&take_path, &take) {
@@ -459,18 +463,14 @@ fn run() -> Result<(), String> {
     // render defaults its size and layout to this, so a plain `harmonigraph-offline
     // take.take` reproduces exactly what was previewed; --size / --layout
     // override.
-    let render_config = take
-        .header
-        .ui_state
-        .as_deref()
-        .and_then(harmonigraph_ui::render_config_from_persist)
-        .unwrap_or_default();
+    let appearance = render::appearance_for(&take, replacement.as_deref());
+    let render_config = &appearance.render;
     let frame = render_config.frame;
     let layout = match &args.layout {
         Some(spec) => Layout::load(spec)?,
         None => Layout::split(frame.lattice, frame.split),
     };
-    let size = output_size(args.size, &render_config);
+    let size = output_size(args.size, render_config);
     // An explicit --size at a different aspect renders a DIFFERENT picture
     // from the one the take was framed in — nothing letterboxes or crops to
     // reconcile them, the layout simply recomposes at the pixels it is given.
@@ -623,7 +623,7 @@ fn run() -> Result<(), String> {
 
     let mut replay = Replay::new(take);
     let mut done = 0u64;
-    let rendered = render::render(&mut replay, audio.as_ref(), &settings, |frame| {
+    let rendered = render::render(&mut replay, audio.as_ref(), &settings, appearance, |frame| {
         if !sink.push(frame)? {
             // ffmpeg closed the pipe (e.g. -shortest, the soundtrack ending
             // before the visuals). Stop feeding; finish() below reads whether
@@ -669,6 +669,97 @@ fn run() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Through CLI parsing, files, output selection and the real render loop:
+    /// replacing appearance must draw exactly what recording it would draw.
+    #[test]
+    fn appearance_files_replace_recorded_output_and_picture_together() {
+        let directory =
+            std::env::temp_dir().join(format!("appearance-export-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let take_path = directory.join("recorded.take");
+        let replacement_path = directory.join("replacement.ron");
+        let mut recorded = harmonigraph_ui::AppearanceDocument::default();
+        recorded.camera.cabinet_scale = 0.7;
+        recorded.view.extent_sevens = 3;
+        recorded.spectrum.low_midi = 40.5;
+        recorded.spiral.zoom = 2.75;
+        recorded.render.short_edge = 180;
+        recorded.render.frame.aspect_w = 16;
+        recorded.render.frame.aspect_h = 9;
+        let write_take = |appearance: &harmonigraph_ui::AppearanceDocument| {
+            harmonigraph_take::Writer::create(
+                &take_path,
+                &harmonigraph_take::Header {
+                    appearance: Some(appearance.serialize()),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .flush()
+            .unwrap();
+        };
+        let draw = |name: &str, extra: &[&str]| {
+            let out = directory.join(format!("{name}.png"));
+            let mut raw = vec![
+                take_path.display().to_string(),
+                "--out".into(),
+                out.display().to_string(),
+                "--start".into(),
+                "0".into(),
+                "--end".into(),
+                "0.1".into(),
+                "--fps".into(),
+                "10".into(),
+            ];
+            raw.extend(extra.iter().map(|arg| (*arg).to_string()));
+            let args = parse_args_from(raw).unwrap().unwrap();
+            match export(args) {
+                Ok(()) => Some(
+                    image::open(directory.join(format!("{name}-00000.png"))).unwrap().into_rgba8(),
+                ),
+                Err(err) if err.contains("no usable GPU adapter") => {
+                    eprintln!("skipping: {err}");
+                    None
+                }
+                Err(err) => panic!("{err}"),
+            }
+        };
+        write_take(&recorded);
+        let Some(original) = draw("recorded", &[]) else {
+            std::fs::remove_dir_all(directory).unwrap();
+            return;
+        };
+        assert_eq!(original.dimensions(), (320, 180));
+        let mut replacement = recorded.clone();
+        replacement.camera.cabinet_scale = 0.9;
+        replacement.view.extent_sevens = 1;
+        replacement.spectrum.low_midi = 45.0;
+        replacement.spiral.zoom = 1.5;
+        replacement.render.frame.aspect_w = 1;
+        replacement.render.frame.aspect_h = 1;
+        replacement.render.short_edge = 256;
+        replacement.render.frame.lattice = harmonigraph_ui::LatticeSide::Bottom;
+        std::fs::write(&replacement_path, replacement.serialize()).unwrap();
+        let replacement_path = replacement_path.to_str().unwrap();
+        let overridden = draw("overridden", &["--appearance", replacement_path]).unwrap();
+        assert_eq!(overridden.dimensions(), (256, 256));
+        let mut control = recorded.clone();
+        control.render = replacement.render.clone();
+        write_take(&control);
+        let control = draw("same_output_recorded_look", &[]).unwrap();
+        assert_eq!(control.dimensions(), overridden.dimensions());
+        assert_ne!(control, overridden, "the replacement's visual settings must reach the picture");
+        write_take(&replacement);
+        assert_eq!(overridden, draw("rerecorded", &[]).unwrap());
+        let explicit = draw(
+            "explicit",
+            &["--appearance", replacement_path, "--size", "160x120", "--layout", "lattice"],
+        )
+        .unwrap();
+        assert_eq!(explicit.dimensions(), (160, 120));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn size_accepts_the_forms_people_actually_type() {

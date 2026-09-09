@@ -193,7 +193,7 @@ pub(crate) fn draw_spectrogram(
 ) {
     // Small copies, so `state.spectrum` is then free to take mutably without
     // fighting the config reads.
-    let cfg = state.spectrum_config;
+    let cfg = state.appearance.spectrum;
     let target_format = state.target_format;
     // Shared time<->depth mapping: a `now`-anchored scrolling window live, or
     // the whole take laid out statically (offline playhead mode).
@@ -332,7 +332,7 @@ mod gap_tests {
         let mut fresh_generation = 0;
         for cold in [false, true] {
             let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
-            state.spectrum_config.roll_seconds = 12.0;
+            state.appearance.spectrum.roll_seconds = 12.0;
             let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
             for i in 0..160 {
                 state.spectrum.push_history(100.0 + i as f64 * 0.008, &[1.0; SPECTRUM_BINS]);
@@ -345,9 +345,9 @@ mod gap_tests {
                     state.spectrum.push_history(now, &[0.25; SPECTRUM_BINS]);
                 }
                 if step == 3 {
-                    state.spectrum_config.roll_seconds = 24.0; // rung-change rebuild
+                    state.appearance.spectrum.roll_seconds = 24.0; // rung-change rebuild
                 }
-                let cfg = state.spectrum_config;
+                let cfg = state.appearance.spectrum;
                 let axes = Axes::new(rect, &cfg);
                 let output = ctx.run_ui(
                     egui::RawInput { screen_rect: Some(rect), ..Default::default() },
@@ -431,11 +431,11 @@ mod gap_tests {
         // Once retention has removed every old column, the cold pane retains
         // its established startup rule: wait for two columns and two slabs.
         let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
-        state.spectrum_config.roll_seconds = 12.0;
+        state.appearance.spectrum.roll_seconds = 12.0;
         state.spectrum.push_history(1.0, &[1.0; SPECTRUM_BINS]);
         state.spectrum.push_history(622.0, &[0.25; SPECTRUM_BINS]);
         assert_eq!(state.spectrum.history().len(), 1, "the fixture must exceed history retention");
-        let axes = Axes::new(rect, &state.spectrum_config);
+        let axes = Axes::new(rect, &state.appearance.spectrum);
         let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
         let output =
             ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {

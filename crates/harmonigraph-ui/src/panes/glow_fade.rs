@@ -159,7 +159,7 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut SharedState, surface: usize, 
         state.glow_fade.remove(&surface);
         return;
     }
-    state.glow_fade.entry(surface).or_default().step(scene, &state.view, now);
+    state.glow_fade.entry(surface).or_default().step(scene, &state.appearance.view, now);
 }
 
 impl GlowFade {
@@ -290,10 +290,10 @@ mod tests {
         harmonigraph_scene::derive_scene(
             &state.tracker,
             &state.tuning,
-            &state.view,
-            &state.view.reach(),
+            &state.appearance.view,
+            &state.appearance.view.reach(),
             &state.frame_params,
-            state.camera,
+            state.appearance.camera,
             None,
             now,
         )
@@ -309,9 +309,9 @@ mod tests {
     /// is the only thing being filtered.
     fn lit(attack: f32, release: f32) -> SharedState {
         let mut state = fresh();
-        state.view.glow_reach = 0.8;
-        state.view.glow_attack = attack;
-        state.view.glow_release = release;
+        state.appearance.view.glow_reach = 0.8;
+        state.appearance.view.glow_attack = attack;
+        state.appearance.view.glow_release = release;
         state.frame_params.fade_time = 0.0;
         state
     }
@@ -330,7 +330,7 @@ mod tests {
         state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut fade = GlowFade::default();
         let mut scene = scene_at(&state, 0.0);
-        fade.step(&mut scene, &state.view, 0.0);
+        fade.step(&mut scene, &state.appearance.view, 0.0);
         let held = node_at(&scene, LatticePos::ORIGIN).glow.level;
         assert!(held > 0.99, "a held note lights its node at once: {held}");
 
@@ -339,7 +339,7 @@ mod tests {
         state.tracker.handle_event(NoteEvent::off(0.0, SourceId::DIRECT, 0, 60));
         let level = |fade: &mut GlowFade, state: &SharedState, now: f64| {
             let mut scene = scene_at(state, now);
-            fade.step(&mut scene, &state.view, now);
+            fade.step(&mut scene, &state.appearance.view, now);
             let node = node_at(&scene, LatticePos::ORIGIN);
             assert_eq!(node.activation, 0.0, "the note itself must be gone by {now}s");
             node.glow.level
@@ -377,7 +377,7 @@ mod tests {
         let mut rows = Vec::new();
         let step = |fade: &mut GlowFade, state: &SharedState, now: f64| {
             let mut scene = scene_at(state, now);
-            fade.step(&mut scene, &state.view, now);
+            fade.step(&mut scene, &state.appearance.view, now);
             let held = node_at(&scene, LatticePos::ORIGIN).glow;
             (held.row, node_at(&scene, neighbour).glow)
         };
@@ -427,14 +427,14 @@ mod tests {
     fn a_nodes_light_keeps_the_size_its_mark_gave_it() {
         const TAU: f64 = 0.5;
         let mut state = lit(0.0, TAU as f32);
-        assert!(state.view.mark_melody, "the fresh view marks the melody end");
+        assert!(state.appearance.view.mark_melody, "the fresh view marks the melody end");
         state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut fade = GlowFade::default();
         let size = |fade: &mut GlowFade, state: &mut SharedState, now: f64| {
-            state.tracker.prune(now, &state.view.envelope(&state.frame_params));
+            state.tracker.prune(now, &state.appearance.view.envelope(&state.frame_params));
             let mut scene = scene_at(state, now);
             let bit = node_at(&scene, LatticePos::ORIGIN).glow.marked;
-            fade.step(&mut scene, &state.view, now);
+            fade.step(&mut scene, &state.appearance.view, now);
             (bit, node_at(&scene, LatticePos::ORIGIN).glow.marked)
         };
         let (bit, held) = size(&mut fade, &mut state, 0.0);
@@ -479,7 +479,7 @@ mod tests {
         let pos = node.lattice_pos;
 
         let mut fade = GlowFade::default();
-        fade.step(&mut scene, &state.view, 0.0);
+        fade.step(&mut scene, &state.appearance.view, 0.0);
         let held = node_at(&scene, pos).glow.level;
         assert_eq!(held, 0.0, "a ring lit its node at {held}");
         assert!(fade.nodes.is_empty(), "a ring was handed a row of the ink strip");
@@ -493,7 +493,7 @@ mod tests {
         state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut scene = scene_at(&state, 0.0);
         let before = node_at(&scene, LatticePos::ORIGIN).glow;
-        state.view.glow_reach = 0.0;
+        state.appearance.view.glow_reach = 0.0;
         scene.glow_reach = 0.0;
         apply(&mut scene, &mut state, 0, 0.0);
         assert_eq!(node_at(&scene, LatticePos::ORIGIN).glow, before);

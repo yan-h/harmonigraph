@@ -23,7 +23,7 @@ fn the_spectral_divider_drags_through_the_dock() {
     let handle = egui::Id::new(("spectral-split", 0usize));
     let band = h.ctx.read_response(handle).expect("the split handle never registered").rect;
     let grab = band.center();
-    let before = state.spectrum_config.roll_fraction;
+    let before = state.appearance.spectrum.roll_fraction;
 
     // Left (the default orientation) puts the divider upright, so the drag
     // that moves it runs along x — pushing it away from the spectrum.
@@ -41,7 +41,7 @@ fn the_spectral_divider_drags_through_the_dock() {
     );
     h.frame(&mut state, vec![press(target, false)]);
 
-    let after = state.spectrum_config.roll_fraction;
+    let after = state.appearance.spectrum.roll_fraction;
     assert!(
         after < before - 0.1,
         "the split should have moved with the pointer ({before} -> {after})",
@@ -55,13 +55,13 @@ fn the_spectral_divider_drags_through_the_dock() {
 fn dragging_the_spectral_picture_pans_the_pitch_range() {
     let mut state = fresh();
     // Start zoomed in, so there is room to pan in both directions.
-    state.spectrum_config.low_midi = 48.0;
-    state.spectrum_config.high_midi = 84.0;
+    state.appearance.spectrum.low_midi = 48.0;
+    state.appearance.spectrum.high_midi = 84.0;
     let mut h = DockHarness::new();
     h.settle(&mut state);
 
     let grab = h.spectral_grab(&state);
-    let before = state.spectrum_config;
+    let before = state.appearance.spectrum;
     // Left (the default orientation) climbs in pitch UP the screen, so a
     // drag toward higher pitch is a drag toward smaller y.
     h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
@@ -69,7 +69,7 @@ fn dragging_the_spectral_picture_pans_the_pitch_range() {
     h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
     h.frame(&mut state, vec![press(target, false)]);
 
-    let after = state.spectrum_config;
+    let after = state.appearance.spectrum;
     assert!(
         after.low_midi < before.low_midi - 1.0,
         "the range should have followed the pointer down the axis ({} -> {})",
@@ -97,7 +97,7 @@ fn dragging_the_spectral_picture_along_time_zooms_the_span() {
     h.settle(&mut state);
 
     let grab = h.spectral_grab(&state);
-    let before = state.spectrum_config;
+    let before = state.appearance.spectrum;
     // Left runs time rightward (now at the left), so dragging right is
     // dragging toward the past.
     h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
@@ -105,7 +105,7 @@ fn dragging_the_spectral_picture_along_time_zooms_the_span() {
     h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
     h.frame(&mut state, vec![press(target, false)]);
 
-    let zoomed = state.spectrum_config;
+    let zoomed = state.appearance.spectrum;
     assert!(
         zoomed.roll_seconds < before.roll_seconds * 0.75,
         "dragging toward the past should have zoomed in ({} -> {})",
@@ -126,7 +126,7 @@ fn dragging_the_spectral_picture_along_time_zooms_the_span() {
     h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
     h.frame(&mut state, vec![egui::Event::PointerMoved(back)]);
     h.frame(&mut state, vec![press(back, false)]);
-    let restored = state.spectrum_config.roll_seconds;
+    let restored = state.appearance.spectrum.roll_seconds;
     assert!(
         (restored - before.roll_seconds).abs() < 0.1,
         "dragging back should restore the span ({} -> {restored})",
@@ -144,12 +144,12 @@ fn a_drag_over_the_spectrum_zooms_the_level_and_not_the_span() {
     let mut state = fresh();
     // Zoomed in, so a stray pan would show up rather than sitting against the
     // clamp at the ends of the axis.
-    state.spectrum_config.low_midi = 48.0;
-    state.spectrum_config.high_midi = 84.0;
+    state.appearance.spectrum.low_midi = 48.0;
+    state.appearance.spectrum.high_midi = 84.0;
     // Give the spectrum enough depth for the outward drag to stay inside the
     // pane. The captured default gives three quarters to the roll; this test
     // is about which side owns the drag, not about the divider's default.
-    state.spectrum_config.roll_fraction = 0.55;
+    state.appearance.spectrum.roll_fraction = 0.55;
     let mut h = DockHarness::new();
     h.settle(&mut state);
 
@@ -157,13 +157,13 @@ fn a_drag_over_the_spectrum_zooms_the_level_and_not_the_span() {
     // rightward with the baseline at the divider, so the curve grows LEFTWARD
     // and that is the way out of it.
     let grab = h.spectral_grab_at(&state, 0.2);
-    let before = state.spectrum_config;
+    let before = state.appearance.spectrum;
     h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
     let target = grab + egui::vec2(-80.0, -20.0);
     h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
     h.frame(&mut state, vec![press(target, false)]);
 
-    let after = state.spectrum_config;
+    let after = state.appearance.spectrum;
     assert_eq!(
         after.roll_seconds, before.roll_seconds,
         "a drag begun over the spectrum has no time axis under it",
@@ -190,13 +190,13 @@ fn a_drag_over_the_spectrum_zooms_the_level_and_not_the_span() {
 #[test]
 fn the_wheel_zooms_the_pitch_range_and_leaves_the_time_span_alone() {
     let mut state = fresh();
-    state.spectrum_config.low_midi = 36.0;
-    state.spectrum_config.high_midi = 96.0;
+    state.appearance.spectrum.low_midi = 36.0;
+    state.appearance.spectrum.high_midi = 96.0;
     let mut h = DockHarness::new();
     h.settle(&mut state);
 
     let over = h.spectral_grab(&state);
-    let before = state.spectrum_config;
+    let before = state.appearance.spectrum;
     h.frame(&mut state, vec![egui::Event::PointerMoved(over)]);
     // Several notches, so the assertion isn't riding on egui's scroll smoothing
     // having fully caught up in one frame.
@@ -212,7 +212,7 @@ fn the_wheel_zooms_the_pitch_range_and_leaves_the_time_span_alone() {
         );
     }
 
-    let after = state.spectrum_config;
+    let after = state.appearance.spectrum;
     let (was, now) = (before.high_midi - before.low_midi, after.high_midi - after.low_midi);
     assert!(now < was - 1.0, "scrolling up should have zoomed in ({was} -> {now})");
     assert_eq!(
@@ -243,7 +243,7 @@ fn the_divider_still_wins_the_drag_over_the_pane_behind_it() {
     let handle = egui::Id::new(("spectral-split", 0usize));
     let band = h.ctx.read_response(handle).expect("the split handle never registered").rect;
     let grab = band.center();
-    let before = state.spectrum_config;
+    let before = state.appearance.spectrum;
 
     h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
     // A drag with a pitch-axis component, so a pane that stole it would show
@@ -252,7 +252,7 @@ fn the_divider_still_wins_the_drag_over_the_pane_behind_it() {
     h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
     h.frame(&mut state, vec![press(target, false)]);
 
-    let after = state.spectrum_config;
+    let after = state.appearance.spectrum;
     assert!(
         (after.roll_fraction - before.roll_fraction).abs() > 0.01,
         "the divider should still have moved",
@@ -323,7 +323,7 @@ fn resizing_the_analyzer_resizes_the_spectrogram_and_not_the_spectrum() {
     );
     // And the dial the render composes from never moved.
     assert_eq!(
-        state.spectrum_config.roll_fraction,
+        state.appearance.spectrum.roll_fraction,
         crate::SpectrumConfig::default().roll_fraction,
         "resizing the editor moved the split a take would export with",
     );
@@ -379,14 +379,14 @@ fn a_curving_zoom_drag_does_not_turn_into_a_pan() {
     h.frame(&mut state, vec![egui::Event::PointerMoved(from)]);
     h.frame(&mut state, vec![egui::Event::PointerMoved(from), press(from, true)]);
 
-    let opened_at = state.spectrum_config.roll_seconds;
+    let opened_at = state.appearance.spectrum.roll_seconds;
     let mut path: Vec<(f32, f32)> = (0..200).map(|i| (i as f32, i as f32 * 0.15)).collect();
     path.extend((0..200).rev().map(|i| (i as f32, 30.0 - (200 - i) as f32 * 0.02)));
     let (mut turned, mut furthest) = (None, opened_at);
     for (step, &(dx, dy)) in path.iter().enumerate() {
         let at = from + egui::vec2(dx, dy);
         let (out, _) = h.frame_timed(&mut state, vec![egui::Event::PointerMoved(at)]);
-        let span = state.spectrum_config.roll_seconds;
+        let span = state.appearance.spectrum.roll_seconds;
         furthest = furthest.min(span);
         // Past the margin the gesture has committed, and from there the cursor
         // is the promise that it still has hold of the Span.
@@ -401,7 +401,7 @@ fn a_curving_zoom_drag_does_not_turn_into_a_pan() {
     );
     // And the return puts the Span back, which a gesture that let go partway
     // cannot do.
-    let back = state.spectrum_config.roll_seconds;
+    let back = state.appearance.spectrum.roll_seconds;
     assert!(
         (back - opened_at).abs() < opened_at * 0.2,
         "the drag came home to {back} s from {opened_at} s",

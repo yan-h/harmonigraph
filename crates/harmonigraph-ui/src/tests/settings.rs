@@ -8,10 +8,10 @@ use crate::*;
 #[test]
 fn opening_analyzer_settings_does_not_change_loaded_values() {
     let mut state = fresh();
-    state.spectrum_config.tilt = -2.0;
+    state.appearance.spectrum.tilt = -2.0;
     assert!(state.load_persist(&state.save_persist()));
-    assert_eq!(state.spectrum_config.tilt, -1.5);
-    let before = ron::to_string(&state.spectrum_config).unwrap();
+    assert_eq!(state.appearance.spectrum.tilt, -1.5);
+    let before = ron::to_string(&state.appearance.spectrum).unwrap();
     let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
     let path = state.workspace.dock.find_tab(&tab).unwrap();
     state.workspace.dock.set_active_tab(path).unwrap();
@@ -23,7 +23,7 @@ fn opening_analyzer_settings_does_not_change_loaded_values() {
         }),
         "the no-input frame must reach the tilt controls"
     );
-    assert_eq!(ron::to_string(&state.spectrum_config).unwrap(), before);
+    assert_eq!(ron::to_string(&state.appearance.spectrum).unwrap(), before);
 }
 
 /// Put the Notes/Console leaf back on screen, which is what the two wheel
@@ -1026,12 +1026,12 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     let name =
         bar_named(&out, "Spectrum release").expect("the Release bar is drawn on the Analyzer page");
     let on_the_bar = name + egui::vec2(2.0, 4.0);
-    let before = state.spectrum_config.release;
+    let before = state.appearance.spectrum.release;
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar)]);
     frame(&mut state, vec![press(on_the_bar, true)]);
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar + egui::vec2(60.0, 0.0))]);
     assert!(ctx.dragged_id().is_some(), "the press on the Release bar started no drag");
-    let inside = state.spectrum_config.release;
+    let inside = state.appearance.spectrum.release;
     assert!(inside != before, "the bar did not follow the pointer inside the window");
 
     // Out past the right edge of the window, with the button still down: the
@@ -1042,7 +1042,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
         "the bar let go of the drag when the pointer left the window",
     );
     assert_eq!(
-        state.spectrum_config.release, 0.5,
+        state.appearance.spectrum.release, 0.5,
         "the bar stopped following the pointer at the window edge (it reads {inside} still)",
     );
 
@@ -1406,8 +1406,8 @@ fn audio_section_shapes(
     width: f32,
 ) -> Vec<egui::epaint::ClippedShape> {
     let mut state = fresh();
-    state.view.spectral_reading = reading;
-    state.view.spectral_ring_width = width;
+    state.appearance.view.spectral_reading = reading;
+    state.appearance.view.spectral_ring_width = width;
     let tab = SettingsPane::Page(DisplayPage::Lattice).install(&mut state);
     tab_body(&mut state, tab, 320.0, PANE_HEIGHT).shapes
 }
@@ -1457,8 +1457,8 @@ fn track_color(shapes: &[egui::epaint::ClippedShape], y: f32) -> egui::Color32 {
 fn history_stays_editable_without_midi_ribbons() {
     let colors = |show_roll| {
         let mut state = fresh();
-        state.spectrum_config.show_roll = show_roll;
-        state.spectrum_config.show_spectrogram = true;
+        state.appearance.spectrum.show_roll = show_roll;
+        state.appearance.spectrum.show_spectrogram = true;
         let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
         let shapes = tab_body(&mut state, tab, 420.0, PANE_HEIGHT).shapes;
         ["History duration", "Ribbon width", "Extension release"]

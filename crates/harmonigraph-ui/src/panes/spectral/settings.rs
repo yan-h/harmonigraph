@@ -53,7 +53,7 @@ pub(crate) fn spectrum_settings_pane(
     );
 
     ui.heading("View");
-    let cfg = &mut state.spectrum_config;
+    let cfg = &mut state.appearance.spectrum;
     // Named for the side the now-line is on, which is where the spectrum sits
     // and where a note arrives — so the setting says where to LOOK rather than
     // which way the picture travels. There is no Auto: it followed the pane's

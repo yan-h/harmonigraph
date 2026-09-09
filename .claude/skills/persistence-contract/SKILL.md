@@ -49,6 +49,17 @@ the version is read out of a struct that never parsed, so the check never runs.
 Raising the floor does nothing for a dropped variant at any value.
 
 What makes that acceptable is that the refusal is LOUD —
-`load_persist` returns whether it applied and writes the reason to the console, the offline renderer prints to stderr, and `a_refused_blob_says_why` holds both.
+`load_persist` returns whether it applied and writes the reason to the console, the offline renderer prints to stderr, and focused editor/offline tests hold refusal and defaulting.
 Dropping an enum variant is still fine;
 say so in the PR body, and keep the refusal audible.
+
+## Appearance and editor workspace have separate boundaries
+
+`SharedState` owns `AppearanceDocument` directly.
+Editor saves nest it beside the workspace;
+take/record transport its serialized text opaquely.
+`AppearanceDocument::parse` checks the appearance version and normalizes its settings once before export chooses output configuration or initializes drawing.
+Editor load calls the same `normalize` implementation on its nested document before applying any workspace state.
+An editor version-floor bump does not invalidate a recorded appearance.
+`install_appearance` installs the normalized value and clears the tuning detection verdicts;
+context-owned resources and workspace dial invalidation retain their separate lifetimes.

@@ -37,6 +37,38 @@ cargo build --release -p harmonigraph-offline
     --size 3840x2160
 ```
 
+## Saved appearance
+
+Takes use format v5 and carry a version-1 appearance document captured when recording starts.
+It contains camera, view, spectrum, spiral framing and the whole video configuration;
+dock layout, selected editor page and other workspace settings stay in the editor save.
+Automatic export uses that recorded appearance, with the resolution selected when the take stops.
+**Re-render take** replaces the recorded appearance with the current one.
+Camera gestures and settings changes during a take are not recorded.
+
+For an explicit replacement file:
+
+```sh
+./read-plugin-state.py --appearance project.bwproject > appearance.ron
+./target/release/harmonigraph-offline piece.take --appearance appearance.ron --out piece.mp4
+# Or synthesize a look without a DAW project:
+cargo run -p harmonigraph-ui --example appearance -- extent_sevens=1 > appearance.ron
+```
+
+Close the plugin window and save the Bitwig project before extracting its appearance.
+The extraction command requires exactly one editor appearance;
+multiple editor instances are reported instead of concatenated into an invalid file.
+`--appearance` takes a standalone appearance document, not an enclosing editor save.
+It replaces the recorded document completely;
+`--size`, `--layout` and other explicit output flags retain their precedence.
+
+Editor saves below version 7 are refused whole and a fresh instance opens at defaults, with a console message.
+Take formats v1–v4 are refused with a version error and must be recorded again.
+An unreadable or unsupported appearance document is reported on stderr and export continues at the default appearance;
+a refused replacement does not fall back to the recorded look.
+A missing appearance or missing settings groups use their normal defaults.
+No older format is migrated or partially recovered.
+
 ## Pass 1 — recording a take
 
 ### From the DAW
@@ -74,7 +106,7 @@ While the transport is stopped the status line says so.
 moment.
 (Unlike the project's saved `ui-state` blob, which only updates when the editor window closes —
 the trap `read-plugin-state.py` documents.
-You can also override it at render time with `--ui-state`.)
+You can also override it at render time with `--appearance`.)
 - **The device has to receive both the notes and the selected audio input.**
 The notes drive the lattice, and the WAV recorded from Main or Sidechain drives the spectrum and soundtrack in the automatic render.
 A manual render can replace that recording with `--audio`, but a device on a pure note track records silence unless the wanted audio is routed to its sidechain.
@@ -181,7 +213,7 @@ The flags worth knowing (`--help` lists them all):
 | `--fps` | default 60 |
 | `--lead` | extra empty frame before the recording starts; default 0 |
 | `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note |
-| `--ui-state` | use a different look than the one in the take |
+| `--appearance` | use a different look than the one in the take |
 | `--playhead` | lay the render window's spectrogram out at once and sweep a playhead through it |
 
 ### Where the video starts
