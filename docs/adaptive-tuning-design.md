@@ -55,6 +55,11 @@ In particular, the C–E♭–G expectation uses E♭ at 6/5, and the C–F expe
 These examples constrain the harmonic metric alongside the ascending-third travel requirement.
 Fine input control remains useful, but does not replace the requirement for harmony to influence the choice.
 
+Register distance should weaken a context note's influence, but it must not overturn the 9/5 preference in this specific minor-triad example.
+Yan explicitly requires 9/5 over 16/9 for C–E♭–G regardless of the registers occupied by those context pitch classes, because of lattice distance.
+Moving E♭3 to E♭6 while retaining the just pitch class therefore does not make 16/9 plausible for B♭3.
+This rules out a register-weighting heuristic that simply discards the distant E♭ and thereby reverses this preference.
+
 ### Register determines which E fits a fifth chain
 
 Yan supplied a concrete constraint for the register-aware algorithm, which is now required in the initial version.
@@ -82,6 +87,22 @@ It does not prescribe a specific weighting formula or a special-case rule for E.
 Both outcomes are requirements for the initial version.
 A register-blind simplification cannot satisfy them and is no longer an accepted initial scope.
 
+### A sounding counterpart takes priority over the fifth-chain continuation
+
+Extend the fifth-chain example by first playing E3 at 5/4 above C3, then adding E5.
+If the low E is still sounding, the new high E must match its pitch class: E5 is `5/1` above C3, exactly two octaves above the low E.
+It must not select the Pythagorean E at `81/16` in that case, and the existing E is never retuned.
+
+If the low E has instead been recently released, the high E should continue the fifth chain at `81/16` above C3.
+The released E remains eligible to contribute to memory, but does not retain the sounding note's pitch-class-matching priority.
+Distinguishing held from released context is therefore a musical decision, not merely storage bookkeeping or a slow decay of influence.
+An arbitrarily long configured memory must not force the high E to match that released low E in this example.
+
+Yan states the general principle as matching an existing sounding E in pitch class when playing another E.
+How to recognize the corresponding incoming pitch with a continuous-pitch controller, resolve multiple conflicting sounding counterparts, and relate this rule to memory tolerance and hard candidate eligibility remain design questions.
+Do not turn that unresolved recognition step into a fixed twelve-key mapping.
+The examples use unbent notes; the separate onset-context simplification for player bends remains in force.
+
 ### Context and memory
 
 Released notes must continue to contribute to harmonic context, favouring more recently released notes.
@@ -104,7 +125,7 @@ The capacity may be configurable; its value and accounting for held versus relea
 **This is explicitly a temporary simplification.** Yan wants to move away from this fixed recent-note scheme eventually, toward a more musically informed replacement policy.
 Do not turn the initial capacity rule into a permanent musical contract or implement the more elaborate successor before it is designed.
 
-Giving held notes stronger influence remains a working proposal, not an absolute anchoring rule.
+Sounding counterparts have the explicit pitch-class-matching priority above; the general weighting of other held versus released context remains open.
 A sustained bass may keep the neighbourhood nearby or be left behind by the newer harmony, depending on the sequence of notes and harmonic heuristics.
 Yan accepts either outcome; do not impose a universal pedal anchor or universal escape rule.
 Forgetting individual old notes must not itself erase the accumulated tuning displacement.
@@ -116,6 +137,10 @@ This is more than giving bass notes a fixed extra weight: relationships between 
 The exact register-sensitive heuristic remains to be designed, but its inclusion is no longer deferred.
 Do not declare octave-equivalent inputs interchangeable against unchanged context or use a pitch-class-only context model.
 Output register and accumulated tuning displacement must also be preserved.
+
+Transposing the entire performance and its context by an octave must preserve relative tuning decisions and lattice travel, with output pitches shifted by that octave.
+Register influence must therefore depend on relationships among registers rather than absolute octave numbers.
+This whole-performance transposition invariant does not make an isolated incoming note octave-equivalent against unchanged context.
 
 Provide a configurable time before reset after silence, with a proposed “Never” option.
 The working proposal measures silence from the release of the last sounding note and clears both harmonic memory and accumulated drift at timeout.
@@ -212,7 +237,7 @@ Replacement must not be conflated with the silence reset: one lets new harmony t
 
 1. **Moving reference.** What establishes and advances the input-to-lattice reference? How are register and accumulated unwrapped displacement carried separately? Note-order dependence is accepted, but updates still need a coherent musical interpretation.
 2. **Harmonic distance and vocabulary setting.** Which axis combinations should the setting offer, and how are permitted connections weighted? Is remoteness measured from one centre, the whole context or nearby individual voices? How is a widely spread context handled without admitting arbitrary bridges or leaving no candidates?
-3. **Memory matching and weights.** Different resulting pitches remain distinct even when played by the same key. How should the proposed same-note tolerance work, and what is N for the accepted temporary recent-note scheme? Should sustained notes or chord density affect weighting? A held bass has no categorical anchoring privilege; its effect should emerge from the sequence and heuristics. The eventual successor to fixed-capacity recency remains open.
+3. **Memory matching and weights.** Different resulting pitches remain distinct even when played by the same key. How should the proposed same-note tolerance work, and what is N for the accepted temporary recent-note scheme? How is an incoming request for a sounding counterpart recognized under continuous pitch, and how are conflicts resolved? This matching priority ends on release; other held-note and chord-density weights remain open. A held bass has no categorical anchoring privilege over unrelated incoming notes. The eventual successor to fixed-capacity recency remains open.
 4. **Reset.** What counts as silence under sustain? Which transport transitions trigger the configurable reset, and should stop/start and loop reset share a control? Does a transport reset clear accumulated displacement along with context? What timeout range and defaults feel useful?
 5. **Continuous pitch and expression.** Which incoming pitch controls describe the pitch to quantize at attack? Post-attack player bends remain audible, while the initial policy context retains tuned onset pitch. Bend-aware context is deferred; automatic reselection of sounding notes is forbidden. The current participating path does not use incoming expression to choose its assignment, so continuous input requires an explicit change to that contract.
 6. **Selection and indicator.** How strong can pitch fidelity become within the boundary, and how are ties and simultaneous attacks ordered stably? How should the incoming note's register relative to register-bearing context influence selection from the first version, and how should the indicator express register-dependent reachability?
@@ -220,15 +245,6 @@ Replacement must not be conflated with the silence reset: one lets new harmony t
 Joint chord selection was an earlier suggestion; the subsequent decision favours simplicity and accepts route dependence.
 A fixed twelve-node keyboard mapping was explicitly rejected in favour of continuous pitch input.
 Do not restore that assumption merely to simplify the indicator.
-
-## Proposed additional toy examples
-
-These are questions proposed for further discussion, not requirements already agreed by Yan.
-Use a few discriminating cases before drafting the algorithm rather than trying to enumerate every musical situation.
-
-1. **Two Es at once.** Establish C3–G3–D4–A4, then play and hold E3 at 5/4 above C3 before adding E5. Should the high E still continue the fifth chain at 81/16 while the low E remains at 5/4? This extends the agreed separate-onset comparison by asking whether both placements can coexist in one evolving context.
-2. **Move one context voice.** Compare just C3–E♭3–G3 followed by B♭3 with C3–G3–E♭6 followed by B♭3. The nearby minor-triad context already calls for 9/5. Should the distant E♭ still establish that preference, or may its influence weaken enough to permit 16/9? Fix the context's actual tuned pitches and compare snapshots to isolate register rather than attack-order effects.
-3. **Transpose everything by an octave.** Raise an entire established example, including all context and incoming notes, by one octave. Should relative tuning decisions and lattice travel remain identical? This distinguishes dependence on relative register relationships from dependence on absolute register; octave-transposition invariance is a proposed expectation, not yet an agreed rule.
 
 ## Behaviour to validate when an algorithm is proposed
 
@@ -244,6 +260,9 @@ Use a few discriminating cases before drafting the algorithm rather than trying 
 - Fine pitch input can distinguish 9/5 and 16/9 when both are eligible.
 - With the same subsequent B♭ input, just C–E♭–G context favours 9/5 and just C–F context favours 16/9; C–E–G has no prescribed answer and may depend on parameters.
 - In the initial version, an established ascending C3–G3–D4–A4 fifth chain yields E5 at `81/16` above C3 when extending the chain, but E3 at `5/4` above C3 when played near C; compare separate next onsets from identical context.
+- With E3 at `5/4` still sounding after that fifth chain, a new E5 matches its pitch class at `5/1` above C3; if E3 was recently released instead, E5 continues the chain at `81/16` despite the remembered E3.
+- Redistributing the just C–E♭–G context across registers, including moving E♭ far above an incoming B♭, must still favour 9/5 over 16/9 because of lattice distance.
+- Transposing the entire input performance and context by an octave preserves relative tuning decisions and lattice travel, and transposes outputs by that octave.
 - An exact pitch match outside the harmonic boundary never wins.
 - The allowed-vocabulary setting controls candidate generation without retuning notes already sounding.
 - Reachable nodes shown in the indicator agree with actual next-note selection under the same context.
