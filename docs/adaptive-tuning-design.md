@@ -73,14 +73,24 @@ Output register and accumulated tuning displacement still need to be preserved e
 
 Provide a configurable time before reset after silence, with a proposed “Never” option.
 The working proposal measures silence from the release of the last sounding note and clears both harmonic memory and accumulated drift at timeout.
-Exact pedal, transport and reset behaviour, time range and defaults remain to be decided.
+Whether transport events reset the context must be configurable, rather than always resetting or always preserving it.
+This answers the discussion of stopping/restarting playback and looping;
+the exact event triggers, whether they share one control or have separate controls, and defaults remain open.
+Exact pedal and reset behaviour, timeout range and the treatment of accumulated drift under transport reset still need to be specified.
 
 ### Frozen notes and sequential decisions
 
 **No adaptive retuning of an already sounding note, ever, under the present design.** Yan explicitly made this an immutable rule unless he later changes his mind.
-Choose the note's tuning at attack and retain it for its lifetime, regardless of subsequent harmony or neighbourhood movement.
+Choose the adaptive tuning correction at attack and retain it for the note's lifetime, regardless of subsequent harmony or neighbourhood movement.
 Do not reselect or glide a held note to improve a later chord.
-The treatment of player-authored expression is a separate input/output question, not permission for automatic retuning.
+Player-authored pitch bends after attack must remain audible, composed with the fixed adaptive correction.
+The no-retuning rule forbids automatic changes by the algorithm, not expressive bends by the player.
+
+For the initial version, harmonic context uses each note's tuned onset pitch and does not follow its subsequent bends.
+This is an intentional simplification: a bent note's current audible pitch may differ from the pitch contributing to future tuning decisions.
+Whether and how harmonic context should follow player bends remains an open question for later design.
+Do not silently implement bend-following context or suppress the player's bends to make those two pitches agree.
+Onset-based policy context does not redefine actual emitted-pitch reporting as onset-only reporting.
 
 Prefer a simple algorithm and accept that the route through the notes affects the result.
 A chord played together, rolled or arpeggiated need not arrive at the same tuning, and changing note order may change the path.
@@ -141,6 +151,7 @@ Context and balance changes may move those ranges and make nodes enter or leave 
 | Neighbourhood size | Set the maximum permitted harmonic remoteness | Proposed; metric, range and default open |
 | Harmonic preference ↔ Pitch fidelity | Balance eligible candidates' harmonic suitability and input-pitch closeness | Requested; scoring, range and default open |
 | Reset after silence | Set when context and accumulated drift reset, optionally never | Requested; timing semantics, range and default open |
+| Reset on transport events | Choose whether stopping/restarting playback and looping reset context | Requested; event triggers, one versus separate controls, reset scope and defaults open |
 | Allowed lattice axes / interval families | Control which harmonic relationships may supply candidates, including whether seventh-based relationships are allowed | Requested; UI, combinations and default open |
 | Same-note tolerance | Decide when a new pitch refreshes an existing memory contribution | Suggested by Yan; matching semantics, units, range and default open |
 | Remembered-note capacity | Set N for the temporary recent-note replacement scheme | Scheme accepted for initial version; exposing N as a setting remains proposed |
@@ -154,8 +165,8 @@ Replacement must not be conflated with the silence reset: one lets new harmony t
 1. **Moving reference.** What establishes and advances the input-to-lattice reference? How are register and accumulated unwrapped displacement carried separately? Note-order dependence is accepted, but updates still need a coherent musical interpretation.
 2. **Harmonic distance and vocabulary setting.** Which axis combinations should the setting offer, and how are permitted connections weighted? Is remoteness measured from one centre, the whole context or nearby individual voices? How is a widely spread context handled without admitting arbitrary bridges or leaving no candidates?
 3. **Memory matching and weights.** Different resulting pitches remain distinct even when played by the same key. How should the proposed same-note tolerance work, and what is N for the accepted temporary recent-note scheme? Should sustained notes or chord density affect weighting? A held bass has no categorical anchoring privilege; its effect should emerge from the sequence and heuristics. The eventual successor to fixed-capacity recency remains open.
-4. **Reset.** What counts as silence under sustain? What should Stop, playback loops and explicit Reset do? What timeout range and default feel useful?
-5. **Continuous pitch and expression.** Which incoming pitch controls describe the pitch to quantize at attack? Should subsequent player-authored bends be forwarded, and if so should they affect future notes' context? Automatic reselection of sounding notes is forbidden. The current participating path does not use incoming expression to choose its assignment, so continuous input requires an explicit change to that contract.
+4. **Reset.** What counts as silence under sustain? Which transport transitions trigger the configurable reset, and should stop/start and loop reset share a control? Does a transport reset clear accumulated displacement along with context? What timeout range and defaults feel useful?
+5. **Continuous pitch and expression.** Which incoming pitch controls describe the pitch to quantize at attack? Post-attack player bends remain audible, while the initial policy context retains tuned onset pitch. Bend-aware context is deferred; automatic reselection of sounding notes is forbidden. The current participating path does not use incoming expression to choose its assignment, so continuous input requires an explicit change to that contract.
 6. **Selection and indicator.** How strong can pitch fidelity become within the boundary, and how are ties and simultaneous attacks ordered stably? Later, how should the incoming note's register relative to register-bearing context influence selection, and how should the indicator express register-dependent reachability?
 
 Joint chord selection was an earlier suggestion; the subsequent decision favours simplicity and accepts route dependence.
@@ -171,6 +182,8 @@ Do not restore that assumption merely to simplify the indicator.
 - Replaying a keyboard pitch at a diesis-shifted output creates a distinct contribution; any memory tolerance must have deliberately stated matching behaviour.
 - In the temporary N-entry scheme, new distinct activity evicts the least recently used released contribution, while held notes remain represented.
 - Later notes never cause an already sounding note to be adaptively retuned.
+- Player bends after attack remain audible with the adaptive correction fixed; the initial harmonic context continues to use tuned onset pitch.
+- Transport-triggered context reset follows its setting rather than an unconditional preserve/reset policy.
 - Fine pitch input can distinguish 9/5 and 16/9 when both are eligible.
 - An exact pitch match outside the harmonic boundary never wins.
 - The allowed-vocabulary setting controls candidate generation without retuning notes already sounding.
