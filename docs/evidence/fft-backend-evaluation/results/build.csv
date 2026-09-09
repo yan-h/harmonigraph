@@ -1,0 +1,7 @@
+pair,backend,seconds,binary_bytes
+0,baseline,0.504,552496
+0,candidate,8.759,1072320
+1,candidate,8.535,1072320
+1,baseline,0.525,552496
+2,baseline,0.568,552496
+2,candidate,8.657,1072320
