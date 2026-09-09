@@ -86,7 +86,7 @@ impl Drop for Harmonigraph {
     fn drop(&mut self) {
         // Window state can retain its own Arc during native teardown. Join the
         // graphics worker at plugin destruction, not only at the last Arc drop.
-        let graphics = self.editor_shared.lock().ui.editor_graphics();
+        let graphics = self.editor_shared.lock().ui.picture.editor_graphics();
         graphics.shutdown_startup();
     }
 }
@@ -1035,7 +1035,7 @@ mod tests {
     fn columns_after(plugin: &Harmonigraph, before: usize) -> Option<usize> {
         let started = Instant::now();
         loop {
-            let columns = plugin.editor_shared.lock().ui.spectrum.history().len();
+            let columns = plugin.editor_shared.lock().ui.picture.runtime.spectrum.history().len();
             if columns > before {
                 return Some(columns);
             }
@@ -1092,8 +1092,9 @@ mod tests {
         // analyzer that is merely late reads as one correctly holding off, so
         // only a drain that really happened trips the assertion it guards.
         let settle = background::POLL * 5;
-        let columns =
-            |plugin: &Harmonigraph| plugin.editor_shared.lock().ui.spectrum.history().len();
+        let columns = |plugin: &Harmonigraph| {
+            plugin.editor_shared.lock().ui.picture.runtime.spectrum.history().len()
+        };
 
         let mut plugin = Harmonigraph::default();
         // First make construction's in-flight round observable. The fill is
@@ -1173,11 +1174,11 @@ mod tests {
         };
         let blob = {
             let mut saved = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
-            saved.appearance.spectrum.window = SpectrumWindow::Precise;
-            saved.appearance.camera.yaw = 1.23;
-            saved.appearance.view.extent_sevens = 3;
-            saved.appearance.spiral.zoom = 2.75;
-            saved.appearance.render.short_edge = 2160;
+            saved.picture.appearance.spectrum.window = SpectrumWindow::Precise;
+            saved.picture.appearance.camera.yaw = 1.23;
+            saved.picture.appearance.view.extent_sevens = 3;
+            saved.picture.appearance.spiral.zoom = 2.75;
+            saved.picture.appearance.render.short_edge = 2160;
             harmonigraph_ui::shell::close(&saved)
         };
 
@@ -1202,11 +1203,11 @@ mod tests {
         );
 
         let shared = plugin.editor_shared.lock();
-        let lag = shared.ui.spectrum.column_lag();
-        assert_eq!(shared.ui.appearance.camera.yaw, 1.23);
-        assert_eq!(shared.ui.appearance.view.extent_sevens, 3);
-        assert_eq!(shared.ui.appearance.spiral.zoom, 2.75);
-        assert_eq!(shared.ui.appearance.render.short_edge, 2160);
+        let lag = shared.ui.picture.runtime.spectrum.column_lag();
+        assert_eq!(shared.ui.picture.appearance.camera.yaw, 1.23);
+        assert_eq!(shared.ui.picture.appearance.view.extent_sevens, 3);
+        assert_eq!(shared.ui.picture.appearance.spiral.zoom, 2.75);
+        assert_eq!(shared.ui.picture.appearance.render.short_edge, 2160);
         assert!(
             (lag - lag_of(SpectrumWindow::Precise)).abs() < 1e-9,
             "the background analyzer ran at a {:.1} ms window where the project saved \
@@ -1296,6 +1297,7 @@ mod tests {
 
         let shared = plugin.editor_shared.clone();
         let mut shared = shared.lock();
+        let shared = &mut *shared;
         let mut main_left = [1.0, 2.0, 3.0, 4.0];
         let mut main_right = [5.0, 6.0, 7.0, 8.0];
         let expected_main_left = main_left;
@@ -1319,7 +1321,7 @@ mod tests {
         assert_eq!(main_left, expected_main_left, "process changed the main left pass-through");
         assert_eq!(main_right, expected_main_right, "process changed the main right pass-through");
         assert_eq!(
-            shared.drain_analysis_audio_for_test().as_slice(),
+            shared.input.drain_analysis_audio_for_test().as_slice(),
             &expected_sidechain,
             "the live analyzer received Main instead of Sidechain",
         );
@@ -1485,6 +1487,7 @@ mod tests {
         let mut plugin = Harmonigraph::default();
         let shared = plugin.editor_shared.clone();
         let mut shared = shared.lock();
+        let shared = &mut *shared;
         plugin.presentation_seconds = 11.0;
         plugin.samples_processed = 48_000;
         plugin
@@ -1507,11 +1510,14 @@ mod tests {
             .expect_both();
         plugin.take.publish_clock(12.0);
         let deadline = Instant::now() + ANALYSIS_DEADLINE;
-        while shared.ui.tracker.roll().notes().count() < 2 && Instant::now() < deadline {
-            shared.catch_up(22.0);
+        while shared.ui.picture.runtime.tracker.roll().notes().count() < 2
+            && Instant::now() < deadline
+        {
+            shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, 22.0);
             std::thread::yield_now();
         }
-        let notes: Vec<_> = shared.ui.tracker.roll().notes().map(|n| (n.start, n.end)).collect();
+        let notes: Vec<_> =
+            shared.ui.picture.runtime.tracker.roll().notes().map(|n| (n.start, n.end)).collect();
         assert_eq!(notes, [(20.0, Some(21.0)), (21.5, None)]);
     }
 

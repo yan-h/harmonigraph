@@ -46,7 +46,7 @@ fn the_perf_overlay_opens_in_the_editors_corner() {
     let mut state = fresh();
     // Turned on by hand: the overlay ships off, and what is under test is
     // where it lands once asked for, not whether anything asks.
-    state.appearance.view.show_perf = true;
+    state.picture.appearance.view.show_perf = true;
     let mut h = DockHarness::new();
     let screen = h.screen;
     // An Area's opening pass sizes it and paints nothing, so the HUD is read
@@ -73,7 +73,7 @@ fn the_perf_overlay_opens_in_the_editors_corner() {
     );
     // Nothing has placed it, which is what makes the corner a default: the
     // position is written by the drag and by nothing else.
-    assert!(state.perf_pos.is_none(), "opening the HUD must not place it");
+    assert!(state.workspace.interaction.perf_pos.is_none(), "opening the HUD must not place it");
 
     // The build tag, which is why the HUD is worth looking at before any of
     // its numbers: Bitwig loads ONE bundle and every session builds into its
@@ -107,9 +107,9 @@ fn the_perf_overlay_opens_in_the_editors_corner() {
 #[test]
 fn the_perf_overlay_holds_its_corner_as_its_rows_shrink() {
     let mut state = fresh();
-    state.appearance.view.show_perf = true;
+    state.picture.appearance.view.show_perf = true;
     // The breakdown open, which is the tall HUD: two dozen rows against four.
-    state.appearance.view.show_perf_detail = true;
+    state.picture.appearance.view.show_perf_detail = true;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     let screen = h.screen;
@@ -122,7 +122,7 @@ fn the_perf_overlay_holds_its_corner_as_its_rows_shrink() {
 
     // The VERY next frame after the rows go: no settling, because one frame
     // in the wrong place is the whole of what this is about.
-    state.appearance.view.show_perf_detail = false;
+    state.picture.appearance.view.show_perf_detail = false;
     let shallow = hud_of(&h.frame(&mut state, vec![]));
     assert!(
         shallow.height() < deep.height() - 100.0,
@@ -147,7 +147,7 @@ fn the_perf_overlay_holds_its_corner_as_its_rows_shrink() {
 #[test]
 fn the_perf_overlay_goes_where_it_is_dragged() {
     let mut state = fresh();
-    state.appearance.view.show_perf = true;
+    state.picture.appearance.view.show_perf = true;
     let mut h = DockHarness::new();
     h.settle(&mut state);
 
@@ -164,7 +164,7 @@ fn the_perf_overlay_goes_where_it_is_dragged() {
     // Within a point of where it is drawn rather than equal to it: what is
     // stored is where the pointer left the HUD, and what is painted is that
     // rounded to a whole pixel, which is egui's job and not this one's.
-    let recorded = state.perf_pos.expect("the drop should be recorded");
+    let recorded = state.workspace.interaction.perf_pos.expect("the drop should be recorded");
     assert!(
         (recorded - after.min).length() < 1.0,
         "the drop should be recorded as the overlay's position: {recorded:?} drawn at {after:?}",
@@ -185,7 +185,7 @@ fn the_perf_overlay_goes_where_it_is_dragged() {
 #[test]
 fn folding_a_pane_does_not_move_the_perf_overlay() {
     let mut state = fresh();
-    state.appearance.view.show_perf = true;
+    state.picture.appearance.view.show_perf = true;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     let placed = drag_hud(&mut h, &mut state, egui::vec2(-200.0, -120.0));
@@ -217,7 +217,7 @@ fn folding_a_pane_does_not_move_the_perf_overlay() {
 #[test]
 fn the_perf_overlay_cannot_be_dragged_out_of_the_editor() {
     let mut state = fresh();
-    state.appearance.view.show_perf = true;
+    state.picture.appearance.view.show_perf = true;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     let screen = h.screen;
@@ -255,11 +255,11 @@ fn the_perf_overlay_cannot_be_dragged_out_of_the_editor() {
 #[test]
 fn a_saved_position_opens_the_hud_where_it_was_left() {
     let mut state = fresh();
-    state.appearance.view.show_perf = true;
+    state.picture.appearance.view.show_perf = true;
     // Nowhere near the corner it would open at by itself, so "honoured" and
     // "defaulted" cannot look alike.
     let left = egui::pos2(120.0, 210.0);
-    state.perf_pos = Some(left);
+    state.workspace.interaction.perf_pos = Some(left);
 
     let mut h = DockHarness::new();
     h.frame(&mut state, vec![]);
@@ -268,7 +268,11 @@ fn a_saved_position_opens_the_hud_where_it_was_left() {
         (hud.min - left).length() < 1.0,
         "a saved position should be where the HUD opens: {hud:?} for {left:?}",
     );
-    assert_eq!(state.perf_pos, Some(left), "drawing the HUD must not rewrite its position");
+    assert_eq!(
+        state.workspace.interaction.perf_pos,
+        Some(left),
+        "drawing the HUD must not rewrite its position"
+    );
 }
 
 /// Switching the HUD off and on again leaves it where it was, and draws it on
@@ -280,14 +284,14 @@ fn a_saved_position_opens_the_hud_where_it_was_left() {
 #[test]
 fn the_perf_overlay_comes_back_where_it_was_switched_off() {
     let mut state = fresh();
-    state.appearance.view.show_perf = true;
+    state.picture.appearance.view.show_perf = true;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     let placed = drag_hud(&mut h, &mut state, egui::vec2(-180.0, -140.0));
 
-    state.appearance.view.show_perf = false;
+    state.picture.appearance.view.show_perf = false;
     h.frame(&mut state, vec![]);
-    state.appearance.view.show_perf = true;
+    state.picture.appearance.view.show_perf = true;
     // ONE frame: a second would hide a fresh sizing pass behind it.
     let back = hud_of(&h.frame(&mut state, vec![]));
     assert_eq!(back, placed, "the HUD should come back where it was switched off");
@@ -298,13 +302,13 @@ fn the_perf_overlay_comes_back_where_it_was_switched_off() {
 #[test]
 fn a_dragged_perf_overlay_is_persisted() {
     let mut state = fresh();
-    state.appearance.view.show_perf = true;
-    state.perf_pos = Some(egui::pos2(123.0, 456.0));
+    state.picture.appearance.view.show_perf = true;
+    state.workspace.interaction.perf_pos = Some(egui::pos2(123.0, 456.0));
 
     let mut restored = fresh();
     assert!(restored.load_persist(&state.save_persist()));
     assert_eq!(
-        restored.perf_pos,
+        restored.workspace.interaction.perf_pos,
         Some(egui::pos2(123.0, 456.0)),
         "a dragged overlay should open where it was left",
     );
@@ -317,7 +321,10 @@ fn a_dragged_perf_overlay_is_persisted() {
     let edited = saved.replacen("x:123.0", "x:NaN", 1);
     assert_ne!(edited, saved, "the position must be in the blob to edit");
     assert!(restored.load_persist(&edited));
-    assert_eq!(restored.perf_pos, None, "an undrawable position should be dropped");
+    assert_eq!(
+        restored.workspace.interaction.perf_pos, None,
+        "an undrawable position should be dropped"
+    );
 }
 
 /// The overlay ships OFF, on a fresh install and in a project saved before the
@@ -331,22 +338,31 @@ fn a_dragged_perf_overlay_is_persisted() {
 #[test]
 fn the_performance_overlay_ships_off() {
     let defaults = fresh();
-    assert!(!defaults.appearance.view.show_perf, "a fresh install opens with the overlay off");
+    assert!(
+        !defaults.picture.appearance.view.show_perf,
+        "a fresh install opens with the overlay off"
+    );
 
     // A blob from before the setting existed: the key cut out of a saved one.
     let mut state = fresh();
-    state.appearance.view.show_perf = true;
+    state.picture.appearance.view.show_perf = true;
     let saved = state.save_persist();
     let old = saved.replacen("show_perf:true,", "", 1);
     assert_ne!(old, saved, "the show_perf cut must land for this to test anything");
 
     let mut restored = fresh();
     restored.load_persist(&old);
-    assert!(!restored.appearance.view.show_perf, "a pre-show_perf blob opens with the overlay off");
+    assert!(
+        !restored.picture.appearance.view.show_perf,
+        "a pre-show_perf blob opens with the overlay off"
+    );
 
     // And a project that asked for it still gets it: the cut above is what
     // makes the blob old, not the value, so the round-trip has to still work.
     let mut kept = fresh();
     kept.load_persist(&saved);
-    assert!(kept.appearance.view.show_perf, "a project that turned the overlay on keeps it");
+    assert!(
+        kept.picture.appearance.view.show_perf,
+        "a project that turned the overlay on keeps it"
+    );
 }

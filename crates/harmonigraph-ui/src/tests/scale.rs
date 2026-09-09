@@ -14,7 +14,7 @@ const PANE_WIDTH: f32 = 400.0;
 /// — at a fixed width, because here it is the scale that varies.
 fn settings_pane_at_scale(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::ClippedShape> {
     let mut state = fresh();
-    state.ui_scale = scale;
+    state.workspace.interaction.ui_scale = scale;
     let tab = pane.install(&mut state);
     let ctx = super::probe::themed_scaled(scale);
     tab_body_on(&ctx, &mut state, tab, PANE_WIDTH, PANE_HEIGHT, 0.0).shapes
@@ -87,7 +87,7 @@ fn the_ui_scale_leaves_the_picture_alone() {
         let backend = RecordingBackend::default();
         // Something to draw: a held voice for the roll and the voice bars, and
         // an analyzed column for the spectrum.
-        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+        state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
             0.5,
             harmonigraph_core::SourceId::DIRECT,
             0,
@@ -96,13 +96,13 @@ fn the_ui_scale_leaves_the_picture_alone() {
         ));
         let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
         bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
-        state.spectrum.push_history(0.5, &bins);
+        state.picture.runtime.spectrum.push_history(0.5, &bins);
         // A rect the scale cannot move, so what is being compared is the
         // picture rather than the pane it was given.
         let screen = egui::vec2(600.0, 400.0);
         let out = super::probe::frame_full(&super::probe::themed_scaled(scale), screen, |ui| {
-            crate::begin_frame(&mut state, &backend, 1.0);
-            crate::draw_pane(ui, crate::Pane::Spectral, &mut state, 1.0, 0);
+            crate::begin_frame(&mut state.picture, &backend, 1.0);
+            crate::draw_pane(ui, crate::Pane::Spectral, &mut state.picture, 1.0, 0);
         });
         // Debug rather than the shapes themselves: they hold floats and
         // texture handles and are not `PartialEq`, and a difference anywhere

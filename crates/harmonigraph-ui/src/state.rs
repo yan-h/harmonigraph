@@ -1,20 +1,19 @@
-//! [`SharedState`], the one instance of everything the UI reads and mutates
-//! each frame, plus what of it survives a session: the dock arrangement,
-//! camera, and settings written through [`UiPersist`](crate::state::UiPersist).
+//! Shell ownership, synchronous visual runtime, viewport resources and editor
+//! workspace. Persisted documents are assembled explicitly at the shell boundary.
 
 use std::collections::VecDeque;
 
 use egui_dock::{DockState, NodeIndex};
-use harmonigraph_core::{Comma, LatticePos, NoteTracker, PitchClass, Tuning};
+use harmonigraph_core::{Comma, LatticePos};
 use harmonigraph_perf::{PerfStats, ShellTimings};
 use harmonigraph_render::wgpu::TextureFormat;
-use harmonigraph_scene::{Camera, DrawnWindow, FrameParams};
+use harmonigraph_scene::{Camera, DrawnWindow};
 
 use crate::{fold, panes, text};
-use crate::{AudioSpectrum, RenderProgress, WholeSong};
+use crate::{RenderProgress, VisualRuntime};
 
 /// Scrollback for the debug console pane. Shells and panes log via
-/// [`SharedState::log`].
+/// [`Console::log`].
 #[derive(Default)]
 pub struct Console {
     pub(crate) lines: VecDeque<String>,
@@ -54,8 +53,8 @@ impl Console {
 /// is a deliberate act, so nothing else here is ever resumed on load — an
 /// editor that reopened armed would record a session nobody asked it to.
 ///
-/// In the plugin's editor `self.take` is the recorder and `self.ui.take` is
-/// this; the frame-by-frame copying between them is `sync_take`.
+/// The plugin owns the recorder separately. `sync_take` exchanges its status
+/// and explicit actions with this workspace interaction state once per GUI callback.
 #[derive(Default)]
 pub struct TakeState {
     /// Whether this shell can record at all. Gates the control: a shell that
@@ -87,19 +86,24 @@ pub struct TakeState {
     pub render_progress: Option<RenderProgress>,
 }
 
-/// Everything the UI reads and mutates each frame. One instance lives in the
-/// shell (inside the editor state in the plugin, inside the app in the
-/// standalone harness).
+/// Shell aggregate. Drawing and runtime code borrow its domains independently.
 pub struct SharedState {
-    pub tracker: NoteTracker,
-    /// Snapshot of the tuning parameters, refreshed each frame in
-    /// [`root_ui`](crate::root_ui) so core/scene code never touches the param system.
-    pub tuning: Tuning,
+    pub picture: PictureState,
+    pub workspace: Workspace,
+}
+
+/// Shared live/offline picture. A picture pane cannot access the editor dock,
+/// shell actions, recording controls or interface preferences.
+pub struct PictureState {
+    pub runtime: VisualRuntime,
     pub appearance: crate::AppearanceDocument,
-    /// Per-frame mirrors of the appearance parameters, refreshed alongside
-    /// `tuning` (the param system owns the real values; these are never
-    /// persisted).
-    pub frame_params: FrameParams,
+    pub surfaces: SurfaceState,
+    pub instruments: Instruments,
+}
+
+/// Viewport geometry and temporal graphics, separate from input history.
+pub struct SurfaceState {
+    pub(crate) spectrogram: crate::spectrum::SpectrogramSurfaces,
     /// The lattice node the pointer is over, if any.
     ///
     /// Shared state that one pane writes and one pane reads: the lattice
@@ -115,7 +119,7 @@ pub struct SharedState {
     /// that have to say what the picture is showing — the analyzer's red "off
     /// the lattice" band, the Notes pane's node column, and the name a pitch
     /// gets when the reach cannot spell it. `None` until a lattice pane has
-    /// drawn one; [`shown`](Self::shown) is what to read, and it falls back to
+    /// drawn one; [`PictureState::shown`] is what to read, and it falls back to
     /// the view's reach.
     ///
     /// Reported rather than computed from the view, because the view holds no
@@ -141,7 +145,6 @@ pub struct SharedState {
     /// drawn and a diagnostic holding its last good reading is the one that
     /// misleads.
     pub drawn_this_frame: Option<DrawnWindow>,
-    pub console: Console,
     /// Surface format of the shell's swapchain; the lattice render pipeline
     /// must match it.
     pub target_format: TextureFormat,
@@ -166,65 +169,6 @@ pub struct SharedState {
     /// is the one place that is hardest to notice and most expensive to get
     /// wrong.
     pub background: glam::Vec4,
-    /// While true, tuning params continuously re-learn from the held notes
-    /// (v1's learn mode). Runtime-only; never persisted.
-    pub learn_active: bool,
-    pub(crate) config_reducer: harmonigraph_core::configuration::ConfigReducer,
-    /// Offline replay supplies recorded resolved boundaries, never frame-driven detection.
-    pub replayed_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
-    pub neighbourhood: crate::adaptive::Neighbourhood,
-    pub adaptive_policy: harmonigraph_core::configuration::PolicyConfig,
-    pub configuration_status: u32,
-    pub configuration_pending: bool,
-    /// Held pitch classes the last learn ran against (change detection).
-    pub(crate) last_learned_classes: Option<Vec<PitchClass>>,
-    /// Per comma (indexed by [`Comma::index`]): the tuning axes (microcents)
-    /// that comma's auto-detect last saw, so it judges each tuning exactly
-    /// once.
-    ///
-    /// This is what lets a comma switch be switched OFF: an unchanged tuning
-    /// gets no second verdict, so the mode stays where it was put until the
-    /// tuning itself moves. It also keeps the detect off the plugin's
-    /// in-flight parameter writes, which report the value being written away
-    /// from for a frame or more (see `begin_frame`).
-    ///
-    /// One entry per comma, and each holds only the axes ITS identity reads
-    /// (see `judged_axes`) — a seventh that moved must not re-open the
-    /// syntonic question, or dragging the seventh would re-engage a meantone
-    /// that was just switched off.
-    ///
-    /// Runtime-only. A saved project carries the modes themselves, and
-    /// reopening one is exactly when the detects should look afresh.
-    pub(crate) temper_judged: [Option<(i32, i32, i32)>; Comma::COUNT],
-    /// User-saved camera angles, applied like the built-in Flat/Isometric
-    /// presets (persisted; see the Lattice page's Camera section).
-    pub camera_presets: Vec<CameraPreset>,
-    /// Entry buffer for naming a new preset. Runtime-only.
-    pub preset_name: String,
-    /// Take recording and video export, which the Video pane and the shell
-    /// pass between them — see [`TakeState`].
-    pub take: TakeState,
-    /// Audio-derived spectrum for the Spectral pane. Runtime-only.
-    pub spectrum: AudioSpectrum,
-    /// How far open the audio ring's Gate stands at each bucket of the
-    /// analyzer's grid, so a ring arrives and leaves on the note Fade rather
-    /// than at the instant the spectrum crosses the bar
-    /// ([`RingFade`](harmonigraph_scene::RingFade)). Runtime-only.
-    ///
-    /// Here rather than in the pane because it is the one thing about the
-    /// lattice that must survive a frame, and because this struct is exactly
-    /// what the offline renderer carries between frames — a transition kept
-    /// anywhere else would draw one picture live and another in an export.
-    /// Stepped against the clock (`panes::spectral_fold::apply`), so the two
-    /// lattices an editor frame draws step it once between them.
-    pub ring_fade: harmonigraph_scene::RingFade,
-    /// What the ring's wedges currently READ, carried across frames on the
-    /// ring's own attack and release — the level inside the annulus, where
-    /// [`ring_fade`](Self::ring_fade) above is whether the annulus is there at
-    /// all. Both live here for the same reason: the offline renderer carries
-    /// this struct between frames and nothing else, so state kept anywhere else
-    /// would draw one picture live and another in an export.
-    pub ring_levels: crate::panes::spectral_fold::RingLevels,
     /// Where every node's own light has got to, and which row of the ink strip
     /// is keeping its colour, per lattice surface
     /// ([`GlowFade`](crate::panes::glow_fade::GlowFade)). Runtime-only.
@@ -244,28 +188,28 @@ pub struct SharedState {
     /// is what a project saves and a take renders from, and a length in POINTS
     /// is a fact about the window this session happens to be open in.
     pub(crate) spectrum_hold: panes::spectral::SpectrumHold,
-    /// Offline playhead render: the whole take's spectrogram laid out
-    /// statically with a playhead at `now`, instead of the live scrolling
-    /// window. `Some` only in the offline renderer. Runtime-only, never
-    /// persisted (mirrors `learn_active`).
-    pub whole_song: Option<WholeSong>,
-    /// The pane arrangement and what the window is doing to it — see
-    /// [`Workspace`], which is also where the reason these are not six more
-    /// flat fields lives.
-    pub workspace: Workspace,
+}
+
+/// Editor interaction and shell actions. Panes borrow this separately from
+/// the layout being traversed, so a reset request cannot replace a live dock.
+pub struct Interaction {
+    /// User-saved camera angles, applied like the built-in Flat/Isometric
+    /// presets (persisted; see the Lattice page's Camera section).
+    pub camera_presets: Vec<CameraPreset>,
+    /// Entry buffer for naming a new preset. Runtime-only.
+    pub preset_name: String,
+    /// Take recording and video export, which the Video pane and the shell
+    /// pass between them — see [`TakeState`].
+    pub take: TakeState,
     /// Which of the Display tab's pages is showing (persisted).
     ///
     /// Here rather than in egui `Context` memory, and the home is load-bearing:
     /// the plugin builds a brand new `Context` every time the editor window
-    /// opens (the trap [`SharedState::release_context_resources`] sets out), so
+    /// opens (the trap [`PictureState::release_context_resources`] sets out), so
     /// a choice kept in memory springs back to Colors with every reopen. The
     /// picker writes clicks straight here and reads the body to draw off the
     /// same field, so there is one source of truth for it.
     pub display_page: panes::display::DisplayPage,
-    /// What the frame measures and publishes about itself — see
-    /// [`Instruments`], which is also where the reason these are not five more
-    /// flat fields lives.
-    pub instruments: Instruments,
     /// Upper bound on how often the UI is drawn, in frames per second;
     /// `None` leaves it uncapped (as fast as the display can present).
     /// Persisted.
@@ -308,46 +252,14 @@ pub struct SharedState {
     /// stays outside recorded appearance; only [`root_ui`](crate::root_ui)
     /// reads it and the offline renderer never draws the HUD.
     pub perf_pos: Option<egui::Pos2>,
+    pub(crate) reset_layout: bool,
 }
 
-/// The pane layout: the arrangement itself, what each sideways fold is holding,
-/// what the window is doing to both, and the two numbers the shell and the
-/// layout trade width through.
-///
-/// Grouped by who reads it, and the answer is never a pane. The whole of it is
-/// read in one stretch of [`root_ui`](crate::root_ui) — the block that moves
-/// the dock out, hands the fields to [`fold`] as arguments, draws, paints the
-/// rails and writes the dock back — and everything else that touches it takes
-/// one or two members for a stated reason: `save_persist` and
-/// `load_persist` carry [`dock`](Self::dock) and [`folds`](Self::folds) because
-/// those two are the members that survive a session, and [`crate::shell`] sets
-/// [`min_window_width`](Self::min_window_width) on the way in and spends
-/// [`window_width_change`](Self::window_width_change) on the way out, which is
-/// the whole of what a shell owes the layout.
-///
-/// Spread flat among the settings and the tracker they read as things a pane
-/// might act on, which is exactly what a pane must not do: the pass a pane runs
-/// in is the pass walking the tree it would be writing.
-///
-/// One pane does touch it, and the shape of that is the reason the grouping is
-/// worth naming rather than an exception to it. The System page's "Reset
-/// layout" button sets [`reset_layout`](Self::reset_layout) — one bool, write
-/// only, consumed after the pass that pane drew in — and reads nothing at all.
-/// A pane wanting more than a flag from here is a pane rearranging the dock it
-/// is being drawn by.
-///
-/// [`dock`](Self::dock) and [`folds`](Self::folds) persist and the other four
-/// do not, which is a split this cannot express and does not try to:
-/// `save_persist` builds [`UiPersist`] field by field, so what is grouped here
-/// reaches the blob only where that function names it. The blob's shape is
-/// therefore independent of this one, and
-/// `the_persist_blob_carries_exactly_these_top_level_keys` is what says so.
-///
-/// What the grouping does NOT buy is the dock's borrow. `root_ui` still moves
-/// the tree out for the duration of the pane pass, because the panes hold
-/// `&mut SharedState` and this is inside it — see the `mem::replace` there,
-/// which explains why the whole group cannot travel instead.
+/// Editor docking and interaction. The dock borrows its own tree while the
+/// Viewer borrows only `interaction` and the independent picture. Shell actions
+/// are consumed after traversal; saving explicitly selects persisted fields.
 pub struct Workspace {
+    pub interaction: Interaction,
     /// The arrangement itself: which panes are where, which tab of a leaf is
     /// selected, and which leaves are collapsed. egui_dock owns everything in
     /// it — the collapsed flags a fold reads are its own (see [`fold`]) — and
@@ -389,10 +301,6 @@ pub struct Workspace {
     /// Set by the shell. Zero — the default, and what a shell that never
     /// resizes leaves it at — means no floor.
     pub min_window_width: f32,
-    /// Set by the System page's "Reset layout" button; consumed by root_ui
-    /// AFTER the frame's DockArea writes the dock back (panes run inside
-    /// that pass, so a direct write from one would be overwritten).
-    pub(crate) reset_layout: bool,
 }
 
 impl Default for Workspace {
@@ -403,7 +311,7 @@ impl Default for Workspace {
             dial: fold::Dial::default(),
             window_width_change: 0.0,
             min_window_width: 0.0,
-            reset_layout: false,
+            interaction: Interaction::default(),
         }
     }
 }
@@ -432,7 +340,7 @@ impl Workspace {
     /// layout. Camera, view settings, and presets are untouched. Takes
     /// effect at the end of the frame (see the `reset_layout` field).
     pub fn reset_dock_layout(&mut self) {
-        self.reset_layout = true;
+        self.interaction.reset_layout = true;
     }
 }
 
@@ -671,74 +579,12 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
 }
 
 impl SharedState {
-    /// An owned handle lets plugin teardown join initialization after releasing
-    /// the shared UI lock. Ordinary editor close leaves this cache alive.
-    pub fn editor_graphics(&self) -> std::sync::Arc<harmonigraph_render::LatticePipelineCache> {
-        self.lattice_pipelines.clone()
-    }
-
-    /// The synchronous reducer's last complete value, for standalone recording.
-    pub fn resolved_configuration(&self) -> harmonigraph_core::configuration::ResolvedConfig {
-        self.replayed_configuration.unwrap_or_else(|| self.config_reducer.resolved())
-    }
-
     pub fn new(target_format: TextureFormat) -> Self {
-        SharedState {
-            tracker: NoteTracker::new(),
-            tuning: Tuning::default(),
-            appearance: crate::AppearanceDocument::default(),
-            frame_params: FrameParams::default(),
-            hovered: None,
-            drawn: None,
-            drawn_this_frame: None,
-            console: Console::default(),
-            target_format,
-            lattice_pipelines: Default::default(),
-            background: harmonigraph_scene::skin::well_color(),
-            learn_active: false,
-            config_reducer: Default::default(),
-            adaptive_policy: Default::default(),
-            neighbourhood: Default::default(),
-            replayed_configuration: None,
-            configuration_status: 0,
-            configuration_pending: false,
-            last_learned_classes: None,
-            temper_judged: [None; Comma::COUNT],
-            camera_presets: Vec::new(),
-            preset_name: String::new(),
-            take: TakeState::default(),
-            spectrum: AudioSpectrum::default(),
-            ring_fade: harmonigraph_scene::RingFade::default(),
-            glow_fade: std::collections::HashMap::new(),
-            ring_levels: crate::panes::spectral_fold::RingLevels::default(),
-            spectrum_hold: panes::spectral::SpectrumHold::default(),
-            whole_song: None,
-            workspace: Workspace::default(),
-            display_page: panes::display::DisplayPage::default(),
-            instruments: Instruments::default(),
-            fps_cap: None,
-            ui_scale: default_ui_scale(),
-            perf_pos: None,
-        }
-    }
-
-    /// Put the audio ring back to a standing start — nothing carried, in
-    /// either half.
-    ///
-    /// The two halves are ONE state and are cleared together. Both step
-    /// against the clock and both hold at a step of zero, so anything drawing
-    /// a SETTING rather than a frame of an animation — a probe taking every
-    /// shot at one moment — has to clear both or the shot before is handed
-    /// straight back. Clearing [`ring_fade`](Self::ring_fade) alone leaves the
-    /// new shot's gate reading the previous shot's grid, which is a picture of
-    /// neither.
-    pub fn reset_ring(&mut self) {
-        self.ring_fade = harmonigraph_scene::RingFade::default();
-        self.ring_levels = crate::panes::spectral_fold::RingLevels::default();
+        Self { picture: PictureState::new(target_format), workspace: Workspace::default() }
     }
 
     pub fn log(&mut self, line: impl Into<String>) {
-        self.console.log(line);
+        self.picture.runtime.console.log(line);
     }
 
     /// Serialize the parts of the UI worth restoring across sessions
@@ -755,49 +601,14 @@ impl SharedState {
             version: UI_PERSIST_VERSION,
             dock: self.workspace.dock.clone(),
             folds: self.workspace.folds.clone(),
-            display_page: self.display_page,
-            appearance: self.appearance.clone(),
-            camera_presets: self.camera_presets.clone(),
-            fps_cap: self.fps_cap,
-            ui_scale: self.ui_scale,
-            perf_pos: self.perf_pos,
+            display_page: self.workspace.interaction.display_page,
+            appearance: self.picture.appearance.clone(),
+            camera_presets: self.workspace.interaction.camera_presets.clone(),
+            fps_cap: self.workspace.interaction.fps_cap,
+            ui_scale: self.workspace.interaction.ui_scale,
+            perf_pos: self.workspace.interaction.perf_pos,
         })
         .unwrap_or_default()
-    }
-
-    /// Install an already normalized appearance at a load boundary.
-    pub fn install_appearance(&mut self, appearance: crate::AppearanceDocument) {
-        self.appearance = appearance;
-        // A restored project must judge its comma modes again even at the
-        // tuning the previous project already showed.
-        self.temper_judged = [None; Comma::COUNT];
-    }
-
-    /// Drop everything that belongs to a particular egui context. Shells MUST
-    /// call this whenever they build one.
-    ///
-    /// The plugin's editor creates a brand new `Context` every time its window
-    /// opens, while this state lives on across them — so anything here that
-    /// describes what a context's renderer holds survives into the new window
-    /// looking perfectly valid. The spectrogram's GPU mirror is exactly that: it
-    /// states which slabs the grid buffer holds, and a frame writes only the
-    /// slabs that have moved against it, so carried into a window whose renderer
-    /// allocated nothing it would patch two slabs of a buffer that was never
-    /// written.
-    ///
-    /// The label trackers carry the fallback atlas guards and the mark sheet's
-    /// publication key, all of which describe one context. Carrying them into
-    /// another context can suppress the first publication to its renderer.
-    pub fn release_context_resources(&mut self) {
-        self.spectrum.release_gpu_grids();
-        // Each callback owns its fallback and mark texture, so each publication
-        // tracker describes the context that closed.
-        for mirror in [&mut self.instruments.font_atlas, &mut self.instruments.lattice_atlas] {
-            mirror
-                .get_mut()
-                .expect("the label mirror is never held across a panic")
-                .forget_context();
-        }
     }
 
     /// Restore the whole editor document. Refused input leaves the current state
@@ -846,24 +657,24 @@ impl SharedState {
         self.workspace.dial.forget();
         self.workspace.folds = persist.folds;
         self.workspace.dock = persist.dock;
-        self.display_page = persist.display_page;
-        self.install_appearance(appearance);
-        self.camera_presets = persist.camera_presets;
-        for preset in &mut self.camera_presets {
+        self.workspace.interaction.display_page = persist.display_page;
+        self.picture.install_appearance(appearance);
+        self.workspace.interaction.camera_presets = persist.camera_presets;
+        for preset in &mut self.workspace.interaction.camera_presets {
             preset.sanitize();
         }
-        self.fps_cap = persist.fps_cap;
+        self.workspace.interaction.fps_cap = persist.fps_cap;
         // Clamped here rather than only where it is drawn, so the control
         // cannot read out a number the chrome is not at: `set_ui_scale`
         // would take a hand-edited 5.0 down to the top of the range while
         // the bar went on saying 500%.
-        self.ui_scale = crate::theme::sane_ui_scale(persist.ui_scale);
+        self.workspace.interaction.ui_scale = crate::theme::sane_ui_scale(persist.ui_scale);
         // A hand-edited NaN is dropped rather than honoured, on the grounds
         // the spiral framing above is repaired on: it positions drawn
         // geometry, and NaN geometry is a panic inside egui's tessellator. A
         // dropped position opens the HUD where an undragged one opens, which
         // is a place the user can see it and drag it from.
-        self.perf_pos = persist.perf_pos.filter(|pos| pos.is_finite());
+        self.workspace.interaction.perf_pos = persist.perf_pos.filter(|pos| pos.is_finite());
         true
     }
 }
@@ -973,12 +784,106 @@ pub(crate) struct UiPersist {
     #[serde(default = "default_ui_scale")]
     pub(crate) ui_scale: f32,
     /// Where the performance overlay was dragged to; a blob without one opens
-    /// it where an undragged HUD opens. See [`SharedState::perf_pos`].
+    /// it where an undragged HUD opens. See [`Interaction::perf_pos`].
     #[serde(default)]
     pub(crate) perf_pos: Option<egui::Pos2>,
 }
 
-impl SharedState {
+impl PictureState {
+    pub fn new(target_format: TextureFormat) -> Self {
+        Self {
+            runtime: VisualRuntime::default(),
+            appearance: crate::AppearanceDocument::default(),
+            surfaces: SurfaceState::new(target_format),
+            instruments: Instruments::default(),
+        }
+    }
+}
+
+impl SurfaceState {
+    fn new(target_format: TextureFormat) -> Self {
+        Self {
+            spectrogram: Default::default(),
+            hovered: None,
+            drawn: None,
+            drawn_this_frame: None,
+            target_format,
+            lattice_pipelines: Default::default(),
+            background: harmonigraph_scene::skin::well_color(),
+            glow_fade: std::collections::HashMap::new(),
+            spectrum_hold: panes::spectral::SpectrumHold::default(),
+        }
+    }
+}
+impl Default for Interaction {
+    fn default() -> Self {
+        Self {
+            camera_presets: Vec::new(),
+            preset_name: String::new(),
+            take: TakeState::default(),
+            display_page: panes::display::DisplayPage::default(),
+            fps_cap: None,
+            ui_scale: default_ui_scale(),
+            perf_pos: None,
+            reset_layout: false,
+        }
+    }
+}
+
+impl PictureState {
+    /// An owned handle lets plugin teardown join initialization after releasing
+    /// the shared UI lock. Ordinary editor close leaves this cache alive.
+    pub fn editor_graphics(&self) -> std::sync::Arc<harmonigraph_render::LatticePipelineCache> {
+        self.surfaces.lattice_pipelines.clone()
+    }
+
+    /// Put the audio ring back to a standing start — nothing carried, in
+    /// either half.
+    ///
+    /// The two halves are ONE state and are cleared together. Both step
+    /// against the clock and both hold at a step of zero, so anything drawing
+    /// a SETTING rather than a frame of an animation — a probe taking every
+    /// shot at one moment — has to clear both or the shot before is handed
+    /// straight back. Clearing [`VisualRuntime::ring_fade`] alone leaves the
+    /// new shot's gate reading the previous shot's grid, which is a picture of
+    /// neither.
+    pub fn reset_ring(&mut self) {
+        self.runtime.ring_fade = harmonigraph_scene::RingFade::default();
+        self.runtime.ring_levels = crate::panes::spectral_fold::RingLevels::default();
+    }
+    /// Install an already normalized appearance at a load boundary.
+    pub fn install_appearance(&mut self, appearance: crate::AppearanceDocument) {
+        self.appearance = appearance;
+        // A restored project must judge its comma modes again even at the
+        // tuning the previous project already showed.
+        self.runtime.temper_judged = [None; Comma::COUNT];
+    }
+    /// Drop everything that belongs to a particular egui context. Shells MUST
+    /// call this whenever they build one.
+    ///
+    /// The plugin's editor creates a brand new `Context` every time its window
+    /// opens, while this state lives on across them — so anything here that
+    /// describes what a context's renderer holds survives into the new window
+    /// looking perfectly valid. The spectrogram's GPU mirror is exactly that: it
+    /// states which slabs the grid buffer holds, and a frame writes only the
+    /// slabs that have moved against it, so carried into a window whose renderer
+    /// allocated nothing it would patch two slabs of a buffer that was never
+    /// written.
+    ///
+    /// The label trackers carry the fallback atlas guards and the mark sheet's
+    /// publication key, all of which describe one context. Carrying them into
+    /// another context can suppress the first publication to its renderer.
+    pub fn release_context_resources(&mut self) {
+        self.surfaces.spectrogram.release_gpu_grids();
+        // Each callback owns its fallback and mark texture, so each publication
+        // tracker describes the context that closed.
+        for mirror in [&mut self.instruments.font_atlas, &mut self.instruments.lattice_atlas] {
+            mirror
+                .get_mut()
+                .expect("the label mirror is never held across a panic")
+                .forget_context();
+        }
+    }
     /// The block of lattice the picture is currently showing, which is what
     /// every "is this pitch on the lattice" question has to be asked of.
     ///
@@ -1003,26 +908,23 @@ impl SharedState {
     /// all. There is no picture to describe there, and the reach is the only
     /// window that does not depend on one.
     pub fn shown(&self) -> DrawnWindow {
-        self.drawn.unwrap_or_else(|| self.appearance.view.reach())
+        self.surfaces.drawn.unwrap_or_else(|| self.appearance.view.reach())
     }
-
     /// Tell the state what ground the lattice pane stands on — what it paints,
     /// and what it hands the scene (see the `background` field). Takes sRGB
     /// bytes, the form every shell already has its background color in, so no
     /// shell needs glam to say it.
     pub fn set_background(&mut self, rgb: (u8, u8, u8)) {
-        self.background = harmonigraph_scene::skin::ground_color(rgb);
+        self.surfaces.background = harmonigraph_scene::skin::ground_color(rgb);
     }
-
     /// The same ground as an egui color, for the pane that paints it.
     ///
     /// Opaque, and it has to be: this fill is what the picture stands on, and
     /// a translucent one would let the dock's own tab body through and put the
     /// lattice back on the panel it was moved off.
     pub(crate) fn background_ink(&self) -> egui::Color32 {
-        crate::panes::scene_color(self.background, 1.0)
+        crate::panes::scene_color(self.surfaces.background, 1.0)
     }
-
     /// Forget everything that accumulates as the plugin runs: the lattice
     /// trail, the piano roll, the spectrogram, and every node's own light.
     /// Display state only — nothing about the tuning, the take, or the
@@ -1046,19 +948,18 @@ impl SharedState {
     /// so a still-sounding node is lit again on the very next frame — this
     /// only cuts the fade a released node's light was still riding.
     pub fn clear_accumulated(&mut self) {
-        self.tracker.clear_history();
-        self.tracker.clear_roll();
-        self.spectrum.clear_history();
-        self.glow_fade.clear();
+        self.runtime.tracker.clear_history();
+        self.runtime.tracker.clear_roll();
+        self.runtime.spectrum.clear_history();
+        self.surfaces.glow_fade.clear();
     }
-
     /// The roll currently on screen: the take's own, laid out statically, in
     /// offline playhead mode; the causal tracker's rolling window, filling in
     /// as notes arrive, live.
     pub fn roll(&self) -> &harmonigraph_core::NoteRoll {
-        match self.whole_song.as_ref() {
+        match self.runtime.whole_song.as_ref() {
             Some(ws) => &ws.roll,
-            None => self.tracker.roll(),
+            None => self.runtime.tracker.roll(),
         }
     }
 }

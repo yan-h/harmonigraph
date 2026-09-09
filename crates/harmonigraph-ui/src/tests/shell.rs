@@ -27,7 +27,12 @@ fn every_tab_has_its_own_id_whatever_its_title_says() {
         panes::Tab::Notes,
         panes::Tab::Video,
     ];
-    let mut viewer = panes::Viewer { state: &mut state, params: &params, now: 0.0 };
+    let mut viewer = panes::Viewer {
+        state: &mut state.picture,
+        interaction: &mut state.workspace.interaction,
+        params: &params,
+        now: 0.0,
+    };
 
     // The sharing the variant-keyed id keeps safe is real, not hypothetical.
     assert_eq!(
@@ -58,7 +63,12 @@ fn the_picture_panes_do_not_scroll() {
     use egui_dock::TabViewer;
     let mut state = fresh();
     let params = RecordingBackend::default();
-    let viewer = panes::Viewer { state: &mut state, params: &params, now: 0.0 };
+    let viewer = panes::Viewer {
+        state: &mut state.picture,
+        interaction: &mut state.workspace.interaction,
+        params: &params,
+        now: 0.0,
+    };
     for tab in [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Spiral] {
         assert_eq!(viewer.scroll_bars(&tab), [false, false], "{tab:?} is scrollable");
     }

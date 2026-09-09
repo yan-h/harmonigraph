@@ -6,7 +6,7 @@ use crate::marks::{
     draw_plain_name, draw_stacked_name, painter_ink, CENTS_GAP, CENTS_SIZE, LABEL_REACH, NAME_SIZE,
     REFERENCE_HEIGHT,
 };
-use crate::{theme, SharedState};
+use crate::{theme, PictureState};
 use egui::Sense;
 use harmonigraph_render::lattice_paint_callback;
 use harmonigraph_scene::{derive_scene, Camera, NoteNames, Projection, SevensLabel};
@@ -18,7 +18,7 @@ use harmonigraph_scene::{derive_scene, Camera, NoteNames, Projection, SevensLabe
 /// The docked tab is 0; offline a layout hands each placement its index (see
 /// [`draw_pane`](crate::draw_pane)), so a `.ron` naming the lattice twice draws
 /// two pictures instead of one picture twice.
-pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, surface: usize) {
+pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64, surface: usize) {
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return;
@@ -76,7 +76,7 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64,
     // ground is the render layout's, not the skin's, and a fill that went to
     // the theme for it would stand the picture on one colour while telling the
     // scene about another.
-    let background = state.background;
+    let background = state.surfaces.background;
     ui.painter().rect_filled(rect, 0.0, state.background_ink());
     let stats = Some(state.instruments.lattice_stats.clone());
     draw_lattice(ui, rect, state, now, surface, background, Some(&response), stats);
@@ -100,7 +100,7 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64,
 pub(crate) fn draw_lattice(
     ui: &mut egui::Ui,
     rect: egui::Rect,
-    state: &mut SharedState,
+    state: &mut PictureState,
     now: f64,
     surface: usize,
     background: glam::Vec4,
@@ -118,23 +118,23 @@ pub(crate) fn draw_lattice(
         .scrolled(&state.appearance.camera, rect.width() / rect.height().max(1.0));
     // Published for the perf overlay's node count and for the panes that have
     // to say what the picture shows, from the one place it exists. The docked
-    // copy alone writes it — see `SharedState::drawn`, and the `response`
+    // copy alone writes it — see `SurfaceState::drawn`, and the `response`
     // argument's own doc for why that flag is what identifies it.
     if response.is_some() {
-        state.drawn_this_frame = Some(window);
+        state.surfaces.drawn_this_frame = Some(window);
     }
     let mut scene = derive_scene(
-        &state.tracker,
-        &state.tuning,
+        &state.runtime.tracker,
+        &state.runtime.tuning,
         &state.appearance.view,
         &window,
-        &state.frame_params,
+        &state.runtime.frame_params,
         state.appearance.camera,
         // Only the interactive copy has a hover to show: the preview's
         // camera is framed in the Lattice tab, not here, and a hover picked
         // up while working there is that view's business, not a picture of
         // the render's.
-        response.and(state.hovered),
+        response.and(state.surfaces.hovered),
         now,
     );
     // What the AUDIO says, over a scene derived exactly as above: a ring of
@@ -164,13 +164,13 @@ pub(crate) fn draw_lattice(
     // the interactive copy has a pointer to read.
     if let Some(response) = response {
         if let Some(pointer) = response.hover_pos() {
-            state.hovered = scene.pick(
+            state.surfaces.hovered = scene.pick(
                 glam::Vec2::new(rect.width(), rect.height()),
                 glam::Vec2::new(pointer.x - rect.min.x, pointer.y - rect.min.y),
                 24.0,
             );
         } else if !response.dragged() {
-            state.hovered = None;
+            state.surfaces.hovered = None;
         }
     }
 
@@ -201,26 +201,30 @@ pub(crate) fn draw_lattice(
     // Only the interactive copy shows it at all: the badge is chrome about
     // the working view being in learn mode, and the preview is a picture of
     // the render, not a place to work.
-    let badge = (response.is_some() && state.learn_active).then(|| learn_badge(ui, rect, now));
+    let badge =
+        (response.is_some() && state.runtime.learn_active).then(|| learn_badge(ui, rect, now));
     ui.painter().set(
         lattice,
         lattice_paint_callback(
             rect,
             &scene,
             batch.lattice_labels(ui.painter(), rect, state),
-            state.target_format,
+            state.surfaces.target_format,
             pane_id(surface),
             stats,
-            state.lattice_pipelines.clone(),
+            state.surfaces.lattice_pipelines.clone(),
         ),
     );
-    if response.is_some() && state.neighbourhood.visible && state.neighbourhood.has_context() {
+    if response.is_some()
+        && state.runtime.neighbourhood.visible
+        && state.runtime.neighbourhood.has_context()
+    {
         // Selection-style outlines are live UI annotations, like hover. They
         // describe next input over C2–C7, not a recorded video ornament.
         let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
         let painter = ui.painter().with_clip_rect(rect);
         for node in &scene.nodes {
-            if !state.neighbourhood.nodes.contains(&node.lattice_pos) {
+            if !state.runtime.neighbourhood.nodes.contains(&node.lattice_pos) {
                 continue;
             }
             if let Some(p) = projector.project(node.world_pos) {
@@ -234,12 +238,12 @@ pub(crate) fn draw_lattice(
                 );
             }
         }
-        let label = if state.neighbourhood.computing {
+        let label = if state.runtime.neighbourhood.computing {
             "Reachable C2–C7 · computing".to_owned()
-        } else if let Some(error) = &state.neighbourhood.error {
+        } else if let Some(error) = &state.runtime.neighbourhood.error {
             format!("Neighbourhood unavailable: {error}")
         } else {
-            format!("Reachable C2–C7 · {} nodes", state.neighbourhood.nodes.len())
+            format!("Reachable C2–C7 · {} nodes", state.runtime.neighbourhood.nodes.len())
         };
         painter.text(
             rect.left_bottom() + egui::vec2(10.0, -10.0),
@@ -289,7 +293,7 @@ pub(crate) fn pane_id(surface: usize) -> u64 {
 fn draw_learn_overlay(
     ui: &egui::Ui,
     rect: egui::Rect,
-    state: &SharedState,
+    state: &PictureState,
     now: f64,
     surface: usize,
     badge: &mut crate::text::TextBatch,
@@ -635,7 +639,9 @@ pub(crate) fn draw_node_labels(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::probe::{frame_full, fresh, painted_full, painted_into, themed};
+    use crate::tests::probe::{
+        frame_full, fresh_picture as fresh, painted_full, painted_into, themed,
+    };
     use harmonigraph_core::{NoteEvent, SourceId};
 
     /// Draw the labels for a chord, with the camera at `distance`, and
@@ -656,18 +662,18 @@ mod tests {
         // No arrival ramp: the scene below is derived 50ms in, a fraction of
         // any real Fade, and a label's alpha rides its node's activation.
         // This suite is about where a label is DRAWN, not how lit it is.
-        state.frame_params.fade_time = 0.0;
+        state.runtime.frame_params.fade_time = 0.0;
         // A chord spread across the lattice, so nodes land all over the pane
         // and (zoomed in) well outside it.
         for note in [55u8, 60, 62, 64, 67, 69, 71] {
-            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
         }
         let scene = derive_scene(
-            &state.tracker,
-            &state.tuning,
+            &state.runtime.tracker,
+            &state.runtime.tuning,
             &state.appearance.view,
             &state.appearance.view.reach(),
-            &state.frame_params,
+            &state.runtime.frame_params,
             state.appearance.camera,
             None,
             0.05,
@@ -960,14 +966,14 @@ mod tests {
         let mut state = fresh();
         // A long arrival, so the climb through the reserve's band is a stretch
         // to sample rather than a frame of it.
-        state.frame_params.fade_time = 1.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.frame_params.fade_time = 1.0;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let scene = derive_scene(
-            &state.tracker,
-            &state.tuning,
+            &state.runtime.tracker,
+            &state.runtime.tuning,
             &state.appearance.view,
             &state.appearance.view.reach(),
-            &state.frame_params,
+            &state.runtime.frame_params,
             state.appearance.camera,
             None,
             0.05,
@@ -996,13 +1002,13 @@ mod tests {
         // depth into the departure the reserve DOES hold the name up. Without
         // this half, a fix that simply never reserved would pass the half
         // above.
-        state.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
+        state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
         let scene = derive_scene(
-            &state.tracker,
-            &state.tuning,
+            &state.runtime.tracker,
+            &state.runtime.tuning,
             &state.appearance.view,
             &state.appearance.view.reach(),
-            &state.frame_params,
+            &state.runtime.frame_params,
             state.appearance.camera,
             None,
             1.9,
@@ -1037,15 +1043,15 @@ mod tests {
     #[test]
     fn a_departing_name_and_the_marker_under_it_are_one_rule() {
         let mut state = fresh();
-        state.frame_params.fade_time = 1.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
+        state.runtime.frame_params.fade_time = 1.0;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
         let scene = derive_scene(
-            &state.tracker,
-            &state.tuning,
+            &state.runtime.tracker,
+            &state.runtime.tuning,
             &state.appearance.view,
             &state.appearance.view.reach(),
-            &state.frame_params,
+            &state.runtime.frame_params,
             state.appearance.camera,
             None,
             1.9,
@@ -1084,7 +1090,7 @@ mod tests {
     #[test]
     fn only_the_interactive_copy_draws_the_learn_badge() {
         let mut state = fresh();
-        state.learn_active = true;
+        state.runtime.learn_active = true;
         state.appearance.view.show_labels = false;
         let ctx = themed();
         let screen = egui::vec2(400.0, 400.0);
@@ -1123,20 +1129,20 @@ mod tests {
         let _ = frame_full(&ctx, screen, |ui| {
             draw_lattice(ui, rect, &mut state, 0.0, 1, glam::Vec4::ZERO, None, None);
         });
-        assert_eq!(state.drawn_this_frame, None, "the preview published a window");
+        assert_eq!(state.surfaces.drawn_this_frame, None, "the preview published a window");
 
         let _ = frame_full(&ctx, screen, |ui| {
             let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
             draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, Some(&response), None);
         });
         assert_eq!(
-            state.drawn_this_frame,
+            state.surfaces.drawn_this_frame,
             Some(state.appearance.view.scrolled(&state.appearance.camera, 1.0)),
             "the docked copy published something other than the window it drew",
         );
     }
 
-    /// Picking only touches `state.hovered` for the interactive copy: the
+    /// Picking only touches `state.surfaces.hovered` for the interactive copy: the
     /// preview has no pointer of its own (see [`lattice_pane`]'s own doc
     /// comment), so a non-interactive [`draw_lattice`] call must leave
     /// whatever the docked pane last picked alone rather than clearing it
@@ -1145,7 +1151,7 @@ mod tests {
     fn only_the_interactive_copy_lets_picking_touch_the_hover() {
         let mut state = fresh();
         let home = harmonigraph_core::LatticePos::new(0, 0, 0);
-        state.hovered = Some(home);
+        state.surfaces.hovered = Some(home);
         let ctx = themed();
         let screen = egui::vec2(400.0, 400.0);
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 300.0));
@@ -1155,7 +1161,11 @@ mod tests {
         let _ = frame_full(&ctx, screen, |ui| {
             draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None);
         });
-        assert_eq!(state.hovered, Some(home), "a non-interactive copy must not touch the hover");
+        assert_eq!(
+            state.surfaces.hovered,
+            Some(home),
+            "a non-interactive copy must not touch the hover"
+        );
 
         // A response with no simulated pointer over it: picking runs and
         // reads "not hovering, not dragging", which clears it.
@@ -1164,7 +1174,7 @@ mod tests {
             draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, Some(&response), None);
         });
         assert_eq!(
-            state.hovered, None,
+            state.surfaces.hovered, None,
             "the interactive copy should pick, and clear a stale hover"
         );
     }
@@ -1251,7 +1261,7 @@ mod tests {
         state.appearance.view.sounding_ink = 88.0;
         // A long fade, so the release is a stretch to sample in rather than a
         // frame of it, and the arrival has landed well before the first sample.
-        state.frame_params.fade_time = 1.0;
+        state.runtime.frame_params.fade_time = 1.0;
         assert!(
             state.appearance.view.show_cents,
             "the fresh view draws cents; without them this is one line"
@@ -1261,8 +1271,8 @@ mod tests {
             NoteNames::Past,
             "the fresh view keeps the past, which is what holds a departing name opaque",
         );
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, 60));
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, 60));
 
         // Held, mid-release, and settled onto the record the trail keeps.
         let held = drawn_label(&mut state, 1.9);
@@ -1317,17 +1327,20 @@ mod tests {
     /// The ink comes back as ONE colour with the rest checked against it, so
     /// the "one label, one grey" half of the claim is held here rather than at
     /// each call.
-    fn drawn_label(state: &mut crate::SharedState, secs: f64) -> (egui::Color32, Vec<String>) {
+    fn drawn_label(state: &mut crate::PictureState, secs: f64) -> (egui::Color32, Vec<String>) {
         // Pruned first, as the editor's own frame does: a trail record is
         // written the frame a release finishes, so a sample that only derived
         // would find the kept name still unrecorded and nothing named at all.
-        state.tracker.prune(secs, &state.appearance.view.envelope(&state.frame_params));
+        state
+            .runtime
+            .tracker
+            .prune(secs, &state.appearance.view.envelope(&state.runtime.frame_params));
         let scene = derive_scene(
-            &state.tracker,
-            &state.tuning,
+            &state.runtime.tracker,
+            &state.runtime.tuning,
             &state.appearance.view,
             &state.appearance.view.reach(),
-            &state.frame_params,
+            &state.runtime.frame_params,
             state.appearance.camera,
             None,
             secs,

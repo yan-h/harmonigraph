@@ -146,14 +146,14 @@
 //! It is stepped against the CLOCK rather than per call, exactly as the gate's
 //! fade below is, so the two lattices an editor frame draws step it once and a
 //! 60 fps render and a 144 Hz pane walk one curve. The state lives in
-//! [`SharedState`], which is the whole of what the offline renderer carries
+//! [`PictureState`], which is the whole of what the offline renderer carries
 //! between frames.
 //!
 //! The GATE's answer does carry across frames
 //! ([`RingFade`](harmonigraph_scene::RingFade)), and it is a different thing
 //! being faded: not what a wedge reads but whether the node draws its ring at
 //! all, which is a decision the Fade softens exactly as it softens a note's
-//! own arrival and departure. That state lives in [`SharedState`], which is the
+//! own arrival and departure. That state lives in [`PictureState`], which is the
 //! whole of what the offline renderer carries between frames, and it is stepped
 //! against the CLOCK rather than per call — so the lattice being drawn TWICE in
 //! an editor frame (the docked pane and the Render preview's copy) steps it
@@ -171,7 +171,7 @@ use harmonigraph_scene::{
 
 use super::spectral::axes::{loudness, power_db, spectrogram_level_db};
 use crate::spectrum::SpectrumBuckets;
-use crate::SharedState;
+use crate::PictureState;
 
 /// Cents one analyzer bucket spans: 3.125, the grid everything below counts in.
 const CENTS_PER_BUCKET: f32 = 1200.0 / (12 * BINS_PER_SEMITONE) as f32;
@@ -233,6 +233,14 @@ pub(crate) struct Fold {
 }
 
 impl Fold {
+    pub(crate) fn clamped_width(width: f32) -> f32 {
+        if width.is_finite() {
+            width.clamp(SPECTRAL_WIDTH_MIN, SPECTRAL_WIDTH_MAX)
+        } else {
+            SPECTRAL_WIDTH_MIN
+        }
+    }
+
     /// Measure the frame's floor and fold the kernel over it. `width` is the
     /// kernel's standard deviation in cents
     /// ([`ViewConfig::spectral_width`](harmonigraph_scene::ViewConfig)).
@@ -243,11 +251,7 @@ impl Fold {
     /// than the persist door (a take replay, the offline renderer's layout, a
     /// standalone harness), so the guard belongs where the division is.
     pub(crate) fn measure(levels: &SpectrumBuckets, width: f32) -> Fold {
-        let width = if width.is_finite() {
-            width.clamp(SPECTRAL_WIDTH_MIN, SPECTRAL_WIDTH_MAX)
-        } else {
-            SPECTRAL_WIDTH_MIN
-        };
+        let width = Self::clamped_width(width);
         let sigma = width / CENTS_PER_BUCKET;
 
         // The floor, then the excess over it, both per bucket. One pass each
@@ -384,7 +388,7 @@ impl Fold {
 /// below is a different question and runs after the measuring rather than
 /// instead of it: it holds back the NODES whose wedges say nothing, and needs
 /// the reading to know which those are.)
-pub(crate) fn apply(scene: &mut Scene, state: &mut SharedState, now: f64) {
+pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, now: f64) {
     if !state.appearance.view.spectral_ring_draws() {
         return;
     }
@@ -395,15 +399,13 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut SharedState, now: f64) {
     // through untouched. A `bool` and not a `match` over two arms that
     // would read as a table of readings, where what this settles is one
     // question about one of them.
-    let levels = state.spectrum.display(now);
-    let folded = levels
-        .filter(|_| reading == SpectralReading::Fold)
-        .map(|levels| Fold::measure(levels, state.appearance.view.spectral_width));
-    // With no audio flowing the target is silence rather than nothing at all,
-    // so the reading LEAVES on its own release instead of dropping to the
-    // ramp's floor in one frame the moment the analyzer stops answering.
-    let grid = folded.as_ref().map(Fold::grid).or(levels);
-    state.ring_levels.fill(&mut paint, &cfg, grid, &state.appearance.view, now);
+    let grid = if reading == SpectralReading::Fold {
+        state.runtime.spectrum.folded(now, state.appearance.view.spectral_width)
+    } else {
+        state.runtime.spectrum.display(now)
+    };
+    // Missing audio targets silence, preserving the shared ring release.
+    state.runtime.ring_levels.fill(&mut paint, &cfg, grid, &state.appearance.view, now);
     scene.spectral = paint;
     // Which nodes the ring is worth drawing on, now that there is something to
     // ask it of. Last, and off the scene rather than off the paint above,
@@ -417,8 +419,8 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut SharedState, now: f64) {
     // is one of those layers, so it arrives and leaves on the Fade rather than
     // on a duration of its own. Assembled through `ViewConfig::envelope`, which
     // is the one place the Fade param and the Fade curve are put back together.
-    let env = state.appearance.view.envelope(&state.frame_params);
-    scene.wear_audio_rings(&mut state.ring_fade, &env, now);
+    let env = state.appearance.view.envelope(&state.runtime.frame_params);
+    scene.wear_audio_rings(&mut state.runtime.ring_fade, &env, now);
 }
 
 /// What the ring's wedges READ, carried across frames on the ring's own attack
@@ -525,7 +527,7 @@ impl RingLevels {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::probe::fresh;
+    use crate::tests::probe::fresh_picture as fresh;
     use harmonigraph_core::{spectrum::midi_to_hz, LatticePos, NoteEvent, SourceId, Tuning};
     use harmonigraph_scene::{
         derive_scene, octave_layout, OctaveLayout, ViewConfig, MAX_SPAN, OCTAVE_SLOTS,
@@ -632,8 +634,8 @@ mod tests {
             state.appearance.spectrum.attack = 0.0;
             state.appearance.spectrum.release = 0.0;
             let cfg = state.appearance.spectrum;
-            state.spectrum.push_samples(samples, 1, SR, 1.0, &cfg);
-            let levels = *state.spectrum.display(1.0).expect("a second of audio is enough");
+            state.runtime.spectrum.push_samples(samples, 1, SR, 1.0, &cfg);
+            let levels = *state.runtime.spectrum.display(1.0).expect("a second of audio is enough");
             let view = ViewConfig::default();
             Bench {
                 levels,
@@ -944,14 +946,14 @@ mod tests {
     /// rings where the first settled them (`RingFade` steps against the clock).
     /// Every claim below but one is about a single frame; the one that is not
     /// asks for its own moments through [`scene_of_at`].
-    fn scene_of(state: &mut SharedState) -> Scene {
+    fn scene_of(state: &mut PictureState) -> Scene {
         scene_of_at(state, 1.0)
     }
 
     /// A state with a radial slot for the analyzer ring. The shipped look may
     /// park that width at its floor; the end-to-end ring tests state the layer
     /// they need so their analyzer and gate paths stay reachable.
-    fn ringing() -> SharedState {
+    fn ringing() -> PictureState {
         let mut state = fresh();
         state.appearance.view.spectral_ring_width = 0.1;
         state
@@ -960,13 +962,13 @@ mod tests {
     /// [`scene_of`] at a stated clock, for the claims about how a ring comes
     /// and goes rather than about what it reads. A state carried across two of
     /// these has a fade running through it, exactly as a shell does.
-    fn scene_of_at(state: &mut SharedState, now: f64) -> Scene {
+    fn scene_of_at(state: &mut PictureState, now: f64) -> Scene {
         let mut scene = derive_scene(
-            &state.tracker,
-            &state.tuning,
+            &state.runtime.tracker,
+            &state.runtime.tuning,
             &state.appearance.view,
             &state.appearance.view.reach(),
-            &state.frame_params,
+            &state.runtime.frame_params,
             state.appearance.camera,
             None,
             now,
@@ -991,12 +993,12 @@ mod tests {
     #[test]
     fn either_reading_draws_beside_the_keys_rather_than_instead_of_them() {
         let mut state = ringing();
-        state.frame_params.fade_time = 0.0;
+        state.runtime.frame_params.fade_time = 0.0;
         state.appearance.spectrum.attack = 0.0;
         state.appearance.spectrum.release = 0.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let cfg = state.appearance.spectrum;
-        state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
+        state.runtime.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
 
         // The MIDI picture alone, taken with the ring dialled to no width —
         // its one off switch, and the state every comparison below is against.
@@ -1017,7 +1019,7 @@ mod tests {
             // and for its reason: both scenes are derived at ONE clock, where
             // the ring's envelope holds rather than steps, so a table left
             // carrying the previous reading is handed straight back.
-            state.ring_levels = RingLevels::default();
+            state.runtime.ring_levels = RingLevels::default();
             let both = scene_of(&mut state);
             for (was, now) in midi.nodes.iter().zip(&both.nodes) {
                 let at = was.lattice_pos;
@@ -1074,10 +1076,10 @@ mod tests {
         state.appearance.spectrum.release = 0.0;
         state.appearance.view.spectral_reading = SpectralReading::Spectrum;
         let cfg = state.appearance.spectrum;
-        state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
+        state.runtime.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
 
         let scene = scene_of(&mut state);
-        let grid = state.spectrum.display(1.0).expect("a second of audio is enough");
+        let grid = state.runtime.spectrum.display(1.0).expect("a second of audio is enough");
         let mut checked = 0;
         for (bucket, &power) in grid.iter().enumerate() {
             let want = loudness(&cfg, power, bucket_pitch(bucket));
@@ -1146,17 +1148,17 @@ mod tests {
         state.appearance.spectrum.attack = 0.0;
         state.appearance.spectrum.release = 0.0;
         let cfg = state.appearance.spectrum;
-        state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
+        state.runtime.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
 
         // Each reading measured from a standing start. Both scenes are derived
         // at one clock, where the ring's envelope holds rather than steps (a
         // pane drawn twice in a frame must not run it twice), so without the
         // reset the second reading would be handed back the first one's levels.
         state.appearance.view.spectral_reading = SpectralReading::Fold;
-        state.ring_levels = RingLevels::default();
+        state.runtime.ring_levels = RingLevels::default();
         let folded = scene_of(&mut state);
         state.appearance.view.spectral_reading = SpectralReading::Spectrum;
-        state.ring_levels = RingLevels::default();
+        state.runtime.ring_levels = RingLevels::default();
         let raw = scene_of(&mut state);
         assert!(folded.spectral.folded, "the fold is not read at its wedges' own pitches");
         assert!(!raw.spectral.folded, "the raw reading lost its window across the wedge");
@@ -1219,7 +1221,7 @@ mod tests {
         state.appearance.spectrum.attack = 0.0;
         state.appearance.spectrum.release = 0.0;
         let cfg = state.appearance.spectrum;
-        state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
+        state.runtime.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
         let scene = scene_of(&mut state);
 
         // The ring's ramp is the heatmap's gradient, entry for entry, with its
@@ -1272,8 +1274,8 @@ mod tests {
         for pitch in [36.0f32, 60.0, 72.5, 96.0] {
             let node = harmonigraph_scene::pitch_lut_color(
                 pitch,
-                state.frame_params.darkest_pitch,
-                state.frame_params.brightest_pitch,
+                state.runtime.frame_params.darkest_pitch,
+                state.runtime.frame_params.brightest_pitch,
                 state.appearance.view.pitch_gradient,
             );
             assert_eq!(
@@ -1347,7 +1349,7 @@ mod tests {
         // A full-scale sine at middle C: one partial, so what should ring is
         // the C nodes and nothing else. A saw would light its whole
         // constellation, which is the right picture and a poor test.
-        state.spectrum.push_samples(&sine(60.0), 1, SR, 1.0, &cfg);
+        state.runtime.spectrum.push_samples(&sine(60.0), 1, SR, 1.0, &cfg);
         let scene = scene_of(&mut state);
         let (mut rang, mut dark) = (0, 0);
         for node in &scene.nodes {
@@ -1384,7 +1386,7 @@ mod tests {
         let mut state = ringing();
         // A straight line of a stated length, so half way in is half way
         // along; the fresh curve is not, and this is not the test for it.
-        state.frame_params.fade_time = 1.0;
+        state.runtime.frame_params.fade_time = 1.0;
         state.appearance.view.fade_shape = 0.0;
         state.appearance.spectrum.attack = 0.0;
         state.appearance.spectrum.release = 0.0;
@@ -1408,10 +1410,10 @@ mod tests {
                 .map(|n| n.audio_ring)
                 .fold(0.0f32, f32::max)
         };
-        state.spectrum.push_samples(&sine(60.0), 1, SR, 1.5, &cfg);
+        state.runtime.spectrum.push_samples(&sine(60.0), 1, SR, 1.5, &cfg);
         let half = rung(&scene_of_at(&mut state, 1.5));
         assert!((half - 0.5).abs() < 1e-4, "half a Fade after the tone a C rings {half}");
-        state.spectrum.push_samples(&sine(60.0), 1, SR, 2.5, &cfg);
+        state.runtime.spectrum.push_samples(&sine(60.0), 1, SR, 2.5, &cfg);
         let full = rung(&scene_of_at(&mut state, 2.5));
         assert_eq!(full, 1.0, "a Fade after the tone a C rings {full}");
     }

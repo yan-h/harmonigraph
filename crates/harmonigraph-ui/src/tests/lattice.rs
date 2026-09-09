@@ -11,7 +11,7 @@ use crate::*;
 fn distance_after_wheel_over_lattice(modifiers: egui::Modifiers) -> (f32, f32) {
     let mut state = fresh();
     let mut h = DockHarness::new();
-    let start = state.appearance.camera.distance;
+    let start = state.picture.appearance.camera.distance;
 
     // A point solidly inside the top-left leaf, which holds the Lattice tab
     // alone (see default_dock): past the tab bar, left of the split.
@@ -34,7 +34,7 @@ fn distance_after_wheel_over_lattice(modifiers: egui::Modifiers) -> (f32, f32) {
     });
     h.frame(&mut state, wheel);
 
-    (start, state.appearance.camera.distance)
+    (start, state.picture.appearance.camera.distance)
 }
 
 /// Repro for "mouse-wheel scroll to zoom no longer works": a plain wheel over
@@ -79,7 +79,8 @@ fn a_wheel_over_the_lattice_does_not_end_the_drag_it_is_zooming() {
     h.frame(&mut state, vec![egui::Event::PointerMoved(at + egui::vec2(30.0, 0.0))]);
     assert!(ctx.dragged_id().is_some(), "the press on the lattice started no drag");
 
-    let (moved_to, distance) = (state.appearance.camera.target, state.appearance.camera.distance);
+    let (moved_to, distance) =
+        (state.picture.appearance.camera.target, state.picture.appearance.camera.distance);
     h.frame(
         &mut state,
         vec![egui::Event::MouseWheel {
@@ -90,23 +91,26 @@ fn a_wheel_over_the_lattice_does_not_end_the_drag_it_is_zooming() {
         }],
     );
     assert!(
-        state.appearance.camera.distance < distance,
+        state.picture.appearance.camera.distance < distance,
         "the wheel did not zoom the camera it was over"
     );
     assert!(ctx.dragged_id().is_some(), "the wheel ended the drag it was zooming");
 
     h.frame(&mut state, vec![egui::Event::PointerMoved(at + egui::vec2(60.0, 0.0))]);
-    assert_ne!(state.appearance.camera.target, moved_to, "the drag stopped following the pointer");
+    assert_ne!(
+        state.picture.appearance.camera.target, moved_to,
+        "the drag stopped following the pointer"
+    );
 }
 
 #[test]
 fn learn_step_writes_params_only_when_the_chord_changes() {
     let mut state = fresh();
     let backend = RecordingBackend::default();
-    state.learn_active = true;
+    state.picture.runtime.learn_active = true;
     // Hold C and G (a 12-TET fifth: within learn range of just).
     for note in [60u8, 67] {
-        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+        state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
             0.0,
             harmonigraph_core::SourceId::DIRECT,
             0,
@@ -115,7 +119,7 @@ fn learn_step_writes_params_only_when_the_chord_changes() {
         ));
     }
 
-    learn_step(&mut state, &backend);
+    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
     let first = backend.sets.borrow().clone();
     assert!(
         first.iter().any(|(k, v)| *k == params::ParamKey::Three && *v == 700.0),
@@ -123,14 +127,14 @@ fn learn_step_writes_params_only_when_the_chord_changes() {
     );
 
     // Same chord again: change detection must suppress further writes.
-    learn_step(&mut state, &backend);
+    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
     assert_eq!(backend.sets.borrow().len(), first.len());
 
     // Disarming clears the memory so re-arming re-learns.
-    state.learn_active = false;
-    learn_step(&mut state, &backend);
-    state.learn_active = true;
-    learn_step(&mut state, &backend);
+    state.picture.runtime.learn_active = false;
+    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
+    state.picture.runtime.learn_active = true;
+    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
     assert_eq!(backend.sets.borrow().len(), first.len() * 2);
 }
 
@@ -138,7 +142,7 @@ fn learn_step_writes_params_only_when_the_chord_changes() {
 /// tuning offset (cents). Used to synthesize just vs 12-TET chords.
 fn hold_chord(state: &mut SharedState, notes: &[(u8, f32)]) {
     for &(note, cents) in notes {
-        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+        state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
             0.0,
             harmonigraph_core::SourceId::DIRECT,
             0,
@@ -146,7 +150,7 @@ fn hold_chord(state: &mut SharedState, notes: &[(u8, f32)]) {
             1.0,
         ));
         if cents != 0.0 {
-            state.tracker.handle_event(harmonigraph_core::NoteEvent {
+            state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent {
                 source: harmonigraph_core::SourceId::DIRECT,
                 time: 0.0,
                 channel: 0,
@@ -161,39 +165,39 @@ fn hold_chord(state: &mut SharedState, notes: &[(u8, f32)]) {
 fn learn_enables_meantone_from_a_12tet_triad() {
     let mut state = unlocked();
     let backend = RecordingBackend::default();
-    state.learn_active = true;
+    state.picture.runtime.learn_active = true;
     // Plain 12-TET C-E-G pins a 700¢ fifth and a 400¢ third; since
     // 400 = 4·700 − 2400 this triad IS a meantone.
     hold_chord(&mut state, &[(60, 0.0), (64, 0.0), (67, 0.0)]);
-    learn_step(&mut state, &backend);
-    assert!(state.appearance.view.meantone, "a 12-TET triad should engage meantone");
+    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
+    assert!(state.picture.appearance.view.meantone, "a 12-TET triad should engage meantone");
 }
 
 #[test]
 fn learn_disables_meantone_from_a_just_triad() {
     let mut state = fresh();
     let backend = RecordingBackend::default();
-    state.learn_active = true;
-    state.appearance.view.meantone = true; // start engaged
+    state.picture.runtime.learn_active = true;
+    state.picture.appearance.view.meantone = true; // start engaged
 
     // C + a JUST major third (386.31¢) + G. The just third sits a full
     // syntonic comma below four fifths, so this is not a meantone.
     let just_offset = harmonigraph_core::tuning::FIVE_JUST - 400.0;
     hold_chord(&mut state, &[(60, 0.0), (64, just_offset), (67, 0.0)]);
-    learn_step(&mut state, &backend);
-    assert!(!state.appearance.view.meantone, "a just third should release meantone");
+    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
+    assert!(!state.picture.appearance.view.meantone, "a just third should release meantone");
 }
 
 #[test]
 fn learn_leaves_meantone_unchanged_without_a_third() {
     let mut state = fresh();
     let backend = RecordingBackend::default();
-    state.learn_active = true;
-    state.appearance.view.meantone = true;
+    state.picture.runtime.learn_active = true;
+    state.picture.appearance.view.meantone = true;
     // A bare fifth fixes no third, so the meantone flag is left alone.
     hold_chord(&mut state, &[(60, 0.0), (67, 0.0)]);
-    learn_step(&mut state, &backend);
-    assert!(state.appearance.view.meantone, "a bare fifth shouldn't change the flag");
+    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
+    assert!(state.picture.appearance.view.meantone, "a bare fifth shouldn't change the flag");
 }
 
 /// One switch governs every automatic meantone decision, learn included.
@@ -201,14 +205,17 @@ fn learn_leaves_meantone_unchanged_without_a_third() {
 fn learn_leaves_meantone_alone_when_the_auto_detect_is_off() {
     let mut state = fresh();
     let backend = RecordingBackend::default();
-    state.learn_active = true;
-    state.appearance.view.meantone_auto = false;
-    state.appearance.view.meantone = true;
+    state.picture.runtime.learn_active = true;
+    state.picture.appearance.view.meantone_auto = false;
+    state.picture.appearance.view.meantone = true;
     // The just triad that DOES release the mode with the detect on.
     let just_offset = harmonigraph_core::tuning::FIVE_JUST - 400.0;
     hold_chord(&mut state, &[(60, 0.0), (64, just_offset), (67, 0.0)]);
-    learn_step(&mut state, &backend);
-    assert!(state.appearance.view.meantone, "with the detect off, learn only retunes the axes");
+    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
+    assert!(
+        state.picture.appearance.view.meantone,
+        "with the detect off, learn only retunes the axes"
+    );
 }
 
 /// A backend that answers with a real tuning, which [`RecordingBackend`]
@@ -283,8 +290,8 @@ impl ParamBackend for TuningBackend {
 /// satisfy an "engages" assertion before the path under test runs.
 fn unlocked() -> SharedState {
     let mut state = fresh();
-    state.appearance.view.meantone = false;
-    state.appearance.view.marvel = false;
+    state.picture.appearance.view.meantone = false;
+    state.picture.appearance.view.marvel = false;
     state
 }
 
@@ -294,17 +301,23 @@ fn unlocked() -> SharedState {
 #[test]
 fn a_meantone_tuning_engages_the_mode_by_itself() {
     let mut state = unlocked();
-    assert!(state.appearance.view.meantone_auto, "the auto-detect is on out of the box");
-    assert!(!state.appearance.view.meantone, "and the mode starts off");
+    assert!(state.picture.appearance.view.meantone_auto, "the auto-detect is on out of the box");
+    assert!(!state.picture.appearance.view.meantone, "and the mode starts off");
     let three =
         harmonigraph_core::tuning::THREE_JUST - harmonigraph_core::tuning::SYNTONIC_COMMA / 4.0;
     let params = TuningBackend::new(three, harmonigraph_core::tuning::FIVE_JUST);
-    begin_frame(&mut state, &params, 0.0);
-    assert!(state.appearance.view.meantone, "quarter-comma meantone should engage the mode");
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(
+        state.picture.appearance.view.meantone,
+        "quarter-comma meantone should engage the mode"
+    );
     // Engaging it is only half the job: the lattice has to be using the
     // derived third, exactly, or comma-equivalent nodes stay two pitches.
     let octave = i64::from(harmonigraph_core::tuning::OCTAVE_MICROCENTS);
-    assert_eq!(i64::from(state.tuning.five), 4 * i64::from(state.tuning.three) - 2 * octave,);
+    assert_eq!(
+        i64::from(state.picture.runtime.tuning.five),
+        4 * i64::from(state.picture.runtime.tuning.three) - 2 * octave,
+    );
 }
 
 /// Just intonation keeps the syntonic comma, so nothing engages: this is the
@@ -316,8 +329,11 @@ fn just_intonation_does_not_engage_meantone() {
         harmonigraph_core::tuning::THREE_JUST,
         harmonigraph_core::tuning::FIVE_JUST,
     );
-    begin_frame(&mut state, &params, 0.0);
-    assert!(!state.appearance.view.meantone, "a just third is a comma away from four fifths");
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(
+        !state.picture.appearance.view.meantone,
+        "a just third is a comma away from four fifths"
+    );
 }
 
 /// With the detect off, even 12-TET — which IS a meantone — leaves the mode
@@ -325,13 +341,13 @@ fn just_intonation_does_not_engage_meantone() {
 #[test]
 fn the_auto_detect_off_leaves_the_mode_alone() {
     let mut state = unlocked();
-    state.appearance.view.meantone_auto = false;
+    state.picture.appearance.view.meantone_auto = false;
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET,
     );
-    begin_frame(&mut state, &params, 0.0);
-    assert!(!state.appearance.view.meantone, "the detect is off; nothing should engage");
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(!state.picture.appearance.view.meantone, "the detect is off; nothing should engage");
 }
 
 /// The detect ENGAGES only. Dragging the fifth moves the derived third out
@@ -341,13 +357,16 @@ fn the_auto_detect_off_leaves_the_mode_alone() {
 #[test]
 fn dragging_the_fifth_does_not_drop_an_engaged_meantone() {
     let mut state = fresh();
-    state.appearance.view.meantone = true;
+    state.picture.appearance.view.meantone = true;
     // 4·690 − 2400 = 360¢: the stale third param is 40¢ away, far outside
     // the tolerance, and irrelevant while the lock holds.
     let params = TuningBackend::new(690.0, 400.0);
-    begin_frame(&mut state, &params, 0.0);
-    assert!(state.appearance.view.meantone, "the mode must survive a fifth that moved");
-    assert!((state.tuning.five_cents() - 360.0).abs() < 0.001, "the third follows the fifth");
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(state.picture.appearance.view.meantone, "the mode must survive a fifth that moved");
+    assert!(
+        (state.picture.runtime.tuning.five_cents() - 360.0).abs() < 0.001,
+        "the third follows the fifth"
+    );
 }
 
 /// Releasing by dragging the third writes the dragged value into the param
@@ -364,16 +383,16 @@ fn a_third_dragged_clear_of_the_magnet_stays_released() {
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET + tolerance * 1.5,
     );
-    begin_frame(&mut state, &params, 0.0);
-    assert!(!state.appearance.view.meantone, "past the tolerance nothing pulls it back");
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(!state.picture.appearance.view.meantone, "past the tolerance nothing pulls it back");
     // Just inside, though, and the magnet takes it.
     let mut state = unlocked();
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET + tolerance * 0.5,
     );
-    begin_frame(&mut state, &params, 0.0);
-    assert!(state.appearance.view.meantone, "inside the tolerance the mode engages");
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(state.picture.appearance.view.meantone, "inside the tolerance the mode engages");
 }
 
 /// The switch still means something with the detect on: pressed ON at a
@@ -387,19 +406,22 @@ fn the_switch_snaps_a_non_meantone_tuning_with_the_detect_on() {
         harmonigraph_core::tuning::THREE_JUST,
         harmonigraph_core::tuning::FIVE_JUST,
     );
-    begin_frame(&mut state, &params, 0.0);
-    assert!(!state.appearance.view.meantone, "just intonation is not detected as meantone");
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(!state.picture.appearance.view.meantone, "just intonation is not detected as meantone");
 
     // What the switch does, which is all it does.
-    state.appearance.view.meantone = true;
+    state.picture.appearance.view.meantone = true;
     for frame in 0..3 {
-        begin_frame(&mut state, &params, frame as f64);
-        assert!(state.appearance.view.meantone, "frame {frame} dropped a hand-set lock");
+        begin_frame(&mut state.picture, &params, frame as f64);
+        assert!(state.picture.appearance.view.meantone, "frame {frame} dropped a hand-set lock");
     }
     // Snapped: the lattice's third is four fifths, not the just third the
     // param still holds.
     let octave = i64::from(harmonigraph_core::tuning::OCTAVE_MICROCENTS);
-    assert_eq!(i64::from(state.tuning.five), 4 * i64::from(state.tuning.three) - 2 * octave,);
+    assert_eq!(
+        i64::from(state.picture.runtime.tuning.five),
+        4 * i64::from(state.picture.runtime.tuning.three) - 2 * octave,
+    );
 }
 
 /// And the OFF direction, which is the one the detect could undo — the
@@ -413,15 +435,15 @@ fn the_switch_releases_under_the_detect_until_the_tuning_changes() {
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET,
     );
-    begin_frame(&mut state, &params, 0.0);
-    assert!(state.appearance.view.meantone, "12-TET engages by itself");
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(state.picture.appearance.view.meantone, "12-TET engages by itself");
 
     // The switch, in full: it writes nothing but the flag.
-    state.appearance.view.meantone = false;
+    state.picture.appearance.view.meantone = false;
     for frame in 1..4 {
-        begin_frame(&mut state, &params, frame as f64);
+        begin_frame(&mut state.picture, &params, frame as f64);
         assert!(
-            !state.appearance.view.meantone,
+            !state.picture.appearance.view.meantone,
             "frame {frame} re-engaged a tuning already judged"
         );
     }
@@ -433,8 +455,8 @@ fn the_switch_releases_under_the_detect_until_the_tuning_changes() {
     params.set(params::ParamKey::Three, three);
     params.set(params::ParamKey::Five, harmonigraph_core::tuning::meantone_third(three));
     params.flush();
-    begin_frame(&mut state, &params, 4.0);
-    assert!(state.appearance.view.meantone, "a new meantone tuning should engage again");
+    begin_frame(&mut state.picture, &params, 4.0);
+    assert!(state.picture.appearance.view.meantone, "a new meantone tuning should engage again");
 }
 
 /// Switching the detect ON asks it about the tuning already loaded, which
@@ -446,21 +468,21 @@ fn the_switch_releases_under_the_detect_until_the_tuning_changes() {
 #[test]
 fn switching_the_detect_on_asks_it_about_the_tuning_already_there() {
     let mut state = unlocked();
-    state.appearance.view.meantone_auto = false;
+    state.picture.appearance.view.meantone_auto = false;
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET,
     );
     for frame in 0..3 {
-        begin_frame(&mut state, &params, frame as f64);
+        begin_frame(&mut state.picture, &params, frame as f64);
     }
-    assert!(!state.appearance.view.meantone, "the detect is off; nothing should engage");
+    assert!(!state.picture.appearance.view.meantone, "the detect is off; nothing should engage");
 
     // The Auto switch, in full: the flag and the cleared verdict.
-    state.appearance.view.meantone_auto = true;
-    state.temper_judged[harmonigraph_core::Comma::Syntonic.index()] = None;
-    begin_frame(&mut state, &params, 3.0);
-    assert!(state.appearance.view.meantone, "switching the detect on left 12-TET unjudged");
+    state.picture.appearance.view.meantone_auto = true;
+    state.picture.runtime.temper_judged[harmonigraph_core::Comma::Syntonic.index()] = None;
+    begin_frame(&mut state.picture, &params, 3.0);
+    assert!(state.picture.appearance.view.meantone, "switching the detect on left 12-TET unjudged");
 }
 
 /// A tuning write the host has not reported back must not be judged on the
@@ -477,20 +499,23 @@ fn an_in_flight_tuning_write_is_not_judged_before_it_lands() {
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET,
     );
-    begin_frame(&mut state, &params, 0.0);
-    assert!(state.appearance.view.meantone, "12-TET engages by itself");
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(state.picture.appearance.view.meantone, "12-TET engages by itself");
 
     // What the third bar does when a drag escapes the magnet: drop the mode
     // and write the dragged value. The host has not heard about it yet.
-    state.appearance.view.meantone = false;
+    state.picture.appearance.view.meantone = false;
     params.set(params::ParamKey::Five, harmonigraph_core::tuning::FIVE_12TET + 2.0);
-    begin_frame(&mut state, &params, 1.0);
-    assert!(!state.appearance.view.meantone, "the stale pair re-locked the mode mid-write");
+    begin_frame(&mut state.picture, &params, 1.0);
+    assert!(!state.picture.appearance.view.meantone, "the stale pair re-locked the mode mid-write");
 
     // And once it lands, the pair it lands on is judged on its own terms.
     params.flush();
-    begin_frame(&mut state, &params, 2.0);
-    assert!(!state.appearance.view.meantone, "a third 2¢ off four fifths is not a meantone");
+    begin_frame(&mut state.picture, &params, 2.0);
+    assert!(
+        !state.picture.appearance.view.meantone,
+        "a third 2¢ off four fifths is not a meantone"
+    );
 }
 
 /// The septimal comma's detect, on the tuning every project opens at: 12-TET
@@ -500,26 +525,30 @@ fn an_in_flight_tuning_write_is_not_judged_before_it_lands() {
 #[test]
 fn a_marvel_tuning_engages_the_mode_by_itself() {
     let mut state = unlocked();
-    assert!(state.appearance.view.marvel_auto, "the septimal detect is on out of the box");
-    assert!(!state.appearance.view.marvel, "and the mode starts off");
+    assert!(state.picture.appearance.view.marvel_auto, "the septimal detect is on out of the box");
+    assert!(!state.picture.appearance.view.marvel, "and the mode starts off");
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET,
     )
     .with_seven(harmonigraph_core::tuning::SEVEN_12TET);
-    begin_frame(&mut state, &params, 0.0);
-    assert!(state.appearance.view.marvel, "12-TET tempers out the septimal kleisma too");
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(state.picture.appearance.view.marvel, "12-TET tempers out the septimal kleisma too");
     // Engaging it is only half the job: the lattice has to be using the
     // derived seventh, exactly, or the sevens sheet stays a separate set of
     // pitches from the home sheet it now spells as.
     let octave = i64::from(harmonigraph_core::tuning::OCTAVE_MICROCENTS);
     assert_eq!(
-        i64::from(state.tuning.seven),
-        2 * i64::from(state.tuning.three) + 2 * i64::from(state.tuning.five) - octave,
+        i64::from(state.picture.runtime.tuning.seven),
+        2 * i64::from(state.picture.runtime.tuning.three)
+            + 2 * i64::from(state.picture.runtime.tuning.five)
+            - octave,
     );
     // Which is the whole point: 7/4 and ten fifths are one pitch class.
-    let seventh = state.tuning.pitch_class(harmonigraph_core::LatticePos::new(0, 0, 1));
-    let tenth_fifth = state.tuning.pitch_class(harmonigraph_core::LatticePos::new(10, 0, 0));
+    let seventh =
+        state.picture.runtime.tuning.pitch_class(harmonigraph_core::LatticePos::new(0, 0, 1));
+    let tenth_fifth =
+        state.picture.runtime.tuning.pitch_class(harmonigraph_core::LatticePos::new(10, 0, 0));
     assert_eq!(seventh, tenth_fifth);
 }
 
@@ -534,9 +563,9 @@ fn just_intonation_does_not_engage_marvel() {
         harmonigraph_core::tuning::FIVE_JUST,
     )
     .with_seven(harmonigraph_core::tuning::SEVEN_JUST);
-    begin_frame(&mut state, &params, 0.0);
-    assert!(!state.appearance.view.marvel, "a just seventh is a kleisma away");
-    assert!(!state.appearance.view.meantone, "and a just third a syntonic comma away");
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(!state.picture.appearance.view.marvel, "a just seventh is a kleisma away");
+    assert!(!state.picture.appearance.view.meantone, "and a just third a syntonic comma away");
 }
 
 /// The two locks compose, and the order is what makes them: the septimal
@@ -551,18 +580,18 @@ fn the_two_locks_compose_into_septimal_meantone() {
     let three =
         harmonigraph_core::tuning::THREE_JUST - harmonigraph_core::tuning::SYNTONIC_COMMA / 4.0;
     let params = TuningBackend::new(three, harmonigraph_core::tuning::FIVE_JUST).with_seven(940.0);
-    state.appearance.view.marvel = true;
-    begin_frame(&mut state, &params, 0.0);
-    assert!(state.appearance.view.meantone, "quarter-comma engages the syntonic lock");
+    state.picture.appearance.view.marvel = true;
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(state.picture.appearance.view.meantone, "quarter-comma engages the syntonic lock");
     let octave = i64::from(harmonigraph_core::tuning::OCTAVE_MICROCENTS);
     assert_eq!(
-        i64::from(state.tuning.seven),
-        10 * i64::from(state.tuning.three) - 5 * octave,
+        i64::from(state.picture.runtime.tuning.seven),
+        10 * i64::from(state.picture.runtime.tuning.three) - 5 * octave,
         "the seventh follows the DERIVED third, not the param",
     );
     // 965.78¢, three cents under the just seventh: septimal meantone's own
     // seventh, which is what makes it spell as the augmented sixth.
-    assert!((state.tuning.seven_cents() - 965.784).abs() < 0.01);
+    assert!((state.picture.runtime.tuning.seven_cents() - 965.784).abs() < 0.01);
 }
 
 /// Each comma's detect judges only the axes its own identity reads. A seventh
@@ -574,29 +603,32 @@ fn the_two_locks_compose_into_septimal_meantone() {
 fn a_seventh_that_moves_does_not_re_open_the_meantone_question() {
     let mut state = unlocked();
     // The septimal mode is not what this is about; leave it out of the way.
-    state.appearance.view.marvel_auto = false;
+    state.picture.appearance.view.marvel_auto = false;
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET,
     )
     .with_seven(harmonigraph_core::tuning::SEVEN_12TET);
-    begin_frame(&mut state, &params, 0.0);
-    assert!(state.appearance.view.meantone, "12-TET engages by itself");
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(state.picture.appearance.view.meantone, "12-TET engages by itself");
 
-    state.appearance.view.meantone = false;
+    state.picture.appearance.view.meantone = false;
     for (frame, seven) in [(1.0, 900.0), (2.0, 1010.0)] {
         params.set(params::ParamKey::Seven, seven);
         params.flush();
-        begin_frame(&mut state, &params, frame);
-        assert!(!state.appearance.view.meantone, "a seventh at {seven}¢ re-locked the meantone");
+        begin_frame(&mut state.picture, &params, frame);
+        assert!(
+            !state.picture.appearance.view.meantone,
+            "a seventh at {seven}¢ re-locked the meantone"
+        );
     }
     // The fifth or the third moving IS a fresh question, and this one is
     // still a meantone.
     params.set(params::ParamKey::Three, 700.5);
     params.set(params::ParamKey::Five, 402.0);
     params.flush();
-    begin_frame(&mut state, &params, 3.0);
-    assert!(state.appearance.view.meantone, "402 = 4·700.5 − 2400 is a meantone again");
+    begin_frame(&mut state.picture, &params, 3.0);
+    assert!(state.picture.appearance.view.meantone, "402 = 4·700.5 − 2400 is a meantone again");
 }
 
 /// The septimal lock survives its own axes moving, for the reason the
@@ -606,14 +638,14 @@ fn a_seventh_that_moves_does_not_re_open_the_meantone_question() {
 #[test]
 fn dragging_the_fifth_does_not_drop_an_engaged_marvel() {
     let mut state = unlocked();
-    state.appearance.view.marvel = true;
+    state.picture.appearance.view.marvel = true;
     // 2·690 + 2·400 − 1200 = 980¢: the stale seventh param is 20¢ away and
     // irrelevant while the lock holds.
     let params = TuningBackend::new(690.0, 400.0).with_seven(1000.0);
-    begin_frame(&mut state, &params, 0.0);
-    assert!(state.appearance.view.marvel, "the mode must survive a fifth that moved");
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(state.picture.appearance.view.marvel, "the mode must survive a fifth that moved");
     assert!(
-        (state.tuning.seven_cents() - 980.0).abs() < 0.001,
+        (state.picture.runtime.tuning.seven_cents() - 980.0).abs() < 0.001,
         "the seventh follows the fifth and third",
     );
 }
@@ -624,13 +656,13 @@ fn dragging_the_fifth_does_not_drop_an_engaged_marvel() {
 fn learn_enables_marvel_from_a_12tet_seventh() {
     let mut state = unlocked();
     let backend = RecordingBackend::default();
-    state.learn_active = true;
+    state.picture.runtime.learn_active = true;
     // C-E-G-B♭ in plain 12-TET: a 700¢ fifth, a 400¢ third and a 1000¢
     // seventh, which is 2·700 + 2·400 − 1200 exactly.
     hold_chord(&mut state, &[(60, 0.0), (64, 0.0), (67, 0.0), (70, 0.0)]);
-    learn_step(&mut state, &backend);
-    assert!(state.appearance.view.marvel, "a 12-TET seventh chord tempers out 225/224");
-    assert!(state.appearance.view.meantone, "and 81/80 with it");
+    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
+    assert!(state.picture.appearance.view.marvel, "a 12-TET seventh chord tempers out 225/224");
+    assert!(state.picture.appearance.view.meantone, "and 81/80 with it");
 }
 
 /// A chord with no seventh in it fixes nothing about the septimal comma, so
@@ -640,13 +672,13 @@ fn learn_enables_marvel_from_a_12tet_seventh() {
 fn learn_leaves_marvel_unchanged_without_a_seventh() {
     let mut state = fresh();
     let backend = RecordingBackend::default();
-    state.learn_active = true;
-    state.appearance.view.marvel = true;
+    state.picture.runtime.learn_active = true;
+    state.picture.appearance.view.marvel = true;
     let just_offset = harmonigraph_core::tuning::FIVE_JUST - 400.0;
     hold_chord(&mut state, &[(60, 0.0), (64, just_offset), (67, 0.0)]);
-    learn_step(&mut state, &backend);
-    assert!(state.appearance.view.marvel, "a triad shouldn't change the septimal flag");
-    assert!(!state.appearance.view.meantone, "the just third still releases meantone");
+    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
+    assert!(state.picture.appearance.view.marvel, "a triad shouldn't change the septimal flag");
+    assert!(!state.picture.appearance.view.meantone, "the just third still releases meantone");
 }
 
 /// One comma's mode switch is not a tuning edit, so it must not re-open
@@ -661,20 +693,23 @@ fn releasing_meantone_does_not_re_engage_a_switched_off_marvel() {
     // meantone engages — and far enough that the raw third and the derived
     // one are different numbers, which is what the verdict must not read.
     let params = TuningBackend::new(700.0, 400.1).with_seven(1000.0);
-    begin_frame(&mut state, &params, 0.0);
-    assert!(state.appearance.view.meantone, "a third inside the tolerance engages meantone");
-    assert!(state.appearance.view.marvel, "and 1000 = 2·700 + 2·400 − 1200 engages marvel");
+    begin_frame(&mut state.picture, &params, 0.0);
+    assert!(
+        state.picture.appearance.view.meantone,
+        "a third inside the tolerance engages meantone"
+    );
+    assert!(state.picture.appearance.view.marvel, "and 1000 = 2·700 + 2·400 − 1200 engages marvel");
 
     // Both switches, in full: two flags, no tuning write.
-    state.appearance.view.marvel = false;
-    state.appearance.view.meantone = false;
+    state.picture.appearance.view.marvel = false;
+    state.picture.appearance.view.meantone = false;
     for frame in 1..4 {
-        begin_frame(&mut state, &params, frame as f64);
+        begin_frame(&mut state.picture, &params, frame as f64);
         assert!(
-            !state.appearance.view.marvel,
+            !state.picture.appearance.view.marvel,
             "frame {frame}: a released meantone re-locked marvel"
         );
-        assert!(!state.appearance.view.meantone, "frame {frame}: meantone came back too");
+        assert!(!state.picture.appearance.view.meantone, "frame {frame}: meantone came back too");
     }
 }
 
@@ -687,15 +722,18 @@ fn releasing_meantone_does_not_re_engage_a_switched_off_marvel() {
 fn learn_measures_the_septimal_comma_against_the_derived_third() {
     let mut state = unlocked();
     let backend = RecordingBackend::default();
-    state.learn_active = true;
+    state.picture.runtime.learn_active = true;
     // A 700¢ fifth, a third 0.4¢ sharp, a seventh 0.6¢ sharp. The third is
     // inside the meantone tolerance, so the lattice's third becomes 400.0 and
     // the marvel seventh 1000.0 — which the played 1000.6 misses by 0.6¢.
     hold_chord(&mut state, &[(60, 0.0), (64, 0.4), (67, 0.0), (70, 0.6)]);
-    learn_step(&mut state, &backend);
-    assert!(state.appearance.view.meantone, "a third 0.4¢ off four fifths is still a meantone");
+    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
     assert!(
-        !state.appearance.view.marvel,
+        state.picture.appearance.view.meantone,
+        "a third 0.4¢ off four fifths is still a meantone"
+    );
+    assert!(
+        !state.picture.appearance.view.marvel,
         "the seventh is 0.6¢ off the derived third's marvel seventh, not 0.2¢ off the played one",
     );
 }
@@ -715,9 +753,9 @@ fn a_seventh_dragged_clear_of_the_magnet_stays_released() {
             harmonigraph_core::tuning::FIVE_12TET,
         )
         .with_seven(harmonigraph_core::tuning::SEVEN_12TET + offset);
-        begin_frame(&mut state, &params, 0.0);
+        begin_frame(&mut state.picture, &params, 0.0);
         assert_eq!(
-            state.appearance.view.marvel, engaged,
+            state.picture.appearance.view.marvel, engaged,
             "a seventh {offset}¢ off the derived one"
         );
     }
@@ -735,10 +773,10 @@ fn a_seventh_dragged_clear_of_the_magnet_stays_released() {
 #[test]
 fn the_window_the_lattice_drew_reaches_the_panes_that_describe_it() {
     let mut state = fresh();
-    assert!(state.drawn.is_none(), "nothing has drawn yet");
+    assert!(state.picture.surfaces.drawn.is_none(), "nothing has drawn yet");
     assert_eq!(
-        state.shown(),
-        state.appearance.view.reach(),
+        state.picture.shown(),
+        state.picture.appearance.view.reach(),
         "with no picture to describe, the reach is what there is",
     );
 
@@ -746,21 +784,25 @@ fn the_window_the_lattice_drew_reaches_the_panes_that_describe_it() {
     h.frame(&mut state, Vec::new());
     h.frame(&mut state, Vec::new());
 
-    let drawn = state.drawn.expect("the docked lattice published no window");
-    assert_eq!(state.shown(), drawn, "the readers are not being given the picture's window");
+    let drawn = state.picture.surfaces.drawn.expect("the docked lattice published no window");
+    assert_eq!(
+        state.picture.shown(),
+        drawn,
+        "the readers are not being given the picture's window"
+    );
     assert_ne!(
         drawn,
-        state.appearance.view.reach(),
+        state.picture.appearance.view.reach(),
         "the published window is the reach, so nothing says it came from a camera",
     );
     // The docked pane's own, at the docked pane's own aspect — a window a
     // dock leaf of this shape really produces, not the whole editor's.
     assert!(
-        drawn.count() < state.appearance.view.reach().count(),
+        drawn.count() < state.picture.appearance.view.reach().count(),
         "the lattice leaf is a fraction of the window, so its cabinet view is \
          well inside the reach: {} nodes against {}",
         drawn.count(),
-        state.appearance.view.reach().count(),
+        state.picture.appearance.view.reach().count(),
     );
 }
 
@@ -775,11 +817,11 @@ fn the_lattice_pane_paints_the_ground_it_hands_the_scene() {
     let mut state = fresh();
     let screen = egui::vec2(600.0, 500.0);
     let shapes = super::probe::painted_full(screen, |ui| {
-        crate::draw_pane(ui, Pane::Lattice, &mut state, 0.0, 0);
+        crate::draw_pane(ui, Pane::Lattice, &mut state.picture, 0.0, 0);
     })
     .shapes;
 
-    let ground = state.background_ink();
+    let ground = state.picture.background_ink();
     assert_eq!(
         ground,
         crate::theme::well(),
@@ -813,10 +855,10 @@ fn the_pane_paints_the_shells_ground_rather_than_the_skins() {
     let mut state = fresh();
     // Nothing in the skin, so a fill that went to the theme cannot match it
     // by coincidence.
-    state.set_background((7, 9, 11));
+    state.picture.set_background((7, 9, 11));
     let screen = egui::vec2(600.0, 500.0);
     let shapes = super::probe::painted_full(screen, |ui| {
-        crate::draw_pane(ui, Pane::Lattice, &mut state, 0.0, 0);
+        crate::draw_pane(ui, Pane::Lattice, &mut state.picture, 0.0, 0);
     })
     .shapes;
 

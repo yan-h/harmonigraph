@@ -5,18 +5,22 @@
 use super::section;
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, GradientPreview, RangeBar, SpectrumBar, SpreadBar};
-use crate::SharedState;
+use crate::AppearanceDocument;
 use harmonigraph_scene::ViewConfig;
 
 /// MIDI colors and their pitch range, then audio colors and their level range.
-pub(super) fn color_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
+pub(super) fn color_pane(
+    ui: &mut egui::Ui,
+    appearance: &mut AppearanceDocument,
+    params: &dyn ParamBackend,
+) {
     ui.heading("MIDI note colors");
     // The gradient above the range because it is the coarser of the two: it
     // says what the colors ARE, the range says which pitches they are spread
     // over. Both feed the one table every pitch-colored shape reads, so a
     // change here repaints the discs, the octave glyphs, the trail and the
     // piano roll together.
-    spectrum_group(ui, &mut state.appearance.view);
+    spectrum_group(ui, &mut appearance.view);
     super::param_range_bar(
         ui,
         params,
@@ -32,7 +36,7 @@ pub(super) fn color_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
                  Drag an end to resize, or the middle to shift both.",
     );
     section(ui, "Audio level colors");
-    spectrogram_gradient_group(ui, &mut state.appearance.spectrum);
+    spectrogram_gradient_group(ui, &mut appearance.spectrum);
 }
 
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {

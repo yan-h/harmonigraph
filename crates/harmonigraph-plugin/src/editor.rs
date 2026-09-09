@@ -94,16 +94,7 @@ impl ClockMapper {
 /// and the GUI thread. Lives for the whole plugin lifetime; the editor
 /// window may open and close many times around it.
 pub struct EditorShared {
-    consumer: harmonigraph_record::publication::Consumer,
-    /// Interleaved input frames from the audio thread (Spectral pane analyzer);
-    /// `audio_channels` samples each.
-    audio_consumer: rtrb::Consumer<f32>,
-    /// Sample rate of those samples, as f32 bits (see the plugin struct).
-    sample_rate_bits: Arc<AtomicU32>,
-    /// Channels per frame in `audio_consumer`, as the audio thread last saw the
-    /// bus. Read every drain, never cached: de-interleaving by a stale count
-    /// would read one channel as two.
-    audio_channels: Arc<AtomicU32>,
+    pub(crate) input: LiveInput,
     /// Crate-visible because [`crate::background`] shares this state with the
     /// frame, and shares more of it than a drainer would need: it applies the
     /// host's restored blob through this field WHOLE — dock, camera, view and
@@ -112,14 +103,6 @@ pub struct EditorShared {
     /// failure to start into the same console. Its tests read back the history
     /// it filled.
     pub(crate) ui: SharedState,
-    /// GUI clock epoch; audio event times are mapped onto this clock.
-    start: Instant,
-    /// Audio->GUI clock mapping (see ClockMapper).
-    clock: ClockMapper,
-    /// Reused per-frame drain scratch (events are batched so the clock
-    /// observation can use the newest timestamp before mapping).
-    /// Reused per-frame audio drain scratch.
-    audio_buf: Vec<f32>,
     /// When the previous GUI update ran; used to detect event-loop stalls.
     last_frame: Option<Instant>,
     /// Param key currently inside a begin_set/end_set automation gesture.
@@ -150,14 +133,16 @@ impl EditorShared {
         take_events: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
         EditorShared {
-            consumer,
-            audio_consumer,
-            sample_rate_bits,
-            audio_channels,
+            input: LiveInput {
+                consumer,
+                audio_consumer,
+                sample_rate_bits,
+                audio_channels,
+                start: Instant::now(),
+                clock: ClockMapper::new(),
+                audio_buf: Vec::new(),
+            },
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
-            start: Instant::now(),
-            clock: ClockMapper::new(),
-            audio_buf: Vec::new(),
             last_frame: None,
             gesture: std::cell::Cell::new(None),
             take,
@@ -166,30 +151,6 @@ impl EditorShared {
             take_last_count: 0,
             take_still_frames: 0,
         }
-    }
-
-    /// The host sample rate the audio thread published, as an f32. It lives
-    /// in an `AtomicU32` as the f32's bit pattern (a lock-free f32); this
-    /// names the bit-cast so its readers can't spell it inconsistently.
-    fn sample_rate(&self) -> f32 {
-        f32::from_bits(self.sample_rate_bits.load(Ordering::Relaxed))
-    }
-
-    /// Channels per frame in the audio ring (at least one).
-    fn audio_channels(&self) -> usize {
-        (self.audio_channels.load(Ordering::Relaxed) as usize).max(1)
-    }
-
-    /// Drain exactly what the process callback sent to the live analyzer.
-    /// Test-only because production has two clocked drainers, below and in
-    /// [`crate::background`], that also maintain the analyzer state around it.
-    #[cfg(test)]
-    pub(crate) fn drain_analysis_audio_for_test(&mut self) -> Vec<f32> {
-        let mut samples = Vec::new();
-        while let Ok(sample) = self.audio_consumer.pop() {
-            samples.push(sample);
-        }
-        samples
     }
 
     /// Frames the transport must be still before OnTransportStop ends a
@@ -204,9 +165,9 @@ impl EditorShared {
     fn sync_take(&mut self, sample_rate: f32) {
         // The plugin can record; the control is hidden in shells that
         // can't (the standalone uses an env var instead).
-        self.ui.take.supported = true;
+        self.ui.workspace.interaction.take.supported = true;
         let recording = self.take.is_recording();
-        if self.ui.take.recording && !recording {
+        if self.ui.workspace.interaction.take.recording && !recording {
             // Start from the CURRENT look, not the last-saved one: what
             // is on screen right now is what the render should reproduce.
             self.take_events.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -215,26 +176,27 @@ impl EditorShared {
             // render uses the selected analysis input as the spectrogram,
             // aligned to the picture by construction (no bounce, no offset).
             // Silent-but-harmless if no audio reaches that input.
-            self.take.start(sample_rate, self.ui.appearance.serialize(), true);
-        } else if !self.ui.take.recording && recording {
-            self.take
-                .stop(harmonigraph_record::RenderRequest::from_config(&self.ui.appearance.render));
+            self.take.start(sample_rate, self.ui.picture.appearance.serialize(), true);
+        } else if !self.ui.workspace.interaction.take.recording && recording {
+            self.take.stop(harmonigraph_record::RenderRequest::from_config(
+                &self.ui.picture.appearance.render,
+            ));
         }
 
         // "Re-render take": render the last finished take with the CURRENT settings.
         // The appearance rides along as --appearance, so the frame, bounce, and
         // offset dialed in after recording all reach the video.
-        self.ui.take.last_ready = self.take.last_take().is_some();
-        if std::mem::take(&mut self.ui.take.render_now) {
+        self.ui.workspace.interaction.take.last_ready = self.take.last_take().is_some();
+        if std::mem::take(&mut self.ui.workspace.interaction.take.render_now) {
             self.take.render_now(harmonigraph_record::RenderRequest::render_now(
-                &self.ui.appearance.render,
-                self.ui.appearance.serialize(),
+                &self.ui.picture.appearance.render,
+                self.ui.picture.appearance.serialize(),
             ));
         }
 
         // "Cancel render": stop the renderer and drop the part-written video.
         // Nothing about the take, so the button above can start another.
-        if std::mem::take(&mut self.ui.take.cancel_render) {
+        if std::mem::take(&mut self.ui.workspace.interaction.take.cancel_render) {
             self.take.cancel_render();
         }
 
@@ -245,7 +207,7 @@ impl EditorShared {
         self.take_rolling = self.take.is_rolling();
 
         // Whether a backward jump ends the take on the audio thread.
-        let ends_at_rewind = self.ui.appearance.render.trigger.ends_at_rewind();
+        let ends_at_rewind = self.ui.picture.appearance.render.trigger.ends_at_rewind();
         self.take.set_end_at_rewind(ends_at_rewind);
 
         // The audio thread saw the transport go backwards and ended the take
@@ -256,16 +218,18 @@ impl EditorShared {
         // the debounce runs out, and whatever the transport does next would
         // otherwise open a pass that ends up being the one rendered.
         if self.take.is_recording() && ends_at_rewind && self.take.hit_rewind() {
-            self.ui.take.recording = false;
-            self.take
-                .stop(harmonigraph_record::RenderRequest::from_config(&self.ui.appearance.render));
+            self.ui.workspace.interaction.take.recording = false;
+            self.take.stop(harmonigraph_record::RenderRequest::from_config(
+                &self.ui.picture.appearance.render,
+            ));
         }
 
         // "The take is done" as soon as the transport stops, if asked —
         // so a play-through or an audio export yields a video with
         // nothing further to click.
         if self.take.is_recording()
-            && self.ui.appearance.render.trigger == harmonigraph_ui::RenderTrigger::OnTransportStop
+            && self.ui.picture.appearance.render.trigger
+                == harmonigraph_ui::RenderTrigger::OnTransportStop
         {
             // Only after something was actually captured: arming ahead of
             // the downbeat must not immediately end the take.
@@ -274,9 +238,9 @@ impl EditorShared {
             } else {
                 self.take_still_frames += 1;
                 if self.take_still_frames >= Self::STOP_FRAMES {
-                    self.ui.take.recording = false;
+                    self.ui.workspace.interaction.take.recording = false;
                     self.take.stop(harmonigraph_record::RenderRequest::from_config(
-                        &self.ui.appearance.render,
+                        &self.ui.picture.appearance.render,
                     ));
                 }
             }
@@ -284,13 +248,13 @@ impl EditorShared {
             self.take_still_frames = 0;
         }
         self.take.tick(self.take_rolling, count);
-        self.ui.take.status = self.take.status();
-        self.ui.take.render_progress = self.take.render_progress();
+        self.ui.workspace.interaction.take.status = self.take.status();
+        self.ui.workspace.interaction.take.render_progress = self.take.render_progress();
         // The shell may have refused to start (unwritable directory);
         // don't leave the indicator claiming otherwise.
-        self.ui.take.recording = self.take.is_recording();
+        self.ui.workspace.interaction.take.recording = self.take.is_recording();
         // Steady dot vs. breathing one: whether capture is actually happening.
-        self.ui.take.rolling = self.take_rolling;
+        self.ui.workspace.interaction.take.rolling = self.take_rolling;
     }
 
     /// Record a GUI frame, logging a console warning when the event loop
@@ -300,117 +264,12 @@ impl EditorShared {
         let gap = self.last_frame.map(|t| t.elapsed().as_secs_f64());
         self.last_frame = Some(Instant::now());
         if let Some(gap) = gap.filter(|g| *g > 0.1) {
-            self.ui.console.log(format!("frame stall: {:.0} ms between updates", gap * 1000.0));
+            self.ui
+                .picture
+                .runtime
+                .console
+                .log(format!("frame stall: {:.0} ms between updates", gap * 1000.0));
         }
-    }
-
-    /// Drain note events from the audio thread into the tracker, mapping
-    /// their sample-clock timestamps onto the GUI clock. A fresh audio
-    /// heartbeat anchors the whole stream before historical records are
-    /// mapped; delayed batches never reset that anchor. Returns true when
-    /// events arrived, in which case the
-    /// caller should repaint this tick rather than at the idle poll.
-    fn drain_into_tracker(&mut self, now: f64) -> bool {
-        if let Some(observation) = self.consumer.clock() {
-            self.clock.observe(observation, now);
-        }
-        let Some(offset) = self.clock.offset else { return false };
-        let tracker = &mut self.ui.tracker;
-        self.consumer.drain(|delivery, _| {
-            if let harmonigraph_record::publication::Delivery::Event(event) = delivery {
-                let result = tracker.handle_canonical_mapped(event, offset);
-                debug_assert!(result.is_ok(), "validated canonical publication");
-            }
-            true
-        }) != 0
-    }
-
-    /// Drain the audio sample ring into the spectrum analyzer.
-    ///
-    /// Always drains AND always feeds. There is no display state that makes the
-    /// samples unwanted: the curve and the spectrogram read this one analyzer,
-    /// the curve is always drawn, and feeding it is also what drives smooth
-    /// repaint (via `is_flowing`). Draining without feeding would only leave the
-    /// ring holding stale audio to burst later — and gating the feed on
-    /// something being on screen is what [`crate::background`] exists to say is
-    /// wrong, since the whole point there is to analyze when nothing shows it.
-    fn drain_audio(&mut self, now: f64) {
-        self.audio_buf.clear();
-        while let Ok(sample) = self.audio_consumer.pop() {
-            self.audio_buf.push(sample);
-        }
-        if !self.audio_buf.is_empty() {
-            let sample_rate = self.sample_rate();
-            let channels = self.audio_channels();
-            let config = self.ui.appearance.spectrum;
-            self.ui.spectrum.push_samples(&self.audio_buf, channels, sample_rate, now, &config);
-        }
-    }
-
-    /// The clock everything the editor stamps is measured on: seconds since
-    /// the PLUGIN was instantiated, not since the window opened.
-    ///
-    /// That distinction is what makes a closed window recoverable at all. The
-    /// clock runs across one, so a column analyzed while nothing was drawing
-    /// lands on the same axis as the columns either side of it, and the
-    /// heatmap has no seam to hide.
-    pub(crate) fn now(&self) -> f64 {
-        self.start.elapsed().as_secs_f64()
-    }
-
-    /// Drain both audio-thread rings onto that clock — notes into the tracker,
-    /// samples into the analyzer — and say whether any note arrived.
-    ///
-    /// A frame calls this, and so does [`crate::background`] while the window
-    /// is closed. That they share ONE path is the property the whole
-    /// closed-window capture rests on: a second, parallel analyzer would give
-    /// back a heatmap on its own hop grid, its own anchor and its own window,
-    /// and nothing on screen would say which stretch came from which. Here the
-    /// picture is the same picture whether or not anyone was watching it
-    /// arrive.
-    ///
-    /// The notes are drained FIRST so a frame can ask for its repaint before
-    /// spending the audio's FFTs; the two are otherwise independent.
-    ///
-    /// This is HALF of what a drain owes the tracker. Feeding it is here;
-    /// ageing it is in [`harmonigraph_ui::begin_frame`], which a frame reaches
-    /// through `root_ui` and a caller that never draws does not reach at all.
-    /// Anything draining without going on to draw wants
-    /// [`catch_up_unwatched`](Self::catch_up_unwatched) instead.
-    pub(crate) fn catch_up(&mut self, now: f64) -> bool {
-        let notes = self.drain_into_tracker(now);
-        self.drain_audio(now);
-        notes
-    }
-
-    /// The whole of what a drain owes when no frame will follow it: both rings
-    /// taken, and then the tracker aged.
-    ///
-    /// Ageing is not optional bookkeeping. Every note-off parks a voice in
-    /// `NoteTracker`'s released tail, and [`prune`] is the only
-    /// thing that empties it — so a drainer that fed the tail without pruning
-    /// would grow it for as long as the plugin ran, which is exactly the
-    /// accumulation `notes.rs` designs its envelope around ("the released tail
-    /// would accumulate for the whole session against an O(nodes x voices)
-    /// loop"). The roll's own age trim rides on the same call.
-    ///
-    /// It lives here rather than inside [`catch_up`](Self::catch_up) so a frame
-    /// keeps pruning EXACTLY once, in `begin_frame`, against the parameter
-    /// mirrors that frame just refreshed. Pruning on the way in as well would
-    /// judge the fade against the previous frame's envelope, and a fade time
-    /// being dragged UPWARD would drop voices that the new, longer envelope
-    /// still has something to draw.
-    ///
-    /// The envelope here is whatever the last frame left behind — its default
-    /// until one has run. That is the right stale value to hold: it is the fade
-    /// the picture was last drawn with, and the alternative is not ageing at
-    /// all.
-    ///
-    /// [`prune`]: harmonigraph_core::NoteTracker::prune
-    pub(crate) fn catch_up_unwatched(&mut self, now: f64) {
-        self.catch_up(now);
-        let envelope = self.ui.appearance.view.envelope(&self.ui.frame_params);
-        self.ui.tracker.prune(now, &envelope);
     }
 }
 
@@ -446,19 +305,19 @@ fn frame(
     let shared = &mut *guard;
 
     if let Some(snapshot) = state.params.session.get().and_then(|s| s.neighbourhood()) {
-        shared.ui.neighbourhood.update(snapshot);
-        if shared.ui.neighbourhood.computing {
+        shared.ui.picture.runtime.neighbourhood.update(snapshot);
+        if shared.ui.picture.runtime.neighbourhood.computing {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
         }
     }
     shared.note_frame();
 
-    let now = shared.now();
-    if shared.catch_up(now) {
+    let now = shared.input.now();
+    if shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now) {
         // New MIDI must render this tick, not at the idle poll.
         ui.ctx().request_repaint();
     }
-    let sample_rate = shared.sample_rate();
+    let sample_rate = shared.input.sample_rate();
     shared.sync_take(sample_rate);
 
     let backend = PluginParamBackend {
@@ -475,7 +334,7 @@ fn frame(
     // compiler names, not a line nobody misses — the overlay would otherwise
     // show it as a steady zero, which reads as a cost that isn't there.
     // `shell_ms` comes last because it measures everything above it.
-    shared.ui.instruments.timings = harmonigraph_perf::ShellTimings {
+    shared.ui.picture.instruments.timings = harmonigraph_perf::ShellTimings {
         tess_ms: queue.tess_ms(),
         egui_gpu_ms: queue.egui_gpu_ms(),
         acquire_ms: queue.acquire_ms(),
@@ -519,7 +378,7 @@ fn frame(
     // effect on the next tick rather than the one after it. The lock is
     // released first because what is armed is a fact about the WINDOW rather
     // than about the state behind it (see [`WindowState::frame_interval`]).
-    let fps_cap = shared.ui.fps_cap;
+    let fps_cap = shared.ui.workspace.interaction.fps_cap;
     let display_max_fps = queue.display_max_fps();
     drop(guard);
     if state.params.configuration.get().is_some() {
@@ -900,7 +759,7 @@ impl Editor for LatticeEditor {
                 let roundtrip = started.elapsed().as_secs_f64() * 1000.0;
                 resized.requested_size.store(None);
                 if let Some(mut shared) = logging.try_lock() {
-                    shared.ui.console.log(format!(
+                    shared.ui.picture.runtime.console.log(format!(
                         "request_resize {}x{} -> {} ({roundtrip:.1} ms)",
                         size.0,
                         size.1,
@@ -922,7 +781,7 @@ impl Editor for LatticeEditor {
             // so this is uncontended in practice, and a resize is not worth
             // blocking a frame for if it ever is not.
             if let Some(mut shared) = logging.try_lock() {
-                shared.ui.console.log(format!("host resize {width}x{height}"));
+                shared.ui.picture.runtime.console.log(format!("host resize {width}x{height}"));
             }
             Some(Size::new(f64::from(width), f64::from(height)))
         });
@@ -1091,6 +950,125 @@ fn session_controls(
         });
 }
 
+/// The sole display and analyzer ingress, retained for the plugin lifetime.
+/// Synchronous draining never acquires the audio callback or a window.
+pub(crate) struct LiveInput {
+    consumer: harmonigraph_record::publication::Consumer,
+    /// Interleaved input frames from the audio thread (Spectral pane analyzer);
+    /// `audio_channels` samples each.
+    audio_consumer: rtrb::Consumer<f32>,
+    /// Sample rate of those samples, as f32 bits (see the plugin struct).
+    sample_rate_bits: Arc<AtomicU32>,
+    /// Channels per frame in `audio_consumer`, as the audio thread last saw the
+    /// bus. Read every drain, never cached: de-interleaving by a stale count
+    /// would read one channel as two.
+    audio_channels: Arc<AtomicU32>,
+    /// GUI clock epoch; audio event times are mapped onto this clock.
+    start: Instant,
+    /// Audio->GUI clock mapping (see ClockMapper).
+    clock: ClockMapper,
+    /// Reused per-frame audio drain scratch.
+    audio_buf: Vec<f32>,
+}
+
+impl LiveInput {
+    /// The host sample rate the audio thread published, as an f32. It lives
+    /// in an `AtomicU32` as the f32's bit pattern (a lock-free f32); this
+    /// names the bit-cast so its readers can't spell it inconsistently.
+    fn sample_rate(&self) -> f32 {
+        f32::from_bits(self.sample_rate_bits.load(Ordering::Relaxed))
+    }
+    /// Channels per frame in the audio ring (at least one).
+    fn audio_channels(&self) -> usize {
+        (self.audio_channels.load(Ordering::Relaxed) as usize).max(1)
+    }
+    /// Drain exactly what the process callback sent to the live analyzer.
+    /// Test-only because production has two schedulers, here and in
+    /// [`crate::background`], that also maintain the analyzer state around it.
+    #[cfg(test)]
+    pub(crate) fn drain_analysis_audio_for_test(&mut self) -> Vec<f32> {
+        let mut samples = Vec::new();
+        while let Ok(sample) = self.audio_consumer.pop() {
+            samples.push(sample);
+        }
+        samples
+    }
+    /// Drain note events from the audio thread into the tracker, mapping
+    /// their sample-clock timestamps onto the GUI clock. A fresh audio
+    /// heartbeat anchors the whole stream before historical records are
+    /// mapped; delayed batches never reset that anchor. Returns true when
+    /// events arrived, in which case the
+    /// caller should repaint this tick rather than at the idle poll.
+    fn drain_into_tracker(
+        &mut self,
+        runtime: &mut harmonigraph_ui::VisualRuntime,
+        now: f64,
+    ) -> bool {
+        if let Some(observation) = self.consumer.clock() {
+            self.clock.observe(observation, now);
+        }
+        let Some(offset) = self.clock.offset else { return false };
+        let tracker = &mut runtime.tracker;
+        self.consumer.drain(|delivery, _| {
+            if let harmonigraph_record::publication::Delivery::Event(event) = delivery {
+                let result = tracker.handle_canonical_mapped(event, offset);
+                debug_assert!(result.is_ok(), "validated canonical publication");
+            }
+            true
+        }) != 0
+    }
+    /// Drain the audio sample ring into the spectrum analyzer.
+    ///
+    /// Always drains AND always feeds. There is no display state that makes the
+    /// samples unwanted: the curve and the spectrogram read this one analyzer,
+    /// the curve is always drawn, and feeding it is also what drives smooth
+    /// repaint (via `is_flowing`). Draining without feeding would only leave the
+    /// ring holding stale audio to burst later — and gating the feed on
+    /// something being on screen is what [`crate::background`] exists to say is
+    /// wrong, since the whole point there is to analyze when nothing shows it.
+    fn drain_audio(
+        &mut self,
+        runtime: &mut harmonigraph_ui::VisualRuntime,
+        appearance: &harmonigraph_ui::AppearanceDocument,
+        now: f64,
+    ) {
+        self.audio_buf.clear();
+        while let Ok(sample) = self.audio_consumer.pop() {
+            self.audio_buf.push(sample);
+        }
+        if !self.audio_buf.is_empty() {
+            let sample_rate = self.sample_rate();
+            let channels = self.audio_channels();
+            let config = appearance.spectrum;
+            runtime.spectrum.push_samples(&self.audio_buf, channels, sample_rate, now, &config);
+        }
+    }
+    /// The clock everything the editor stamps is measured on: seconds since
+    /// the PLUGIN was instantiated, not since the window opened.
+    ///
+    /// That distinction is what makes a closed window recoverable at all. The
+    /// clock runs across one, so a column analyzed while nothing was drawing
+    /// lands on the same axis as the columns either side of it, and the
+    /// heatmap has no seam to hide.
+    pub(crate) fn now(&self) -> f64 {
+        self.start.elapsed().as_secs_f64()
+    }
+    /// Drain the sole note and audio streams into borrowed runtime storage.
+    /// Both the open frame and closed scheduler use this ordering. Input feeding
+    /// does not prune against stale parameters: callers advance time after
+    /// observing their parameters, or retain the last mirrors while closed.
+    pub(crate) fn drain(
+        &mut self,
+        runtime: &mut harmonigraph_ui::VisualRuntime,
+        appearance: &harmonigraph_ui::AppearanceDocument,
+        now: f64,
+    ) -> bool {
+        let notes = self.drain_into_tracker(runtime, now);
+        self.drain_audio(runtime, appearance, now);
+        notes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1100,6 +1078,56 @@ mod tests {
     #[allow(unused_imports)]
     use harmonigraph_core::notes::{NoteEvent, SourceId};
     use std::sync::Arc;
+
+    #[test]
+    fn recording_stop_debounce_counts_gui_callbacks_not_runtime_ticks() {
+        let (_notes, consumer) = harmonigraph_record::publication::channel();
+        let (_audio, audio_consumer) = rtrb::RingBuffer::new(64);
+        let (recorder, control) = harmonigraph_record::channel();
+        let directory =
+            std::env::temp_dir().join(format!("runtime-recording-cadence-{}", std::process::id()));
+        let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
+        let mut shared = EditorShared::new(
+            consumer,
+            audio_consumer,
+            Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
+            Arc::new(super::AtomicU32::new(1)),
+            control,
+            Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        );
+        shared.ui.picture.appearance.render.trigger =
+            harmonigraph_ui::RenderTrigger::OnTransportStop;
+        shared.ui.picture.appearance.render.renderer_path =
+            directory.join("absent-renderer").to_string_lossy().into_owned();
+        shared.ui.workspace.interaction.take.recording = true;
+        shared.sync_take(48_000.0);
+        assert!(shared.take.is_recording());
+        shared.take_events.store(1, std::sync::atomic::Ordering::Relaxed);
+        for tick in 0..100 {
+            let now = tick as f64 * 0.02;
+            shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
+            shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
+        }
+        assert_eq!(
+            shared.take_still_frames, 0,
+            "closed runtime ticks must not count toward debounce"
+        );
+        for _ in 0..EditorShared::STOP_FRAMES - 1 {
+            shared.sync_take(48_000.0);
+            assert!(shared.take.is_recording());
+        }
+        assert_eq!(shared.take_still_frames, EditorShared::STOP_FRAMES - 1);
+        shared.sync_take(48_000.0);
+        assert!(!shared.take.is_recording(), "the twentieth stopped GUI callback ends the take");
+        drop(shared);
+        drop(recorder);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !probe.finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(probe.finished());
+        let _ = std::fs::remove_dir_all(directory);
+    }
 
     /// The real arm path snapshots live appearance even when workspace state
     /// is unrelated, and later knob edits cannot rewrite the starting look.
@@ -1119,18 +1147,18 @@ mod tests {
             control,
             Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
-        shared.ui.appearance.camera.yaw = 1.23;
-        shared.ui.appearance.view.extent_sevens = 3;
-        shared.ui.appearance.spectrum.low_midi = 40.5;
-        shared.ui.appearance.spiral.zoom = 2.75;
-        shared.ui.appearance.render.short_edge = 2160;
-        shared.ui.appearance.render.renderer_path = "a renderer (with, punctuation)".into();
-        shared.ui.ui_scale = 1.25;
-        let expected = shared.ui.appearance.serialize();
-        shared.ui.take.recording = true;
+        shared.ui.picture.appearance.camera.yaw = 1.23;
+        shared.ui.picture.appearance.view.extent_sevens = 3;
+        shared.ui.picture.appearance.spectrum.low_midi = 40.5;
+        shared.ui.picture.appearance.spiral.zoom = 2.75;
+        shared.ui.picture.appearance.render.short_edge = 2160;
+        shared.ui.picture.appearance.render.renderer_path = "a renderer (with, punctuation)".into();
+        shared.ui.workspace.interaction.ui_scale = 1.25;
+        let expected = shared.ui.picture.appearance.serialize();
+        shared.ui.workspace.interaction.take.recording = true;
         shared.sync_take(44_100.0);
         assert!(shared.take.is_recording(), "{}", shared.take.status());
-        shared.ui.appearance = Default::default();
+        shared.ui.picture.appearance = Default::default();
         // Closing the producer finalizes the writer without launching an export.
         drop(shared);
         drop(recorder);
@@ -1208,16 +1236,23 @@ mod tests {
         }
 
         producer.observe_clock(99.995);
-        assert!(shared.drain_into_tracker(7.0), "events arrived -> repaint");
-        let mut on_times: Vec<f64> = shared.ui.tracker.voices().map(|v| v.on_time).collect();
+        assert!(
+            shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 7.0),
+            "events arrived -> repaint"
+        );
+        let mut on_times: Vec<f64> =
+            shared.ui.picture.runtime.tracker.voices().map(|v| v.on_time).collect();
         on_times.sort_by(f64::total_cmp);
         assert_eq!(on_times.len(), 2);
         assert!((on_times[1] - on_times[0] - 0.045).abs() < 1e-9, "spacing lost: {on_times:?}");
         assert!(on_times[1] <= 7.0, "never maps into the GUI future");
-        assert_eq!(shared.ui.tracker.voices().map(|v| v.source.0).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(
+            shared.ui.picture.runtime.tracker.voices().map(|v| v.source.0).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
 
         // Empty ring: no work, no repaint request.
-        assert!(!shared.drain_into_tracker(7.1));
+        assert!(!shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 7.1));
         producer.observe_clock(11.0);
         // Audio now=11 and GUI now=21. A delayed event from audio=2 belongs
         // at GUI=12; neither its batch nor a later idle poll is a new clock.
@@ -1242,12 +1277,20 @@ mod tests {
         producer.note(accepted, Default::default()).unwrap();
         let event = NoteEvent::on(2.0, SourceId::DIRECT, 0, 72, 0.8);
         producer.note(event.into(), Default::default()).unwrap();
-        assert!(shared.drain_into_tracker(21.0));
+        assert!(shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 21.0));
         assert_eq!(
-            shared.ui.tracker.voices().find(|v| v.source == SourceId::DIRECT).unwrap().on_time,
+            shared
+                .ui
+                .picture
+                .runtime
+                .tracker
+                .voices()
+                .find(|v| v.source == SourceId::DIRECT)
+                .unwrap()
+                .on_time,
             12.0
         );
-        assert!(!shared.drain_into_tracker(22.0));
+        assert!(!shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 22.0));
         use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
         let baseline = SourceBaseline::new(
             SourceId::DIRECT,
@@ -1267,20 +1310,46 @@ mod tests {
         .unwrap();
         producer.observe_clock(12.0);
         producer.baseline(&baseline, Default::default()).unwrap();
-        shared.drain_into_tracker(22.2);
-        let note = shared.ui.tracker.roll().notes().find(|n| n.source == SourceId::DIRECT).unwrap();
+        shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 22.2);
+        let note = shared
+            .ui
+            .picture
+            .runtime
+            .tracker
+            .roll()
+            .notes()
+            .find(|n| n.source == SourceId::DIRECT)
+            .unwrap();
         assert_eq!(note.start, 12.0);
         assert!(note.history_complete, "baseline retains the matching observed lifetime");
         assert!(
-            (shared.ui.tracker.source_baseline(SourceId::DIRECT).unwrap().time - 13.01).abs()
+            (shared.ui.picture.runtime.tracker.source_baseline(SourceId::DIRECT).unwrap().time
+                - 13.01)
+                .abs()
                 < 1e-9
         );
         assert_eq!(
-            shared.ui.tracker.voices().find(|v| v.source == SourceId::DIRECT).unwrap().on_time,
+            shared
+                .ui
+                .picture
+                .runtime
+                .tracker
+                .voices()
+                .find(|v| v.source == SourceId::DIRECT)
+                .unwrap()
+                .on_time,
             12.0
         );
         assert_eq!(
-            shared.ui.tracker.roll().notes().filter(|n| n.source == SourceId::DIRECT).count(),
+            shared
+                .ui
+                .picture
+                .runtime
+                .tracker
+                .roll()
+                .notes()
+                .filter(|n| n.source == SourceId::DIRECT)
+                .count(),
             1
         );
         use harmonigraph_core::canonical::{GapReason, PublicationGap};
@@ -1317,9 +1386,18 @@ mod tests {
         )
         .unwrap();
         producer.baseline(&resumed, Default::default()).unwrap();
-        shared.drain_into_tracker(22.3);
-        let voice = shared.ui.tracker.voices().find(|v| v.source == SourceId(3)).unwrap();
-        let note = shared.ui.tracker.roll().notes().find(|v| v.source == SourceId(3)).unwrap();
+        shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 22.3);
+        let voice =
+            shared.ui.picture.runtime.tracker.voices().find(|v| v.source == SourceId(3)).unwrap();
+        let note = shared
+            .ui
+            .picture
+            .runtime
+            .tracker
+            .roll()
+            .notes()
+            .find(|v| v.source == SourceId(3))
+            .unwrap();
         assert_eq!(
             (voice.on_time, note.start),
             (12.0, 12.0),
@@ -1327,11 +1405,11 @@ mod tests {
         );
     }
 
-    /// `catch_up`'s ANSWER, which is the only thing that asks for a repaint on
+    /// `LiveInput::drain`'s ANSWER, which is the only thing that asks for a repaint on
     /// the tick a note arrives rather than at the idle poll (see `frame`).
     ///
     /// Its own test because the drain and the answer fail independently: every
-    /// other test of this path reads the tracker afterwards, so a `catch_up`
+    /// other test of this path reads the tracker afterwards, so a `LiveInput::drain`
     /// that drained perfectly and always answered `false` would satisfy all of
     /// them while costing every note played the latency of the idle poll.
     #[test]
@@ -1349,16 +1427,25 @@ mod tests {
         );
 
         // An empty ring is not a repaint.
-        assert!(!shared.catch_up(7.0), "nothing arrived, so nothing needs drawing");
+        assert!(
+            !shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, 7.0),
+            "nothing arrived, so nothing needs drawing"
+        );
 
         producer.observe_clock(1.0);
         producer
             .note(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0).into(), Default::default())
             .unwrap();
-        assert!(shared.catch_up(7.1), "a note arrived and the frame was not told");
+        assert!(
+            shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, 7.1),
+            "a note arrived and the frame was not told"
+        );
 
         // And the ring is empty again, so the next tick asks for nothing.
-        assert!(!shared.catch_up(7.2), "the same note asked for a second repaint");
+        assert!(
+            !shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, 7.2),
+            "the same note asked for a second repaint"
+        );
     }
 
     #[test]

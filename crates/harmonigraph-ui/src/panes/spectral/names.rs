@@ -52,7 +52,7 @@ use harmonigraph_scene::{DrawnWindow, ViewConfig};
 
 use super::axes::{Axes, PitchScale, TimeAxis};
 use crate::marks;
-use crate::{theme, SharedState};
+use crate::{theme, PictureState};
 
 /// Point size of a name's letter. Well under the axis labels'
 /// ([`MARKING_PT`](super::axes::MARKING_PT)): there are many more of
@@ -410,7 +410,7 @@ pub(super) struct NoteLabel {
 /// The two scales it lays names out by part company at the pitch zoom — see
 /// [`NameScale`].
 pub(super) fn plan(
-    state: &SharedState,
+    state: &PictureState,
     axes: &Axes,
     scale: &PitchScale,
     split: f32,
@@ -541,7 +541,7 @@ pub(super) fn plan(
     let naming = |pitch: f32, names: &mut HashMap<PitchClass, (NoteName, f64)>| {
         let class = PitchClass::from_cents(pitch.rem_euclid(12.0) * 100.0);
         *names.entry(class).or_insert_with(|| {
-            let name = note_name(&state.appearance.view, &shown, &state.tuning, pitch);
+            let name = note_name(&state.appearance.view, &shown, &state.runtime.tuning, pitch);
             (name, room(&name))
         })
     };
@@ -1288,7 +1288,7 @@ fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
 /// answers that is the dots on the turns, which are not the name.
 ///
 /// The REACH is asked first and the picture's own window
-/// ([`SharedState::shown`](crate::SharedState::shown)) only where the reach
+/// ([`PictureState::shown`](crate::PictureState::shown)) only where the reach
 /// comes back empty, which is what keeps two things true at once. A name is
 /// stable: the reach is the same block whatever the camera is doing, so
 /// panning and zooming do not respell a note that was already named, and the
@@ -1486,7 +1486,7 @@ pub(super) fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::probe::{frame_full, fresh, painted_full, themed_at};
+    use crate::tests::probe::{frame_full, fresh_picture as fresh, painted_full, themed_at};
     use crate::{SpectralOrientation, SpectrumConfig};
     use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
@@ -1556,20 +1556,20 @@ mod tests {
 
     /// A state whose pane shows `range` semitones around middle C over a
     /// `span`-second window, with the whole depth axis given to the roll.
-    fn state(range: f32, span: f32) -> SharedState {
+    fn state(range: f32, span: f32) -> PictureState {
         turned(range, span, SpectralOrientation::Left)
     }
 
     /// The same pane with the names anchored on their onsets — the "Name the
     /// far end" setting, which in this Left-facing fixture is the onset and in
     /// a reversed orientation would be the leading edge.
-    fn travelling(range: f32, span: f32) -> SharedState {
+    fn travelling(range: f32, span: f32) -> PictureState {
         let mut state = state(range, span);
         state.appearance.spectrum.note_names_travel = true;
         state
     }
 
-    fn turned(range: f32, span: f32, orientation: SpectralOrientation) -> SharedState {
+    fn turned(range: f32, span: f32, orientation: SpectralOrientation) -> PictureState {
         let mut state = fresh();
         // These fixtures measure lattice spellings themselves. The shipped
         // comma locks are a view choice that would respell the same positions
@@ -1589,11 +1589,11 @@ mod tests {
 
     /// The names `state` would draw at `now`, placed exactly the way
     /// [`spectral_pane`](super::super::spectral_pane) places them.
-    fn labels(state: &SharedState, now: f64) -> Vec<NoteLabel> {
+    fn labels(state: &PictureState, now: f64) -> Vec<NoteLabel> {
         labels_in(state, now, PANE)
     }
 
-    fn labels_in(state: &SharedState, now: f64, rect: egui::Rect) -> Vec<NoteLabel> {
+    fn labels_in(state: &PictureState, now: f64, rect: egui::Rect) -> Vec<NoteLabel> {
         let cfg = &state.appearance.spectrum;
         let axes = Axes::new(rect, cfg);
         let min_midi = cfg.low_midi;
@@ -1607,15 +1607,15 @@ mod tests {
     /// pitches struck together every 0.9 seconds, for longer than the window
     /// holds. `from` cuts the roll's memory back to notes still sounding then,
     /// which is what a sweep anchored on the window's own edge amounts to.
-    fn phrase(from: f64) -> SharedState {
+    fn phrase(from: f64) -> PictureState {
         let mut state = state(24.0, 10.0);
         let mut t = 0.0;
         while t < 24.0 {
             for (i, note) in [60u8, 62, 64].iter().enumerate() {
                 let at = t + i as f64 * 0.11;
                 if at + 0.25 >= from {
-                    state.tracker.handle_event(on(at, *note));
-                    state.tracker.handle_event(off(at + 0.25, *note));
+                    state.runtime.tracker.handle_event(on(at, *note));
+                    state.runtime.tracker.handle_event(off(at + 0.25, *note));
                 }
             }
             t += 0.9;
@@ -1627,7 +1627,7 @@ mod tests {
     /// eight seconds of scrolling at `label_scale`. Names are followed by the
     /// NOTE each belongs to, not by where it is drawn: every name is moving,
     /// so a position says nothing about identity.
-    fn blinks(state_at: impl Fn(f64) -> SharedState, label_scale: f32) -> usize {
+    fn blinks(state_at: impl Fn(f64) -> PictureState, label_scale: f32) -> usize {
         let mut seen: HashMap<(String, i64), Vec<usize>> = HashMap::new();
         for frame in 0..480 {
             let now = 14.0 + frame as f64 / 60.0;
@@ -1663,16 +1663,16 @@ mod tests {
         let start = 500.0;
         let mut state = state(24.0, 10.0);
         let mut next = 0;
-        let feed = |state: &mut SharedState, next: &mut usize, until: f64| {
+        let feed = |state: &mut PictureState, next: &mut usize, until: f64| {
             while *next < events.len() && events[*next].0 <= until {
                 let (at, note, down) = events[*next];
-                state.tracker.handle_event(if down { on(at, note) } else { off(at, note) });
+                state.runtime.tracker.handle_event(if down { on(at, note) } else { off(at, note) });
                 *next += 1;
             }
         };
         feed(&mut state, &mut next, start);
         assert!(
-            state.tracker.roll().notes().count() >= harmonigraph_core::NoteRoll::MAX_NOTES,
+            state.runtime.tracker.roll().notes().count() >= harmonigraph_core::NoteRoll::MAX_NOTES,
             "the roll has to be AT its cap for this to be the test it says it is",
         );
 
@@ -1721,6 +1721,7 @@ mod tests {
         let axes = Axes::new(BIG, &cfg);
         let placed = plan(&state, &axes, &scale_of(&state), split, 20.0, zoomed(ZOOMED));
         let on_pane = state
+            .runtime
             .tracker
             .roll()
             .notes()
@@ -1742,7 +1743,7 @@ mod tests {
         labels.iter().map(|l| l.name.to_string()).collect()
     }
 
-    fn scale_of(state: &SharedState) -> PitchScale {
+    fn scale_of(state: &PictureState) -> PitchScale {
         let cfg = &state.appearance.spectrum;
         let min_midi = cfg.low_midi;
         let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
@@ -1759,8 +1760,8 @@ mod tests {
         let mut state = state(24.0, 10.0);
         for i in 0..4 {
             let t = i as f64 * 2.0;
-            state.tracker.handle_event(on(t, 60));
-            state.tracker.handle_event(off(t + 0.5, 60));
+            state.runtime.tracker.handle_event(on(t, 60));
+            state.runtime.tracker.handle_event(off(t + 0.5, 60));
         }
         // Four presses of one pitch, far enough apart in time that no two
         // names collide.
@@ -1773,8 +1774,8 @@ mod tests {
     #[test]
     fn a_name_sits_on_its_ribbon_at_the_leading_edge() {
         let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(2.0, 60));
-        state.tracker.handle_event(off(6.0, 60));
+        state.runtime.tracker.handle_event(on(2.0, 60));
+        state.runtime.tracker.handle_event(off(6.0, 60));
 
         let placed = labels(&state, 10.0);
         assert_eq!(placed.len(), 1);
@@ -1965,8 +1966,8 @@ mod tests {
     #[test]
     fn a_name_sits_on_the_ribbon_the_roll_drew() {
         let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(2.0, 60));
-        state.tracker.handle_event(off(6.0, 60));
+        state.runtime.tracker.handle_event(on(2.0, 60));
+        state.runtime.tracker.handle_event(off(6.0, 60));
 
         let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
         let axes = Axes::new(PANE, &state.appearance.spectrum);
@@ -1997,14 +1998,14 @@ mod tests {
     #[test]
     fn a_held_notes_name_waits_at_the_now_line_and_leaves_when_released() {
         let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(1.0, 60));
+        state.runtime.tracker.handle_event(on(1.0, 60));
 
-        let at = |state: &SharedState, now| labels(state, now)[0].rect.min.x;
+        let at = |state: &PictureState, now| labels(state, now)[0].rect.min.x;
         let early = at(&state, 2.0);
         let later = at(&state, 4.0);
         assert_eq!(early, later, "held, the name holds its place while the ribbon grows");
 
-        state.tracker.handle_event(off(4.0, 60));
+        state.runtime.tracker.handle_event(off(4.0, 60));
         assert!(at(&state, 5.0) > later, "released, it travels away with the note");
         assert!(at(&state, 7.0) > at(&state, 5.0), "...and keeps travelling");
     }
@@ -2024,9 +2025,9 @@ mod tests {
     #[test]
     fn one_press_is_named_once_however_the_host_delivers_it() {
         let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(1.0, 60));
-        state.tracker.handle_event(off(1.0, 60));
-        state.tracker.handle_event(on(1.0, 60));
+        state.runtime.tracker.handle_event(on(1.0, 60));
+        state.runtime.tracker.handle_event(off(1.0, 60));
+        state.runtime.tracker.handle_event(on(1.0, 60));
 
         let early = labels(&state, 1.5);
         assert_eq!(said(&early), ["C"], "one press, one name");
@@ -2045,7 +2046,7 @@ mod tests {
     #[test]
     fn a_note_that_began_before_the_window_is_still_named() {
         let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(0.0, 67)); // still held
+        state.runtime.tracker.handle_event(on(0.0, 67)); // still held
         let placed = labels(&state, 100.0);
         assert_eq!(said(&placed), ["G"]);
 
@@ -2071,13 +2072,13 @@ mod tests {
     fn a_travelling_name_starts_moving_at_once_and_the_release_is_not_an_event() {
         let played = |release: Option<f64>| {
             let mut state = travelling(24.0, 10.0);
-            state.tracker.handle_event(on(1.0, 60));
+            state.runtime.tracker.handle_event(on(1.0, 60));
             if let Some(t) = release {
-                state.tracker.handle_event(off(t, 60));
+                state.runtime.tracker.handle_event(off(t, 60));
             }
             state
         };
-        let at = |state: &SharedState, now| labels(state, now)[0].rect.min.x;
+        let at = |state: &PictureState, now| labels(state, now)[0].rect.min.x;
 
         let held = played(None);
         assert!(at(&held, 4.0) > at(&held, 2.0), "held, the name is already travelling");
@@ -2103,8 +2104,8 @@ mod tests {
     #[test]
     fn a_travelling_name_lies_over_its_ribbon_toward_the_now_line() {
         let mut state = travelling(24.0, 10.0);
-        state.tracker.handle_event(on(2.0, 60));
-        state.tracker.handle_event(off(6.0, 60));
+        state.runtime.tracker.handle_event(on(2.0, 60));
+        state.runtime.tracker.handle_event(off(6.0, 60));
 
         let placed = labels(&state, 10.0);
         assert_eq!(placed.len(), 1);
@@ -2150,8 +2151,8 @@ mod tests {
             for travel in [false, true] {
                 let mut state = turned(24.0, 10.0, orientation);
                 state.appearance.spectrum.note_names_travel = travel;
-                state.tracker.handle_event(on(2.0, 60));
-                state.tracker.handle_event(off(6.0, 60));
+                state.runtime.tracker.handle_event(on(2.0, 60));
+                state.runtime.tracker.handle_event(off(6.0, 60));
 
                 // Square, so the same pane serves the vertical orientations.
                 let square =
@@ -2215,7 +2216,7 @@ mod tests {
         // far end, which is the onset.
         let mut state = travelling(24.0, 10.0);
         state.appearance.spectrum.roll_fraction = 0.55; // the fresh value
-        state.tracker.handle_event(on(5.0, 60));
+        state.runtime.tracker.handle_event(on(5.0, 60));
 
         let axes = Axes::new(PANE, &state.appearance.spectrum);
         let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
@@ -2248,7 +2249,7 @@ mod tests {
         // The pane's edge, where the whole depth axis is the roll's and there
         // is nothing between the now-line and the outside.
         let mut state = travelling(24.0, 10.0);
-        state.tracker.handle_event(on(5.0, 60));
+        state.runtime.tracker.handle_event(on(5.0, 60));
         for now in [5.0, 5.05, 5.1, 5.2] {
             let placed = labels(&state, now);
             assert_eq!(placed.len(), 1, "at {now}s");
@@ -2268,7 +2269,7 @@ mod tests {
         // measuring against the divider would leave the name 6 points out.
         let mut state = turned(24.0, 10.0, SpectralOrientation::Right);
         state.appearance.spectrum.roll_fraction = 0.98;
-        state.tracker.handle_event(on(5.0, 60));
+        state.runtime.tracker.handle_event(on(5.0, 60));
         let axes = Axes::new(PANE, &state.appearance.spectrum);
         let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
         let t = scale_of(&state).t_of(60.0);
@@ -2303,7 +2304,7 @@ mod tests {
     fn with_the_spectrum_on_the_right_a_name_holds_the_notes_left_end() {
         let mut state = turned(24.0, 10.0, SpectralOrientation::Right);
         state.appearance.spectrum.roll_fraction = 0.55; // the fresh value
-        state.tracker.handle_event(on(5.0, 60));
+        state.runtime.tracker.handle_event(on(5.0, 60));
 
         let axes = Axes::new(PANE, &state.appearance.spectrum);
         let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
@@ -2352,8 +2353,8 @@ mod tests {
     fn a_name_is_written_on_the_end_that_reads_first() {
         for orientation in SpectralOrientation::ALL {
             let mut state = turned(24.0, 10.0, orientation);
-            state.tracker.handle_event(on(2.0, 60));
-            state.tracker.handle_event(off(6.0, 60));
+            state.runtime.tracker.handle_event(on(2.0, 60));
+            state.runtime.tracker.handle_event(off(6.0, 60));
 
             // Square, so the same pane serves the vertical orientations.
             let square = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 320.0) };
@@ -2429,8 +2430,8 @@ mod tests {
 
         // Nothing clamped: a released note, named on its leading edge.
         let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(2.0, 60));
-        state.tracker.handle_event(off(6.0, 60));
+        state.runtime.tracker.handle_event(on(2.0, 60));
+        state.runtime.tracker.handle_event(off(6.0, 60));
         let placed = labels(&state, 10.0);
         assert_eq!(placed.len(), 1);
         let axes = Axes::new(PANE, &state.appearance.spectrum);
@@ -2446,7 +2447,7 @@ mod tests {
         // whole depth axis here (`roll_fraction` 1.0), so the pane's own edge
         // is where the now-line is and there is nothing between them.
         let mut state = travelling(24.0, 10.0);
-        state.tracker.handle_event(on(5.0, 60));
+        state.runtime.tracker.handle_event(on(5.0, 60));
         for now in [5.0, 5.05, 5.1] {
             let placed = labels(&state, now);
             assert_eq!(placed.len(), 1, "at {now}s");
@@ -2478,11 +2479,11 @@ mod tests {
         // has nowhere clear to go, and held.
         let played = |travel: bool, release: Option<f64>| {
             let mut state = if travel { travelling(24.0, 10.0) } else { state(24.0, 10.0) };
-            state.tracker.handle_event(on(1.0, 60));
-            state.tracker.handle_event(off(1.05, 60));
-            state.tracker.handle_event(on(1.1, 60));
+            state.runtime.tracker.handle_event(on(1.0, 60));
+            state.runtime.tracker.handle_event(off(1.05, 60));
+            state.runtime.tracker.handle_event(on(1.1, 60));
             if let Some(t) = release {
-                state.tracker.handle_event(off(t, 60));
+                state.runtime.tracker.handle_event(off(t, 60));
             }
             state
         };
@@ -2519,7 +2520,7 @@ mod tests {
             // The same pitch on two channels, struck together and held — a
             // doubled source, or one MPE part layered over another.
             for channel in [0, 1] {
-                state.tracker.handle_event(NoteEvent {
+                state.runtime.tracker.handle_event(NoteEvent {
                     source: SourceId::DIRECT,
                     time: 1.0,
                     channel,
@@ -2536,9 +2537,9 @@ mod tests {
         // press at either anchor, the two entries sharing an onset.
         let pressed = |travel: bool| {
             let mut state = if travel { travelling(24.0, 10.0) } else { state(24.0, 10.0) };
-            state.tracker.handle_event(on(1.0, 60));
-            state.tracker.handle_event(off(1.0, 60));
-            state.tracker.handle_event(on(1.0, 60));
+            state.runtime.tracker.handle_event(on(1.0, 60));
+            state.runtime.tracker.handle_event(off(1.0, 60));
+            state.runtime.tracker.handle_event(on(1.0, 60));
             state
         };
         assert_eq!(said(&labels(&pressed(false), 1.5)), ["C"]);
@@ -2588,8 +2589,8 @@ mod tests {
         for orientation in SpectralOrientation::ALL {
             for length in [0.3f64, 4.0, 12.0] {
                 let mut state = turned(24.0, 10.0, orientation);
-                state.tracker.handle_event(on(1.0, 60));
-                state.tracker.handle_event(off(1.0 + length, 60));
+                state.runtime.tracker.handle_event(on(1.0, 60));
+                state.runtime.tracker.handle_event(off(1.0 + length, 60));
 
                 let cfg = &state.appearance.spectrum;
                 let axes = Axes::new(square, cfg);
@@ -2652,7 +2653,7 @@ mod tests {
     #[test]
     fn a_travelling_name_leaves_the_pane_with_the_onset_it_is_written_on() {
         let mut state = travelling(24.0, 10.0);
-        state.tracker.handle_event(on(0.0, 67)); // still held, and never released
+        state.runtime.tracker.handle_event(on(0.0, 67)); // still held, and never released
 
         let placed = labels(&state, 5.0);
         assert_eq!(said(&placed), ["G"], "on the pane, and named");
@@ -2727,7 +2728,7 @@ mod tests {
         for orientation in SpectralOrientation::ALL {
             let mut state = turned(24.0, 10.0, orientation);
             state.appearance.spectrum.note_names_travel = !orientation.is_time_reversed();
-            state.tracker.handle_event(on(1.0, 60)); // held for the whole sweep
+            state.runtime.tracker.handle_event(on(1.0, 60)); // held for the whole sweep
 
             // Square, so the same pane serves the vertical orientations.
             let square = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 320.0) };
@@ -2796,8 +2797,8 @@ mod tests {
     fn notes_outside_the_pitch_zoom_are_left_out() {
         let mut state = state(24.0, 10.0); // 48..72
         for note in [36, 60, 84] {
-            state.tracker.handle_event(on(0.0, note));
-            state.tracker.handle_event(off(0.5, note));
+            state.runtime.tracker.handle_event(on(0.0, note));
+            state.runtime.tracker.handle_event(off(0.5, note));
         }
         assert_eq!(said(&labels(&state, 5.0)), ["C"], "only the one inside 48..72");
     }
@@ -2807,10 +2808,10 @@ mod tests {
     #[test]
     fn notes_that_have_left_the_window_are_left_out() {
         let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(0.0, 60));
-        state.tracker.handle_event(off(0.5, 60));
-        state.tracker.handle_event(on(8.0, 67));
-        state.tracker.handle_event(off(8.5, 67));
+        state.runtime.tracker.handle_event(on(0.0, 60));
+        state.runtime.tracker.handle_event(off(0.5, 60));
+        state.runtime.tracker.handle_event(on(8.0, 67));
+        state.runtime.tracker.handle_event(off(8.5, 67));
 
         assert_eq!(said(&labels(&state, 9.0)), ["C", "G"], "oldest first, both on the pane");
         // now = 12: the first note ended at 0.5, a window and more ago.
@@ -2833,8 +2834,8 @@ mod tests {
         // where a name plus its gap is nearer twenty.
         for i in 0..40 {
             let t = i as f64 * 0.1;
-            state.tracker.handle_event(on(t, 60));
-            state.tracker.handle_event(off(t + 0.05, 60));
+            state.runtime.tracker.handle_event(on(t, 60));
+            state.runtime.tracker.handle_event(off(t + 0.05, 60));
         }
         let placed = labels(&state, 4.5);
         assert!(placed.len() > 1, "several of them are named");
@@ -2867,16 +2868,16 @@ mod tests {
             let mut state = state(24.0, 10.0);
             for i in 0..12 {
                 let t = i as f64 * 0.25;
-                state.tracker.handle_event(on(t, 60));
-                state.tracker.handle_event(off(t + 0.1, 60));
+                state.runtime.tracker.handle_event(on(t, 60));
+                state.runtime.tracker.handle_event(off(t + 0.1, 60));
             }
             if let Some(t) = extra {
-                state.tracker.handle_event(on(t, 60));
-                state.tracker.handle_event(off(t + 0.1, 60));
+                state.runtime.tracker.handle_event(on(t, 60));
+                state.runtime.tracker.handle_event(off(t + 0.1, 60));
             }
             state
         };
-        let xs = |state: &SharedState| -> Vec<f32> {
+        let xs = |state: &PictureState| -> Vec<f32> {
             labels(state, 4.0).iter().map(|l| l.rect.min.x).collect()
         };
         let before = xs(&played(None));
@@ -2901,8 +2902,8 @@ mod tests {
         let mut state = turned(24.0, 10.0, SpectralOrientation::Top);
         for i in 0..6 {
             let t = i as f64 * 1.2;
-            state.tracker.handle_event(on(t, 60));
-            state.tracker.handle_event(off(t + 0.2, 60));
+            state.runtime.tracker.handle_event(on(t, 60));
+            state.runtime.tracker.handle_event(off(t + 0.2, 60));
         }
         let tall = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(110.0, 320.0) };
         let placed = labels_in(&state, 6.0, tall);
@@ -2929,10 +2930,10 @@ mod tests {
     #[test]
     fn whole_song_names_a_ribbon_at_its_onset() {
         let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(2.0, 60));
-        state.tracker.handle_event(off(6.0, 60));
-        let roll = state.tracker.roll().clone();
-        state.whole_song =
+        state.runtime.tracker.handle_event(on(2.0, 60));
+        state.runtime.tracker.handle_event(off(6.0, 60));
+        let roll = state.runtime.tracker.roll().clone();
+        state.runtime.whole_song =
             Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
 
         let placed = labels(&state, 4.0);
@@ -2968,10 +2969,10 @@ mod tests {
     fn whole_song_keeps_a_note_that_began_before_the_render() {
         let named_from = |onset: f64, release: f64, start: f64| {
             let mut state = state(24.0, 10.0);
-            state.tracker.handle_event(on(onset, 60)); // before the render's start
-            state.tracker.handle_event(off(release, 60));
-            let roll = state.tracker.roll().clone();
-            state.whole_song =
+            state.runtime.tracker.handle_event(on(onset, 60)); // before the render's start
+            state.runtime.tracker.handle_event(off(release, 60));
+            let roll = state.runtime.tracker.roll().clone();
+            state.runtime.whole_song =
                 Some(crate::WholeSong { columns: Vec::new(), roll, start, span: 10.0 });
             let placed = labels(&state, start + 2.0);
             let axes = Axes::new(PANE, &state.appearance.spectrum);
@@ -3016,11 +3017,11 @@ mod tests {
         // where it both takes the exemption and moves under it.
         for orientation in SpectralOrientation::ALL {
             let mut state = turned(24.0, 10.0, orientation);
-            state.tracker.handle_event(on(1.0, 60));
-            state.tracker.handle_event(off(1.05, 60));
-            state.tracker.handle_event(on(1.1, 60));
-            let roll = state.tracker.roll().clone();
-            state.whole_song =
+            state.runtime.tracker.handle_event(on(1.0, 60));
+            state.runtime.tracker.handle_event(off(1.05, 60));
+            state.runtime.tracker.handle_event(on(1.1, 60));
+            let roll = state.runtime.tracker.roll().clone();
+            state.runtime.whole_song =
                 Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
 
             // The playhead inside the second note, then well past where it
@@ -3127,8 +3128,8 @@ mod tests {
         // they are four points apart, where a name is a dozen tall. Every one
         // of them is still named.
         for note in 60..66 {
-            state.tracker.handle_event(on(5.0, note));
-            state.tracker.handle_event(off(5.2, note));
+            state.runtime.tracker.handle_event(on(5.0, note));
+            state.runtime.tracker.handle_event(off(5.2, note));
         }
         assert_eq!(labels(&state, 5.5).len(), 6, "all six, overlap and all");
         // ...and on a pane with room to draw them apart, unchanged.
@@ -3151,11 +3152,11 @@ mod tests {
         // name has nowhere clear to go.
         let strike = |held: bool| {
             let mut state = state(24.0, 10.0);
-            state.tracker.handle_event(on(1.0, 60));
-            state.tracker.handle_event(off(1.9, 60));
-            state.tracker.handle_event(on(1.95, 60));
+            state.runtime.tracker.handle_event(on(1.0, 60));
+            state.runtime.tracker.handle_event(off(1.9, 60));
+            state.runtime.tracker.handle_event(on(1.95, 60));
             if !held {
-                state.tracker.handle_event(off(2.0, 60));
+                state.runtime.tracker.handle_event(off(2.0, 60));
             }
             state
         };
@@ -3188,13 +3189,13 @@ mod tests {
             // refusing most of it.
             for i in 0..20 {
                 let t = i as f64 * 0.09;
-                state.tracker.handle_event(on(t, 60));
-                state.tracker.handle_event(off(t + 0.04, 60));
+                state.runtime.tracker.handle_event(on(t, 60));
+                state.runtime.tracker.handle_event(off(t + 0.04, 60));
             }
             if hold {
                 // ...and the same pitch pressed and held, right at the
                 // now-line where its name would sweep across all of them.
-                state.tracker.handle_event(on(1.9, 60));
+                state.runtime.tracker.handle_event(on(1.9, 60));
             }
             state
         };
@@ -3229,10 +3230,10 @@ mod tests {
         // A JUST tuning, which is the one the distinction lives in: an equal
         // temperament tempers the syntonic comma out by construction, so there
         // is no node a comma below E to name.
-        state.tuning = harmonigraph_core::Tuning::just();
-        state.tracker.handle_event(on(1.0, 64));
-        state.tracker.handle_event(tuning(1.01, 64, -0.137));
-        state.tracker.handle_event(off(2.0, 64));
+        state.runtime.tuning = harmonigraph_core::Tuning::just();
+        state.runtime.tracker.handle_event(on(1.0, 64));
+        state.runtime.tracker.handle_event(tuning(1.01, 64, -0.137));
+        state.runtime.tracker.handle_event(off(2.0, 64));
 
         // The just third is a lattice node, and says so with the comma mark
         // the lattice draws on that node — the whole reason to spell a name
@@ -3259,12 +3260,12 @@ mod tests {
         let named = |bent_first: bool, now: f64| {
             let (early, late) = if bent_first { (0.02, 0.0) } else { (0.0, 0.02) };
             let mut state = state(24.0, 10.0);
-            state.tracker.handle_event(on(1.0, 70));
-            state.tracker.handle_event(tuning(1.01, 70, early));
-            state.tracker.handle_event(off(2.0, 70));
-            state.tracker.handle_event(on(5.0, 70));
-            state.tracker.handle_event(tuning(5.01, 70, late));
-            state.tracker.handle_event(off(6.0, 70));
+            state.runtime.tracker.handle_event(on(1.0, 70));
+            state.runtime.tracker.handle_event(tuning(1.01, 70, early));
+            state.runtime.tracker.handle_event(off(2.0, 70));
+            state.runtime.tracker.handle_event(on(5.0, 70));
+            state.runtime.tracker.handle_event(tuning(5.01, 70, late));
+            state.runtime.tracker.handle_event(off(6.0, 70));
             said(&labels_in(&state, now, BIG))
         };
 
@@ -3443,7 +3444,7 @@ mod tests {
     #[test]
     fn the_setting_turns_them_off_and_so_does_hiding_the_roll() {
         let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(0.0, 60));
+        state.runtime.tracker.handle_event(on(0.0, 60));
         assert_eq!(labels(&state, 1.0).len(), 1);
 
         state.appearance.spectrum.note_names = false;
@@ -3461,7 +3462,7 @@ mod tests {
     #[test]
     fn a_shut_roll_region_draws_no_names() {
         let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(0.0, 60));
+        state.runtime.tracker.handle_event(on(0.0, 60));
         // The divider dragged all the way over: the spectrum owns everything.
         state.appearance.spectrum.roll_fraction = 0.0;
         assert!(labels(&state, 1.0).is_empty());
@@ -3484,9 +3485,9 @@ mod tests {
     #[test]
     fn a_bent_notes_name_rides_the_ribbon_rather_than_its_onset() {
         let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(1.0, 60));
+        state.runtime.tracker.handle_event(on(1.0, 60));
         // Glided up a fifth over a second, and still held.
-        state.tracker.handle_event(tuning(2.0, 60, 7.0));
+        state.runtime.tracker.handle_event(tuning(2.0, 60, 7.0));
 
         let placed = labels(&state, 3.0);
         assert_eq!(placed.len(), 1);
@@ -3508,13 +3509,13 @@ mod tests {
     #[test]
     fn the_cull_follows_the_name_not_the_notes_onset() {
         let mut out = state(24.0, 10.0); // 48..72
-        out.tracker.handle_event(on(1.0, 60));
-        out.tracker.handle_event(tuning(1.5, 60, 30.0)); // gone to MIDI 90
+        out.runtime.tracker.handle_event(on(1.0, 60));
+        out.runtime.tracker.handle_event(tuning(1.5, 60, 30.0)); // gone to MIDI 90
         assert!(labels(&out, 3.0).is_empty(), "its name left with it");
 
         let mut into = state(24.0, 10.0);
-        into.tracker.handle_event(on(1.0, 30));
-        into.tracker.handle_event(tuning(1.5, 30, 30.0)); // arrived at MIDI 60
+        into.runtime.tracker.handle_event(on(1.0, 30));
+        into.runtime.tracker.handle_event(tuning(1.5, 30, 30.0)); // arrived at MIDI 60
         assert_eq!(said(&labels(&into, 3.0)), ["C"], "and arrives with it");
     }
 
@@ -3535,8 +3536,8 @@ mod tests {
         // the whole ten-minute window at the moment asked about.
         for i in 0..3000 {
             let t = i as f64 * 0.2;
-            state.tracker.handle_event(on(t, 60));
-            state.tracker.handle_event(off(t + 0.1, 60));
+            state.runtime.tracker.handle_event(on(t, 60));
+            state.runtime.tracker.handle_event(off(t + 0.1, 60));
         }
         let placed = labels(&state, 600.0);
         assert!(!placed.is_empty());
@@ -3572,8 +3573,8 @@ mod tests {
     fn a_names_drawn_position_advances_by_the_same_step_every_frame() {
         const PPP: f32 = 2.0;
         let mut st = state(24.0, 7.0);
-        st.tracker.handle_event(on(10.0, 60));
-        st.tracker.handle_event(off(10.3, 60));
+        st.runtime.tracker.handle_event(on(10.0, 60));
+        st.runtime.tracker.handle_event(off(10.3, 60));
 
         // One context across the run: the galley cache is what makes a name's
         // ink comparable from frame to frame.
@@ -3718,12 +3719,12 @@ mod tests {
     fn a_parked_name_yields_to_one_of_its_own_pitch_that_has_caught_up() {
         let render = |second: f64| {
             let mut state = state(24.0, 10.0);
-            state.tracker.handle_event(on(1.0, 60)); // sounding across the start
-            state.tracker.handle_event(off(4.0, 60));
-            state.tracker.handle_event(on(second, 60));
-            state.tracker.handle_event(off(second + 1.0, 60));
-            let roll = state.tracker.roll().clone();
-            state.whole_song =
+            state.runtime.tracker.handle_event(on(1.0, 60)); // sounding across the start
+            state.runtime.tracker.handle_event(off(4.0, 60));
+            state.runtime.tracker.handle_event(on(second, 60));
+            state.runtime.tracker.handle_event(off(second + 1.0, 60));
+            let roll = state.runtime.tracker.roll().clone();
+            state.runtime.whole_song =
                 Some(crate::WholeSong { columns: Vec::new(), roll, start: 3.0, span: 10.0 });
             labels(&state, 5.0)
         };
@@ -3771,11 +3772,11 @@ mod tests {
     #[test]
     fn a_parked_name_of_a_bent_note_lands_on_its_ribbon_and_not_on_its_onset() {
         let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(1.0, 60));
-        state.tracker.handle_event(tuning(1.5, 60, 7.0)); // C4 -> G4, then held
+        state.runtime.tracker.handle_event(on(1.0, 60));
+        state.runtime.tracker.handle_event(tuning(1.5, 60, 7.0)); // C4 -> G4, then held
         let now = 8.0;
-        let roll = state.tracker.roll().clone();
-        state.whole_song =
+        let roll = state.runtime.tracker.roll().clone();
+        state.runtime.whole_song =
             Some(crate::WholeSong { columns: Vec::new(), roll, start: 4.0, span: 10.0 });
 
         let placed = labels(&state, now);
@@ -3832,10 +3833,10 @@ mod tests {
         let mut state = state(24.0, 10.0);
         state.appearance.spectrum.low_midi = 63.0;
         state.appearance.spectrum.high_midi = 87.0;
-        state.tracker.handle_event(on(1.0, 60));
-        state.tracker.handle_event(tuning(1.5, 60, 7.0)); // C4 -> G4, then held
-        let roll = state.tracker.roll().clone();
-        state.whole_song =
+        state.runtime.tracker.handle_event(on(1.0, 60));
+        state.runtime.tracker.handle_event(tuning(1.5, 60, 7.0)); // C4 -> G4, then held
+        let roll = state.runtime.tracker.roll().clone();
+        state.runtime.whole_song =
             Some(crate::WholeSong { columns: Vec::new(), roll, start: 4.0, span: 10.0 });
 
         let placed = labels(&state, 8.0);

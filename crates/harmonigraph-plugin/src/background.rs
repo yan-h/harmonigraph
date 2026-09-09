@@ -33,7 +33,8 @@
 //! comments warn about.
 //!
 //! Nothing here analyzes anything itself. It calls
-//! [`catch_up_unwatched`](crate::editor::EditorShared::catch_up_unwatched),
+//! [`LiveInput::drain`](crate::editor::LiveInput::drain) and
+//! [`VisualRuntime::advance_time`](harmonigraph_ui::VisualRuntime::advance_time),
 //! which is the frame's own drain plus the ageing a frame instead gets from
 //! `begin_frame`; see there for why sharing that one path is the point.
 //!
@@ -124,7 +125,7 @@ impl BackgroundAnalyzer {
             // the window was shut, and a heatmap with holes in it looks exactly
             // like one nobody was playing into.
             Err(err) => {
-                shared.lock().ui.console.log(format!(
+                shared.lock().ui.picture.runtime.console.log(format!(
                     "background analyzer not started ({err}) — the spectrogram \
                      will only cover time the editor window was open",
                 ));
@@ -269,12 +270,14 @@ fn tick(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Re
     let Some(mut shared) = shared.try_lock() else {
         return;
     };
+    let shared = &mut *shared;
     // BEFORE the drain: the settings decide how the samples about to be taken
     // are analyzed, so a round that adopted them afterwards would still leave
     // its own columns at the window the blob just replaced.
-    restore.adopt(&mut shared);
-    let now = shared.now();
-    shared.catch_up_unwatched(now);
+    restore.adopt(shared);
+    let now = shared.input.now();
+    shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
+    shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
 }
 
 /// Drain, sleep, repeat, until the plugin goes away.
@@ -301,8 +304,9 @@ fn run(
     // Destruction follows host callback quiescence. Consume the final owned
     // display payloads before the editor's bank is reclaimed off thread.
     let mut shared = shared.lock();
-    let now = shared.now();
-    shared.catch_up(now);
+    let shared = &mut *shared;
+    let now = shared.input.now();
+    shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
 }
 
 #[cfg(test)]
@@ -356,7 +360,7 @@ mod tests {
     /// and nothing else, written by the same call the editor saves through.
     fn blob_with_window(window: harmonigraph_ui::SpectrumWindow) -> String {
         let mut state = harmonigraph_ui::SharedState::new(crate::editor::ASSUMED_SURFACE_FORMAT);
-        state.appearance.spectrum.window = window;
+        state.picture.appearance.spectrum.window = window;
         harmonigraph_ui::shell::close(&state)
     }
 
@@ -413,16 +417,16 @@ mod tests {
         }
 
         fn columns(&self) -> usize {
-            self.shared.lock().ui.spectrum.history().len()
+            self.shared.lock().ui.picture.runtime.spectrum.history().len()
         }
 
         fn voices(&self) -> usize {
-            self.shared.lock().ui.tracker.voices().count()
+            self.shared.lock().ui.picture.runtime.tracker.voices().count()
         }
 
         /// The window the SETTING asks for.
         fn configured_window(&self) -> harmonigraph_ui::SpectrumWindow {
-            self.shared.lock().ui.appearance.spectrum.window
+            self.shared.lock().ui.picture.appearance.spectrum.window
         }
 
         /// The window the ANALYZER is actually running at, which is the claim
@@ -430,15 +434,16 @@ mod tests {
         /// precisely the bug (see `AudioSpectrum::push_samples`, the one thing
         /// that carries one to the other).
         fn analyzed_lag(&self) -> f64 {
-            self.shared.lock().ui.spectrum.column_lag()
+            self.shared.lock().ui.picture.runtime.spectrum.column_lag()
         }
 
         /// What a GUI frame does with the rings, which is the same call this
-        /// module makes — see `EditorShared::catch_up`.
+        /// module makes — see `LiveInput::drain`.
         fn frame(&self) {
             let mut shared = self.shared.lock();
-            let now = shared.now();
-            shared.catch_up(now);
+            let shared = &mut *shared;
+            let now = shared.input.now();
+            shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
         }
     }
 
@@ -540,10 +545,10 @@ mod tests {
     /// wrong in the same way.
     ///
     /// What the baseline is NOT is the real `frame`: it is `Harness::frame`,
-    /// which stands in for it by making the same `catch_up` call. So this is a
+    /// which stands in for it by making the same `LiveInput::drain` call. So this is a
     /// regression guard on `tick` — it catches `tick` growing an analyzer of its
     /// own, a clock of its own, or a `return` placed after the pop — and not
-    /// evidence that `frame` still routes through `catch_up`. That claim is
+    /// evidence that `frame` still routes through `LiveInput::drain`. That claim is
     /// `catch_up_answers_whether_notes_arrived`'s, one file over.
     ///
     /// It is the column GRID this pins and deliberately not the timestamps.
@@ -637,7 +642,7 @@ mod tests {
         let mut h = harness();
         // What the project saved, against what the user has since dialled in.
         h.restore(&blob_with_window(SpectrumWindow::Precise));
-        h.shared.lock().ui.appearance.spectrum.window = SpectrumWindow::Fast;
+        h.shared.lock().ui.picture.appearance.spectrum.window = SpectrumWindow::Fast;
         h.editor_state.set_open(true);
 
         h.tick();
@@ -694,7 +699,15 @@ mod tests {
         h.tick();
 
         assert_eq!(
-            h.shared.lock().ui.console.lines().filter(|l| l.contains("persist ignored")).count(),
+            h.shared
+                .lock()
+                .ui
+                .picture
+                .runtime
+                .console
+                .lines()
+                .filter(|l| l.contains("persist ignored"))
+                .count(),
             0,
             "an empty blob was read as a broken one",
         );
@@ -718,9 +731,9 @@ mod tests {
         // otherwise a load that reset a field to its default would pass.
         {
             let ui = &mut h.shared.lock().ui;
-            ui.appearance.spectrum.window = SpectrumWindow::Precise;
-            ui.appearance.spectrum.floor_db = -72.0;
-            ui.fps_cap = Some(90.0);
+            ui.picture.appearance.spectrum.window = SpectrumWindow::Precise;
+            ui.picture.appearance.spectrum.floor_db = -72.0;
+            ui.workspace.interaction.fps_cap = Some(90.0);
         }
         // What the close writes into `params.ui_state`.
         let saved = harmonigraph_ui::shell::close(&h.shared.lock().ui);
@@ -752,6 +765,8 @@ mod tests {
             .shared
             .lock()
             .ui
+            .picture
+            .runtime
             .console
             .lines()
             .filter(|line| line.contains("persist ignored"))

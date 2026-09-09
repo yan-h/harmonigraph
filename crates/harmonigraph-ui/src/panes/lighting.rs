@@ -2,16 +2,16 @@
 
 use super::section;
 use crate::widgets::{choice_row, ValueBar};
-use crate::SharedState;
+use crate::AppearanceDocument;
 use harmonigraph_scene::{
     GlowCurve, ShadowKernel, ShadowSettings, ShadowStyle, ViewConfig, GLOW_BALLISTICS_MAX,
     GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX,
     SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN,
 };
 
-pub(super) fn lighting_pane(ui: &mut egui::Ui, state: &mut SharedState) {
+pub(super) fn lighting_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     ui.heading("Bloom");
-    ValueBar::new(&mut state.appearance.view.bloom_strength, 0.0..=1.5, "Bloom amount")
+    ValueBar::new(&mut appearance.view.bloom_strength, 0.0..=1.5, "Bloom amount")
         .unit(1.0, "×")
         .show(ui)
         .on_hover_text(
@@ -19,8 +19,8 @@ pub(super) fn lighting_pane(ui: &mut egui::Ui, state: &mut SharedState) {
                  0 turns bloom off; \
                  1× is the reference strength.",
         );
-    glow_section(ui, &mut state.appearance.view);
-    shadow_groups(ui, &mut state.appearance.view.shadow);
+    glow_section(ui, &mut appearance.view);
+    shadow_groups(ui, &mut appearance.view.shadow);
 }
 
 fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {

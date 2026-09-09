@@ -7,7 +7,7 @@ use crate::config::BALLISTICS_MAX;
 use crate::panes::{edge_bar, section};
 use crate::params::{AnalysisInput, ParamBackend};
 use crate::widgets::{button_row, choice_row, option_label, RangeBar, ValueBar};
-use crate::SharedState;
+use crate::PictureState;
 
 /// A MIDI note as the frequency an analyzer would label it: whole hertz down
 /// low, kHz to one decimal above 1000, each carrying its unit so the number
@@ -39,7 +39,7 @@ pub(super) fn span_readout(seconds: f32) -> String {
 /// the UI state). The Display tab's Analyzer page.
 pub(crate) fn spectrum_settings_pane(
     ui: &mut egui::Ui,
-    state: &mut SharedState,
+    state: &mut PictureState,
     params: &dyn ParamBackend,
 ) {
     use crate::{SpectralOrientation, SpectrumTapers, SpectrumWindow};
@@ -256,8 +256,8 @@ pub(crate) fn spectrum_settings_pane(
             )
             .clicked()
         {
-            state.tracker.clear_roll();
-            state.spectrum.clear_history();
+            state.runtime.tracker.clear_roll();
+            state.runtime.spectrum.clear_history();
         }
     });
     section(ui, "MIDI ribbons");
@@ -362,7 +362,7 @@ mod tests {
 
     fn frame(
         ctx: &egui::Context,
-        state: &mut SharedState,
+        state: &mut PictureState,
         backend: &dyn ParamBackend,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
@@ -398,7 +398,7 @@ mod tests {
     fn analysis_input_row_is_plugin_only_and_selects_sidechain() {
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
         let absent = frame(&ctx, &mut state, &NoSource, Vec::new());
         assert!(
             text_center(&absent, "Sidechain").is_none(),

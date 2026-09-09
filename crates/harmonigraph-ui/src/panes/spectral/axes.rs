@@ -8,7 +8,7 @@
 //! screen direction either of them runs in, so an orientation change turns
 //! every layer together and no layer has to know which way is up.
 
-use crate::SharedState;
+use crate::PictureState;
 
 /// The profile line along the spectrum curve's top, in points — the light edge
 /// that gives the fill a boundary to be seen by (see
@@ -901,9 +901,9 @@ pub(super) struct TimeAxis {
 }
 
 impl TimeAxis {
-    pub(super) fn new(state: &SharedState, split: f32, now: f64) -> Self {
+    pub(super) fn new(state: &PictureState, split: f32, now: f64) -> Self {
         let depth_span = 1.0 - split;
-        match state.whole_song.as_ref() {
+        match state.runtime.whole_song.as_ref() {
             Some(ws) => TimeAxis {
                 split,
                 depth_span,

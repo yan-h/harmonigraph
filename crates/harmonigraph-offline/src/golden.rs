@@ -59,7 +59,7 @@
 use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS};
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_take::{Header, NoteKind, NoteRecord, Take};
-use harmonigraph_ui::{Layout, SharedState};
+use harmonigraph_ui::{Layout, PictureState};
 
 use crate::render::{render, Settings};
 use crate::replay::Replay;
@@ -255,7 +255,7 @@ impl Shot {
     /// same axes, so every note in the fixture is heatmap the gate cannot see —
     /// and the roll is not what #503 moves.
     fn take(&self) -> Take {
-        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         let cfg = &mut state.appearance.spectrum;
         cfg.show_roll = false;
         // The whole depth to the spectrogram's region, which also drops the
@@ -364,7 +364,7 @@ fn the_whole_song_layout_draws_the_frame_on_record() {
 #[test]
 fn mixed_spectral_shadows_draw_the_frame_on_record() {
     let shot = Shot { size: [320, 200], range: (48.0, 84.0), whole: false };
-    let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+    let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
     state.appearance.spectrum.show_roll = true;
     state.appearance.spectrum.roll_fraction = 0.65;
     state.appearance.spectrum.roll_seconds = WINDOW;
@@ -450,7 +450,7 @@ enum Drawn {
 
 /// Milliseconds a frame takes end to end, and how many were rendered.
 fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
-    let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+    let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
     let cfg = &mut state.appearance.spectrum;
     cfg.show_roll = false;
     cfg.roll_fraction = if drawn == Drawn::Heatmap { 1.0 } else { 0.0 };
@@ -533,7 +533,7 @@ fn spectral_shadow_frame_ms(
     geometry: harmonigraph_scene::ShadowKernel,
     text: harmonigraph_scene::ShadowKernel,
 ) -> Option<(f64, u64)> {
-    let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+    let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
     state.appearance.spectrum.show_roll = true;
     state.appearance.spectrum.roll_fraction = 0.65;
     state.appearance.spectrum.roll_seconds = WINDOW;

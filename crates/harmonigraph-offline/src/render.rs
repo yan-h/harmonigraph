@@ -3,11 +3,11 @@
 //! One function, deliberately, because the whole claim of this crate is
 //! that a frame depends on nothing but `now` and what has been fed in by
 //! then. Keeping the loop in one place makes that auditable — there is
-//! no hidden state between frames beyond the `SharedState` the plugin
+//! no hidden state between frames beyond the `PictureState` the plugin
 //! also carries.
 
 use harmonigraph_render::wgpu::TextureFormat;
-use harmonigraph_ui::{begin_frame, draw_pane, AppearanceDocument, Layout, SharedState};
+use harmonigraph_ui::{begin_frame, draw_pane, AppearanceDocument, Layout, PictureState};
 
 use crate::wav::Audio;
 
@@ -135,12 +135,12 @@ pub fn render(
     // property of the device, and the device outlives every frame.
     let max_texture_side = renderer.max_texture_side();
 
-    let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+    let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
     state.install_appearance(appearance);
     // Nothing offline is interactive, and both would draw over the
     // picture: no armed-mode pulse, no hover highlight.
-    state.learn_active = false;
-    state.hovered = None;
+    state.runtime.learn_active = false;
+    state.surfaces.hovered = None;
     // The comma auto-detects are interactive too, in the sense that matters
     // here: they answer a tuning EDIT, and a replay has no editor. Left on,
     // they judge the take's tuning afresh on frame 0 — and a session that
@@ -164,7 +164,7 @@ pub fn render(
         if let Some(audio) = audio {
             let span = (settings.end - settings.start).max(0.0);
             if span > 0.0 {
-                state.whole_song = Some(harmonigraph_ui::WholeSong::precompute(
+                state.runtime.whole_song = Some(harmonigraph_ui::WholeSong::precompute(
                     &audio.samples,
                     audio.channels,
                     audio.sample_rate,
@@ -177,10 +177,10 @@ pub fn render(
         }
         // The whole take's notes, laid out from the start — the roll shows the
         // whole piece at once, not filling in as the playhead passes over it.
-        if let Some(ws) = state.whole_song.as_mut() {
+        if let Some(ws) = state.runtime.whole_song.as_mut() {
             ws.roll = replay.full_roll();
         }
-        if let (Some(ws), Some(audio)) = (state.whole_song.as_ref(), audio) {
+        if let (Some(ws), Some(audio)) = (state.runtime.whole_song.as_ref(), audio) {
             if let Some(warning) = empty_window_warning(
                 ws,
                 settings.audio_start,
@@ -252,7 +252,7 @@ pub fn render(
 /// at low frame rates; the first frame therefore feeds an empty slice.
 fn prepare_frame(
     replay: &mut Replay,
-    state: &mut SharedState,
+    state: &mut PictureState,
     audio: Option<&Audio>,
     settings: &Settings,
     frame: u64,
@@ -260,7 +260,7 @@ fn prepare_frame(
     // Frame-index time avoids accumulated floating-point drift.
     let step = 1.0 / settings.fps;
     let now = settings.start + frame as f64 * step;
-    replay.advance_to(state, now);
+    replay.advance_to(&mut state.runtime, now);
     if let Some(audio) = audio {
         let from = settings.start + frame.saturating_sub(1) as f64 * step;
         let (chunk, end) =
@@ -268,7 +268,13 @@ fn prepare_frame(
         if !chunk.is_empty() {
             let newest = settings.audio_start + (end - 1) as f64 / f64::from(audio.sample_rate);
             let config = state.appearance.spectrum;
-            state.spectrum.push_samples(chunk, audio.channels, audio.sample_rate, newest, &config);
+            state.runtime.spectrum.push_samples(
+                chunk,
+                audio.channels,
+                audio.sample_rate,
+                newest,
+                &config,
+            );
         }
     }
     begin_frame(state, &replay.params, now);
@@ -371,36 +377,40 @@ mod tests {
                     ..settings()
                 };
                 let mut replay = Replay::new(transient_take(origin));
-                let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
-                state.learn_active = false;
+                let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
+                state.runtime.learn_active = false;
                 let window = state.appearance.spectrum.window.samples();
                 let lag = window as f64 / (2.0 * SR);
                 let audio_end = origin + FRAMES as f64 / SR;
                 let mut partial_tail = false;
                 for frame in 0..settings.frame_count() {
-                    let before = state.spectrum.history().len();
+                    let before = state.runtime.spectrum.history().len();
                     let now =
                         prepare_frame(&mut replay, &mut state, Some(&audio), &settings, frame);
                     let from = settings.start + frame.saturating_sub(1) as f64 / fps;
                     if from < audio_end && now > audio_end {
                         partial_tail = true;
                         assert!(
-                            state.spectrum.history().len() > before,
+                            state.runtime.spectrum.history().len() > before,
                             "partial tail must emit a column: {fps}, {offset}"
                         );
                     }
                     if from >= audio_end {
-                        assert_eq!(state.spectrum.history().len(), before, "empty tail added data");
+                        assert_eq!(
+                            state.runtime.spectrum.history().len(),
+                            before,
+                            "empty tail added data"
+                        );
                     }
                     if frame == 0 {
                         assert_eq!(
-                            state.spectrum.history().len(),
+                            state.runtime.spectrum.history().len(),
                             0,
                             "no pre-roll on the first frame"
                         );
                     }
                     assert!(
-                        state.spectrum.history().iter().all(|c| c.time <= now),
+                        state.runtime.spectrum.history().iter().all(|c| c.time <= now),
                         "future columns would evict visible history at {fps} fps"
                     );
                 }
@@ -412,7 +422,7 @@ mod tests {
                     .step_by(HOP)
                     .map(|fed| origin + (first + fed - 1) as f64 / SR - lag)
                     .collect();
-                let history = state.spectrum.history();
+                let history = state.runtime.spectrum.history();
                 assert_eq!(history.len(), expected.len());
                 assert!(!expected.is_empty());
                 for (column, expected) in history.iter().zip(expected) {
@@ -422,7 +432,7 @@ mod tests {
                         column.time
                     );
                 }
-                assert!((state.spectrum.column_lag() - lag).abs() < 1e-12);
+                assert!((state.runtime.spectrum.column_lag() - lag).abs() < 1e-12);
                 let bins: Vec<_> = history.iter().map(|c| c.db.to_vec()).collect();
                 if let Some(previous) = &previous_bins {
                     assert_eq!(&bins, previous, "batching changed spectrum bytes at {fps} fps");
@@ -457,7 +467,7 @@ mod tests {
     fn rendering_sliced_audio_twice_is_byte_identical() {
         let audio = transient_audio();
         let mut take = transient_take(7.125);
-        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         state.appearance.spectrum.roll_seconds = 1.0;
         state.appearance.spectrum.roll_fraction = 1.0;
         state.appearance.spectrum.show_roll = false;
@@ -519,7 +529,7 @@ mod tests {
         let expected_size = replacement.render.frame.pixels(720);
         assert_eq!(crate::output_size(None, &selected.render), expected_size);
         assert_eq!(crate::output_size(Some([640, 480]), &selected.render), [640, 480]);
-        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         state.install_appearance(selected);
         assert_eq!(state.appearance.serialize(), replacement.serialize());
         for refused in
@@ -561,7 +571,7 @@ mod tests {
     /// what the tests above measure is the frame count and the picture, neither
     /// of which wants a halo over it.
     fn lit_take() -> Take {
-        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         state.appearance.view.glow_reach = 0.8;
         state.appearance.view.glow_strength = 1.5;
         // Long against the tenth of a second a frame is here, so several frames
@@ -575,7 +585,7 @@ mod tests {
     }
 
     fn spectral_shadow_take(enabled: bool) -> Take {
-        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         state.appearance.spectrum.show_roll = true;
         state.appearance.spectrum.roll_fraction = 0.7;
         state.appearance.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {

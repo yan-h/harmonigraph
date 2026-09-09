@@ -11,10 +11,14 @@
 
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
-use crate::SharedState;
+use crate::AppearanceDocument;
 
 /// Render quality/cost, then the workspace layout.
-pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
+pub(super) fn system_pane(
+    ui: &mut egui::Ui,
+    appearance: &mut AppearanceDocument,
+    interaction: &mut crate::Interaction,
+) {
     // Performance: the cost dial and the meter to judge it by. Render scale is
     // presented as GPU cost rather than as a look setting, because that is what
     // it is: the renderer pins the two things that decide how the lattice LOOKS
@@ -26,7 +30,7 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // edge is already soft-banded before the extra samples see it. Described as
     // "higher supersamples" it read as a quality knob that did nothing.
     ui.heading("Performance");
-    ValueBar::new(&mut state.appearance.view.render_scale, 0.5..=2.0, "Render resolution")
+    ValueBar::new(&mut appearance.view.render_scale, 0.5..=2.0, "Render resolution")
         .percent()
         .show(ui)
         .on_hover_text(
@@ -43,7 +47,7 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     choice_row(
         ui,
         "Frame limit (fps)",
-        &mut state.fps_cap,
+        &mut interaction.fps_cap,
         &[
             (None, "Uncapped", "Repaint as often as the host window allows."),
             (
@@ -56,12 +60,12 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             (Some(144.0), "144", "For a high-refresh display."),
         ],
     );
-    ui.checkbox(&mut state.appearance.view.show_perf, "Performance overlay").on_hover_text(
+    ui.checkbox(&mut appearance.view.show_perf, "Performance overlay").on_hover_text(
         "A draggable HUD: frame rate, worst recent frame, memory, and the \
          voice/node workload.",
     );
-    if state.appearance.view.show_perf {
-        ui.checkbox(&mut state.appearance.view.show_perf_detail, "Frame breakdown").on_hover_text(
+    if appearance.view.show_perf {
+        ui.checkbox(&mut appearance.view.show_perf_detail, "Frame breakdown").on_hover_text(
             "Expands the overlay into every stage of the frame, to see which \
              one is costing you.",
         );
@@ -76,13 +80,13 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // where the settings column costs more of the screen than the picture can
     // spare. A render is unaffected for the same reason, and deliberately: the
     // offline renderer draws the picture panes and never this.
-    ValueBar::new(&mut state.ui_scale, crate::theme::UI_SCALE_RANGE, "Interface scale")
+    ValueBar::new(&mut interaction.ui_scale, crate::theme::UI_SCALE_RANGE, "Interface scale")
         .percent()
         .show(ui)
         .on_hover_text(
             "Size of interface text, controls and tab bars. 100% is the reference size. Picture scale and exported videos are unaffected.",
         );
-    ui.checkbox(&mut state.appearance.view.frameless, "Hide tab bars (Tab)").on_hover_text(
+    ui.checkbox(&mut appearance.view.frameless, "Hide tab bars (Tab)").on_hover_text(
         "Hide dock tab bars for a continuous picture. Press Tab to toggle while not editing text.",
     );
     button_row(ui, |ui| {
@@ -90,7 +94,7 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         // every reopen, so a new default layout is otherwise unreachable).
         if ui.button("Reset layout").on_hover_text("Restore the default pane arrangement").clicked()
         {
-            state.workspace.reset_dock_layout();
+            interaction.reset_layout = true;
         }
     });
 }

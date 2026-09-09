@@ -55,7 +55,8 @@ say so in the PR body, and keep the refusal audible.
 
 ## Appearance and editor workspace have separate boundaries
 
-`SharedState` owns `AppearanceDocument` directly.
+`PictureState` owns `AppearanceDocument` directly;
+`SharedState` adds the editor workspace around the picture.
 Editor saves nest it beside the workspace;
 take/record transport its serialized text opaquely.
 `AppearanceDocument::parse` checks the appearance version and normalizes its settings once before export chooses output configuration or initializes drawing.

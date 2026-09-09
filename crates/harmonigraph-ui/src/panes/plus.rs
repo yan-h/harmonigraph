@@ -51,12 +51,12 @@
 
 use super::{edge_bar, section};
 use crate::widgets::ValueBar;
-use crate::SharedState;
+use crate::AppearanceDocument;
 use harmonigraph_scene::{ViewConfig, PLUS_SIZE_MAX};
 
 /// The resting picture, last on the page: the lattice's own structure, under
 /// everything drawn on top of it.
-pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
+pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     section(ui, "Idle lattice");
     // First, because it is the one setting here that reaches past this
     // section: the rings it moves belong to the note, and every other bar
@@ -67,7 +67,7 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // rather than nothing, which against the panel reads as holes punched
     // through the lattice: a picture worth being able to reach, and worth
     // reaching by dragging rather than by falling off the end.
-    ValueBar::new(&mut state.appearance.view.lattice_ground, 0.0..=100.0, "Idle ring brightness")
+    ValueBar::new(&mut appearance.view.lattice_ground, 0.0..=100.0, "Idle ring brightness")
         .unit(1.0, "%")
         // L*, the units the gradients' own Brightness is authored in, so a
         // ground and a gradient can be compared by their numbers. Whole
@@ -86,7 +86,7 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     //
     // No off position, for the bar above's reason: Arm length at 0 is the
     // marker field's own switch, and every setting of this one draws.
-    ValueBar::new(&mut state.appearance.view.marker_ink, 0.0..=100.0, "Idle label brightness")
+    ValueBar::new(&mut appearance.view.marker_ink, 0.0..=100.0, "Idle label brightness")
         .unit(1.0, "%")
         // Whole points on the same L* axis as Ground, and that IS the point of
         // the units: two bars a person is meant to read against each other
@@ -104,7 +104,7 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // rings stand around can be read off the numbers rather than by eye.
     edge_bar(
         ui,
-        (&mut state.appearance.view.plus_arm, &mut state.appearance.view.plus_taper),
+        (&mut appearance.view.plus_arm, &mut appearance.view.plus_taper),
         PLUS_SIZE_MAX,
         "Cross length",
         {
@@ -128,7 +128,7 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // with the screen-constant band every edge here carries, so the bottom of
     // this bar is the thinnest cross the screen can draw. What takes the field
     // away is the bar above.
-    ValueBar::new(&mut state.appearance.view.plus_width, 0.0..=PLUS_SIZE_MAX, "Cross width")
+    ValueBar::new(&mut appearance.view.plus_width, 0.0..=PLUS_SIZE_MAX, "Cross width")
         .percent()
         .show(ui)
         .on_hover_text(

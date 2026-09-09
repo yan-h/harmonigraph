@@ -94,7 +94,13 @@ fn chord_samples(n: usize, phase: &mut f64) -> Vec<f32> {
 /// lattice and give the roll something to scroll.
 fn held_chord(state: &mut SharedState, now: f64) {
     for note in [57u8, 61, 64, 69, 73, 76] {
-        state.tracker.handle_event(NoteEvent::on(now, SourceId::DIRECT, 0, note, 0.8));
+        state.picture.runtime.tracker.handle_event(NoteEvent::on(
+            now,
+            SourceId::DIRECT,
+            0,
+            note,
+            0.8,
+        ));
     }
 }
 
@@ -151,15 +157,26 @@ fn profile(label: &str, ppp: f32, load: Load, tweak: impl Fn(&mut SharedState)) 
         // run will read it at.
         let t = h.next_time();
         let audio = chord_samples(FRAME_SAMPLES, &mut phase);
-        let cfg = state.appearance.spectrum;
-        state.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
+        let cfg = state.picture.appearance.spectrum;
+        state.picture.runtime.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
         for k in 0..load.notes_per_frame {
             // Walking the keyboard rather than repeating one note: a name is
             // memoized per pitch class, so a stuck note would measure one
             // cache hit a frame instead of the naming work.
             let note = 36 + ((i * load.notes_per_frame + k) * 7 % 60) as u8;
-            state.tracker.handle_event(NoteEvent::on(t, SourceId::DIRECT, 0, note, 0.7));
-            state.tracker.handle_event(NoteEvent::off(t + 0.25, SourceId::DIRECT, 0, note));
+            state.picture.runtime.tracker.handle_event(NoteEvent::on(
+                t,
+                SourceId::DIRECT,
+                0,
+                note,
+                0.7,
+            ));
+            state.picture.runtime.tracker.handle_event(NoteEvent::off(
+                t + 0.25,
+                SourceId::DIRECT,
+                0,
+                note,
+            ));
         }
 
         let events = load.hover.map(|at| vec![egui::Event::PointerMoved(at)]).unwrap_or_default();
@@ -214,28 +231,34 @@ fn profile_frame() {
     profile("idle @1x", 1.0, idle, |_| {});
     profile("idle @2x (retina)", 2.0, idle, |_| {});
     profile("idle, perf overlay on", 2.0, idle, |s| {
-        s.appearance.view.show_perf = true;
-        s.appearance.view.show_perf_detail = true;
+        s.picture.appearance.view.show_perf = true;
+        s.picture.appearance.view.show_perf_detail = true;
     });
-    profile("idle, no spectrogram", 2.0, idle, |s| s.appearance.spectrum.show_spectrogram = false);
-    profile("idle, no roll", 2.0, idle, |s| s.appearance.spectrum.show_roll = false);
-    profile("idle, no lattice labels", 2.0, idle, |s| s.appearance.view.show_labels = false);
+    profile("idle, no spectrogram", 2.0, idle, |s| {
+        s.picture.appearance.spectrum.show_spectrogram = false
+    });
+    profile("idle, no roll", 2.0, idle, |s| s.picture.appearance.spectrum.show_roll = false);
+    profile("idle, no lattice labels", 2.0, idle, |s| {
+        s.picture.appearance.view.show_labels = false
+    });
     profile("idle, hover lattice", 2.0, on_lattice, |_| {});
     profile("idle, hover spectral", 2.0, on_spectral, |_| {});
 
     println!("-- a bigger lattice: the scene derivation is per NODE --");
-    profile("sevens open (819 nodes)", 2.0, idle, |s| s.appearance.view.extent_sevens = 1);
+    profile("sevens open (819 nodes)", 2.0, idle, |s| s.picture.appearance.view.extent_sevens = 1);
     profile("3075 nodes", 2.0, idle, |s| {
-        s.appearance.view.extent_threes = 20;
-        s.appearance.view.extent_fives = 12;
-        s.appearance.view.extent_sevens = 1;
+        s.picture.appearance.view.extent_threes = 20;
+        s.picture.appearance.view.extent_fives = 12;
+        s.picture.appearance.view.extent_sevens = 1;
     });
 
     println!("-- a busy passage: 6 notes a frame, each held a quarter second --");
     profile("busy", 2.0, busy, |_| {});
-    profile("busy, no note names", 2.0, busy, |s| s.appearance.spectrum.note_names = false);
-    profile("busy, no roll", 2.0, busy, |s| s.appearance.spectrum.show_roll = false);
-    profile("busy, no lattice labels", 2.0, busy, |s| s.appearance.view.show_labels = false);
+    profile("busy, no note names", 2.0, busy, |s| s.picture.appearance.spectrum.note_names = false);
+    profile("busy, no roll", 2.0, busy, |s| s.picture.appearance.spectrum.show_roll = false);
+    profile("busy, no lattice labels", 2.0, busy, |s| {
+        s.picture.appearance.view.show_labels = false
+    });
     profile("busy, 2 notes a frame", 2.0, Load { notes_per_frame: 2, ..idle }, |_| {});
     profile("busy, 12 notes a frame", 2.0, Load { notes_per_frame: 12, ..idle }, |_| {});
 }
@@ -269,7 +292,7 @@ fn profile_allocations() {
     for i in 0..(WARMUP + FRAMES) {
         let t = h.next_time();
         if i == WARMUP {
-            at_warmup = state.spectrum.spectrogram_fallbacks();
+            at_warmup = state.picture.surfaces.spectrogram.spectrogram_fallbacks();
         }
         let counting = i >= WARMUP;
         let mut charge = |slot: usize, from: (usize, usize)| {
@@ -282,8 +305,8 @@ fn profile_allocations() {
 
         let at = mark();
         let audio = chord_samples(FRAME_SAMPLES, &mut phase);
-        let cfg = state.appearance.spectrum;
-        state.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
+        let cfg = state.picture.appearance.spectrum;
+        state.picture.runtime.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
         charge(0, at);
 
         let at = mark();
@@ -303,7 +326,7 @@ fn profile_allocations() {
             bytes as f64 / FRAMES as f64 / 1024.0,
         );
     }
-    let (rebuilds, uploads) = state.spectrum.spectrogram_fallbacks();
+    let (rebuilds, uploads) = state.picture.surfaces.spectrogram.spectrogram_fallbacks();
     println!(
         "spectrogram over {FRAMES} frames: {} re-aggregations, {} full uploads",
         rebuilds - at_warmup.0,
@@ -321,8 +344,8 @@ fn profile_settings_panes() {
     let mut state = fresh();
     // The Video pane's record button and progress bar only exist with a take
     // backend behind them.
-    state.take.supported = true;
-    state.take.last_ready = true;
+    state.workspace.interaction.take.supported = true;
+    state.workspace.interaction.take.last_ready = true;
     let ctx = super::probe::themed();
 
     println!("\n-- one settings pane at 300 points wide, ms per frame --");
@@ -362,16 +385,16 @@ fn profile_picture_panes() {
         for i in 0..(WARMUP + 240) {
             let t = i as f64 / 60.0;
             let audio = chord_samples(FRAME_SAMPLES, &mut phase);
-            let cfg = state.appearance.spectrum;
-            state.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
+            let cfg = state.picture.appearance.spectrum;
+            state.picture.runtime.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
             let start = std::time::Instant::now();
             let _ = super::probe::frame_into(
                 &ctx,
                 body,
                 egui::Rect::from_min_size(egui::Pos2::ZERO, body),
                 |ui| {
-                    crate::begin_frame(&mut state, &backend, t);
-                    draw_pane(ui, pane, &mut state, t, 0);
+                    crate::begin_frame(&mut state.picture, &backend, t);
+                    draw_pane(ui, pane, &mut state.picture, t, 0);
                 },
             );
             let ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -400,8 +423,8 @@ fn profile_shape_census() {
     for _ in 0..(WARMUP + 30) {
         let t = h.next_time();
         let audio = chord_samples(FRAME_SAMPLES, &mut phase);
-        let cfg = state.appearance.spectrum;
-        state.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
+        let cfg = state.picture.appearance.spectrum;
+        state.picture.runtime.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
         out = Some(h.frame(&mut state, vec![]));
     }
 
@@ -444,5 +467,82 @@ fn shape_name(shape: &egui::Shape) -> &'static str {
         egui::Shape::QuadraticBezier(_) => "quad-bezier",
         egui::Shape::CubicBezier(_) => "cubic-bezier",
         egui::Shape::Callback(_) => "callback",
+    }
+}
+
+/// Repeatable ownership-refactor comparison. Includes analysis in the total,
+/// with a real dock and Video preview, plus the same feed without drawing.
+#[test]
+#[ignore]
+fn profile_visual_runtime() {
+    for (label, draw, preview, audio_on) in [
+        ("quiet dock", true, false, false),
+        ("active dock", true, false, true),
+        ("active dock + preview", true, true, true),
+        ("active no drawing", false, false, true),
+        ("quiet no drawing", false, false, false),
+    ] {
+        let mut state = fresh();
+        state.picture.appearance.view.spectral_ring_width = 0.15;
+        state.picture.appearance.view.spectral_reading = harmonigraph_scene::SpectralReading::Fold;
+        if preview {
+            let path = state.workspace.dock.find_tab(&panes::Tab::Video).unwrap();
+            state.workspace.dock.set_active_tab(path).unwrap();
+        }
+        let mut h = DockHarness::at(WINDOW);
+        h.ctx.set_pixels_per_point(2.0);
+        if audio_on {
+            held_chord(&mut state, 0.0);
+        }
+        let mut phase = 0.0;
+        let mut total = Vec::new();
+        let mut analysis = Vec::new();
+        let mut frame = Vec::new();
+        let mut allocations = Vec::new();
+        for i in 0..(WARMUP + 600) {
+            let now = (i + 1) as f64 / 60.0;
+            let audio = if audio_on { chord_samples(FRAME_SAMPLES, &mut phase) } else { vec![] };
+            let start_allocs = ALLOCS.load(std::sync::atomic::Ordering::Relaxed);
+            let start = std::time::Instant::now();
+            state.picture.runtime.spectrum.push_samples(
+                &audio,
+                1,
+                RATE,
+                now,
+                &state.picture.appearance.spectrum,
+            );
+            let fed = start.elapsed().as_secs_f64() * 1000.0;
+            if draw {
+                let out = h.frame(&mut state, vec![]);
+                std::hint::black_box(h.ctx.tessellate(out.shapes, out.pixels_per_point));
+            } else {
+                begin_frame(&mut state.picture, &RecordingBackend::default(), now);
+            }
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            let allocs = ALLOCS.load(std::sync::atomic::Ordering::Relaxed) - start_allocs;
+            if i >= WARMUP {
+                total.push(elapsed);
+                analysis.push(fed);
+                frame.push(elapsed - fed);
+                allocations.push(allocs as f64);
+            }
+        }
+        if preview {
+            assert!(state.picture.surfaces.glow_fade.len() >= 2, "both lattice surfaces must draw");
+        }
+        let summary = |mut values: Vec<f64>| {
+            values.sort_by(f64::total_cmp);
+            format!(
+                "min {:.3} p50 {:.3} p95 {:.3} p99 {:.3} max {:.3}",
+                values[0], values[300], values[570], values[594], values[599]
+            )
+        };
+        println!(
+            "{label}: total {} ms; analysis {} ms; frame {} ms; allocations {}",
+            summary(total),
+            summary(analysis),
+            summary(frame),
+            summary(allocations)
+        );
     }
 }

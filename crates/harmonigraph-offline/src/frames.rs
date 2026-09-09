@@ -305,7 +305,7 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_node_glow_draws_a_picture() {
-        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+        use harmonigraph_ui::{draw_pane, Layout, PictureState};
 
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
@@ -320,17 +320,17 @@ mod tests {
         context.set_pixels_per_point(PPP);
 
         let layout = Layout::preset("lattice").expect("the lattice preset");
-        let mut state = SharedState::new(FORMAT);
+        let mut state = PictureState::new(FORMAT);
         // The DAW's own lattice ground rather than the preset's near-black, so
         // what the light lands on here is what it lands on there.
         state.set_background((24, 25, 29));
-        state.frame_params.fade_time = 0.0;
+        state.runtime.frame_params.fade_time = 0.0;
         // The light's own clock off: one frame is the whole picture, and a
         // halo part way through its attack is a shot of the ballistics.
         state.appearance.view.glow_attack = 0.0;
         state.appearance.view.glow_release = 0.0;
         for note in [55u8, 60, 64, 67, 71] {
-            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+            state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
                 0.0,
                 harmonigraph_core::SourceId::DIRECT,
                 0,
@@ -417,7 +417,7 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_shadow_against_the_octave_gap() {
-        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+        use harmonigraph_ui::{draw_pane, Layout, PictureState};
 
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
@@ -432,15 +432,15 @@ mod tests {
         context.set_pixels_per_point(PPP);
 
         let layout = Layout::preset("lattice").expect("the lattice preset");
-        let mut state = SharedState::new(FORMAT);
+        let mut state = PictureState::new(FORMAT);
         state.set_background((24, 25, 29));
-        state.frame_params.fade_time = 0.0;
+        state.runtime.frame_params.fade_time = 0.0;
         state.appearance.view.glow_attack = 0.0;
         state.appearance.view.glow_release = 0.0;
         state.appearance.view.glow_reach = 2.0;
         state.appearance.view.glow_strength = 1.0;
         for note in [55u8, 60, 64, 67, 71] {
-            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+            state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
                 0.0,
                 harmonigraph_core::SourceId::DIRECT,
                 0,
@@ -520,7 +520,7 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_resting_markers_draw_a_picture() {
-        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+        use harmonigraph_ui::{draw_pane, Layout, PictureState};
 
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
@@ -570,17 +570,17 @@ mod tests {
             (fresh.plus_arm, fresh.plus_width, fresh.plus_arm, false, NoteNames::Played),
         ];
         for (size, width, taper, chord, names) in shots {
-            let mut state = SharedState::new(FORMAT);
+            let mut state = PictureState::new(FORMAT);
             state.appearance.view.show_labels = true;
             state.appearance.view.note_names = names;
             // The DAW's own lattice ground rather than the preset's near-black:
             // the markers are a step above the panel and nothing else here says
             // how big a step that reads as.
             state.set_background((24, 25, 29));
-            state.frame_params.fade_time = 0.0;
+            state.runtime.frame_params.fade_time = 0.0;
             if chord {
                 for note in [55u8, 60, 64, 67, 71] {
-                    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+                    state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
                         0.0,
                         harmonigraph_core::SourceId::DIRECT,
                         0,
@@ -652,7 +652,7 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_lattice_shadows_draw_a_picture() {
-        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+        use harmonigraph_ui::{draw_pane, Layout, PictureState};
 
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
@@ -678,13 +678,13 @@ mod tests {
 
         let fresh = harmonigraph_scene::ShadowStyle::default();
         for shadow in [0.0f32, fresh.width, 0.45, harmonigraph_scene::GLOW_SHADOW_MAX] {
-            let mut state = SharedState::new(FORMAT);
+            let mut state = PictureState::new(FORMAT);
             state.appearance.view.show_labels = true;
             state.appearance.view.note_names = harmonigraph_scene::NoteNames::Played;
             state.set_background((24, 25, 29));
-            state.frame_params.fade_time = 0.0;
+            state.runtime.frame_params.fade_time = 0.0;
             for note in [55u8, 60, 64, 67, 71] {
-                state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+                state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
                     0.0,
                     harmonigraph_core::SourceId::DIRECT,
                     0,
@@ -743,7 +743,7 @@ mod tests {
     /// fixture sets its own rather than taking the layout's.
     #[test]
     fn a_node_with_a_sheet_behind_it_is_still_a_lamp() {
-        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+        use harmonigraph_ui::{draw_pane, Layout, PictureState};
 
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
@@ -770,9 +770,9 @@ mod tests {
             0.2126 * b[i] as f64 + 0.7152 * b[i + 1] as f64 + 0.0722 * b[i + 2] as f64
         };
         let mut read = |extent: i32| -> (f64, f64) {
-            let mut state = SharedState::new(FORMAT);
+            let mut state = PictureState::new(FORMAT);
             state.set_background((24, 25, 29));
-            state.frame_params.fade_time = 0.0;
+            state.runtime.frame_params.fade_time = 0.0;
             // Settled: the light's own clock would otherwise leave a one-frame
             // shot part way up its attack, which is a reading of the ramp.
             state.appearance.view.glow_attack = 0.0;
@@ -791,7 +791,7 @@ mod tests {
             // which is a claim of its own and not the light under the body.
             state.appearance.view.show_labels = false;
             for note in [60u8, 64, 67, 70] {
-                state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+                state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
                     0.0,
                     harmonigraph_core::SourceId::DIRECT,
                     0,
@@ -870,7 +870,7 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_audio_ring_draws_a_picture() {
-        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+        use harmonigraph_ui::{draw_pane, Layout, PictureState};
 
         const SIZE: [u32; 2] = [1200, 1000];
         // Retina-ish, so the wedges and the note names are resolved rather
@@ -891,11 +891,11 @@ mod tests {
         context.set_pixels_per_point(PPP);
 
         let layout = Layout::preset("lattice").expect("the lattice preset");
-        let mut state = SharedState::new(FORMAT);
+        let mut state = PictureState::new(FORMAT);
         state.set_background(layout.background);
         // Just intonation, which is what the panel is aimed at: a partial of a
         // just-tuned note lands ON its node rather than near it.
-        state.tuning = harmonigraph_core::Tuning::just();
+        state.runtime.tuning = harmonigraph_core::Tuning::just();
         // #351's reading conditions, and the reason this probe exists. Its
         // "pull the extents in" is a ZOOM here: the drawn window is whatever
         // the camera is looking at, and the extents set the naming
@@ -913,8 +913,8 @@ mod tests {
         state.appearance.spectrum.release = 0.0;
         // Fully lit at once: an envelope would put the MIDI half of the
         // picture part way through its arrival.
-        state.frame_params.fade_time = 0.0;
-        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+        state.runtime.frame_params.fade_time = 0.0;
+        state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
             0.0,
             harmonigraph_core::SourceId::DIRECT,
             0,
@@ -922,7 +922,7 @@ mod tests {
             1.0,
         ));
         let cfg = state.appearance.spectrum;
-        state.spectrum.push_samples(&sawtooth(48.0, RATE), 1, RATE, NOW, &cfg);
+        state.runtime.spectrum.push_samples(&sawtooth(48.0, RATE), 1, RATE, NOW, &cfg);
 
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
@@ -1075,7 +1075,7 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn a_released_note_lets_go_of_its_light() {
-        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+        use harmonigraph_ui::{draw_pane, Layout, PictureState};
 
         const SIZE: [u32; 2] = [900, 900];
         const PPP: f32 = 2.0;
@@ -1110,7 +1110,7 @@ mod tests {
             [-0.05, 0.1, 0.25, 0.4, 0.6, 0.9, 1.5, 2.5].iter().map(|t| OFF + t).collect();
 
         for (tag, depth) in shots {
-            let mut state = SharedState::new(FORMAT);
+            let mut state = PictureState::new(FORMAT);
             state.set_background((24, 25, 29));
             state.appearance.view.glow_reach = 1.5;
             state.appearance.view.glow_strength = 1.0;
@@ -1119,7 +1119,7 @@ mod tests {
                 style.depth = depth;
             }
             state.appearance.camera.zoom_by(2.0);
-            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+            state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
                 0.0,
                 harmonigraph_core::SourceId::DIRECT,
                 0,
@@ -1131,7 +1131,7 @@ mod tests {
             let mut shot = 0usize;
             while shot < want.len() {
                 if !released && now >= OFF {
-                    state.tracker.handle_event(harmonigraph_core::NoteEvent::off(
+                    state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::off(
                         now,
                         harmonigraph_core::SourceId::DIRECT,
                         0,
@@ -1199,7 +1199,7 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_marker_depth_order_draws_a_picture() {
-        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+        use harmonigraph_ui::{draw_pane, Layout, PictureState};
 
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
@@ -1229,12 +1229,12 @@ mod tests {
             ("edge", 1.42, 0.4),
             ("yaw", 0.3, 1.42),
         ] {
-            let mut state = SharedState::new(FORMAT);
+            let mut state = PictureState::new(FORMAT);
             state.appearance.view.show_labels = false;
             state.set_background((24, 25, 29));
-            state.frame_params.fade_time = 0.0;
+            state.runtime.frame_params.fade_time = 0.0;
             for note in [55u8, 60, 64, 67, 71] {
-                state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+                state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
                     0.0,
                     harmonigraph_core::SourceId::DIRECT,
                     0,

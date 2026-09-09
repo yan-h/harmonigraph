@@ -1,6 +1,6 @@
 //! The audio-derived spectrum behind the Spectral pane: the analyzer that
 //! turns incoming samples into columns, the store those columns age out of,
-//! and the per-surface caches describing the uploaded heatmap texture.
+//! Separate surface storage describes the uploaded heatmap textures.
 //! Runtime-only — none of this is persisted.
 
 use crate::SpectrumConfig;
@@ -10,10 +10,19 @@ use crate::SpectrumConfig;
 pub(crate) type SpectrumBuckets = [f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
 
 /// Audio-derived pitch spectrum shown in the Spectral pane. The shell
-/// feeds mono samples every frame from wherever its audio comes from
+/// feeds samples every tick from wherever its audio comes from
 /// (plugin: selected main/sidechain input via a ring buffer; standalone: the
-/// mock synth); the pane asks for a display refresh when it draws. Runtime-only.
+/// mock synth). Analysis advances on the sample clock without drawing. Runtime-only.
 pub struct AudioSpectrum {
+    /// Changed only when the smoothed grid changes. This identity lives beside
+    /// its one-frame measurement, so replacing/resetting the analyzer drops both.
+    display_revision: u64,
+    /// One lazy Fold for matching draws at the same logical frame time.
+    /// Time prevents cross-frame reuse; width and revision preserve edits and
+    /// new audio within repeated egui passes. Geometry and palettes are not inputs.
+    frame_fold: Option<(f64, u64, u32, crate::panes::spectral_fold::Fold)>,
+    #[cfg(test)]
+    pub(crate) fold_measurements: usize,
     /// One analyzer per input channel, combined in the power domain — see
     /// [`ChannelBank`](harmonigraph_core::spectrum::ChannelBank).
     pub(crate) analyzer: harmonigraph_core::spectrum::ChannelBank,
@@ -50,10 +59,6 @@ pub struct AudioSpectrum {
     /// [`SpectrumHistory`] and
     /// [`AudioSpectrum::push_history`].
     pub(crate) history: SpectrumHistory,
-    /// One per drawing surface, so two live spectrograms in one frame don't
-    /// overwrite each other's work. See [`SpectrogramSurfaces`] for what a
-    /// surface id is.
-    pub(crate) spectrogram: SpectrogramSurfaces,
 }
 
 /// Every drawing surface's heatmap state, indexed by the surface id its copy of
@@ -137,7 +142,7 @@ pub use harmonigraph_core::spectrogram::{SpectrogramColumn, SpectrumHistory};
 /// `Some` only in the offline renderer — the live ring
 /// ([`AudioSpectrum::history`]) is bounded and scrolls with `now` instead.
 /// Runtime-only, never persisted (like
-/// [`SharedState::learn_active`](crate::SharedState::learn_active)).
+/// [`VisualRuntime::learn_active`](crate::VisualRuntime::learn_active)).
 pub struct WholeSong {
     /// Take time at the near edge: the playhead sits here at the render's
     /// start.
@@ -298,6 +303,10 @@ impl WholeSong {
 impl Default for AudioSpectrum {
     fn default() -> Self {
         AudioSpectrum {
+            display_revision: 0,
+            frame_fold: None,
+            #[cfg(test)]
+            fold_measurements: 0,
             analyzer: harmonigraph_core::spectrum::ChannelBank::new(48_000.0, 1),
             display: [0.0; harmonigraph_core::spectrum::SPECTRUM_BINS],
             frames_seen: 0,
@@ -305,7 +314,6 @@ impl Default for AudioSpectrum {
             anchor: None,
             last_samples: None,
             history: SpectrumHistory::default(),
-            spectrogram: SpectrogramSurfaces::default(),
         }
     }
 }
@@ -348,19 +356,6 @@ pub(crate) fn hop_alpha(seconds: f32, dt: f64) -> f32 {
 }
 
 impl AudioSpectrum {
-    /// Forget what the GPU holds of the spectrogram grids, so the next draw
-    /// uploads them whole into whatever context is current. See
-    /// [`SharedState::release_context_resources`](crate::SharedState::release_context_resources).
-    ///
-    /// The aggregators survive: they are derived from the STORE rather than
-    /// from anything the GPU allocated, and are the one piece a new context does
-    /// not invalidate.
-    pub(crate) fn release_gpu_grids(&mut self) {
-        for surface in self.spectrogram.all_mut() {
-            surface.gpu.release();
-        }
-    }
-
     /// Seconds of AUDIO between FFTs (125 columns a second), measured in
     /// samples rather than on the shell clock — see
     /// [`push_samples`](Self::push_samples).
@@ -491,6 +486,7 @@ impl AudioSpectrum {
             // Two coefficients, chosen per bucket by which way it is moving.
             // Derived from the hop actually in use rather than set on the bar,
             // so the times mean seconds at any hop this loop runs at.
+            self.display_revision = self.display_revision.wrapping_add(1);
             let step = hop as f64 / sr;
             let attack = hop_alpha(config.attack, step);
             let release = hop_alpha(config.release, step);
@@ -562,19 +558,6 @@ impl AudioSpectrum {
         &self.history
     }
 
-    /// Fallbacks taken across every surface since the plugin was opened: full
-    /// re-aggregations of the window, and full uploads of the grid.
-    ///
-    /// Both are CORRECT and both are expensive, which is the whole problem —
-    /// they draw the right picture at many times the cost, so nothing on screen
-    /// distinguishes a working cache from one that has quietly stopped. The
-    /// overlay turns them into a rate, where "climbing" is the entire diagnosis.
-    pub(crate) fn spectrogram_fallbacks(&self) -> (u32, u32) {
-        self.spectrogram.all().fold((0, 0), |(rebuilds, uploads), s| {
-            (rebuilds + s.agg.as_ref().map_or(0, |a| a.rebuilds()), uploads + s.gpu.full_uploads())
-        })
-    }
-
     /// Forget the spectrogram history (paired with clearing the roll).
     pub fn clear_history(&mut self) {
         self.history.clear();
@@ -600,5 +583,57 @@ impl AudioSpectrum {
     /// shown), so it idles cleanly once audio stops.
     pub fn is_flowing(&self, now: f64) -> bool {
         self.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS)
+    }
+}
+
+impl SpectrogramSurfaces {
+    /// Forget what the GPU holds of the spectrogram grids, so the next draw
+    /// uploads them whole into whatever context is current. See
+    /// [`PictureState::release_context_resources`](crate::PictureState::release_context_resources).
+    ///
+    /// The aggregators survive: they are derived from the STORE rather than
+    /// from anything the GPU allocated, and are the one piece a new context does
+    /// not invalidate.
+    pub(crate) fn release_gpu_grids(&mut self) {
+        for surface in self.all_mut() {
+            surface.gpu.release();
+        }
+    }
+    /// Fallbacks taken across every surface since the plugin was opened: full
+    /// re-aggregations of the window, and full uploads of the grid.
+    ///
+    /// Both are CORRECT and both are expensive, which is the whole problem —
+    /// they draw the right picture at many times the cost, so nothing on screen
+    /// distinguishes a working cache from one that has quietly stopped. The
+    /// overlay turns them into a rate, where "climbing" is the entire diagnosis.
+    pub(crate) fn spectrogram_fallbacks(&self) -> (u32, u32) {
+        self.all().fold((0, 0), |(rebuilds, uploads), s| {
+            (rebuilds + s.agg.as_ref().map_or(0, |a| a.rebuilds()), uploads + s.gpu.full_uploads())
+        })
+    }
+}
+
+impl AudioSpectrum {
+    pub(crate) fn folded(&mut self, now: f64, width: f32) -> Option<&SpectrumBuckets> {
+        self.display(now)?;
+        let width = crate::panes::spectral_fold::Fold::clamped_width(width);
+        let key = (now, self.display_revision, width.to_bits());
+        if self
+            .frame_fold
+            .as_ref()
+            .is_none_or(|(time, revision, width, _)| (*time, *revision, *width) != key)
+        {
+            self.frame_fold = Some((
+                key.0,
+                key.1,
+                key.2,
+                crate::panes::spectral_fold::Fold::measure(&self.display, width),
+            ));
+            #[cfg(test)]
+            {
+                self.fold_measurements += 1;
+            }
+        }
+        self.frame_fold.as_ref().map(|(_, _, _, fold)| fold.grid())
     }
 }

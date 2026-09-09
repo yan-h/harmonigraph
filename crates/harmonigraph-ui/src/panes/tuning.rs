@@ -13,7 +13,7 @@ use super::param_bar;
 use super::section;
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, ValueBar};
-use crate::{theme, SharedState};
+use crate::{theme, PictureState};
 use harmonigraph_core::configuration::ConfigEdit;
 use harmonigraph_core::tuning;
 
@@ -57,7 +57,7 @@ use harmonigraph_core::tuning;
 /// cannot get back to anyway.
 fn tempered_bar(
     ui: &mut egui::Ui,
-    state: &mut SharedState,
+    state: &mut PictureState,
     params: &dyn ParamBackend,
     comma: tuning::Comma,
 ) {
@@ -89,7 +89,11 @@ fn tempered_bar(
     // whether or not the magnet took the value — and it is the identity's own
     // tolerance, since the value being edited IS the derived axis.
     if response.changed() && (value - derived).abs() > tuning::TEMPER_TOLERANCE {
-        crate::tuning_edit(state, params, ConfigEdit::unlock(comma, tuning::microcents(value)));
+        state.runtime.edit_tuning(
+            &mut state.appearance,
+            params,
+            ConfigEdit::unlock(comma, tuning::microcents(value)),
+        );
     }
     if response.drag_stopped() {
         params.end_set(key);
@@ -105,7 +109,7 @@ fn tempered_bar(
 /// a drag of the fifth is already in the params by the time the bars below it
 /// draw — reading the frame's snapshot instead would leave every derived
 /// readout a frame behind for the whole gesture.
-fn live_tuning(state: &SharedState, params: &dyn ParamBackend) -> harmonigraph_core::Tuning {
+fn live_tuning(state: &PictureState, params: &dyn ParamBackend) -> harmonigraph_core::Tuning {
     if let Some(owned) = params.configuration() {
         return owned.resolved.tuning;
     }
@@ -174,7 +178,7 @@ fn comma_deriving(key: ParamKey, view: &harmonigraph_scene::ViewConfig) -> Optio
 ///
 /// Toggle switches, not buttons, for the same reason Learn is one: these are
 /// persistent modes and must not read like the presets above them.
-fn comma_controls(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
+fn comma_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
     // A table, because the rows answer the same two questions in the same
     // order and a reader compares DOWN the columns: which temperament, and is
     // it engaging by itself. The comma each one tempers out is in the hover
@@ -243,7 +247,7 @@ fn comma_controls(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Param
                 if temper.changed() {
                     let mut edit = ConfigEdit::default();
                     edit.tempered[comma.index()] = Some(on);
-                    crate::tuning_edit(state, params, edit);
+                    state.runtime.edit_tuning(&mut state.appearance, params, edit);
                 }
                 // Auto-detect. Switching it ON re-opens the question on the tuning
                 // already loaded — without clearing the verdict it would engage
@@ -264,7 +268,7 @@ fn comma_controls(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Param
                 if auto.changed() {
                     let mut edit = ConfigEdit::default();
                     edit.auto[comma.index()] = Some(auto_on);
-                    crate::tuning_edit(state, params, edit);
+                    state.runtime.edit_tuning(&mut state.appearance, params, edit);
                 }
                 ui.end_row();
             }
@@ -274,7 +278,7 @@ fn comma_controls(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Param
 
 pub(super) fn tuning_pane(
     ui: &mut egui::Ui,
-    state: &mut SharedState,
+    state: &mut PictureState,
     params: &dyn ParamBackend,
     now: f64,
 ) {
@@ -304,8 +308,8 @@ pub(super) fn tuning_pane(
             )
             .clicked()
         {
-            crate::tuning_edit(
-                state,
+            state.runtime.edit_tuning(
+                &mut state.appearance,
                 params,
                 ConfigEdit {
                     axes: [
@@ -328,8 +332,8 @@ pub(super) fn tuning_pane(
             )
             .clicked()
         {
-            crate::tuning_edit(
-                state,
+            state.runtime.edit_tuning(
+                &mut state.appearance,
                 params,
                 ConfigEdit {
                     axes: [
@@ -345,17 +349,17 @@ pub(super) fn tuning_pane(
         }
         // v1's tuning-learn mode: while engaged, the tuning re-learns
         // instantly whenever the set of held notes changes (see root_ui).
-        let mut learn_active = state.learn_active;
+        let mut learn_active = state.runtime.learn_active;
         let learn = crate::widgets::toggle_switch(ui, &mut learn_active, "Learn")
             .on_hover_text("While active, continuously set the tuning from the held notes");
         if learn.changed() {
-            crate::tuning_edit(
-                state,
+            state.runtime.edit_tuning(
+                &mut state.appearance,
                 params,
                 ConfigEdit { learning: Some(learn_active), ..Default::default() },
             );
         }
-        if state.learn_active {
+        if state.runtime.learn_active {
             // Pulsing armed ring so the engaged mode can't be missed.
             ui.painter().rect_stroke(
                 learn.rect.expand(2.0),
@@ -371,16 +375,16 @@ pub(super) fn tuning_pane(
     // rather than three numbers, so it gets its own heading.
     section(ui, "Temperaments");
     comma_controls(ui, state, params);
-    if state.configuration_status & 3 != 0 {
+    if state.runtime.configuration_status & 3 != 0 {
         ui.colored_label(
             theme::armed(),
             "Learning unavailable: configuration or held state is incomplete. Reset to recover.",
         );
-    } else if state.configuration_status & 4 != 0 {
+    } else if state.runtime.configuration_status & 4 != 0 {
         ui.weak("Tuning applied; host notification was rejected");
-    } else if state.configuration_status & 8 != 0 {
+    } else if state.runtime.configuration_status & 8 != 0 {
         ui.weak("Tuning change refused: pending command storage is full");
-    } else if state.configuration_pending {
+    } else if state.runtime.configuration_pending {
         ui.weak("Tuning change pending audio adoption");
     }
 
@@ -390,17 +394,20 @@ pub(super) fn tuning_pane(
     // "Hovered: (t, f, s) = pitch" line whenever the pointer is over a node
     // makes the controls below it jump down and back as the pointer crosses
     // the lattice — a readout in one pane moving another pane's buttons.
-    // `state.hovered` drives the lattice's own highlight, which is where a
+    // `state.surfaces.hovered` drives the lattice's own highlight, which is where a
     // hover belongs.
 }
 
-fn adaptive_controls(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
+fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
     section(ui, "Adaptive tuning");
-    let mut p = state.adaptive_policy;
+    let mut p = state.runtime.adaptive_policy;
     let before = p;
     p.harmonic =
         adaptive_value(ui, p.harmonic.into(), 0..=20_000, 1000.0, "Harmonic weight", "") as u16;
-    ui.checkbox(&mut state.neighbourhood.visible, "Show reachable neighbourhood (input C2–C7)");
+    ui.checkbox(
+        &mut state.runtime.neighbourhood.visible,
+        "Show reachable neighbourhood (input C2–C7)",
+    );
     p.pitch_scale =
         adaptive_value(ui, p.pitch_scale.into(), 1..=100, 1.0, "Pitch scale", "¢").max(1) as u16;
     p.radius =
@@ -447,8 +454,8 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Pa
         "New attacks follow the moving context. Sounding notes keep their adaptive correction.",
     );
     if p != before {
-        crate::tuning_edit(
-            state,
+        state.runtime.edit_tuning(
+            &mut state.appearance,
             params,
             ConfigEdit { policy: Some(p.sanitize()), ..Default::default() },
         );

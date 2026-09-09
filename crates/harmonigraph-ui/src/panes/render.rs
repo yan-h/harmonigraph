@@ -17,7 +17,7 @@ use egui::Sense;
 
 use super::section;
 use crate::widgets::{button_row, choice_row, option_label, record_button, ValueBar};
-use crate::{theme, LatticeSide, Layout, Pane, SharedState};
+use crate::{theme, LatticeSide, Layout, Pane, PictureState};
 
 /// The surface this preview's panes draw on. Every copy of a pane holds
 /// something between frames keyed on its surface — a GPU buffer, a bloom chain,
@@ -37,10 +37,15 @@ const PREVIEW_MIN_HEIGHT: f32 = 160.0;
 
 /// Frame controls, then a live preview of exactly what the offline render will
 /// compose.
-pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
-    record_controls(ui, state);
+pub(crate) fn render_pane(
+    ui: &mut egui::Ui,
+    state: &mut PictureState,
+    interaction: &mut crate::Interaction,
+    now: f64,
+) {
+    record_controls(ui, state, interaction);
     frame_controls(ui, state);
-    render_controls(ui, state);
+    render_controls(ui, state, interaction);
 
     section(ui, "Preview");
     let frame = state.appearance.render.frame;
@@ -122,7 +127,7 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
 
 /// Aspect ratio, resolution, arrangement, and split — editing the persisted
 /// `RenderFrame` and the resolution beside it.
-fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
+fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
     section(ui, "Frame");
     // A `button_row` rather than a `choice_row`: the selection is a PAIR of
     // numbers, not one enum value, so there is nothing for choice_row's
@@ -201,7 +206,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
 ///
 /// It clears display state only — nothing about the take, the render, or the
 /// tuning — so there is nothing to undo and no confirmation to sit through.
-fn clear_everything(ui: &mut egui::Ui, state: &mut SharedState) {
+fn clear_everything(ui: &mut egui::Ui, state: &mut PictureState) {
     button_row(ui, |ui| {
         if ui
             .button("Clear display history")
@@ -236,7 +241,11 @@ fn clear_everything(ui: &mut egui::Ui, state: &mut SharedState) {
 /// make "Scrolling" unreachable. `RenderRequest::playhead` is what keeps the row
 /// deciding. The live preview can't lay a whole take out, so a Playhead choice
 /// leaves the preview's spectral region blank — see `playhead_placeholder`.
-fn render_controls(ui: &mut egui::Ui, state: &mut SharedState) {
+fn render_controls(
+    ui: &mut egui::Ui,
+    state: &mut PictureState,
+    interaction: &mut crate::Interaction,
+) {
     section(ui, "Render");
     choice_row(
         ui,
@@ -251,7 +260,7 @@ fn render_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             ),
         ],
     );
-    if !state.take.supported {
+    if !interaction.take.supported {
         return;
     }
 
@@ -282,7 +291,7 @@ fn render_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // Re-render the last take with the frame you've dialed in since recording.
     // The take carries only a record-time snapshot, so this is how a reframed
     // preview reaches the video without recording again.
-    if state.take.last_ready {
+    if interaction.take.last_ready {
         ui.add_space(2.0);
         if ui
             .button("Re-render take")
@@ -291,10 +300,10 @@ fn render_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             )
             .clicked()
         {
-            state.take.render_now = true;
+            interaction.take.render_now = true;
         }
     }
-    render_progress(ui, state);
+    render_progress(ui, interaction);
 }
 
 /// The marks that say "this rectangle is the video frame", drawn entirely
@@ -385,7 +394,7 @@ fn letterbox(outer: egui::Rect, aspect: f32) -> egui::Rect {
 /// live copy never overwrites the docked pane's buffers within a frame — and
 /// with no GPU-time slot, since the Video pane's preview is a second lattice
 /// on screen, and reporting its cost as THE lattice cost would be wrong.
-fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &mut SharedState, now: f64) {
+fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &mut PictureState, now: f64) {
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return;
     }
@@ -405,21 +414,25 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &mut SharedState,
 ///
 /// Absent entirely in a shell with no transport to record against, which is
 /// what leaves the standalone opening on Frame.
-fn record_controls(ui: &mut egui::Ui, state: &mut SharedState) {
+fn record_controls(
+    ui: &mut egui::Ui,
+    state: &mut PictureState,
+    interaction: &mut crate::Interaction,
+) {
     // Take recording: the input half of offline video rendering. A record
     // button that doubles as its own indicator — press to arm; the dot breathes
     // while it waits for the transport, then goes solid while capturing. See
     // record_button in widgets.rs.
-    if !state.take.supported {
+    if !interaction.take.supported {
         return;
     }
     section(ui, "Record");
-    let rolling = state.take.rolling;
-    record_button(ui, &mut state.take.recording, rolling, "Record take").on_hover_text(
+    let rolling = interaction.take.rolling;
+    record_button(ui, &mut interaction.take.recording, rolling, "Record take").on_hover_text(
         "Record notes, automation, the current look and the selected audio input for video export. Press again to finish, or choose an automatic ending under Render when.",
     );
-    if !state.take.status.is_empty() {
-        ui.weak(&state.take.status);
+    if !interaction.take.status.is_empty() {
+        ui.weak(&interaction.take.status);
     }
     clear_everything(ui, state);
 }
@@ -443,8 +456,8 @@ fn record_controls(ui: &mut egui::Ui, state: &mut SharedState) {
 /// untouched, so "Re-render take" above starts a fresh one from the same take,
 /// and a video some earlier render finished stays where it landed — only the
 /// run in flight has anything half-written to throw away.
-fn render_progress(ui: &mut egui::Ui, state: &mut SharedState) {
-    let Some(progress) = state.take.render_progress else { return };
+fn render_progress(ui: &mut egui::Ui, interaction: &mut crate::Interaction) {
+    let Some(progress) = interaction.take.render_progress else { return };
     let value = match progress.total {
         // Pad `done` to the width of `total` so the readout keeps one width as
         // it counts up: monospace, so that holds the name still beside it —
@@ -466,7 +479,7 @@ fn render_progress(ui: &mut egui::Ui, state: &mut SharedState) {
             )
             .clicked()
         {
-            state.take.cancel_render = true;
+            interaction.take.cancel_render = true;
         }
     });
 }
