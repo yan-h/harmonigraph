@@ -440,6 +440,54 @@ impl AudioSpectrum {
         .unwrap();
     }
 
+    /// Start a new retained source run after loss, reset or a format change.
+    /// Keep historical columns, but never combine samples across the boundary.
+    pub fn restart_source(&mut self, channels: usize, sample_rate: f32) {
+        self.analyzer = harmonigraph_core::spectrum::ChannelBank::new(sample_rate, channels);
+        self.frames_seen = 0;
+        self.next_hop = 0;
+        self.anchor = None;
+        self.last_samples = None;
+        self.display.fill(0.0);
+        self.display_revision = self.display_revision.wrapping_add(1);
+        self.frame_fold = None;
+    }
+
+    /// Feed complete source frames on an exact sample grid. `origin` is frame
+    /// zero of this retained run converted to the shell clock by its owner.
+    /// Unlike arrival-dated input, it needs no second clock estimate/smoothing.
+    /// The shell may update its conversion once per drain, shared with notes;
+    /// physical callback/chunk boundaries never influence that conversion.
+    pub fn push_source_samples(
+        &mut self,
+        samples: &[f32],
+        channels: usize,
+        sample_rate: f32,
+        origin: f64,
+        config: &SpectrumConfig,
+    ) {
+        let batch = samples.len() / channels.max(1);
+        if batch == 0 {
+            return;
+        }
+        let newest = origin
+            + (self.frames_seen + batch as u64).saturating_sub(1) as f64
+                / f64::from(sample_rate.max(1.0));
+        self.feed_sample_chunks(
+            batch,
+            channels,
+            sample_rate,
+            newest,
+            config,
+            Some(origin),
+            |feed| {
+                feed(samples);
+                Ok::<_, std::convert::Infallible>(())
+            },
+        )
+        .unwrap();
+    }
+
     /// Feed one logical batch through bounded physical chunks. Update the clock
     /// anchor once from the complete batch's newest frame, exactly as
     /// `push_samples` does: I/O boundaries must not add smoothing steps or move
@@ -452,6 +500,20 @@ impl AudioSpectrum {
         sample_rate: f32,
         now: f64,
         config: &SpectrumConfig,
+        consume: impl FnOnce(&mut dyn FnMut(&[f32])) -> Result<(), E>,
+    ) -> Result<(), E> {
+        self.feed_sample_chunks(batch, channels, sample_rate, now, config, None, consume)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn feed_sample_chunks<E>(
+        &mut self,
+        batch: usize,
+        channels: usize,
+        sample_rate: f32,
+        now: f64,
+        config: &SpectrumConfig,
+        source_origin: Option<f64>,
         consume: impl FnOnce(&mut dyn FnMut(&[f32])) -> Result<(), E>,
     ) -> Result<(), E> {
         // Any of the four empties the analyzers' rings, so nothing comes out
@@ -488,12 +550,12 @@ impl AudioSpectrum {
         // minutes), or the first batch after the pane was switched on.
         let total = self.frames_seen + batch as u64;
         let candidate = now - total.saturating_sub(1) as f64 / sr;
-        let anchor = match self.anchor {
+        let anchor = source_origin.unwrap_or_else(|| match self.anchor {
             Some(prev) if (candidate - prev).abs() <= Self::ANCHOR_SNAP => {
                 prev + (candidate - prev) * Self::ANCHOR_SMOOTHING
             }
             _ => candidate,
-        };
+        });
         self.anchor = Some(anchor);
 
         consume(&mut |samples| {
@@ -540,7 +602,16 @@ impl AudioSpectrum {
                 // the newest frame fed so far sits on the anchored grid, so
                 // consecutive columns are exactly `hop` frames apart.
                 let boundary = anchor + self.frames_seen.saturating_sub(1) as f64 / sr;
-                self.push_history(boundary - self.analyzer.window_center_offset(), &fresh);
+                let center = boundary - self.analyzer.window_center_offset();
+                // A source clock conversion can correct backwards while old
+                // history remains on its previous mapping. The incremental
+                // heatmap requires strictly increasing dates. Omit overlapping
+                // history until mapped time passes its tail, without re-dating
+                // samples or skipping any FFT/curve progression above. Offline
+                // arrival-dated feeding retains its existing append behavior.
+                if source_origin.is_none() || self.history.back().is_none_or(|c| center > c.time) {
+                    self.push_history(center, &fresh);
+                }
             }
         })
     }

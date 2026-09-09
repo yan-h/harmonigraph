@@ -126,9 +126,8 @@ pub struct EditorShared {
 impl EditorShared {
     pub fn new(
         consumer: harmonigraph_record::publication::Consumer,
-        audio_consumer: rtrb::Consumer<f32>,
+        audio_consumer: crate::audio_ingress::Consumer,
         sample_rate_bits: Arc<AtomicU32>,
-        audio_channels: Arc<AtomicU32>,
         take: harmonigraph_record::Control,
         take_events: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
@@ -137,10 +136,10 @@ impl EditorShared {
                 consumer,
                 audio_consumer,
                 sample_rate_bits,
-                audio_channels,
                 start: Instant::now(),
                 clock: ClockMapper::new(),
-                audio_buf: Vec::new(),
+                audio_position: None,
+                audio_origin: 0.0,
             },
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
             last_frame: None,
@@ -954,21 +953,17 @@ fn session_controls(
 /// Synchronous draining never acquires the audio callback or a window.
 pub(crate) struct LiveInput {
     consumer: harmonigraph_record::publication::Consumer,
-    /// Interleaved input frames from the audio thread (Spectral pane analyzer);
-    /// `audio_channels` samples each.
-    audio_consumer: rtrb::Consumer<f32>,
-    /// Sample rate of those samples, as f32 bits (see the plugin struct).
+    audio_consumer: crate::audio_ingress::Consumer,
+    /// Latest rate is for recording controls, never for interpreting queued audio.
     sample_rate_bits: Arc<AtomicU32>,
-    /// Channels per frame in `audio_consumer`, as the audio thread last saw the
-    /// bus. Read every drain, never cached: de-interleaving by a stale count
-    /// would read one channel as two.
-    audio_channels: Arc<AtomicU32>,
+    /// Expected next source frame and epoch; gaps restart the streaming analyzer.
+    audio_position: Option<(u64, u64)>,
+    /// Presentation seconds of the retained run’s frame zero, before mapping.
+    audio_origin: f64,
     /// GUI clock epoch; audio event times are mapped onto this clock.
     start: Instant,
     /// Audio->GUI clock mapping (see ClockMapper).
     clock: ClockMapper,
-    /// Reused per-frame audio drain scratch.
-    audio_buf: Vec<f32>,
 }
 
 impl LiveInput {
@@ -978,19 +973,13 @@ impl LiveInput {
     fn sample_rate(&self) -> f32 {
         f32::from_bits(self.sample_rate_bits.load(Ordering::Relaxed))
     }
-    /// Channels per frame in the audio ring (at least one).
-    fn audio_channels(&self) -> usize {
-        (self.audio_channels.load(Ordering::Relaxed) as usize).max(1)
-    }
     /// Drain exactly what the process callback sent to the live analyzer.
     /// Test-only because production has two schedulers, here and in
     /// [`crate::background`], that also maintain the analyzer state around it.
     #[cfg(test)]
     pub(crate) fn drain_analysis_audio_for_test(&mut self) -> Vec<f32> {
         let mut samples = Vec::new();
-        while let Ok(sample) = self.audio_consumer.pop() {
-            samples.push(sample);
-        }
+        self.audio_consumer.drain(|_, chunk| samples.extend_from_slice(chunk));
         samples
     }
     /// Drain note events from the audio thread into the tracker, mapping
@@ -1030,18 +1019,27 @@ impl LiveInput {
         &mut self,
         runtime: &mut harmonigraph_ui::VisualRuntime,
         appearance: &harmonigraph_ui::AppearanceDocument,
-        now: f64,
     ) {
-        self.audio_buf.clear();
-        while let Ok(sample) = self.audio_consumer.pop() {
-            self.audio_buf.push(sample);
-        }
-        if !self.audio_buf.is_empty() {
-            let sample_rate = self.sample_rate();
-            let channels = self.audio_channels();
-            let config = appearance.spectrum;
-            runtime.spectrum.push_samples(&self.audio_buf, channels, sample_rate, now, &config);
-        }
+        // One existing clock conversion per drain, shared with note delivery.
+        // Source timestamps are exact; changing heartbeat observations can
+        // still correct their GUI placement, including initial delivery bias.
+        let Some(offset) = self.clock.offset else { return };
+        self.audio_consumer.drain(|block, samples| {
+            let position = (block.epoch, block.first_frame);
+            if self.audio_position != Some(position) {
+                runtime.spectrum.restart_source(block.format.channels, block.format.sample_rate);
+                self.audio_origin =
+                    block.origin + block.first_frame as f64 / f64::from(block.format.sample_rate);
+            }
+            runtime.spectrum.push_source_samples(
+                samples,
+                block.format.channels,
+                block.format.sample_rate,
+                self.audio_origin + offset,
+                &appearance.spectrum,
+            );
+            self.audio_position = Some((block.epoch, block.first_frame + block.frames as u64));
+        });
     }
     /// The clock everything the editor stamps is measured on: seconds since
     /// the PLUGIN was instantiated, not since the window opened.
@@ -1064,7 +1062,7 @@ impl LiveInput {
         now: f64,
     ) -> bool {
         let notes = self.drain_into_tracker(runtime, now);
-        self.drain_audio(runtime, appearance, now);
+        self.drain_audio(runtime, appearance);
         notes
     }
 }
@@ -1079,10 +1077,156 @@ mod tests {
     use harmonigraph_core::notes::{NoteEvent, SourceId};
     use std::sync::Arc;
 
+    fn audio_harness(capacity: usize) -> (crate::audio_ingress::Producer, EditorShared) {
+        let (_notes, consumer) = harmonigraph_record::publication::channel();
+        let (audio, audio_consumer) = crate::audio_ingress::channel(capacity);
+        let (_recorder, control) = harmonigraph_record::channel();
+        let mut shared = EditorShared::new(
+            consumer,
+            audio_consumer,
+            Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
+            control,
+            Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        );
+        shared.input.clock.observe(0.0, 0.0);
+        (audio, shared)
+    }
+
+    fn drain_audio(shared: &mut EditorShared, now: f64) {
+        shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
+    }
+
+    #[test]
+    fn source_audio_columns_survive_callback_partitions_and_delayed_drains() {
+        let frames = 50_017;
+        let samples: Vec<_> = (0..frames)
+            .flat_map(|i| {
+                let x = (i as f32 * 0.047).sin();
+                [x, -x]
+            })
+            .collect();
+        let columns = |shared: &EditorShared| {
+            shared
+                .ui
+                .picture
+                .runtime
+                .spectrum
+                .history()
+                .iter()
+                .map(|c| (c.time, c.db.clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut reference = None;
+        for (callback, drain_every, delay) in
+            [(frames, 1, 0.0), (127, 1, 0.0), (511, 7, 0.3), (4093, 99, 3.0)]
+        {
+            let (mut tx, mut shared) = audio_harness(crate::AUDIO_RING_CAPACITY);
+            let mut count = 0;
+            for first in (0..frames).step_by(callback) {
+                let end = (first + callback).min(frames);
+                tx.publish(
+                    end - first,
+                    crate::audio_ingress::Format {
+                        channels: 2,
+                        sample_rate: 48_000.0,
+                        sidechain: false,
+                    },
+                    10.0 + first as f64 / 48_000.0,
+                    samples[first * 2..end * 2].iter().copied(),
+                );
+                count += 1;
+                if count % drain_every == 0 {
+                    drain_audio(&mut shared, 10.0 + end as f64 / 48_000.0 + delay);
+                }
+            }
+            drain_audio(&mut shared, 15.0 + delay);
+            let actual = columns(&shared);
+            assert!(actual.len() > 50, "fixture must fill the window and reach many FFT hops");
+            if let Some(expected) = &reference {
+                assert_eq!(&actual, expected, "callback={callback}, drain_every={drain_every}");
+            } else {
+                reference = Some(actual);
+            }
+        }
+    }
+
+    #[test]
+    fn source_audio_follows_the_shared_clock_correction_without_second_smoothing() {
+        let (mut tx, mut shared) = audio_harness(crate::AUDIO_RING_CAPACITY);
+        shared.input.clock = ClockMapper::new();
+        shared.input.clock.observe(0.10, 0.35);
+        let format =
+            crate::audio_ingress::Format { channels: 1, sample_rate: 48_000.0, sidechain: false };
+        let frames = 24_000;
+        tx.publish(frames, format, 0.0, std::iter::repeat(0.5));
+        drain_audio(&mut shared, 0.75);
+        let before = shared.ui.picture.runtime.spectrum.history().len();
+        assert!(before > 10);
+        for i in 1..=60 {
+            let audio = 0.1 + i as f64 * 0.01;
+            shared.input.clock.observe(audio, audio);
+        }
+        let offset = shared.input.clock.offset.unwrap();
+        assert!(offset < 0.012, "initial 250ms delivery bias must correct");
+        tx.publish(frames, format, 0.5, std::iter::repeat(0.5));
+        drain_audio(&mut shared, 1.0 + offset);
+        let spectrum = &shared.ui.picture.runtime.spectrum;
+        assert!(spectrum.history().len() > before);
+        let last = spectrum.history().iter().last().unwrap();
+        // 48000 frames is exactly 125 hops. Timestamp names the newest frame
+        // minus the unchanged half-window offset, on the CURRENT note clock.
+        let expected = 47_999.0 / 48_000.0 - spectrum.column_lag() + offset;
+        assert!((last.time - expected).abs() < 1e-12, "{} != {expected}", last.time);
+    }
+
+    #[test]
+    fn source_discontinuities_refill_the_window_without_erasing_history() {
+        let window = harmonigraph_ui::SpectrumConfig::default().window.samples();
+        let (mut tx, mut shared) = audio_harness(window + 384);
+        let mono =
+            crate::audio_ingress::Format { channels: 1, sample_rate: 48_000.0, sidechain: false };
+        // Retain a full window plus a hop, then drop an entire callback.
+        tx.publish(window + 384, mono, 0.0, std::iter::repeat(0.5));
+        tx.publish(window, mono, 1.0, std::iter::repeat(-0.5));
+        drain_audio(&mut shared, 1.0);
+        let before = shared.ui.picture.runtime.spectrum.history().len();
+        assert!(before > 0);
+        // A gap cannot complete a window using the previous run's tail.
+        tx.publish(window / 2, mono, 2.0, std::iter::repeat(-0.5));
+        drain_audio(&mut shared, 2.0);
+        assert_eq!(shared.ui.picture.runtime.spectrum.history().len(), before);
+        // Queue old-format partial audio before a reset and new-format audio.
+        tx.publish(window / 4, mono, 3.0, std::iter::repeat(0.9));
+        tx.reset();
+        let stereo =
+            crate::audio_ingress::Format { channels: 2, sample_rate: 96_000.0, sidechain: true };
+        tx.publish(window / 4, stereo, 4.0, std::iter::repeat(0.0));
+        drain_audio(&mut shared, 4.0);
+        assert_eq!(shared.ui.picture.runtime.spectrum.history().len(), before);
+        for i in 1..=4 {
+            tx.publish(
+                window / 4,
+                stereo,
+                4.0 + i as f64 * window as f64 / 4.0 / 96_000.0,
+                std::iter::repeat(0.0),
+            );
+            drain_audio(&mut shared, 5.0);
+        }
+        let spectrum = &shared.ui.picture.runtime.spectrum;
+        assert!(spectrum.history().len() > before, "new format must refill and emit columns");
+        for column in spectrum.history().iter().skip(before) {
+            assert!(column.time > 4.0, "no window may straddle the reset");
+            assert!(
+                column.db.iter().all(|v| *v == 0),
+                "no old-format energy may leak into silence"
+            );
+        }
+    }
+
     #[test]
     fn recording_stop_debounce_counts_gui_callbacks_not_runtime_ticks() {
         let (_notes, consumer) = harmonigraph_record::publication::channel();
-        let (_audio, audio_consumer) = rtrb::RingBuffer::new(64);
+        let (_audio, audio_consumer) = crate::audio_ingress::channel(64);
         let (recorder, control) = harmonigraph_record::channel();
         let directory =
             std::env::temp_dir().join(format!("runtime-recording-cadence-{}", std::process::id()));
@@ -1091,7 +1235,6 @@ mod tests {
             consumer,
             audio_consumer,
             Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            Arc::new(super::AtomicU32::new(1)),
             control,
             Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
@@ -1134,7 +1277,7 @@ mod tests {
     #[test]
     fn arming_captures_the_whole_live_appearance_without_workspace_state() {
         let (_notes, consumer) = harmonigraph_record::publication::channel();
-        let (_audio, audio_consumer) = rtrb::RingBuffer::new(64);
+        let (_audio, audio_consumer) = crate::audio_ingress::channel(64);
         let (recorder, control) = harmonigraph_record::channel();
         let directory =
             std::env::temp_dir().join(format!("appearance-capture-{}", std::process::id()));
@@ -1143,7 +1286,6 @@ mod tests {
             consumer,
             audio_consumer,
             Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            Arc::new(super::AtomicU32::new(1)),
             control,
             Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
@@ -1200,13 +1342,12 @@ mod tests {
         // spacing intact. (This is the integration the ClockMapper unit
         // tests below can't cover: observe-newest-THEN-map ordering.)
         let (mut producer, consumer) = harmonigraph_record::publication::channel();
-        let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(64);
+        let (_audio_producer, audio_consumer) = crate::audio_ingress::channel(64);
         let (_recorder, take_control) = harmonigraph_record::channel();
         let mut shared = EditorShared::new(
             consumer,
             audio_consumer,
             std::sync::Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            std::sync::Arc::new(super::AtomicU32::new(1)),
             take_control,
             std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
@@ -1415,13 +1556,12 @@ mod tests {
     #[test]
     fn catch_up_answers_whether_notes_arrived() {
         let (mut producer, consumer) = harmonigraph_record::publication::channel();
-        let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(64);
+        let (_audio_producer, audio_consumer) = crate::audio_ingress::channel(64);
         let (_recorder, take_control) = harmonigraph_record::channel();
         let mut shared = EditorShared::new(
             consumer,
             audio_consumer,
             std::sync::Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            std::sync::Arc::new(super::AtomicU32::new(1)),
             take_control,
             std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
@@ -1541,14 +1681,13 @@ mod tests {
     /// place rather than once per test.
     fn a_window() -> WindowState {
         let (_producer, consumer) = harmonigraph_record::publication::channel();
-        let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(1);
+        let (_audio_producer, audio_consumer) = crate::audio_ingress::channel(1);
         let (_recorder, take_control) = harmonigraph_record::channel();
         WindowState::new(
             Arc::new(super::Mutex::new(EditorShared::new(
                 consumer,
                 audio_consumer,
                 Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-                Arc::new(super::AtomicU32::new(1)),
                 take_control,
                 Arc::new(std::sync::atomic::AtomicU64::new(0)),
             ))),

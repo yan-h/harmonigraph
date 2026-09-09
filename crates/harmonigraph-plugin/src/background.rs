@@ -324,7 +324,8 @@ mod tests {
     struct Harness {
         shared: Arc<Mutex<EditorShared>>,
         notes: harmonigraph_record::publication::Publisher,
-        audio: rtrb::Producer<f32>,
+        audio: crate::audio_ingress::Producer,
+        audio_frames: u64,
         editor_state: Arc<EguiState>,
         /// The host's end of `params.ui_state`.
         ui_state: Arc<RwLock<String>>,
@@ -335,13 +336,12 @@ mod tests {
 
     fn harness() -> Harness {
         let (notes, note_consumer) = harmonigraph_record::publication::channel();
-        let (audio, audio_consumer) = rtrb::RingBuffer::new(crate::AUDIO_RING_CAPACITY);
+        let (audio, audio_consumer) = crate::audio_ingress::channel(crate::AUDIO_RING_CAPACITY);
         let (_recorder, take_control) = harmonigraph_record::channel();
         let shared = EditorShared::new(
             note_consumer,
             audio_consumer,
             Arc::new(AtomicU32::new(48_000.0f32.to_bits())),
-            Arc::new(AtomicU32::new(1)),
             take_control,
             Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
@@ -350,6 +350,7 @@ mod tests {
             shared: Arc::new(Mutex::new(shared)),
             notes,
             audio,
+            audio_frames: 0,
             editor_state: EguiState::from_size(800, 600),
             restore: Restore::of(ui_state.clone()),
             ui_state,
@@ -389,12 +390,22 @@ mod tests {
         /// Mono audio at 48 kHz, enough for the analyzer to fill a window and
         /// cross hop boundaries, so a drain of it must produce columns.
         fn push_audio(&mut self, frames: usize) {
-            for i in 0..frames {
-                let t = i as f32 / 48_000.0;
-                self.audio
-                    .push((std::f32::consts::TAU * 440.0 * t).sin() * 0.5)
-                    .expect("the ring is sized for this");
-            }
+            let start = self.audio_frames;
+            self.audio.publish(
+                frames,
+                crate::audio_ingress::Format {
+                    channels: 1,
+                    sample_rate: 48_000.0,
+                    sidechain: false,
+                },
+                start as f64 / 48_000.0,
+                (0..frames).map(|i| {
+                    let t = (start + i as u64) as f32 / 48_000.0;
+                    (std::f32::consts::TAU * 440.0 * t).sin() * 0.5
+                }),
+            );
+            self.audio_frames += frames as u64;
+            self.notes.observe_clock(self.audio_frames as f64 / 48_000.0);
         }
 
         /// One note-on, stamped on the audio thread's own sample clock.
@@ -552,9 +563,9 @@ mod tests {
     /// `catch_up_answers_whether_notes_arrived`'s, one file over.
     ///
     /// It is the column GRID this pins and deliberately not the timestamps.
-    /// Those hang off `AudioSpectrum`'s anchor, which tracks the SHELL clock —
+    /// Those use the shared note ClockMapper conversion to the SHELL clock —
     /// so feeding half a second of audio in no time at all, as a test must,
-    /// drags the anchor by design and says nothing about the handover. A host
+    /// corrects that mapping by design and says nothing about the handover. A host
     /// hands this thread one poll of audio per poll of wall clock, and the two
     /// advance together.
     #[test]
