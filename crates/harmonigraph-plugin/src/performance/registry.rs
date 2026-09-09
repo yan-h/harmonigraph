@@ -134,6 +134,7 @@ impl Registry {
             faults: AtomicU32::new(0),
             alive: std::sync::atomic::AtomicBool::new(true),
             epoch: AtomicU64::new(1),
+            policy_era: AtomicU64::new(0),
             closing: AtomicU64::new(0),
             hub_through: std::sync::atomic::AtomicI64::new(i64::MIN),
             rows: std::array::from_fn(|_| Arc::new(SourceControl::default())),

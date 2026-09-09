@@ -449,6 +449,7 @@ fn restored(device: &Device, fifth: f32) -> PluginState {
             meantone_auto: false,
             marvel_auto: false,
             learning: false,
+            ..Default::default()
         })
         .unwrap(),
     );
@@ -790,6 +791,7 @@ fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
                 meantone_auto: true,
                 marvel_auto: true,
                 learning: false,
+                ..Default::default()
             })
             .unwrap(),
         );
@@ -1473,4 +1475,36 @@ fn a_full_display_lane_does_not_hold_back_directs_take_snapshot() {
     device.finish_notes(69 * 64, &[(10, 60)]);
     drop(device);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    let policy = PolicyConfig {
+        harmonic: 2300,
+        axes: 3,
+        memory: 11,
+        silence_ms: 4500,
+        reset_loop: true,
+        reset_stop: true,
+        ..Default::default()
+    };
+    let mut state = restored(&device, 700.0);
+    state.fields.insert(
+        MUSICAL_SETTINGS.into(),
+        serde_json::to_string(&MusicalSettings { adaptive: policy.into(), ..Default::default() })
+            .unwrap(),
+    );
+    device.load(state, true);
+    let mailbox = device.mailbox();
+    assert_eq!(view(mailbox.visible().0, true).resolved.policy, policy);
+    let saved: MusicalSettings =
+        serde_json::from_str(&device.save().fields[MUSICAL_SETTINGS]).unwrap();
+    assert_eq!(PolicyConfig::from(saved.adaptive), policy);
+    device.run(0, vec![], false);
+    assert_eq!(view(mailbox.visible().0, false).resolved.policy, policy);
+    let defaults: MusicalSettings = serde_json::from_str("{\"adaptive\":{}}").unwrap();
+    assert_eq!(PolicyConfig::from(defaults.adaptive), PolicyConfig::default());
 }

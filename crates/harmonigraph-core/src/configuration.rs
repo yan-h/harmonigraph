@@ -18,17 +18,82 @@ impl Default for TuningModes {
     }
 }
 
-/// Versioned musical bounds and weights. Camera reach and display tolerance
-/// never fill these fields; the production owner binds the fixed policy.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Musical controls, stored as integers so configuration equality is exact.
+/// Weights are thousandths; silence is milliseconds (zero means never).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyConfig {
     pub version: u32,
-    pub domain: [u16; 3],
-    pub candidate_radius: u32,
-    pub context_radius: u32,
-    pub context_weight: u16,
-    pub history_weight: u16,
-    pub origin_weight: u16,
+    pub radius: u8,
+    pub axes: u8,
+    pub memory: u8,
+    pub harmonic: u16,
+    pub pitch_scale: u16,
+    pub released: u16,
+    pub recency: u16,
+    pub register_floor: u16,
+    pub register_falloff: u16,
+    pub tolerance: u32,
+    pub silence_ms: u32,
+    pub reset_stop: bool,
+    pub reset_loop: bool,
+}
+impl Default for PolicyConfig {
+    fn default() -> Self {
+        crate::policy::CONFIG
+    }
+}
+impl PolicyConfig {
+    pub fn sanitize(mut self) -> Self {
+        self.version = 2;
+        self.radius = self.radius.clamp(1, 5);
+        self.axes = self.axes.clamp(1, 3);
+        self.memory = self.memory.min(24);
+        self.harmonic = self.harmonic.min(20_000);
+        self.pitch_scale = self.pitch_scale.clamp(1, 100);
+        self.released = self.released.min(1000);
+        self.recency = self.recency.min(1000);
+        self.register_floor = self.register_floor.clamp(10, 1000);
+        self.register_falloff = self.register_falloff.min(4000);
+        self.tolerance = self.tolerance.min(20_000_000);
+        self.silence_ms = self.silence_ms.min(120_000);
+        self
+    }
+    /// Fixed configuration mailbox representation, shared by edits and snapshots.
+    pub fn words(self) -> [i32; 8] {
+        [
+            2,
+            i32::from(self.radius)
+                | i32::from(self.axes) << 8
+                | i32::from(self.memory) << 16
+                | i32::from(self.reset_stop) << 24
+                | i32::from(self.reset_loop) << 25,
+            i32::from(self.harmonic) | i32::from(self.pitch_scale) << 16,
+            i32::from(self.released) | i32::from(self.recency) << 16,
+            i32::from(self.register_floor) | i32::from(self.register_falloff) << 16,
+            self.tolerance as i32,
+            self.silence_ms as i32,
+            0,
+        ]
+    }
+    pub fn from_words(w: [i32; 8]) -> Self {
+        Self {
+            version: 2,
+            radius: w[1] as u8,
+            axes: (w[1] >> 8) as u8,
+            memory: (w[1] >> 16) as u8,
+            reset_stop: w[1] & (1 << 24) != 0,
+            reset_loop: w[1] & (1 << 25) != 0,
+            harmonic: w[2] as u16,
+            pitch_scale: (w[2] >> 16) as u16,
+            released: w[3] as u16,
+            recency: (w[3] >> 16) as u16,
+            register_floor: w[4] as u16,
+            register_falloff: (w[4] >> 16) as u16,
+            tolerance: w[5].max(0) as u32,
+            silence_ms: w[6].max(0) as u32,
+        }
+        .sanitize()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +112,7 @@ pub struct ConfigEdit {
     pub tempered: [Option<bool>; Comma::COUNT],
     pub auto: [Option<bool>; Comma::COUNT],
     pub learning: Option<bool>,
+    pub policy: Option<PolicyConfig>,
 }
 
 impl ConfigEdit {
@@ -69,6 +135,7 @@ pub enum ConfigMutation {
     Restore {
         raw: Tuning,
         modes: TuningModes,
+        policy: PolicyConfig,
     },
     Learn(LearnedTuning),
     /// Host modulation can change the committed raw axes while learning's
@@ -148,12 +215,16 @@ impl ConfigReducer {
     pub fn apply(&mut self, mutation: ConfigMutation) -> bool {
         let previous = self.clone();
         match mutation {
-            ConfigMutation::Restore { raw, modes } => {
+            ConfigMutation::Restore { raw, modes, policy } => {
+                self.resolved.policy = policy.sanitize();
                 self.raw = raw;
                 self.modes = modes;
                 self.judged = [None; Comma::COUNT];
             }
             ConfigMutation::Edit(edit) => {
+                if let Some(policy) = edit.policy {
+                    self.resolved.policy = policy.sanitize();
+                }
                 let axes = [
                     &mut self.raw.c_offset,
                     &mut self.raw.three,

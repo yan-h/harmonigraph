@@ -2,7 +2,7 @@
 //! configuration/confirmed-state part of #617, not session aggregation or an
 //! accepted performance-output model.
 use harmonigraph_core::configuration::{
-    ConfigEdit, ConfigMutation, ConfigReducer, ResolvedConfig, TuningModes,
+    ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, ResolvedConfig, TuningModes,
 };
 use harmonigraph_core::confirmed::{ConfirmedPitches, LearningState};
 use harmonigraph_core::{LearnedTuning, SourceId, Tempered, Tuning};
@@ -27,6 +27,7 @@ struct MusicalSettings {
     meantone_auto: bool,
     marvel_auto: bool,
     learning: bool,
+    adaptive: harmonigraph_take::configuration::PolicyRecord,
 }
 impl Default for MusicalSettings {
     fn default() -> Self {
@@ -36,6 +37,7 @@ impl Default for MusicalSettings {
             meantone_auto: true,
             marvel_auto: true,
             learning: false,
+            adaptive: Default::default(),
         }
     }
 }
@@ -47,13 +49,14 @@ impl MusicalSettings {
             learning: self.learning,
         }
     }
-    fn from_modes(modes: TuningModes) -> Self {
+    fn from_modes(modes: TuningModes, policy: PolicyConfig) -> Self {
         Self {
             meantone: modes.tempered.syntonic,
             marvel: modes.tempered.septimal_kleisma,
             meantone_auto: modes.auto[0],
             marvel_auto: modes.auto[1],
             learning: modes.learning,
+            adaptive: policy.into(),
         }
     }
 }
@@ -90,6 +93,9 @@ pub fn packet(edit: ConfigEdit) -> ConfigurationEdit {
     payload[3] = encode_option(edit.auto[0]);
     payload[4] = encode_option(edit.auto[1]);
     payload[5] = encode_option(edit.learning);
+    if let Some(policy) = edit.policy {
+        payload[7..15].copy_from_slice(&policy.sanitize().words());
+    }
     ConfigurationEdit {
         values: edit.axes.map(|value| value.map(|v| v as f32 / 1_000_000.0)),
         payload,
@@ -106,6 +112,7 @@ fn payload(resolved: ResolvedConfig) -> [i32; PAYLOAD_WORDS] {
     payload[0] = RESOLVED;
     payload[1] = bits(resolved.modes);
     payload[2..7].copy_from_slice(&axes(resolved.tuning));
+    payload[7..15].copy_from_slice(&resolved.policy.words());
     payload
 }
 
@@ -121,6 +128,9 @@ pub fn view(snapshot: ConfigurationSnapshot, pending: bool) -> ConfigurationView
             tolerance: snapshot.payload[6],
         };
         resolved.modes = modes(snapshot.payload[1]);
+    }
+    if snapshot.payload[7] == 2 {
+        resolved.policy = PolicyConfig::from_words(snapshot.payload[7..15].try_into().unwrap());
     }
     resolved.revision = snapshot.revision;
     ConfigurationView { resolved, status: snapshot.status, pending }
@@ -141,6 +151,7 @@ pub fn prepare(state: &PluginState) -> Result<ConfigurationEdit, SubmitError> {
     let mut payload = [0; PAYLOAD_WORDS];
     payload[0] = RESTORE;
     payload[1] = bits(settings.modes());
+    payload[7..15].copy_from_slice(&PolicyConfig::from(settings.adaptive).words());
     let mut values = [None; CONFIG_PARAMETERS];
     for (i, key) in ParamKey::TUNING.into_iter().enumerate() {
         let value = match state.params.get(key.id()) {
@@ -157,7 +168,10 @@ pub fn prepare(state: &PluginState) -> Result<ConfigurationEdit, SubmitError> {
 }
 
 pub fn save(snapshot: ConfigurationSnapshot, state: &mut PluginState) {
-    let settings = MusicalSettings::from_modes(modes(snapshot.payload[1]));
+    let settings = MusicalSettings::from_modes(
+        modes(snapshot.payload[1]),
+        view(snapshot, false).resolved.policy,
+    );
     state.fields.insert(
         MUSICAL_SETTINGS.to_owned(),
         serde_json::to_string(&settings).expect("fixed musical settings serialize"),
@@ -295,7 +309,11 @@ impl Owner {
         }
         let raw = tuning(commit.raw);
         let mutation = match command.edit.payload[0] {
-            RESTORE => ConfigMutation::Restore { raw, modes: modes(command.edit.payload[1]) },
+            RESTORE => ConfigMutation::Restore {
+                raw,
+                modes: modes(command.edit.payload[1]),
+                policy: PolicyConfig::from_words(command.edit.payload[7..15].try_into().unwrap()),
+            },
             LEARN => ConfigMutation::LearnResolved { learned: self.learned?, raw },
             _ => ConfigMutation::Edit(ConfigEdit {
                 // Full normalized/modulated raw input is coherent here. Unchanged
@@ -310,6 +328,9 @@ impl Owner {
                     decode_option(command.edit.payload[4]),
                 ],
                 learning: decode_option(command.edit.payload[5]),
+                policy: (command.edit.payload[7] == 2).then(|| {
+                    PolicyConfig::from_words(command.edit.payload[7..15].try_into().unwrap())
+                }),
             }),
         };
         // Reduce in arrival order; the value only becomes the block's at the

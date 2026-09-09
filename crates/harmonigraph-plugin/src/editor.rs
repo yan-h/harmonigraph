@@ -445,6 +445,12 @@ fn frame(
     let mut guard = state.shared.lock();
     let shared = &mut *guard;
 
+    if let Some(snapshot) = state.params.session.get().and_then(|s| s.neighbourhood()) {
+        shared.ui.neighbourhood.update(snapshot);
+        if shared.ui.neighbourhood.computing {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+        }
+    }
     shared.note_frame();
 
     let now = shared.now();

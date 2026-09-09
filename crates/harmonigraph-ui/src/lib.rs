@@ -510,6 +510,7 @@ pub(crate) fn apply_resolved(
     config: harmonigraph_core::configuration::ResolvedConfig,
 ) {
     state.tuning = config.tuning;
+    state.adaptive_policy = config.policy;
     state.view.meantone = config.modes.tempered.syntonic;
     state.view.marvel = config.modes.tempered.septimal_kleisma;
     state.view.meantone_auto = config.modes.auto[0];
@@ -531,6 +532,15 @@ pub(crate) fn tuning_edit(
             state.console.log("Tuning command refused: configuration storage is full");
         }
         return;
+    }
+    if let Some(policy) = edit.policy {
+        state.config_reducer.apply(harmonigraph_core::configuration::ConfigMutation::Edit(
+            harmonigraph_core::configuration::ConfigEdit {
+                policy: Some(policy),
+                ..Default::default()
+            },
+        ));
+        state.adaptive_policy = policy;
     }
     for (key, value) in params::ParamKey::TUNING.into_iter().zip(edit.axes) {
         if let Some(value) = value {
@@ -678,3 +688,5 @@ fn learn_step(state: &mut SharedState, params: &dyn ParamBackend) {
 
 #[cfg(test)]
 mod tests;
+
+pub mod adaptive;

@@ -8,7 +8,8 @@ Yan explicitly asked to refine the design before implementation.
 Continue the discussion and update this document as decisions are made.
 The current implementation is described in [adaptive-tuning.md](adaptive-tuning.md).
 The [standalone tuning laboratory](../tools/adaptive-tuning-simulator/README.md) implements a first experimental model and the musical fixtures for inspection.
-It does not change the production plugin; its documented scoring and reference choices remain hypotheses to refine against this design.
+Its documented scoring and reference choices remain hypotheses to refine against this design.
+The [plugin implementation record](adaptive-tuning-plugin.md) describes the subsequent Rust port, controls, expression handling and integration limits.
 
 Yan later clarified that toy-example answers are not fixed at every parameter setting, and that different answers may implicitly assume different settings.
 Read their expected outcomes as musical targets to reproduce under explicitly stated settings, not a demand for one unconditional answer across the entire parameter space.

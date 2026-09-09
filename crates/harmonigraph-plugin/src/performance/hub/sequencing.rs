@@ -1,8 +1,7 @@
 //! The Hub's owned original-input cursor, separate from actual-output progress.
 use super::*;
 use harmonigraph_core::configuration::ResolvedConfig;
-use harmonigraph_core::{policy, LatticePos, PitchClass};
-mod history;
+use harmonigraph_core::{policy, LatticePos};
 
 #[derive(Clone, Copy)]
 pub(super) struct Plan {
@@ -35,6 +34,7 @@ struct Voice {
     key: u8,
     channel: u8,
     pitch: i64,
+    onset_pitch: i64,
     node: Option<LatticePos>,
     decision: u64,
 }
@@ -50,6 +50,7 @@ impl Voice {
             key: voice.note,
             channel: voice.channel,
             pitch: voice.pitch_microcents,
+            onset_pitch: voice.onset_pitch_microcents,
             node: voice.attack_node,
             decision: voice.decision,
         }
@@ -104,9 +105,15 @@ pub(super) struct Sequencer {
     /// authoritative sounding-note facts stay where they always were, in each
     /// row's `State`; this is the policy's context, not a second copy of them.
     context: Box<[Option<Voice>]>,
-    pub(super) history: history::History,
+    last_policy_reset: PolicyReset,
+    memory: policy::Memory,
+    last_release: Option<i64>,
+    policy_config: policy::MusicalConfig,
     policy: Box<policy::PolicyScratch>,
-    policy_context: Box<[policy::ContextPitch]>,
+    policy_context: Vec<policy::ContextPitch>,
+    published_context: Vec<policy::ContextPitch>,
+    published_config: Option<policy::MusicalConfig>,
+    published_reference: i64,
     pub(super) participating: [bool; TUNERS + 1],
     pub(super) participation_serial: [u64; TUNERS + 1],
     pub work: usize,
@@ -138,16 +145,17 @@ impl Default for Sequencer {
             plan_count: 0,
             plan_work: 0,
             context: vec![None; HELD_SESSION].into_boxed_slice(),
-            history: history::History::default(),
+            last_policy_reset: PolicyReset::floor(0, 0),
+            memory: Default::default(),
+            last_release: None,
+            policy_config: harmonigraph_core::configuration::ConfigReducer::default()
+                .resolved()
+                .into(),
             policy: Box::default(),
-            policy_context: vec![
-                policy::ContextPitch {
-                    pitch: PitchClass::from_microcents(0),
-                    node: None
-                };
-                HELD_SESSION
-            ]
-            .into_boxed_slice(),
+            policy_context: Vec::with_capacity(policy::MAX_CONTEXT + policy::MAX_MEMORY),
+            published_context: Vec::with_capacity(policy::MAX_CONTEXT + policy::MAX_MEMORY),
+            published_config: None,
+            published_reference: 0,
             participating: [true; TUNERS + 1],
             participation_serial: [0; TUNERS + 1],
             work: 0,
@@ -157,6 +165,15 @@ impl Default for Sequencer {
     }
 }
 impl Sequencer {
+    /// Only committed clock boundaries advance this shared identity. Retained
+    /// attacks keep their birth era and cannot reset the new context; healthy
+    /// calibration must not advance it or replay another source's old loop.
+    pub(super) fn adopt_policy_clock(&mut self, session: &SessionControl, restart: bool) {
+        let era = session.policy_era.load(Ordering::Acquire);
+        let era = if restart { era.saturating_add(1) } else { era };
+        self.last_policy_reset = PolicyReset::floor(session.runtime, era);
+        session.policy_era.store(era, Ordering::Release);
+    }
     /// The per-row half of giving a lease up. It lives here rather than on the
     /// `Row` because the sequencer indexes these by source -- DIRECT is zero
     /// and a Hub row is one past its own index -- and a fresh lease must not
@@ -164,7 +181,7 @@ impl Sequencer {
     pub(super) fn release_row(&mut self, index: usize) {
         self.participating[index + 1] = true;
         self.participation_serial[index + 1] = 0;
-        self.history.clear(index + 1, self.decision);
+        self.memory.forget_source((index + 1) as u8);
         self.terminal_sources &= !(1 << index);
         self.captured[index + 1] = 0;
     }
@@ -180,8 +197,12 @@ impl Sequencer {
     /// observation's numbering would sit in the policy's context until the
     /// next boundary swept it out. [`Sequencer::carry_observed`] is what
     /// preserves the contribution instead.
+    pub(super) fn reset_memory(&mut self) {
+        self.memory.clear();
+        self.last_release = None;
+    }
     pub(super) fn clear_clock_context(&mut self) {
-        self.history.clear_all(self.decision);
+        self.memory.clear();
         for cell in self.context.iter_mut() {
             *cell = None;
         }
@@ -211,7 +232,8 @@ impl Sequencer {
     /// A discontinuous boundary has already reset the observation, so this
     /// carries nothing across one.
     pub(super) fn carry_observed(&mut self, direct: &mut Direct) {
-        self.clear_clock_context();
+        self.context.fill(None);
+        self.last_release = None;
         // The clear leaves every cell free, and there are four times as many
         // of them as one source can hold voices, so this zip drops nothing.
         for (cell, voice) in self.context.iter_mut().zip(direct.fenced_voices()) {
@@ -253,7 +275,12 @@ impl Sequencer {
                 continue;
             };
             match update.player {
-                None => *cell = None,
+                None => {
+                    if let Some(v) = cell.take() {
+                        self.memory.release(v.context_pitch(), v.source, self.policy_config.policy);
+                        self.last_release = Some(update.sample);
+                    }
+                }
                 Some(player) => cell.as_mut().unwrap().tune(player),
             }
         }
@@ -399,9 +426,8 @@ impl Sequencer {
 }
 
 const _: () = assert!(std::mem::size_of::<Option<Plan>>() <= 256);
-const _: () = assert!(
-    std::mem::size_of::<Option<Plan>>() - std::mem::size_of::<ResolvedConfig>() + 128 <= 256
-);
+// The complete binding now includes original channel pitch. Check its actual
+// configuration size above; any future growth must still fit this cell.
 const _: () = assert!(std::mem::size_of::<Option<Voice>>() <= 256);
 // One context cell keeps full room for a future complete configuration. It
 // used to hold that configuration's revision, which nothing read: the decision
@@ -410,18 +436,22 @@ const _: () = assert!(std::mem::size_of::<Option<Voice>>() + 128 <= 256);
 
 #[cfg(test)]
 impl Sequencer {
-    /// Every voice the policy would score a fresh onset against, as
-    /// `(source slot, lifetime)`. Distinct from a row's factual `State`: this
-    /// is what tuning reads, and a note the Hub no longer believes is sounding
-    /// has to be gone from BOTH.
+    /// Held context as `(source slot, lifetime)`, excluding released memory.
+    /// Distinct from a row's factual `State`: a note the Hub no longer believes
+    /// is sounding has to leave both held sets.
     pub(super) fn test_context(&self) -> Vec<(u8, u64)> {
         self.context.iter().flatten().map(|voice| (voice.source, voice.lifetime)).collect()
     }
     pub(super) fn print_test_memory_layout(&self) {
         println!(
-            "LEDGER musical [history_cell,prospective] {:?}; policy [scratch,context] {:?}",
-            self.history.layout(),
-            [std::mem::size_of_val(&*self.policy), std::mem::size_of_val(&*self.policy_context)]
+            "LEDGER musical memory {:?}; policy [scratch_backing,context_backing,published_backing] {:?}",
+            std::mem::size_of_val(&self.memory),
+            [
+                self.policy.candidates.capacity() * std::mem::size_of::<harmonigraph_core::LatticePos>()
+                    + self.policy.context.capacity() * std::mem::size_of::<policy::ContextPitch>(),
+                self.policy_context.capacity() * std::mem::size_of::<policy::ContextPitch>(),
+                self.published_context.capacity() * std::mem::size_of::<policy::ContextPitch>(),
+            ]
         );
         println!(
             "LEDGER sequencer [owner,plan_option,paired_row_backing,plan_backing,voice_option,voice_backing] {:?}",
@@ -672,6 +702,7 @@ impl Hub {
             let boundary = sample.map_or(membership.through, |sample| sample.max(membership.floor));
             let finalized = boundary.min(membership.through);
             self.sequencer.finalized = Some(finalized);
+            self.sequencer.expire_memory(finalized, self.rate);
             // The observation's own changes to the cells a boundary carried,
             // replayed at their samples inside the same chronological merge
             // the copied records take. `finalized` is how far this pass has
@@ -708,7 +739,8 @@ impl Hub {
             };
             self.batch.begin(sample);
             self.sequencer.membership = Some(membership);
-            self.sequencer.history.configuration(config.revision, self.sequencer.decision);
+            self.sequencer.policy_config = config.into();
+            self.sequencer.expire_memory(sample, self.rate);
             self.sequencer.config = Some(config);
             self.sequencer.cohort_floor = self.sequencer.decision;
             self.sequencer.cohort_unsent = 0;
@@ -800,7 +832,7 @@ impl Hub {
                 self.sequencer.participation_serial[source] = record.serial;
                 self.sequencer.participating[source] = value;
                 if !value {
-                    self.sequencer.history.clear(source, self.sequencer.decision);
+                    self.sequencer.memory.forget_source(source as u8);
                 }
                 // Either direction is now a reset of that Tune, and this
                 // record is still the whole of what the reset owes the Hub.
@@ -826,7 +858,10 @@ impl Hub {
             // DIRECT reaches neither — its forwarding never becomes an
             // `OutputDelta` and it has no plan to cancel — so this record is
             // the whole of source 0's cleanup.
-            self.sequencer.forget_source(record.lease.slot);
+            self.sequencer.release_source(record.lease.slot, record.sample);
+            if self.sequencer.policy_config.policy.reset_stop {
+                self.sequencer.memory.clear();
+            }
             self.batch.stopped(record.lease.slot, record.serial);
             return true;
         }
@@ -839,7 +874,16 @@ impl Hub {
                 })
             });
             match (record.kind, voice) {
-                (CaptureKind::Terminal, Some(cell)) => *cell = None,
+                (CaptureKind::Terminal, Some(cell)) => {
+                    if let Some(v) = cell.take() {
+                        self.sequencer.memory.release(
+                            v.context_pitch(),
+                            v.source,
+                            self.sequencer.policy_config.policy,
+                        );
+                        self.sequencer.last_release = Some(record.sample);
+                    }
+                }
                 (CaptureKind::Tuning { value_bits }, Some(cell)) => {
                     cell.as_mut().unwrap().tune(f64::from_bits(value_bits))
                 }
@@ -914,52 +958,50 @@ impl Hub {
         // Every onset that reaches here from a paired row is adaptive; the
         // refusal above is what makes that true. DIRECT is the other case and
         // is never assigned.
-        let (correction, selection) = if source != 0 {
-            let mut count = 0;
-            for voice in self.sequencer.context.iter().flatten() {
-                if self.sequencer.participating[usize::from(voice.source)] {
-                    self.sequencer.policy_context[count] = policy::ContextPitch {
-                        pitch: PitchClass::from_microcents(voice.pitch),
-                        node: voice.node,
-                    };
-                    count += 1;
-                }
+        let player = self.batch.initial_tuning(record.lease.slot, record.lifetime).unwrap_or(0.0);
+        let channel_pitch = record.channel_pitch;
+        if record.policy_reset.session == self.sequencer.last_policy_reset.session
+            && record.policy_reset > self.sequencer.last_policy_reset
+        {
+            if configuration.policy.reset_loop {
+                self.sequencer.memory.clear();
             }
+            self.sequencer.last_policy_reset = record.policy_reset;
+        }
+        let (correction, selection) = if source != 0 {
+            self.sequencer.fill_policy_context();
+            let count = self.sequencer.policy_context.len();
             #[cfg(test)]
             {
                 self.sequencer.policy_counts[0] += 1;
                 self.sequencer.policy_counts[1] += count;
                 self.sequencer.policy_counts[2] = self.sequencer.policy_counts[2].max(count);
             }
-            let history = self.sequencer.history.previous(
-                record.lease,
-                record.channel,
-                record.key,
-                configuration.revision,
-            );
             let Ok(selection) = policy::assign_new_note(
                 configuration.into(),
                 &self.sequencer.policy_context[..count],
-                history,
-                policy::OrderedOnset { key: record.key },
+                self.sequencer.memory.reference,
+                policy::OrderedOnset {
+                    pitch: i64::from(record.key) * 100_000_000
+                        + channel_pitch
+                        + (player * 100_000_000.0).round() as i64,
+                },
                 &mut self.sequencer.policy,
             ) else {
                 self.configuration_exhausted();
                 return false;
             };
             let node = match selection.assignment {
-                policy::Assignment::Selected { node, .. } => Selection::Node([
-                    i8::try_from(node.threes).expect("bounded canonical threes"),
-                    i8::try_from(node.fives).expect("bounded canonical fives"),
-                    i8::try_from(node.sevens).expect("bounded canonical sevens"),
-                ]),
+                policy::Assignment::Selected { node, .. } => {
+                    Selection::Node([node.threes, node.fives, node.sevens])
+                }
                 policy::Assignment::NoCandidate => Selection::NoCandidate,
             };
             (selection.assignment.correction_microcents(), node)
         } else {
             (0, Selection::Unretuned)
         };
-        let player = self.batch.initial_tuning(record.lease.slot, record.lifetime).unwrap_or(0.0);
+
         // A lifetime this sample already ended still gets its assignment — the
         // Tune is waiting for one — but never becomes context, because the
         // release that ended it applied before this onset existed.
@@ -981,6 +1023,7 @@ impl Hub {
                 correction,
                 selection,
                 initial_player: player,
+                initial_channel: channel_pitch,
             };
             // The Tune owns its own delay, so the emission this onset is
             // planned for is that Tune's D and not a session-wide constant.
@@ -1009,7 +1052,14 @@ impl Hub {
                 return false;
             }
             if self.sequencer.participating[source] {
-                self.sequencer.history.commit(record.lease, record.channel, record.key, binding);
+                self.sequencer.memory.attack(
+                    i64::from(record.key) * 100_000_000
+                        + channel_pitch
+                        + correction
+                        + (player * 100_000_000.0).round() as i64,
+                    correction,
+                    configuration.policy,
+                );
             }
             self.sequencer.cohort_unsent += 1;
             self.sequencer.cohort_recipients |= 1 << (source - 1);
@@ -1024,12 +1074,16 @@ impl Hub {
                 source: record.lease.slot,
                 observed: false,
                 lifetime: record.lifetime,
-                correction: i64::from(correction),
+                correction,
                 player,
                 key: record.key,
                 channel: record.channel,
                 pitch: i64::from(record.key) * 100_000_000
-                    + i64::from(correction)
+                    + correction
+                    + (player * 100_000_000.0).round() as i64,
+                onset_pitch: i64::from(record.key) * 100_000_000
+                    + channel_pitch
+                    + correction
                     + (player * 100_000_000.0).round() as i64,
                 node: selection.node(),
                 decision,
@@ -1222,16 +1276,6 @@ impl Sequencer {
         }
     }
 
-    /// The same, for an ending addressed to no lifetime because it ends all of
-    /// them. One pass over the cells the scan above already walks.
-    fn forget_source(&mut self, source: u8) {
-        for cell in self.context.iter_mut() {
-            if cell.is_some_and(|voice| voice.source == source) {
-                *cell = None;
-            }
-        }
-    }
-
     pub(super) fn accepted_output(
         &mut self,
         source: u8,
@@ -1247,7 +1291,24 @@ impl Sequencer {
             if value.lifetime != 0
                 && (value.event.release() || value.outcome.channel_terminal().is_some())
             {
-                self.forget_voice(source, value.lifetime);
+                if let Some(cell) = self.context.iter_mut().find(|cell| {
+                    cell.is_some_and(|v| {
+                        !v.observed && v.source == source && v.lifetime == value.lifetime
+                    })
+                }) {
+                    let ended = cell.take().unwrap();
+                    // A factual emergency release can arrive before its Stop
+                    // capture. Preserve that onset exactly once; cancellations
+                    // of unsounded plans still use forget_voice above.
+                    if self.participating[usize::from(source)] {
+                        self.memory.release(
+                            ended.context_pitch(),
+                            source,
+                            self.policy_config.policy,
+                        );
+                        self.last_release = Some(value.actual);
+                    }
+                }
             }
             return;
         };
@@ -1261,5 +1322,87 @@ impl Sequencer {
         }) {
             planned.pitch = fact.pitch;
         }
+    }
+}
+
+impl Voice {
+    fn context_pitch(self) -> policy::ContextPitch {
+        policy::ContextPitch { pitch: self.onset_pitch, node: self.node, weight: 1.0 }
+    }
+}
+impl Sequencer {
+    fn fill_policy_context(&mut self) {
+        self.policy_context.clear();
+        // Newest held repetitions win the tolerance match, independently of
+        // storage-slot reuse. Sorting the fixed voice references allocates nothing.
+        let mut voices = [None; HELD_SESSION];
+        let mut count = 0;
+        for voice in self.context.iter().flatten() {
+            if self.participating[usize::from(voice.source)] {
+                voices[count] = Some(*voice);
+                count += 1;
+            }
+        }
+        voices[..count].sort_unstable_by_key(|v| std::cmp::Reverse(v.unwrap().decision));
+        for voice in voices[..count].iter().flatten() {
+            if !self.policy_context.iter().any(|v| {
+                v.pitch.abs_diff(voice.onset_pitch)
+                    <= u64::from(self.policy_config.policy.tolerance)
+            }) {
+                self.policy_context.push(voice.context_pitch());
+            }
+        }
+        self.memory.append(&mut self.policy_context, self.policy_config.policy);
+    }
+    fn release_source(&mut self, source: u8, sample: i64) {
+        for cell in self.context.iter_mut() {
+            if cell.is_some_and(|v| v.source == source) {
+                let v = cell.take().unwrap();
+                self.memory.release(v.context_pitch(), source, self.policy_config.policy);
+                self.last_release = Some(sample);
+            }
+        }
+    }
+    fn expire_memory(&mut self, sample: i64, rate: f64) {
+        let timeout = self.policy_config.policy.silence_ms;
+        if timeout != 0
+            && self.context.iter().all(Option::is_none)
+            && self.last_release.is_some_and(|t| {
+                sample.saturating_sub(t) as f64 >= f64::from(timeout) * rate / 1000.0
+            })
+        {
+            self.memory.clear();
+            self.last_release = None;
+        }
+    }
+}
+
+impl Sequencer {
+    pub(super) fn publish_neighbourhood(
+        &mut self,
+        shared: &setup::Shared,
+        config: policy::MusicalConfig,
+    ) {
+        self.policy_config = config;
+        self.fill_policy_context();
+        // Keyed only by values which decide the next assignment. Display
+        // tolerance, callback time and camera movement must not restart work.
+        if self.published_config != Some(config)
+            || self.published_reference != self.memory.reference
+            || self.published_context != self.policy_context
+        {
+            shared.neighbourhood.publish(config, self.memory.reference, &self.policy_context);
+            self.published_config = Some(config);
+            self.published_reference = self.memory.reference;
+            self.published_context.clear();
+            self.published_context.extend_from_slice(&self.policy_context);
+        }
+    }
+}
+
+#[cfg(test)]
+impl Hub {
+    pub(in crate::performance) fn test_next_context(&self) -> policy::reach::Snapshot {
+        self.shared.neighbourhood.read().expect("published next-attack context")
     }
 }

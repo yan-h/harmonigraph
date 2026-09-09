@@ -207,7 +207,9 @@ const _: () = assert!(std::mem::size_of::<Hub>() <= 1136);
 // A row is its `State` (15,752 bytes of held voices and channel controllers)
 // plus its bookkeeping. The held-note snapshot it used to carry alongside was
 // nearly as large again; this ceiling is retightened to what is left.
-const _: () = assert!(std::mem::size_of::<Row>() <= 16384);
+// Each voice now retains its onset register alongside current emitted pitch;
+// channel bend sensitivity is also retained. Storage remains fixed per row.
+const _: () = assert!(std::mem::size_of::<Row>() <= 18432);
 impl Hub {
     pub fn end(
         &mut self,
@@ -249,6 +251,7 @@ impl Hub {
         });
         self.shared.deadline_misses.store(misses, Ordering::Relaxed);
         self.shared.extra_delay.store(worst as u64, Ordering::Relaxed);
+        self.sequencer.publish_neighbourhood(&self.shared, owner.reducer.resolved().into());
         if self.trace.due(callback.frames, self.rate) {
             self.publish_diagnostics(callback, owner);
             self.shared.request_main();
@@ -390,6 +393,7 @@ impl Hub {
             return;
         };
         self.direct.reset_idle_clock(clock.epoch);
+        self.sequencer.adopt_policy_clock(&offer.session, true);
         self.clock = Clock::new(self.clock.calibration, self.rate, self.max_frames);
         self.publication_clock = clock;
         self.publication_through = None;
@@ -496,6 +500,9 @@ impl Hub {
             // Reactivation is a host-owned boundary rather than a clock
             // failure: the members cancel and release through their own
             // `activate`, and this session adopts the new format outright.
+            if let Some(offer) = &self.offer {
+                self.sequencer.adopt_policy_clock(&offer.session, true);
+            }
             self.clock = Clock::new(self.clock.calibration, rate, frames);
             self.direct.activate(rate, frames, 0);
             self.anchor = None;
@@ -520,6 +527,7 @@ impl Hub {
         owner.recording.clock.runtime_session = offer.session.runtime;
         offer.session.epoch.store(owner.recording.clock.epoch, Ordering::Release);
         self.direct.attach_direct(offer.session.clone());
+        self.sequencer.adopt_policy_clock(&offer.session, false);
         return_slot.publish(offer.session.runtime);
         self.offer = Some(offer);
         self.shared.request_main();
@@ -618,6 +626,12 @@ impl Hub {
             return;
         }
         self.direct.commit_clock_setup(update, epoch);
+        if update.reset || self.invalidated {
+            self.sequencer.adopt_policy_clock(&offer.session, true);
+        }
+        if self.invalidated && owner.reducer.resolved().policy.reset_loop {
+            self.sequencer.reset_memory();
+        }
         owner.resume_clock(offset, self.invalidated);
         self.invalidated = false;
         self.clock = Clock::new(update.routing.calibration(), self.rate, self.max_frames);
@@ -1197,6 +1211,9 @@ impl Hub {
                 }
                 self.clock_loss_pending = true;
                 row.repair = publication::Lanes::both(true);
+                if row.state.pitch_changed {
+                    row.repair = publication::Lanes::both(true);
+                }
                 row.applied = value.sequence;
                 Self::confirm(row, &mut owner.confirmed);
                 let accepted = row.state.voice(value.lifetime).copied();
@@ -1323,6 +1340,9 @@ impl Hub {
                     if published.take.is_ok() && published.display.is_ok() {
                         self.trace.published(delta);
                     }
+                }
+                if row.state.pitch_changed {
+                    row.repair = publication::Lanes::both(true);
                 }
                 row.applied = value.sequence;
                 if value.outcome.partial() {

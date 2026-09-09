@@ -207,28 +207,15 @@ fn production_sixteen_sources_complete_a_256_onset_cohort_and_hold_exact_credit(
     }
     assert_eq!(onsets, [16; 16]);
     let counts = inspect_hub(&hub, |hub| hub.test_policy_counts());
-    // Late-cohort replay can reevaluate unaccepted requests. Report that cost
-    // too, while proving the first 256 sequential selections reach 255 voices.
-    assert!(counts[0] >= 256 && counts[1] >= 32640);
-    assert_eq!(counts[2], 255);
+    // All 256 voices were assigned above; repeated actual pitches now share
+    // one harmonic contribution even though their lifetimes remain independent.
+    assert!(counts[0] >= 256 && counts[1] > 0);
+    assert!(counts[2] <= 16, "repeated sounding pitches contribute once: {counts:?}");
     let config = inspect_source(&sources[0], |source| {
         source.state.voices().next().unwrap().assignment.unwrap()
     });
-    let candidates: Vec<_> = (0..16)
-        .map(|index| {
-            let target = harmonigraph_core::PitchClass::from_midi_note(address(index).1 as u8);
-            harmonigraph_core::positions_within(-6..=6, -2..=2, 0..=0)
-                .filter(|node| {
-                    config.tuning.pitch_class(*node).signed_microcents_from(target).unsigned_abs()
-                        <= harmonigraph_core::policy::CANDIDATE_RADIUS
-                })
-                .count()
-        })
-        .collect();
-    if synthetic {
-        assert!(candidates.iter().all(|count| *count == 65));
-    }
-    println!("MUSICAL max synthetic={synthetic} domain=65 candidates={candidates:?} policy[calls,sum_context,max_context]={counts:?} source_max_ns={source_max} hub_max_ns={hub_max} total_callback_ns={callback_sum} completed_raw={raw}");
+    assert_eq!(config.policy.version, 2);
+    println!("MUSICAL max synthetic={synthetic} policy[calls,sum_context,max_context]={counts:?} source_max_ns={source_max} hub_max_ns={hub_max} total_callback_ns={callback_sum} completed_raw={raw}");
     assert_eq!(session.credits.load(Ordering::Acquire), 256);
     assert!(sources
         .iter()
@@ -1874,7 +1861,7 @@ fn production_fifteen_note_mixed_offsets_preserve_gestures_without_terminal_late
                     let Event::Expression { value: expressed, .. } = events[2].1 else {
                         panic!("player expression")
                     };
-                    assert_eq!((events[2].0, expressed), (onset + 10, initial));
+                    assert_eq!((events[2].0, expressed), (onset + 10, initial + 0.125));
                     assert!(events[3].1.release());
                     assert_eq!(events[3].0, onset + 20);
                 }
@@ -2795,8 +2782,8 @@ fn settle(hub: &Device, source: &Device, mut raw: i64, release: Vec<Input>) {
     assert_eq!(source.source_snapshot().held, 0);
 }
 
-/// While Participating the Tune owns pitch and overrides what the player
-/// sends. Off owns nothing: the bend and the per-note tuning are the
+/// Participating adds adaptive correction; both modes preserve player pitch.
+/// Off owns no correction: the bend and the per-note tuning are the
 /// player's and reach the instrument as they were written.
 #[test]
 fn production_off_forwards_the_players_bend_and_per_note_tuning_unchanged() {
@@ -2840,11 +2827,7 @@ fn production_off_forwards_the_players_bend_and_per_note_tuning_unchanged() {
             _ => None,
         })
         .collect();
-    assert_eq!(
-        bends,
-        [0x2000, 0x3000],
-        "Participating centres the player's bend; Off passes the same bend through"
-    );
+    assert_eq!(bends, [0x3000, 0x3000], "Both modes preserve the player's channel bend");
     let tuning = |id| {
         actual
             .iter()
@@ -2855,11 +2838,16 @@ fn production_off_forwards_the_players_bend_and_per_note_tuning_unchanged() {
             .collect::<Vec<_>>()
     };
     let participating = tuning(1);
-    assert_eq!(participating.len(), 2, "an adaptive onset states its tuning, then the override");
+    assert_eq!(
+        participating.len(),
+        2,
+        "an adaptive onset states its tuning, then player expression"
+    );
     assert_ne!(participating[0], 0.0, "the assignment the Tune chose, not the player's 0.25");
     assert_eq!(
-        participating[1], participating[0],
-        "the player's per-note tuning is zeroed and carries only the assignment"
+        participating[1],
+        participating[0] + 0.25,
+        "the player's per-note tuning is added to the frozen correction"
     );
     assert_eq!(
         tuning(2),
@@ -2967,11 +2955,9 @@ fn production_a_toggle_owns_its_forwarded_note_until_the_release_is_accepted() {
     settle(&hub, &source, 6144, vec![]);
 }
 
-/// Off leaves the player's bend on the wire. Participating owns pitch again,
-/// so returning to it recentres the channels Off actually bent -- otherwise
-/// every note the Tune tuned afterwards would sound at that offset.
+/// Returning to Participating retains the channel pitch the player established.
 #[test]
-fn production_returning_to_participating_recentres_what_off_bent() {
+fn production_returning_to_participating_preserves_what_off_bent() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
     musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
@@ -2992,13 +2978,11 @@ fn production_returning_to_participating_recentres_what_off_bent() {
     let back = source.run_format(3072, vec![source.participation(true, 0)], None, None, 512);
     hub.run_format(3072, vec![], None, None, 512);
     assert!(
-        back.values
-            .iter()
-            .any(|(_, event)| matches!(event, Event::Midi { data: [0xe0, 0x00, 0x40], .. })),
-        "the boundary recentres it"
+        !back.values.iter().any(|(_, event)| matches!(event, Event::Midi { data: [0xe0, ..], .. })),
+        "participation cannot overwrite the player's pitch"
     );
-    // A channel this Tune never bent owes nothing, so the recentre is not a
-    // fixed cost every toggle pays.
+    assert_eq!(inspect_source(&source, |s| s.state.channels()[0].pitch_bend), Some(0x3000));
+    // Neither direction of a participation toggle owns pitch.
     let again = source.run_format(3584, vec![source.participation(false, 0)], None, None, 512);
     hub.run_format(3584, vec![], None, None, 512);
     assert!(
@@ -3006,20 +2990,16 @@ fn production_returning_to_participating_recentres_what_off_bent() {
             .values
             .iter()
             .any(|(_, event)| matches!(event, Event::Midi { data: [0xe0, ..], .. })),
-        "a centred channel is already in the new mode's state"
+        "the other direction also preserves player pitch"
     );
     assert_eq!(source.source_snapshot().faults, 0);
     settle(&hub, &source, 4096, vec![]);
 }
 
-/// A restore can move participation and routing together, and the routing half
-/// is a reset whose cancel cut covers the participation marker standing in the
-/// same queue. That marker never reaches output -- and it carries the only
-/// thing that arms the recentre. Losing it leaves the wire holding the bend the
-/// Off phrase passed through, under a Tune that owns pitch again, so every note
-/// it tunes afterwards sounds at that offset.
+/// A cancelled participation marker must preserve pitch while routing reset
+/// still settles notes, pedals and its accepted-output cut.
 #[test]
-fn production_a_reset_that_cancels_a_toggle_still_recentres_what_off_bent() {
+fn production_a_reset_that_cancels_a_toggle_preserves_player_bend() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
@@ -3076,7 +3056,7 @@ fn production_a_reset_that_cancels_a_toggle_still_recentres_what_off_bent() {
          has to survive the whole withdraw and re-adopt the routing change puts between \
          the toggle and the next moment output is allowed"
     );
-    assert_eq!(recentres, 1, "the toggle still owes the wire its centre, exactly once");
+    assert_eq!(recentres, 0, "the cancelled toggle creates no pitch-centering obligation");
     assert_eq!(source.source_snapshot().faults, 0);
     settle(&hub, &source, raw, vec![]);
 }
@@ -3548,7 +3528,7 @@ fn production_a_carried_direct_voice_is_context_for_the_onset_before_its_release
             .voices()
             .find(|voice| voice.note == 52)
             .and_then(|voice| voice.attack_node)),
-        Some(harmonigraph_core::LatticePos::new(-4, -1, 0)),
+        Some(harmonigraph_core::LatticePos::new(4, 0, 0)),
         "and the musical consequence: scored against the held D. Read against a context \
          the release had already emptied, this E is the plain 5/4 (0, 1, 0)"
     );
@@ -3564,7 +3544,8 @@ fn production_a_carried_direct_voice_is_context_for_the_onset_before_its_release
 
 /// The other half of the merge rule the replay has to obey: inside one sample
 /// every release and controller lands before any onset. The carried voice's own
-/// release is a release, so an onset at exactly its sample is scored without it.
+/// release is a release, so with released memory disabled an onset at exactly
+/// its sample is scored without it.
 #[test]
 fn production_a_carried_direct_release_applies_before_the_onset_at_its_own_sample() {
     let _scope = crate::test_scope::enter();
@@ -3580,6 +3561,10 @@ fn production_a_carried_direct_release_applies_before_the_onset_at_its_own_sampl
         hub.run_format(raw, vec![], None, None, 512);
     }
     let mut raw = reanchored(&hub, &source, uuid, vec![note(31, 0, 50, 1, true)]);
+    musical_tests::configure_policy(
+        &hub,
+        harmonigraph_core::configuration::PolicyConfig { memory: 0, ..Default::default() },
+    );
     assert_eq!(
         inspect_hub(&hub, |hub| hub.test_context()),
         [(0, 1)],
@@ -3609,7 +3594,7 @@ fn production_a_carried_direct_release_applies_before_the_onset_at_its_own_sampl
             .find(|voice| voice.note == 52)
             .and_then(|voice| voice.attack_node)),
         Some(harmonigraph_core::LatticePos::new(0, 1, 0)),
-        "the plain 5/4, not the (-4, -1, 0) the same E takes when the D outlives it"
+        "without held or released context the E starts at the origin's 5/4"
     );
     assert_eq!(source.source_snapshot().faults, 0);
     settle(&hub, &source, raw, vec![note(7, 0, 52, 0, false)]);
@@ -3807,19 +3792,8 @@ fn production_a_lost_direct_replay_is_a_fault_at_the_sample_it_was_lost_at() {
     assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
 }
 
-/// Destruction is the one reset that never resumes, and it takes the marker
-/// with it: `retire_source` stops and joins the producer, and only then does
-/// the retirement pump dispose the participation toggle still standing in the
-/// queue. The recentre that disposal owes cannot be armed there -- the pump
-/// invokes no host output and never reaches `begin` -- so an armed bit would
-/// hold `output_settled` false for the life of the process.
-///
-/// The controller is the fixture, not scenery. Nothing this Tune holds is
-/// wire state, so `stop()` arms no debt at all; what reaches the pedal resets
-/// is the marker turning the join's evidence true, the join faulting on that
-/// evidence, and `arm_release_debt` finding a channel whose controller state
-/// is nonzero and whose three pedals were never observed neutral. Without the
-/// CC1 that branch is never entered and the test passes for the wrong reason.
+/// Teardown reclaims an unreached participation marker without inventing a
+/// pitch-centering debt. Non-pitch cleanup remains owned by the retirement pump.
 #[test]
 fn production_destroying_a_tune_with_an_unreached_toggle_still_reclaims_its_entry() {
     let _scope = crate::test_scope::enter();
@@ -3884,10 +3858,8 @@ fn production_destroying_a_tune_with_an_unreached_toggle_still_reclaims_its_entr
         raw += 512;
     }
     assert!(
-        inspect_hub(&hub, |hub| hub.test_joined_rows().iter().any(|row| row.2)),
-        "the teardown evidence carries the recentre nothing will send: the bend the Off \
-         phrase left is still on the wire, and destruction removed the only owner that \
-         could ever have centred it"
+        inspect_hub(&hub, |hub| hub.test_joined_rows().iter().all(|row| !row.2)),
+        "retained player bend is not an unfulfilled reset obligation"
     );
     assert_eq!(
         registry::global().lock().unwrap().test_counts(),

@@ -35,21 +35,19 @@ pub const BATCH_EVENTS: usize = 2048;
 /// 48 kHz, past any use a live player has for it.
 pub const DELAY_MULTIPLIER_MAX: i32 = 16;
 
-/// Four bytes retain all three outcomes without conflating an Off birth with
+/// Wide coordinates retain all three outcomes without conflating an Off birth with
 /// the policy's completed NoCandidate history clear.
 #[derive(Clone, Copy, Debug, Default)]
 pub enum Selection {
     #[default]
     Unretuned,
     NoCandidate,
-    Node([i8; 3]),
+    Node([i32; 3]),
 }
 impl Selection {
     pub fn node(self) -> Option<harmonigraph_core::LatticePos> {
         match self {
-            Self::Node(p) => {
-                Some(harmonigraph_core::LatticePos::new(p[0].into(), p[1].into(), p[2].into()))
-            }
+            Self::Node(p) => Some(harmonigraph_core::LatticePos::new(p[0], p[1], p[2])),
             _ => None,
         }
     }
@@ -57,7 +55,7 @@ impl Selection {
         !matches!(self, Self::Unretuned)
     }
 }
-const _: () = assert!(std::mem::size_of::<Selection>() == 4);
+const _: () = assert!(std::mem::size_of::<Selection>() == 16);
 
 /// Source-local request binding. decision zero is unbound; all other fields are
 /// copied as one addressed reply and preserved through Off and resubmission.
@@ -65,12 +63,13 @@ const _: () = assert!(std::mem::size_of::<Selection>() == 4);
 pub struct Assignment {
     pub configuration: harmonigraph_core::configuration::ResolvedConfig,
     pub decision: u64,
-    /// Exact microcents within the policy's inclusive +/-50-cent bound.
-    pub correction: i32,
+    /// Full, unwrapped adaptive correction in microcents.
+    pub correction: i64,
     /// Checked coordinates from the bounded canonical policy domain, or the
     /// explicit completed result. Decision zero alone means no assignment.
     pub selection: Selection,
     pub initial_player: f64,
+    pub initial_channel: i64,
 }
 impl Default for Assignment {
     fn default() -> Self {
@@ -80,6 +79,7 @@ impl Default for Assignment {
             correction: 0,
             selection: Selection::Unretuned,
             initial_player: 0.0,
+            initial_channel: 0,
         }
     }
 }
@@ -92,25 +92,12 @@ impl Assignment {
 
 #[cfg(test)]
 #[test]
-fn compact_selection_preserves_every_canonical_policy_coordinate() {
-    use harmonigraph_core::{policy, positions_within, Tempered};
-    for syntonic in [false, true] {
-        for septimal_kleisma in [false, true] {
-            for raw in positions_within(
-                -policy::RAW_THREES..=policy::RAW_THREES,
-                -policy::RAW_FIVES..=policy::RAW_FIVES,
-                -policy::RAW_SEVENS..=policy::RAW_SEVENS,
-            ) {
-                let node = raw.respell(Tempered { syntonic, septimal_kleisma });
-                let encoded = Selection::Node([
-                    i8::try_from(node.threes).unwrap(),
-                    i8::try_from(node.fives).unwrap(),
-                    i8::try_from(node.sevens).unwrap(),
-                ]);
-                assert_eq!(encoded.node(), Some(node));
-            }
-        }
-    }
+fn selection_preserves_long_lattice_journeys() {
+    let p = [0, 30_000, -240];
+    assert_eq!(
+        Selection::Node(p).node(),
+        Some(harmonigraph_core::LatticePos::new(p[0], p[1], p[2]))
+    );
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,6 +106,21 @@ pub struct Lease {
     pub source: SourceId,
     pub incarnation: u64,
     pub slot: u8,
+}
+
+/// A musical loop identity, independent of calibration and ownership epochs.
+/// The Hub advances the era only when raw time may restart. An onset keeps
+/// its original identity even if it waits across that boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PolicyReset {
+    pub session: u64,
+    pub era: u64,
+    pub sample: i64,
+}
+impl PolicyReset {
+    pub const fn floor(session: u64, era: u64) -> Self {
+        Self { session, era, sample: i64::MIN }
+    }
 }
 
 /// One copied, self-contained input record. Everything the Hub needs to order
@@ -147,6 +149,11 @@ pub struct Capture {
     pub key: u8,
     /// This onset asks for an adaptive assignment.
     pub adaptive: bool,
+    /// Original channel pitch at this attack, separate from per-note expression.
+    pub channel_pitch: i64,
+    /// Most recent loop/seek before this attack, in original host steady-time
+    /// samples and its original clock era, independent of calibration.
+    pub policy_reset: PolicyReset,
 }
 pub const NO_REQUEST: u16 = u16::MAX;
 
@@ -458,6 +465,9 @@ pub struct SessionControl {
     pub faults: AtomicU32,
     pub alive: AtomicBool,
     pub epoch: AtomicU64,
+    /// Musical clock era, owned by the Hub. Healthy calibration preserves it;
+    /// committed Reset and host reactivation permit raw time to start over.
+    pub policy_era: AtomicU64,
     /// Zero is open. A pending hub setup generation fences new admission while
     /// the old epoch's complete output and recording routes finish.
     pub closing: AtomicU64,
@@ -498,13 +508,15 @@ pub fn bank() -> (Box<HubBank>, [Option<SourceEndpoints>; TUNERS]) {
 }
 
 const _: () = assert!(std::mem::size_of::<OutputDelta>() <= 128);
-const _: () = assert!(std::mem::size_of::<Capture>() <= 96);
-const _: () = assert!(std::mem::size_of::<Option<Capture>>() <= 96);
-const _: () = assert!(std::mem::size_of::<Intent>() <= 128);
+// Original channel pitch and an era-qualified musical reset bind to the onset.
+// The queue remains fixed-capacity and pointer-free.
+const _: () = assert!(std::mem::size_of::<Capture>() <= 128);
+const _: () = assert!(std::mem::size_of::<Option<Capture>>() <= 128);
+const _: () = assert!(std::mem::size_of::<Intent>() <= 144);
 const _: () = assert!(std::mem::size_of::<Reply>() <= 256);
 const _: () = assert!(std::mem::size_of::<Control>() <= 256);
 // Hub windows and journals allocate Option payloads, not just the bare wire type.
 const _: () = assert!(std::mem::size_of::<Option<OutputDelta>>() <= 128);
-const _: () = assert!(std::mem::size_of::<Option<Intent>>() <= 128);
+const _: () = assert!(std::mem::size_of::<Option<Intent>>() <= 144);
 const _: () = assert!(std::mem::align_of::<Option<OutputDelta>>() <= 8);
 const _: () = assert!(std::mem::align_of::<Option<Intent>>() <= 8);
