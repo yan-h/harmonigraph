@@ -24,7 +24,7 @@ The cause was structural: a graceful-settlement protocol between Tunes and the H
 Stage 8 deleted it.
 What replaced it is **the fault cut**: a note emits on time with the correction that came back or without one, a fault is a status bit that never silences a track, and the only lifecycle event is a cut that nothing waits for.
 
-The transport is now 3,206 production lines where it was 12,981, and its tests 1,191 where they were 12,040.
+The transport is now 3,253 production lines where it was 12,981, and its tests 1,425 where they were 12,040.
 The module is `crates/harmonigraph-plugin/src/tuning/` rather than `performance/`.
 Policy v2 is untouched: the same scorer, the same controls, the same fixtures.
 
