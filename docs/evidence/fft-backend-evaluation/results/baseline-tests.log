@@ -1,0 +1,38 @@
+   Compiling fft-evaluation-baseline v0.0.0 (/private/tmp/harmonigraph-fft-evaluation/build/baseline)
+    Finished `release` profile [optimized] target(s) in 0.95s
+     Running unittests src/main.rs (target/release/deps/fft_evaluation_baseline-53212b9f5ea7e22c)
+
+running 31 tests
+test spectrogram::tests::quantizing_round_trips_to_half_a_step ... ok
+test spectrogram::tests::quantizing_preserves_order ... ok
+test spectrum::tests::a440_lands_on_a4 ... ok
+test spectrum::tests::an_anti_phase_pair_reads_at_full_level_where_a_mixdown_would_see_silence ... ok
+test spectrum::tests::dyad_shows_both_pitches ... ok
+test spectrum::tests::empty_analyzer_reports_nothing ... ok
+test spectrum::tests::midi_to_hz_anchors_a440_and_doubles_each_octave ... ok
+test spectrum::tests::every_channel_of_a_bank_measures_through_the_same_tapers ... ok
+test spectrum::tests::octaves_show_as_separate_peaks ... ok
+test spectrum::tests::one_taper_is_the_hann_window_and_the_arithmetic_under_it ... ok
+test spectrum::tests::out_of_range_partials_are_dropped_not_wrapped ... ok
+test spectrum::tests::reusing_a_stages_twiddles_does_not_move_a_single_bit ... ok
+test spectrum::tests::a_full_scale_sine_reads_unity_at_every_taper_count ... ok
+test spectrum::tests::sample_rate_change_resets_the_window ... ok
+test spectrum::tests::set_fft_size_resets_the_window_and_noops_at_the_current_size ... ok
+test spectrum::tests::set_tapers_resets_the_window_and_noops_at_the_current_count ... ok
+test spectrum::tests::silent_windows_keep_readiness_retained_audio_and_resume ... ok
+test spectrum::tests::the_lowest_buckets_draw_at_every_window_length ... ok
+test spectrum::tests::the_packed_real_transform_matches_a_naive_dft_on_a_small_case ... ok
+test spectrum::tests::the_power_sum_keeps_the_full_scale_calibration_and_drops_pan_from_it ... ok
+test spectrogram::tests::a_merged_column_is_timestamped_inside_the_pair_it_replaced ... ok
+test spectrum::tests::the_reconstruction_has_no_seam_at_a_bin ... ok
+test spectrum::tests::the_reconstruction_never_overshoots_the_bins_it_reads ... ok
+test spectrum::tests::the_taper_table ... ignored
+test spectrogram::tests::trimming_drops_the_oldest_first_and_clear_empties_it ... ok
+test spectrogram::tests::the_flat_view_stays_in_time_order_across_tiers ... ok
+test spectrogram::tests::a_peak_survives_being_merged_into_the_coarse_tiers ... ok
+test spectrum::tests::the_noise_floor_reads_higher_as_tapers_are_added ... ok
+test spectrum::tests::more_tapers_steady_a_bucket_against_noise ... ok
+test spectrum::tests::the_reconstruction_beats_a_straight_line_between_bins ... ok
+test spectrogram::tests::the_column_count_is_bounded_however_long_it_runs ... ok
+
+test result: ok. 30 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.45s

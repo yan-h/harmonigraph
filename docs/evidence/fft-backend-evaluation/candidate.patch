@@ -1,0 +1,91 @@
+--- src/spectrum.rs
++++ src/spectrum.rs
+@@ -138,18 +138,11 @@
+     /// The scale that puts a full-scale sine at 1.0, precomputed alongside the
+     /// tapers it is a property of — see [`taper_norm_power`].
+     norm_power: f32,
+-    /// FFT scratch, HALF the window long: the real window is PACKED into a
+-    /// complex signal of half the length, transformed at that length, and
+-    /// untangled back into bins — see [`untangle_real_power`].
+-    re: Vec<f32>,
+-    im: Vec<f32>,
+-    /// The untangle's twiddles, one per bin of the half transform. Precomputed
+-    /// with the buffers it is sized against, because computing them live hands
+-    /// the packing's whole saving back — see [`build_untangle_twiddles`].
+-    ///
+-    /// [`fft_in_place`] reads it too, at a stride per stage: the transform's
+-    /// twiddles are a SUBSET of these, so buying this table bought that one.
+-    untangle_twiddles: Vec<(f32, f32)>,
++    // EXPERIMENT ONLY: planned real FFT with caller-owned reusable buffers.
++    fft: Option<std::sync::Arc<dyn realfft::RealToComplex<f32>>>,
++    fft_input: Vec<f32>,
++    fft_output: Vec<realfft::num_complex::Complex32>,
++    fft_scratch: Vec<realfft::num_complex::Complex32>,
+     /// Power per bin, SUMMED across the tapers by
+     /// [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum) — the one place the
+     /// taper count stops being visible, since everything downstream of it reads
+@@ -177,9 +170,10 @@
+             tapers: Vec::new(),
+             taper_count: 0,
+             norm_power: 0.0,
+-            re: Vec::new(),
+-            im: Vec::new(),
+-            untangle_twiddles: Vec::new(),
++            fft: None,
++            fft_input: Vec::new(),
++            fft_output: Vec::new(),
++            fft_scratch: Vec::new(),
+             bin_power: Vec::new(),
+             bin_mag: Vec::new(),
+         };
+@@ -202,9 +196,12 @@
+         self.filled = 0;
+         self.tapers = build_tapers(fft_size, taper_count);
+         self.norm_power = taper_norm_power(&self.tapers, fft_size);
+-        self.re = vec![0.0; fft_size / 2];
+-        self.im = vec![0.0; fft_size / 2];
+-        self.untangle_twiddles = build_untangle_twiddles(fft_size);
++        // No global cache or retained planner: each channel owns its plan.
++        let fft = realfft::RealFftPlanner::<f32>::new().plan_fft_forward(fft_size);
++        self.fft_input = fft.make_input_vec();
++        self.fft_output = fft.make_output_vec();
++        self.fft_scratch = fft.make_scratch_vec();
++        self.fft = Some(fft);
+         self.bin_power = vec![0.0; fft_size / 2];
+         self.bin_mag = vec![0.0; fft_size / 2];
+     }
+@@ -343,23 +340,19 @@
+         let (first, last) = (2usize, half - 2);
+         for k in 0..self.taper_count {
+             let taper = k * self.fft_size;
+-            // Unroll the ring into time order, tapered, and PACKED: the even
+-            // samples become the real part of a half-length complex signal and
+-            // the odd ones its imaginary part, so a real window of `fft_size`
+-            // costs a complex transform of `half` plus an O(n) untangle.
++            // Preserve baseline even/odd traversal and f32 window products.
+             for j in 0..half {
+                 let even = (self.write + 2 * j) % self.fft_size;
+                 let odd = (self.write + 2 * j + 1) % self.fft_size;
+-                self.re[j] = self.ring[even] * self.tapers[taper + 2 * j];
+-                self.im[j] = self.ring[odd] * self.tapers[taper + 2 * j + 1];
++                self.fft_input[2 * j] = self.ring[even] * self.tapers[taper + 2 * j];
++                self.fft_input[2 * j + 1] = self.ring[odd] * self.tapers[taper + 2 * j + 1];
+             }
+-            fft_in_place(&mut self.re, &mut self.im, &self.untangle_twiddles);
+-            untangle_real_power(
+-                &self.re,
+-                &self.im,
+-                &self.untangle_twiddles,
+-                first,
+-                last,
+-                &mut self.bin_power,
+-            );
++            self.fft.as_ref().unwrap().process_with_scratch(
++                &mut self.fft_input, &mut self.fft_output, &mut self.fft_scratch,
++            ).unwrap();
++            // Same usable range; deliberately discard DC, bin 1 and Nyquist.
++            for j in first..=last {
++                let c = self.fft_output[j];
++                self.bin_power[j] += c.re * c.re + c.im * c.im;
++            }
+         }

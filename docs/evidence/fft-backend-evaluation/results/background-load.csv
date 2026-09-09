@@ -1,0 +1,169 @@
+run,pid,ps_cpu_percent,process
+pair-0-baseline,85262,59.9,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-0-baseline,412,47.1,/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+pair-0-baseline,877,14.8,/usr/libexec/sysmond
+pair-0-baseline,53666,13.7,/Applications/ChatGPT.app/Contents/Resources/codex
+pair-0-baseline,83396,13.7,/Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+pair-0-baseline,83584,8.5,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+pair-0-baseline,699,4.8,/System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+pair-0-baseline,53669,3.6,/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/152.0.7977.83/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)
+pair-0-baseline,425,3.2,/usr/sbin/coreaudiod
+pair-0-baseline,47658,2.4,/System/Library/DriverExtensions/com.apple.DriverKit.AppleUserECM.dext/com.apple.DriverKit.AppleUserECM
+pair-0-baseline,28161,1.7,/Users/yan/.local/share/claude/versions/2.1.263
+pair-0-baseline,54019,1.7,/Users/yan/.local/share/claude/versions/2.1.267
+pair-0-candidate,85262,48.9,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-0-candidate,412,36.2,/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+pair-0-candidate,83396,10.4,/Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+pair-0-candidate,83584,5.9,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+pair-0-candidate,670,3.7,/Users/yan/Applications/iTerm.app/Contents/MacOS/iTerm2
+pair-0-candidate,53666,3.5,/Applications/ChatGPT.app/Contents/Resources/codex
+pair-0-candidate,699,3.1,/System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+pair-0-candidate,425,2.7,/usr/sbin/coreaudiod
+pair-0-candidate,47658,2.5,/System/Library/DriverExtensions/com.apple.DriverKit.AppleUserECM.dext/com.apple.DriverKit.AppleUserECM
+pair-0-candidate,43613,2.3,/Applications/Discord.app/Contents/Frameworks/Discord Helper (Renderer).app/Contents/MacOS/Discord Helper (Renderer)
+pair-0-candidate,877,1.6,/usr/libexec/sysmond
+pair-0-candidate,382,1.3,/System/Library/CoreServices/launchservicesd
+pair-1-baseline,85262,49.3,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-1-baseline,412,36.4,/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+pair-1-baseline,42337,16.3,/Applications/GeForceNOW.app/Contents/Frameworks/GeForceNOW Helper (Renderer).app/Contents/MacOS/GeForceNOW Helper (Renderer)
+pair-1-baseline,83396,10.7,/Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+pair-1-baseline,42320,9.9,/Applications/GeForceNOW.app/Contents/Frameworks/GeForceNOW Helper (GPU).app/Contents/MacOS/GeForceNOW Helper (GPU)
+pair-1-baseline,41952,6.1,/Applications/GeForceNOW.app/Contents/MacOS/GeForceNOW
+pair-1-baseline,83584,5.9,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+pair-1-baseline,339,2.8,/usr/libexec/logd
+pair-1-baseline,425,2.5,/usr/sbin/coreaudiod
+pair-1-baseline,53577,1.9,/Applications/ChatGPT.app/Contents/MacOS/ChatGPT
+pair-1-baseline,670,1.7,/Users/yan/Applications/iTerm.app/Contents/MacOS/iTerm2
+pair-1-baseline,699,1.7,/System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+pair-1-candidate,85262,48.9,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-1-candidate,412,35.1,/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+pair-1-candidate,699,11.9,/System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+pair-1-candidate,83396,11.2,/Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+pair-1-candidate,877,9.4,/usr/libexec/sysmond
+pair-1-candidate,83584,5.8,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+pair-1-candidate,425,2.2,/usr/sbin/coreaudiod
+pair-1-candidate,680,1.0,/Applications/Zed.app/Contents/MacOS/zed
+pair-1-candidate,597,0.8,/System/Library/DriverExtensions/com.apple.AppleUserHIDDrivers.dext/com.apple.AppleUserHIDDrivers
+pair-1-candidate,670,0.7,/Users/yan/Applications/iTerm.app/Contents/MacOS/iTerm2
+pair-1-candidate,47658,0.7,/System/Library/DriverExtensions/com.apple.DriverKit.AppleUserECM.dext/com.apple.DriverKit.AppleUserECM
+pair-1-candidate,85266,0.7,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-2-baseline,85262,52.2,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-2-baseline,412,32.9,/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+pair-2-baseline,83396,12.3,/Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+pair-2-baseline,83584,5.9,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+pair-2-baseline,699,4.9,/System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+pair-2-baseline,877,4.2,/usr/libexec/sysmond
+pair-2-baseline,425,2.6,/usr/sbin/coreaudiod
+pair-2-baseline,441,2.4,/usr/libexec/airportd
+pair-2-baseline,670,2.1,/Users/yan/Applications/iTerm.app/Contents/MacOS/iTerm2
+pair-2-baseline,590,1.9,/System/Library/DriverExtensions/com.apple.DriverKit-AppleBCMWLAN.dext/com.apple.DriverKit-AppleBCMWLAN
+pair-2-baseline,44978,1.8,/Users/yan/.local/share/claude/versions/2.1.266
+pair-2-baseline,54019,1.8,/Users/yan/.local/share/claude/versions/2.1.267
+pair-2-candidate,85262,49.2,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-2-candidate,412,34.5,/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+pair-2-candidate,83396,11.1,/Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+pair-2-candidate,83584,5.6,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+pair-2-candidate,425,3.3,/usr/sbin/coreaudiod
+pair-2-candidate,42337,3.1,/Applications/GeForceNOW.app/Contents/Frameworks/GeForceNOW Helper (Renderer).app/Contents/MacOS/GeForceNOW Helper (Renderer)
+pair-2-candidate,387,2.9,/usr/libexec/locationd
+pair-2-candidate,42320,1.7,/Applications/GeForceNOW.app/Contents/Frameworks/GeForceNOW Helper (GPU).app/Contents/MacOS/GeForceNOW Helper (GPU)
+pair-2-candidate,86417,1.6,/Applications/Google Drive.app/Contents/MacOS/Google Drive
+pair-2-candidate,47658,1.4,/System/Library/DriverExtensions/com.apple.DriverKit.AppleUserECM.dext/com.apple.DriverKit.AppleUserECM
+pair-2-candidate,680,1.3,/Applications/Zed.app/Contents/MacOS/zed
+pair-2-candidate,41952,1.3,/Applications/GeForceNOW.app/Contents/MacOS/GeForceNOW
+pair-3-baseline,85262,50.5,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-3-baseline,412,33.7,/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+pair-3-baseline,699,13.7,/System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+pair-3-baseline,877,11.7,/usr/libexec/sysmond
+pair-3-baseline,83396,11.7,/Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+pair-3-baseline,83584,5.9,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+pair-3-baseline,425,2.5,/usr/sbin/coreaudiod
+pair-3-baseline,670,1.5,/Users/yan/Applications/iTerm.app/Contents/MacOS/iTerm2
+pair-3-baseline,680,1.2,/Applications/Zed.app/Contents/MacOS/zed
+pair-3-baseline,17655,1.0,/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU
+pair-3-baseline,47658,0.9,/System/Library/DriverExtensions/com.apple.DriverKit.AppleUserECM.dext/com.apple.DriverKit.AppleUserECM
+pair-3-baseline,85266,0.8,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-3-candidate,85262,50.2,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-3-candidate,412,34.9,/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+pair-3-candidate,83396,10.2,/Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+pair-3-candidate,83584,5.7,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+pair-3-candidate,699,3.3,/System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+pair-3-candidate,670,2.7,/Users/yan/Applications/iTerm.app/Contents/MacOS/iTerm2
+pair-3-candidate,877,2.6,/usr/libexec/sysmond
+pair-3-candidate,425,2.2,/usr/sbin/coreaudiod
+pair-3-candidate,44978,1.7,/Users/yan/.local/share/claude/versions/2.1.266
+pair-3-candidate,680,1.0,/Applications/Zed.app/Contents/MacOS/zed
+pair-3-candidate,597,0.9,/System/Library/DriverExtensions/com.apple.AppleUserHIDDrivers.dext/com.apple.AppleUserHIDDrivers
+pair-3-candidate,47658,0.9,/System/Library/DriverExtensions/com.apple.DriverKit.AppleUserECM.dext/com.apple.DriverKit.AppleUserECM
+pair-4-baseline,85262,49.6,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-4-baseline,412,33.7,/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+pair-4-baseline,83396,10.4,/Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+pair-4-baseline,83584,5.7,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+pair-4-baseline,670,4.7,/Users/yan/Applications/iTerm.app/Contents/MacOS/iTerm2
+pair-4-baseline,425,2.8,/usr/sbin/coreaudiod
+pair-4-baseline,699,2.2,/System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+pair-4-baseline,877,1.4,/usr/libexec/sysmond
+pair-4-baseline,28161,1.4,/Users/yan/.local/share/claude/versions/2.1.263
+pair-4-baseline,680,1.2,/Applications/Zed.app/Contents/MacOS/zed
+pair-4-baseline,47658,1.2,/System/Library/DriverExtensions/com.apple.DriverKit.AppleUserECM.dext/com.apple.DriverKit.AppleUserECM
+pair-4-baseline,95028,1.2,/Users/yan/.local/share/claude/versions/2.1.263
+pair-4-candidate,85262,51.3,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-4-candidate,412,36.0,/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+pair-4-candidate,42337,19.0,/Applications/GeForceNOW.app/Contents/Frameworks/GeForceNOW Helper (Renderer).app/Contents/MacOS/GeForceNOW Helper (Renderer)
+pair-4-candidate,83396,10.6,/Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+pair-4-candidate,699,8.4,/System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+pair-4-candidate,42320,8.2,/Applications/GeForceNOW.app/Contents/Frameworks/GeForceNOW Helper (GPU).app/Contents/MacOS/GeForceNOW Helper (GPU)
+pair-4-candidate,83584,6.0,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+pair-4-candidate,877,5.6,/usr/libexec/sysmond
+pair-4-candidate,41952,4.4,/Applications/GeForceNOW.app/Contents/MacOS/GeForceNOW
+pair-4-candidate,425,2.4,/usr/sbin/coreaudiod
+pair-4-candidate,703,1.7,/Applications/AlDente.app/Contents/MacOS/AlDente
+pair-4-candidate,16192,1.5,bash
+pair-5-baseline,85262,49.3,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-5-baseline,412,33.9,/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+pair-5-baseline,83396,10.8,/Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+pair-5-baseline,83584,5.7,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+pair-5-baseline,699,3.8,/System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+pair-5-baseline,670,3.4,/Users/yan/Applications/iTerm.app/Contents/MacOS/iTerm2
+pair-5-baseline,877,3.4,/usr/libexec/sysmond
+pair-5-baseline,425,2.5,/usr/sbin/coreaudiod
+pair-5-baseline,680,1.0,/Applications/Zed.app/Contents/MacOS/zed
+pair-5-baseline,47658,0.9,/System/Library/DriverExtensions/com.apple.DriverKit.AppleUserECM.dext/com.apple.DriverKit.AppleUserECM
+pair-5-baseline,41952,0.8,/Applications/GeForceNOW.app/Contents/MacOS/GeForceNOW
+pair-5-baseline,85266,0.8,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-5-candidate,85262,46.5,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-5-candidate,1,40.7,/sbin/launchd
+pair-5-candidate,412,35.2,/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+pair-5-candidate,83396,10.1,/Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+pair-5-candidate,83584,5.9,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+pair-5-candidate,47658,2.7,/System/Library/DriverExtensions/com.apple.DriverKit.AppleUserECM.dext/com.apple.DriverKit.AppleUserECM
+pair-5-candidate,425,2.5,/usr/sbin/coreaudiod
+pair-5-candidate,53666,1.8,/Applications/ChatGPT.app/Contents/Resources/codex
+pair-5-candidate,699,1.7,/System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+pair-5-candidate,680,1.3,/Applications/Zed.app/Contents/MacOS/zed
+pair-5-candidate,670,1.1,/Users/yan/Applications/iTerm.app/Contents/MacOS/iTerm2
+pair-5-candidate,54019,1.1,/Users/yan/.local/share/claude/versions/2.1.267
+pair-6-baseline,85262,50.1,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-6-baseline,412,34.6,/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+pair-6-baseline,43779,22.2,/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent
+pair-6-baseline,347,12.4,/usr/sbin/systemstats
+pair-6-baseline,877,12.3,/usr/libexec/sysmond
+pair-6-baseline,83396,10.9,/Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+pair-6-baseline,83584,6.1,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+pair-6-baseline,44978,4.1,/Users/yan/.local/share/claude/versions/2.1.266
+pair-6-baseline,425,3.7,/usr/sbin/coreaudiod
+pair-6-baseline,42337,2.8,/Applications/GeForceNOW.app/Contents/Frameworks/GeForceNOW Helper (Renderer).app/Contents/MacOS/GeForceNOW Helper (Renderer)
+pair-6-baseline,42320,1.6,/Applications/GeForceNOW.app/Contents/Frameworks/GeForceNOW Helper (GPU).app/Contents/MacOS/GeForceNOW Helper (GPU)
+pair-6-baseline,703,1.5,/Applications/AlDente.app/Contents/MacOS/AlDente
+pair-6-candidate,85262,57.9,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+pair-6-candidate,412,32.4,/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+pair-6-candidate,83396,14.3,/Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+pair-6-candidate,53666,6.6,/Applications/ChatGPT.app/Contents/Resources/codex
+pair-6-candidate,83584,5.9,/Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+pair-6-candidate,699,4.3,/System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+pair-6-candidate,670,2.9,/Users/yan/Applications/iTerm.app/Contents/MacOS/iTerm2
+pair-6-candidate,425,2.1,/usr/sbin/coreaudiod
+pair-6-candidate,44978,2.0,/Users/yan/.local/share/claude/versions/2.1.266
+pair-6-candidate,877,1.8,/usr/libexec/sysmond
+pair-6-candidate,47658,1.8,/System/Library/DriverExtensions/com.apple.DriverKit.AppleUserECM.dext/com.apple.DriverKit.AppleUserECM
+pair-6-candidate,680,1.3,/Applications/Zed.app/Contents/MacOS/zed
