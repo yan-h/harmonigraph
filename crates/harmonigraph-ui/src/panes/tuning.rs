@@ -399,11 +399,12 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Pa
     let mut p = state.adaptive_policy;
     let before = p;
     p.harmonic =
-        adaptive_value(ui, p.harmonic.into(), 20_000, 1000.0, "Harmonic weight", "") as u16;
+        adaptive_value(ui, p.harmonic.into(), 0..=20_000, 1000.0, "Harmonic weight", "") as u16;
     ui.checkbox(&mut state.neighbourhood.visible, "Show reachable neighbourhood (input C2–C7)");
     p.pitch_scale =
-        adaptive_value(ui, p.pitch_scale.into(), 100, 1.0, "Pitch scale", "¢").max(1) as u16;
-    p.radius = adaptive_value(ui, p.radius.into(), 5, 1.0, "Neighbourhood steps", "").max(1) as u8;
+        adaptive_value(ui, p.pitch_scale.into(), 1..=100, 1.0, "Pitch scale", "¢").max(1) as u16;
+    p.radius =
+        adaptive_value(ui, p.radius.into(), 1..=5, 1.0, "Neighbourhood steps", "").max(1) as u8;
     ui.label("Allowed axes");
     theme::reserve_scroll_gutter(ui);
     egui::ScrollArea::horizontal().id_salt("adaptive-axes-scroll").show(ui, |ui| {
@@ -419,19 +420,25 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Pa
                 ui.selectable_value(&mut p.axes, 3, "Fifths + thirds + sevenths");
             });
     });
-    ui.collapsing("Memory, register and resets", |ui| {
-        p.memory = adaptive_value(ui, p.memory.into(), 24, 1.0, "Released pitches", "") as u8;
+    ui.collapsing("Context", |ui| {
+        p.memory = adaptive_value(ui, p.memory.into(), 0..=24, 1.0, "Released pitches", "") as u8;
         for (value, label, max) in [
             (&mut p.released, "Released weight", 1000),
             (&mut p.recency, "Release carry-over", 1000),
             (&mut p.register_floor, "Register floor", 1000),
             (&mut p.register_falloff, "Register falloff", 4000),
         ] {
-            *value = adaptive_value(ui, (*value).into(), max, 1000.0, label, "") as u16;
+            *value = adaptive_value(ui, (*value).into(), 0..=max, 1000.0, label, "") as u16;
         }
-        p.tolerance =
-            adaptive_value(ui, p.tolerance, 20_000_000, 1_000_000.0, "Same-note tolerance", "¢");
-        p.silence_ms = adaptive_value(ui, p.silence_ms, 120_000, 1000.0, "Silence reset", "s");
+        p.tolerance = adaptive_value(
+            ui,
+            p.tolerance,
+            0..=20_000_000,
+            1_000_000.0,
+            "Same-note tolerance",
+            "¢",
+        );
+        p.silence_ms = adaptive_value(ui, p.silence_ms, 0..=120_000, 1000.0, "Silence reset", "s");
         ui.weak("Silence reset: zero means never.");
         ui.checkbox(&mut p.reset_stop, "Reset context on stop");
         ui.checkbox(&mut p.reset_loop, "Reset context on loop / seek");
@@ -452,13 +459,18 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Pa
 fn adaptive_value(
     ui: &mut egui::Ui,
     raw: u32,
-    max: u32,
+    range: std::ops::RangeInclusive<u32>,
     scale: f32,
     label: &str,
     unit: &str,
 ) -> u32 {
     let mut value = raw as f32 / scale;
-    let mut bar = ValueBar::new(&mut value, 0.0..=max as f32 / scale, label).unit(1.0, unit);
+    let mut bar = ValueBar::new(
+        &mut value,
+        *range.start() as f32 / scale..=*range.end() as f32 / scale,
+        label,
+    )
+    .unit(1.0, unit);
     bar = if scale == 1.0 { bar.integer() } else { bar.decimals(2) };
     if bar.show(ui).changed() {
         (value * scale).round() as u32

@@ -427,18 +427,22 @@ const _: () = assert!(std::mem::size_of::<Option<Voice>>() + 128 <= 256);
 
 #[cfg(test)]
 impl Sequencer {
-    /// Every voice the policy would score a fresh onset against, as
-    /// `(source slot, lifetime)`. Distinct from a row's factual `State`: this
-    /// is what tuning reads, and a note the Hub no longer believes is sounding
-    /// has to be gone from BOTH.
+    /// Held context as `(source slot, lifetime)`, excluding released memory.
+    /// Distinct from a row's factual `State`: a note the Hub no longer believes
+    /// is sounding has to leave both held sets.
     pub(super) fn test_context(&self) -> Vec<(u8, u64)> {
         self.context.iter().flatten().map(|voice| (voice.source, voice.lifetime)).collect()
     }
     pub(super) fn print_test_memory_layout(&self) {
         println!(
-            "LEDGER musical [history_cell,prospective] {:?}; policy [scratch,context] {:?}",
+            "LEDGER musical memory {:?}; policy [scratch_backing,context_backing,published_backing] {:?}",
             std::mem::size_of_val(&self.memory),
-            [std::mem::size_of_val(&*self.policy), std::mem::size_of_val(&*self.policy_context)]
+            [
+                self.policy.candidates.capacity() * std::mem::size_of::<harmonigraph_core::LatticePos>()
+                    + self.policy.context.capacity() * std::mem::size_of::<policy::ContextPitch>(),
+                self.policy_context.capacity() * std::mem::size_of::<policy::ContextPitch>(),
+                self.published_context.capacity() * std::mem::size_of::<policy::ContextPitch>(),
+            ]
         );
         println!(
             "LEDGER sequencer [owner,plan_option,paired_row_backing,plan_backing,voice_option,voice_backing] {:?}",

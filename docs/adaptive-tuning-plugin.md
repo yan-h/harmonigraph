@@ -42,6 +42,7 @@ The participation toggle preserves player pitch while retaining the established 
 Actual emitted pitch and onset pitch are separate factual fields.
 Channel-pitch changes update the factual voices and request complete display/take baselines; these updates do not masquerade as separately accepted per-note wire events.
 Those baselines preserve current pitch, but do not provide a separate sample-timed per-note trajectory for every intermediate channel-controller event within a callback.
+That recording limitation is tracked in [issue #783](https://github.com/yan-h/harmonigraph/issues/783).
 
 Zero silence timeout means never reset for silence.
 A positive timeout is evaluated against the completed input frontier once no held context remains.
