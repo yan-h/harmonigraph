@@ -634,7 +634,7 @@ the second is what keeps Learn from becoming a fixed point.
 ## Open, deferred and not built
 
 **Deferred framework simplification.** The nice-plug output scheduler is now unused by the plugin but still vendored;
-see [the framework boundary](#the-framework-boundary) for what deleting it costs.
+[#789](https://github.com/yan-h/harmonigraph/issues/789) holds the exact remaining edit and the one non-mechanical question in it.
 
 **Deferred policy choices.** Pedal-aware harmonic holding, a successor to the deliberately temporary bounded recent-note memory, and explicit anchors or additional root and excluded-pitch controls remain unbuilt.
 The shipped policy-v2 controls do not imply those choices were made.
