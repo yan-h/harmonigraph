@@ -57,7 +57,7 @@ Fine input control remains useful, but does not replace the requirement for harm
 
 ### Register determines which E fits a fifth chain
 
-Yan supplied a concrete constraint for the eventual register-aware algorithm.
+Yan supplied a concrete constraint for the register-aware algorithm, which is now required in the initial version.
 Establish C–G–D–A as successive ascending just perfect fifths, preserving their registers rather than folding them into one octave.
 For example, the context is C3–G3–D4–A4, with frequency ratios `1, 3/2, 9/4, 27/8` relative to C3.
 Then compare two alternative next onsets against that same context:
@@ -79,7 +79,8 @@ All already sounding context notes retain their fixed adaptive tuning.
 
 This constrains how an incoming note's register changes the relevance of individual context notes and intervals.
 It does not prescribe a specific weighting formula or a special-case rule for E.
-It remains a requirement for the deferred register-aware version, not a claim that the initially accepted register-blind simplification can produce both outcomes.
+Both outcomes are requirements for the initial version.
+A register-blind simplification cannot satisfy them and is no longer an accepted initial scope.
 
 ### Context and memory
 
@@ -93,7 +94,8 @@ If the same keyboard C returns one diesis lower, it is an entirely separate new 
 Identity follows the resulting pitch/lattice placement, not controller-key identity.
 Yan suggested a tolerance setting for deciding when a new note counts as the same as an old one.
 The proposed tolerance concerns memory matching, not permission to retune a sounding note.
-Its comparison domain, units, default, interaction with lattice spelling and eventual register-sensitive matching still need to be specified.
+Its comparison domain, units, default, interaction with lattice spelling and register-sensitive matching still need to be specified.
+Memory matching must preserve the registers needed by harmonic context rather than silently collapsing octave-separated occurrences into a pitch-class-only record.
 Do not choose a default that conflates the motivating diesis-separated pitches or the desired minor-seventh alternatives.
 
 For the initial version, Yan accepts remembering the last N distinct contributions, refreshing repeats and evicting the least recently used released contribution when capacity is exceeded.
@@ -108,12 +110,12 @@ Yan accepts either outcome; do not impose a universal pedal anchor or universal 
 Forgetting individual old notes must not itself erase the accumulated tuning displacement.
 Ordinary releases between chords must not destroy continuity.
 
-Octave placement should influence the final algorithm, but Yan explicitly accepts ignoring it in the initial version for simplicity.
-The eventual harmonic context must store notes by register, and evaluate an incoming note using its register relative to those context notes.
-This is more than giving bass notes a fixed extra weight: relationships between input and context registers belong in the eventual decision.
-The exact register-sensitive heuristic is deferred, not a requirement to introduce it in the first version.
-Do not declare permanent octave equivalence or make a pitch-class-only representation the final context model.
-Output register and accumulated tuning displacement still need to be preserved even while initial harmonic scoring ignores register.
+**Register awareness is required in the initial version.** Yan explicitly reversed the earlier permission to defer it after supplying the fifth-chain example.
+Harmonic context must store notes by register, and evaluate an incoming note using its register relative to those context notes.
+This is more than giving bass notes a fixed extra weight: relationships between input and context registers belong in the decision.
+The exact register-sensitive heuristic remains to be designed, but its inclusion is no longer deferred.
+Do not declare octave-equivalent inputs interchangeable against unchanged context or use a pitch-class-only context model.
+Output register and accumulated tuning displacement must also be preserved.
 
 Provide a configurable time before reset after silence, with a proposed “Never” option.
 The working proposal measures silence from the release of the last sounding note and clears both harmonic memory and accumulated drift at timeout.
@@ -181,8 +183,10 @@ It does not show everything reachable after arbitrary future sequences, which ca
 
 Yan imagines a reasonably small reachable set, fewer than twenty nodes.
 Treat that as a design target to validate, not an agreed hard cap that may silently remove useful interval choices.
-For the initial version, which may ignore register in harmonic decisions, sweeping continuous input through one octave is a proposed definition.
-Revisit that definition when the deferred register-sensitive behaviour is designed.
+Register awareness means a sweep through just one octave can miss nodes reachable from other input registers.
+The indicator's “any arbitrary next input” meaning must account for those registers, for example by taking the union of reachable lattice nodes across the intended input-register range.
+The input range, how to compute that union and whether an optional register-specific view helps remain open.
+Do not present a single-register slice as the complete reachable set.
 
 Proposed presentation: subtle outlines on reachable nodes, distinct from the appearance of sounding notes.
 A faint connecting region and an optional view of each node's input-pitch range are possibilities, not approved UI specifications.
@@ -211,11 +215,20 @@ Replacement must not be conflated with the silence reset: one lets new harmony t
 3. **Memory matching and weights.** Different resulting pitches remain distinct even when played by the same key. How should the proposed same-note tolerance work, and what is N for the accepted temporary recent-note scheme? Should sustained notes or chord density affect weighting? A held bass has no categorical anchoring privilege; its effect should emerge from the sequence and heuristics. The eventual successor to fixed-capacity recency remains open.
 4. **Reset.** What counts as silence under sustain? Which transport transitions trigger the configurable reset, and should stop/start and loop reset share a control? Does a transport reset clear accumulated displacement along with context? What timeout range and defaults feel useful?
 5. **Continuous pitch and expression.** Which incoming pitch controls describe the pitch to quantize at attack? Post-attack player bends remain audible, while the initial policy context retains tuned onset pitch. Bend-aware context is deferred; automatic reselection of sounding notes is forbidden. The current participating path does not use incoming expression to choose its assignment, so continuous input requires an explicit change to that contract.
-6. **Selection and indicator.** How strong can pitch fidelity become within the boundary, and how are ties and simultaneous attacks ordered stably? Later, how should the incoming note's register relative to register-bearing context influence selection, and how should the indicator express register-dependent reachability?
+6. **Selection and indicator.** How strong can pitch fidelity become within the boundary, and how are ties and simultaneous attacks ordered stably? How should the incoming note's register relative to register-bearing context influence selection from the first version, and how should the indicator express register-dependent reachability?
 
 Joint chord selection was an earlier suggestion; the subsequent decision favours simplicity and accepts route dependence.
 A fixed twelve-node keyboard mapping was explicitly rejected in favour of continuous pitch input.
 Do not restore that assumption merely to simplify the indicator.
+
+## Proposed additional toy examples
+
+These are questions proposed for further discussion, not requirements already agreed by Yan.
+Use a few discriminating cases before drafting the algorithm rather than trying to enumerate every musical situation.
+
+1. **Two Es at once.** Establish C3–G3–D4–A4, then play and hold E3 at 5/4 above C3 before adding E5. Should the high E still continue the fifth chain at 81/16 while the low E remains at 5/4? This extends the agreed separate-onset comparison by asking whether both placements can coexist in one evolving context.
+2. **Move one context voice.** Compare just C3–E♭3–G3 followed by B♭3 with C3–G3–E♭6 followed by B♭3. The nearby minor-triad context already calls for 9/5. Should the distant E♭ still establish that preference, or may its influence weaken enough to permit 16/9? Fix the context's actual tuned pitches and compare snapshots to isolate register rather than attack-order effects.
+3. **Transpose everything by an octave.** Raise an entire established example, including all context and incoming notes, by one octave. Should relative tuning decisions and lattice travel remain identical? This distinguishes dependence on relative register relationships from dependence on absolute register; octave-transposition invariance is a proposed expectation, not yet an agreed rule.
 
 ## Behaviour to validate when an algorithm is proposed
 
@@ -230,12 +243,12 @@ Do not restore that assumption merely to simplify the indicator.
 - Transport-triggered context reset follows its setting rather than an unconditional preserve/reset policy.
 - Fine pitch input can distinguish 9/5 and 16/9 when both are eligible.
 - With the same subsequent B♭ input, just C–E♭–G context favours 9/5 and just C–F context favours 16/9; C–E–G has no prescribed answer and may depend on parameters.
-- In the register-aware version, an established ascending C3–G3–D4–A4 fifth chain yields E5 at `81/16` above C3 when extending the chain, but E3 at `5/4` above C3 when played near C; compare separate next onsets from identical context.
+- In the initial version, an established ascending C3–G3–D4–A4 fifth chain yields E5 at `81/16` above C3 when extending the chain, but E3 at `5/4` above C3 when played near C; compare separate next onsets from identical context.
 - An exact pitch match outside the harmonic boundary never wins.
 - The allowed-vocabulary setting controls candidate generation without retuning notes already sounding.
 - Reachable nodes shown in the indicator agree with actual next-note selection under the same context.
-- Note-order dependence is accepted for inversions and arpeggios; simultaneous attacks must still have a deterministic order, sustained-anchor behaviour needs explicit heuristics, and register weighting may be deferred initially.
-- The eventual register-sensitive version stores context notes by register and evaluates incoming notes in relation to those registers; this is deferred rather than claimed by the initial version.
+- Note-order dependence is accepted for inversions and arpeggios; simultaneous attacks must still have a deterministic order, and sustained-anchor and register behaviour need explicit heuristics.
+- The initial version stores context notes by register and evaluates incoming notes in relation to those registers.
 
 These are design checks, not claims of implemented or tested behaviour.
 The existing policy's fixed origin domain, 50-cent candidate window and per-note sequential decisions are useful comparison points, not constraints on this redesign.
