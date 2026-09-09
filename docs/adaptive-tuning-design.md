@@ -55,6 +55,32 @@ In particular, the C–E♭–G expectation uses E♭ at 6/5, and the C–F expe
 These examples constrain the harmonic metric alongside the ascending-third travel requirement.
 Fine input control remains useful, but does not replace the requirement for harmony to influence the choice.
 
+### Register determines which E fits a fifth chain
+
+Yan supplied a concrete constraint for the eventual register-aware algorithm.
+Establish C–G–D–A as successive ascending just perfect fifths, preserving their registers rather than folding them into one octave.
+For example, the context is C3–G3–D4–A4, with frequency ratios `1, 3/2, 9/4, 27/8` relative to C3.
+Then compare two alternative next onsets against that same context:
+
+| Incoming E register | Required tuning | Lattice interpretation |
+|---|---|---|
+| Roughly a perfect fifth above A4: E5 | `81/16` above C3, or `3/2` above A4 | Continue the Pythagorean chain to four fifth steps above C |
+| Roughly a major third above C3: E3 | `5/4` above C3 | Use one just major-third step above C |
+
+The high E is two octaves plus `81/64` above C, whose octave-reduced interval is approximately 407.820 cents.
+The low E is approximately 386.314 cents above C.
+After accounting for their two-octave register difference, the two E placements differ by the syntonic comma `81/80`, approximately 21.506 cents.
+This is a choice between distinct lattice nodes, not merely putting one fixed E node in a different octave.
+
+A comparison may use the same nominal input pitch class in those two registers to isolate register's effect.
+Start each alternative from the same established context; do not let the first E contaminate the context used for the second.
+Preserve the actual context pitches and registers in the fixture, rather than inferring a Pythagorean chain from key labels alone.
+All already sounding context notes retain their fixed adaptive tuning.
+
+This constrains how an incoming note's register changes the relevance of individual context notes and intervals.
+It does not prescribe a specific weighting formula or a special-case rule for E.
+It remains a requirement for the deferred register-aware version, not a claim that the initially accepted register-blind simplification can produce both outcomes.
+
 ### Context and memory
 
 Released notes must continue to contribute to harmonic context, favouring more recently released notes.
@@ -204,6 +230,7 @@ Do not restore that assumption merely to simplify the indicator.
 - Transport-triggered context reset follows its setting rather than an unconditional preserve/reset policy.
 - Fine pitch input can distinguish 9/5 and 16/9 when both are eligible.
 - With the same subsequent B♭ input, just C–E♭–G context favours 9/5 and just C–F context favours 16/9; C–E–G has no prescribed answer and may depend on parameters.
+- In the register-aware version, an established ascending C3–G3–D4–A4 fifth chain yields E5 at `81/16` above C3 when extending the chain, but E3 at `5/4` above C3 when played near C; compare separate next onsets from identical context.
 - An exact pitch match outside the harmonic boundary never wins.
 - The allowed-vocabulary setting controls candidate generation without retuning notes already sounding.
 - Reachable nodes shown in the indicator agree with actual next-note selection under the same context.
