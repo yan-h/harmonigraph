@@ -1401,6 +1401,61 @@ mod tests {
     use egui::Color32;
     use harmonigraph_core::spectrum::SPECTRUM_BINS;
 
+    #[test]
+    fn corrected_source_clock_keeps_history_and_incremental_aggregation_ordered() {
+        let mut spectrum = crate::AudioSpectrum::default();
+        let config = crate::SpectrumConfig { attack: 0.0, release: 0.0, ..Default::default() };
+        let samples: Vec<_> = (0..24_000).map(|i| (i as f32 * 0.047).sin()).collect();
+        spectrum.push_source_samples(&samples, 1, 48_000.0, 0.25, &config);
+        let before = spectrum.history().len();
+        let before_curve = spectrum.display;
+        assert!(before > 10, "fixture must measure before correcting its clock");
+        let mut agg = super::SpectrogramAgg::new();
+        let bucket = 0.016;
+        let keep = 1024;
+        agg.window(spectrum.history(), 0, bucket, keep);
+        let corrected = 0.25 * 0.95f64.powi(60);
+        // Correction overlaps the previous history by almost 30 hops. Feed
+        // one hop at a time so the incremental consumer sees the backwards
+        // boundary as well as the eventual crossing of its previous tail.
+        for hop in 0..64 {
+            spectrum.push_source_samples(&[0.0; 384], 1, 48_000.0, corrected, &config);
+            let history = spectrum.history();
+            let times: Vec<_> = history.iter().map(|c| c.time).collect();
+            assert!(times.windows(2).all(|w| w[0] < w[1]), "backward correction at hop {hop}");
+            if hop == 0 {
+                assert_eq!(history.len(), before, "overlapping history is explicitly suppressed");
+                assert_eq!(spectrum.frames_seen, 24_384, "analysis still consumes every frame");
+                assert_ne!(spectrum.display, before_curve, "the current curve still advances");
+            }
+            if hop == 23 {
+                assert_eq!(history.len(), before, "a whole new window still overlaps history");
+                assert_eq!(
+                    spectrum.display, [0.0; SPECTRUM_BINS],
+                    "the current curve measured silence"
+                );
+                assert!(spectrum.is_flowing(corrected + 33_216.0 / 48_000.0));
+            }
+            assert_eq!(
+                agg.window(history, 0, bucket, keep),
+                super::aggregate_slabs(history.iter(), bucket),
+                "incremental grid differs from complete history at hop {hop}",
+            );
+        }
+        assert!(spectrum.history().len() > before, "corrected history must resume");
+        assert_eq!(agg.rebuilds(), 1, "the retained grid should continue incrementally");
+
+        // Power-of-two rate makes this a bit-exact equality at the old tail:
+        // one hop of audio and a correction backwards by exactly one hop.
+        let mut equal = crate::AudioSpectrum::default();
+        equal.push_source_samples(&samples[..8384], 1, 32_768.0, 0.25, &config);
+        assert_eq!(equal.history().len(), 1);
+        equal.push_source_samples(&samples[..262], 1, 32_768.0, 0.25 - 262.0 / 32_768.0, &config);
+        assert_eq!(equal.history().len(), 1, "equal timestamps must also be suppressed");
+        equal.push_source_samples(&samples[..262], 1, 32_768.0, 0.25 - 262.0 / 32_768.0, &config);
+        assert_eq!(equal.history().len(), 2, "the next later hop resumes history");
+    }
+
     /// Slabs an aggregator is told to keep, where the test is about the values
     /// it produces rather than about what it retains: larger than any of these
     /// windows holds, so the trim never enters into it. The sweep and the drag

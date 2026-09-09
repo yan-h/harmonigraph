@@ -7,11 +7,12 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind, SourceId};
-use harmonigraph_record::{interleaved_reservation, TAKE_CHANNELS};
+use harmonigraph_record::TAKE_CHANNELS;
 use harmonigraph_ui::params::{AnalysisInput, ParamBackend, ParamKey};
 use nice_plug::prelude::*;
 use parking_lot::Mutex;
 
+mod audio_ingress;
 mod background;
 mod configuration;
 mod editor;
@@ -57,15 +58,10 @@ pub struct Harmonigraph {
     /// and it cost a crash; ordering the field is cheaper than being sure.
     _background: background::BackgroundAnalyzer,
     params: Arc<HarmonigraphParams>,
-    /// The selected analysis input, interleaved, for the GUI's spectrum analyzer.
-    audio_producer: rtrb::Producer<f32>,
-    /// Current sample rate as f32 bits, so the GUI folds FFT bins under
-    /// the clock the samples were actually taken at.
+    /// Coherent, bounded audio and source metadata for the live analyzer.
+    audio_producer: audio_ingress::Producer,
+    /// Current rate for recording controls only; queued audio carries its own.
     sample_rate_bits: Arc<AtomicU32>,
-    /// How many channels the ring's frames carry, so the GUI can de-interleave
-    /// them. Written every block; the host can renegotiate the bus layout, and a
-    /// GUI de-interleaving by a stale count would read one channel as two.
-    audio_channels: Arc<AtomicU32>,
     /// State shared with the editor; created eagerly so the ring buffer's
     /// consumer end has somewhere to live before the GUI opens.
     editor_shared: Arc<Mutex<editor::EditorShared>>,
@@ -454,12 +450,8 @@ fn selected_analysis_input<'a, T>(
 
 impl Default for Harmonigraph {
     fn default() -> Self {
-        let (audio_producer, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
+        let (audio_producer, audio_consumer) = audio_ingress::channel(AUDIO_RING_CAPACITY);
         let sample_rate_bits = Arc::new(AtomicU32::new((DEFAULT_SAMPLE_RATE as f32).to_bits()));
-        // Mono until a block says otherwise: the safe guess, since reading a
-        // stereo ring as mono only halves the pitch of what it draws for one
-        // block, while reading mono as stereo would de-interleave silence.
-        let audio_channels = Arc::new(AtomicU32::new(1));
         let (take, take_control) = harmonigraph_record::channel();
         let consumer = take_control.take_display().expect("one display consumer");
         #[cfg(test)]
@@ -472,7 +464,6 @@ impl Default for Harmonigraph {
             consumer,
             audio_consumer,
             sample_rate_bits.clone(),
-            audio_channels.clone(),
             take_control,
             take_events.clone(),
         )));
@@ -496,7 +487,6 @@ impl Default for Harmonigraph {
             params,
             audio_producer,
             sample_rate_bits,
-            audio_channels,
             editor_shared,
             sample_rate: DEFAULT_SAMPLE_RATE,
             samples_processed: 0,
@@ -581,6 +571,7 @@ impl Plugin for Harmonigraph {
             mailbox.published.publish(owner.snapshot);
         }
         self.samples_processed = 0;
+        self.audio_producer.reset();
         // Reset only observed direct input. The session owner must publish
         // its own explicit source/session controls after lifecycle validation.
         // Presentation time stays continuous when exact raw clock provenance
@@ -658,41 +649,25 @@ impl Plugin for Harmonigraph {
         // it analyzes the channels separately and combines them in the power
         // domain, so a mixdown here would cancel anti-phase content before it
         // could (see `harmonigraph_core::spectrum::ChannelBank`). A full ring — editor
-        // closed, or its thread stalled — silently drops frames, the same
-        // failure mode as the note ring.
+        // closed, or its thread stalled — drops frames. The next retained
+        // source position explicitly resets analysis across that gap.
         // Read the parameter and choose ONCE per block: the same buffer goes to
         // the live ring below and the take recorder after it. The main buffer
         // remains the host's untouched pass-through path either way.
-        let analysis_input = selected_analysis_input(
-            &*buffer,
-            aux.inputs.first(),
-            self.params.analysis_input.value(),
-        );
+        let selected = self.params.analysis_input.value();
+        let analysis_input = selected_analysis_input(&*buffer, aux.inputs.first(), selected);
         let channels = analysis_input.channels();
-        if channels > 0 {
-            self.audio_channels.store(channels as u32, Ordering::Relaxed);
-            // Reserve the block's slots once and fill them, rather than a
-            // per-sample push(): one ring-atomic touch per block instead of
-            // ~48k/s on the audio thread. `slots()` only grows as the consumer
-            // drains, so the reservation of `want` never fails; the `if let`
-            // is defensive.
-            let want =
-                interleaved_reservation(self.audio_producer.slots(), block_samples, channels);
-            if want > 0 {
-                // Interleaved from the per-channel planes the host gave us. A
-                // shared slice-of-slices rather than `iter_samples`, because a
-                // frame view cannot be flat-mapped without collecting it — and
-                // this is the audio thread, where the allocation that would take
-                // is exactly what is not allowed.
-                let planes = analysis_input.as_slice_immutable();
-                let frames = want / channels;
-                if let Ok(chunk) = self.audio_producer.write_chunk_uninit(want) {
-                    chunk.fill_from_iter(
-                        (0..frames).flat_map(|f| (0..channels).map(move |c| planes[c][f])),
-                    );
-                }
-            }
-        }
+        let planes = analysis_input.as_slice_immutable();
+        self.audio_producer.publish(
+            block_samples,
+            audio_ingress::Format {
+                channels,
+                sample_rate: self.sample_rate as f32,
+                sidechain: selected == AnalysisInputParam::Sidechain,
+            },
+            self.presentation_seconds,
+            (0..block_samples).flat_map(|f| (0..channels).map(move |c| planes[c][f])),
+        );
 
         if let Some(owner) = self.configuration.as_mut() {
             self.aggregation.as_mut().unwrap().publish(owner, &mut self.take);
@@ -1072,6 +1047,21 @@ mod tests {
         }
     }
 
+    fn publish_test_audio(plugin: &mut Harmonigraph, frames: usize) {
+        plugin.audio_producer.publish(
+            frames,
+            audio_ingress::Format {
+                channels: 1,
+                sample_rate: DEFAULT_SAMPLE_RATE as f32,
+                sidechain: false,
+            },
+            plugin.presentation_seconds,
+            (0..frames).map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin() * 0.5),
+        );
+        plugin.presentation_seconds += frames as f64 / DEFAULT_SAMPLE_RATE;
+        plugin.take.publish_clock(plugin.presentation_seconds);
+    }
+
     /// The window flag the editor announces itself through has to be the one
     /// the background analyzer watches, and nothing but this says so.
     ///
@@ -1099,13 +1089,7 @@ mod tests {
         let mut plugin = Harmonigraph::default();
         // First make construction's in-flight round observable. The fill is
         // big enough to cross hop boundaries, so its drain must grow history.
-        for i in 0..20_000 {
-            let t = i as f32 / 48_000.0;
-            plugin
-                .audio_producer
-                .push((std::f32::consts::TAU * 440.0 * t).sin() * 0.5)
-                .expect("the ring is sized for this");
-        }
+        publish_test_audio(&mut plugin, 20_000);
         let before = columns_after(&plugin, 0).unwrap_or_else(|| {
             panic!(
                 "no baseline column in {ANALYSIS_DEADLINE:?}: this runner never scheduled the \
@@ -1125,13 +1109,7 @@ mod tests {
         );
 
         // A second reachable fill is the work an open editor must leave alone.
-        for i in 0..20_000 {
-            let t = i as f32 / 48_000.0;
-            plugin
-                .audio_producer
-                .push((std::f32::consts::TAU * 440.0 * t).sin() * 0.5)
-                .expect("the ring is sized for this");
-        }
+        publish_test_audio(&mut plugin, 20_000);
         std::thread::sleep(settle);
         assert_eq!(
             columns(&plugin),
@@ -1188,13 +1166,7 @@ mod tests {
         *plugin.params.ui_state.write() = blob;
         // A Precise window is 16384 samples; this is more than one windowful,
         // so the analyzer cannot come out of the drain empty.
-        for i in 0..40_000 {
-            let t = i as f32 / 48_000.0;
-            plugin
-                .audio_producer
-                .push((std::f32::consts::TAU * 440.0 * t).sin() * 0.5)
-                .expect("the ring is sized for this");
-        }
+        publish_test_audio(&mut plugin, 40_000);
         assert!(
             columns_after(&plugin, 0).is_some(),
             "nothing was analyzed in {ANALYSIS_DEADLINE:?}: either the restored blob \
@@ -1519,6 +1491,50 @@ mod tests {
         let notes: Vec<_> =
             shared.ui.picture.runtime.tracker.roll().notes().map(|n| (n.start, n.end)).collect();
         assert_eq!(notes, [(20.0, Some(21.0)), (21.5, None)]);
+    }
+
+    #[test]
+    fn analyzer_source_time_ignores_transport_loops_stops_and_missing_positions() {
+        let mut plugin = Harmonigraph::default();
+        plugin.sample_rate = 48_000.0;
+        let shared = plugin.editor_shared.clone();
+        let mut shared = shared.lock();
+        let shared = &mut *shared;
+        let mut left = vec![0.5; 10_000];
+        let mut right = vec![-0.5; 10_000];
+        let mut audio = stereo_buffer(&mut left, &mut right);
+        let mut context = EmptyProcessContext::new();
+        let mut aux = AuxiliaryBuffers { inputs: &mut [], outputs: &mut [] };
+        for (playing, position) in [(true, Some(100_000)), (true, Some(0)), (false, None)] {
+            context.transport.playing = playing;
+            context.transport.pos_samples = position;
+            plugin.process(&mut audio, &mut aux, &mut context);
+        }
+        shared.input.drain(
+            &mut shared.ui.picture.runtime,
+            &shared.ui.picture.appearance,
+            plugin.presentation_seconds,
+        );
+        let spectrum = &shared.ui.picture.runtime.spectrum;
+        let before = spectrum.history().len();
+        assert!(before > 40, "all three callbacks must reach the analyzer");
+        let times: Vec<_> = spectrum.history().iter().map(|c| c.time).collect();
+        for pair in times.windows(2) {
+            assert!((pair[1] - pair[0] - 0.008).abs() < 1e-12, "transport moved the source grid");
+        }
+        // An actual plugin reset, unlike project transport, must discard the
+        // carried FFT window. A tiny next callback cannot add another column.
+        plugin.reset();
+        let mut left = [0.0; 384];
+        let mut right = [0.0; 384];
+        let mut audio = stereo_buffer(&mut left, &mut right);
+        plugin.process(&mut audio, &mut aux, &mut context);
+        shared.input.drain(
+            &mut shared.ui.picture.runtime,
+            &shared.ui.picture.appearance,
+            plugin.presentation_seconds,
+        );
+        assert_eq!(shared.ui.picture.runtime.spectrum.history().len(), before);
     }
 
     #[test]
