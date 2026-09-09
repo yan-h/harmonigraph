@@ -5,6 +5,8 @@
 `--write` repairs those breaks, leaving accepted lines alone. Both operate on
 the tracked `.md` files this repo owns; `vendor/` is excluded so a local fork
 keeps diffing cleanly against upstream.
+Untracked Markdown is skipped with a warning: stage new documents with
+`git add` before checking or repairing them. Ignored files are not considered.
 
 A line break inside a paragraph renders as a space, so where the breaks fall
 changes no rendered output. What it changes is the diff: an edit touches the
@@ -21,6 +23,7 @@ code spans and links.
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import subprocess
@@ -108,10 +111,11 @@ def offenders(path: str, lines: list[str]) -> list[tuple[int, str]]:
     return bad
 
 
-def tracked() -> list[str]:
+def markdown_files(*options: str) -> list[str]:
     out = subprocess.run(
-        ["git", "ls-files", "*.md"], capture_output=True, text=True, check=True
-    ).stdout.split("\n")
+        ["git", "ls-files", "-z", *options, "--", "*.md"],
+        capture_output=True, text=True, check=True,
+    ).stdout.split("\0")
     # AGENTS.md and GEMINI.md are symlinks to CLAUDE.md; following them would
     # rewrite one file three times and report it three times.
     return [
@@ -121,12 +125,23 @@ def tracked() -> list[str]:
     ]
 
 
+def tracked() -> list[str]:
+    return markdown_files()
+
+
 def main() -> int:
-    check = "--check" in sys.argv
-    write = "--write" in sys.argv
-    if check == write:
-        print("usage: semantic-breaks.py --check | --write", file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--check", action="store_true", help="report mid-clause breaks")
+    mode.add_argument("--write", action="store_true", help="repair only reported breaks")
+    args = parser.parse_args()
+    check, write = args.check, args.write
+
+    for path in markdown_files("--others", "--exclude-standard"):
+        print(
+            f"warning: untracked Markdown skipped: {path}; stage with git add before validation",
+            file=sys.stderr,
+        )
 
     failures = 0
     for path in tracked():

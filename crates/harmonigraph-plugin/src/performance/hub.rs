@@ -127,11 +127,14 @@ impl Default for Row {
 }
 impl Row {
     /// This row owns nothing in flight: no copied input left to sequence, no
-    /// accepted output left to publish, and nothing it believes is sounding.
-    /// Every path that gives a row up asks this first, because it is the
-    /// point at which forgetting the row cannot strand anything.
+    /// accepted output left to publish, and either no held voice or the
+    /// destroyed producer's entire final cut applied. Destruction leaves
+    /// State and joined_unknown_wire truthful; reclaiming ownership is not
+    /// evidence that a downstream instrument stopped sounding.
     fn settled(&self) -> bool {
-        self.output.len() == 0 && self.state.count() == 0 && self.inputs.len() == 0
+        self.output.len() == 0
+            && (self.state.count() == 0 || self.producer_joined == Some(self.applied))
+            && self.inputs.len() == 0
     }
     /// Rejects a message minted before the lease or the session epoch this row
     /// now holds. A reset ends both, so this one test is what keeps every
@@ -831,15 +834,27 @@ impl Hub {
                         row.seal_generation = generation;
                         row.joining = None;
                     }
-                    Control::ProducerJoined { incarnation, epoch, cut, unknown_wire }
-                        if row.current(incarnation, epoch)
-                            && shared.withdrawn.load(Ordering::Acquire)
-                            && row.received <= cut
-                            && row.producer_joined.is_none_or(|old| old == cut) =>
+                    Control::ProducerJoined {
+                        incarnation,
+                        epoch,
+                        cut,
+                        input_cut,
+                        unknown_wire,
+                    } if row.current(incarnation, epoch)
+                        && shared.withdrawn.load(Ordering::Acquire)
+                        && row.received <= cut
+                        && row.producer_joined.is_none_or(|old| old == cut) =>
                     {
                         row.producer_joined = Some(cut);
                         row.joined_unknown_wire = unknown_wire;
                         row.joining = None;
+                        // Destruction ends input at its actual final serial,
+                        // including a setup marker at the exclusive coverage
+                        // front. Dispose its copies through the existing
+                        // terminal path; no future callback can complete that
+                        // sample. Later copies may still arrive on the intent
+                        // ring, and Detach still certifies transfer has ended.
+                        row.terminal_cut = Some(input_cut);
                     }
                     Control::Detach { incarnation, epoch, cut }
                         if row.current(incarnation, epoch) =>
@@ -1493,10 +1508,9 @@ impl Hub {
                     }
                 }
             }
-            if row
-                .detach
-                .is_some_and(|cut| row.seal == Some(cut) && row.applied == cut && row.settled())
-            {
+            if row.detach.is_some_and(|cut| {
+                row.seal.or(row.producer_joined) == Some(cut) && row.applied == cut && row.settled()
+            }) {
                 row.member = false;
                 if !session.rows[index].hub_detached.swap(true, Ordering::AcqRel) {
                     self.service_revision = self.service_revision.wrapping_add(1);
@@ -1586,8 +1600,9 @@ impl Hub {
             // A musical seal does not close input publication. The live
             // producer can still capture post-cut input before its enclosing
             // detach boundary; only Detach certifies that transfer has ended.
-            if row.detach.is_some_and(|cut| row.seal == Some(cut) && row.applied == cut)
-                && row.settled()
+            if row.detach.is_some_and(|cut| {
+                row.seal.or(row.producer_joined) == Some(cut) && row.applied == cut
+            }) && row.settled()
                 && !offer.session.rows[index].hub_detached.swap(true, Ordering::AcqRel)
             {
                 self.service_revision = self.service_revision.wrapping_add(1);
@@ -1599,10 +1614,10 @@ impl Hub {
             return false;
         }
         self.direct.settled()
-            && self
-                .rows
-                .iter()
-                .all(|r| r.settled() && (r.lease.is_none() || r.seal == Some(r.applied)))
+            && self.rows.iter().all(|r| {
+                r.settled()
+                    && (r.lease.is_none() || r.seal.or(r.producer_joined) == Some(r.applied))
+            })
             && self.offer.as_ref().is_none_or(|offer| {
                 offer.session.credits.load(Ordering::Acquire) == 0
                     && offer.session.rows.iter().all(|row| {
@@ -1659,6 +1674,7 @@ pub struct TestRow {
     pub lease: Option<Lease>,
     pub epoch: u64,
     pub detach: Option<u64>,
+    pub terminal_cut: Option<u64>,
     pub participating: bool,
     pub participation_serial: u64,
 }
@@ -1682,6 +1698,7 @@ impl Hub {
             lease: self.rows[slot].lease,
             epoch: self.rows[slot].epoch,
             detach: self.rows[slot].detach,
+            terminal_cut: self.rows[slot].terminal_cut,
             participating: self.sequencer.participating[slot + 1],
             participation_serial: self.sequencer.participation_serial[slot + 1],
         }

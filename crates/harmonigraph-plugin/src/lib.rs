@@ -559,6 +559,12 @@ impl Plugin for Harmonigraph {
         true
     }
 
+    fn deactivate(&mut self) {
+        if self.configuration.is_none() {
+            self.take.finish_callback();
+        }
+    }
+
     fn reset(&mut self) {
         if let Some(owner) = self.configuration.as_mut() {
             if self.aggregation.as_mut().is_some_and(|hub| hub.force_reset(owner, true)) {
@@ -728,6 +734,9 @@ impl Plugin for Harmonigraph {
         self.samples_processed += block_samples as u64;
         self.presentation_seconds += block_samples as f64 / self.sample_rate;
         self.take.publish_clock(self.presentation_seconds);
+        if self.configuration.is_none() {
+            self.take.finish_callback();
+        }
         ProcessStatus::Normal
     }
 }
@@ -954,6 +963,9 @@ impl Vst3Plugin for Harmonigraph {
 
 nice_export_clap!(Harmonigraph, HarmonigraphTune);
 nice_export_vst3!(Harmonigraph);
+
+#[cfg(test)]
+mod recording_tests;
 
 #[cfg(test)]
 mod tests {

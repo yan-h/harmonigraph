@@ -1,5 +1,5 @@
 //! Output debt: the obligations `output_settled` and `publish_seal` refuse to
-//! settle on, and that only an accepted host output event can discharge. Two
+//! settle on while live, and that only accepted host output can discharge. Two
 //! kinds live here -- a per-channel reset (three pedals and the recenter) and
 //! a per-lifetime emergency termination -- because they are the only ones a
 //! Source can acquire outside a callback.
@@ -10,8 +10,9 @@
 //! armed after the join is an obligation with no callback left to discharge
 //! it, and `output_settled` and `publish_seal` would both refuse this Source
 //! for the life of the process -- holding its registry entry with it. What was
-//! already owed at the join stands and is still owed; `join_producer` reports
-//! what the wire is left holding as evidence instead of as debt.
+//! already owed at destruction is abandoned, after `join_producer` records
+//! what the wire is left holding as evidence. Abandonment frees ownership;
+//! it does not assert host acceptance or downstream physical termination.
 //!
 //! Guarding one arming caller at a time is what this replaces. Three routes
 //! reach these fields after a destroy has begun -- `stop`, a participation
@@ -43,9 +44,13 @@ impl Debt {
     }
 
     /// The producer's final cut is immutable and no callback follows it, so
-    /// from here nothing this Source could owe would ever be sent.
-    pub(super) fn join(&mut self) {
+    /// from here nothing this Source could owe would ever be sent. The caller
+    /// captures unknown-wire evidence first, then returns these references.
+    /// Accepted output still lives in the factual journals until acknowledged.
+    pub(super) fn join(&mut self) -> [Option<Release>; 64] {
         self.joined = true;
+        self.channel = [0; 16];
+        std::mem::replace(&mut self.releases, [None; 64])
     }
 
     /// Raise one channel reset. Every mint of channel debt is this call.

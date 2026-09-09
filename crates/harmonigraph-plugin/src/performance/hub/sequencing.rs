@@ -8,12 +8,11 @@ mod history;
 pub(super) struct Plan {
     request: Request,
     binding: Assignment,
-    /// Expected input-to-output translation for this exact decision. Replayed
-    /// plans start at their acknowledged boundary; accepted onsets freeze it.
+    /// Expected input-to-output translation for this exact decision. New plans
+    /// start at the source delay; accepted onsets set it to actual minus input.
     shift: i64,
     sent: bool,
     terminal: bool,
-    accepted: bool,
     bound: bool,
     next: u32,
     previous: u32,
@@ -69,7 +68,6 @@ impl Voice {
 struct Membership {
     clock: ClockId,
     leases: [Option<Lease>; TUNERS],
-    intervals: [Option<(Coverage, u64)>; TUNERS],
     through: i64,
     floor: i64,
 }
@@ -386,12 +384,11 @@ impl Sequencer {
                 Plan {
                     request: identity,
                     binding: Assignment::default(),
-                    // A placeholder for a canceled attack. It is never bound,
-                    // so no output ever reads this shift back.
+                    // A canceled attack binds only for retirement when its
+                    // original capture passes; no output reads this shift.
                     shift: 0,
                     sent: false,
                     terminal: true,
-                    accepted: false,
                     bound: false,
                     next: NO_PLAN,
                     previous: NO_PLAN,
@@ -528,7 +525,6 @@ impl Hub {
         let mut snapshot = Membership {
             clock: self.clock_id(),
             leases: [None; TUNERS],
-            intervals: [None; TUNERS],
             through: direct.through.min(cap),
             floor: direct.start,
         };
@@ -562,7 +558,6 @@ impl Hub {
                 return None;
             }
             snapshot.leases[index] = Some(lease);
-            snapshot.intervals[index] = Some(interval);
             snapshot.floor = snapshot.floor.max(interval.0.start);
             snapshot.through = snapshot.through.min(interval.0.through);
         }
@@ -915,11 +910,7 @@ impl Hub {
             }
         }
         let Some(decision) = self.sequencer.decision.checked_add(1) else { return false };
-        let configuration = prior
-            .filter(|plan| plan.bound)
-            .map(|plan| plan.binding.configuration)
-            .or(self.sequencer.config)
-            .expect("owned original cohort configuration");
+        let configuration = self.sequencer.config.expect("owned original cohort configuration");
         // Every onset that reaches here from a paired row is adaptive; the
         // refusal above is what makes that true. DIRECT is the other case and
         // is never assigned.
@@ -1009,7 +1000,6 @@ impl Hub {
                     shift,
                     sent: false,
                     terminal: false,
-                    accepted: false,
                     bound: true,
                     next: NO_PLAN,
                     previous: NO_PLAN,
@@ -1118,7 +1108,6 @@ impl Hub {
         }
         let planned = output.input.checked_add(plan.shift)?;
         if output.event.attack().is_some() {
-            plan.accepted = true;
             plan.shift = output.actual.checked_sub(output.input)?;
         }
         Some((plan.binding, planned))

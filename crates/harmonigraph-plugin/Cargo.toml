@@ -47,7 +47,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSTimer"] }
 
 [dev-dependencies]
-nice-plug = { workspace = true, features = ["clap-boundary-tests"] }
+nice-plug = { workspace = true, features = ["clap-boundary-tests", "assert_process_allocs"] }
 nice-assert-no-alloc = "1.0"
 harmonigraph-take = { workspace = true }
 clap-sys = "0.5.0"
