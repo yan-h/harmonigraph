@@ -37,6 +37,24 @@ Finer input tuning should give the player more control over nearby harmonic alte
 The concrete example is choosing between the minor sevenths 16/9 (approximately 996.09 cents) and 9/5 (approximately 1017.60 cents) above a reference.
 When both are harmonically admissible, a more precise input should help select the intended one.
 
+### Context determines the minor-seventh preference
+
+The 9/5 versus 16/9 example is not solely a test of a finely tuned controller selecting either interval.
+Yan specified the following contextual expectations for a subsequent B♭, with ratios measured from C:
+
+| Existing context | Expected B♭ | Musical relationship |
+|---|---|---|
+| C–E♭–G | 9/5 | With E♭ at 6/5, B♭ at 9/5 is a just fifth above E♭ |
+| C–E–G | No fixed answer | Yan is unsure and accepts that algorithm parameters may decide |
+| C–F | 16/9 | With F at 4/3, B♭ at 16/9 is a just fourth above F, equivalently a fifth below it modulo octaves |
+
+Use these as examples of context-dependent selection, not hard-coded chord-recognition rules.
+Compare the contexts with the same incoming B♭ pitch to isolate the effect of harmony from finer controller input.
+The ratio explanations assume just context pitches; a fixture must establish their actual tuned onset pitches rather than infer them from keyboard labels alone.
+In particular, the C–E♭–G expectation uses E♭ at 6/5, and the C–F expectation uses F at 4/3.
+These examples constrain the harmonic metric alongside the ascending-third travel requirement.
+Fine input control remains useful, but does not replace the requirement for harmony to influence the choice.
+
 ### Context and memory
 
 Released notes must continue to contribute to harmonic context, favouring more recently released notes.
@@ -185,6 +203,7 @@ Do not restore that assumption merely to simplify the indicator.
 - Player bends after attack remain audible with the adaptive correction fixed; the initial harmonic context continues to use tuned onset pitch.
 - Transport-triggered context reset follows its setting rather than an unconditional preserve/reset policy.
 - Fine pitch input can distinguish 9/5 and 16/9 when both are eligible.
+- With the same subsequent B♭ input, just C–E♭–G context favours 9/5 and just C–F context favours 16/9; C–E–G has no prescribed answer and may depend on parameters.
 - An exact pitch match outside the harmonic boundary never wins.
 - The allowed-vocabulary setting controls candidate generation without retuning notes already sounding.
 - Reachable nodes shown in the indicator agree with actual next-note selection under the same context.
