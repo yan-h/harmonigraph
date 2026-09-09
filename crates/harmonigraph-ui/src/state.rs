@@ -304,10 +304,9 @@ pub struct SharedState {
     /// Here rather than in `view` for the reason `ui_scale` above it is: the
     /// overlay is a development instrument over the picture and never part of
     /// one, so where it was pushed to on this screen has no business in
-    /// [`ViewConfig`], which is what a recorded frame is composed from. The
-    /// blob itself does travel — a take carries one — but nothing but
-    /// [`root_ui`](crate::root_ui) reads this, and the offline renderer never
-    /// draws the HUD at all, so no render can be composed from it.
+    /// [`ViewConfig`](harmonigraph_scene::ViewConfig). This editor preference
+    /// stays outside recorded appearance; only [`root_ui`](crate::root_ui)
+    /// reads it and the offline renderer never draws the HUD.
     pub perf_pos: Option<egui::Pos2>,
 }
 
