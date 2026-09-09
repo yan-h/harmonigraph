@@ -537,6 +537,16 @@ impl Hub {
         let record = self.batch[position];
         let source = usize::from(record.source);
         let scheduled = record.sample.saturating_add(self.rows[source].delay);
+        if let Some((_, channel, key, _)) = record.event.attack() {
+            // A missed release copy can leave the Hub fuller than the Tune.
+            // Refuse before assignment mutates policy or sends a reply: this
+            // locally admitted voice still sounds raw and is tracked by Tune.
+            if self.rows[source].state.onset_cell(channel, key).is_none() {
+                self.rows[source].state.complete = false;
+                self.status |= session::DROPPED;
+                return;
+            }
+        }
         let assignment =
             record.onset().then(|| self.assign(record, group, group_end, config)).flatten();
         // A channel termination is one controller that ends every voice on its
@@ -725,8 +735,9 @@ impl Hub {
             );
         }
         let Some(mut delta) = delta else {
-            // A source at its held-voice ceiling refuses the onset, and the
-            // policy must not keep scoring against a note that never sounded.
+            // Defensive cleanup if an onset cannot be retained. Admission
+            // above normally refuses it before assignment; policy must not
+            // keep a lifetime that the scheduled state cannot address.
             if event.attack().is_some() {
                 self.sequencer.forget_voice(record.source, record.serial);
                 self.status |= session::DROPPED;

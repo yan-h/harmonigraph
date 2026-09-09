@@ -58,6 +58,14 @@ impl State {
     pub fn count(&self) -> usize {
         self.voices().count()
     }
+    /// The cell an onset will replace or occupy. The Hub checks this before
+    /// assigning or replying, so a refused voice cannot acquire a correction.
+    pub fn onset_cell(&self, channel: u8, note: u8) -> Option<usize> {
+        self.voices
+            .iter()
+            .position(|v| v.is_some_and(|v| v.channel == channel && v.note == note))
+            .or_else(|| self.voices.iter().position(Option::is_none))
+    }
     /// The channel's current displacement in microcents, which is half of the
     /// absolute pitch an onset is scored at.
     pub fn channel_pitch(&self, channel: u8) -> i64 {
@@ -177,11 +185,7 @@ impl State {
         self.pitch_changed = false;
         let mut result = None;
         if let Some((id, channel, note, velocity)) = event.attack() {
-            let index = self
-                .voices
-                .iter()
-                .position(|v| v.is_some_and(|v| v.channel == channel && v.note == note))
-                .or_else(|| self.voices.iter().position(Option::is_none));
+            let index = self.onset_cell(channel, note);
             let Some(index) = index else {
                 self.complete = false;
                 return None;

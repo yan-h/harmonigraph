@@ -22,7 +22,8 @@ Built and merged in [#709](https://github.com/yan-h/harmonigraph/issues/709), si
 Every adaptive-tuning bug in the two days after the #712 stack landed was a lifecycle bug — nine closed, plus [#787](https://github.com/yan-h/harmonigraph/pull/787)'s Apply stall — and none was a musical-policy bug.
 The cause was structural: a graceful-settlement protocol between Tunes and the Hub, built to make every partial failure exactly-once.
 Stage 8 deleted it.
-What replaced it is **the fault cut**: a note emits on time with the correction that came back or without one, a fault is a status bit that never silences a track, and the only lifecycle event is a cut that nothing waits for.
+What replaced it is **the fault cut**: an admitted note emits on time with the correction that came back or without one, correction faults are status bits, and the only lifecycle event is a cut that nothing waits for.
+Local retention ceilings refuse input before either scheduling path sees it, and valid host steady time is a hard requirement.
 
 The transport is now 3,305 production lines where it was 12,981, and its tests 1,518 where they were 12,040.
 The module is `crates/harmonigraph-plugin/src/tuning/` rather than `performance/`.
@@ -61,7 +62,7 @@ A later implementation should not broaden a row merely because its rejected bran
 | Plugin boundary | A separate lightweight Harmonigraph Tune class, exported from the same CLAP bundle as Harmonigraph | Full-plugin instances, or one class with persisted Hub/Tune roles | Keeps the pre-instrument device and its lifecycle small and gives the host a clear note-effect identity; a process-wide registry is shared only inside one dylib, so one bundle is what makes an in-process session possible at all | A supported hosting mode stops sharing one process between two classes of one bundle |
 | Input completeness | **Assign whatever arrived, sorted by sample.** A record whose sample was already sequenced is assigned when it arrives | Order complete source intervals against each source's published coverage watermark | Trial 20 of the Bitwig spike had complete intervals on all 3,422 Hub callbacks with zero offsets; only a deliberate +64 branch offset ever made the Hub wait, and waiting is what a Tune cannot afford now that it never holds a note back | A supported graph is measured delivering a source's earlier musical event after a later one |
 | Assignment order | Chronological, then deterministic sequential assignment of simultaneous attacks | Joint chord optimization | Each new assignment sees the earlier ones without selecting a globally optimal chord or moving held voices | A concrete musical requirement demands a different policy |
-| Clock | One absolute sample per copied record, taken from the host's steady time. No mapping, no offset, no per-report provenance | A mapped sample carrying the enclosing callback, the sub-block, the session epoch, the source incarnation and a sequence | The wrapper already resolves a sub-block's absolute start before the plugin sees an event, so the sub-block provenance was recovering something nothing had lost. Steady time is what makes two tracks orderable against each other, and a host that does not supply it is a fault status rather than a clock to reconstruct | A supported host is measured without a usable steady sample timeline |
+| Clock | One absolute sample per copied record, taken from the host's steady time. No mapping, no offset, no per-report provenance | A mapped sample carrying the enclosing callback, the sub-block, the session epoch, the source incarnation and a sequence | The wrapper already resolves a sub-block's absolute start before the plugin sees an event, so the sub-block provenance was recovering something nothing had lost. Steady time is what makes two tracks orderable against each other, and a host that does not supply valid steady time is unsupported: the wrapper rejects the callback before delivering its input | A supported host is measured without a usable steady sample timeline |
 | Storage layout | In-process preallocated storage with explicit ownership and off-thread reclamation | A pointer-free memory-mappable arena | `rtrb` already uses pointers and shared ownership; real-time safety wants bounded access and lifetime management, not a cross-process ABI | A concrete cross-process transport is authorized |
 | Voice identity | Source, channel and key, with the host note id passed through untouched | The host voice id as identity, with a multiplicity fallback for its absence | Tune advertises no overlapping-note support, so a host must not overlap one key and channel; a retrigger replaces, which is the rule the tracker already applies | Bitwig is observed delivering overlapping same-key notes to a note effect that does not advertise them |
 | State authority | **What the Hub scheduled** — input plus that source's D, derived from its own sequenced input | Actual emitted output, reported back by each Tune and reconciled against the plan | One authority cannot disagree with itself. The reconciliation was two provenances, an output ring, a journal and a dual-provenance reducer, to establish a fact the Hub had already computed | A real downstream pitch-feedback mechanism exists and is worth integrating |
@@ -72,7 +73,7 @@ A later implementation should not broaden a row merely because its rejected bran
 | Participation UI | **None.** A Tune always participates; bypass or remove it in Bitwig | One Participating/Off control per Tune | Off was a whole second forwarding path with three separate consumer gates and a reset boundary of its own, for a state the host already provides | A project needs a track excluded from tuning while still passing through this plugin |
 | Player pitch | Preserve the player's MIDI bend and per-note pitch expression, and add one frozen adaptive correction on top | Centre the bend and replace the expression | Player gestures remain expressive, and policy v2 can score their absolute onset pitch without changing its frozen adaptive choice later | A required gesture cannot be represented by this composition |
 | Policy location | One pure sequential policy in the Hub | Distributed evaluation of shared state by each Tune | One owner has the complete ordered input and every preceding assignment; Tunes buffer and apply answers | The measured Hub work budget cannot support the chosen policy |
-| A fault | **Keep passing notes through uncorrected, and show it.** No fault ever silences a track | Five fault classes, a latched shared reset, and an emission gate that refuses new attacks until an explicit Reset | A missing Hub, a full queue and a clock that stopped are all the same thing musically: this note has no correction. The gate turned every one of them into silence, and every stall Yan reported was audible as silence rather than as a wrong pitch | Silence becomes a better answer than a raw pitch for some fault this cannot distinguish |
+| A fault | **Keep locally admitted notes passing through, and show lost corrections.** Local capacity refusal and invalid host clock are hard boundaries | Five fault classes, a latched shared reset, and an emission gate that refuses new attacks until an explicit Reset | A missing Hub or full copy ring costs an admitted note its correction. A full local line or held set cannot safely retain another event or voice; invalid steady time prevents input delivery at the wrapper. The gate turned every one of them into silence, and every stall Yan reported was audible as silence rather than as a wrong pitch | Silence becomes a better answer than a raw pitch for some fault this cannot distinguish |
 
 ### Mechanism decisions, and what each replaced
 
@@ -87,7 +88,7 @@ a design whose rejected branch was implemented first knows exactly what it cost.
 | Tune→Hub transport | Self-contained copied records through bounded preallocated queues; the Hub owns what it receives and Tune owns its pending state | A shared `CaptureArena` with `unsafe impl Sync`, `Token`/`Key`/`Permissions`, a split between original and local storage, and a storage-retirement handshake | Each record is fixed-size and its storage preallocated, so copying costs no allocation and no extra delay — and it deletes an entire ownership protocol whose only purpose was avoiding the copy | Copying is measured to cost callback budget the assignment cannot afford |
 | Same-sample ordering | Merge the per-source streams by sample; within one sample apply every release and controller from every source, then assign onsets in key, channel, source order | A 15-phase incremental topological sort over a 1,280-vertex adjacency bitset, built by an O(n²) pairwise scan and budgeted across callbacks | Across sources the dependency graph is empty by construction, and within one source the host already delivers events in dependency order, which copying preserves. There was nothing for a graph to discover | A dependency exists that this order does not already respect |
 | Configuration granularity | One resolved configuration adopted per enclosing Hub callback, captured when a group's assignment starts and held until that group completes | A 128-marker `ConfigTimeline` with a `ControlBudget`, and a pass-routing `Recording` of 2,178 segments (~198 KB live on the audio thread) answering which tuning was in force at an exact sample | An edit waits at most one host block — about 10.7 ms at 512/48 kHz — and nobody has to ask the sample-exact question at all | Sample-exact configuration automation becomes a musical requirement |
-| Divergence and faults | No retrospective reassignment, and no reassignment at all: a fault is a status bit and the note sounds raw | An 8-phase recovery transaction (Prepare→Inventory→Preserve→Status→Rebuild→Replay→Resume) with its own protocol messages, ~20 `recovering()` branches and three duplicated ordinary/replay code pairs | Its documented outcome when it fired was a note sounding 467 ms late. The latch that replaced it then produced silence instead, which is the failure Yan actually heard, so #786 removed that half too | A measured ordinary case needs a recovered phrase rather than a raw one |
+| Divergence and faults | No retrospective reassignment, and no reassignment at all: a correction fault is a status bit and the admitted note sounds raw | An 8-phase recovery transaction (Prepare→Inventory→Preserve→Status→Rebuild→Replay→Resume) with its own protocol messages, ~20 `recovering()` branches and three duplicated ordinary/replay code pairs | Its documented outcome when it fired was a note sounding 467 ms late. The latch that replaced it then produced silence instead, which is the failure Yan actually heard, so #786 removed that half too | A measured ordinary case needs a recovered phrase rather than a raw one |
 | Controller context for a late note | A late note meets the receiver's current controller state; shared channel controls keep their own input-plus-delay schedule | A channel-wave mechanism replaying 130 folded controller registers plus raw prelude history into the receiver ahead of a younger onset | Different articulation during a late note is accepted; reconstructing the controller context a note "should have" met is a replay, and replay is the thing this design excludes | A measured ordinary case is musically wrong because of it |
 | Publication loss | The lane reports its own loss into a reserved cell; the display clears stale state and refreshes from a current snapshot; an incomplete take exports with a warning | Per-source baselines with generation handles, an `UnsafeCell` bank behind a busy state machine, cross-thread resync requests and per-source repair cursors | A snapshot restores what is sounding now, which is the whole of what a display needs after a gap; the repair protocol was reconstructing history the display had already drawn | Reconstructing lost history becomes worth its own protocol |
 | Membership and allocation | Sixteen rows and their ring pairs are built once **with the process-wide session**, and a side claims its own half at activation. Attach and detach bump the epoch, which is the cut for every row | Per-pairing allocation through an offer/return handshake, with `Slots`/`Reservation` and a lease each side had to agree on | The rings are ~1.5 MB for the whole process rather than per instance, and pairing became one atomic load — which is the only version of pairing that cannot stall, because there is nothing in it to wait for | Per-instance ring memory becomes a measured problem |
@@ -97,7 +98,7 @@ a design whose rejected branch was implemented first knows exactly what it cost.
 | Pairing | One atomic load of the session's Hub slot, at activation and on every callback while unpaired | A saved pairing UUID, auto-join, ambiguity handling, a popup, and offers/returns/leases through two slot cells | There is one Hub per process, so there was never a choice to make. #787 showed the re-pairing after a commit stalls independently of the settle stall; with pairing reduced to a load there is no re-pairing protocol left to stall | A second Hub becomes a supported configuration |
 | Participation | None; a Tune always participates | An Off forwarding path, a toggle that stood as a reset boundary in the input queue, and three separate per-consumer Off gates | The host's own bypass is the same control, already built and already understood | A project needs a track that passes through this plugin untuned |
 | Every lifecycle transition | **The cut**: Note-Off every held voice, neutralise the pedals, clear the delay line, adopt the new epoch. Nothing waits on anyone | `commit_transition` with ten `setup_wait` reasons, six settle predicates across Source and Row, and incarnation, generation, reset-generation and cancel-cut counters | One epoch remains of the four counters. A cut cannot stall because there is no second party to it: the Tune that takes it does not tell anyone, and the Hub learns from the same atomic it reads anyway | A transition needs to preserve sounding notes across it, which is the one thing a cut cannot do |
-| A fault | One status bit, shown and never acted on | The `BUSY`/`CLOSED` emission gate, "refuse new attacks until Reset", and the latch as behaviour rather than as a status line | The latch survives as a status line, which is the half that was ever useful | A fault class is found where continuing is worse than stopping |
+| A fault | One status bit, with no latched emission gate; local retention is checked before copying input | The `BUSY`/`CLOSED` emission gate, "refuse new attacks until Reset", and the latch as behaviour rather than as a status line | The latch survives as a status line, which is the half that was ever useful | A fault class is found where continuing is worse than stopping |
 
 ## The shape
 
@@ -140,9 +141,9 @@ notes -> Tune delay line -> corrected, delayed notes -> instrument
 
 For each processing interval a Tune:
 
-1. copies every input event to the Hub's ring for its row —
-`(epoch, serial, absolute sample, event)` —
-and keeps the event in a local delay line keyed by `sample + D`.
+1. admits the input to the local delay line keyed by `sample + D`, then copies it to the Hub's ring for its row —
+`(epoch, serial, absolute sample, event)`.
+An input without local capacity is dropped before the Hub sees it;
 A full ring drops the copy;
 that note will emit uncorrected and count as a miss;
 2. drains replies.
@@ -314,11 +315,32 @@ Nothing waits on anyone, and no second party has to agree that it happened.
 | Destruction | The row goes back to the session on the main thread. Records the departing Tune left in its ring carry an epoch the Hub has already moved past, so they are refused where they are found |
 
 A **fault is not a cut**.
-It is a bit in a status word, shown in the editor and in `HG-TUNING`, and it never stops a note:
-no Harmonigraph in the process, a second one, no free row, a full copy ring, no steady sample timeline, a policy evaluation the scorer refused, a publication lane that lost a report, and a retained event that did not fit.
-Every one of them means the same thing musically —
-*this note has no correction* —
-and the answer to all of them is the raw pitch and the counter.
+It is a bit in a status word, shown in the editor and in `HG-TUNING`, and it does not latch an emission gate.
+No Harmonigraph in the process, a second one, no free row, a full copy ring or a refused policy evaluation still allows a locally admitted note to sound;
+a missing correction means raw pitch and a counter.
+A lost publication report does not change the scheduled pitch.
+
+Local storage is a hard admission boundary.
+A Tune retains at most 8,192 pending events and 64 held `(channel, key)` identities.
+A full delay line drops the incoming event before copying it to the Hub, including a release:
+the existing voice remains held on both paths and the next cut still owes its Note-Off.
+An onset that would exceed the held ceiling is likewise dropped before enqueue or copy, so it neither sounds nor enters context, display or take.
+Admission projects the emitted held set through pending events in wire order using the same identity reducer as emission:
+retriggers replace, addressed releases free their matched cell, and CC120/123 free their channel.
+That projection is temporary bounded scratch, with no allocation or persistent second authority;
+short queues whose worst-case occupancy is below the ceiling skip replay.
+Refusal sets `DROPPED` and increments the dropped-event count, without changing the frozen corrections or cut ownership of admitted voices.
+A full Hub copy ring remains the separate raw-output case.
+Lost release copies or same-sample sequencing order can leave the Hub fuller than the Tune.
+The Hub checks its own held capacity before assigning or replying;
+on refusal it sets `DROPPED` without adding policy context or publishing an onset.
+That locally admitted note still sounds raw, keeps a Tune identity cell, and remains in the cut inventory.
+
+Valid absolute steady sample time is a hard supported-host requirement, shared across the session's instances.
+A callback must have nonnegative `steady_time`, a nonempty frame range within the activated maximum, and a representable end sample.
+The CLAP wrapper rejects an invalid boundary with `CLAP_PROCESS_ERROR` before delivering its note input.
+Missing time (`steady_time = -1`) can set `CLOCK` during callback begin, but provides no raw-note passthrough;
+there is no fallback clock or recovery architecture.
 
 The epoch is one `AtomicU64`.
 A Tune reads it once per callback and cuts when it differs from the one it is running under;
