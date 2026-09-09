@@ -152,10 +152,10 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
 
         let res: &LatticeResources = resources.get().expect("prepare created resources");
         let layouts = SceneLayouts {
-            uniforms: &res.bind_group_layout,
-            glow: &res.filter_layout,
-            shadow: &res.shadow_layout,
-            casters: &res.caster_layout,
+            uniforms: &res.compiled.bind_group_layout,
+            glow: &res.compiled.filter_layout,
+            shadow: &res.compiled.shadow_layout,
+            casters: &res.compiled.caster_layout,
         };
         let build = |src: &str| {
             let shader = lattice_module(&device, &with_common(src));
@@ -201,7 +201,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             let view = texture.create_view(&Default::default());
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("parity_light_bind_group"),
-                layout: &res.filter_layout,
+                layout: &res.compiled.filter_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -209,7 +209,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&res.sampler),
+                        resource: wgpu::BindingResource::Sampler(&res.compiled.sampler),
                     },
                 ],
             })
@@ -220,7 +220,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             .offscreen
             .as_ref()
             .and_then(|o| o.shadow.as_ref())
-            .map_or(&res.shadow_dummy_bind_group, |a| a.read());
+            .map_or(&res.compiled.shadow_dummy_bind_group, |a| a.read());
 
         let clear = wgpu::Color { r: 0.07, g: 0.08, b: 0.09, a: 1.0 };
         let draw = |pipeline: &wgpu::RenderPipeline| {
@@ -280,7 +280,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             );
             let draw_cells = |src: &str| {
                 let shader = lattice_module(&device, &with_common(src));
-                let (pipeline, _) = create_cell_pipelines(&device, &shader, &res.bind_group_layout);
+                let (pipeline, _) =
+                    create_cell_pipelines(&device, &shader, &res.compiled.bind_group_layout);
                 let target = render_to_texture(
                     &device,
                     &queue,

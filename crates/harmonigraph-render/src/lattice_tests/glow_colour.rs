@@ -1186,7 +1186,7 @@ fn glow_free_blur_cull_matches_unculled_rows_through_release_and_reuse() {
         }
     }
     let mut resources = LatticeResources::new(&shooter.device, &shooter.queue, shooter.format);
-    let culled = resources.ink_blur_pipeline.clone();
+    let culled = resources.compiled.ink_blur_pipeline.clone();
     let cull =
         "    if inst.glow.x <= 0.0 {\n        return vec4<f32>(0.0, 0.0, 0.0, 1.0);\n    }\n";
     let at = SHADER_SRC.find("fn vs_ink_blur(").unwrap();
@@ -1196,10 +1196,10 @@ fn glow_free_blur_cull_matches_unculled_rows_through_release_and_reuse() {
     let (_, unculled) = create_ink_strip_pipelines(
         &shooter.device,
         &reference_shader,
-        &resources.bind_group_layout,
-        &resources.strip_layout,
+        &resources.compiled.bind_group_layout,
+        &resources.compiled.strip_layout,
     );
-    resources.ink_blur_pipeline = culled.clone();
+    resources.compiled.ink_blur_pipeline = culled.clone();
     shooter.resources.insert(resources);
     for phase in 0..5 {
         match phase {
@@ -1220,7 +1220,8 @@ fn glow_free_blur_cull_matches_unculled_rows_through_release_and_reuse() {
             _ => {}
         }
         shooter.pane = 700;
-        shooter.resources.get_mut::<LatticeResources>().unwrap().ink_blur_pipeline = culled.clone();
+        shooter.resources.get_mut::<LatticeResources>().unwrap().compiled.ink_blur_pipeline =
+            culled.clone();
         let candidate = shooter.shot_again(&scene);
         let pane = &shooter.resources.get::<LatticeResources>().unwrap().panes[&700];
         assert_eq!(
@@ -1228,7 +1229,7 @@ fn glow_free_blur_cull_matches_unculled_rows_through_release_and_reuse() {
             "all glow-free audio rings must reach both strip draws"
         );
         shooter.pane = 701;
-        shooter.resources.get_mut::<LatticeResources>().unwrap().ink_blur_pipeline =
+        shooter.resources.get_mut::<LatticeResources>().unwrap().compiled.ink_blur_pipeline =
             unculled.clone();
         let reference = shooter.shot_again(&scene);
         assert_eq!(candidate, reference, "phase {phase}: blur cull changed pixels");

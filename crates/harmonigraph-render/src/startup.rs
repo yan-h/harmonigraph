@@ -162,7 +162,7 @@ mod tests {
         let worker_queue = queue.clone();
         let worker = std::thread::spawn(move || {
             blocked.recv().unwrap();
-            super::super::LatticeResources::new(
+            super::super::CompiledLatticeResources::new(
                 &worker_device,
                 &worker_queue,
                 wgpu::TextureFormat::Bgra8Unorm,
@@ -206,7 +206,7 @@ pub(super) struct Job {
     device: wgpu::Device,
     format: wgpu::TextureFormat,
     progress: Arc<Mutex<Stage>>,
-    worker: Option<std::thread::JoinHandle<super::LatticeResources>>,
+    worker: Option<std::thread::JoinHandle<super::CompiledLatticeResources>>,
     failed: bool,
 }
 
@@ -244,9 +244,8 @@ impl LatticePipelineCache {
             }
             if let Some(worker) = active.worker.take() {
                 match worker.join() {
-                    Ok(mut resources) => {
-                        resources.timer = None;
-                        *self.template.lock().expect("lattice pipeline cache poisoned") =
+                    Ok(resources) => {
+                        *self.compiled.lock().expect("lattice pipeline cache poisoned") =
                             Some((active.instance.clone(), active.device.clone(), resources));
                         *job = None;
                         if same_device {
@@ -265,7 +264,7 @@ impl LatticePipelineCache {
             *job = None;
         }
 
-        if self.template.lock().expect("lattice pipeline cache poisoned").as_ref().is_some_and(
+        if self.compiled.lock().expect("lattice pipeline cache poisoned").as_ref().is_some_and(
             |(owner_instance, owner, resources)| {
                 owner_instance == instance && owner == device && resources.target_format == format
             },
@@ -279,7 +278,7 @@ impl LatticePipelineCache {
         let worker_queue = queue.clone();
         let worker =
             std::thread::Builder::new().name("harmonigraph-graphics".into()).spawn(move || {
-                super::LatticeResources::new_with_progress(
+                super::CompiledLatticeResources::new_with_progress(
                     &worker_device,
                     &worker_queue,
                     format,

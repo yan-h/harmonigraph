@@ -6,7 +6,7 @@
 //! adds [`lattice_paint_callback`] to the painter; pipelines and buffers are
 //! created lazily on first paint and cached in egui-wgpu's
 //! `CallbackResources`. The plugin retains compiled handles between windows
-//! through [`LatticePipelineCache`]; textures and pane history stay window-owned.
+//! through [`LatticePipelineCache`]; published atlases and pane history stay window-owned.
 //!
 //! Rendering model: one instanced draw of camera-facing quads (billboards),
 //! sorted back-to-front on the CPU, rendered in `prepare()` into a per-pane
@@ -1438,10 +1438,10 @@ impl LatticeCallback {
     /// through them.
     fn bloom_pipelines(resources: &LatticeResources) -> BloomPipelines<'_> {
         BloomPipelines {
-            bright: &resources.bright_pipeline,
-            downsample: &resources.downsample_pipeline,
-            blur_h: &resources.blur_h_pipeline,
-            blur_v: &resources.blur_v_pipeline,
+            bright: &resources.compiled.bright_pipeline,
+            downsample: &resources.compiled.downsample_pipeline,
+            blur_h: &resources.compiled.blur_h_pipeline,
+            blur_v: &resources.compiled.blur_v_pipeline,
         }
     }
 
@@ -1630,8 +1630,12 @@ fn halo_pixels(uniforms: &Uniforms, r: glam::Vec2, u: glam::Vec2) -> f32 {
     span * (half + (off * off + c * c).sqrt()).sqrt()
 }
 
-/// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
-struct LatticeResources {
+/// Device programs, layouts and immutable fallback bindings. Cloning retains
+/// GPU handles, never a context's atlas publications, pane history or timer.
+/// Hot reload replaces handles only in the context's own value; no shared
+/// mutable pipeline owner participates in drawing.
+#[derive(Clone)]
+struct CompiledLatticeResources {
     scenes: [ScenePipelines; 2],
     composite_pipeline: wgpu::RenderPipeline,
     /// Bloom chain: bright pass, half->quarter downsample, blur x2.
@@ -1705,17 +1709,23 @@ struct LatticeResources {
     /// [`shadow::caster_layout`].
     caster_layout: wgpu::BindGroupLayout,
     glyph_sampler: wgpu::Sampler,
+    blank: wgpu::Texture,
+    blank_sdf: wgpu::Texture,
+    target_format: wgpu::TextureFormat,
+}
+
+/// Mutable rendering state owned by one egui-wgpu callback context. Each new
+/// context starts empty even when its pane IDs match a previous window.
+struct LatticeResources {
+    compiled: CompiledLatticeResources,
     /// This renderer's bindings for the two sheets a glyph can be cut from —
     /// egui's shared font texture and the drawn marks' private texture.
     atlas: text::AtlasTexture,
     marks: text::AtlasTexture,
-    blank: wgpu::Texture,
     /// Identity of the shared SDF texture its glyph bind groups name. The
     /// allocation itself is stored once in `CallbackResources` and is also
     /// used by the standalone text renderer.
     sdf_key: u64,
-    blank_sdf: wgpu::Texture,
-    target_format: wgpu::TextureFormat,
     panes: HashMap<u64, PaneBuffers>,
     /// GPU-side timing of the lattice passes. `None` when the device didn't
     /// grant timestamp queries — plenty of GPUs (and the offline renderer,
@@ -1729,7 +1739,7 @@ struct LatticeResources {
 /// Compiled lattice pipelines retained by one UI state across editor windows.
 /// Only instance, device and target format key this slot: camera, pane dimensions,
 /// elapsed hidden time and drawing history do not affect compilation. The
-/// template never draws, so it holds no pane targets, ink history or font atlas.
+/// cached value contains no pane targets, ink history, font atlas or timer.
 /// Reopening clones GPU handles and allocates fresh window-owned mutable state.
 #[derive(Default)]
 pub struct LatticePipelineCache {
@@ -1737,7 +1747,7 @@ pub struct LatticePipelineCache {
     // existing rebuild-on-open behavior rather than caching its baked source.
     #[cfg(not(feature = "hot-reload"))]
     // wgpu compares native devices by ID, and those IDs restart per instance.
-    template: std::sync::Mutex<Option<(wgpu::Instance, wgpu::Device, LatticeResources)>>,
+    compiled: std::sync::Mutex<Option<(wgpu::Instance, wgpu::Device, CompiledLatticeResources)>>,
     #[cfg(not(feature = "hot-reload"))]
     startup: std::sync::Mutex<startup::Initialization>,
 }
@@ -1757,15 +1767,18 @@ impl LatticePipelineCache {
         }
         #[cfg(not(feature = "hot-reload"))]
         {
-            let mut cached = self.template.lock().expect("lattice pipeline cache poisoned");
+            let mut cached = self.compiled.lock().expect("lattice pipeline cache poisoned");
             if cached.as_ref().is_none_or(|(owner_instance, owner, r)| {
                 owner_instance != instance || owner != device || r.target_format != format
             }) {
-                let mut resources = LatticeResources::new(device, queue, format);
-                resources.timer = None;
-                *cached = Some((instance.clone(), device.clone(), resources));
+                let compiled = CompiledLatticeResources::new(device, queue, format);
+                *cached = Some((instance.clone(), device.clone(), compiled));
             }
-            cached.as_ref().expect("initialized above").2.for_context(device, queue)
+            LatticeResources::from_compiled(
+                cached.as_ref().expect("initialized above").2.clone(),
+                device,
+                queue,
+            )
         }
     }
 }
@@ -2145,7 +2158,7 @@ struct GlowTarget {
     format: wgpu::TextureFormat,
     view: wgpu::TextureView,
     /// The texture + the shared sampler, as
-    /// [`LatticeResources::filter_layout`] takes them.
+    /// [`CompiledLatticeResources::filter_layout`] takes them.
     bind_group: wgpu::BindGroup,
 }
 
@@ -2210,10 +2223,10 @@ const INK_STRIP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 struct OffscreenShared<'a> {
     format: wgpu::TextureFormat,
     composite_layout: &'a wgpu::BindGroupLayout,
-    /// One texture plus the sampler; see [`LatticeResources::filter_layout`].
+    /// One texture plus the sampler; see [`CompiledLatticeResources::filter_layout`].
     filter_layout: &'a wgpu::BindGroupLayout,
     /// The shadow atlas as its readers take it; see
-    /// [`LatticeResources::shadow_layout`].
+    /// [`CompiledLatticeResources::shadow_layout`].
     shadow_layout: &'a wgpu::BindGroupLayout,
     sampler: &'a wgpu::Sampler,
     /// Transparent stand-in for the composite's bloom binding while off.
@@ -2680,13 +2693,13 @@ impl InkStrip {
 /// Both the node and the marker pipeline take all three: they are one pass over
 /// one pane, so one layout is what lets the light and the atlas be bound once
 /// for both. Whether there IS either to bind is the caller's business — see
-/// `LatticeResources::glow_dummy_bind_group` and `shadow_dummy_bind_group`.
+/// `CompiledLatticeResources::glow_dummy_bind_group` and `shadow_dummy_bind_group`.
 #[derive(Clone, Copy)]
 struct SceneLayouts<'a> {
     uniforms: &'a wgpu::BindGroupLayout,
     glow: &'a wgpu::BindGroupLayout,
     shadow: &'a wgpu::BindGroupLayout,
-    /// Every caster's kernel; see [`LatticeResources::caster_layout`].
+    /// Every caster's kernel; see [`CompiledLatticeResources::caster_layout`].
     casters: &'a wgpu::BindGroupLayout,
 }
 
@@ -3244,7 +3257,7 @@ fn create_post_pipeline(
     })
 }
 
-impl LatticeResources {
+impl CompiledLatticeResources {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
         Self::new_with_progress(device, queue, target_format, |_| {})
     }
@@ -3473,7 +3486,7 @@ impl LatticeResources {
             ],
         });
 
-        LatticeResources {
+        Self {
             scenes,
             composite_pipeline,
             bright_pipeline,
@@ -3502,61 +3515,36 @@ impl LatticeResources {
             caster_layout,
             glyph_layout,
             glyph_sampler: text::glyph_sampler(device),
-            atlas: text::AtlasTexture::default(),
-            marks: text::AtlasTexture::default(),
             blank: text::blank_atlas(device, queue),
-            sdf_key: 0,
             blank_sdf: text::blank_sdf_atlas(device, queue),
             target_format,
+        }
+    }
+}
+
+impl LatticeResources {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
+        Self::from_compiled(
+            CompiledLatticeResources::new(device, queue, target_format),
+            device,
+            queue,
+        )
+    }
+
+    fn from_compiled(
+        compiled: CompiledLatticeResources,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Self {
+        Self {
+            compiled,
+            atlas: text::AtlasTexture::default(),
+            marks: text::AtlasTexture::default(),
+            sdf_key: 0,
             panes: HashMap::new(),
             timer: GpuTimer::new(device, queue),
             #[cfg(feature = "hot-reload")]
             watcher: ShaderWatcher::new(),
-        }
-    }
-
-    /// Clone only immutable device resources. In particular, a new egui
-    /// context must publish its own atlases and a new window must start with
-    /// empty pane history, even when their IDs match the window that closed.
-    #[cfg(not(feature = "hot-reload"))]
-    fn for_context(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
-        Self {
-            scenes: self.scenes.clone(),
-            composite_pipeline: self.composite_pipeline.clone(),
-            bright_pipeline: self.bright_pipeline.clone(),
-            downsample_pipeline: self.downsample_pipeline.clone(),
-            blur_h_pipeline: self.blur_h_pipeline.clone(),
-            blur_v_pipeline: self.blur_v_pipeline.clone(),
-            glow_gather_pipeline: self.glow_gather_pipeline.clone(),
-            glow_node_layout: self.glow_node_layout.clone(),
-            ink_strip_pipeline: self.ink_strip_pipeline.clone(),
-            ink_blur_pipeline: self.ink_blur_pipeline.clone(),
-            bind_group_layout: self.bind_group_layout.clone(),
-            composite_layout: self.composite_layout.clone(),
-            filter_layout: self.filter_layout.clone(),
-            glow_dummy_bind_group: self.glow_dummy_bind_group.clone(),
-            bloom_dummy: self.bloom_dummy.clone(),
-            strip_layout: self.strip_layout.clone(),
-            sampler: self.sampler.clone(),
-            glyph_coverage_cell_pipeline: self.glyph_coverage_cell_pipeline.clone(),
-            glyph_distance_cell_pipeline: self.glyph_distance_cell_pipeline.clone(),
-            glyph_distance_pad_pipeline: self.glyph_distance_pad_pipeline.clone(),
-            shadow_cell_pipelines: self.shadow_cell_pipelines.clone(),
-            node_cell_pipeline: self.node_cell_pipeline.clone(),
-            plus_cell_pipeline: self.plus_cell_pipeline.clone(),
-            shadow_dummy_bind_group: self.shadow_dummy_bind_group.clone(),
-            shadow_layout: self.shadow_layout.clone(),
-            caster_layout: self.caster_layout.clone(),
-            glyph_layout: self.glyph_layout.clone(),
-            glyph_sampler: self.glyph_sampler.clone(),
-            blank: self.blank.clone(),
-            blank_sdf: self.blank_sdf.clone(),
-            target_format: self.target_format,
-            atlas: text::AtlasTexture::default(),
-            marks: text::AtlasTexture::default(),
-            sdf_key: 0,
-            panes: HashMap::new(),
-            timer: GpuTimer::new(device, queue),
         }
     }
 
@@ -3625,24 +3613,25 @@ impl LatticeResources {
         wants: PaneTargets,
         sdf: Option<&wgpu::Texture>,
     ) -> &mut PaneBuffers {
-        let layout = &self.bind_group_layout;
-        let caster_layout = &self.caster_layout;
-        let node_layout = &self.glow_node_layout;
+        let layout = &self.compiled.bind_group_layout;
+        let caster_layout = &self.compiled.caster_layout;
+        let node_layout = &self.compiled.glow_node_layout;
         // Taken before the pane is borrowed: the view is a fresh handle onto
         // this frame's font texture and mark sheet — `prepare` binds them
         // before it gets here.
-        let (glyph_layout, glyph_sampler) = (&self.glyph_layout, &self.glyph_sampler);
+        let (glyph_layout, glyph_sampler) =
+            (&self.compiled.glyph_layout, &self.compiled.glyph_sampler);
         let atlas_view = self.atlas.view();
-        let mark_view = self.marks.view_or(&self.blank);
-        let sdf_view = sdf.unwrap_or(&self.blank_sdf).create_view(&Default::default());
+        let mark_view = self.marks.view_or(&self.compiled.blank);
+        let sdf_view = sdf.unwrap_or(&self.compiled.blank_sdf).create_view(&Default::default());
         let sheet_keys = (self.atlas.key(), self.marks.key(), self.sdf_key);
         let shared = OffscreenShared {
             format: LATTICE_COLOR_FORMAT,
-            composite_layout: &self.composite_layout,
-            filter_layout: &self.filter_layout,
-            shadow_layout: &self.shadow_layout,
-            sampler: &self.sampler,
-            bloom_dummy: &self.bloom_dummy,
+            composite_layout: &self.compiled.composite_layout,
+            filter_layout: &self.compiled.filter_layout,
+            shadow_layout: &self.compiled.shadow_layout,
+            sampler: &self.compiled.sampler,
+            bloom_dummy: &self.compiled.bloom_dummy,
         };
         let want_casters = wants.casters;
         let want_glow_nodes = wants.glow_nodes;
@@ -3767,7 +3756,7 @@ impl LatticeResources {
             }
             // Empty geometry skips both decisions, as before: this is target
             // maintenance, not a hidden-view lifecycle or retirement policy.
-            pane.ensure_ink_history(device, &self.strip_layout, wants.glow, wants.rows);
+            pane.ensure_ink_history(device, &self.compiled.strip_layout, wants.glow, wants.rows);
             if let Some(offscreen) = pane.offscreen.as_mut() {
                 offscreen.ensure_glow(device, &shared, wants.glow);
                 offscreen.ensure_shadow(device, &shared, wants.shadow, wants.blurs);
@@ -3914,7 +3903,7 @@ impl CallbackTrait for LatticeCallback {
         // changed (it can't today, but this keeps the invariant explicit).
         let recreate = callback_resources
             .get::<LatticeResources>()
-            .is_none_or(|r| r.target_format != self.target_format);
+            .is_none_or(|r| r.compiled.target_format != self.target_format);
         if recreate {
             // The plugin publishes the instance that owns this device. Other
             // shells keep their existing window-owned resource lifetime.
@@ -4000,7 +3989,7 @@ impl CallbackTrait for LatticeCallback {
                     let (node_cell_pipeline, plus_cell_pipeline) = create_cell_pipelines(
                         device,
                         &lattice_shader,
-                        &resources.bind_group_layout,
+                        &resources.compiled.bind_group_layout,
                     );
                     // The glow off the same source, so an edit to a node's
                     // layers reaches the light around it in the same reload —
@@ -4010,9 +3999,9 @@ impl CallbackTrait for LatticeCallback {
                         device,
                         &lattice_shader,
                         LATTICE_COLOR_FORMAT,
-                        &resources.bind_group_layout,
-                        &resources.strip_layout,
-                        &resources.glow_node_layout,
+                        &resources.compiled.bind_group_layout,
+                        &resources.compiled.strip_layout,
+                        &resources.compiled.glow_node_layout,
                     );
                     // ...and the strip the light is coloured out of, on the
                     // same argument one step further back: an edit to what a
@@ -4020,14 +4009,14 @@ impl CallbackTrait for LatticeCallback {
                     let (ink_strip_pipeline, ink_blur_pipeline) = create_ink_strip_pipelines(
                         device,
                         &lattice_shader,
-                        &resources.bind_group_layout,
-                        &resources.strip_layout,
+                        &resources.compiled.bind_group_layout,
+                        &resources.compiled.strip_layout,
                     );
-                    resources.node_cell_pipeline = node_cell_pipeline;
-                    resources.plus_cell_pipeline = plus_cell_pipeline;
-                    resources.glow_gather_pipeline = glow_gather_pipeline;
-                    resources.ink_strip_pipeline = ink_strip_pipeline;
-                    resources.ink_blur_pipeline = ink_blur_pipeline;
+                    resources.compiled.node_cell_pipeline = node_cell_pipeline;
+                    resources.compiled.plus_cell_pipeline = plus_cell_pipeline;
+                    resources.compiled.glow_gather_pipeline = glow_gather_pipeline;
+                    resources.compiled.ink_strip_pipeline = ink_strip_pipeline;
+                    resources.compiled.ink_blur_pipeline = ink_blur_pipeline;
 
                     // The NAMES, off the other module the same edit changed.
                     // All three of their pipelines: the fill is the ink
@@ -4036,18 +4025,18 @@ impl CallbackTrait for LatticeCallback {
                     // one shader drawing one name, on the same argument the
                     // glow's rebuild above is made on.
                     let glyph_shader = text::glyph_shader(device, &reloaded.text);
-                    resources.scenes = create_scene_pipelines(
+                    resources.compiled.scenes = create_scene_pipelines(
                         device,
                         &lattice_shader,
                         &blit_shader,
                         &glyph_shader,
                         SceneLayouts {
-                            uniforms: &resources.bind_group_layout,
-                            glow: &resources.filter_layout,
-                            shadow: &resources.shadow_layout,
-                            casters: &resources.caster_layout,
+                            uniforms: &resources.compiled.bind_group_layout,
+                            glow: &resources.compiled.filter_layout,
+                            shadow: &resources.compiled.shadow_layout,
+                            casters: &resources.compiled.caster_layout,
                         },
-                        &resources.glyph_layout,
+                        &resources.compiled.glyph_layout,
                     );
                     let (
                         glyph_coverage_cell_pipeline,
@@ -4056,11 +4045,11 @@ impl CallbackTrait for LatticeCallback {
                     ) = text::create_glyph_cell_pipelines(
                         device,
                         &glyph_shader,
-                        &resources.glyph_layout,
+                        &resources.compiled.glyph_layout,
                     );
-                    resources.glyph_coverage_cell_pipeline = glyph_coverage_cell_pipeline;
-                    resources.glyph_distance_cell_pipeline = glyph_distance_cell_pipeline;
-                    resources.glyph_distance_pad_pipeline = glyph_distance_pad_pipeline;
+                    resources.compiled.glyph_coverage_cell_pipeline = glyph_coverage_cell_pipeline;
+                    resources.compiled.glyph_distance_cell_pipeline = glyph_distance_cell_pipeline;
+                    resources.compiled.glyph_distance_pad_pipeline = glyph_distance_pad_pipeline;
 
                     // And the text CALLBACK's own glyph pipelines, in an entry
                     // of the map this one cannot reach: publishing raises the
@@ -4431,13 +4420,13 @@ impl CallbackTrait for LatticeCallback {
                 if let Some(glyphs) =
                     pane.glyph_bind_group.as_ref().filter(|_| pane.glyph_count > 0)
                 {
-                    pass.set_pipeline(&resources.glyph_distance_pad_pipeline);
+                    pass.set_pipeline(&resources.compiled.glyph_distance_pad_pipeline);
                     pass.set_bind_group(0, glyphs, &[]);
                     pass.set_vertex_buffer(0, pane.box_buffer.slice(..));
                     pass.draw(0..4, 0..pane.box_count);
                 }
                 if pane.instance_count > 0 {
-                    pass.set_pipeline(&resources.node_cell_pipeline);
+                    pass.set_pipeline(&resources.compiled.node_cell_pipeline);
                     pass.set_bind_group(0, &pane.bind_group, &[]);
                     pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                     pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
@@ -4449,7 +4438,7 @@ impl CallbackTrait for LatticeCallback {
                 let marker_has_cells =
                     packed.boxes.first().is_some_and(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
                 if pane.plus_count > 0 && self.marker_arm_points > 0.0 && marker_has_cells {
-                    pass.set_pipeline(&resources.plus_cell_pipeline);
+                    pass.set_pipeline(&resources.compiled.plus_cell_pipeline);
                     pass.set_bind_group(0, &pane.bind_group, &[]);
                     pass.draw(0..4, 0..1);
                 }
@@ -4463,9 +4452,9 @@ impl CallbackTrait for LatticeCallback {
                     // pipeline for the whole run — where a NODE's fill branches
                     // per box, its own cell draw serving both kinds.
                     pass.set_pipeline(if self.shadow.lattice_text.kernel.is_distance() {
-                        &resources.glyph_distance_cell_pipeline
+                        &resources.compiled.glyph_distance_cell_pipeline
                     } else {
-                        &resources.glyph_coverage_cell_pipeline
+                        &resources.compiled.glyph_coverage_cell_pipeline
                     });
                     pass.draw(0..4, 0..pane.glyph_count);
                 }
@@ -4473,7 +4462,7 @@ impl CallbackTrait for LatticeCallback {
                 // The same answer the atlas was allocated on, so the chain and
                 // the plane it ping-pongs through can never disagree.
                 if blurs {
-                    let cells = &resources.shadow_cell_pipelines;
+                    let cells = &resources.compiled.shadow_cell_pipelines;
                     atlas.blur(
                         egui_encoder,
                         (&cells.blur_x, &cells.blur_y),
@@ -4533,7 +4522,7 @@ impl CallbackTrait for LatticeCallback {
                     // light is carried FROM (see [`InkStrip`]).
                     pass.set_bind_group(1, strip.carried(), &[]);
                     pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                    pass.set_pipeline(&resources.ink_strip_pipeline);
+                    pass.set_pipeline(&resources.compiled.ink_strip_pipeline);
                     pass.draw(0..4, 0..pane.instance_count);
                     drop(pass);
 
@@ -4556,7 +4545,7 @@ impl CallbackTrait for LatticeCallback {
                     pass.set_bind_group(0, &pane.bind_group, &[]);
                     pass.set_bind_group(1, strip.written(), &[]);
                     pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                    pass.set_pipeline(&resources.ink_blur_pipeline);
+                    pass.set_pipeline(&resources.compiled.ink_blur_pipeline);
                     pass.draw(0..4, 0..pane.instance_count);
                 }
 
@@ -4593,12 +4582,12 @@ impl CallbackTrait for LatticeCallback {
                     pass.set_bind_group(1, &strip.blurred_bind_group, &[]);
                     pass.set_bind_group(2, &pane.glow_node_bind_group, &[]);
                     pass.set_bind_group(3, &pane.glow_tile_bind_group, &[]);
-                    pass.set_pipeline(&resources.glow_gather_pipeline);
+                    pass.set_pipeline(&resources.compiled.glow_gather_pipeline);
                     pass.draw(0..4, 0..1);
                 }
             }
 
-            let scene = &resources.scenes[usize::from(offscreen.bloom.is_some())];
+            let scene = &resources.compiled.scenes[usize::from(offscreen.bloom.is_some())];
             let attachment = |view| {
                 Some(wgpu::RenderPassColorAttachment {
                     view,
@@ -4643,13 +4632,15 @@ impl CallbackTrait for LatticeCallback {
             // the wash to read back. The dummy where the light does not exist
             // at all, which is the Reach bar at 0 — a transparent read is the
             // plain ground, so nothing branches (see `glow_dummy_bind_group`).
-            let light =
-                offscreen.glow.as_ref().map_or(&resources.glow_dummy_bind_group, |g| &g.bind_group);
+            let light = offscreen
+                .glow
+                .as_ref()
+                .map_or(&resources.compiled.glow_dummy_bind_group, |g| &g.bind_group);
             // The finished atlas at group 2 of every node and marker draw, for
             // each to read its own cell. The 1x1 stand-in where this frame
             // packed none: every box is then zeros, and a caster with no cell
             // multiplies by exactly 1 with nothing sampled (`shadow_through`).
-            let cells = atlas.map_or(&resources.shadow_dummy_bind_group, |a| a.read());
+            let cells = atlas.map_or(&resources.compiled.shadow_dummy_bind_group, |a| a.read());
 
             // The order, as `from_scene` laid it down (see [`Draw`]). One walk
             // forward, back to front, with nothing here deciding what goes
@@ -4786,7 +4777,7 @@ impl CallbackTrait for LatticeCallback {
 
         // The scene was rendered in prepare(); stretch it over the
         // viewport (egui-wgpu sets the viewport to the callback rect).
-        render_pass.set_pipeline(&resources.composite_pipeline);
+        render_pass.set_pipeline(&resources.compiled.composite_pipeline);
         render_pass.set_bind_group(0, &offscreen.composite_bind_group, &[]);
         render_pass.draw(0..4, 0..1);
     }

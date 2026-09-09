@@ -30,16 +30,25 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     (shooter.device, shooter.queue) =
-        pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+            ..Default::default()
+        }))
+        .unwrap();
     shooter.resources.insert(instance.clone());
     let cache = std::sync::Arc::new(LatticePipelineCache::default());
-    let scene = parity_scene();
+    let mut scene = parity_scene();
+    scene.glow_reach = 0.8;
     let first = shooter.draw_modified(&scene, LatticeLabels::default(), |cb| {
         cb.pipeline_cache = Some(cache.clone());
     });
     let window = shooter.resources.get_mut::<LatticeResources>().unwrap();
     assert!(!window.panes.is_empty(), "the first window must actually draw");
-    let pipeline = window.scenes[0].nodes.clone();
+    assert!(
+        window.panes.values().all(|pane| pane.ink_history.is_some()),
+        "the populated context must own temporal history"
+    );
+    let pipeline = window.compiled.scenes[0].nodes.clone();
     let atlas = FontAtlas {
         image: std::sync::Arc::new(egui::ColorImage::filled([4, 4], egui::Color32::WHITE)),
         key: 99,
@@ -47,19 +56,32 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     window.atlas.upload(&shooter.device, &shooter.queue, &atlas);
     window.marks.upload(&shooter.device, &shooter.queue, &atlas);
     window.sdf_key = 99;
-    // Exercise the reset on populated resources. The cache's template never
-    // draws, so testing only its clone would pass even if these fields leaked.
-    let reset = window.for_context(&shooter.device, &shooter.queue);
+    // Clone the compiled owner out of a populated, still-live context. Its
+    // type excludes mutable state, and constructing another context must
+    // initialize every such field independently.
+    let reset =
+        LatticeResources::from_compiled(window.compiled.clone(), &shooter.device, &shooter.queue);
     assert!(reset.panes.is_empty());
     assert!(reset.atlas.view().is_none() && reset.marks.view().is_none());
     assert_eq!(reset.sdf_key, 0);
+    assert_eq!(reset.compiled.scenes[0].nodes, pipeline);
+    assert_eq!(reset.compiled.blank, window.compiled.blank);
+    if let Some(timer) = &window.timer {
+        let fresh = reset.timer.as_ref().expect("same timestamp-capable device");
+        assert_ne!(fresh.set, timer.set);
+        assert_ne!(fresh.staging, timer.staging);
+        assert!(fresh.state == TimerState::Idle);
+        assert!(!std::sync::Arc::ptr_eq(&fresh.ready, &timer.ready));
+    }
+    assert_eq!(window.sdf_key, 99);
+    assert!(window.atlas.holds(&atlas) && window.marks.holds(&atlas));
     drop(reset);
     shooter.resources = CallbackResources::default();
 
     let started = std::time::Instant::now();
     let reopened = cache.resources(&instance, &shooter.device, &shooter.queue, shooter.format);
     eprintln!("cached lattice reopen: {:?}", started.elapsed());
-    assert_eq!(reopened.scenes[0].nodes, pipeline, "reopening recompiled the pipeline");
+    assert_eq!(reopened.compiled.scenes[0].nodes, pipeline, "reopening recompiled the pipeline");
     drop(reopened);
 
     shooter.resources.insert(instance.clone());
@@ -68,7 +90,10 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
         cb.pipeline_cache = Some(cache.clone());
     });
     assert_eq!(differing_pixels(&first, &second), 0, "reopening changed the picture");
-    assert_eq!(shooter.resources.get::<LatticeResources>().unwrap().scenes[0].nodes, pipeline);
+    assert_eq!(
+        shooter.resources.get::<LatticeResources>().unwrap().compiled.scenes[0].nodes,
+        pipeline
+    );
 }
 
 /// The worker builds the same programs as synchronous first paint, and its
@@ -109,12 +134,15 @@ fn startup_worker_preserves_pixels_and_reuses_its_completed_pipelines() {
             other => panic!("unexpected startup result: {other:?}"),
         }
     }
-    let pipeline = cache.template.lock().unwrap().as_ref().unwrap().2.scenes[0].nodes.clone();
+    let pipeline = cache.compiled.lock().unwrap().as_ref().unwrap().2.scenes[0].nodes.clone();
     let asynchronous = shooter.draw_modified(&scene, LatticeLabels::default(), |callback| {
         callback.pipeline_cache = Some(cache.clone());
     });
     assert_eq!(differing_pixels(&synchronous, &asynchronous), 0);
-    assert_eq!(shooter.resources.get::<LatticeResources>().unwrap().scenes[0].nodes, pipeline);
+    assert_eq!(
+        shooter.resources.get::<LatticeResources>().unwrap().compiled.scenes[0].nodes,
+        pipeline
+    );
     shooter.resources = CallbackResources::default();
     assert_eq!(
         cache.poll_startup(&instance, &shooter.device, &shooter.queue, shooter.format),
@@ -133,13 +161,13 @@ fn pipeline_cache_rebuilds_for_another_device_or_format() {
     let cache = LatticePipelineCache::default();
     let rgba = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let bgra = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
-    assert_ne!(rgba.composite_pipeline, bgra.composite_pipeline);
-    assert_eq!(bgra.target_format, wgpu::TextureFormat::Bgra8Unorm);
+    assert_ne!(rgba.compiled.composite_pipeline, bgra.compiled.composite_pipeline);
+    assert_eq!(bgra.compiled.target_format, wgpu::TextureFormat::Bgra8Unorm);
     let (other, other_queue) =
         pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let replaced =
         cache.resources(&instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
-    assert_ne!(bgra.scenes[0].nodes, replaced.scenes[0].nodes);
+    assert_ne!(bgra.compiled.scenes[0].nodes, replaced.compiled.scenes[0].nodes);
 
     // Separate instances can mint equal device IDs. Test that case explicitly.
     let _ = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
@@ -148,7 +176,7 @@ fn pipeline_cache_rebuilds_for_another_device_or_format() {
         pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     assert_eq!(device, other, "this fixture must exercise colliding native device IDs");
     let _ = cache.resources(&other_instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
-    let retained = cache.template.lock().unwrap();
+    let retained = cache.compiled.lock().unwrap();
     let (owner_instance, owner, _) = retained.as_ref().unwrap();
     assert_eq!(owner_instance, &other_instance);
     assert_eq!(owner, &other);
@@ -283,17 +311,17 @@ fn offscreen_composite_matches_direct_draw() {
     // depthless pipelines, straight into the target pass.
     let res: &LatticeResources = resources.get().expect("prepare created resources");
     let layouts = SceneLayouts {
-        uniforms: &res.bind_group_layout,
-        glow: &res.filter_layout,
-        shadow: &res.shadow_layout,
-        casters: &res.caster_layout,
+        uniforms: &res.compiled.bind_group_layout,
+        glow: &res.compiled.filter_layout,
+        shadow: &res.compiled.shadow_layout,
+        casters: &res.compiled.caster_layout,
     };
     let shader = lattice_module(&device, &with_common(SHADER_SRC));
     let (node_pipeline, plus_pipeline) = create_pipelines(&device, &shader, format, layouts, false);
     // The stand-in light at group 1: this path has no glow pass to composite,
     // and the fixture asks for none (`parity_scene` holds the reach at 0), so
     // the offscreen path is reading the same transparent nothing.
-    let light = &res.glow_dummy_bind_group;
+    let light = &res.compiled.glow_dummy_bind_group;
     let pane = res.panes.get(&7).expect("prepare created the pane");
     // The atlas the pass above filled, which this path samples rather than
     // fills: the shadows are part of the picture the two are compared on.
@@ -301,7 +329,7 @@ fn offscreen_composite_matches_direct_draw() {
         .offscreen
         .as_ref()
         .and_then(|o| o.shadow.as_ref())
-        .map_or(&res.shadow_dummy_bind_group, |a| a.read());
+        .map_or(&res.compiled.shadow_dummy_bind_group, |a| a.read());
     let direct_tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
         // The pane's own order, walked the same way `prepare` walks it — a
         // second expression of it here would make the two paths differ by draw
