@@ -356,7 +356,7 @@ mod tests {
     /// and nothing else, written by the same call the editor saves through.
     fn blob_with_window(window: harmonigraph_ui::SpectrumWindow) -> String {
         let mut state = harmonigraph_ui::SharedState::new(crate::editor::ASSUMED_SURFACE_FORMAT);
-        state.spectrum_config.window = window;
+        state.appearance.spectrum.window = window;
         harmonigraph_ui::shell::close(&state)
     }
 
@@ -422,7 +422,7 @@ mod tests {
 
         /// The window the SETTING asks for.
         fn configured_window(&self) -> harmonigraph_ui::SpectrumWindow {
-            self.shared.lock().ui.spectrum_config.window
+            self.shared.lock().ui.appearance.spectrum.window
         }
 
         /// The window the ANALYZER is actually running at, which is the claim
@@ -637,7 +637,7 @@ mod tests {
         let mut h = harness();
         // What the project saved, against what the user has since dialled in.
         h.restore(&blob_with_window(SpectrumWindow::Precise));
-        h.shared.lock().ui.spectrum_config.window = SpectrumWindow::Fast;
+        h.shared.lock().ui.appearance.spectrum.window = SpectrumWindow::Fast;
         h.editor_state.set_open(true);
 
         h.tick();
@@ -718,8 +718,8 @@ mod tests {
         // otherwise a load that reset a field to its default would pass.
         {
             let ui = &mut h.shared.lock().ui;
-            ui.spectrum_config.window = SpectrumWindow::Precise;
-            ui.spectrum_config.floor_db = -72.0;
+            ui.appearance.spectrum.window = SpectrumWindow::Precise;
+            ui.appearance.spectrum.floor_db = -72.0;
             ui.fps_cap = Some(90.0);
         }
         // What the close writes into `params.ui_state`.

@@ -30,21 +30,21 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64,
     let shift = ui.input(|i| i.modifiers.shift);
     let panning = response.dragged_by(egui::PointerButton::Middle)
         || (response.dragged_by(egui::PointerButton::Primary)
-            && (shift || state.camera.projection == Projection::Cabinet));
+            && (shift || state.appearance.camera.projection == Projection::Cabinet));
     if panning {
         let delta = response.drag_delta();
-        state.camera.pan(glam::Vec2::new(delta.x, delta.y));
+        state.appearance.camera.pan(glam::Vec2::new(delta.x, delta.y));
     } else if response.dragged_by(egui::PointerButton::Primary) {
         let delta = response.drag_delta();
-        state.camera.orbit(glam::Vec2::new(delta.x, delta.y));
+        state.appearance.camera.orbit(glam::Vec2::new(delta.x, delta.y));
     }
     // Zoom when the pointer is over the view.
     if let Some((scroll, zoom)) = zoom_gesture(ui, &response) {
         if scroll != 0.0 {
-            state.camera.zoom(scroll);
+            state.appearance.camera.zoom(scroll);
         }
         if zoom != 1.0 {
-            state.camera.zoom_by(zoom);
+            state.appearance.camera.zoom_by(zoom);
         }
     }
     if response.double_clicked() {
@@ -53,15 +53,16 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64,
         // lattice, so the window's center goes back with the camera —
         // otherwise a double-click on a scrolled view resets the camera into
         // the middle of wherever it had scrolled to, which is not a reset.
-        state.camera = Camera { projection: state.camera.projection, ..Default::default() };
-        state.view.center_threes = 0;
-        state.view.center_fives = 0;
+        state.appearance.camera =
+            Camera { projection: state.appearance.camera.projection, ..Default::default() };
+        state.appearance.view.center_threes = 0;
+        state.appearance.view.center_fives = 0;
     }
     // The window's center follows the camera, so scrolling never leaves the
     // reach the note names are chosen out of behind. Here rather than inside
     // each gesture: it is idempotent, and one call cannot be the one a new
     // gesture forgets. The interactive copy only — it writes shared state.
-    state.view.follow_camera(&mut state.camera);
+    state.appearance.view.follow_camera(&mut state.appearance.camera);
 
     // The ground the picture stands on, painted here rather than left to
     // whatever is behind the pane. A picture pane is recessed below the chrome
@@ -111,7 +112,10 @@ pub(crate) fn draw_lattice(
     // see `ViewConfig::scrolled`. Derived here, per copy and per frame, and
     // never written back: the docked pane and the Video tab's preview both
     // reach this function every frame at their own aspects.
-    let window = state.view.scrolled(&state.camera, rect.width() / rect.height().max(1.0));
+    let window = state
+        .appearance
+        .view
+        .scrolled(&state.appearance.camera, rect.width() / rect.height().max(1.0));
     // Published for the perf overlay's node count and for the panes that have
     // to say what the picture shows, from the one place it exists. The docked
     // copy alone writes it — see `SharedState::drawn`, and the `response`
@@ -122,10 +126,10 @@ pub(crate) fn draw_lattice(
     let mut scene = derive_scene(
         &state.tracker,
         &state.tuning,
-        &state.view,
+        &state.appearance.view,
         &window,
         &state.frame_params,
-        state.camera,
+        state.appearance.camera,
         // Only the interactive copy has a hover to show: the preview's
         // camera is framed in the Lattice tab, not here, and a hover picked
         // up while working there is that view's business, not a picture of
@@ -182,8 +186,8 @@ pub(crate) fn draw_lattice(
     // so anything meant to sit ON TOP of the names has to be a second batch
     // rather than a later call into this one.
     let mut batch = crate::text::TextBatch::default();
-    if state.view.show_labels {
-        draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
+    if state.appearance.view.show_labels {
+        draw_node_labels(ui, rect, &scene, &state.appearance.view, &mut batch);
     }
     // The badge is laid out here, before the names are handed over, though it
     // is DRAWN after them. Laying text out is what rasterizes glyphs into
@@ -648,7 +652,7 @@ mod tests {
         distance: f32,
     ) -> (Vec<crate::text::TextPiece>, harmonigraph_scene::Scene) {
         let mut state = fresh();
-        state.camera.distance = distance;
+        state.appearance.camera.distance = distance;
         // No arrival ramp: the scene below is derived 50ms in, a fraction of
         // any real Fade, and a label's alpha rides its node's activation.
         // This suite is about where a label is DRAWN, not how lit it is.
@@ -661,16 +665,16 @@ mod tests {
         let scene = derive_scene(
             &state.tracker,
             &state.tuning,
-            &state.view,
-            &state.view.reach(),
+            &state.appearance.view,
+            &state.appearance.view.reach(),
             &state.frame_params,
-            state.camera,
+            state.appearance.camera,
             None,
             0.05,
         );
         let mut batch = crate::text::TextBatch::default();
         let _ = painted_into(egui::vec2(1200.0, 900.0), rect, |ui| {
-            draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
+            draw_node_labels(ui, rect, &scene, &state.appearance.view, &mut batch);
         });
         (batch.pieces().to_vec(), scene)
     }
@@ -961,14 +965,14 @@ mod tests {
         let scene = derive_scene(
             &state.tracker,
             &state.tuning,
-            &state.view,
-            &state.view.reach(),
+            &state.appearance.view,
+            &state.appearance.view.reach(),
             &state.frame_params,
-            state.camera,
+            state.appearance.camera,
             None,
             0.05,
         );
-        let names = state.view.note_names;
+        let names = state.appearance.view.note_names;
         assert_eq!(
             names,
             NoteNames::Past,
@@ -996,10 +1000,10 @@ mod tests {
         let scene = derive_scene(
             &state.tracker,
             &state.tuning,
-            &state.view,
-            &state.view.reach(),
+            &state.appearance.view,
+            &state.appearance.view.reach(),
             &state.frame_params,
-            state.camera,
+            state.appearance.camera,
             None,
             1.9,
         );
@@ -1039,23 +1043,23 @@ mod tests {
         let scene = derive_scene(
             &state.tracker,
             &state.tuning,
-            &state.view,
-            &state.view.reach(),
+            &state.appearance.view,
+            &state.appearance.view.reach(),
             &state.frame_params,
-            state.camera,
+            state.appearance.camera,
             None,
             1.9,
         );
-        let names = state.view.note_names;
+        let names = state.appearance.view.note_names;
         assert_eq!(names, NoteNames::Past, "the reserve is Past's alone");
         let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note still lights");
         assert!(node.departing && node.on_home, "the reserve wants a departure on the home sheet");
         assert_eq!(node.trail, 0.0, "the record is not written until the release ends");
         assert_eq!(
-            node.name_level(&state.view),
+            node.name_level(&state.appearance.view),
             label_strength(node, names),
             "the marker reads a departing name at {} while the pass draws it at {}",
-            node.name_level(&state.view),
+            node.name_level(&state.appearance.view),
             label_strength(node, names),
         );
         // The half a level cannot say on its own: a name drawn whole leaves NO
@@ -1081,7 +1085,7 @@ mod tests {
     fn only_the_interactive_copy_draws_the_learn_badge() {
         let mut state = fresh();
         state.learn_active = true;
-        state.view.show_labels = false;
+        state.appearance.view.show_labels = false;
         let ctx = themed();
         let screen = egui::vec2(400.0, 400.0);
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 300.0));
@@ -1127,7 +1131,7 @@ mod tests {
         });
         assert_eq!(
             state.drawn_this_frame,
-            Some(state.view.scrolled(&state.camera, 1.0)),
+            Some(state.appearance.view.scrolled(&state.appearance.camera, 1.0)),
             "the docked copy published something other than the window it drew",
         );
     }
@@ -1243,14 +1247,17 @@ mod tests {
     #[test]
     fn a_labels_lines_cross_between_the_bars_on_the_note_fade() {
         let mut state = fresh();
-        state.view.marker_ink = 24.0;
-        state.view.sounding_ink = 88.0;
+        state.appearance.view.marker_ink = 24.0;
+        state.appearance.view.sounding_ink = 88.0;
         // A long fade, so the release is a stretch to sample in rather than a
         // frame of it, and the arrival has landed well before the first sample.
         state.frame_params.fade_time = 1.0;
-        assert!(state.view.show_cents, "the fresh view draws cents; without them this is one line");
+        assert!(
+            state.appearance.view.show_cents,
+            "the fresh view draws cents; without them this is one line"
+        );
         assert_eq!(
-            state.view.note_names,
+            state.appearance.view.note_names,
             NoteNames::Past,
             "the fresh view keeps the past, which is what holds a departing name opaque",
         );
@@ -1265,12 +1272,12 @@ mod tests {
             |l: f32| super::super::scene_color(harmonigraph_scene::grey_of_lightness(l), 1.0);
         assert_eq!(
             held.0,
-            grey(state.view.sounding_ink),
+            grey(state.appearance.view.sounding_ink),
             "a sounding label is not drawn in the grey its own bar names",
         );
         assert_eq!(
             kept.0,
-            grey(state.view.marker_ink),
+            grey(state.appearance.view.marker_ink),
             "a label on a node nothing is sounding under left the markers' grey",
         );
         // Between the two and at neither, which is the whole of what says a
@@ -1314,21 +1321,21 @@ mod tests {
         // Pruned first, as the editor's own frame does: a trail record is
         // written the frame a release finishes, so a sample that only derived
         // would find the kept name still unrecorded and nothing named at all.
-        state.tracker.prune(secs, &state.view.envelope(&state.frame_params));
+        state.tracker.prune(secs, &state.appearance.view.envelope(&state.frame_params));
         let scene = derive_scene(
             &state.tracker,
             &state.tuning,
-            &state.view,
-            &state.view.reach(),
+            &state.appearance.view,
+            &state.appearance.view.reach(),
             &state.frame_params,
-            state.camera,
+            state.appearance.camera,
             None,
             secs,
         );
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 450.0));
         let mut batch = crate::text::TextBatch::default();
         let _ = painted_into(egui::vec2(1200.0, 900.0), rect, |ui| {
-            draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
+            draw_node_labels(ui, rect, &scene, &state.appearance.view, &mut batch);
         });
         let pieces = batch.pieces().to_vec();
         let ink = pieces.first().expect("the visited node is named").fill;

@@ -163,7 +163,7 @@ pub(crate) fn spectral_pane(
 ) {
     use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
-    let cfg = state.spectrum_config;
+    let cfg = state.appearance.spectrum;
     // Drag-sensing, so the pitch range can be panned and the Span or the Level
     // zoomed by grabbing the picture (see `drag_zoom`). Registered BEFORE the
     // divider's own band, which
@@ -205,7 +205,7 @@ pub(crate) fn spectral_pane(
     // has just moved the dial out from under the hold, which `spectrum_split`
     // reads as the hold no longer describing this picture — so the divider
     // follows the pointer this frame, and the hold re-takes it on the next.
-    let cfg = state.spectrum_config;
+    let cfg = state.appearance.spectrum;
     let split = if whole_song { 0.0 } else { spectrum_split(state, surface) };
 
     // The axis: absolute pitch, linear in MIDI note = logarithmic in
@@ -470,7 +470,7 @@ pub(crate) fn spectral_pane(
         // One envelope for the whole roll, as every other caller takes it: it
         // is a property of the view and the frame, and rebuilding it per voice
         // would read as if it could vary between them.
-        let env = state.view.envelope(&state.frame_params);
+        let env = state.appearance.view.envelope(&state.frame_params);
         for voice in voices {
             let strength = voice.activation(now, &env);
             if strength <= 0.0 || !scale.contains(voice.pitch) {
@@ -611,7 +611,7 @@ pub(crate) fn spectral_pane(
         state,
         crate::text::spectral_labels(surface),
         names_slide(&cfg),
-        Some(state.view.shadow.spectral_text),
+        Some(state.appearance.view.shadow.spectral_text),
         Some(crate::text::spectral_shadow_surface(surface)),
     );
     painter.add(harmonigraph_render::spectral_shadow_prepare_callback(

@@ -49,7 +49,7 @@ pub use config::{
     SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumTapers, SpectrumWindow,
     SCALE_BAR_RANGE, TILT_STEPS,
 };
-// The Spiral pane's framing, which is `SharedState::spiral_view`'s type. `panes`
+// The Spiral pane's framing, which is `AppearanceDocument::spiral`'s type. `panes`
 // is private, so a public field of a type from in there is a field nothing
 // outside can name, read into a variable or construct — which puts it on the
 // footing `SpectrumConfig` above and `harmonigraph_scene::Camera` already have,
@@ -73,7 +73,7 @@ pub use harmonigraph_take::{
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory, WholeSong};
 pub(crate) use state::default_dock;
-pub use state::{render_config_from_persist, CameraPreset, Console, SharedState, TakeState};
+pub use state::{CameraPreset, Console, SharedState, TakeState};
 pub use text::use_renderer_font_texture;
 
 use harmonigraph_core::{Comma, PitchClass};
@@ -279,11 +279,11 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     if !ui.ctx().text_edit_focused()
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
     {
-        state.view.frameless = !state.view.frameless;
+        state.appearance.view.frameless = !state.appearance.view.frameless;
         ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
     let mut dock_style = theme::dock_style(ui.style(), ui_scale);
-    if state.view.frameless {
+    if state.appearance.view.frameless {
         dock_style.tab_bar.height = 0.0;
     }
 
@@ -419,11 +419,11 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
             active_voices: state.tracker.voices().count(),
             held_voices: state.tracker.held_count(),
             visible_nodes: state.drawn_this_frame.map_or(0, |w| w.count()),
-            render_scale: state.view.render_scale,
+            render_scale: state.appearance.view.render_scale,
             animating,
         },
     );
-    if state.view.show_perf {
+    if state.appearance.view.show_perf {
         // The whole editor, which is the region the HUD may be dragged around
         // in — where inside it the HUD sits is the user's, and `perf_pos` is
         // where that answer lives.
@@ -432,7 +432,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
             ui.max_rect(),
             &mut state.perf_pos,
             &state.instruments.perf,
-            state.view.show_perf_detail,
+            state.appearance.view.show_perf_detail,
         );
     }
 }
@@ -465,7 +465,7 @@ pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64)
     };
     // Every layer of a node fades on this one envelope, so a voice is dead to
     // the display exactly when its release reaches zero.
-    state.tracker.prune(now, &state.view.envelope(&state.frame_params));
+    state.tracker.prune(now, &state.appearance.view.envelope(&state.frame_params));
 }
 
 /// Resolve current musical values without advancing drawing or envelope state.
@@ -497,10 +497,10 @@ pub fn resolve_tuning(state: &mut SharedState, params: &dyn ParamBackend) {
 pub(crate) fn tuning_modes(state: &SharedState) -> harmonigraph_core::configuration::TuningModes {
     harmonigraph_core::configuration::TuningModes {
         tempered: harmonigraph_core::Tempered {
-            syntonic: state.view.meantone,
-            septimal_kleisma: state.view.marvel,
+            syntonic: state.appearance.view.meantone,
+            septimal_kleisma: state.appearance.view.marvel,
         },
-        auto: [state.view.meantone_auto, state.view.marvel_auto],
+        auto: [state.appearance.view.meantone_auto, state.appearance.view.marvel_auto],
         learning: state.learn_active,
     }
 }
@@ -511,10 +511,10 @@ pub(crate) fn apply_resolved(
 ) {
     state.tuning = config.tuning;
     state.adaptive_policy = config.policy;
-    state.view.meantone = config.modes.tempered.syntonic;
-    state.view.marvel = config.modes.tempered.septimal_kleisma;
-    state.view.meantone_auto = config.modes.auto[0];
-    state.view.marvel_auto = config.modes.auto[1];
+    state.appearance.view.meantone = config.modes.tempered.syntonic;
+    state.appearance.view.marvel = config.modes.tempered.septimal_kleisma;
+    state.appearance.view.meantone_auto = config.modes.auto[0];
+    state.appearance.view.marvel_auto = config.modes.auto[1];
     state.learn_active = config.modes.learning;
 }
 
@@ -550,10 +550,10 @@ pub(crate) fn tuning_edit(
     for comma in Comma::ALL {
         let i = comma.index();
         if let Some(on) = edit.tempered[i] {
-            *state.view.temper_mut(comma) = on;
+            *state.appearance.view.temper_mut(comma) = on;
         }
         if let Some(on) = edit.auto[i] {
-            *state.view.temper_auto_mut(comma) = on;
+            *state.appearance.view.temper_auto_mut(comma) = on;
             if on {
                 state.temper_judged[i] = None;
             }
@@ -635,7 +635,7 @@ fn frame_interval(fps_cap: Option<f32>) -> Option<std::time::Duration> {
 /// reaches back to a note that was sounding. Goes quiet once the last note
 /// has scrolled off the far edge, so an idle plugin still idles.
 fn roll_scrolling(state: &SharedState, now: f64) -> bool {
-    let cfg = &state.spectrum_config;
+    let cfg = &state.appearance.spectrum;
     cfg.show_roll
         && cfg.roll_fraction > 0.0
         && state
@@ -679,8 +679,8 @@ fn learn_step(state: &mut SharedState, params: &dyn ParamBackend) {
             }
         }
         let modes = harmonigraph_core::configuration::learned_modes(learned, tuning_modes(state));
-        state.view.meantone = modes.tempered.syntonic;
-        state.view.marvel = modes.tempered.septimal_kleisma;
+        state.appearance.view.meantone = modes.tempered.syntonic;
+        state.appearance.view.marvel = modes.tempered.septimal_kleisma;
         state.console.log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
     }
     state.last_learned_classes = Some(classes);
@@ -690,3 +690,6 @@ fn learn_step(state: &mut SharedState, params: &dyn ParamBackend) {
 mod tests;
 
 pub mod adaptive;
+
+mod appearance;
+pub use appearance::AppearanceDocument;

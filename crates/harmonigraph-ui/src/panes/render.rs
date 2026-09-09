@@ -43,7 +43,7 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     render_controls(ui, state);
 
     section(ui, "Preview");
-    let frame = state.take.render_config.frame;
+    let frame = state.appearance.render.frame;
     let avail = ui.available_size();
     if avail.x < 20.0 {
         return;
@@ -85,7 +85,7 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     // than show the live scrolling spectrogram and quietly mislead, leave the
     // spectral region empty and say so.
     let placements = layout.resolve(box_rect.size());
-    let placeholder = state.take.render_config.playhead;
+    let placeholder = state.appearance.render.playhead;
     for (pane, rect) in &placements {
         let rect = rect.translate(box_rect.min.to_vec2());
         match pane {
@@ -130,7 +130,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     button_row(ui, |ui| {
         ui.label("Aspect ratio")
             .on_hover_text("Shape of the exported video. Short edge sets its size in pixels.");
-        let f = &mut state.take.render_config.frame;
+        let f = &mut state.appearance.render.frame;
         for (w, h) in [(16u32, 9u32), (9, 16), (1, 1), (4, 5), (21, 9)] {
             let on = f.aspect_w == w && f.aspect_h == h;
             if ui.selectable_label(on, option_label(&format!("{w}:{h}"))).clicked() {
@@ -146,7 +146,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     //
     // 720 is on the list rather than only the three sizes worth delivering
     // because it is a real draft setting for a render measured in minutes.
-    let frame = state.take.render_config.frame;
+    let frame = state.appearance.render.frame;
     let sizes: Vec<(u32, String, String)> = [720u32, 1080, 1440, 2160]
         .iter()
         .map(|&short| {
@@ -156,8 +156,8 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
         .collect();
     let options: Vec<(u32, &str, &str)> =
         sizes.iter().map(|(v, label, hint)| (*v, label.as_str(), hint.as_str())).collect();
-    choice_row(ui, "Short edge (px)", &mut state.take.render_config.short_edge, &options);
-    let f = &mut state.take.render_config.frame;
+    choice_row(ui, "Short edge (px)", &mut state.appearance.render.short_edge, &options);
+    let f = &mut state.appearance.render.frame;
     // Named for where the LATTICE goes, so the row reads as the placement it
     // is — "Lattice: Top" rather than an axis plus a convention about which
     // pane leads. Off `ALL` with an exhaustive match, like the Spectral pane's
@@ -241,7 +241,7 @@ fn render_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     choice_row(
         ui,
         "Spectrogram",
-        &mut state.take.render_config.playhead,
+        &mut state.appearance.render.playhead,
         &[
             (false, "Scrolling", "Bake the live scrolling spectrogram, exactly as previewed here"),
             (
@@ -259,7 +259,7 @@ fn render_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     choice_row(
         ui,
         "Render when",
-        &mut state.take.render_config.trigger,
+        &mut state.appearance.render.trigger,
         &[
             (
                 crate::RenderTrigger::OnDisarm,
@@ -393,7 +393,7 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &mut SharedState,
     // layout's background rather than on the panel this preview happens to sit
     // on — the same colour `harmonigraph-offline` will clear to.
     let background = harmonigraph_scene::skin::ground_color(
-        Layout::split(state.take.render_config.frame.lattice, state.take.render_config.frame.split)
+        Layout::split(state.appearance.render.frame.lattice, state.appearance.render.frame.split)
             .background,
     );
     super::lattice::draw_lattice(ui, rect, state, now, PREVIEW_SURFACE, background, None, None);

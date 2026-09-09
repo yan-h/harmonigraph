@@ -151,7 +151,7 @@ fn profile(label: &str, ppp: f32, load: Load, tweak: impl Fn(&mut SharedState)) 
         // run will read it at.
         let t = h.next_time();
         let audio = chord_samples(FRAME_SAMPLES, &mut phase);
-        let cfg = state.spectrum_config;
+        let cfg = state.appearance.spectrum;
         state.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
         for k in 0..load.notes_per_frame {
             // Walking the keyboard rather than repeating one note: a name is
@@ -214,28 +214,28 @@ fn profile_frame() {
     profile("idle @1x", 1.0, idle, |_| {});
     profile("idle @2x (retina)", 2.0, idle, |_| {});
     profile("idle, perf overlay on", 2.0, idle, |s| {
-        s.view.show_perf = true;
-        s.view.show_perf_detail = true;
+        s.appearance.view.show_perf = true;
+        s.appearance.view.show_perf_detail = true;
     });
-    profile("idle, no spectrogram", 2.0, idle, |s| s.spectrum_config.show_spectrogram = false);
-    profile("idle, no roll", 2.0, idle, |s| s.spectrum_config.show_roll = false);
-    profile("idle, no lattice labels", 2.0, idle, |s| s.view.show_labels = false);
+    profile("idle, no spectrogram", 2.0, idle, |s| s.appearance.spectrum.show_spectrogram = false);
+    profile("idle, no roll", 2.0, idle, |s| s.appearance.spectrum.show_roll = false);
+    profile("idle, no lattice labels", 2.0, idle, |s| s.appearance.view.show_labels = false);
     profile("idle, hover lattice", 2.0, on_lattice, |_| {});
     profile("idle, hover spectral", 2.0, on_spectral, |_| {});
 
     println!("-- a bigger lattice: the scene derivation is per NODE --");
-    profile("sevens open (819 nodes)", 2.0, idle, |s| s.view.extent_sevens = 1);
+    profile("sevens open (819 nodes)", 2.0, idle, |s| s.appearance.view.extent_sevens = 1);
     profile("3075 nodes", 2.0, idle, |s| {
-        s.view.extent_threes = 20;
-        s.view.extent_fives = 12;
-        s.view.extent_sevens = 1;
+        s.appearance.view.extent_threes = 20;
+        s.appearance.view.extent_fives = 12;
+        s.appearance.view.extent_sevens = 1;
     });
 
     println!("-- a busy passage: 6 notes a frame, each held a quarter second --");
     profile("busy", 2.0, busy, |_| {});
-    profile("busy, no note names", 2.0, busy, |s| s.spectrum_config.note_names = false);
-    profile("busy, no roll", 2.0, busy, |s| s.spectrum_config.show_roll = false);
-    profile("busy, no lattice labels", 2.0, busy, |s| s.view.show_labels = false);
+    profile("busy, no note names", 2.0, busy, |s| s.appearance.spectrum.note_names = false);
+    profile("busy, no roll", 2.0, busy, |s| s.appearance.spectrum.show_roll = false);
+    profile("busy, no lattice labels", 2.0, busy, |s| s.appearance.view.show_labels = false);
     profile("busy, 2 notes a frame", 2.0, Load { notes_per_frame: 2, ..idle }, |_| {});
     profile("busy, 12 notes a frame", 2.0, Load { notes_per_frame: 12, ..idle }, |_| {});
 }
@@ -282,7 +282,7 @@ fn profile_allocations() {
 
         let at = mark();
         let audio = chord_samples(FRAME_SAMPLES, &mut phase);
-        let cfg = state.spectrum_config;
+        let cfg = state.appearance.spectrum;
         state.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
         charge(0, at);
 
@@ -362,7 +362,7 @@ fn profile_picture_panes() {
         for i in 0..(WARMUP + 240) {
             let t = i as f64 / 60.0;
             let audio = chord_samples(FRAME_SAMPLES, &mut phase);
-            let cfg = state.spectrum_config;
+            let cfg = state.appearance.spectrum;
             state.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
             let start = std::time::Instant::now();
             let _ = super::probe::frame_into(
@@ -400,7 +400,7 @@ fn profile_shape_census() {
     for _ in 0..(WARMUP + 30) {
         let t = h.next_time();
         let audio = chord_samples(FRAME_SAMPLES, &mut phase);
-        let cfg = state.spectrum_config;
+        let cfg = state.appearance.spectrum;
         state.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
         out = Some(h.frame(&mut state, vec![]));
     }

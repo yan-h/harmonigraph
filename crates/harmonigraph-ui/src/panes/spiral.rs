@@ -529,7 +529,7 @@ impl Spiral {
 /// spiral twice grows a chain per rect instead of tearing one down and
 /// rebuilding it between the two.
 pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, surface: usize) {
-    let cfg = state.spectrum_config;
+    let cfg = state.appearance.spectrum;
     let (rect, response) =
         ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
     if rect.width() < 10.0 || rect.height() < 10.0 {
@@ -539,14 +539,14 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, 
     painter.rect_filled(rect, 0.0, crate::theme::well());
 
     let fit = Spiral::new(rect, &cfg);
-    navigate(ui, &response, &fit, &mut state.spiral_view);
-    let spiral = fit.framed(&state.spiral_view);
+    navigate(ui, &response, &fit, &mut state.appearance.spiral);
+    let spiral = fit.framed(&state.appearance.spiral);
     painter.add(egui::Shape::mesh(strip(&spiral, state, &cfg, now)));
     seam(&painter, &spiral);
     rays(&painter, &spiral);
     let lit = sounding(&spiral, state, now);
     let marks = dots(&spiral, state, &lit);
-    let dot_shadow = state.view.shadow.spectral_geometry.clamped();
+    let dot_shadow = state.appearance.view.shadow.spectral_geometry.clamped();
     if dot_shadow.casts() && !marks.is_empty() {
         painter.add(harmonigraph_render::dot_shadow_paint_callback(
             rect,
@@ -579,7 +579,7 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, 
     // Skipped whole when there is nothing to light, which is what keeps a
     // reader who never turns the bloom on from paying for its pipelines at all
     // — the callback would decline the work, but not before building them.
-    let bloom = harmonigraph_render::bloom_strength(state.view.bloom_strength);
+    let bloom = harmonigraph_render::bloom_strength(state.appearance.view.bloom_strength);
     if bloom > 0.0 && !marks.is_empty() {
         painter.add(harmonigraph_render::glow_paint_callback(
             rect,
@@ -607,7 +607,7 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, 
         // pair cannot name and would not pay for — see `SlideAxis`, where the
         // lattice's orbiting camera is the same answer.
         harmonigraph_render::SlideAxis::Across,
-        Some(state.view.shadow.spectral_text),
+        Some(state.appearance.view.shadow.spectral_text),
         Some(crate::text::spiral_shadow_surface(surface)),
     );
     painter.add(harmonigraph_render::spectral_shadow_prepare_callback(
@@ -844,7 +844,7 @@ fn sounding(spiral: &Spiral, state: &SharedState, now: f64) -> Vec<Sounding> {
     // One envelope for the whole pane, as every other caller takes it: it is a
     // property of the view and the frame, and rebuilding it per voice would
     // read as if it could vary between them.
-    let env = state.view.envelope(&state.frame_params);
+    let env = state.appearance.view.envelope(&state.frame_params);
     voices
         .into_iter()
         .filter(|v| v.pitch >= spiral.min_midi && v.pitch <= spiral.max_midi)
@@ -948,8 +948,12 @@ fn names(
     // rung crosses back into its terms here — a conversion, not a second snap.
     let scale = NAME_PT * raster / crate::marks::NAME_SIZE;
     for voice in named {
-        let name =
-            super::spectral::names::note_name(&state.view, &shown, &state.tuning, voice.pitch);
+        let name = super::spectral::names::note_name(
+            &state.appearance.view,
+            &shown,
+            &state.tuning,
+            voice.pitch,
+        );
         crate::marks::draw_stacked_name(
             batch,
             painter,
@@ -1040,13 +1044,13 @@ mod tests {
     /// moved while held.
     fn dragged(start: SpiralView, from: egui::Pos2, delta: egui::Vec2) -> SpiralView {
         let mut state = fresh();
-        state.spiral_view = start;
+        state.appearance.spiral = start;
         let ctx = themed();
         frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from)]);
         frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from), press(from, true)]);
         frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from + delta)]);
         frame(&ctx, &mut state, vec![press(from + delta, false)]);
-        state.spiral_view
+        state.appearance.spiral
     }
 
     /// The framing `points` of wheel with the pointer at `at` leaves behind.
@@ -1056,7 +1060,7 @@ mod tests {
     /// got to rather than what one frame did.
     fn scrolled(start: SpiralView, at: egui::Pos2, points: f32) -> SpiralView {
         let mut state = fresh();
-        state.spiral_view = start;
+        state.appearance.spiral = start;
         let ctx = themed();
         frame(&ctx, &mut state, vec![egui::Event::PointerMoved(at)]);
         for _ in 0..6 {
@@ -1071,7 +1075,7 @@ mod tests {
                 }],
             );
         }
-        state.spiral_view
+        state.appearance.spiral
     }
 
     /// The framing ONE frame carrying both a drag and a pinch leaves behind: the
@@ -1089,7 +1093,7 @@ mod tests {
         pinch: f32,
     ) -> SpiralView {
         let mut state = fresh();
-        state.spiral_view = start;
+        state.appearance.spiral = start;
         let ctx = themed();
         frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from)]);
         frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from), press(from, true)]);
@@ -1098,7 +1102,7 @@ mod tests {
             &mut state,
             vec![egui::Event::PointerMoved(from + delta), egui::Event::Zoom(pinch)],
         );
-        state.spiral_view
+        state.appearance.spiral
     }
 
     fn painted(state: &mut SharedState, now: f64) -> Vec<egui::Shape> {
@@ -1120,7 +1124,7 @@ mod tests {
         rect: egui::Rect,
         now: f64,
     ) -> (crate::text::TextBatch, Spiral) {
-        let spiral = Spiral::new(rect, &state.spectrum_config);
+        let spiral = Spiral::new(rect, &state.appearance.spectrum);
         let mut batch = crate::text::TextBatch::default();
         let _ = painted_into(SCREEN, rect, |ui| {
             let lit = sounding(&spiral, state, now);
@@ -1232,14 +1236,14 @@ mod tests {
     #[test]
     fn a_tone_lands_on_its_own_pitch_class() {
         let mut state = fresh();
-        state.spectrum_config.low_midi = 60.0;
-        state.spectrum_config.high_midi = 96.0;
+        state.appearance.spectrum.low_midi = 60.0;
+        state.appearance.spectrum.high_midi = 96.0;
         // 1 kHz, the tilt's own pivot, so the slope takes nothing off the level
         // and the peak is the tone's alone.
         let sr = 48_000.0;
         let samples: Vec<f32> =
             (0..48_000).map(|i| (std::f32::consts::TAU * 1_000.0 * i as f32 / sr).sin()).collect();
-        let cfg = state.spectrum_config;
+        let cfg = state.appearance.spectrum;
         state.spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
         let tone_midi = 69.0 + 12.0 * (1_000.0f32 / 440.0).log2();
 
@@ -1381,8 +1385,8 @@ mod tests {
     fn a_collapsed_pitch_range_paints_no_nan() {
         for (low, high) in [(60.0f32, 60.0f32), (96.0, 36.0), (60.0, 59.0)] {
             let mut state = fresh();
-            state.spectrum_config.low_midi = low;
-            state.spectrum_config.high_midi = high;
+            state.appearance.spectrum.low_midi = low;
+            state.appearance.spectrum.high_midi = high;
             state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
             let shapes = painted(&mut state, 0.1);
             assert!(!shapes.is_empty(), "{low}..{high} drew nothing at all");
@@ -1400,9 +1404,9 @@ mod tests {
     fn only_the_notes_the_range_reaches_are_marked() {
         let marks = |note: u8| {
             let mut state = fresh();
-            state.spectrum_config.low_midi = 48.0;
-            state.spectrum_config.high_midi = 84.0;
-            let fill = Spiral::new(PANE, &state.spectrum_config).dot();
+            state.appearance.spectrum.low_midi = 48.0;
+            state.appearance.spectrum.high_midi = 84.0;
+            let fill = Spiral::new(PANE, &state.appearance.spectrum).dot();
             state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
             // The COLOURED disc of the pair, not its backing: both are circles,
             // and counting either alone counts the notes once.
@@ -1431,7 +1435,7 @@ mod tests {
         for note in [55u8, 60, 67, 76] {
             state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
         }
-        let spiral = Spiral::new(PANE, &state.spectrum_config);
+        let spiral = Spiral::new(PANE, &state.appearance.spectrum);
         let lit = sounding(&spiral, &state, 0.1);
         let marks = dots(&spiral, &state, &lit);
         assert_eq!(marks.len(), 4, "the fixture's four notes are four coloured discs");
@@ -1451,7 +1455,7 @@ mod tests {
     fn nothing_to_light_asks_for_no_halo() {
         let callbacks = |bloom: f32, sounding: bool| {
             let mut state = fresh();
-            state.view.bloom_strength = bloom;
+            state.appearance.view.bloom_strength = bloom;
             if sounding {
                 state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
             }
@@ -1488,9 +1492,9 @@ mod tests {
     #[test]
     fn the_seam_runs_between_the_turns_once_per_octave() {
         let mut state = fresh();
-        state.spectrum_config.low_midi = 36.0;
-        state.spectrum_config.high_midi = 96.0;
-        let s = Spiral::new(PANE, &state.spectrum_config);
+        state.appearance.spectrum.low_midi = 36.0;
+        state.appearance.spectrum.high_midi = 96.0;
+        let s = Spiral::new(PANE, &state.appearance.spectrum);
         let points = painted(&mut state, 0.1)
             .into_iter()
             .find_map(|shape| match shape {
@@ -1553,8 +1557,8 @@ mod tests {
     fn every_sounding_pitch_class_is_named_on_the_rim() {
         for (name, rect) in FRAMES {
             let mut state = fresh();
-            state.spectrum_config.low_midi = 48.0;
-            state.spectrum_config.high_midi = 84.0;
+            state.appearance.spectrum.low_midi = 48.0;
+            state.appearance.spectrum.high_midi = 84.0;
             for note in 60..72 {
                 state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
             }
@@ -1604,8 +1608,8 @@ mod tests {
     #[test]
     fn octaves_of_one_pitch_class_are_named_once() {
         let mut state = fresh();
-        state.spectrum_config.low_midi = 48.0;
-        state.spectrum_config.high_midi = 84.0;
+        state.appearance.spectrum.low_midi = 48.0;
+        state.appearance.spectrum.high_midi = 84.0;
         for note in [48, 60, 72] {
             state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
         }
@@ -1629,8 +1633,8 @@ mod tests {
     #[test]
     fn a_note_bent_just_under_a_pitch_class_is_named_with_it() {
         let mut state = fresh();
-        state.spectrum_config.low_midi = 48.0;
-        state.spectrum_config.high_midi = 84.0;
+        state.appearance.spectrum.low_midi = 48.0;
+        state.appearance.spectrum.high_midi = 84.0;
         state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 72, 1.0));
         state.tracker.handle_event(NoteEvent {
@@ -1640,7 +1644,7 @@ mod tests {
             note: 72,
             kind: NoteEventKind::Tuning { semitones: -0.04 },
         });
-        let spiral = Spiral::new(PANE, &state.spectrum_config);
+        let spiral = Spiral::new(PANE, &state.appearance.spectrum);
         let lit = sounding(&spiral, &state, 0.1);
         // Both are on the disc, so one name is a name they SHARE rather than
         // one of them having been dropped on the way in.
@@ -1656,8 +1660,8 @@ mod tests {
     #[test]
     fn a_note_outside_the_range_is_not_named() {
         let mut state = fresh();
-        state.spectrum_config.low_midi = 48.0;
-        state.spectrum_config.high_midi = 84.0;
+        state.appearance.spectrum.low_midi = 48.0;
+        state.appearance.spectrum.high_midi = 84.0;
         state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 24, 1.0));
         state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 120, 1.0));
         let (batch, _) = rim_names(&state, PANE, 0.1);
@@ -1944,7 +1948,7 @@ mod tests {
     #[test]
     fn a_drag_leaves_the_analyzers_own_settings_alone() {
         let mut state = fresh();
-        let before = state.spectrum_config;
+        let before = state.appearance.spectrum;
         let ctx = themed();
         let from = PANE.center() + egui::vec2(-30.0, 20.0);
         let delta = egui::vec2(60.0, -45.0);
@@ -1953,17 +1957,17 @@ mod tests {
         frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from + delta)]);
         frame(&ctx, &mut state, vec![press(from + delta, false)]);
         assert_ne!(
-            state.spiral_view.look,
+            state.appearance.spiral.look,
             SpiralView::default().look,
             "the drag never reached the pane",
         );
         assert_eq!(
             (before.low_midi, before.high_midi, before.roll_seconds, before.ceiling_db),
             (
-                state.spectrum_config.low_midi,
-                state.spectrum_config.high_midi,
-                state.spectrum_config.roll_seconds,
-                state.spectrum_config.ceiling_db,
+                state.appearance.spectrum.low_midi,
+                state.appearance.spectrum.high_midi,
+                state.appearance.spectrum.roll_seconds,
+                state.appearance.spectrum.ceiling_db,
             ),
             "a drag on the spiral moved an Analyzer setting",
         );
@@ -1974,7 +1978,7 @@ mod tests {
     #[test]
     fn a_double_click_returns_to_the_whole_disc() {
         let mut state = fresh();
-        state.spiral_view = view(5.0, egui::vec2(0.8, -0.4));
+        state.appearance.spiral = view(5.0, egui::vec2(0.8, -0.4));
         let ctx = themed();
         let at = PANE.center() + egui::vec2(40.0, 40.0);
         frame(&ctx, &mut state, vec![egui::Event::PointerMoved(at)]);
@@ -1982,7 +1986,7 @@ mod tests {
             frame(&ctx, &mut state, vec![press(at, true)]);
             frame(&ctx, &mut state, vec![press(at, false)]);
         }
-        let after = state.spiral_view;
+        let after = state.appearance.spiral;
         assert_eq!(
             (after.zoom, after.look),
             (SpiralView::default().zoom, SpiralView::default().look),
@@ -2079,7 +2083,7 @@ mod tests {
                 // And the repaired framing paints finite geometry, which is the
                 // claim the ranges above are only a proxy for.
                 let mut state = fresh();
-                state.spiral_view = framing;
+                state.appearance.spiral = framing;
                 for shape in painted(&mut state, 0.1) {
                     assert!(
                         !shape.visual_bounding_rect().any_nan(),
@@ -2104,8 +2108,8 @@ mod tests {
         use harmonigraph_core::spectrum::BINS_PER_SEMITONE;
         let rect = FRAMES[1].1;
         let mut state = fresh();
-        state.spiral_view = view(ZOOM.1, egui::Vec2::ZERO);
-        let cfg = state.spectrum_config;
+        state.appearance.spiral = view(ZOOM.1, egui::Vec2::ZERO);
+        let cfg = state.appearance.spectrum;
         let span = cfg.high_midi - cfg.low_midi;
         let shapes: Vec<egui::Shape> =
             painted_into(rect.size(), rect, |ui| spiral_pane(ui, &mut state, 0.1, 0))

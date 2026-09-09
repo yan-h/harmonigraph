@@ -327,8 +327,8 @@ mod tests {
         state.frame_params.fade_time = 0.0;
         // The light's own clock off: one frame is the whole picture, and a
         // halo part way through its attack is a shot of the ballistics.
-        state.view.glow_attack = 0.0;
-        state.view.glow_release = 0.0;
+        state.appearance.view.glow_attack = 0.0;
+        state.appearance.view.glow_release = 0.0;
         for note in [55u8, 60, 64, 67, 71] {
             state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
                 0.0,
@@ -355,12 +355,12 @@ mod tests {
             (4.0, 0.6),
             (8.0, 0.4),
         ];
-        let home = state.camera;
+        let home = state.appearance.camera;
         for (reach, strength) in shots {
-            state.camera = home;
-            state.camera.zoom_by(2.5);
-            state.view.glow_reach = reach;
-            state.view.glow_strength = strength;
+            state.appearance.camera = home;
+            state.appearance.camera.zoom_by(2.5);
+            state.appearance.view.glow_reach = reach;
+            state.appearance.view.glow_strength = strength;
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),
@@ -435,10 +435,10 @@ mod tests {
         let mut state = SharedState::new(FORMAT);
         state.set_background((24, 25, 29));
         state.frame_params.fade_time = 0.0;
-        state.view.glow_attack = 0.0;
-        state.view.glow_release = 0.0;
-        state.view.glow_reach = 2.0;
-        state.view.glow_strength = 1.0;
+        state.appearance.view.glow_attack = 0.0;
+        state.appearance.view.glow_release = 0.0;
+        state.appearance.view.glow_reach = 2.0;
+        state.appearance.view.glow_strength = 1.0;
         for note in [55u8, 60, 64, 67, 71] {
             state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
                 0.0,
@@ -458,11 +458,11 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("a scratch directory");
         let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "after".to_string());
 
-        let home = state.camera;
+        let home = state.appearance.camera;
         for gap in [0.05f32, 0.1, 0.2] {
-            state.camera = home;
-            state.camera.zoom_by(3.5);
-            state.view.octave_gap = gap;
+            state.appearance.camera = home;
+            state.appearance.camera.zoom_by(3.5);
+            state.appearance.view.octave_gap = gap;
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),
@@ -571,8 +571,8 @@ mod tests {
         ];
         for (size, width, taper, chord, names) in shots {
             let mut state = SharedState::new(FORMAT);
-            state.view.show_labels = true;
-            state.view.note_names = names;
+            state.appearance.view.show_labels = true;
+            state.appearance.view.note_names = names;
             // The DAW's own lattice ground rather than the preset's near-black:
             // the markers are a step above the panel and nothing else here says
             // how big a step that reads as.
@@ -589,10 +589,10 @@ mod tests {
                     ));
                 }
             }
-            state.camera.zoom_by(2.5);
-            state.view.plus_arm = size;
-            state.view.plus_width = width;
-            state.view.plus_taper = taper;
+            state.appearance.camera.zoom_by(2.5);
+            state.appearance.view.plus_arm = size;
+            state.appearance.view.plus_width = width;
+            state.appearance.view.plus_taper = taper;
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),
@@ -679,8 +679,8 @@ mod tests {
         let fresh = harmonigraph_scene::ShadowStyle::default();
         for shadow in [0.0f32, fresh.width, 0.45, harmonigraph_scene::GLOW_SHADOW_MAX] {
             let mut state = SharedState::new(FORMAT);
-            state.view.show_labels = true;
-            state.view.note_names = harmonigraph_scene::NoteNames::Played;
+            state.appearance.view.show_labels = true;
+            state.appearance.view.note_names = harmonigraph_scene::NoteNames::Played;
             state.set_background((24, 25, 29));
             state.frame_params.fade_time = 0.0;
             for note in [55u8, 60, 64, 67, 71] {
@@ -692,8 +692,8 @@ mod tests {
                     1.0,
                 ));
             }
-            state.camera.zoom_by(2.0);
-            for style in state.view.shadow.groups_mut() {
+            state.appearance.camera.zoom_by(2.0);
+            for style in state.appearance.view.shadow.groups_mut() {
                 style.width = shadow;
             }
             let output = context.run_ui(
@@ -775,21 +775,21 @@ mod tests {
             state.frame_params.fade_time = 0.0;
             // Settled: the light's own clock would otherwise leave a one-frame
             // shot part way up its attack, which is a reading of the ramp.
-            state.view.glow_attack = 0.0;
-            state.view.glow_release = 0.0;
-            state.view.extent_sevens = extent;
+            state.appearance.view.glow_attack = 0.0;
+            state.appearance.view.glow_release = 0.0;
+            state.appearance.view.extent_sevens = extent;
             // The off-sheet nodes at the home sheet's own size, so what differs
             // between the two shots is the sheet COUNT and not how big anything
             // on it is drawn.
-            state.view.sevens_size = 1.0;
-            state.view.glow_reach = 4.0;
+            state.appearance.view.sevens_size = 1.0;
+            state.appearance.view.glow_reach = 4.0;
             // A compact falloff keeps the ground below saturation, leaving the
             // missing light under the node measurable at this wide reach.
-            state.view.glow_curve.shape = 2.75;
+            state.appearance.view.glow_curve.shape = 2.75;
             // No names: a played node's name stands on its middle and casts
             // its own shadow there (`fs_shadow_box` in harmonigraph-render),
             // which is a claim of its own and not the light under the body.
-            state.view.show_labels = false;
+            state.appearance.view.show_labels = false;
             for note in [60u8, 64, 67, 70] {
                 state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
                     0.0,
@@ -799,7 +799,7 @@ mod tests {
                     1.0,
                 ));
             }
-            state.camera.zoom_by(2.0);
+            state.appearance.camera.zoom_by(2.0);
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),
@@ -903,14 +903,14 @@ mod tests {
         // nodes on screen is to look at fewer of them. The floor is the other
         // half, and it is unchanged: at −60 dB the comma neighbours haze over
         // the constellation.
-        state.view.extent_threes = 4;
-        state.view.extent_fives = 3;
-        state.spectrum_config.floor_db = -35.0;
+        state.appearance.view.extent_threes = 4;
+        state.appearance.view.extent_fives = 3;
+        state.appearance.spectrum.floor_db = -35.0;
         // The Analyzer's own Attack and Release. Both off here, so the picture
         // is the spectrum of the second that was pushed rather than a function
         // of how many hops this fixture happened to feed.
-        state.spectrum_config.attack = 0.0;
-        state.spectrum_config.release = 0.0;
+        state.appearance.spectrum.attack = 0.0;
+        state.appearance.spectrum.release = 0.0;
         // Fully lit at once: an envelope would put the MIDI half of the
         // picture part way through its arrival.
         state.frame_params.fade_time = 0.0;
@@ -921,7 +921,7 @@ mod tests {
             48,
             1.0,
         ));
-        let cfg = state.spectrum_config;
+        let cfg = state.appearance.spectrum;
         state.spectrum.push_samples(&sawtooth(48.0, RATE), 1, RATE, NOW, &cfg);
 
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
@@ -954,7 +954,7 @@ mod tests {
         // of nodes is worth a ring, and one node up close has nothing to say
         // about that. Its low end is the gate off — a ring on every node in
         // view, silence included — which is what the sweep is read against.
-        let fresh_range = state.view.spectral_ring_range;
+        let fresh_range = state.appearance.view.spectral_ring_range;
         let mut shots: Vec<(f32, &str, Shot)> = Vec::new();
         for (zoom, at) in [(2.5f32, ""), (9.0, "-close")] {
             shots.push((zoom, at, Shot::Midi));
@@ -967,13 +967,13 @@ mod tests {
             shots.push((2.5, "", Shot::Gate(gate)));
         }
 
-        let home = state.camera;
+        let home = state.appearance.camera;
         for (zoom, at, shot) in shots {
             let source = match shot {
                 Shot::Midi => "audio-ring-off".to_string(),
                 Shot::Fold => "audio-ring-fold".to_string(),
                 Shot::Spectrum(range) => {
-                    state.view.spectral_ring_range = range;
+                    state.appearance.view.spectral_ring_range = range;
                     format!("audio-ring-{range:.0}c")
                 }
                 Shot::Gate(gate) => format!("audio-ring-gate-{:.0}", gate * 100.0),
@@ -981,7 +981,7 @@ mod tests {
             // Every other shot is of the ring's own reading, so they are taken
             // at the gate OFF: a node held back would read as a reading that
             // says nothing there, which is the one thing those shots are for.
-            state.view.spectral_ring_gate = match shot {
+            state.appearance.view.spectral_ring_gate = match shot {
                 Shot::Gate(gate) => gate,
                 _ => 0.0,
             };
@@ -990,11 +990,11 @@ mod tests {
             // the octave band closes in over the space it leaves, which is the
             // MIDI picture the stack draws.
             let fresh_width = harmonigraph_scene::ViewConfig::default().spectral_ring_width;
-            state.view.spectral_ring_width = match shot {
+            state.appearance.view.spectral_ring_width = match shot {
                 Shot::Midi => 0.0,
                 _ => fresh_width,
             };
-            state.view.spectral_reading = match shot {
+            state.appearance.view.spectral_reading = match shot {
                 Shot::Fold | Shot::Midi | Shot::Gate(_) => {
                     harmonigraph_scene::SpectralReading::Fold
                 }
@@ -1003,7 +1003,7 @@ mod tests {
             // From the fresh camera each time: the pane pans the view's center
             // with the camera, so a zoom applied on top of the last one would
             // compound.
-            state.camera = home;
+            state.appearance.camera = home;
             // And from a fresh ring, for the same reason one step further on:
             // every shot here is taken at ONE clock, so a ring carried over
             // from the shot before would still be standing where that shot's
@@ -1019,7 +1019,7 @@ mod tests {
             // one measured first — which reads as the gate admitting far more
             // than it does, and by more the higher the gate is set.
             state.reset_ring();
-            state.camera.zoom_by(zoom);
+            state.appearance.camera.zoom_by(zoom);
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),
@@ -1112,13 +1112,13 @@ mod tests {
         for (tag, depth) in shots {
             let mut state = SharedState::new(FORMAT);
             state.set_background((24, 25, 29));
-            state.view.glow_reach = 1.5;
-            state.view.glow_strength = 1.0;
-            for style in state.view.shadow.groups_mut() {
+            state.appearance.view.glow_reach = 1.5;
+            state.appearance.view.glow_strength = 1.0;
+            for style in state.appearance.view.shadow.groups_mut() {
                 style.width = 0.16;
                 style.depth = depth;
             }
-            state.camera.zoom_by(2.0);
+            state.appearance.camera.zoom_by(2.0);
             state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
                 0.0,
                 harmonigraph_core::SourceId::DIRECT,
@@ -1230,7 +1230,7 @@ mod tests {
             ("yaw", 0.3, 1.42),
         ] {
             let mut state = SharedState::new(FORMAT);
-            state.view.show_labels = false;
+            state.appearance.view.show_labels = false;
             state.set_background((24, 25, 29));
             state.frame_params.fade_time = 0.0;
             for note in [55u8, 60, 64, 67, 71] {
@@ -1242,14 +1242,14 @@ mod tests {
                     1.0,
                 ));
             }
-            state.camera.projection = if tag == "cabinet" {
+            state.appearance.camera.projection = if tag == "cabinet" {
                 harmonigraph_scene::Projection::Cabinet
             } else {
                 harmonigraph_scene::Projection::Perspective
             };
-            state.camera.pitch = pitch;
-            state.camera.yaw = yaw;
-            state.camera.zoom_by(1.6);
+            state.appearance.camera.pitch = pitch;
+            state.appearance.camera.yaw = yaw;
+            state.appearance.camera.zoom_by(1.6);
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),

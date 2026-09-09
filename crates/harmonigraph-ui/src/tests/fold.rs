@@ -368,7 +368,7 @@ fn a_pinned_separator_resizes_in_frameless_mode_too() {
         h.settle(&mut state);
         let _ = h.collapse_click(&mut state, panes::Tab::Spectral);
         let _ = h.settle_folds(&mut state);
-        state.view.frameless = true;
+        state.appearance.view.frameless = true;
         let _ = h.settle_folds(&mut state);
 
         let gone = pane_rect(&state, panes::Tab::Spectral);

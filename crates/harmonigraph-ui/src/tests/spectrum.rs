@@ -758,8 +758,8 @@ fn two_placements_of_one_pane_fold_a_grid_each() {
 
     let seeded = || {
         let mut state = fresh();
-        state.spectrum_config.show_spectrogram = true;
-        state.spectrum_config.roll_seconds = 10.0;
+        state.appearance.spectrum.show_spectrogram = true;
+        state.appearance.spectrum.roll_seconds = 10.0;
         let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
         bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 2] = 1.0;
         for i in 0..80 {

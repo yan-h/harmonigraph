@@ -111,7 +111,7 @@ fn live_tuning(state: &SharedState, params: &dyn ParamBackend) -> harmonigraph_c
     }
     let mut tuning = crate::params::tuning_from_params(params);
     for comma in tuning::Comma::ALL {
-        if state.view.tempers(comma) {
+        if state.appearance.view.tempers(comma) {
             tuning.temper(comma);
         }
     }
@@ -221,8 +221,8 @@ fn comma_controls(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Param
                 // The hover is where the comma itself is named, so it leads with
                 // the ratio: it is the thing a reader came to this section for,
                 // and the switch beside it says only which temperament drops it.
-                let auto_on = state.view.temper_auto(comma);
-                let mut on = state.view.tempers(comma);
+                let auto_on = state.appearance.view.temper_auto(comma);
+                let mut on = state.appearance.view.tempers(comma);
                 let temper = crate::widgets::toggle_switch(ui, &mut on, comma.temperament())
                     .on_hover_text(format!(
                         "{} — the {} ({:.2}¢). {} locks the {} to {}, and note names are \
@@ -251,7 +251,7 @@ fn comma_controls(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Param
                 // every tuning it sees whether the detect is running or not.
                 // Switching it off leaves the mode where it is, with the switch
                 // beside it still live.
-                let mut auto_on = state.view.temper_auto(comma);
+                let mut auto_on = state.appearance.view.temper_auto(comma);
                 let auto =
                     crate::widgets::toggle_switch(ui, &mut auto_on, "").on_hover_text(format!(
                         "Engage {} by itself whenever the {} lands within {}¢ of {} — from a \
@@ -287,7 +287,7 @@ pub(super) fn tuning_pane(
     // (meantone the major third, marvel the harmonic seventh), so that axis's
     // bar shows the derived value and is where the mode is released.
     for &key in &ParamKey::TUNING {
-        match comma_deriving(key, &state.view) {
+        match comma_deriving(key, &state.appearance.view) {
             Some(comma) => tempered_bar(ui, state, params, comma),
             None => {
                 param_bar(ui, params, key).on_hover_text(tuning_hint(key));

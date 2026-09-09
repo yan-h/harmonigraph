@@ -417,7 +417,7 @@ pub(super) fn plan(
     now: f64,
     scales: NameScale,
 ) -> Vec<NoteLabel> {
-    let cfg = &state.spectrum_config;
+    let cfg = &state.appearance.spectrum;
     // Names label RIBBONS, so they need ribbons. With the roll hidden there is
     // nothing under them to name and they would be text floating over the
     // heatmap at whatever pitches notes happened to have — which is not the
@@ -541,7 +541,7 @@ pub(super) fn plan(
     let naming = |pitch: f32, names: &mut HashMap<PitchClass, (NoteName, f64)>| {
         let class = PitchClass::from_cents(pitch.rem_euclid(12.0) * 100.0);
         *names.entry(class).or_insert_with(|| {
-            let name = note_name(&state.view, &shown, &state.tuning, pitch);
+            let name = note_name(&state.appearance.view, &shown, &state.tuning, pitch);
             (name, room(&name))
         })
     };
@@ -1565,7 +1565,7 @@ mod tests {
     /// a reversed orientation would be the leading edge.
     fn travelling(range: f32, span: f32) -> SharedState {
         let mut state = state(range, span);
-        state.spectrum_config.note_names_travel = true;
+        state.appearance.spectrum.note_names_travel = true;
         state
     }
 
@@ -1574,9 +1574,9 @@ mod tests {
         // These fixtures measure lattice spellings themselves. The shipped
         // comma locks are a view choice that would respell the same positions
         // before the naming rule under test sees them.
-        state.view.meantone = false;
-        state.view.marvel = false;
-        state.spectrum_config = SpectrumConfig {
+        state.appearance.view.meantone = false;
+        state.appearance.view.marvel = false;
+        state.appearance.spectrum = SpectrumConfig {
             orientation,
             low_midi: 60.0 - range * 0.5,
             high_midi: 60.0 + range * 0.5,
@@ -1594,7 +1594,7 @@ mod tests {
     }
 
     fn labels_in(state: &SharedState, now: f64, rect: egui::Rect) -> Vec<NoteLabel> {
-        let cfg = &state.spectrum_config;
+        let cfg = &state.appearance.spectrum;
         let axes = Axes::new(rect, cfg);
         let min_midi = cfg.low_midi;
         let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
@@ -1632,7 +1632,7 @@ mod tests {
         for frame in 0..480 {
             let now = 14.0 + frame as f64 / 60.0;
             let state = state_at(now);
-            let cfg = state.spectrum_config;
+            let cfg = state.appearance.spectrum;
             let split = super::super::axes::spectrum_share(&cfg);
             let axes = Axes::new(BIG, &cfg);
             let labels = plan(&state, &axes, &scale_of(&state), split, now, zoomed(label_scale));
@@ -1676,7 +1676,7 @@ mod tests {
             "the roll has to be AT its cap for this to be the test it says it is",
         );
 
-        let cfg = state.spectrum_config;
+        let cfg = state.appearance.spectrum;
         let axes = Axes::new(BIG, &cfg);
         let split = super::super::axes::spectrum_share(&cfg);
         let mut seen: HashMap<(String, i64), Vec<usize>> = HashMap::new();
@@ -1716,7 +1716,7 @@ mod tests {
         // Vacuity guard: names must actually be competing here, or "nothing
         // blinked" is a statement about a pane with nothing to thin.
         let state = phrase(f64::NEG_INFINITY);
-        let cfg = state.spectrum_config;
+        let cfg = state.appearance.spectrum;
         let split = super::super::axes::spectrum_share(&cfg);
         let axes = Axes::new(BIG, &cfg);
         let placed = plan(&state, &axes, &scale_of(&state), split, 20.0, zoomed(ZOOMED));
@@ -1743,7 +1743,7 @@ mod tests {
     }
 
     fn scale_of(state: &SharedState) -> PitchScale {
-        let cfg = &state.spectrum_config;
+        let cfg = &state.appearance.spectrum;
         let min_midi = cfg.low_midi;
         let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
         PitchScale { min_midi, max_midi, span: max_midi - min_midi }
@@ -1778,7 +1778,7 @@ mod tests {
 
         let placed = labels(&state, 10.0);
         assert_eq!(placed.len(), 1);
-        let axes = Axes::new(PANE, &state.spectrum_config);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
         // Horizontal: depth is the x axis with now at the left, and pitch
         // climbs with -y. The ribbon runs from the release (4s back, depth
         // 0.4) to the onset (8s back, depth 0.8), so its leading edge is the
@@ -1968,8 +1968,8 @@ mod tests {
         state.tracker.handle_event(on(2.0, 60));
         state.tracker.handle_event(off(6.0, 60));
 
-        let split = super::super::axes::spectrum_share(&state.spectrum_config);
-        let axes = Axes::new(PANE, &state.spectrum_config);
+        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
         let ribbon =
             super::super::roll::note_instances(&axes, &scale_of(&state), &state, split, 10.0, 2.0);
         assert_eq!(ribbon.len(), 1, "one note, one ribbon");
@@ -2049,7 +2049,7 @@ mod tests {
         let placed = labels(&state, 100.0);
         assert_eq!(said(&placed), ["G"]);
 
-        let axes = Axes::new(PANE, &state.spectrum_config);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
         assert!(placed[0].rect.min.x >= axes.at(0.5, 0.0).x, "at the now-line, held");
     }
 
@@ -2108,7 +2108,7 @@ mod tests {
 
         let placed = labels(&state, 10.0);
         assert_eq!(placed.len(), 1);
-        let axes = Axes::new(PANE, &state.spectrum_config);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
         // Horizontal: depth is x with now at the left, so the ribbon runs from
         // the onset (8s back, depth 0.8) to the release (4s back, depth 0.4)
         // and the name is written at the onset, growing back toward now.
@@ -2149,7 +2149,7 @@ mod tests {
         for orientation in SpectralOrientation::ALL {
             for travel in [false, true] {
                 let mut state = turned(24.0, 10.0, orientation);
-                state.spectrum_config.note_names_travel = travel;
+                state.appearance.spectrum.note_names_travel = travel;
                 state.tracker.handle_event(on(2.0, 60));
                 state.tracker.handle_event(off(6.0, 60));
 
@@ -2162,7 +2162,7 @@ mod tests {
                 // The ribbon's two ends, and how far the name sits from the one
                 // it is anchored to along the depth axis — signed, so a name
                 // laid the wrong way reads as a negative reach.
-                let axes = Axes::new(square, &state.spectrum_config);
+                let axes = Axes::new(square, &state.appearance.spectrum);
                 let t = scale_of(&state).t_of(60.0);
                 let (head, onset) = (axes.at(t, 0.4), axes.at(t, 0.8));
                 // The leading edge reads first where time runs the screen's own
@@ -2214,11 +2214,11 @@ mod tests {
         // The crossing, at the anchor that grows toward the now-line: Left's
         // far end, which is the onset.
         let mut state = travelling(24.0, 10.0);
-        state.spectrum_config.roll_fraction = 0.55; // the fresh value
+        state.appearance.spectrum.roll_fraction = 0.55; // the fresh value
         state.tracker.handle_event(on(5.0, 60));
 
-        let axes = Axes::new(PANE, &state.spectrum_config);
-        let split = super::super::axes::spectrum_share(&state.spectrum_config);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
+        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
         // Left: depth is x with the now-line at the roll's near edge, so the
         // spectrum owns everything left of it, and the pane's own edge is the
         // far side of that.
@@ -2267,10 +2267,10 @@ mod tests {
         // meets the pane. `split` is 0.02 here rather than 0, so a clamp still
         // measuring against the divider would leave the name 6 points out.
         let mut state = turned(24.0, 10.0, SpectralOrientation::Right);
-        state.spectrum_config.roll_fraction = 0.98;
+        state.appearance.spectrum.roll_fraction = 0.98;
         state.tracker.handle_event(on(5.0, 60));
-        let axes = Axes::new(PANE, &state.spectrum_config);
-        let split = super::super::axes::spectrum_share(&state.spectrum_config);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
+        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
         let t = scale_of(&state).t_of(60.0);
         let divider = axes.at(t, split).x;
         let placed = labels(&state, 5.0);
@@ -2302,11 +2302,11 @@ mod tests {
     #[test]
     fn with_the_spectrum_on_the_right_a_name_holds_the_notes_left_end() {
         let mut state = turned(24.0, 10.0, SpectralOrientation::Right);
-        state.spectrum_config.roll_fraction = 0.55; // the fresh value
+        state.appearance.spectrum.roll_fraction = 0.55; // the fresh value
         state.tracker.handle_event(on(5.0, 60));
 
-        let axes = Axes::new(PANE, &state.spectrum_config);
-        let split = super::super::axes::spectrum_share(&state.spectrum_config);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
+        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
         let t = scale_of(&state).t_of(60.0);
         // Right: time runs leftward, so the analyzer owns everything right of
         // the divider and the note grows away from it.
@@ -2363,7 +2363,7 @@ mod tests {
             // The ribbon's two ends — the release 4s back, the onset 8s back —
             // and the way a reader's eye runs over the pane: rightward where
             // time is across it, downward where time runs down it.
-            let axes = Axes::new(square, &state.spectrum_config);
+            let axes = Axes::new(square, &state.appearance.spectrum);
             let t = scale_of(&state).t_of(60.0);
             let (head, onset) = (axes.at(t, 0.4), axes.at(t, 0.8));
             let reading = if orientation.is_time_vertical() {
@@ -2433,7 +2433,7 @@ mod tests {
         state.tracker.handle_event(off(6.0, 60));
         let placed = labels(&state, 10.0);
         assert_eq!(placed.len(), 1);
-        let axes = Axes::new(PANE, &state.spectrum_config);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
         // The release, 4 seconds back of a 10-second window, at middle C.
         let gap = ink_from(&placed[0], axes.at(0.5, 0.4));
         assert!(
@@ -2591,7 +2591,7 @@ mod tests {
                 state.tracker.handle_event(on(1.0, 60));
                 state.tracker.handle_event(off(1.0 + length, 60));
 
-                let cfg = &state.spectrum_config;
+                let cfg = &state.appearance.spectrum;
                 let axes = Axes::new(square, cfg);
                 let split = super::super::axes::spectrum_share(cfg);
                 let scale = scale_of(&state);
@@ -2656,7 +2656,7 @@ mod tests {
 
         let placed = labels(&state, 5.0);
         assert_eq!(said(&placed), ["G"], "on the pane, and named");
-        let axes = Axes::new(PANE, &state.spectrum_config);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
         assert!(placed[0].rect.min.x > axes.at(0.5, 0.0).x, "travelling, not at the now-line");
         // The window is ten seconds and the onset is at 0, so the onset crosses
         // the far edge at exactly 10.
@@ -2699,7 +2699,7 @@ mod tests {
         // is a distance from an end, and this note has no end left to measure
         // one from.
         assert!(labels(&state, 120.0).is_empty(), "a drone kept a name it had no end for");
-        let cfg = &state.spectrum_config;
+        let cfg = &state.appearance.spectrum;
         let split = super::super::axes::spectrum_share(cfg);
         let ribbons =
             super::super::roll::note_instances(&axes, &scale_of(&state), &state, split, 120.0, 2.0);
@@ -2726,12 +2726,12 @@ mod tests {
     fn a_travelling_name_scrolls_at_the_pictures_own_rate_until_it_is_gone() {
         for orientation in SpectralOrientation::ALL {
             let mut state = turned(24.0, 10.0, orientation);
-            state.spectrum_config.note_names_travel = !orientation.is_time_reversed();
+            state.appearance.spectrum.note_names_travel = !orientation.is_time_reversed();
             state.tracker.handle_event(on(1.0, 60)); // held for the whole sweep
 
             // Square, so the same pane serves the vertical orientations.
             let square = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 320.0) };
-            let axes = Axes::new(square, &state.spectrum_config);
+            let axes = Axes::new(square, &state.appearance.spectrum);
             let depth = axes.dir_depth();
 
             // From a second into the note — clear of the near edge, where a name
@@ -2783,7 +2783,7 @@ mod tests {
     fn travelling_names_never_blink_out_and_back_either() {
         let travelling = |_now: f64| {
             let mut state = phrase(f64::NEG_INFINITY);
-            state.spectrum_config.note_names_travel = true;
+            state.appearance.spectrum.note_names_travel = true;
             state
         };
         assert_eq!(blinks(travelling, 2.23), 0);
@@ -2908,7 +2908,7 @@ mod tests {
         let placed = labels_in(&state, 6.0, tall);
         assert!(placed.len() > 1, "several names: {}", placed.len());
 
-        let axes = Axes::new(tall, &state.spectrum_config);
+        let axes = Axes::new(tall, &state.appearance.spectrum);
         // Every name sits on middle C's line, which with time vertical is an x.
         let lane = axes.at(scale_of(&state).t_of(60.0), 0.0).x;
         for label in &placed {
@@ -2937,7 +2937,7 @@ mod tests {
 
         let placed = labels(&state, 4.0);
         assert_eq!(said(&placed), ["C"]);
-        let axes = Axes::new(PANE, &state.spectrum_config);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
         // Laid out statically from the near edge: the onset at 2 s of 10 is a
         // fifth of the way along, and the name starts there and grows later.
         let onset = axes.at(scale_of(&state).t_of(60.0), 0.2);
@@ -2974,7 +2974,7 @@ mod tests {
             state.whole_song =
                 Some(crate::WholeSong { columns: Vec::new(), roll, start, span: 10.0 });
             let placed = labels(&state, start + 2.0);
-            let axes = Axes::new(PANE, &state.spectrum_config);
+            let axes = Axes::new(PANE, &state.appearance.spectrum);
             (said(&placed), placed.first().map(|l| l.rect), axes.at(0.5, 0.0).x)
         };
 
@@ -3446,13 +3446,13 @@ mod tests {
         state.tracker.handle_event(on(0.0, 60));
         assert_eq!(labels(&state, 1.0).len(), 1);
 
-        state.spectrum_config.note_names = false;
+        state.appearance.spectrum.note_names = false;
         assert!(labels(&state, 1.0).is_empty());
 
-        state.spectrum_config.note_names = true;
-        state.spectrum_config.show_roll = false;
-        state.spectrum_config.show_spectrogram = true;
-        state.spectrum_config.roll_fraction = 0.55;
+        state.appearance.spectrum.note_names = true;
+        state.appearance.spectrum.show_roll = false;
+        state.appearance.spectrum.show_spectrogram = true;
+        state.appearance.spectrum.roll_fraction = 0.55;
         assert!(labels(&state, 1.0).is_empty(), "no ribbons, so nothing to name");
     }
 
@@ -3463,7 +3463,7 @@ mod tests {
         let mut state = state(24.0, 10.0);
         state.tracker.handle_event(on(0.0, 60));
         // The divider dragged all the way over: the spectrum owns everything.
-        state.spectrum_config.roll_fraction = 0.0;
+        state.appearance.spectrum.roll_fraction = 0.0;
         assert!(labels(&state, 1.0).is_empty());
     }
 
@@ -3490,7 +3490,7 @@ mod tests {
 
         let placed = labels(&state, 3.0);
         assert_eq!(placed.len(), 1);
-        let axes = Axes::new(PANE, &state.spectrum_config);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
         // Sounding G at the leading edge (the now-line), not the C it began on.
         let sounding = axes.at(scale_of(&state).t_of(67.0), 0.0);
         assert!(
@@ -3783,7 +3783,7 @@ mod tests {
         // Where the ribbon actually is at the far edge — read off the roll's own
         // geometry rather than assumed, so this cannot pass against a name and a
         // ribbon that have BOTH moved.
-        let cfg = &state.spectrum_config;
+        let cfg = &state.appearance.spectrum;
         let axes = Axes::new(PANE, cfg);
         let scale = scale_of(&state);
         let split = super::super::axes::spectrum_share(cfg);
@@ -3830,8 +3830,8 @@ mod tests {
     #[test]
     fn a_cropped_name_is_culled_on_the_pitch_it_is_drawn_at() {
         let mut state = state(24.0, 10.0);
-        state.spectrum_config.low_midi = 63.0;
-        state.spectrum_config.high_midi = 87.0;
+        state.appearance.spectrum.low_midi = 63.0;
+        state.appearance.spectrum.high_midi = 87.0;
         state.tracker.handle_event(on(1.0, 60));
         state.tracker.handle_event(tuning(1.5, 60, 7.0)); // C4 -> G4, then held
         let roll = state.tracker.roll().clone();
@@ -3848,7 +3848,7 @@ mod tests {
         // pair — and the row its onset would have had is off the axis here, so
         // a name placed by that pitch could not be found by this assertion at
         // all.
-        let axes = Axes::new(PANE, &state.spectrum_config);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
         let row = axes.at(scale_of(&state).t_of(67.0), 0.0).y;
         assert!(
             (placed[0].rect.center().y - row).abs() < 2.0,

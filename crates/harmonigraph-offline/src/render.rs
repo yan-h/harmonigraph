@@ -7,12 +7,28 @@
 //! also carries.
 
 use harmonigraph_render::wgpu::TextureFormat;
-use harmonigraph_ui::{begin_frame, draw_pane, Layout, SharedState};
+use harmonigraph_ui::{begin_frame, draw_pane, AppearanceDocument, Layout, SharedState};
 
 use crate::wav::Audio;
 
 use crate::frames::Renderer;
 use crate::replay::Replay;
+
+/// Select and normalize once before output setup. Explicit re-render settings
+/// replace the recorded document in full. Refusal retains the existing default
+/// rendering policy and reports it where an offline user can see it.
+pub fn appearance_for(
+    take: &harmonigraph_take::Take,
+    replacement: Option<&str>,
+) -> AppearanceDocument {
+    let Some(blob) = replacement.or(take.header.appearance.as_deref()) else {
+        return AppearanceDocument::default();
+    };
+    AppearanceDocument::parse(blob).unwrap_or_else(|err| {
+        eprintln!("warning: {err}; rendering at defaults (camera, view, spectrum and frame)");
+        AppearanceDocument::default()
+    })
+}
 
 /// Everything the loop needs that isn't the take itself.
 pub struct Settings {
@@ -54,7 +70,7 @@ impl Settings {
 /// window bounded the fold, this same input built a texture spanning the whole
 /// take and panicked on the upload. Trading that for a silent blank is only
 /// acceptable with a line to read, on the same reasoning as the refused
-/// `ui_state` above — the console the editor would log to is not drawn here.
+/// `appearance` above — the console the editor would log to is not drawn here.
 ///
 /// Two columns rather than one, because that is what `spectrogram::build`
 /// refuses under: a single slab has no time axis to stretch over.
@@ -103,6 +119,7 @@ pub fn render(
     replay: &mut Replay,
     audio: Option<&Audio>,
     settings: &Settings,
+    appearance: AppearanceDocument,
     mut emit: impl FnMut(&[u8]) -> Result<bool, String>,
 ) -> Result<u64, String> {
     let mut renderer = Renderer::new(settings.size)
@@ -119,19 +136,7 @@ pub fn render(
     let max_texture_side = renderer.max_texture_side();
 
     let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
-    if let Some(blob) = replay.take().header.ui_state.clone() {
-        // On stderr, because a refusal here is invisible otherwise: the
-        // console the editor would log to is not drawn offline, and what a
-        // refused blob produces is a render at wholly default camera, view
-        // and frame — a plausible-looking mp4 that reproduces nothing about
-        // the session it was recorded in. Better a line than a silent one.
-        if !state.load_persist(&blob) {
-            eprintln!(
-                "warning: this take's ui_state was refused; rendering at defaults \
-                 (camera, view, spectrum and frame)",
-            );
-        }
-    }
+    state.install_appearance(appearance);
     // Nothing offline is interactive, and both would draw over the
     // picture: no armed-mode pulse, no hover highlight.
     state.learn_active = false;
@@ -145,7 +150,7 @@ pub fn render(
     // what was on screen; the render's job is to reproduce it, not to
     // re-decide it.
     for comma in harmonigraph_core::Comma::ALL {
-        *state.view.temper_auto_mut(comma) = false;
+        *state.appearance.view.temper_auto_mut(comma) = false;
     }
 
     // Playhead mode: precompute the render window's spectrogram from the full
@@ -155,7 +160,7 @@ pub fn render(
     // the separate precomputed set.
     // `--playhead` on the command line, or the take's own "Whole-song
     // playhead" render setting — either turns it on.
-    if settings.whole_song_spectrogram || state.take.render_config.playhead {
+    if settings.whole_song_spectrogram || state.appearance.render.playhead {
         if let Some(audio) = audio {
             let span = (settings.end - settings.start).max(0.0);
             if span > 0.0 {
@@ -166,7 +171,7 @@ pub fn render(
                     settings.audio_start,
                     settings.start,
                     span,
-                    &state.spectrum_config,
+                    &state.appearance.spectrum,
                 ));
             }
         }
@@ -262,7 +267,7 @@ fn prepare_frame(
             audio.slice_seconds(from - settings.audio_start, now - settings.audio_start);
         if !chunk.is_empty() {
             let newest = settings.audio_start + (end - 1) as f64 / f64::from(audio.sample_rate);
-            let config = state.spectrum_config;
+            let config = state.appearance.spectrum;
             state.spectrum.push_samples(chunk, audio.channels, audio.sample_rate, newest, &config);
         }
     }
@@ -368,7 +373,7 @@ mod tests {
                 let mut replay = Replay::new(transient_take(origin));
                 let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
                 state.learn_active = false;
-                let window = state.spectrum_config.window.samples();
+                let window = state.appearance.spectrum.window.samples();
                 let lag = window as f64 / (2.0 * SR);
                 let audio_end = origin + FRAMES as f64 / SR;
                 let mut partial_tail = false;
@@ -453,10 +458,10 @@ mod tests {
         let audio = transient_audio();
         let mut take = transient_take(7.125);
         let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
-        state.spectrum_config.roll_seconds = 1.0;
-        state.spectrum_config.roll_fraction = 1.0;
-        state.spectrum_config.show_roll = false;
-        take.header.ui_state = Some(state.save_persist());
+        state.appearance.spectrum.roll_seconds = 1.0;
+        state.appearance.spectrum.roll_fraction = 1.0;
+        state.appearance.spectrum.show_roll = false;
+        take.header.appearance = Some(state.appearance.serialize());
         let settings = Settings {
             layout: Layout::preset("spectral").unwrap(),
             fps: 30_000.0 / 1001.0,
@@ -467,10 +472,16 @@ mod tests {
         };
         let run = |audio| {
             let mut frames = Vec::new();
-            let result = render(&mut Replay::new(take.clone()), audio, &settings, |bytes| {
-                frames.push(bytes.to_vec());
-                Ok(true)
-            });
+            let result = render(
+                &mut Replay::new(take.clone()),
+                audio,
+                &settings,
+                appearance_for(&take, None),
+                |bytes| {
+                    frames.push(bytes.to_vec());
+                    Ok(true)
+                },
+            );
             match result {
                 Ok(_) => Some(frames),
                 Err(e) if e.contains("no usable GPU adapter") => {
@@ -483,6 +494,47 @@ mod tests {
         let Some(first) = run(Some(&audio)) else { return };
         assert_eq!(first, run(Some(&audio)).unwrap());
         assert_ne!(first, run(None).unwrap(), "the audio must change the rendered picture");
+    }
+
+    #[test]
+    fn export_selects_one_complete_appearance_and_defaults_a_refused_replacement() {
+        let mut recorded = AppearanceDocument::default();
+        recorded.camera.yaw = 1.23;
+        recorded.view.extent_sevens = 3;
+        recorded.spectrum.low_midi = 40.5;
+        recorded.spiral.zoom = 2.75;
+        recorded.render.short_edge = 2160;
+        let mut take = take();
+        take.header.appearance = Some(recorded.serialize());
+        let selected = appearance_for(&take, None);
+        assert_eq!(selected.serialize(), recorded.serialize());
+        let mut replacement = AppearanceDocument::default();
+        replacement.camera.yaw = -0.5;
+        replacement.view.extent_sevens = 2;
+        replacement.spectrum.low_midi = 45.0;
+        replacement.spiral.zoom = 1.5;
+        replacement.render.short_edge = 720;
+        let selected = appearance_for(&take, Some(&replacement.serialize()));
+        assert_eq!(selected.serialize(), replacement.serialize());
+        let expected_size = replacement.render.frame.pixels(720);
+        assert_eq!(crate::output_size(None, &selected.render), expected_size);
+        assert_eq!(crate::output_size(Some([640, 480]), &selected.render), [640, 480]);
+        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        state.install_appearance(selected);
+        assert_eq!(state.appearance.serialize(), replacement.serialize());
+        for refused in
+            ["broken".to_string(), replacement.serialize().replacen("version:1", "version:0", 1)]
+        {
+            assert_eq!(
+                appearance_for(&take, Some(&refused)).serialize(),
+                AppearanceDocument::default().serialize()
+            );
+        }
+        take.header.appearance = None;
+        assert_eq!(
+            appearance_for(&take, None).serialize(),
+            AppearanceDocument::default().serialize()
+        );
     }
 
     fn settings() -> Settings {
@@ -510,36 +562,36 @@ mod tests {
     /// of which wants a halo over it.
     fn lit_take() -> Take {
         let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
-        state.view.glow_reach = 0.8;
-        state.view.glow_strength = 1.5;
+        state.appearance.view.glow_reach = 0.8;
+        state.appearance.view.glow_strength = 1.5;
         // Long against the tenth of a second a frame is here, so several frames
         // of every note's light are a mix of the frames before it rather than a
         // settle.
-        state.view.glow_attack = 0.3;
-        state.view.glow_release = 2.5;
+        state.appearance.view.glow_attack = 0.3;
+        state.appearance.view.glow_release = 2.5;
         let mut take = take();
-        take.header.ui_state = Some(state.save_persist());
+        take.header.appearance = Some(state.appearance.serialize());
         take
     }
 
     fn spectral_shadow_take(enabled: bool) -> Take {
         let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
-        state.spectrum_config.show_roll = true;
-        state.spectrum_config.roll_fraction = 0.7;
-        state.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
+        state.appearance.spectrum.show_roll = true;
+        state.appearance.spectrum.roll_fraction = 0.7;
+        state.appearance.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
             kernel: harmonigraph_scene::ShadowKernel::Gaussian,
             width: 0.75,
             depth: f32::from(enabled),
             ..Default::default()
         };
-        state.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
+        state.appearance.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
             kernel: harmonigraph_scene::ShadowKernel::Distance,
             width: 0.75,
             depth: f32::from(enabled),
             ..Default::default()
         };
         let mut take = take();
-        take.header.ui_state = Some(state.save_persist());
+        take.header.appearance = Some(state.appearance.serialize());
         take
     }
 
@@ -550,7 +602,8 @@ mod tests {
     fn render_take(take: Take, settings: &Settings) -> Option<Vec<Vec<u8>>> {
         let mut replay = Replay::new(take);
         let mut frames = Vec::new();
-        match render(&mut replay, None, settings, |bytes| {
+        let appearance = appearance_for(replay.take(), None);
+        match render(&mut replay, None, settings, appearance, |bytes| {
             frames.push(bytes.to_vec());
             Ok(true)
         }) {
@@ -740,7 +793,8 @@ mod tests {
         let run = || -> Option<Vec<Vec<u8>>> {
             let mut replay = Replay::new(take());
             let mut frames = Vec::new();
-            match render(&mut replay, Some(&audio), &settings, |bytes| {
+            let appearance = appearance_for(replay.take(), None);
+            match render(&mut replay, Some(&audio), &settings, appearance, |bytes| {
                 frames.push(bytes.to_vec());
                 Ok(true)
             }) {

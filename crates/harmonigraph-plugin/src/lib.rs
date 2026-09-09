@@ -1173,7 +1173,11 @@ mod tests {
         };
         let blob = {
             let mut saved = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
-            saved.spectrum_config.window = SpectrumWindow::Precise;
+            saved.appearance.spectrum.window = SpectrumWindow::Precise;
+            saved.appearance.camera.yaw = 1.23;
+            saved.appearance.view.extent_sevens = 3;
+            saved.appearance.spiral.zoom = 2.75;
+            saved.appearance.render.short_edge = 2160;
             harmonigraph_ui::shell::close(&saved)
         };
 
@@ -1199,6 +1203,10 @@ mod tests {
 
         let shared = plugin.editor_shared.lock();
         let lag = shared.ui.spectrum.column_lag();
+        assert_eq!(shared.ui.appearance.camera.yaw, 1.23);
+        assert_eq!(shared.ui.appearance.view.extent_sevens, 3);
+        assert_eq!(shared.ui.appearance.spiral.zoom, 2.75);
+        assert_eq!(shared.ui.appearance.render.short_edge, 2160);
         assert!(
             (lag - lag_of(SpectrumWindow::Precise)).abs() < 1e-9,
             "the background analyzer ran at a {:.1} ms window where the project saved \

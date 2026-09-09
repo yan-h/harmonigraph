@@ -110,7 +110,7 @@ fn delayed_history_and_baseline_keep_original_pass_and_both_wav_tails() {
         "late voiced first pass is still the render target"
     );
     let take = harmonigraph_take::Take::read(&file).unwrap();
-    assert_eq!(take.header.version, 4);
+    assert_eq!(take.header.version, harmonigraph_take::FORMAT_VERSION);
     assert!(take.incomplete.is_none());
     assert_eq!(take.events.len(), 5);
     assert_eq!(take.notes().map(|n| n.t).collect::<Vec<_>>(), [20.0, 20.25, 20.5, 21.5]);

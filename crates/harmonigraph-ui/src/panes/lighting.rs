@@ -11,7 +11,7 @@ use harmonigraph_scene::{
 
 pub(super) fn lighting_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     ui.heading("Bloom");
-    ValueBar::new(&mut state.view.bloom_strength, 0.0..=1.5, "Bloom amount")
+    ValueBar::new(&mut state.appearance.view.bloom_strength, 0.0..=1.5, "Bloom amount")
         .unit(1.0, "×")
         .show(ui)
         .on_hover_text(
@@ -19,8 +19,8 @@ pub(super) fn lighting_pane(ui: &mut egui::Ui, state: &mut SharedState) {
                  0 turns bloom off; \
                  1× is the reference strength.",
         );
-    glow_section(ui, &mut state.view);
-    shadow_groups(ui, &mut state.view.shadow);
+    glow_section(ui, &mut state.appearance.view);
+    shadow_groups(ui, &mut state.appearance.view.shadow);
 }
 
 fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {

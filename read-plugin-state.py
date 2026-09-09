@@ -7,6 +7,7 @@ bug against real state rather than a guess.
 
     ./read-plugin-state.py                 # newest Bitwig project
     ./read-plugin-state.py --rust          # ...as an impl Default body
+    ./read-plugin-state.py --appearance project.bwproject > appearance.ron
     ./read-plugin-state.py path/to.bwproject
 
 THE ONE THING THAT WILL WASTE YOUR TIME
@@ -34,7 +35,9 @@ Inside that is nice-plug's plugin state as plain JSON:
 
     {"version":..,"params":{..},"fields":{"editor-state":..,"ui-state":..}}
 
-`fields["ui-state"]` is the RON string `SharedState::save_persist` wrote.
+`fields["ui-state"]` is the editor RON `SharedState::save_persist` wrote.
+Its `appearance` member holds camera, view, spectrum, spiral and video settings;
+--appearance prints that complete document for the offline renderer.
 nice-plug can also zstd-compress that JSON (see its wrapper/state.rs), so
 this tries zstd too, and plaintext, before giving up.
 """
@@ -130,10 +133,22 @@ def find_states(path: pathlib.Path):
 def split_ron(body: str) -> "list[tuple[str, str]]":
     """Split a flat RON struct body into (name, value) on top-level commas."""
     out, depth, cur = [], 0, ""
+    quoted, escaped = False, False
     for c in body:
-        if c in "([":
+        if quoted:
+            cur += c
+            if escaped:
+                escaped = False
+            elif c == "\\":
+                escaped = True
+            elif c == '"':
+                quoted = False
+            continue
+        if c == '"':
+            quoted = True
+        if c in "([{":
             depth += 1
-        elif c in ")]":
+        elif c in ")]}":
             depth -= 1
         if c == "," and depth == 0:
             out.append(cur)
@@ -147,24 +162,20 @@ def split_ron(body: str) -> "list[tuple[str, str]]":
 
 def block(ui: str, name: str) -> "str | None":
     """The body of a top-level `name:(...)` block in the persist RON."""
-    m = re.search(rf"{name}:\(", ui)
-    if not m:
-        return None
-    start, depth = m.end() - 1, 0
-    for j in range(start, len(ui)):
-        if ui[j] == "(":
-            depth += 1
-        elif ui[j] == ")":
-            depth -= 1
-            if depth == 0:
-                return ui[start + 1 : j]
+    body = ui.strip().removeprefix("(").removesuffix(")")
+    value = dict(split_ron(body)).get(name)
+    if value and value.startswith("(") and value.endswith(")"):
+        return value[1:-1]
     return None
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("project", nargs="?", help="a .bwproject (default: newest)")
-    ap.add_argument(
+    output = ap.add_mutually_exclusive_group()
+    output.add_argument("--appearance", action="store_true",
+                        help="print one complete appearance RON for offline --appearance")
+    output.add_argument(
         "--rust",
         action="store_true",
         help="print the view fields as an impl Default body to paste into view.rs",
@@ -183,13 +194,26 @@ def main() -> None:
             "WINDOW is closed. Close it, save the project, and re-run."
         )
 
+    if args.appearance:
+        appearances = [
+            body for st in states
+            if (ui := st.get("fields", {}).get("ui-state"))
+            and (body := block(ui, "appearance")) is not None
+        ]
+        if len(appearances) != 1:
+            sys.exit(f"Expected one editor appearance, found {len(appearances)}; "
+                     "close its window and save with the current plugin format.")
+        print(f"({appearances[0]})")
+        return
+
     if args.rust:
         # Only the editor's instance carries a view; the tune-pairing
         # participant beside it has no ui-state at all, and is not a failure.
         bodies = [
             (n, body)
             for n, st in enumerate(states, 1)
-            if (ui := st.get("fields", {}).get("ui-state")) and (body := block(ui, "view"))
+            if (ui := st.get("fields", {}).get("ui-state")) and (appearance := block(ui, "appearance"))
+            and (body := block(f"({appearance})", "view"))
         ]
         if not bodies:
             sys.exit("No view block in any instance's ui-state blob.")
@@ -217,8 +241,12 @@ def main() -> None:
         # reason — a take renders from the blob, so a disc dialled in on its
         # inner turns has to export the picture it was dialled to. Left out,
         # a capture silently drops half the framing of one of the two pictures.
-        for name in ("camera", "spiral", "view"):
-            body = block(ui, name)
+        appearance = block(ui, "appearance")
+        if appearance is None:
+            print("\n(no appearance document — older editor format is unsupported)")
+            continue
+        for name in ("camera", "spiral", "view", "spectrum", "render"):
+            body = block(f"({appearance})", name)
             if body is None:
                 continue
             print(f"\n--- {name} ---")

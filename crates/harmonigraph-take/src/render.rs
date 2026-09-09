@@ -11,7 +11,7 @@
 //! see [`RenderConfig::short_edge`].
 //!
 //! They are serde-facing: each round-trips through a saved project's UI blob
-//! and through the `ui_state` a take carries.
+//! and through the `appearance` a take carries.
 //!
 //! [`RenderProgress`] is the one member that is NEITHER — no serde, and it
 //! never enters a take. It is counted off the renderer subprocess's stdout and

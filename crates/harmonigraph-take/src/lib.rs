@@ -17,7 +17,7 @@
 //! One RON-encoded [`Record`] per line, appendable and streamable:
 //!
 //! ```text
-//! Header((version:4,sample_rate:48000.0,...))
+//! Header((version:5,sample_rate:48000.0,...))
 //! Note((t:0.5,source:0,channel:0,note:60,kind:On(velocity:0.8)))
 //! Param((t:0.0,id:"pitch-class-fade",value:2.0))
 //! ```
@@ -52,8 +52,9 @@ use serde::{Deserialize, Serialize};
 /// scope; version 2 lacked resolved configuration boundaries; version 3 lacked
 /// canonical baselines, sample provenance and publication gaps. Refusing an old
 /// header prevents its final record from looking like an interrupted write.
+/// Version 4 carried full editor persistence instead of dedicated appearance.
 /// There are no compatibility shims.
-pub const FORMAT_VERSION: u32 = 4;
+pub const FORMAT_VERSION: u32 = 5;
 
 /// Conventional file extension. Not enforced anywhere.
 pub const EXTENSION: &str = "take";
@@ -69,14 +70,9 @@ pub struct Header {
     /// host told us. Lets the take be lined up against a bounced WAV that
     /// starts somewhere else.
     pub start_samples: Option<u64>,
-    /// The shell's UI state blob (`SharedState::save_persist`) as of the
-    /// recording: view settings, camera, spectrum/roll config. This is
-    /// what makes a replay *look* like what was on screen.
-    ///
-    /// In the plugin this is only up to date if the editor window was
-    /// closed before the project was saved — the same trap
-    /// `read-plugin-state.py` documents.
-    pub ui_state: Option<String>,
+    /// Opaque serialized appearance at capture start. The UI owns its schema;
+    /// take/record transport it without depending on UI or graphics types.
+    pub appearance: Option<String>,
     /// Editor size in logical points when recorded, as a hint for
     /// choosing the render aspect ratio.
     pub window_points: Option<(f32, f32)>,
@@ -101,7 +97,7 @@ impl Default for Header {
             version: FORMAT_VERSION,
             sample_rate: 48_000.0,
             start_samples: None,
-            ui_state: None,
+            appearance: None,
             window_points: None,
             source: String::new(),
             audio_file: None,
@@ -572,7 +568,7 @@ mod tests {
         let header = Header {
             sample_rate: 44_100.0,
             start_samples: Some(1024),
-            ui_state: Some("(some:\"ron\")".into()),
+            appearance: Some("(some:\"ron\")".into()),
             window_points: Some((1000.0, 700.0)),
             source: "test".into(),
             ..Default::default()
@@ -627,7 +623,7 @@ mod tests {
         let take = round_trip("round-trip");
         assert_eq!(take.header.sample_rate, header.sample_rate);
         assert_eq!(take.header.start_samples, header.start_samples);
-        assert_eq!(take.header.ui_state, header.ui_state);
+        assert_eq!(take.header.appearance, header.appearance);
         assert_eq!(take.header.window_points, header.window_points);
         assert_eq!(take.notes().collect::<Vec<_>>(), notes);
         assert_eq!(take.params, params);
@@ -894,7 +890,7 @@ mod tests {
 
     #[test]
     fn an_old_header_is_refused_before_a_final_record_can_look_truncated() {
-        for version in [0, 1, 2, 3] {
+        for version in 0..FORMAT_VERSION {
             for last in ["Note((t:0.0,channel:0,note:60,kind:On((velocity:0.8))))", "Note((t:"] {
                 let text = format!("Header((version:{version},sample_rate:48000.0))\n{last}");
                 let error = Take::parse(std::io::Cursor::new(text)).unwrap_err();

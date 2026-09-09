@@ -67,7 +67,7 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // rather than nothing, which against the panel reads as holes punched
     // through the lattice: a picture worth being able to reach, and worth
     // reaching by dragging rather than by falling off the end.
-    ValueBar::new(&mut state.view.lattice_ground, 0.0..=100.0, "Idle ring brightness")
+    ValueBar::new(&mut state.appearance.view.lattice_ground, 0.0..=100.0, "Idle ring brightness")
         .unit(1.0, "%")
         // L*, the units the gradients' own Brightness is authored in, so a
         // ground and a gradient can be compared by their numbers. Whole
@@ -86,7 +86,7 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     //
     // No off position, for the bar above's reason: Arm length at 0 is the
     // marker field's own switch, and every setting of this one draws.
-    ValueBar::new(&mut state.view.marker_ink, 0.0..=100.0, "Idle label brightness")
+    ValueBar::new(&mut state.appearance.view.marker_ink, 0.0..=100.0, "Idle label brightness")
         .unit(1.0, "%")
         // Whole points on the same L* axis as Ground, and that IS the point of
         // the units: two bars a person is meant to read against each other
@@ -104,7 +104,7 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // rings stand around can be read off the numbers rather than by eye.
     edge_bar(
         ui,
-        (&mut state.view.plus_arm, &mut state.view.plus_taper),
+        (&mut state.appearance.view.plus_arm, &mut state.appearance.view.plus_taper),
         PLUS_SIZE_MAX,
         "Cross length",
         {
@@ -128,7 +128,7 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // with the screen-constant band every edge here carries, so the bottom of
     // this bar is the thinnest cross the screen can draw. What takes the field
     // away is the bar above.
-    ValueBar::new(&mut state.view.plus_width, 0.0..=PLUS_SIZE_MAX, "Cross width")
+    ValueBar::new(&mut state.appearance.view.plus_width, 0.0..=PLUS_SIZE_MAX, "Cross width")
         .percent()
         .show(ui)
         .on_hover_text(

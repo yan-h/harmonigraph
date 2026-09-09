@@ -16,7 +16,7 @@ pub(super) fn color_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
     // over. Both feed the one table every pitch-colored shape reads, so a
     // change here repaints the discs, the octave glyphs, the trail and the
     // piano roll together.
-    spectrum_group(ui, &mut state.view);
+    spectrum_group(ui, &mut state.appearance.view);
     super::param_range_bar(
         ui,
         params,
@@ -32,7 +32,7 @@ pub(super) fn color_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
                  Drag an end to resize, or the middle to shift both.",
     );
     section(ui, "Audio level colors");
-    spectrogram_gradient_group(ui, &mut state.spectrum_config);
+    spectrogram_gradient_group(ui, &mut state.appearance.spectrum);
 }
 
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
