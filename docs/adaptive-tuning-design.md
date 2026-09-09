@@ -13,6 +13,19 @@ Read their expected outcomes as musical targets to reproduce under explicitly st
 The explicitly immutable prohibition on automatic retuning of sounding notes is unchanged.
 Do not satisfy the examples with chord-specific exceptions; first test whether a small coherent family of scoring rules and settings can express them.
 
+## Guiding principle: few hard rules, tunable shared heuristics
+
+Yan explicitly prefers few hard rules and a simple combination of heuristics that can be adjusted to produce intuitive outcomes.
+This is the governing design direction, not a request to encode a hierarchy of mandatory decisions for every toy example.
+Treat sounding-note attraction, release recency, register relationships and precise input as influences in the shared selection mechanism where possible.
+Words such as “precedence” in the examples describe desired musical influence; they do not by themselves require lexicographic priorities that defeat every other consideration.
+
+The explicitly agreed fixed adaptive correction and hard exclusion of harmonically remote candidates remain structural constraints.
+Within eligible candidates, seek a small shared score or comparably simple heuristic combination, with parameters explaining changes in behaviour.
+The number of heuristic terms need not equal the number of exposed controls; keep both understandable.
+Specific chord names and example identities must not become branches in that mechanism.
+If satisfying an example demands a new special rule, present the tradeoff to Yan and consider revising or dropping the example instead.
+
 ## Musical objective
 
 Allow indefinite travel through a just-intonation lattice using locally sensible harmonic steps, even when the controller repeats a fixed set of pitches.
@@ -154,7 +167,8 @@ The capacity may be configurable; its value and accounting for held versus relea
 **This is explicitly a temporary simplification.** Yan wants to move away from this fixed recent-note scheme eventually, toward a more musically informed replacement policy.
 Do not turn the initial capacity rule into a permanent musical contract or implement the more elaborate successor before it is designed.
 
-Sounding notes take precedence over released memory; a sounding counterpart is a preference subject to the revised precision and parameter rules, not an unconditional pitch-class lock.
+Sounding notes should have stronger influence than released memory; a sounding counterpart is a preference subject to the revised precision and parameter rules, not an unconditional pitch-class lock.
+Express that influence through the shared heuristics rather than assume an absolute held-versus-released decision hierarchy.
 The formal weighting and interaction with harmonic and register distance remain open.
 A sustained bass may keep the neighbourhood nearby or be left behind by the newer harmony, depending on the sequence of notes and harmonic heuristics.
 Yan accepts either outcome; do not impose a universal pedal anchor or universal escape rule.
