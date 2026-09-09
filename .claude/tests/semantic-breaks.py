@@ -160,6 +160,39 @@ class SemanticBreaksTests(unittest.TestCase):
             self.assertEqual(write.returncode, 0, write.stderr)
             self.assertEqual(write.stdout, "")
 
+    def test_cli_warns_until_new_markdown_is_staged(self):
+        with tempfile.TemporaryDirectory(prefix="semantic-breaks-") as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q", tmp], check=True)
+            (root / "new doc.md").write_text("Broken\nprose.\n")
+            (root / ".gitignore").write_text("ignored.md\n")
+            (root / "ignored.md").write_text("Broken\nprose.\n")
+            (root / "vendor").mkdir()
+            (root / "vendor/upstream.md").write_text("Broken\nprose.\n")
+
+            def run(mode):
+                return subprocess.run(
+                    [sys.executable, "-B", str(SCRIPT), mode],
+                    cwd=tmp, text=True, capture_output=True,
+                )
+
+            for mode in ("--check", "--write"):
+                result = run(mode)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("untracked Markdown skipped: new doc.md", result.stderr)
+                self.assertIn("git add", result.stderr)
+                self.assertNotIn("ignored.md", result.stderr)
+                self.assertNotIn("upstream.md", result.stderr)
+                self.assertEqual((root / "new doc.md").read_text(), "Broken\nprose.\n")
+            help_result = run("--help")
+            self.assertEqual(help_result.returncode, 0)
+            self.assertIn("Untracked Markdown is skipped", help_result.stdout)
+            subprocess.run(["git", "add", "new doc.md"], cwd=tmp, check=True)
+            result = run("--check")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("new doc.md:1:", result.stderr)
+            self.assertNotIn("untracked Markdown", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
