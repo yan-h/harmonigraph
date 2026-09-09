@@ -49,7 +49,7 @@ pub fn deadline_text(status: u32, misses: u64) -> String {
             .to_owned();
     }
     if misses == 0 {
-        return "Every note was corrected".to_owned();
+        return "No missed correction deadlines".to_owned();
     }
     if misses == 1 {
         return "1 note sounded uncorrected - raise the delay and play again".to_owned();

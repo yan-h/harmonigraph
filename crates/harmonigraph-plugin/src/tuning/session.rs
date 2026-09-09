@@ -22,7 +22,8 @@ pub const NO_ROW: u32 = 1 << 2;
 /// A copy did not fit in the ring, so the Hub never saw that input.
 pub const RING_FULL: u32 = 1 << 3;
 /// The host is not supplying a usable steady sample timeline, which is the one
-/// thing that lets two tracks be ordered against each other.
+/// thing that lets two tracks be ordered against each other. The wrapper
+/// rejects such callback input; this status does not imply raw passthrough.
 pub const CLOCK: u32 = 1 << 4;
 /// The policy refused an evaluation — too much context, too many candidates,
 /// coordinate exhaustion. That onset sounds uncorrected.
@@ -30,8 +31,8 @@ pub const POLICY: u32 = 1 << 5;
 /// A display or take lane lost a report.
 pub const PUBLICATION: u32 = 1 << 6;
 /// A bounded store was full and an event was dropped outright: the delay line,
-/// the held set, or a value the wrapper refused. Unlike every other bit here
-/// this one costs a note rather than a correction, so it is named separately.
+/// the held set, or a value the wrapper refused. Local refusal costs the input;
+/// Hub-only refusal costs its assignment while the Tune still emits raw.
 pub const DROPPED: u32 = 1 << 7;
 
 pub fn status_text(status: u32) -> String {
@@ -40,17 +41,17 @@ pub fn status_text(status: u32) -> String {
         (SECOND_HUB, "a second Harmonigraph is loaded"),
         (NO_ROW, "all sixteen Tune rows are held"),
         (RING_FULL, "the copy queue is full"),
-        (CLOCK, "the host supplies no steady sample timeline"),
+        (CLOCK, "invalid host steady time; callback input was refused"),
         (POLICY, "the policy refused an evaluation"),
         (PUBLICATION, "the display or take lane lost a report"),
-        (DROPPED, "a retained event did not fit and was dropped"),
+        (DROPPED, "an event or assignment was dropped"),
     ];
     let named: Vec<_> =
         reasons.iter().filter(|(bit, _)| status & bit != 0).map(|(_, why)| *why).collect();
     if named.is_empty() {
         return "No faults".to_owned();
     }
-    format!("Notes pass through uncorrected: {}", named.join(", "))
+    format!("Tuning status: {}", named.join(", "))
 }
 
 /// One copied input record. Everything the Hub needs to order and assign this

@@ -144,6 +144,15 @@ fn hub_wrapper(device: &Device) -> &nice_plug::wrapper::clap::Wrapper<crate::Har
 fn inspect_hub<R>(device: &Device, f: impl FnOnce(&hub::Hub) -> R) -> R {
     hub_wrapper(device).test_inspect_plugin(|plugin| f(plugin.aggregation.as_ref().unwrap()))
 }
+fn inspect_tune<R>(device: &Device, f: impl FnOnce(&tune::Tune) -> R) -> R {
+    assert!(device.tuner);
+    let wrapper = unsafe {
+        &*((*device.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<plugin::HarmonigraphTune>>())
+    };
+    wrapper.test_inspect_plugin(|plugin| f(plugin.tune.as_ref().unwrap()))
+}
 fn transport(time: u32, tempo: f64) -> Input {
     let mut event: clap_event_transport = unsafe { std::mem::zeroed() };
     event.header = header::<clap_event_transport>(CLAP_EVENT_TRANSPORT, time);
@@ -895,32 +904,225 @@ fn the_display_shows_the_schedule_rather_than_the_input() {
     assert_eq!(onset.planned, Some(onset.sample));
 }
 
-/// A source at its held-voice ceiling refuses the note, and the policy must
-/// not go on scoring against one that never sounded. The fixture plays one
-/// more than `HELD_PER_SOURCE` so the refusal is actually reached.
+/// Both a cohort still wholly pending and a sounding set reach the actual
+/// 64-cell ceiling. Refused attacks reach neither the wire nor publication;
+/// every admitted voice keeps its frozen expression and cut ownership.
 #[test]
-fn an_onset_past_the_held_ceiling_leaves_no_context_behind_it() {
+fn an_onset_past_the_held_ceiling_is_refused_before_copy_and_output() {
+    use harmonigraph_take::{CanonicalRecord, NoteKind};
     let _scope = crate::test_scope::enter();
-    let mut pair = Pair::new();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    let mut tune = Device::new(true);
+    tune.activate();
+    let mut pair = Pair { hub, tune, raw: 0 };
     let input: Vec<_> =
         (0..HELD_PER_SOURCE + 1).map(|key| note(key as i32, 0, key as i16, 0, true)).collect();
-    pair.step(input);
-    pair.idle();
-    let held = inspect_hub(&pair.hub, |hub| hub.test_held(0));
-    assert_eq!(held, HELD_PER_SOURCE, "the fixture reaches the ceiling: {held}");
-    assert_ne!(pair.hub.shared().status() & session::DROPPED, 0);
-    // Release every voice the source did take. What is left in the policy's
-    // context afterwards is what the refused onset would have leaked.
-    let releases: Vec<_> =
-        (0..HELD_PER_SOURCE).map(|key| note(key as i32, 0, key as i16, 0, false)).collect();
-    pair.step(releases);
-    for _ in 0..2 {
-        pair.idle();
-    }
-    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), 0);
+    assert!(pair.step(input).is_empty());
     assert_eq!(
-        inspect_hub(&pair.hub, |hub| hub.test_context()),
-        0,
-        "the refused onset is not still being scored against"
+        inspect_tune(&pair.tune, |tune| (tune.held(), tune.pending(), tune.captured)),
+        (0, HELD_PER_SOURCE, HELD_PER_SOURCE as u64)
     );
+    let output = pair.idle();
+    let keys: Vec<_> =
+        output.iter().filter_map(|(_, e)| e.attack().map(|(_, _, key, _)| key)).collect();
+    assert_eq!(keys, (0..HELD_PER_SOURCE as u8).collect::<Vec<_>>());
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), HELD_PER_SOURCE);
+    pair.step(vec![note(65, 0, 65, 0, true)]);
+    assert!(pair.idle().is_empty(), "a full sounding set refuses the next onset too");
+    assert_eq!(inspect_tune(&pair.tune, |tune| tune.captured), HELD_PER_SOURCE as u64);
+    assert_ne!(pair.status() & session::DROPPED, 0);
+    let published: Vec<_> = capture
+        .display_events()
+        .into_iter()
+        .filter_map(|record| match record {
+            CanonicalRecord::Delta(delta) if matches!(delta.event.kind, NoteKind::On { .. }) => {
+                Some(delta.event.note)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(published, keys, "only admitted attacks enter publication");
+    let (id, correction) = output
+        .iter()
+        .find_map(|(_, e)| match e {
+            Event::Expression { id, value, .. } if value.abs() > 0.001 => Some((*id, *value)),
+            _ => None,
+        })
+        .expect("the fixture must exercise a nonzero frozen correction");
+    pair.step(vec![expression(id, 0.25, 0)]);
+    assert!((tuning_of(&pair.idle()).unwrap() - (0.25 + correction)).abs() < 1e-9);
+    pair.tune.shared().request_reset();
+    pair.tune.main();
+    let cut = pair.idle();
+    let ended: Vec<_> = cut
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Event::Note { kind: 1, key, .. } => Some(*key as u8),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ended, keys, "every sounded voice is in the cut inventory");
+    assert_eq!(inspect_hub(&pair.hub, |hub| (hub.test_held(0), hub.test_context())), (0, 0));
+}
+
+/// The admission replay must use the same identity rules as emission, even
+/// before any onset has sounded: replacement ids, stale releases, wildcard
+/// addressing and both channel-ending controllers all run through real input.
+#[test]
+fn pending_retriggers_and_endings_reuse_held_capacity_in_wire_order() {
+    let _scope = crate::test_scope::enter();
+    for controller in [None, Some(120), Some(123)] {
+        let mut pair = Pair::new();
+        let mut input: Vec<_> =
+            (0..HELD_PER_SOURCE).map(|key| note(key as i32, 0, key as i16, 0, true)).collect();
+        let Input::Note(mut invalid_release) = note(1, 0, 1, 2, false) else { unreachable!() };
+        invalid_release.velocity = f64::NAN;
+        input.extend([
+            note(100, 0, 0, 1, true),
+            Input::Note(invalid_release),
+            note(0, 0, 0, 2, false),
+            note(200, 0, 64, 3, true),
+        ]);
+        input.push(match controller {
+            Some(cc) => raw_midi([0xb0, cc, 0], 4),
+            None => note(100, -1, -1, 4, false),
+        });
+        input.push(note(201, 0, 64, 5, true));
+        let expected_copies = input.len() - 2; // Invalid release and overflow attack.
+        pair.step(input);
+        assert_eq!(inspect_tune(&pair.tune, |tune| tune.captured), expected_copies as u64);
+        let output = pair.idle();
+        let ids: Vec<_> =
+            output.iter().filter_map(|(_, e)| e.attack().map(|(id, _, _, _)| id)).collect();
+        assert_eq!(ids, (0..HELD_PER_SOURCE as i32).chain([100, 201]).collect::<Vec<_>>());
+        assert!(output
+            .iter()
+            .any(|(time, e)| *time == 4 && (e.release() || e.channel_termination().is_some())));
+        let held = if controller.is_some() { 1 } else { HELD_PER_SOURCE };
+        assert_eq!(inspect_tune(&pair.tune, |tune| tune.held()), held);
+        assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), held);
+        assert_eq!(
+            inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, 64).unwrap().host_note_id),
+            201
+        );
+        pair.tune.host_reset();
+        let cut = pair.idle();
+        assert_eq!(cut.iter().filter(|(_, e)| e.release()).count(), held);
+        assert!(cut.iter().any(|(_, e)| matches!(e, Event::Note { kind: 1, id: 201, .. })));
+    }
+}
+
+/// Losing a release copy can leave the Hub at capacity after the Tune has
+/// room. The Hub must refuse before sending a correction or changing context;
+/// the locally admitted note still sounds raw and retains cut ownership.
+#[test]
+fn a_full_hub_refuses_assignment_before_replying_to_a_locally_admitted_note() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    let mut tune = Device::new(true);
+    tune.activate();
+    let mut pair = Pair { hub, tune, raw: 0 };
+    pair.step((0..HELD_PER_SOURCE).map(|key| note(key as i32, 0, key as i16, 0, true)).collect());
+    assert_eq!(pair.idle().iter().filter(|(_, e)| e.attack().is_some()).count(), HELD_PER_SOURCE);
+    let mut input: Vec<_> = (0..CAPTURE_RING).map(|_| raw_midi([0xb0, 20, 0], 0)).collect();
+    input.push(note(0, 0, 0, 1, false));
+    pair.step(input);
+    let mut output = Vec::new();
+    for _ in 0..6 {
+        output.extend(pair.idle());
+    }
+    assert!(output.iter().any(|(_, e)| matches!(e, Event::Note { kind: 1, id: 0, .. })));
+    assert_eq!(inspect_tune(&pair.tune, |tune| tune.held()), HELD_PER_SOURCE - 1);
+    assert_eq!(
+        inspect_hub(&pair.hub, |hub| (hub.test_held(0), hub.test_context())),
+        (HELD_PER_SOURCE, HELD_PER_SOURCE)
+    );
+    capture.display_events();
+    pair.step(vec![note(64, 0, 64, 0, true)]);
+    let output = pair.idle();
+    assert_eq!(output.len(), 1, "no correction reply accompanies the locally tracked onset");
+    assert_eq!(output[0].1.attack().map(|(id, _, _, _)| id), Some(64));
+    assert_eq!(pair.misses(), 1);
+    assert_ne!(pair.hub.shared().status() & session::DROPPED, 0);
+    assert_eq!(inspect_tune(&pair.tune, |tune| tune.held()), HELD_PER_SOURCE);
+    assert_eq!(
+        inspect_hub(&pair.hub, |hub| (hub.test_held(0), hub.test_context())),
+        (HELD_PER_SOURCE, HELD_PER_SOURCE)
+    );
+    assert!(capture.display_events().is_empty(), "the Hub does not publish a refused assignment");
+    pair.tune.host_reset();
+    let cut = pair.idle();
+    assert_eq!(cut.iter().filter(|(_, e)| e.release()).count(), HELD_PER_SOURCE);
+    assert!(cut.iter().any(|(_, e)| matches!(e, Event::Note { kind: 1, id: 64, .. })));
+    assert!(!cut.iter().any(|(_, e)| matches!(e, Event::Note { kind: 1, id: 0, .. })));
+}
+
+/// Fill the real 8192-entry line across callbacks while the Hub drains each
+/// 1024-entry copy ring. Neither a new onset nor an existing voice's release
+/// may leak to Hub state/publication when local retention fails.
+#[test]
+fn a_full_local_line_refuses_onset_and_release_before_copying() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    let mut tune = Device::new(true);
+    tune.activate();
+    tune.run(0, vec![tune.param_event(DELAY_PARAM, 15.0, 0)], None);
+    tune.reactivate_format(48000.0, 512);
+    assert_eq!(tune.latency(), 16 * 512);
+    let mut pair = Pair { hub, tune, raw: 512 };
+    pair.step(vec![note(1, 0, 60, 0, true)]);
+    let mut sounding = Vec::new();
+    for _ in 0..16 {
+        sounding.extend(pair.idle());
+    }
+    assert_eq!(sounding.iter().filter(|(_, e)| e.attack().is_some()).count(), 1);
+    capture.display_events();
+    assert_eq!(PENDING_EVENTS % CAPTURE_RING, 0);
+    for _ in 0..PENDING_EVENTS / CAPTURE_RING {
+        assert!(pair
+            .step((0..CAPTURE_RING).map(|_| raw_midi([0xb0, 20, 0], 0)).collect())
+            .is_empty());
+    }
+    assert_eq!(inspect_tune(&pair.tune, |tune| tune.pending()), PENDING_EVENTS);
+    assert_eq!(pair.status() & session::RING_FULL, 0, "the Hub ring is not the ceiling reached");
+    let copied = inspect_tune(&pair.tune, |tune| tune.captured);
+    pair.step(vec![note(2, 0, 64, 0, true), note(1, 0, 60, 1, false)]);
+    assert_eq!(
+        inspect_tune(&pair.tune, |tune| (tune.pending(), tune.captured)),
+        (PENDING_EVENTS, copied)
+    );
+    assert_ne!(pair.status() & session::DROPPED, 0);
+    assert!(capture.display_events().is_empty(), "neither refusal publishes an onset or release");
+    assert!(inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, 60)).is_some());
+    assert!(inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, 64)).is_none());
+    let mut output = Vec::new();
+    for _ in 0..64 {
+        output.extend(pair.idle());
+    }
+    assert_eq!(inspect_tune(&pair.tune, |tune| tune.pending()), 0);
+    assert_eq!(output.len(), PENDING_EVENTS, "all locally admitted controllers drain");
+    assert!(output.iter().all(|(_, e)| matches!(e, Event::Midi { data: [0xb0, 20, 0], .. })));
+    pair.tune.host_reset();
+    let cut = pair.idle();
+    assert_eq!(cut.iter().filter(|(_, e)| e.release()).count(), 1);
+    assert!(cut.iter().any(|(_, e)| matches!(e, Event::Note { kind: 1, id: 1, .. })));
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), 0);
+}
+
+/// Missing steady time is rejected at the exported CLAP process boundary;
+/// calling Tune::begin directly would miss the wrapper's input refusal.
+#[test]
+fn missing_steady_time_rejects_the_callback_before_note_admission() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    let output = pair.tune.run_status(-1, vec![note(1, 0, 60, 0, true)], None, None, 64, true);
+    assert!(output.values.is_empty());
+    assert_eq!(inspect_tune(&pair.tune, |tune| (tune.pending(), tune.captured)), (0, 0));
+    assert_ne!(pair.status() & session::CLOCK, 0);
+    pair.idle();
+    assert!(pair.idle().is_empty(), "the invalid callback did not retain raw output for later");
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0);
 }

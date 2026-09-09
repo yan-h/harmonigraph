@@ -291,10 +291,9 @@ impl Tune {
         }
     }
 
-    /// Copy the input to the Hub and keep it until its time comes. Both halves
-    /// happen here, so an input that reaches the line always reached the ring
-    /// too, unless the ring was full — which is the one case that costs a
-    /// correction rather than a note.
+    /// Retain the input locally before exposing it to the Hub. A full local
+    /// line refuses the event on both paths; a full copy ring costs only the
+    /// correction, because the event already has its place in the line.
     pub fn input(&mut self, input: OwnedInput) {
         // `clap_performance_stop` is the audio engine stopping, not the
         // transport. A transport Stop reaches a plugin only as this flag, so
@@ -323,6 +322,14 @@ impl Tune {
         let (Some(sample), Some(event)) = (input.sample, Event::from_input(input.value)) else {
             return;
         };
+        // Admission may rely on a queued release freeing a cell. Use the
+        // output boundary's validator now, so that release cannot later be
+        // discarded by Group construction after it made room for an onset.
+        if api::Group::single(api::Token([0; 4]), api::Lane::Normal, 0, event.input()).is_err() {
+            self.status |= session::DROPPED;
+            self.dropped += 1;
+            return;
+        }
         self.serial += 1;
         let serial = self.serial;
         let due = sample.saturating_add(self.delay);
@@ -330,6 +337,20 @@ impl Tune {
         if onset {
             self.notes_in += 1;
         }
+        // Do not replay a full line for a note it cannot retain anyway.
+        if self.line.len() == PENDING_EVENTS || onset && !self.can_hold(event) {
+            self.status |= session::DROPPED;
+            self.dropped += 1;
+            return;
+        }
+        let pending =
+            Pending { due, serial, event, awaiting: false, correction: None, player: 0.0 };
+        if self.line.push(pending).is_err() {
+            self.status |= session::DROPPED;
+            self.dropped += 1;
+            return;
+        }
+        let position = self.line.position(self.line.len() - 1).unwrap();
         let asking = self.asking();
         let copied = asking && self.copy(Capture { epoch: self.epoch, serial, sample, event });
         if asking && !copied {
@@ -341,19 +362,26 @@ impl Tune {
                 self.misses += 1;
             }
         }
-        let pending = Pending {
-            due,
-            serial,
-            event,
-            awaiting: onset && copied,
-            correction: None,
-            player: 0.0,
-        };
-        if self.line.push(pending).is_err() {
-            self.status |= session::DROPPED;
-            return;
-        }
+        self.line.set(position, Pending { awaiting: onset && copied, ..pending });
         self.bind_initial_tuning(due, event);
+    }
+
+    /// Refuse an onset before either path sees it if its eventual wire
+    /// position has no identity cell. Pending releases and channel endings
+    /// free cells; retriggers replace them. This is scratch, not a second
+    /// authority: it replays the actual held reducer in FIFO emission order.
+    fn can_hold(&self, event: Event) -> bool {
+        // Even if every pending event adds a voice, this cannot fill the set.
+        // Ordinary phrases therefore do not need to replay their delay line.
+        if self.held() + self.line.len() < HELD_PER_SOURCE {
+            return true;
+        }
+        let mut held = self.held;
+        for offset in 0..self.line.len() {
+            let pending = self.line.at(self.line.position(offset).unwrap()).unwrap();
+            Self::track_voice(&mut held, pending.event, 0);
+        }
+        Self::track_voice(&mut held, event, 0)
     }
 
     /// A per-note pitch expression at its own note's sample is the value that
@@ -556,36 +584,13 @@ impl Tune {
     /// The held set and the pedal state, which is the whole of what the cut
     /// needs. It follows what was actually emitted, never what was planned.
     fn track(&mut self, event: Event, correction: i64) {
-        if let Some((id, channel, key, _)) = event.attack() {
+        let retained = Self::track_voice(&mut self.held, event, correction);
+        debug_assert!(retained, "onsets reserve held capacity before admission");
+        if event.attack().is_some() {
             self.notes_out += 1;
-            let cell = self
-                .held
-                .iter()
-                .position(|held| held.is_some_and(|v| v.channel == channel && v.key == key))
-                .or_else(|| self.held.iter().position(Option::is_none));
-            if let Some(cell) = cell {
-                self.held[cell] = Some(Voice { id, channel, key, correction });
-            } else {
-                self.status |= session::DROPPED;
-            }
-            return;
-        }
-        if event.release() {
-            if let Some(cell) = self.held.iter_mut().find(|cell| {
-                cell.is_some_and(|voice| event.matches(voice.id, voice.channel, voice.key))
-            }) {
-                *cell = None;
-            }
         }
         if let Event::Midi { port: 0, data, .. } = event {
             let channel = data[0] & 15;
-            if event.channel_termination().is_some() {
-                for cell in self.held.iter_mut() {
-                    if cell.is_some_and(|voice| voice.channel == channel) {
-                        *cell = None;
-                    }
-                }
-            }
             if data[0] & 0xf0 == 0xb0 {
                 if let Some(bit) = PEDALS.iter().position(|cc| *cc == data[1]) {
                     let mask = 1 << bit;
@@ -597,6 +602,45 @@ impl Tune {
                 }
             }
         }
+    }
+
+    /// The identity/correction reducer shared by emission and admission.
+    /// False means an attack cannot be retained; no other event needs a cell.
+    fn track_voice(
+        held: &mut [Option<Voice>; HELD_PER_SOURCE],
+        event: Event,
+        correction: i64,
+    ) -> bool {
+        if let Some((id, channel, key, _)) = event.attack() {
+            let cell = held
+                .iter()
+                .position(|held| held.is_some_and(|v| v.channel == channel && v.key == key))
+                .or_else(|| held.iter().position(Option::is_none));
+            if let Some(cell) = cell {
+                held[cell] = Some(Voice { id, channel, key, correction });
+            } else {
+                return false;
+            }
+            return true;
+        }
+        if event.release() {
+            if let Some(cell) = held.iter_mut().find(|cell| {
+                cell.is_some_and(|voice| event.matches(voice.id, voice.channel, voice.key))
+            }) {
+                *cell = None;
+            }
+        }
+        if let Event::Midi { port: 0, data, .. } = event {
+            let channel = data[0] & 15;
+            if event.channel_termination().is_some() {
+                for cell in held.iter_mut() {
+                    if cell.is_some_and(|voice| voice.channel == channel) {
+                        *cell = None;
+                    }
+                }
+            }
+        }
+        true
     }
 
     pub fn end(&mut self) {
