@@ -65,11 +65,10 @@ fn footprint_resampling_returns_db_for_average_interpolation_and_silence() {
 /// text labelling the axis it is drawn against.
 ///
 /// Both ends of the zoom are pinned, because both are claims: at the whole
-/// axis a name is exactly the size it was dialled at, so nothing about the
-/// default view changes, and at the tightest range the analyzer offers it
-/// is five times that — the axis being ten octaves and the floor two, and
-/// the law being a constant share of the axis rather than some softened
-/// fraction of one.
+/// axis a name is exactly the size it was dialled at, and at the tightest
+/// range the analyzer offers it is five times that — the axis being ten
+/// octaves and the floor two, and the law being a constant share of the axis
+/// rather than some softened fraction of one.
 #[test]
 fn names_follow_the_pitch_zoom_and_markings_hold_still() {
     let cfg = SpectrumConfig::default();
@@ -81,15 +80,20 @@ fn names_follow_the_pitch_zoom_and_markings_hold_still() {
     let pixel = 0.5 / (names::LABEL_PT * 2.0);
 
     let full = at(FULL_PITCH_SPAN).names.label;
-    assert!((full - 1.0).abs() <= pixel, "the whole axis draws names at {full}, not 1");
+    assert!(
+        (full - cfg.note_name_scale).abs() <= pixel,
+        "the whole axis draws names at {full}, not {}",
+        cfg.note_name_scale,
+    );
     let tightest = at(crate::PITCH_RANGE_MIN_SPAN).names.label;
     assert!(
-        (tightest - FULL_PITCH_SPAN / crate::PITCH_RANGE_MIN_SPAN).abs() <= pixel,
+        (tightest - cfg.note_name_scale * FULL_PITCH_SPAN / crate::PITCH_RANGE_MIN_SPAN).abs()
+            <= pixel,
         "the tightest range draws names at {tightest}, not in proportion to its zoom",
     );
     // Monotone in between, and never under the size it started at: the
     // reference is the widest range there is, so the only way is up.
-    let mut previous = 0.0;
+    let mut previous = cfg.note_name_scale;
     for span in [FULL_PITCH_SPAN, 96.0, 60.0, 36.0, crate::PITCH_RANGE_MIN_SPAN] {
         let names = at(span).names.label;
         assert!(names >= previous, "{span} semitones drew smaller names than the span above");
@@ -1193,17 +1197,22 @@ fn a_collapsed_range_rules_nothing() {
 fn pane_label_room(rect: egui::Rect, cfg: &SpectrumConfig) -> f32 {
     let axes = Axes::new(rect, cfg);
     let ctx = egui::Context::default();
+    // Measure the Iosevka numerals the pane actually uses, rather than egui's
+    // wider bundled monospace fallback.
+    crate::theme::apply_theme(&ctx);
     let mut room = 0.0;
     let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
         let painter = ui.painter();
-        // The span reaches only the note names, which this discards; a level
-        // number is set in the markings, and those are the pane's alone.
+        // The span reaches only the note names, which this discards; a
+        // level number is set in the markings, and those are the pane's
+        // alone.
         //
         // Ordered the way the pane orders it, and not by the raw pair: an
-        // inverted or collapsed range reaches the pane as `PITCH_RANGE_MIN_SPAN`
-        // and would reach this as a zero or negative span, which is a different
-        // markings scale and so a different font — the stand-in this helper
-        // exists to remove, put back where the range is degenerate.
+        // inverted or collapsed range reaches the pane as
+        // `PITCH_RANGE_MIN_SPAN` and would reach this as a zero or negative
+        // span, which is a different markings scale and so a different
+        // font — the stand-in this helper exists to remove, put back where
+        // the range is degenerate.
         let span = cfg.high_midi.max(cfg.low_midi + crate::PITCH_RANGE_MIN_SPAN) - cfg.low_midi;
         let text = text_scales(cfg, &axes, span, painter.ctx().pixels_per_point());
         room =
@@ -1229,10 +1238,10 @@ fn numbered_db(cfg: &SpectrumConfig, level_len: f32, room: f32) -> Vec<f32> {
 /// FLOOR among them where it lands on one, and never the ceiling.
 #[test]
 fn the_volume_grid_rules_every_ten_decibels() {
-    // The default window (-60..-20) on an axis with comfortable room for a 10 dB
-    // step, so nothing is coarsened or subdivided — that is the next test. The
-    // floor is a ten and is ruled; the ceiling is a ten and is not, being the
-    // edge the picture already stops at.
+    // A representative -60..-20 window on an axis with comfortable room for a
+    // 10 dB step, so nothing is coarsened or subdivided — that is the next
+    // test. The floor is a ten and is ruled; the ceiling is a ten and is not,
+    // being the edge the picture already stops at.
     let cfg = level_cfg(-60.0, -20.0);
     assert_eq!(ruled_db(&cfg, 400.0, 60.0), vec![-60.0, -50.0, -40.0, -30.0]);
 
@@ -2149,7 +2158,10 @@ fn the_volume_rulings_cross_the_pitch_axis_under_the_spectrum() {
         // is the reference the painted one is compared against below, so a
         // second answer here is a reference to a different picture.
         let want = level_grid(&cfg, budget * axes.depth_len(), pane_label_room(rect, &cfg));
-        assert_eq!(want.len(), 4, "the default window is ruled in tens: -60, -50, -40, -30");
+        assert!(
+            want.len() >= 3,
+            "the default window drew too few rulings to test a grid: {want:?}",
+        );
 
         let (levels, slabs) = painted_levels(rect, cfg);
         assert_eq!(levels.len(), want.len(), "{orientation:?} ruled a different ladder");

@@ -2259,8 +2259,9 @@ mod tests {
     /// the box is pinned there until it has one (see
     /// [`a_sounding_note_is_floored_into_the_past_alone`]). A fixture straddling
     /// that crossover reads the transition as a snap and fails for a reason
-    /// that has nothing to do with rounding. At the default 180 s Span a point
-    /// is over a second, which puts the crossover a second in.
+    /// that has nothing to do with rounding. At the captured 72 s Span a point
+    /// is a fraction of a second, which puts the crossover shortly after the
+    /// note begins.
     #[test]
     fn a_scrolling_note_moves_sub_pixel_rather_than_in_whole_pixel_jumps() {
         let mut state = fresh();

@@ -1661,6 +1661,11 @@ mod tests {
     fn quantizing_a_bucket_does_not_move_its_colour() {
         use crate::panes::spectral::axes::{loudness_db, power_db};
         let mut cfg = SpectrumConfig::default();
+        // The curve and heatmap have independent windows in the composed
+        // defaults. This fixture makes them equal so the only difference under
+        // measurement is the heatmap store's byte quantization.
+        cfg.volume_floor_db = cfg.floor_db;
+        cfg.volume_ceiling_db = cfg.ceiling_db;
         let tolerance =
             0.5 * harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
         for tilt in [0.0, 3.0, -3.0] {
@@ -3409,7 +3414,14 @@ mod tests {
     /// gradient's colours under another's settings.
     #[test]
     fn the_lut_key_folds_two_gradients_that_draw_one_picture() {
-        let cfg = SpectrumConfig::default();
+        // Keep every gradient knob away from its clamp. The captured default
+        // spends the whole lightness axis, where moving its midpoint alone is
+        // correctly sanitized back to the same pair and would not exercise a
+        // changed picture.
+        let cfg = SpectrumConfig {
+            spectrogram_gradient: crate::SpectrogramPreset::Aurora.gradient(),
+            ..SpectrumConfig::default()
+        };
         let mut gpu = GpuGrid::default();
         // A table built for `c` alone, so a folded pair can be compared as
         // pixels rather than as keys.
@@ -4548,7 +4560,7 @@ mod tests {
             assert_eq!(
                 drawn(default, &mut headless)[..3],
                 [0, 0, 0],
-                "a -90 dB bucket is under the default -60 dB floor and must be black",
+                "a -90 dB bucket is under the captured default floor and must be black",
             );
             let dragged = SpectrumConfig { volume_floor_db: -120.0, ..default };
             let lit = drawn(dragged, &mut headless);

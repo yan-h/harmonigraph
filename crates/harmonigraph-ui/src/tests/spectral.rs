@@ -146,10 +146,14 @@ fn a_drag_over_the_spectrum_zooms_the_level_and_not_the_span() {
     // clamp at the ends of the axis.
     state.spectrum_config.low_midi = 48.0;
     state.spectrum_config.high_midi = 84.0;
+    // Give the spectrum enough depth for the outward drag to stay inside the
+    // pane. The captured default gives three quarters to the roll; this test
+    // is about which side owns the drag, not about the divider's default.
+    state.spectrum_config.roll_fraction = 0.55;
     let mut h = DockHarness::new();
     h.settle(&mut state);
 
-    // The spectrum owns 0..0.45 of the depth axis by default. Left runs depth
+    // The spectrum owns 0..0.45 of the depth axis in this fixture. Left runs depth
     // rightward with the baseline at the divider, so the curve grows LEFTWARD
     // and that is the way out of it.
     let grab = h.spectral_grab_at(&state, 0.2);

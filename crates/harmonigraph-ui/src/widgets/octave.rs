@@ -306,20 +306,14 @@ mod tests {
 
     /// Double-clicking the strip is the only way back to the stock wheel, so
     /// where it lands has to BE the stock wheel — not a pair that was the
-    /// stock wheel when the gesture was written. The fringe is the half that
-    /// goes wrong quietly: reset to zero extras and the two bars under the
-    /// strip gray out holding a size and a blend nothing is drawing, which
-    /// reads as the fringe knobs being unavailable rather than as the reset
-    /// having thrown the fringe away.
+    /// stock wheel when the gesture was written. Count and extras are asserted
+    /// as the pair, so a later retune cannot leave the reset pointing at half
+    /// of an old composition.
     #[test]
     fn a_double_click_goes_home_to_the_wheel_a_fresh_view_opens_with() {
         let fresh = ViewConfig::default();
         assert_eq!(reset_wheel(), (fresh.octave_count, fresh.octave_extras));
-        assert!(
-            reset_wheel().1 > 0,
-            "the stock wheel carries a fringe, so the reset must leave the \
-             Extra size and Extra blend bars live",
-        );
+        assert_eq!(reset_wheel(), (7, 0), "the stock wheel is seven full-size octaves");
     }
 
     /// Paint one octave strip across a 300pt row and return what it emitted.

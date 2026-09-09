@@ -566,14 +566,14 @@ fn a_blob_written_against_the_taper_keeps_what_it_still_says() {
     let mut restored = fresh();
     restored.load_persist(&tapered);
     assert_eq!(restored.view.octave_count, 7, "the count the blob names survives the taper keys");
-    // The fresh fringe as this count can hold it, not the fresh fringe raw:
-    // `sanitize` clamps the PAIR, and seven octaves leave room for two extras
-    // a side. Spelling the clamp out keeps this measuring the fallback rather
-    // than failing the day someone retunes the fresh fringe past what fits.
+    // The fresh extras as this count can hold them, not the fresh value raw:
+    // `sanitize` clamps the PAIR. Spelling the clamp out keeps this measuring
+    // the fallback rather than failing the day someone retunes the fresh
+    // extras past what fits.
     let (_, fits) = harmonigraph_scene::clamp_wheel(7, defaults.octave_extras);
     assert_eq!(
         restored.view.octave_extras, fits,
-        "and the fringe it is missing comes back at the fresh value, as the count can hold it",
+        "and the extras it is missing come back at the fresh value, as the count can hold them",
     );
     assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
 }
