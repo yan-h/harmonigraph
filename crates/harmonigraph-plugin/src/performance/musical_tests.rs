@@ -1496,6 +1496,101 @@ fn production_silence_and_stop_reset_settings_clear_only_the_musical_memory() {
 }
 
 #[test]
+fn production_loop_reset_survives_a_committed_reset_and_lower_host_clock() {
+    let _scope = crate::test_scope::enter();
+    let position = |seconds: i64| {
+        let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+        value.flags |= CLAP_TRANSPORT_HAS_SECONDS_TIMELINE;
+        value.song_pos_seconds = seconds * (1i64 << 31);
+        Input::Transport(value)
+    };
+    let chord = |phrase: &mut Phrase, key: i16| {
+        phrase.step(
+            [
+                vec![
+                    note(1, 0, key, 0, true),
+                    note(2, 0, key + 4, 1, true),
+                    note(3, 0, key + 7, 2, true),
+                ],
+                vec![],
+                vec![],
+            ],
+            [0, 1, 2],
+        );
+        for _ in 0..4 {
+            phrase.idle();
+        }
+        let node = phrase.voice(0, key as u8, 0).attack_node;
+        phrase.release_all();
+        node
+    };
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, Calibration { offset: 0 });
+    hub.activate_format(44100.0, 512);
+    configure(&hub, Tuning::just());
+    configure_policy(
+        &hub,
+        harmonigraph_core::configuration::PolicyConfig { reset_loop: true, ..Default::default() },
+    );
+    // DIRECT shares the musical reset frontier. Seed its high-raw loop before
+    // any Tunes are paired, so an idle CLAP Reset can commit synchronously.
+    hub.run_format(1_000_000, vec![position(10)], None, None, 512);
+    hub.run_format(1_000_512, vec![position(1), note(1, 0, 48, 1, true)], None, None, 512);
+    hub.run_format(1_001_024, vec![note(1, 0, 48, 0, false)], None, None, 512);
+    for step in 3..16 {
+        hub.run_format(1_000_000 + step * 512, vec![], None, None, 512);
+    }
+    let before = inspect_hub(&hub, |h| h.direct.test_snapshot().epoch);
+    assert!(inspect_hub(&hub, |h| h.direct.settled()));
+    unsafe { (*hub.plugin).reset.unwrap()(hub.plugin) };
+    assert!(inspect_hub(&hub, |h| h.direct.test_snapshot().epoch) > before);
+    let sources = std::array::from_fn(|_| {
+        let mut source = Device::new(true);
+        source.configure_format(uuid, true, Calibration { offset: 0 });
+        source.activate_format(44100.0, 512);
+        source
+    });
+    let mut phrase = Phrase { uuid, hub, sources, raw: 0, maximum: [0; 4] };
+    phrase.step(
+        std::array::from_fn(|_| [64, 66, 69].map(|cc| raw_midi([0xb0, cc, 0], 0)).into()),
+        [0, 1, 2],
+    );
+    for _ in 0..96 {
+        for source in &phrase.sources {
+            source.main();
+        }
+        phrase.hub.main();
+        phrase.idle();
+    }
+    assert!(phrase.sources.iter().all(|source| source.source_snapshot().epoch > before));
+    for root in [48, 52, 56] {
+        chord(&mut phrase, root);
+    }
+    assert!(phrase.raw < 1_000_000, "the second loop must have a lower raw identity");
+    phrase.step(std::array::from_fn(|_| vec![position(10)]), [0, 1, 2]);
+    phrase.step(std::array::from_fn(|_| vec![position(1)]), [2, 1, 0]);
+    assert_eq!(
+        chord(&mut phrase, 48),
+        Some(LatticePos::new(0, 0, 0)),
+        "the lower-raw loop clears new memory"
+    );
+    for root in [52, 56] {
+        chord(&mut phrase, root);
+    }
+    phrase.step([vec![], vec![note(5, 0, 48, 0, true)], vec![]], [1, 0, 2]);
+    for _ in 0..4 {
+        phrase.idle();
+    }
+    assert_eq!(
+        phrase.voice(1, 48, 0).attack_node,
+        Some(LatticePos::new(0, 3, 0)),
+        "another source must not repeat that reset"
+    );
+    phrase.release_all();
+}
+
+#[test]
 fn production_loop_reset_is_applied_once_across_sources_before_the_next_attack() {
     let _scope = crate::test_scope::enter();
     let position = |seconds: i64| {

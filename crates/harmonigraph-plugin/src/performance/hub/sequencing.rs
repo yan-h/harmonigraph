@@ -105,7 +105,7 @@ pub(super) struct Sequencer {
     /// authoritative sounding-note facts stay where they always were, in each
     /// row's `State`; this is the policy's context, not a second copy of them.
     context: Box<[Option<Voice>]>,
-    last_policy_reset: i64,
+    last_policy_reset: PolicyReset,
     memory: policy::Memory,
     last_release: Option<i64>,
     policy_config: policy::MusicalConfig,
@@ -145,7 +145,7 @@ impl Default for Sequencer {
             plan_count: 0,
             plan_work: 0,
             context: vec![None; HELD_SESSION].into_boxed_slice(),
-            last_policy_reset: i64::MIN,
+            last_policy_reset: PolicyReset::floor(0, 0),
             memory: Default::default(),
             last_release: None,
             policy_config: harmonigraph_core::configuration::ConfigReducer::default()
@@ -165,6 +165,15 @@ impl Default for Sequencer {
     }
 }
 impl Sequencer {
+    /// Only committed clock boundaries advance this shared identity. Retained
+    /// attacks keep their birth era and cannot reset the new context; healthy
+    /// calibration must not advance it or replay another source's old loop.
+    pub(super) fn adopt_policy_clock(&mut self, session: &SessionControl, restart: bool) {
+        let era = session.policy_era.load(Ordering::Acquire);
+        let era = if restart { era.saturating_add(1) } else { era };
+        self.last_policy_reset = PolicyReset::floor(session.runtime, era);
+        session.policy_era.store(era, Ordering::Release);
+    }
     /// The per-row half of giving a lease up. It lives here rather than on the
     /// `Row` because the sequencer indexes these by source -- DIRECT is zero
     /// and a Hub row is one past its own index -- and a fresh lease must not
@@ -951,7 +960,9 @@ impl Hub {
         // is never assigned.
         let player = self.batch.initial_tuning(record.lease.slot, record.lifetime).unwrap_or(0.0);
         let channel_pitch = record.channel_pitch;
-        if record.policy_reset > self.sequencer.last_policy_reset {
+        if record.policy_reset.session == self.sequencer.last_policy_reset.session
+            && record.policy_reset > self.sequencer.last_policy_reset
+        {
             if configuration.policy.reset_loop {
                 self.sequencer.memory.clear();
             }

@@ -108,6 +108,21 @@ pub struct Lease {
     pub slot: u8,
 }
 
+/// A musical loop identity, independent of calibration and ownership epochs.
+/// The Hub advances the era only when raw time may restart. An onset keeps
+/// its original identity even if it waits across that boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PolicyReset {
+    pub session: u64,
+    pub era: u64,
+    pub sample: i64,
+}
+impl PolicyReset {
+    pub const fn floor(session: u64, era: u64) -> Self {
+        Self { session, era, sample: i64::MIN }
+    }
+}
+
 /// One copied, self-contained input record. Everything the Hub needs to order
 /// and assign this input is here; nothing points back into Tune storage.
 ///
@@ -137,8 +152,8 @@ pub struct Capture {
     /// Original channel pitch at this attack, separate from per-note expression.
     pub channel_pitch: i64,
     /// Most recent loop/seek before this attack, in original host steady-time
-    /// samples, independent of calibration; MIN means none.
-    pub policy_reset: i64,
+    /// samples and its original clock era, independent of calibration.
+    pub policy_reset: PolicyReset,
 }
 pub const NO_REQUEST: u16 = u16::MAX;
 
@@ -450,6 +465,9 @@ pub struct SessionControl {
     pub faults: AtomicU32,
     pub alive: AtomicBool,
     pub epoch: AtomicU64,
+    /// Musical clock era, owned by the Hub. Healthy calibration preserves it;
+    /// committed Reset and host reactivation permit raw time to start over.
+    pub policy_era: AtomicU64,
     /// Zero is open. A pending hub setup generation fences new admission while
     /// the old epoch's complete output and recording routes finish.
     pub closing: AtomicU64,
@@ -490,15 +508,15 @@ pub fn bank() -> (Box<HubBank>, [Option<SourceEndpoints>; TUNERS]) {
 }
 
 const _: () = assert!(std::mem::size_of::<OutputDelta>() <= 128);
-// Two additional i64 values bind original channel pitch and a musical reset
-// frontier to the onset. The queue remains fixed-capacity and pointer-free.
-const _: () = assert!(std::mem::size_of::<Capture>() <= 112);
-const _: () = assert!(std::mem::size_of::<Option<Capture>>() <= 112);
-const _: () = assert!(std::mem::size_of::<Intent>() <= 128);
+// Original channel pitch and an era-qualified musical reset bind to the onset.
+// The queue remains fixed-capacity and pointer-free.
+const _: () = assert!(std::mem::size_of::<Capture>() <= 128);
+const _: () = assert!(std::mem::size_of::<Option<Capture>>() <= 128);
+const _: () = assert!(std::mem::size_of::<Intent>() <= 144);
 const _: () = assert!(std::mem::size_of::<Reply>() <= 256);
 const _: () = assert!(std::mem::size_of::<Control>() <= 256);
 // Hub windows and journals allocate Option payloads, not just the bare wire type.
 const _: () = assert!(std::mem::size_of::<Option<OutputDelta>>() <= 128);
-const _: () = assert!(std::mem::size_of::<Option<Intent>>() <= 128);
+const _: () = assert!(std::mem::size_of::<Option<Intent>>() <= 144);
 const _: () = assert!(std::mem::align_of::<Option<OutputDelta>>() <= 8);
 const _: () = assert!(std::mem::align_of::<Option<Intent>>() <= 8);

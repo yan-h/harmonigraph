@@ -123,7 +123,7 @@ pub(super) struct Life {
     pub(super) midi: bool,
     pub(super) adaptive: bool,
     pub(super) channel_pitch: i64,
-    pub(super) policy_reset: i64,
+    pub(super) policy_reset: PolicyReset,
     pub(super) assignment: Assignment,
     pub(super) assignment_held: bool,
     pub(super) note_off_owed: bool,
@@ -258,7 +258,7 @@ pub struct Source {
     stopping: bool,
     transport_playing: bool,
     policy_transport: Option<(i64, i64, bool)>,
-    policy_reset: i64,
+    policy_reset: PolicyReset,
     input_pitch: [harmonigraph_core::policy::channel::ChannelPitch; 16],
     producer_joined: bool,
     joined_published: bool,
@@ -467,7 +467,7 @@ impl Source {
             stopping: false,
             transport_playing: false,
             policy_transport: None,
-            policy_reset: i64::MIN,
+            policy_reset: PolicyReset::floor(0, 0),
             input_pitch: [Default::default(); 16],
             producer_joined: false,
             joined_published: false,
@@ -538,6 +538,7 @@ impl Source {
     /// reported under survives this boundary and the Hub grants only a
     /// contiguous accepted prefix.
     pub fn adopt_boundary_clock(&mut self) {
+        self.policy_transport = None;
         let coverage = self.clock.coverage;
         self.clock = Clock::new(self.clock.calibration, self.rate, self.max_frames);
         self.clock.coverage = coverage;
@@ -545,6 +546,7 @@ impl Source {
     }
     pub fn reset_idle_clock(&mut self, epoch: u64) {
         assert!(self.settled());
+        self.policy_transport = None;
         self.epoch = epoch;
         self.clock = Clock::new(self.clock.calibration, self.rate, self.max_frames);
         self.shared.publish_clock(&self.clock);
@@ -919,6 +921,13 @@ impl Source {
     /// later callback, so every refusal below is a latched fault rather than a
     /// request to be offered this value again.
     pub fn input(&mut self, input: OwnedInput) {
+        let scope = self.session().map_or((0, 0), |session| {
+            (session.runtime, session.policy_era.load(Ordering::Acquire))
+        });
+        if (self.policy_reset.session, self.policy_reset.era) != scope {
+            self.policy_transport = None;
+            self.policy_reset = PolicyReset::floor(scope.0, scope.1);
+        }
         if let InputValue::Parameter { id, value, modulation: false } = input.value {
             // Participation is the only parameter this class reads, and the id
             // is the only thing that says which one arrived: a stepped
@@ -955,7 +964,7 @@ impl Source {
                             transport.song_pos_seconds.saturating_sub(previous_position) as f64
                                 / (1u64 << 31) as f64;
                         if was_playing && playing && (position_change - elapsed).abs() > 0.002 {
-                            self.policy_reset = sample;
+                            self.policy_reset.sample = sample;
                         }
                     }
                     self.policy_transport = Some((sample, transport.song_pos_seconds, playing));
@@ -1318,6 +1327,7 @@ impl Source {
                 // Applying a valid calibration is not yet observed fresh
                 // callback coverage. Keep the visible latch until begin proves it.
                 self.reset_armed = true;
+                self.policy_transport = None;
             }
             self.shared.applied.store(update.generation, Ordering::Release);
             self.shared.publish_clock(&self.clock);
@@ -1361,6 +1371,9 @@ impl Source {
 
     pub fn commit_clock_setup(&mut self, update: setup::Update, epoch: u64) {
         assert!(self.direct.is_some() && self.transition_settled());
+        if update.reset {
+            self.policy_transport = None;
+        }
         self.clock = Clock::new(update.routing.calibration(), self.rate, self.max_frames);
         self.coverage = None;
         self.epoch = epoch;
@@ -3160,7 +3173,7 @@ impl Source {
             key: 0,
             adaptive: false,
             channel_pitch: 0,
-            policy_reset: i64::MIN,
+            policy_reset: PolicyReset::floor(0, 0),
         };
         let addressed = |base: Capture, kind: CaptureKind, index: u16, life: Life| Capture {
             kind,
@@ -3703,7 +3716,7 @@ impl Source {
 
 const _: () = assert!(super::capture::PendingStore::BACKING_CELL_BYTES <= 128);
 const _: () = assert!(std::mem::align_of::<Pending>() <= 8);
-const _: () = assert!(std::mem::size_of::<Option<Life>>() <= 256);
+const _: () = assert!(std::mem::size_of::<Option<Life>>() <= 272);
 const _: () = assert!(std::mem::align_of::<Option<Life>>() <= 8);
 const _: () = assert!(std::mem::size_of::<Option<Manifest>>() <= 256);
 const _: () = assert!(std::mem::align_of::<Option<Manifest>>() <= 8);

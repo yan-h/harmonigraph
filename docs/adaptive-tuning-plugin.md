@@ -53,6 +53,8 @@ With stop reset disabled, the ended notes remain recent context.
 Loop/seek detection compares the host's seconds timeline with elapsed sample time while playing.
 A discontinuity greater than two milliseconds tags subsequent attacks with its original sample.
 That boundary identity uses host steady time independently of source calibration, including across healthy epoch changes.
+It also carries its original session and musical clock generation.
+Committed resets and host reactivation advance that generation, so a restarted host clock can produce a new loop at a lower sample number, while retained attacks cannot replay a loop from the previous generation.
 With loop reset enabled, the first attack after that boundary clears released memory and displacement; other sources cannot reset it again for the same boundary.
 Held notes retain their frozen assignments.
 The host must supply a seconds timeline for this detection.

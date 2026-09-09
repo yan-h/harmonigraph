@@ -1,6 +1,6 @@
 //! Output debt: the obligations `output_settled` and `publish_seal` refuse to
 //! settle on while live, and that only accepted host output can discharge. Two
-//! kinds live here -- a per-channel reset (three pedals and the recenter) and
+//! kinds live here -- a per-channel reset (three pedals) and
 //! a per-lifetime emergency termination -- because they are the only ones a
 //! Source can acquire outside a callback.
 //!
@@ -14,14 +14,12 @@
 //! what the wire is left holding as evidence. Abandonment frees ownership;
 //! it does not assert host acceptance or downstream physical termination.
 //!
-//! Guarding one arming caller at a time is what this replaces. Three routes
-//! reach these fields after a destroy has begun -- `stop`, a participation
-//! marker's recenter, and `fault` both from the join itself and from a capture
-//! overflow inside the pump -- and each guarded route only moved the leak to
-//! the next one. Both fields are private to this module, so **no route can
+//! Guarding one arming caller at a time is what this replaces. Both `stop`
+//! and `fault` reach these fields after a destroy has begun, including faults
+//! from the join itself or a capture overflow inside the pump. Both fields
+//! are private to this module, so **no route can
 //! raise a pending reset bit or take a release slot except `arm` and
-//! `arm_release`**, which is what makes a fourth one impossible rather than
-//! merely absent: a new caller inherits the rule by construction. The other
+//! `arm_release`**: a new caller inherits the rule by construction. The other
 //! two writers can only move debt that is already here -- `stage` needs the
 //! pending bit and `complete` needs the staged one -- so neither is a mint.
 

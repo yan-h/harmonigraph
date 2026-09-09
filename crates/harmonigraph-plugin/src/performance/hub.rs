@@ -393,6 +393,7 @@ impl Hub {
             return;
         };
         self.direct.reset_idle_clock(clock.epoch);
+        self.sequencer.adopt_policy_clock(&offer.session, true);
         self.clock = Clock::new(self.clock.calibration, self.rate, self.max_frames);
         self.publication_clock = clock;
         self.publication_through = None;
@@ -499,6 +500,9 @@ impl Hub {
             // Reactivation is a host-owned boundary rather than a clock
             // failure: the members cancel and release through their own
             // `activate`, and this session adopts the new format outright.
+            if let Some(offer) = &self.offer {
+                self.sequencer.adopt_policy_clock(&offer.session, true);
+            }
             self.clock = Clock::new(self.clock.calibration, rate, frames);
             self.direct.activate(rate, frames, 0);
             self.anchor = None;
@@ -523,6 +527,7 @@ impl Hub {
         owner.recording.clock.runtime_session = offer.session.runtime;
         offer.session.epoch.store(owner.recording.clock.epoch, Ordering::Release);
         self.direct.attach_direct(offer.session.clone());
+        self.sequencer.adopt_policy_clock(&offer.session, false);
         return_slot.publish(offer.session.runtime);
         self.offer = Some(offer);
         self.shared.request_main();
@@ -621,6 +626,9 @@ impl Hub {
             return;
         }
         self.direct.commit_clock_setup(update, epoch);
+        if update.reset || self.invalidated {
+            self.sequencer.adopt_policy_clock(&offer.session, true);
+        }
         if self.invalidated && owner.reducer.resolved().policy.reset_loop {
             self.sequencer.reset_memory();
         }
