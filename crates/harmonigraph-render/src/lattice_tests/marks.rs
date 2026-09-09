@@ -24,10 +24,10 @@ fn a_melody_bass_mark_extends_the_slice_it_names() {
     eprintln!("node {node_px} px; mark {melody_px}");
     // A floor, not a target, measured against the node's whole lit
     // footprint (glow included). A mark is ONE octave's slice continued
-    // outward, so it claims a wedge rather than a ring — a fifth of the turn
-    // on the fresh five-octave wheel. What it catches is a strip that draws as
-    // nothing at all, which is a hairline in the DAW: well under 1% against
-    // the 15% the fresh thickness comes to here.
+    // outward, so it claims a wedge rather than a ring — a seventh of the turn
+    // on the fresh wheel. What it catches is a strip that draws as nothing at
+    // all, which is a hairline in the DAW: well under 1% against the 15% the
+    // fresh thickness comes to here.
     assert!(
         melody_px * 32 > node_px,
         "the mark covers too little of the node to find: \
@@ -86,7 +86,7 @@ fn the_audio_ring_reads_the_spectrum_around_each_octave() {
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    // Octaves the fresh wheel draws on a C node — five slices centered on
+    // Octaves the probe wheel draws on a C node — five slices centered on
     // middle C, so slots 3..=7. Middle C's own, the one above it (a known
     // rise in pitch, which is what calibrates the shot's handedness), and one
     // two below, far enough that a wedge at 72 degrees an octave is well clear

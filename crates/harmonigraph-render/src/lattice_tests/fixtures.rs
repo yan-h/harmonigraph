@@ -417,6 +417,17 @@ pub(super) fn solid_inked(bare: &[u8], inked: &[u8]) -> Vec<usize> {
 /// in, and so the one a mark can link back to.
 pub(super) const MIDDLE_C: u32 = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
 
+/// The angular fixture shared by the low-resolution pixel probes.
+///
+/// Five full slices leave each wedge wide enough for a 256 px shot to carry a
+/// meaningful interior and make a quarter-window detune resolve as 18 degrees.
+/// This is measurement geometry rather than the fresh look, so a later default
+/// capture must not silently shrink the fixtures until their asserted paths are
+/// no longer reached.
+pub(super) fn probe_octave_layout() -> harmonigraph_scene::OctaveLayout {
+    harmonigraph_scene::octave_layout(5, 60.0, 0, 1.0, 0.0)
+}
+
 /// Bloom must add light (halo energy over the bloom-off output) —
 /// and only when asked: strength 0 keeps the parity test above valid.
 /// One big centered node, sounding, with one octave slot lit: a clean
@@ -531,7 +542,7 @@ pub(super) fn slot_beside_middle_c() -> u32 {
 /// A BAND rather than a single bucket, and 40¢ rather than the 3.125¢ one
 /// bucket spans, because the measurement below is made in pixels: the ring is
 /// an annulus about 20 px from the node's centre in a 256 px shot, so a wedge
-/// of the fresh five-octave wheel is some 25 px of arc, and one bucket at the
+/// of the probe's five-octave wheel is some 25 px of arc, and one bucket at the
 /// probe's 200¢ Range would be an eighth of a pixel of it. Symmetric, so the
 /// lit arc's centroid is the band's own centre pitch whatever the Range.
 pub(super) const PARTIAL_HALF_CENTS: f32 = 40.0;
@@ -603,6 +614,7 @@ pub(super) const PROBE_RANGE: f32 = 200.0;
 pub(super) fn ringing_node(held: Option<usize>, sounding: Option<f32>, range: f32) -> Scene {
     let fresh = harmonigraph_scene::ViewConfig::default();
     let mut scene = single_marked_node(0, 0);
+    scene.octave_layout = probe_octave_layout();
     let node = &mut scene.nodes[0];
     node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
     // Fully present whatever is lit, so the band's ghost ring is the same in
