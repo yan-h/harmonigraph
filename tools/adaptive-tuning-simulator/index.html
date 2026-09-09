@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Adaptive tuning laboratory · Harmonigraph</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.mjs"></script>
+</head>
+<body>
+<main>
+  <header>
+    <div><p class="eyebrow">Harmonigraph / tuning laboratory</p><h1>Tuning, in motion.</h1>
+      <p class="intro">Explore how pitch, register and recent harmony shape a journey through just intonation.</p></div>
+    <div class="header-actions"><label class="check"><input id="sound" type="checkbox"> Sound</label><button id="theme" type="button">Light theme</button></div>
+  </header>
+  <div id="error" role="alert" hidden></div>
+  <section class="experiment" aria-label="Experiment">
+    <label class="experiment-picker">Musical example<select id="example"></select></label>
+    <div class="experiment-copy"><p id="description"></p><p id="expected" class="muted"></p></div>
+  </section>
+  <div class="workspace">
+    <aside>
+      <div class="section-heading"><h2>Heuristics</h2><button id="defaults" class="quiet" type="button">Example defaults</button></div>
+      <p class="muted small">Changing a parameter replays this experiment to the current step.</p>
+      <div id="main-controls"></div>
+      <details><summary>Neighbourhood & memory</summary><div id="extra-controls"></div>
+        <label class="field">Allowed steps<select id="axes"><option value="1">Fifths only · 3-limit</option><option value="2" selected>Fifths + thirds · 5-limit</option><option value="3">Fifths + thirds + sevenths · 7-limit</option></select></label>
+        <label class="field">Reset after silence (seconds)<input id="silence" type="number" min="0" max="120" step="0.5" value="0"><span class="muted small">0 = retain until reset or replacement</span></label>
+        <label class="check"><input id="reset-stop" type="checkbox"> Reset on stop</label>
+        <label class="check"><input id="reset-loop" type="checkbox"> Reset on loop</label>
+      </details>
+      <div class="model-note"><p class="eyebrow">One shared score</p><p>Pitch error + weighted lattice distance.</p><p class="muted small">Held notes, release recency and relative register set the context weights. Every onset advances the moving reference.</p><a href="README.md" target="_blank" rel="noopener">Read the model & limitations ↗</a></div>
+    </aside>
+    <div class="stage">
+      <section class="playback" aria-label="Playback controls">
+        <div class="play-buttons"><button id="restart" type="button" aria-label="Restart experiment">Restart</button><button id="step" type="button">Step</button><button id="play" class="primary" type="button">Play</button><button id="finish" type="button">Run to end</button></div>
+        <label class="speed">Step interval<select id="speed"><option value="180">Fast · 0.18 s</option><option value="450" selected>Medium · 0.45 s</option><option value="900">Slow · 0.90 s</option></select></label>
+        <div class="progress"><input id="scrub" aria-label="Experiment step" type="range" min="0" max="1" value="0"><output id="step-count">0 / 0</output></div>
+        <p id="event-label" class="event-label" aria-live="polite">Ready</p>
+      </section>
+      <section class="lattice-section" aria-label="Current harmonic neighbourhood">
+        <div class="section-heading"><h2>Current neighbourhood</h2><label class="slice" id="slice-field" hidden>Seventh layer<select id="slice"></select></label></div>
+        <div class="legend"><span><i class="mark held"></i>Sounding</span><span><i class="mark recent"></i>Remembered</span><span><i class="mark reachable"></i>Reachable</span><span><i class="mark selected"></i>Next choice</span><span><i class="mark eligible"></i>Eligible</span></div>
+        <div id="lattice-wrap"><svg id="lattice" role="img" aria-label="Just-intonation lattice, thirds rightward and fifths upward"></svg></div>
+        <div class="reach-controls"><span id="reach-status" aria-live="polite">Computing reachability…</span><div><label>Inputs from<input id="range-low" value="C2" aria-label="Lowest input for reachability"></label><label>to<input id="range-high" value="C7" aria-label="Highest input for reachability"></label><button id="range-apply" type="button">Apply</button></div></div>
+        <p class="muted small">Reachable outlines include every winning input interval and boundary in the displayed input range, across all seventh layers. Click a node to inspect it.</p>
+      </section>
+      <section class="probe" aria-label="Try an arbitrary pitch">
+        <div class="section-heading"><h2>Try the next note</h2><button id="release-all" class="quiet" type="button">Release all</button></div>
+        <div class="probe-inputs"><label>Pitch<input id="pitch" value="E3" spellcheck="false"></label><label>Fine offset <span class="muted">¢</span><input id="fine" type="number" value="0" min="-1200" max="1200" step="0.1"></label><button id="attack" class="primary" type="button">Play note</button><button id="reset-context" type="button">Reset context</button></div>
+        <p class="muted small">Use E5, Eb3, E5+7.82c, or an absolute pitch such as 7607.82c. Previewing does not change context.</p>
+        <div class="readouts" aria-live="polite"><div><span>Next output</span><strong id="next-output">—</strong></div><div><span>Correction from input</span><strong id="next-correction">—</strong></div><div><span>Moving reference</span><strong id="reference">0.00 ¢</strong></div></div>
+      </section>
+      <section class="inspection">
+        <div class="section-heading"><h2>Why this note?</h2><label>Inspect<select id="score-mode"><option value="next">Next input</option><option value="last" selected>Last actual onset</option></select></label></div>
+        <p id="decision-caption" class="muted small"></p>
+        <div class="table-wrap"><table><thead><tr><th>Node [5th, 3rd, 7th]</th><th>Output</th><th>Pitch cost</th><th>Harmony cost</th><th>Total ↓</th></tr></thead><tbody id="scores"></tbody></table></div>
+        <p id="node-detail" class="muted small">Select a lattice node to inspect its input ranges.</p>
+      </section>
+      <section class="context-section"><div class="section-heading"><h2>Harmonic context</h2><span id="context-count" class="muted small"></span></div>
+        <p id="seed-note" class="muted small"></p>
+        <div class="table-wrap"><table><thead><tr><th>Note</th><th>Onset pitch</th><th>State / weight</th><th>Player bend ¢</th><th></th></tr></thead><tbody id="context"></tbody></table></div>
+      </section>
+      <section class="journey-section"><div class="section-heading"><h2>Accumulated displacement</h2><span id="history-count" class="muted small"></span></div><svg id="journey" role="img" aria-label="Adaptive correction in cents over successive onsets"></svg></section>
+      <details class="program-section"><summary>Edit the sequence</summary><p class="muted small">One event per line: on E3 e, off e, off *, wait 1, bend e 20, stop, start, loop, reset. The selected example’s explicit starting context is retained.</p><textarea id="program" spellcheck="false" aria-label="Event sequence" rows="12"></textarea><div class="program-actions"><button id="apply-program" type="button">Apply & restart</button><button id="blank" type="button">Start empty</button><button id="export" type="button">Export experiment</button><label class="import-label">Import experiment<input id="import" type="file" accept=".json,application/json"></label></div></details>
+      <details class="checks-section"><summary>Musical checks</summary><p class="muted small">Checks use each example’s declared starting context and profile, independently of the current experiment. A mismatch is a result to investigate.</p><button id="run-checks" type="button">Run all examples</button><div id="check-results" aria-live="polite"></div></details>
+    </div>
+  </div>
+  <footer>Experimental policy · Independent of the plugin · Tuned onset pitches remain fixed; player bends remain expressive.</footer>
+</main>
+</body>
+</html>
