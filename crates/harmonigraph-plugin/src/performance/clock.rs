@@ -12,6 +12,21 @@ impl Calibration {
     pub fn matches(self, rate: f64, frames: u32) -> bool {
         rate.is_finite() && rate > 0.0 && frames != 0
     }
+    /// The next maximum-sized callback must fit in this mapping before a
+    /// proposed clock can become authoritative. A signed offset is otherwise
+    /// syntactically valid but would open a clock that fails on its first use.
+    pub fn supports_next_callback(self, rate: f64, max_frames: u32, raw: i64, frames: u32) -> bool {
+        if !self.matches(rate, max_frames) {
+            return false;
+        }
+        let Some(next) = raw.checked_add(i64::from(frames)) else {
+            return false;
+        };
+        let Some(through) = next.checked_add(i64::from(max_frames)) else {
+            return false;
+        };
+        self.map(next).is_some() && self.map(through).is_some()
+    }
     pub fn map(self, raw: i64) -> Option<i64> {
         raw.checked_add(self.offset)
     }
