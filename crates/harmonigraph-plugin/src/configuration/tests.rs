@@ -178,8 +178,7 @@ impl Device {
         stats.plugin.store(plugin as usize, Ordering::Relaxed);
         assert!(!plugin.is_null());
         assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
-        let device = Self { plugin, _host: host, stats, active: false };
-        device
+        Self { plugin, _host: host, stats, active: false }
     }
     fn wrapper(&self) -> &nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph> {
         unsafe { &*((*self.plugin).plugin_data.cast()) }

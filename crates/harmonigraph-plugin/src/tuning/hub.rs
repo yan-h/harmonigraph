@@ -161,6 +161,17 @@ impl Sequencer {
         }
         self.memory.append(&mut self.working, self.config.policy);
     }
+    /// Drop a context voice without contributing it to released memory: it
+    /// never sounded, because the source's own state had no cell for it.
+    fn forget_voice(&mut self, source: u8, lifetime: u64) {
+        if let Some(cell) = self
+            .context
+            .iter_mut()
+            .find(|cell| cell.is_some_and(|v| v.source == source && v.lifetime == lifetime))
+        {
+            *cell = None;
+        }
+    }
     fn release_voice(&mut self, source: u8, lifetime: u64, sample: i64) {
         if let Some(cell) = self
             .context
@@ -345,6 +356,11 @@ impl Hub {
                 self.sequencer.last_release = None;
             }
             self.batch.clear();
+            // Deltas scheduled before the cut describe notes it has just
+            // ended. Every row is already owed a snapshot, which is what tells
+            // the display what is actually sounding now.
+            self.pending.clear();
+            self.status = 0;
             self.epoch = epoch;
         }
         for slot in 0..TUNERS {
@@ -359,7 +375,10 @@ impl Hub {
         }
         self.rows[usize::from(DIRECT)].live = true;
         self.rows[usize::from(DIRECT)].delay = self.tune.delay();
-        let mut status = self.status & session::PUBLICATION;
+        // Sticky until the cut. A policy refusal or a lost report inside one
+        // callback would otherwise be gone before the once-a-second summary
+        // that is meant to show it.
+        let mut status = self.status & (session::PUBLICATION | session::POLICY | session::DROPPED);
         if session.hubs() > 1 {
             status |= session::SECOND_HUB;
         }
@@ -659,6 +678,12 @@ impl Hub {
             );
         }
         let Some(mut delta) = delta else {
+            // A source at its held-voice ceiling refuses the onset, and the
+            // policy must not keep scoring against a note that never sounded.
+            if event.attack().is_some() {
+                self.sequencer.forget_voice(record.source, record.serial);
+                self.status |= session::DROPPED;
+            }
             self.rows[index].applied = self.rows[index].sequence;
             return;
         };
@@ -873,6 +898,10 @@ impl Hub {
     #[cfg(test)]
     pub fn test_held(&self, source: u8) -> usize {
         self.rows[usize::from(source)].state.count()
+    }
+    #[cfg(test)]
+    pub fn test_context(&self) -> usize {
+        self.sequencer.context.iter().flatten().count()
     }
     #[cfg(test)]
     pub fn test_next_context(&self) -> policy::reach::Snapshot {

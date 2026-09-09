@@ -248,6 +248,11 @@ impl Tune {
             self.pedals[usize::from(channel)] = 0;
         }
         self.line.clear();
+        // A fault is a status, and a status is about the context it happened
+        // in. Carrying one past the cut that ended that context would report a
+        // full ring against notes that were never in it.
+        self.status = 0;
+        self.misses = 0;
         self.epoch = epoch;
         if let Link::Direct { out, back } = &mut self.link {
             out.clear();
@@ -356,12 +361,13 @@ impl Tune {
     }
 
     fn copy(&mut self, capture: Capture) -> bool {
-        self.captured += 1;
-        match &mut self.link {
+        let copied = match &mut self.link {
             Link::Detached => false,
             Link::Row(attached) => attached.ends.captures.push(capture).is_ok(),
             Link::Direct { out, .. } => out.push(capture).is_ok(),
-        }
+        };
+        self.captured += u64::from(copied);
+        copied
     }
 
     /// A reply reaches the onset with its serial or it reaches nothing. A
@@ -380,6 +386,12 @@ impl Tune {
             for offset in 0..self.line.len() {
                 let Some(position) = self.line.position(offset) else { break };
                 let Some(mut pending) = self.line.at(position) else { break };
+                // Serials increase along the line, because input order is what
+                // fills it. An answer to a note that has already emitted is
+                // therefore one comparison rather than a whole scan.
+                if pending.serial > reply.serial {
+                    break;
+                }
                 if pending.serial != reply.serial {
                     continue;
                 }

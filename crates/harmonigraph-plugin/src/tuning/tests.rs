@@ -811,3 +811,33 @@ fn the_display_shows_the_schedule_rather_than_the_input() {
     assert_eq!(onset.sample, 64 + 512, "and the sample it is scheduled to sound at");
     assert_eq!(onset.planned, Some(onset.sample));
 }
+
+/// A source at its held-voice ceiling refuses the note, and the policy must
+/// not go on scoring against one that never sounded. The fixture plays one
+/// more than `HELD_PER_SOURCE` so the refusal is actually reached.
+#[test]
+fn an_onset_past_the_held_ceiling_leaves_no_context_behind_it() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    let input: Vec<_> =
+        (0..HELD_PER_SOURCE + 1).map(|key| note(key as i32, 0, key as i16, 0, true)).collect();
+    pair.step(input);
+    pair.idle();
+    let held = inspect_hub(&pair.hub, |hub| hub.test_held(0));
+    assert_eq!(held, HELD_PER_SOURCE, "the fixture reaches the ceiling: {held}");
+    assert_ne!(pair.hub.shared().status() & session::DROPPED, 0);
+    // Release every voice the source did take. What is left in the policy's
+    // context afterwards is what the refused onset would have leaked.
+    let releases: Vec<_> =
+        (0..HELD_PER_SOURCE).map(|key| note(key as i32, 0, key as i16, 0, false)).collect();
+    pair.step(releases);
+    for _ in 0..2 {
+        pair.idle();
+    }
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_held(0)), 0);
+    assert_eq!(
+        inspect_hub(&pair.hub, |hub| hub.test_context()),
+        0,
+        "the refused onset is not still being scored against"
+    );
+}
