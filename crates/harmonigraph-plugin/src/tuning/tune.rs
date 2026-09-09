@@ -126,9 +126,6 @@ impl Tune {
             self.id = session::session().register();
         }
     }
-    pub fn id(&self) -> u64 {
-        self.id
-    }
     pub fn status(&self) -> u32 {
         self.status
     }

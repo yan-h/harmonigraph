@@ -67,14 +67,6 @@ impl Event {
         }
     }
 
-    pub fn channel_control(self) -> Option<u8> {
-        match self {
-            Self::Midi { port: 0, data, .. } if matches!(data[0] & 0xf0, 0xb0..=0xe0) => {
-                Some(data[0] & 15)
-            }
-            _ => None,
-        }
-    }
     /// true=All Sound Off (choke), false=All Notes Off (logical note-off).
     pub fn channel_termination(self) -> Option<bool> {
         match self {
@@ -152,52 +144,8 @@ impl Event {
         }
     }
 
-    /// An input wildcard's captured target is emitted with its original ID but
-    /// concrete key/channel so it cannot address a later translated lifetime.
-    pub fn addressed(self, channel: u8, key: u8) -> Self {
-        match self {
-            Self::Note { kind, id, velocity, flags, .. } => Self::Note {
-                kind,
-                id,
-                port: 0,
-                channel: i16::from(channel),
-                key: i16::from(key),
-                velocity,
-                flags,
-            },
-            Self::Expression { kind, id, value, flags, .. } => Self::Expression {
-                kind,
-                id,
-                port: 0,
-                channel: i16::from(channel),
-                key: i16::from(key),
-                value,
-                flags,
-            },
-            value => value,
-        }
-    }
 
-    pub fn for_voice(self, id: i32, channel: u8, key: u8) -> Self {
-        let mut value = self.addressed(channel, key);
-        match &mut value {
-            Self::Note { id: target, .. } | Self::Expression { id: target, .. } => *target = id,
-            _ => {}
-        }
-        value
-    }
 
-    pub fn terminate(id: i32, channel: u8, key: u8) -> Self {
-        Self::Note {
-            kind: 2,
-            id,
-            port: 0,
-            channel: i16::from(channel),
-            key: i16::from(key),
-            velocity: 0.0,
-            flags: 0,
-        }
-    }
 }
 
 const _: () = assert!(std::mem::size_of::<Event>() <= 48);

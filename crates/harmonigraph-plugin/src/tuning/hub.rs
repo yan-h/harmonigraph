@@ -220,7 +220,6 @@ pub struct Hub {
     status: u32,
     decisions: u64,
     published: u64,
-    retired_publication: Option<(Box<Owner>, Recorder, f64)>,
 }
 
 impl Hub {
@@ -243,7 +242,6 @@ impl Hub {
             status: 0,
             decisions: 0,
             published: 0,
-            retired_publication: None,
         })
     }
 
@@ -277,6 +275,12 @@ impl Hub {
 
     pub fn begin(&mut self, callback: api::Callback, owner: &mut Owner, presentation: f64) {
         self.callback = Some(callback);
+        // One clock for the life of this Harmonigraph. Nothing advances it any
+        // more, because nothing can hold a record long enough for an old one
+        // to reach the recorder: what this callback sequences, it publishes.
+        if owner.recording.clock.runtime_session == 0 {
+            owner.recording.clock.runtime_session = self.id;
+        }
         self.clock = owner.recording.clock;
         if self.anchor.is_none() {
             self.anchor = Some((callback.steady_time, presentation));
@@ -338,7 +342,7 @@ impl Hub {
             self.seconds = None;
             return;
         };
-        let seconds = transport.song_pos_seconds as f64 / f64::from(1i64 << 31);
+        let seconds = transport.song_pos_seconds as f64 / 2_147_483_648.0;
         let elapsed = callback.steady_time as f64 / self.rate;
         let offset = seconds - elapsed;
         if self.seconds.is_some_and(|previous| (offset - previous).abs() > 0.002) {
@@ -759,6 +763,12 @@ impl Hub {
         }
     }
 
+    /// The configuration owner refused an evaluation. Like every other fault
+    /// here it is a status bit: nothing is silenced and nothing latches.
+    pub fn configuration_exhausted(&mut self) {
+        self.status |= session::POLICY;
+    }
+
     pub fn end(&mut self, callback: api::Callback) {
         self.tune.end();
         self.status |= self.tune.status();
@@ -785,22 +795,22 @@ impl Hub {
         self.shared.request_main();
     }
 
-    /// Destruction hands the last publication work off so the recorder's own
-    /// boundaries close before the owner is dropped.
+    /// Destruction closes the recorder's own boundaries, here and now. There
+    /// is no drain to wait for: everything this Hub sequenced was published in
+    /// the callback it was sequenced in, so the only thing left to say is
+    /// whether any voice was still sounding — which is a take the renderer
+    /// warns about rather than a fact this can go and establish.
     pub fn retire_publication(
         &mut self,
-        owner: Box<Owner>,
-        recorder: Recorder,
+        mut owner: Box<Owner>,
+        mut recorder: Recorder,
         observation: f64,
     ) {
         recorder.hold_retired_publication();
-        self.retired_publication = Some((owner, recorder, observation));
-    }
-    pub fn finish_retired_publication(&mut self) {
-        if let Some((mut owner, mut recorder, observation)) = self.retired_publication.take() {
-            owner.finish_recording_publication(&mut recorder, observation);
-            recorder.retired_publication_complete();
-        }
+        owner.recording.dispose_retired_configuration(&mut recorder);
+        owner.finish_recording_publication(&mut recorder, observation);
+        let held = self.rows.iter().any(|row| row.state.count() != 0);
+        owner.recording.finish_retired_publication(&mut recorder, held);
     }
 
     #[cfg(test)]

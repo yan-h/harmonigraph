@@ -5,7 +5,7 @@
 //! audio callback does is one atomic load of [`Session::hub`], and one of
 //! [`Session::epoch`] to learn whether it owes a cut. Nothing is offered,
 //! returned, leased or acknowledged, so there is nothing here that can stall.
-use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use super::{event::Event, CAPTURE_RING, REPLY_RING, TUNERS};
@@ -99,8 +99,6 @@ pub struct Row {
     pub delay: AtomicI64,
     /// Onsets that emitted without a correction, since the last cut.
     pub misses: AtomicU64,
-    pub captured: AtomicU64,
-    pub dropped: AtomicU64,
     ends: Mutex<Ends>,
 }
 
@@ -112,8 +110,6 @@ impl Row {
             owner: AtomicU64::new(0),
             delay: AtomicI64::new(0),
             misses: AtomicU64::new(0),
-            captured: AtomicU64::new(0),
-            dropped: AtomicU64::new(0),
             ends: Mutex::new(Ends {
                 tune: Some(TuneEnds { captures, replies: hub_replies }),
                 hub: Some(HubEnds { captures: hub_captures, replies }),
@@ -163,9 +159,6 @@ pub fn session() -> &'static Session {
 }
 
 impl Session {
-    pub fn rows(&self) -> &[Row; TUNERS] {
-        &self.rows
-    }
     pub fn row(&self, slot: u8) -> &Row {
         &self.rows[usize::from(slot)]
     }
@@ -232,8 +225,6 @@ impl Session {
                     continue;
                 };
                 row.misses.store(0, Ordering::Release);
-                row.captured.store(0, Ordering::Release);
-                row.dropped.store(0, Ordering::Release);
                 self.bump();
                 return Some((slot as u8, ends));
             }

@@ -16,16 +16,6 @@ impl<T, const N: usize> Default for Queue<T, N> {
     }
 }
 impl<T, const N: usize> Queue<T, N> {
-    pub fn detached() -> Self {
-        Self { cells: Box::new([]), head: 0, len: 0 }
-    }
-    /// Off-audio only: the caller allocated `cells`, this moves it in.
-    pub fn attach(&mut self, cells: Box<[Option<T>]>) {
-        assert_eq!(self.len, 0, "an attached backing replaces nothing held");
-        assert!(cells.len() <= N);
-        self.cells = cells;
-        self.head = 0;
-    }
     fn capacity(&self) -> usize {
         self.cells.len()
     }
@@ -38,12 +28,6 @@ impl<T, const N: usize> Queue<T, N> {
     {
         self.cells.get(position).copied().flatten()
     }
-    pub fn get(&self, offset: usize) -> Option<T>
-    where
-        T: Copy,
-    {
-        self.at(self.position(offset)?)
-    }
     /// Replace a retained value in place. A reply reaching its onset changes
     /// what that cell will emit without changing where it sits in the line.
     pub fn set(&mut self, position: usize, value: T) {
@@ -51,9 +35,6 @@ impl<T, const N: usize> Queue<T, N> {
     }
     pub fn len(&self) -> usize {
         self.len
-    }
-    pub fn free(&self) -> usize {
-        self.capacity() - self.len
     }
     pub fn clear(&mut self)
     where

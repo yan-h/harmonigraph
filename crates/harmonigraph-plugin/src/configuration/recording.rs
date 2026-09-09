@@ -107,45 +107,6 @@ impl Recording {
         self.retirement_finished = true;
         recorder.retired_publication_complete();
     }
-    pub fn owns_recording(&self) -> bool {
-        self.current.is_some()
-            || self.passes.iter().any(Option::is_some)
-            || self.segments.iter().flatten().any(|segment| segment.address.is_some())
-    }
-    pub fn publication_debt(&self) -> bool {
-        self.segments.iter().any(Option::is_some)
-            || self.passes.iter().flatten().any(|pass| pass.end.is_some())
-    }
-    /// Commit only after the old canonical/configuration routes have drained.
-    /// Clock calibration is independent from the recorder's arm/pass lifetime.
-    pub fn commit_clock(&mut self, clock: ClockId, offset: i64) -> bool {
-        if self.publication_debt() {
-            return false;
-        }
-        self.clock = clock;
-        self.hub_offset = offset;
-        self.source_prefix = None;
-        self.registered_through = i64::MIN;
-        for pass in self.passes.iter_mut().flatten() {
-            pass.last = None;
-        }
-        true
-    }
-    /// Called only after every old stream has sealed and its complete accepted
-    /// prefix has a publication disposition. No new-clock sample proves this.
-    /// A forced discontinuity is explicitly incomplete; dispose remaining old
-    /// configuration/maps with that failure instead of inventing coverage.
-    pub fn close_invalidated(&mut self, recorder: &mut Recorder) {
-        recorder.fail_configuration();
-        self.segments.fill(None);
-        for cell in &mut self.passes {
-            if cell.is_some_and(|pass| Some(pass.address) != self.current) {
-                let pass = cell.take().unwrap();
-                recorder.configuration_pass_complete(pass.address);
-                recorder.source_pass_complete(pass.address, self.observation_time);
-            }
-        }
-    }
     pub fn reset(&mut self, recorder: &Recorder) {
         if self.segments.iter().flatten().any(|s| {
             s.address.is_some()
@@ -283,11 +244,6 @@ impl Recording {
         self.finish(recorder);
     }
 
-    /// How far input may be consumed: this callback is configured through its
-    /// end, but only registered segments carry a recording route.
-    pub fn input_frontier(&self) -> i64 {
-        self.prefix.min(self.registered_through)
-    }
 
     pub fn finish(&mut self, recorder: &mut Recorder) {
         for cell in &mut self.passes {
