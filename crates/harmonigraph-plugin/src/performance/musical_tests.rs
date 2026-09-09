@@ -298,6 +298,7 @@ fn production_hub_reinitialize_settles_while_new_notes_arrive() {
 }
 
 struct Phrase {
+    uuid: SavedUuid,
     hub: Device,
     sources: [Device; 3],
     raw: i64,
@@ -305,19 +306,22 @@ struct Phrase {
 }
 impl Phrase {
     fn new() -> Self {
+        Self::with_calibration([0; 3])
+    }
+    fn with_calibration(offsets: [i64; 3]) -> Self {
         let uuid = SavedUuid::default();
         let calibration = Calibration { offset: 0 };
         let mut hub = Device::new(false);
         hub.configure_format(uuid, true, calibration);
         hub.activate_format(44100.0, 512);
         configure(&hub, Tuning::just());
-        let sources = std::array::from_fn(|_| {
+        let sources = std::array::from_fn(|i| {
             let mut source = Device::new(true);
-            source.configure_format(uuid, true, calibration);
+            source.configure_format(uuid, true, Calibration { offset: offsets[i] });
             source.activate_format(44100.0, 512);
             source
         });
-        let mut phrase = Self { hub, sources, raw: 0, maximum: [0; 4] };
+        let mut phrase = Self { uuid, hub, sources, raw: 0, maximum: [0; 4] };
         // Explicit accepted neutral initialization, not a claim about Bitwig's
         // unmeasured initial CC64/66/69 state (#696).
         phrase.step(
@@ -1500,8 +1504,13 @@ fn production_loop_reset_is_applied_once_across_sources_before_the_next_attack()
         value.song_pos_seconds = seconds * (1i64 << 31);
         Input::Transport(value)
     };
-    for reset_loop in [false, true] {
-        let mut phrase = Phrase::new();
+    for (reset_loop, offsets, epoch_change) in [
+        (false, [0; 3], false),
+        (true, [0; 3], false),
+        (true, [0, 64, -32], false),
+        (true, [0, 64, -32], true),
+    ] {
+        let mut phrase = Phrase::with_calibration(offsets);
         configure_policy(
             &phrase.hub,
             harmonigraph_core::configuration::PolicyConfig { reset_loop, ..Default::default() },
@@ -1527,7 +1536,16 @@ fn production_loop_reset_is_applied_once_across_sources_before_the_next_attack()
         }
         phrase.step(std::array::from_fn(|_| vec![position(10)]), [0, 1, 2]);
         phrase.step(
-            [vec![position(1), note(4, 0, 48, 1, true)], vec![position(1)], vec![position(1)]],
+            [
+                vec![
+                    position(1),
+                    note(4, 0, 48, 1, true),
+                    note(9, 0, 52, 2, true),
+                    note(10, 0, 55, 3, true),
+                ],
+                vec![position(1)],
+                vec![position(1)],
+            ],
             [2, 1, 0],
         );
         for _ in 0..4 {
@@ -1535,11 +1553,69 @@ fn production_loop_reset_is_applied_once_across_sources_before_the_next_attack()
         }
         let root = if reset_loop { 0 } else { 3 };
         assert_eq!(phrase.voice(0, 48, 0).attack_node, Some(LatticePos::new(0, root, 0)));
-        phrase.step([vec![], vec![note(5, 0, 52, 0, true)], vec![]], [1, 0, 2]);
+        phrase.release_all();
+        if epoch_change {
+            let before = phrase.sources[1].source_snapshot().epoch;
+            phrase.sources[1]
+                .shared()
+                .apply(
+                    setup::Routing::Source(SourceSetup {
+                        selected: Some(phrase.uuid),
+                        calibration: Calibration { offset: 128 },
+                    }),
+                    false,
+                )
+                .unwrap();
+            phrase
+                .hub
+                .shared()
+                .apply(
+                    setup::Routing::Hub(HubSetup {
+                        uuid: phrase.uuid,
+                        calibration: Calibration { offset: 64 },
+                    }),
+                    false,
+                )
+                .unwrap();
+            for _ in 0..96 {
+                phrase.idle();
+                for source in &phrase.sources {
+                    source.main();
+                }
+                phrase.hub.main();
+            }
+            assert!(phrase.sources[1].source_snapshot().epoch > before);
+            assert_eq!(inspect_source(&phrase.sources[1], |s| s.clock.calibration.offset), 128);
+        }
+        // Move again before this source's first post-loop attack: an incorrect
+        // second reset would otherwise be hidden by the still-sounding C.
+        for key in [52, 56] {
+            phrase.step(
+                [
+                    vec![
+                        note(6, 0, key, 0, true),
+                        note(7, 0, key + 4, 1, true),
+                        note(8, 0, key + 7, 2, true),
+                    ],
+                    vec![],
+                    vec![],
+                ],
+                [0, 1, 2],
+            );
+            for _ in 0..4 {
+                phrase.idle();
+            }
+            phrase.release_all();
+        }
+        phrase.step([vec![], vec![note(5, 0, 48, 0, true)], vec![]], [1, 0, 2]);
         for _ in 0..4 {
             phrase.idle();
         }
-        assert_eq!(phrase.voice(1, 52, 0).attack_node, Some(LatticePos::new(0, root + 1, 0)));
+        assert_eq!(
+            phrase.voice(1, 48, 0).attack_node,
+            Some(LatticePos::new(0, root + 3, 0)),
+            "offsets={offsets:?}, epoch_change={epoch_change}"
+        );
         phrase.release_all();
     }
 }

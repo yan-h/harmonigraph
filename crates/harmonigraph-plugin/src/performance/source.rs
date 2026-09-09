@@ -3170,11 +3170,10 @@ impl Source {
             key: life.key,
             adaptive: life.adaptive,
             channel_pitch: life.channel_pitch,
-            policy_reset: if life.policy_reset == i64::MIN {
-                i64::MIN
-            } else {
-                life.policy_reset.saturating_add(self.clock.calibration.offset)
-            },
+            // This identifies a shared transport boundary, not a scheduled
+            // note. Calibration must not give that one boundary different
+            // identities across sources or after a healthy epoch change.
+            policy_reset: life.policy_reset,
             ..base
         };
         // A same-key predecessor and every note a channel termination ends

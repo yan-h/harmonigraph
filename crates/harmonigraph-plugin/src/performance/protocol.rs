@@ -136,7 +136,8 @@ pub struct Capture {
     pub adaptive: bool,
     /// Original channel pitch at this attack, separate from per-note expression.
     pub channel_pitch: i64,
-    /// Most recent loop/seek before this attack, in Hub samples; MIN means none.
+    /// Most recent loop/seek before this attack, in original host steady-time
+    /// samples, independent of calibration; MIN means none.
     pub policy_reset: i64,
 }
 pub const NO_REQUEST: u16 = u16::MAX;
