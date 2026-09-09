@@ -1,36 +1,12 @@
-//! Fixed performance values and an internal Stop boundary marker. These cannot
-//! contain full transport, a host pointer, or an allocation.
+//! Fixed performance values. These cannot contain full transport, a host
+//! pointer, or an allocation.
 use nice_plug::wrapper::clap::configuration::InputValue;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
-    /// Retained and consumed by Source at its original sample, never sent to a host.
-    Stop,
-    /// Ordered local participation boundary, never a downstream MIDI event.
-    Participation(bool),
-    Note {
-        kind: u16,
-        id: i32,
-        port: i16,
-        channel: i16,
-        key: i16,
-        velocity: f64,
-        flags: u32,
-    },
-    Expression {
-        kind: i32,
-        id: i32,
-        port: i16,
-        channel: i16,
-        key: i16,
-        value: f64,
-        flags: u32,
-    },
-    Midi {
-        port: u16,
-        data: [u8; 3],
-        flags: u32,
-    },
+    Note { kind: u16, id: i32, port: i16, channel: i16, key: i16, velocity: f64, flags: u32 },
+    Expression { kind: i32, id: i32, port: i16, channel: i16, key: i16, value: f64, flags: u32 },
+    Midi { port: u16, data: [u8; 3], flags: u32 },
 }
 
 impl Event {
@@ -53,9 +29,6 @@ impl Event {
 
     pub fn input(self) -> InputValue {
         match self {
-            Self::Stop | Self::Participation(_) => {
-                unreachable!("local boundaries are not wire output")
-            }
             Self::Note { kind, id, port, channel, key, velocity, flags } => {
                 InputValue::Note { kind, note_id: id, port, channel, key, velocity, flags }
             }
@@ -74,21 +47,6 @@ impl Event {
         }
     }
 
-    /// A local ordering boundary rather than anything that reaches a host.
-    /// Both of these are consumed where the output cursor reaches their own
-    /// input sample, and both cancel and terminate what stands before them.
-    pub fn marker(self) -> bool {
-        matches!(self, Self::Stop | Self::Participation(_))
-    }
-
-    pub fn channel_control(self) -> Option<u8> {
-        match self {
-            Self::Midi { port: 0, data, .. } if matches!(data[0] & 0xf0, 0xb0..=0xe0) => {
-                Some(data[0] & 15)
-            }
-            _ => None,
-        }
-    }
     /// true=All Sound Off (choke), false=All Notes Off (logical note-off).
     pub fn channel_termination(self) -> Option<bool> {
         match self {
@@ -163,53 +121,6 @@ impl Event {
             }
             Self::Midi { port: 0, data, .. } => data[0] & 15 == channel && data[1] == key,
             _ => false,
-        }
-    }
-
-    /// An input wildcard's captured target is emitted with its original ID but
-    /// concrete key/channel so it cannot address a later translated lifetime.
-    pub fn addressed(self, channel: u8, key: u8) -> Self {
-        match self {
-            Self::Note { kind, id, velocity, flags, .. } => Self::Note {
-                kind,
-                id,
-                port: 0,
-                channel: i16::from(channel),
-                key: i16::from(key),
-                velocity,
-                flags,
-            },
-            Self::Expression { kind, id, value, flags, .. } => Self::Expression {
-                kind,
-                id,
-                port: 0,
-                channel: i16::from(channel),
-                key: i16::from(key),
-                value,
-                flags,
-            },
-            value => value,
-        }
-    }
-
-    pub fn for_voice(self, id: i32, channel: u8, key: u8) -> Self {
-        let mut value = self.addressed(channel, key);
-        match &mut value {
-            Self::Note { id: target, .. } | Self::Expression { id: target, .. } => *target = id,
-            _ => {}
-        }
-        value
-    }
-
-    pub fn terminate(id: i32, channel: u8, key: u8) -> Self {
-        Self::Note {
-            kind: 2,
-            id,
-            port: 0,
-            channel: i16::from(channel),
-            key: i16::from(key),
-            velocity: 0.0,
-            flags: 0,
         }
     }
 }

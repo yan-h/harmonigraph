@@ -524,7 +524,7 @@ fn frame(
     drop(guard);
     if state.params.configuration.get().is_some() {
         if let Some(session) = state.params.session.get() {
-            session_controls(ui.ctx(), session, &mut state.session_draft, &mut state.session_delay);
+            session_controls(ui.ctx(), session, &mut state.session_delay);
         }
     }
     if let Some(interval) = pace(state, fps_cap, display_max_fps) {
@@ -829,7 +829,6 @@ unsafe impl HasRawWindowHandle for ParentWindowHandleAdapter {
 struct WindowState {
     shared: Arc<Mutex<EditorShared>>,
     params: Arc<HarmonigraphParams>,
-    session_draft: Option<(u64, crate::performance::clock::Calibration)>,
     /// The multiplier the "apply to all paired Tunes" button would send. It is
     /// a draft in this menu, not anybody's saved value.
     session_delay: i32,
@@ -850,7 +849,7 @@ struct WindowState {
 
 impl WindowState {
     fn new(shared: Arc<Mutex<EditorShared>>, params: Arc<HarmonigraphParams>) -> Self {
-        WindowState { shared, params, frame_interval: None, session_draft: None, session_delay: 1 }
+        WindowState { shared, params, frame_interval: None, session_delay: 1 }
     }
 
     /// The interval to arm on the window's frame timer, or `None` when it
@@ -1053,92 +1052,40 @@ impl Drop for LatticeEditorHandle {
 }
 
 /// Host-shell setup, intentionally outside the picture shared with video export.
-/// A draft is local to this open menu; applying it uses the prepared setup path.
+/// Two controls survive the fault cut: Reset, and the delay every Tune owns
+/// its own copy of. Pairing is a load of one process-wide slot, so there is no
+/// hub to choose and no routing offset to calibrate.
 fn session_controls(
     ctx: &egui::Context,
-    shared: &Arc<crate::performance::setup::Shared>,
-    draft: &mut Option<(u64, crate::performance::clock::Calibration)>,
+    shared: &Arc<crate::tuning::setup::Shared>,
     delay: &mut i32,
 ) {
-    use crate::performance::setup::{diagnostics_text, Routing};
+    use crate::tuning::{session, setup, DELAY_MULTIPLIER_MAX};
     egui::Area::new(egui::Id::new("harmonigraph-session-setup"))
         .anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0])
         .show(ctx, |ui| {
             ui.menu_button("Session", |ui| {
-                let accepted = shared.value();
-                let Routing::Hub(saved) = accepted.routing else {
-                    return;
-                };
-                if draft.as_ref().is_none_or(|(generation, _)| *generation != accepted.generation) {
-                    *draft = Some((accepted.generation, saved.calibration));
-                }
-                let (_, calibration) = draft.as_mut().unwrap();
-                ui.label(format!("Hub {}", saved.uuid));
-                ui.label("Signed offset for this routing");
-                ui.horizontal(|ui| {
-                    ui.label("Signed sample offset");
-                    ui.add(egui::DragValue::new(&mut calibration.offset));
-                });
-                ui.label("Sample rate and buffer size follow the host automatically.");
-                ui.label("Offset defaults to zero; adjust only for a known routing delay.");
-                if ui.button("Apply / Reinitialize").clicked() {
-                    let value = crate::performance::routing::HubSetup {
-                        calibration: *calibration,
-                        ..saved
-                    };
-                    if let Err(error) = shared.apply(Routing::Hub(value), true) {
-                        ui.label(error);
-                    }
-                }
+                let status = shared.status();
+                ui.label(format!("Session epoch {}", session::session().epoch()));
+                ui.label("Pairing is automatic: one Harmonigraph per process.");
                 if ui.button("Reset voices").clicked() {
-                    if let Err(error) = shared.apply(Routing::Hub(saved), true) {
-                        ui.label(error);
-                    }
+                    shared.request_reset();
                 }
-                let applied = shared.applied.load(Ordering::Acquire);
-                let adopted = shared.adopted();
-                if let Some(adopted) = adopted {
-                    ui.label(format!(
-                        "Active clock: {:+} samples, {} Hz, up to {} frames — {}",
-                        adopted.calibration.offset,
-                        adopted.sample_rate,
-                        adopted.max_frames,
-                        if adopted.valid { "valid" } else { "reinitialization required" },
-                    ));
-                }
-                ui.label(if applied == accepted.generation {
-                    "Setup adopted"
-                } else {
-                    "Setup pending: old output must settle"
-                });
                 ui.separator();
                 // The delay belongs to each Tune's own saved parameter; this is
                 // a convenience that asks all of them at once, and each one
                 // then requests its own reactivation.
-                ui.label("Tuning delay applies per Tune; this asks all paired ones at once.");
+                ui.label("Tuning delay applies per Tune; this asks all of them at once.");
                 ui.horizontal(|ui| {
                     ui.label("Buffers of delay");
-                    ui.add(
-                        egui::DragValue::new(delay)
-                            .range(1..=crate::performance::protocol::DELAY_MULTIPLIER_MAX),
-                    );
+                    ui.add(egui::DragValue::new(delay).range(1..=DELAY_MULTIPLIER_MAX));
                 });
-                if ui.button("Apply to all paired Tunes").clicked() {
-                    crate::performance::registry::global()
-                        .lock()
-                        .unwrap()
-                        .request_delay(shared.hub.as_ref().unwrap(), *delay as u32);
+                if ui.button("Apply to all Tunes").clicked() {
+                    setup::Shared::request_delay_for_all(*delay as u32);
                 }
                 ui.separator();
-                ui.label(diagnostics_text(shared.status.load(Ordering::Acquire)));
-                ui.label(crate::performance::setup::deadline_text(
-                    shared.status.load(Ordering::Acquire),
-                    None,
-                    applied != accepted.generation || adopted.is_none_or(|clock| !clock.valid),
-                    shared.deadline_misses.load(Ordering::Relaxed),
-                    shared.extra_delay.load(Ordering::Relaxed),
-                    adopted.map_or(0.0, |clock| clock.sample_rate),
-                ));
+                ui.label(session::status_text(status));
+                ui.label(setup::deadline_text(status, shared.misses.load(Ordering::Relaxed)));
                 ui.label(harmonigraph_perf::BUILD_TAG);
             });
         });
@@ -1150,80 +1097,9 @@ mod tests {
         pace, target_frame_interval, ClockMapper, EditorShared, HarmonigraphParams, WindowState,
         DISPLAY_OVERSAMPLE, FALLBACK_FRAME_INTERVAL, MIN_SIZE,
     };
+    #[allow(unused_imports)]
     use harmonigraph_core::notes::{NoteEvent, SourceId};
     use std::sync::Arc;
-
-    #[test]
-    fn an_open_session_menu_rebinds_restored_setup_before_calibration_only_apply() {
-        use crate::performance::{routing::HubSetup, setup};
-        use nice_plug::wrapper::clap::setup::Setup;
-        let ctx = egui::Context::default();
-        let shared = setup::Shared::hub();
-        let mut draft = None;
-        let mut delay = 1;
-        let mut draw = |events| {
-            ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1000.0, 700.0),
-                    )),
-                    events,
-                    ..Default::default()
-                },
-                |ui| super::session_controls(ui.ctx(), &shared, &mut draft, &mut delay),
-            )
-        };
-        fn text_position(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
-            output
-                .shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == label => {
-                        Some(text.pos + text.galley.rect.center().to_vec2())
-                    }
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("visible menu text {label:?}"))
-        }
-        let pointer = |pos, pressed| egui::Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: Default::default(),
-        };
-        draw(vec![]);
-        let output = draw(vec![]);
-        let session = text_position(&output, "Session");
-        draw(vec![egui::Event::PointerMoved(session), pointer(session, true)]);
-        draw(vec![pointer(session, false)]);
-        let output = draw(vec![]);
-        let setup::Routing::Hub(original) = shared.value().routing else { unreachable!() };
-        text_position(&output, &format!("Hub {}", original.uuid));
-        let mut restored = HubSetup::default();
-        restored.calibration.offset = 37;
-        let mut state = nice_plug::plugin::PluginState {
-            version: String::new(),
-            params: Default::default(),
-            fields: Default::default(),
-        };
-        state.fields.insert(setup::HUB_FIELD.into(), serde_json::to_string(&restored).unwrap());
-        setup::Adapter(shared.clone(), None).prepare(&state).unwrap().commit();
-        let output = draw(vec![]);
-        text_position(&output, &format!("Hub {}", restored.uuid));
-        let offset = text_position(&output, "37");
-        draw(vec![egui::Event::PointerMoved(offset), pointer(offset, true)]);
-        let moved = offset + egui::vec2(10.0, 0.0);
-        draw(vec![egui::Event::PointerMoved(moved)]);
-        draw(vec![pointer(moved, false)]);
-        let output = draw(vec![]);
-        let apply = text_position(&output, "Apply / Reinitialize");
-        draw(vec![egui::Event::PointerMoved(apply), pointer(apply, true)]);
-        draw(vec![pointer(apply, false)]);
-        let setup::Routing::Hub(applied) = shared.value().routing else { unreachable!() };
-        assert_eq!(applied.uuid, restored.uuid);
-        assert_ne!(applied.calibration.offset, restored.calibration.offset);
-    }
 
     /// The floor this window is held to and the floor the pane layout dials to
     /// are one number, and the cast into window pixels is where they could

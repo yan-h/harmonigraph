@@ -5,8 +5,7 @@ use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, ResolvedConfig, TuningModes,
 };
 use harmonigraph_core::confirmed::{ConfirmedPitches, LearningState};
-use harmonigraph_core::{LearnedTuning, SourceId, Tempered, Tuning};
-use harmonigraph_record::publication::{Lane, Lanes};
+use harmonigraph_core::{LearnedTuning, Tempered, Tuning};
 use harmonigraph_ui::params::{ConfigurationView, ParamKey};
 use nice_plug::plugin::ParamValue;
 use nice_plug::prelude::*;
@@ -181,7 +180,6 @@ pub fn save(snapshot: ConfigurationSnapshot, state: &mut PluginState) {
 mod recording;
 
 pub struct Owner {
-    pub frozen: bool,
     /// Every edit reduces here the moment it arrives, in arrival order, so the
     /// reducer's own combined-edit/preset/unlock semantics are untouched.
     pub(crate) reducer: ConfigReducer,
@@ -190,7 +188,6 @@ pub struct Owner {
     /// the block are adopted by the next `begin`.
     block: ResolvedConfig,
     pub(crate) confirmed: ConfirmedPitches,
-    pub direct: crate::performance::direct::Direct,
     learning: LearningState,
     learned: Option<LearnedTuning>,
     pub snapshot: ConfigurationSnapshot,
@@ -211,12 +208,10 @@ impl Owner {
         };
 
         Self {
-            frozen: false,
             block: reducer.resolved(),
             reducer,
             recording: recording::Recording::default(),
             confirmed: ConfirmedPitches::default(),
-            direct: crate::performance::direct::Direct::default(),
             learning: LearningState::default(),
             learned: None,
             snapshot,
@@ -233,17 +228,8 @@ impl Owner {
         &mut self,
         boundary: ConfigurationBoundary,
         recorder: &harmonigraph_record::Recorder,
-        presentation_time: f64,
+        _presentation_time: f64,
     ) {
-        if self.frozen {
-            return;
-        }
-        self.direct.begin(
-            self.recording.clock,
-            boundary.steady_time,
-            presentation_time,
-            f64::from(boundary.sample_rate),
-        );
         self.boundary = boundary;
         self.recording.captured_intent = recorder.capture_recording_intent();
         self.recording.block_start = boundary.steady_time;
@@ -259,9 +245,7 @@ impl Owner {
     /// reduced by now; this is where the whole of it becomes effective, and
     /// nothing later in the callback moves the value again.
     pub fn adopt(&mut self) {
-        if !self.frozen {
-            self.block = self.reducer.resolved();
-        }
+        self.block = self.reducer.resolved();
     }
 
     /// The one configuration for assignment groups started in this block. A
@@ -270,31 +254,15 @@ impl Owner {
         &self,
         clock: harmonigraph_core::canonical::ClockId,
     ) -> Option<ResolvedConfig> {
-        (!self.frozen && clock == self.recording.clock).then_some(self.block)
+        (clock == self.recording.clock).then_some(self.block)
     }
 
     pub fn reset(&mut self, recorder: &harmonigraph_record::Recorder) {
-        self.frozen = false;
-        if self.direct.pending().is_some() {
-            recorder.fail_configuration();
-        }
-        self.direct.reset();
         self.confirmed.reset();
         self.learning = LearningState::default();
         self.learned = None;
         self.snapshot.status = 0;
         self.recording.reset(recorder);
-    }
-    pub fn resume_clock(&mut self, offset: i64, discontinuous: bool) {
-        if discontinuous {
-            self.direct.reset();
-        }
-        self.direct.reanchor(offset);
-        self.confirmed.reset();
-        self.learning = LearningState::default();
-        self.learned = None;
-        self.snapshot.status = 0;
-        self.frozen = false;
     }
     pub fn fault(&mut self) {
         self.snapshot.status |= 2;
@@ -304,7 +272,7 @@ impl Owner {
         command: ConfigurationCommand,
         commit: ConfigurationCommit,
     ) -> Option<ConfigurationSnapshot> {
-        if self.frozen || self.snapshot.status & 2 != 0 {
+        if self.snapshot.status & 2 != 0 {
             return None;
         }
         let raw = tuning(commit.raw);
@@ -357,138 +325,13 @@ impl Owner {
         Some(self.snapshot)
     }
     pub fn segment(&mut self, start: u32, frames: u32) {
-        if self.frozen {
-            return;
-        }
         self.recording.block_start = self.boundary.steady_time + i64::from(start);
         self.recording.block_frames = frames;
     }
     pub fn recording_intent(&self) -> u64 {
         self.recording.captured_intent
     }
-    pub fn direct_timing(&self, offset: u32) -> Option<harmonigraph_core::canonical::EventTiming> {
-        let sample = self.recording.block_start.checked_add(i64::from(offset))?;
-        Some(harmonigraph_core::canonical::EventTiming {
-            clock: self.recording.clock,
-            input: sample,
-            planned: None,
-            sample,
-            sample_rate: f64::from(self.boundary.sample_rate),
-        })
-    }
 
-    /// A refused Hub has no peer or registry retirement owner. Its joined
-    /// wrapper still owes every observed DIRECT delta at its original route.
-    ///
-    /// Only retirement drains history here. A live Hub publishes every
-    /// observed delta through its own chronological merge with the rows'
-    /// accepted output, and calls [`Owner::publish_direct_repair`] only once
-    /// that queue is empty -- so the bounded second drain this used to make
-    /// alongside it could never move a record, and the block end that bounded
-    /// it never bounded anything.
-    pub fn publish_retired_direct(
-        &mut self,
-        recorder: &mut harmonigraph_record::Recorder,
-        observation_time: f64,
-    ) {
-        self.publish_direct_history(recorder, observation_time);
-        self.publish_direct_repair(recorder, observation_time);
-    }
-
-    fn publish_direct_history(
-        &mut self,
-        recorder: &mut harmonigraph_record::Recorder,
-        observation_time: f64,
-    ) {
-        // A loss here only arms DIRECT's own snapshot. The Hub arms every
-        // other source from the same outage latch, once, in `publish_output`.
-        for _ in 0..crate::performance::direct::OUTPUT_WINDOW {
-            let Some(delta) = self.direct.pending() else {
-                break;
-            };
-            let Some(timing) = delta.timing else {
-                recorder.fail_configuration();
-                recorder.publication_lost(observation_time, Default::default());
-                self.direct.published();
-                continue;
-            };
-            let route = match self.recording_route(timing, delta.event.time) {
-                Ok(route) => route,
-                Err(()) => {
-                    recorder.fail_configuration();
-                    Default::default()
-                }
-            };
-            let published = recorder.publish_note(delta, route);
-            for lane in Lane::ALL {
-                self.direct.recovery[lane] |= published[lane].is_err();
-            }
-            self.direct.published();
-        }
-    }
-    pub fn publish_direct_repair(
-        &mut self,
-        recorder: &mut harmonigraph_record::Recorder,
-        observation_time: f64,
-    ) {
-        use harmonigraph_record::publication::PublishError;
-        // All available earlier history precedes this complete current-state
-        // frame. Old onset metadata carries its original exact clock already;
-        // only the baseline's present cut is routed through the current segment.
-        if self.direct.pending().is_some() || (!self.direct.lost && !self.direct.recovery.any()) {
-            return;
-        }
-        let offset = self.recording.block_frames.saturating_sub(1);
-        let Some(timing) = self.direct_timing(offset) else {
-            return;
-        };
-        let time = observation_time - 1.0 / f64::from(self.boundary.sample_rate);
-        let route = match self.recording_route(timing, time) {
-            Ok(route) => route,
-            Err(()) => {
-                // A display-only repair has no new recording history. The old
-                // map may correctly have retired after its complete frontier.
-                if self.direct.lost {
-                    recorder.fail_configuration();
-                }
-                Default::default()
-            }
-        };
-        if self.direct.lost {
-            recorder.publication_lost(time, route);
-            self.direct.lost = false;
-            self.direct.recovery = Lanes::both(true);
-        }
-        // One lane at a time, gated on ITS OWN free cells and carrying ITS OWN
-        // next identity. A display ring the editor has stopped draining used to
-        // hold this frame back from a healthy take, and a frame one lane took
-        // while the other was Busy used to come back under the id the taker had
-        // already seen — silently, since a duplicate id is simply ignored.
-        for lane in Lane::ALL {
-            if !self.direct.recovery[lane] || recorder.publication_free()[lane] < 2 {
-                continue;
-            }
-            let Some(id) = self.direct.baseline_id[lane].checked_add(1) else {
-                self.fault();
-                return;
-            };
-            // A source with nothing to say has nothing to say on either lane,
-            // so both exits leave the loop rather than trying the next one.
-            let Some(frame) =
-                self.direct.state.baseline(SourceId::DIRECT, id, self.direct.sequence, time, true)
-            else {
-                return;
-            };
-            match recorder.publish_baseline(lane, &frame, route) {
-                Ok(()) => {
-                    self.direct.baseline_id[lane] = id;
-                    self.direct.recovery[lane] = false;
-                }
-                Err(PublishError::Busy | PublishError::Lost) => {}
-                Err(PublishError::Invalid) => self.fault(),
-            }
-        }
-    }
     pub fn recording_route(
         &self,
         timing: harmonigraph_core::canonical::EventTiming,
@@ -511,9 +354,6 @@ impl Owner {
         origin: Option<f64>,
         observation_time: f64,
     ) {
-        if self.frozen {
-            return;
-        }
         self.recording.observation_time = observation_time;
         if self.snapshot.status & 2 != 0 && recorder.recording_epoch() != 0 {
             recorder.fail_configuration();
@@ -521,19 +361,7 @@ impl Owner {
         self.recording.segment(recorder, origin, f64::from(self.boundary.sample_rate), self.block);
     }
 
-    pub fn observe(&mut self, event: OwnedInput) {
-        if self.frozen {
-            return;
-        }
-        self.direct.observe(event);
-    }
     pub fn group_end(&mut self) -> Option<ConfigurationEdit> {
-        if self.frozen {
-            return None;
-        }
-        if !self.direct.sync_learning(&mut self.confirmed) {
-            self.snapshot.status |= 1;
-        }
         if self.snapshot.status != 0 {
             return None;
         }
@@ -567,22 +395,3 @@ pub(crate) fn inject_recorder(recorder: harmonigraph_record::Recorder) {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-impl Owner {
-    pub fn print_test_memory_layout(&self) {
-        use std::mem::size_of;
-        println!(
-            "LEDGER configuration [owner,reducer,confirmed,learning,recording,direct] {:?}",
-            [
-                size_of::<Self>(),
-                size_of::<ConfigReducer>(),
-                size_of::<ConfirmedPitches>(),
-                size_of::<LearningState>(),
-                size_of::<recording::Recording>(),
-                size_of::<crate::performance::direct::Direct>()
-            ]
-        );
-        self.direct.print_test_memory_layout();
-    }
-}

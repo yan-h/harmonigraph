@@ -1,66 +1,68 @@
 //! The production companion. No analyzer, audio rings, recorder, dock, shared
 //! visualization state or GPU editor is constructed for this CLAP class.
-use super::{setup, source::Source};
 use nice_plug::prelude::*;
 use nice_plug::wrapper::clap::{configuration::OwnedInput, performance as api};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use super::{setup, tune::Tune, DELAY_MULTIPLIER_MAX};
+
 #[derive(Params)]
 pub struct TuneParams {
-    #[id = "participating"]
-    pub participating: BoolParam,
     /// Positive integer multiples of the host's advertised maximum callback
     /// size. An ordinary parameter, so the host saves it and each Tune reports
-    /// the latency it implies before any Hub pairing exists.
+    /// the latency it implies before any Hub exists.
     #[id = "tuning_delay"]
     pub delay: IntParam,
 }
 impl Default for TuneParams {
     fn default() -> Self {
         Self {
-            participating: BoolParam::new("Participating", true).with_value_to_string(Arc::new(
-                |value| if value { "Participating" } else { "Off" }.into(),
-            )),
             delay: IntParam::new(
                 "Tuning Delay",
                 1,
-                IntRange::Linear { min: 1, max: super::protocol::DELAY_MULTIPLIER_MAX },
+                IntRange::Linear { min: 1, max: DELAY_MULTIPLIER_MAX },
             )
             .with_value_to_string(Arc::new(|value| format!("{value}x buffer"))),
         }
     }
 }
+
 pub struct HarmonigraphTune {
     pub params: Arc<TuneParams>,
     pub shared: Arc<setup::Shared>,
-    pub source: Option<Box<Source>>,
+    pub tune: Option<Box<Tune>>,
     /// The maximum callback size this activation advertised. One buffer means
     /// this and nothing else -- not the minimum, not the length of the
     /// callback in hand, not an observed typical size.
     frames: u32,
 }
+
 impl Default for HarmonigraphTune {
     fn default() -> Self {
         let shared = setup::Shared::source();
-        let source = Source::new(shared.clone());
-        Self { params: Arc::new(TuneParams::default()), shared, source: Some(source), frames: 0 }
+        let tune = Tune::new(shared.clone());
+        Self { params: Arc::new(TuneParams::default()), shared, tune: Some(tune), frames: 0 }
     }
 }
+
 impl HarmonigraphTune {
     fn multiplier(&self) -> u32 {
-        self.params.delay.value().clamp(1, super::protocol::DELAY_MULTIPLIER_MAX) as u32
+        self.params.delay.value().clamp(1, DELAY_MULTIPLIER_MAX) as u32
     }
     /// What this Tune asks the host for. Zero frames means no activation has
     /// advertised a format yet, and there is no delay to report until one has.
     /// Asking is not being answered: the wrapper publishes a request only
     /// across an activation, so between a finished edit and the reactivation
     /// the host keeps reading the delay this activation is actually running.
-    /// Requested against active is a number for the editor, not for the host.
     fn requested_latency(&self) -> u32 {
         self.multiplier().saturating_mul(self.frames)
     }
+    fn tune(&mut self) -> &mut Tune {
+        self.tune.as_mut().unwrap()
+    }
 }
+
 impl Plugin for HarmonigraphTune {
     const NAME: &'static str = "Harmonigraph Tune";
     const VENDOR: &'static str = "Yan Han";
@@ -106,6 +108,7 @@ impl Plugin for HarmonigraphTune {
         ProcessStatus::KeepAlive
     }
 }
+
 impl ClapPlugin for HarmonigraphTune {
     const CLAP_ID: &'static str = "com.yan-h.harmonigraph-tune";
     const CLAP_DESCRIPTION: Option<&'static str> = Some("Shared harmonic session note companion");
@@ -118,37 +121,34 @@ impl ClapPlugin for HarmonigraphTune {
         Some(Arc::new(setup::Adapter(self.shared.clone(), Some(self.params.clone()))))
     }
     fn clap_main_init(&mut self) -> bool {
-        self.shared.register();
+        self.tune().register();
         true
     }
     fn clap_main_activate(&mut self, config: &BufferConfig) -> bool {
         self.frames = config.max_buffer_size;
         let multiplier = self.multiplier();
         self.shared.active_multiplier.store(multiplier, Ordering::Release);
-        self.source.as_mut().unwrap().activate(
-            f64::from(config.sample_rate),
-            config.max_buffer_size,
-            multiplier,
-        );
+        self.shared.publish_format(f64::from(config.sample_rate), config.max_buffer_size);
+        self.tune().activate(f64::from(config.sample_rate), config.max_buffer_size, multiplier);
         true
     }
+    /// Destruction gives the row back. The records this Tune left in its ring
+    /// carry an epoch the attach that follows has already moved past, so the
+    /// Hub refuses them and no drain, seal or acknowledgement is owed.
     fn clap_main_destroy(&mut self) {
-        super::registry::retire_source(self.source.take().unwrap());
+        self.tune.take().unwrap().retire();
     }
     fn clap_performance_stop(&mut self) {
-        self.source.as_mut().unwrap().stop();
+        self.tune().stop();
     }
     fn clap_performance_reset(&mut self) {
-        self.source.as_mut().unwrap().stop();
+        self.tune().stop();
     }
     fn clap_performance_begin(&mut self, callback: api::Callback, _output: &mut api::Output<'_>) {
-        self.source.as_mut().unwrap().begin(callback);
+        self.tune().begin(callback);
     }
     fn clap_performance_input(&mut self, input: OwnedInput) {
-        self.source.as_mut().unwrap().input(input);
-    }
-    fn clap_performance_input_boundary(&mut self) {
-        self.source.as_mut().unwrap().apply_setup();
+        self.tune().input(input);
     }
     fn clap_performance_process(
         &mut self,
@@ -165,22 +165,20 @@ impl ClapPlugin for HarmonigraphTune {
         // compensate for a delay no note is being given. Repeating the same
         // number costs one atomic swap and asks for nothing.
         context.set_latency_samples(self.requested_latency());
-        self.source.as_mut().unwrap().schedule(block, output);
+        self.tune().schedule(block, output);
         ProcessStatus::KeepAlive
     }
-    fn clap_performance_prepare(&mut self, group: api::Group) -> bool {
-        #[cfg(all(test, debug_assertions))]
-        self.source.as_mut().unwrap().test_stale_prepare(group);
-        self.source.as_mut().unwrap().prepare(group)
+    /// Every staged group is emitted. There is no eligibility left to check
+    /// here and no acceptance to record: what the host does with an event is
+    /// outside the protocol, which residual case 2 of #786 states plainly.
+    fn clap_performance_prepare(&mut self, _group: api::Group) -> bool {
+        true
     }
     fn clap_performance_complete(
         &mut self,
-        completion: api::Completion,
-        output: &mut api::Output<'_>,
+        _completion: api::Completion,
+        _output: &mut api::Output<'_>,
     ) {
-        #[cfg(all(test, debug_assertions))]
-        self.source.as_mut().unwrap().test_stale_complete(completion, output);
-        self.source.as_mut().unwrap().complete(completion, output);
     }
     fn clap_performance_finalize(
         &mut self,
@@ -188,7 +186,7 @@ impl ClapPlugin for HarmonigraphTune {
         _status: i32,
         output: &mut api::Output<'_>,
     ) {
-        self.source.as_mut().unwrap().schedule(
+        self.tune().schedule(
             api::Block {
                 callback,
                 start: 0,
@@ -198,7 +196,7 @@ impl ClapPlugin for HarmonigraphTune {
             output,
         );
     }
-    fn clap_performance_end(&mut self, callback: api::Callback, _summary: api::Summary) {
-        self.source.as_mut().unwrap().end(callback);
+    fn clap_performance_end(&mut self, _callback: api::Callback, _summary: api::Summary) {
+        self.tune().end();
     }
 }

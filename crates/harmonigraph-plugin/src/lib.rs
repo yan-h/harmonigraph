@@ -17,10 +17,10 @@ mod configuration;
 mod editor;
 #[cfg(all(feature = "startup-probe", target_os = "macos"))]
 pub use editor::startup_probe::run as editor_startup_probe;
-mod performance;
 #[cfg(test)]
 mod test_scope;
-use performance::tune::HarmonigraphTune;
+mod tuning;
+use tuning::plugin::HarmonigraphTune;
 
 /// Capacity of the audio→GUI sample ring feeding the Spectral pane's
 /// analyzer: >1 s of STEREO at 48 kHz. Overflow just drops frames — a spectrum
@@ -42,7 +42,7 @@ const DEFAULT_SAMPLE_RATE: f64 = 44_100.0;
 
 pub struct Harmonigraph {
     configuration: Option<Box<configuration::Owner>>,
-    aggregation: Option<Box<performance::hub::Hub>>,
+    aggregation: Option<Box<tuning::hub::Hub>>,
     /// Keeps the spectrogram's history running while the editor window is
     /// closed (see [`background`]). Held only to be dropped with the plugin,
     /// which is what stops its thread.
@@ -108,7 +108,7 @@ impl std::ops::DerefMut for RecorderSlot {
 
 #[derive(Params)]
 pub struct HarmonigraphParams {
-    session: std::sync::OnceLock<Arc<performance::setup::Shared>>,
+    session: std::sync::OnceLock<Arc<tuning::setup::Shared>>,
     configuration:
         std::sync::OnceLock<Arc<nice_plug::wrapper::clap::configuration::ConfigurationMailbox>>,
     /// Window size in logical pixels, persisted with the plugin state.
@@ -466,7 +466,7 @@ impl Default for Harmonigraph {
         let take = configuration::injected_recorder().unwrap_or(take);
         let take_events = Arc::new(AtomicU64::new(0));
         let params = Arc::new(HarmonigraphParams::default());
-        let aggregation = performance::hub::Hub::new();
+        let aggregation = tuning::hub::Hub::new();
         params.session.set(aggregation.shared.clone()).unwrap_or_else(|_| unreachable!());
         let editor_shared = Arc::new(Mutex::new(editor::EditorShared::new(
             consumer,
@@ -567,13 +567,9 @@ impl Plugin for Harmonigraph {
 
     fn reset(&mut self) {
         if let Some(owner) = self.configuration.as_mut() {
-            if self.aggregation.as_mut().is_some_and(|hub| hub.force_reset(owner, true)) {
-                self.samples_processed = 0;
-                return;
-            }
             owner.reset(&self.take);
             if let Some(hub) = &mut self.aggregation {
-                hub.reset_idle_clock(owner.recording.clock);
+                hub.stop();
             }
             let mailbox = self.params.configuration.get().unwrap();
             let generation = mailbox.reset_generation.load(Ordering::Relaxed);
@@ -610,11 +606,7 @@ impl Plugin for Harmonigraph {
         // state on the arming edge. Skipping it on a disarmed block means the
         // next arm edge never fires and recording silently never resumes.
         let armed = match self.configuration.as_ref() {
-            Some(owner) if !owner.frozen => self.take.is_armed_at(owner.recording_intent()),
-            Some(_) => {
-                self.take.is_armed();
-                false
-            }
+            Some(owner) => self.take.is_armed_at(owner.recording_intent()),
             None => self.take.is_armed(),
         };
         let take_origin =
@@ -703,11 +695,7 @@ impl Plugin for Harmonigraph {
         }
 
         if let Some(owner) = self.configuration.as_mut() {
-            self.aggregation.as_mut().unwrap().publish(
-                owner,
-                &mut self.take,
-                ring_time(self.presentation_seconds, block_samples as u32, self.sample_rate),
-            );
+            self.aggregation.as_mut().unwrap().publish(owner, &mut self.take);
             owner.finish_recording_publication(
                 &mut self.take,
                 ring_time(self.presentation_seconds, block_samples as u32, self.sample_rate),
@@ -744,13 +732,13 @@ impl Plugin for Harmonigraph {
 impl ClapPlugin for Harmonigraph {
     const CLAP_PERFORMANCE: bool = true;
     fn clap_setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
-        Some(Arc::new(performance::setup::Adapter(
+        Some(Arc::new(tuning::setup::Adapter(
             self.aggregation.as_ref().unwrap().shared.clone(),
             None,
         )))
     }
     fn clap_main_init(&mut self) -> bool {
-        self.aggregation.as_ref().unwrap().shared.register();
+        self.aggregation.as_mut().unwrap().register();
         true
     }
     fn clap_main_activate(&mut self, config: &BufferConfig) -> bool {
@@ -763,20 +751,23 @@ impl ClapPlugin for Harmonigraph {
     fn clap_configuration_retire(&mut self, unfinished: bool) {
         self.configuration.as_mut().unwrap().recording.retired_configuration = Some(unfinished);
     }
+    /// Destruction gives the rings back and lets the recorder's own boundaries
+    /// close. There is nothing to settle and nobody to tell: a Tune learns the
+    /// Hub is gone from the same slot it learned the Hub was here.
     fn clap_main_destroy(&mut self) {
         let mut hub = self.aggregation.take().unwrap();
+        hub.retire();
         hub.retire_publication(
             self.configuration.take().unwrap(),
             self.take.0.take().unwrap(),
             self.presentation_seconds,
         );
-        performance::registry::retire_hub(hub);
     }
     fn clap_performance_stop(&mut self) {
-        self.aggregation.as_mut().unwrap().direct.stop();
+        self.aggregation.as_mut().unwrap().stop();
     }
     fn clap_performance_reset(&mut self) {
-        self.aggregation.as_mut().unwrap().direct.stop();
+        self.aggregation.as_mut().unwrap().stop();
     }
     fn clap_performance_begin(
         &mut self,
@@ -793,7 +784,7 @@ impl ClapPlugin for Harmonigraph {
         &mut self,
         input: nice_plug::wrapper::clap::configuration::OwnedInput,
     ) {
-        self.aggregation.as_mut().unwrap().direct.input(input);
+        self.aggregation.as_mut().unwrap().input(input);
     }
     fn clap_performance_input_boundary(&mut self) {
         self.aggregation.as_mut().unwrap().input_boundary(self.configuration.as_mut().unwrap());
@@ -806,21 +797,22 @@ impl ClapPlugin for Harmonigraph {
         block: nice_plug::wrapper::clap::performance::Block,
         output: &mut nice_plug::wrapper::clap::performance::Output<'_>,
     ) -> ProcessStatus {
-        self.aggregation.as_mut().unwrap().direct.schedule(block, output);
+        self.aggregation.as_mut().unwrap().schedule(block, output);
         self.process(buffer, aux, context)
     }
+    /// Every staged group is emitted. Nothing is eligible or ineligible any
+    /// more, and what the host does with an event is outside the protocol.
     fn clap_performance_prepare(
         &mut self,
-        group: nice_plug::wrapper::clap::performance::Group,
+        _group: nice_plug::wrapper::clap::performance::Group,
     ) -> bool {
-        self.aggregation.as_mut().unwrap().direct.prepare(group)
+        true
     }
     fn clap_performance_complete(
         &mut self,
-        completion: nice_plug::wrapper::clap::performance::Completion,
-        output: &mut nice_plug::wrapper::clap::performance::Output<'_>,
+        _completion: nice_plug::wrapper::clap::performance::Completion,
+        _output: &mut nice_plug::wrapper::clap::performance::Output<'_>,
     ) {
-        self.aggregation.as_mut().unwrap().direct.complete(completion, output);
     }
     fn clap_performance_finalize(
         &mut self,
@@ -828,7 +820,7 @@ impl ClapPlugin for Harmonigraph {
         _status: i32,
         output: &mut nice_plug::wrapper::clap::performance::Output<'_>,
     ) {
-        self.aggregation.as_mut().unwrap().direct.schedule(
+        self.aggregation.as_mut().unwrap().schedule(
             nice_plug::wrapper::clap::performance::Block {
                 callback,
                 start: 0,
@@ -843,23 +835,10 @@ impl ClapPlugin for Harmonigraph {
         callback: nice_plug::wrapper::clap::performance::Callback,
         _summary: nice_plug::wrapper::clap::performance::Summary,
     ) {
-        let old = self.configuration.as_ref().unwrap().recording.clock;
-        self.aggregation.as_mut().unwrap().end(
-            callback,
-            self.configuration.as_mut().unwrap(),
-            &mut self.take,
-            self.presentation_seconds,
-        );
-        if old != self.configuration.as_ref().unwrap().recording.clock {
-            let mailbox = self.params.configuration.get().unwrap();
-            if mailbox
-                .reset_generation
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1))
-                .is_err()
-            {
-                self.configuration.as_mut().unwrap().fault();
-            }
-            mailbox.published.publish(self.configuration.as_ref().unwrap().snapshot);
+        let observation = self.presentation_seconds;
+        if let Some(owner) = self.configuration.as_mut() {
+            self.aggregation.as_mut().unwrap().end(callback, owner, &mut self.take);
+            owner.finish_recording_publication(&mut self.take, observation);
         }
     }
     const CLAP_CONFIGURATION: bool = true;
@@ -924,11 +903,13 @@ impl ClapPlugin for Harmonigraph {
         }
         result
     }
+    /// The Hub's own notes reach learning through its own sequenced row, at
+    /// the time they are scheduled to sound, so there is nothing left for a
+    /// second observation of the same input to add.
     fn clap_configuration_observe(
         &mut self,
-        event: nice_plug::wrapper::clap::configuration::OwnedInput,
+        _event: nice_plug::wrapper::clap::configuration::OwnedInput,
     ) {
-        self.configuration.as_mut().unwrap().observe(event);
     }
     fn clap_configuration_group_end(
         &mut self,
