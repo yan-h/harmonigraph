@@ -41,15 +41,30 @@ When both are harmonically admissible, a more precise input should help select t
 
 Released notes must continue to contribute to harmonic context, favouring more recently released notes.
 Forget old contributions when they cease to be useful, using straightforward bounded memory rather than an elaborate analysis of whether a note could ever affect a future choice.
-The exact weighting and forgetting rules remain open.
+**New musical activity replaces old context; elapsed time alone does not gradually weaken it.** If Yan plays and leaves a note, later notes must still use that context for as long as the configured memory/reset setting permits.
+The exact replacement and weighting rules remain open.
 
-The working proposal gives held notes the strongest influence and decreases released-note influence with age.
+Giving held notes stronger influence remains a working proposal, not an absolute anchoring rule.
+A sustained bass may keep the neighbourhood nearby or be left behind by the newer harmony, depending on the sequence of notes and harmonic heuristics.
+Yan accepts either outcome; do not impose a universal pedal anchor or universal escape rule.
 Forgetting individual old notes must not itself erase the accumulated tuning displacement.
 Ordinary releases between chords must not destroy continuity.
 
 Provide a configurable time before reset after silence, with a proposed “Never” option.
 The working proposal measures silence from the release of the last sounding note and clears both harmonic memory and accumulated drift at timeout.
 Exact pedal, transport and reset behaviour, time range and defaults remain to be decided.
+
+### Frozen notes and sequential decisions
+
+**No adaptive retuning of an already sounding note, ever, under the present design.** Yan explicitly made this an immutable rule unless he later changes his mind.
+Choose the note's tuning at attack and retain it for its lifetime, regardless of subsequent harmony or neighbourhood movement.
+Do not reselect or glide a held note to improve a later chord.
+The treatment of player-authored expression is a separate input/output question, not permission for automatic retuning.
+
+Prefer a simple algorithm and accept that the route through the notes affects the result.
+A chord played together, rolled or arpeggiated need not arrive at the same tuning, and changing note order may change the path.
+Do not introduce joint chord optimization or extra grouping latency just to make those cases equivalent.
+The implementation still needs a deterministic order for simultaneous attacks.
 
 ### Hard harmonic boundary
 
@@ -101,32 +116,33 @@ Context and balance changes may move those ranges and make nodes enter or leave 
 | Harmonic preference ↔ Pitch fidelity | Balance eligible candidates' harmonic suitability and input-pitch closeness | Requested; scoring, range and default open |
 | Reset after silence | Set when context and accumulated drift reset, optionally never | Requested; timing semantics, range and default open |
 
-Memory decay might need a separate control or might use a fixed rule.
-It must not be conflated with the silence reset: one lets new harmony take over, while the other intentionally ends the journey.
+Memory replacement might need a capacity or activity-based control, or might use a fixed rule.
+Do not add gradual time decay as the default interpretation of forgetting.
+Replacement must not be conflated with the silence reset: one lets new harmony take over, while the other intentionally ends the journey.
 
 ## Open decisions for the next discussion
 
-1. **Held pitches and anchors.** Must already sounding notes remain fixed, as they do today? How strongly should a sustained bass or pedal constrain travel when upper voices move elsewhere?
-2. **Chord timing.** Should simultaneous new notes be selected jointly, and should slightly spread attacks or arpeggios receive the same interpretation? What latency, if any, is acceptable for grouping them?
-3. **Moving reference.** What establishes and advances the input-to-lattice reference without causing unintended shifts from chord voicing, attack order or expression? How are register and accumulated unwrapped displacement carried separately?
-4. **Harmonic distance.** Which lattice connections and prime axes count, with what weights? Is remoteness measured from one centre, the whole context or nearby individual voices? How is a widely spread context handled without admitting arbitrary bridges or leaving no candidates?
-5. **Memory.** How quickly should released harmony lose influence? Should a newer occurrence replace an older contribution, and should sustained notes, chord density or repeated attacks affect weighting?
-6. **Reset.** What counts as silence under sustain? What should Stop, playback loops and explicit Reset do? What timeout range and default feel useful?
-7. **Continuous pitch and expression.** Which incoming pitch controls describe the pitch to quantize at attack? Should later bends stay expressive, feed the harmonic context, or cause reselection? The current participating path does not use incoming expression to choose its assignment, so continuous input requires an explicit change to that contract.
-8. **Selection and indicator.** How strong can pitch fidelity become within the boundary, and how are ties resolved stably? If chord notes are selected jointly, does the indicator describe single-note next actions only or also possible chord outcomes?
+1. **Moving reference.** What establishes and advances the input-to-lattice reference? How are register and accumulated unwrapped displacement carried separately? Note-order dependence is accepted, but updates still need a coherent musical interpretation.
+2. **Harmonic distance.** Which lattice connections and prime axes count, with what weights? Is remoteness measured from one centre, the whole context or nearby individual voices? How is a widely spread context handled without admitting arbitrary bridges or leaving no candidates?
+3. **Memory replacement and weights.** Which new activity supersedes which old contributions? Should a newer occurrence replace an older contribution, and should sustained notes, chord density, register or repeated attacks affect weighting? A held bass has no categorical anchoring privilege; its effect should emerge from the sequence and heuristics.
+4. **Reset.** What counts as silence under sustain? What should Stop, playback loops and explicit Reset do? What timeout range and default feel useful?
+5. **Continuous pitch and expression.** Which incoming pitch controls describe the pitch to quantize at attack? Should subsequent player-authored bends be forwarded, and if so should they affect future notes' context? Automatic reselection of sounding notes is forbidden. The current participating path does not use incoming expression to choose its assignment, so continuous input requires an explicit change to that contract.
+6. **Selection and indicator.** How strong can pitch fidelity become within the boundary, and how are ties and simultaneous attacks ordered stably? Does octave/register affect selection or only output register and context weighting?
 
-Joint chord selection was suggested to avoid keyboard-order and inversion artefacts, but it is not settled.
+Joint chord selection was an earlier suggestion; the subsequent decision favours simplicity and accepts route dependence.
 A fixed twelve-node keyboard mapping was explicitly rejected in favour of continuous pitch input.
-Do not restore that assumption merely to simplify grouping or the indicator.
+Do not restore that assumption merely to simplify the indicator.
 
 ## Behaviour to validate when an algorithm is proposed
 
 - Repeated ascending-third major chords continue rightward for many cycles, beyond one diesis and beyond the old absolute pitch-correction window.
 - Ordinary gaps between chords preserve the journey until the configured reset.
+- A lone remembered note remains useful after waiting, provided the silence timeout has not expired; new musical activity, rather than gradual time decay, replaces its influence.
+- Later notes never cause an already sounding note to be adaptively retuned.
 - Fine pitch input can distinguish 9/5 and 16/9 when both are eligible.
 - An exact pitch match outside the harmonic boundary never wins.
 - Reachable nodes shown in the indicator agree with actual next-note selection under the same context.
-- Inversions, octave changes, attack order, sustained anchors and arpeggios have deliberate, stated behaviour rather than accidental consequences of sequencing.
+- Note-order dependence is accepted for inversions and arpeggios; simultaneous attacks must still have a deterministic order, and sustained-anchor and octave behaviour need explicit heuristics.
 
 These are design checks, not claims of implemented or tested behaviour.
 The existing policy's fixed origin domain, 50-cent candidate window and per-note sequential decisions are useful comparison points, not constraints on this redesign.
