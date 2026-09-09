@@ -255,6 +255,8 @@ pub struct Hub {
     /// Host seconds against elapsed samples, for loop and seek detection.
     seconds: Option<f64>,
     status: u32,
+    /// Which row the next collection starts from.
+    rotation: usize,
     decisions: u64,
     published: u64,
 }
@@ -278,6 +280,7 @@ impl Hub {
             clock: ClockId::default(),
             seconds: None,
             status: 0,
+            rotation: 0,
             decisions: 0,
             published: 0,
         })
@@ -453,8 +456,12 @@ impl Hub {
     /// to a session that has been cut away and is dropped where it is found.
     fn collect(&mut self) {
         let direct_epoch = self.tune.epoch();
-        while let Some(capture) = self.tune.take_direct() {
-            if capture.epoch == direct_epoch && self.batch.len() < BATCH_EVENTS {
+        // A full batch stops the drain rather than emptying it: what stays in
+        // the ring is sequenced next callback, and a ring that then fills is
+        // the Tune's own RING_FULL rather than a record lost without a word.
+        while self.batch.len() < BATCH_EVENTS {
+            let Some(capture) = self.tune.take_direct() else { break };
+            if capture.epoch == direct_epoch {
                 self.batch.push(Record {
                     source: DIRECT,
                     sample: capture.sample,
@@ -465,11 +472,18 @@ impl Hub {
             }
         }
         let epoch = self.epoch;
+        // Start one row further along each callback. A batch that fills always
+        // fills from the front, so a fixed order would make the same row wait
+        // every time rather than each of them waiting in turn.
+        let rotation = self.rotation;
+        self.rotation = (self.rotation + 1) % TUNERS;
         let Some(ends) = self.ends.as_mut() else { return };
-        for (slot, end) in ends.iter_mut().enumerate() {
-            let Some(end) = end else { continue };
-            while let Ok(capture) = end.captures.pop() {
-                if capture.epoch != epoch || self.batch.len() >= BATCH_EVENTS {
+        for offset in 0..TUNERS {
+            let slot = (rotation + offset) % TUNERS;
+            let Some(end) = ends[slot].as_mut() else { continue };
+            while self.batch.len() < BATCH_EVENTS {
+                let Ok(capture) = end.captures.pop() else { break };
+                if capture.epoch != epoch {
                     continue;
                 }
                 self.batch.push(Record {
