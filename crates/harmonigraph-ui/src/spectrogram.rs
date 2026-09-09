@@ -4526,15 +4526,15 @@ mod tests {
             }
         }
 
-        /// The quiet end of the ramp FADES to black rather than falling off a cliff
-        /// into it.
+        /// The quiet end of the ramp FADES toward black rather than falling off a
+        /// cliff into it.
         ///
         /// A shortcut answering everything under some dB as silence is invisible
         /// while the Level window bottoms out above it, and becomes a hard edge —
         /// faintest colour straight to black — the moment the window can be dragged
         /// below. The control is the same bucket at the default window, where it
-        /// really is under the floor: without it, a picture that had gone black
-        /// everywhere would pass the first half by drawing nothing.
+        /// really is under the floor: without it, a picture pinned to the darkest
+        /// LUT slice everywhere would pass the first half.
         #[test]
         fn a_bucket_above_a_dragged_down_floor_still_draws_a_colour() {
             let Some(mut headless) = SpectrogramHeadless::new() else {
@@ -4556,17 +4556,29 @@ mod tests {
                 );
                 pixel(&frame, size, 0, 0)
             };
-            let default = SpectrumConfig { volume_ceiling_db: 0.0, ..SpectrumConfig::default() };
+            // Hold the palette and pitch tilt fixed while probing the
+            // level-window mapping.
+            let default = SpectrumConfig {
+                spectrogram_gradient: crate::SpectrogramPreset::Aurora.gradient(),
+                volume_ceiling_db: 0.0,
+                tilt: 0.0,
+                ..SpectrumConfig::default()
+            };
+            let darkest = crate::panes::spectral::spectrogram::cell_color(
+                default.spectrogram_gradient,
+                0.5 / SHADES as f32,
+            )
+            .to_array();
             assert_eq!(
                 drawn(default, &mut headless)[..3],
-                [0, 0, 0],
-                "a -90 dB bucket is under the captured default floor and must be black",
+                darkest[..3],
+                "a -90 dB bucket under the default floor missed the darkest LUT slice",
             );
             let dragged = SpectrumConfig { volume_floor_db: -120.0, ..default };
             let lit = drawn(dragged, &mut headless);
             assert_ne!(
                 lit[..3],
-                [0, 0, 0],
+                darkest[..3],
                 "a -90 dB bucket 30 dB above a -120 dB floor was cut off instead of faded",
             );
         }
