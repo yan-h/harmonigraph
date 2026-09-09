@@ -4470,6 +4470,11 @@ fn full_normal_attempt_lane_keeps_all_voice_and_pedal_emergency_attempts_availab
     let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
+    let source_wrapper = unsafe {
+        &*((*source.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
+    };
     source.run(0, vec![], None);
     hub.run(0, vec![], None);
     let mut initial: Vec<_> = (0..16)
@@ -4527,6 +4532,11 @@ fn full_normal_attempt_lane_keeps_all_voice_and_pedal_emergency_attempts_availab
         64,
         "accepted termination still awaits canonical retention"
     );
+    let release_owners = source_wrapper
+        .test_inspect_plugin(|plugin| plugin.source.as_ref().unwrap().test_release_slots());
+    assert!(release_owners
+        .iter()
+        .all(|owner| { owner.is_some_and(|(_, staged, accepted)| !staged && accepted.is_some()) }));
     // A genuinely malformed later host input raises a distinct recovery cause.
     // It cannot recreate the already accepted neutralization or consume more
     // reserved factual sequence numbers for the same settled channel debt.
@@ -4542,6 +4552,12 @@ fn full_normal_attempt_lane_keeps_all_voice_and_pedal_emergency_attempts_availab
     assert_eq!(extra.attempts, 0);
     assert_eq!(source.source_snapshot().emergency, 112);
     assert_eq!(source.source_snapshot().faults, source::OUTPUT_FAULT | source::INPUT_FAULT);
+    assert_eq!(
+        source_wrapper
+            .test_inspect_plugin(|plugin| { plugin.source.as_ref().unwrap().test_release_slots() }),
+        release_owners,
+        "a later fault cannot restage, replace or multiply accepted release-slot owners"
+    );
     assert_eq!(source.run(256, vec![], None).attempts, 0);
     assert_eq!(source.source_snapshot().emergency, 112);
     let mut remaining_resets = 0;
@@ -4552,6 +4568,10 @@ fn full_normal_attempt_lane_keeps_all_voice_and_pedal_emergency_attempts_availab
     assert_eq!(remaining_resets, 0);
     assert_eq!(session.credits.load(Ordering::Acquire), 0, "{:?}", source.source_snapshot());
     assert_eq!(source.source_snapshot().emergency, 0);
+    assert!(source_wrapper
+        .test_inspect_plugin(|plugin| plugin.source.as_ref().unwrap().test_release_slots())
+        .iter()
+        .all(Option::is_none));
 }
 
 #[cfg(debug_assertions)]

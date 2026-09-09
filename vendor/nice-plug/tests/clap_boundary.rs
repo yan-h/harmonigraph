@@ -72,6 +72,7 @@ struct Observed {
     finals: usize,
     traces: usize,
     faults: usize,
+    prepares: usize,
 }
 impl Default for Control {
     fn default() -> Self {
@@ -299,6 +300,7 @@ impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
         }
     }
     fn clap_performance_prepare(&mut self, group: perf::Group) -> bool {
+        self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).prepares += 1;
         if (0..group.event_count()).any(|index| match group.event(index) {
             Some(InputValue::Note { kind: CLAP_EVENT_NOTE_ON, .. }) => true,
             Some(InputValue::Midi { data: [status, _, velocity], .. }) => status & 0xf0 == 0x90 && velocity != 0,
@@ -395,6 +397,13 @@ fn single(n: u64, lane: perf::Lane, time: u32, value: InputValue) -> perf::Group
 }
 fn pair(n: u64, time: u32) -> perf::Group {
     perf::Group::onset(token(n), time, note(CLAP_EVENT_NOTE_ON), tuning()).unwrap()
+}
+fn replacement(n: u64, time: u32) -> perf::Group {
+    perf::Group::sequence(
+        single(n, perf::Lane::Normal, time, note(CLAP_EVENT_NOTE_CHOKE)),
+        pair(n + 1, time),
+    )
+    .unwrap()
 }
 fn header<T>(kind: u16, time: u32) -> clap_event_header {
     clap_event_header {
@@ -1202,6 +1211,35 @@ fn onset_pair_reserves_two_credits_when_only_one_is_left() {
     assert_eq!(o.admissions[512], Ok(()));
     assert_eq!(d.sink.attempts.len(), 512);
     assert_eq!(o.completions.len(), 512);
+}
+
+#[test]
+fn replacement_sequence_has_one_prepare_and_reports_its_exact_accepted_prefix() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for (acceptance, expected) in [
+        (vec![false], (1, 0, 6)),
+        (vec![true, false], (3, 1, 4)),
+        (vec![true, true, false], (7, 3, 0)),
+        (vec![true, true, true], (7, 7, 0)),
+    ] {
+        let mut d = Device::new(
+            Control { script: instructions([replacement(40, 7)]), ..Default::default() },
+            c"fixture.performance",
+        );
+        d.sink.script = acceptance;
+        d.run(0, 64, vec![], true);
+        let observed = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(observed.prepares, 1);
+        assert_eq!(observed.completions.len(), 1);
+        let completion = observed.completions[0];
+        assert_eq!(
+            (completion.attempted, completion.accepted, completion.unattempted),
+            expected
+        );
+        let (release, onset) = completion.group.sequence_parts().unwrap();
+        assert_eq!((release.event_count(), onset.event_count()), (1, 2));
+        assert_eq!((release.token, onset.token), (token(40), token(41)));
+    }
 }
 
 #[test]

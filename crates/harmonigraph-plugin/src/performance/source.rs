@@ -25,9 +25,10 @@ pub(super) mod channel;
 mod debt;
 #[cfg(all(test, debug_assertions))]
 mod replay_tests;
+#[cfg(test)]
+pub(super) mod scheduler_tests;
 mod stop;
 mod token;
-use token::PREPAID_ONSET;
 mod wave;
 pub(super) mod work;
 
@@ -632,7 +633,12 @@ impl Source {
         // obligations no callback can deliver, preserving State, the final
         // accepted sequence and both journals exactly as they were. A live
         // reset must still earn every release through host acceptance.
-        for release in self.debt.join().into_iter().flatten() {
+        #[cfg(test)]
+        scheduler_tests::record_join_before(&self.debt);
+        let abandoned_releases = self.debt.join();
+        #[cfg(test)]
+        scheduler_tests::record_join_after(&self.debt);
+        for release in abandoned_releases.into_iter().flatten() {
             self.lives.local_mut(release.life).unwrap().refs -= 1;
             self.recycle(release.life);
         }
@@ -1981,21 +1987,16 @@ impl Source {
             Plan::Wait(wait) => return Staging::Wait(wait),
             Plan::Ready(group) => group,
         };
-        // Rule two ties the choke to the replacement's own emission, and the
-        // two are separate host pushes: the choke, then a completion, then the
-        // onset, with everything else the callback owes competing for the same
-        // 512 credits in between. So they are admitted together or not at all.
-        // The onset is already in the scheduler before the choke can be pushed.
-        // Its token also tells prepare to spend both completion budgets before
-        // the choke, so the choke's cleanup cannot consume the onset's visit.
+        // Rule two ties the choke to the replacement's own emission. One
+        // scheduler group owns both wire pushes, so every preparation resource
+        // is secured before the choke can reach the host and no completion can
+        // spend or invalidate what the onset still needs.
         let replacement = child != NONE
             && self.pending.at(position).is_some_and(|parent| parent.event.attack().is_some());
         let staged = if replacement {
             match self.plan_work(position, NONE, start, end, output) {
-                Plan::Ready(mut onset) => {
-                    onset.token.0[3] = PREPAID_ONSET;
-                    output.stage_all(&[group, onset])
-                }
+                Plan::Ready(onset) => api::Group::sequence(group, onset)
+                    .and_then(|replacement| output.stage(replacement)),
                 // The replacement will never emit, so nothing is choked for it:
                 // the forced release retires with the onset instead of sounding
                 // alone, which is also what keeps the envelope retirable.
@@ -2099,17 +2100,36 @@ impl Source {
 
     pub fn prepare(&mut self, group: api::Group) -> bool {
         assert!(self.permit.is_none());
+        #[cfg(test)]
+        if let Some(prepared) = self.test_prepare_probe(group) {
+            return prepared;
+        }
         if token::is_emergency(group.token) {
             return self.prepare_emergency();
         }
-        let position = group.token.0[1] as usize;
-        let child = token::child(group.token);
+        let sequence = group.sequence_parts();
+        let first = sequence.map_or(group, |(first, _)| first);
+        let position = first.token.0[1] as usize;
+        let child = token::child(first.token);
         let Some(parent) = self.pending.at(position).filter(|parent| {
-            parent.serial == group.token.0[2] && parent.staged && parent.selected == child
+            parent.serial == first.token.0[2] && parent.staged && parent.selected == child
         }) else {
             return false;
         };
-        let pending = self.resolved(position, child);
+        let first_pending = self.resolved(position, child);
+        let pending = if let Some((_, second)) = sequence {
+            if second.token.0[1] as usize != position
+                || second.token.0[2] != parent.serial
+                || token::child(second.token) != NONE
+                || child == NONE
+                || parent.event.attack().is_none()
+            {
+                return false;
+            }
+            self.resolved(position, NONE)
+        } else {
+            first_pending
+        };
         let actual = self.callback.unwrap().steady_time.checked_add(i64::from(group.time));
         if actual.is_none_or(|actual| self.next_stop_sample().is_some_and(|stop| actual >= stop)) {
             return false;
@@ -2134,12 +2154,7 @@ impl Source {
         } else {
             1
         };
-        let completion_work = if group.token.0[3] == PREPAID_ONSET {
-            // Only accepted completion of the paired choke can hand this
-            // staged parent to its inline onset. A refused choke invalidates
-            // both tokens; a later standalone retry pays normally.
-            0
-        } else if child != NONE && parent.event.attack().is_some() {
+        let completion_work = if child != NONE && parent.event.attack().is_some() {
             completion_work + usize::from(parent.work_count)
         } else {
             completion_work
@@ -2151,8 +2166,9 @@ impl Source {
         {
             return false;
         }
-        let report_cells =
-            self.channel_report_cells(pending) + usize::from(group.initial_tuning().is_some());
+        let report_cells = self.channel_report_cells(pending)
+            + usize::from(group.initial_tuning().is_some())
+            + usize::from(sequence.is_some()) * self.channel_report_cells(first_pending);
         // Preserve the entire reserved emergency allowance before every normal
         // host acceptance. Exhaustion must occur while terminations can still
         // receive unique factual sequence numbers; clearing a fault cannot wrap.
@@ -2173,7 +2189,12 @@ impl Source {
             gate: false,
             inherited: NONE,
         };
-        if !self.channel_ready(pending) || !self.channel_wire_bindings_available(pending) {
+        if (sequence.is_some()
+            && (!self.channel_ready(first_pending)
+                || !self.channel_wire_bindings_available(first_pending)))
+            || !self.channel_ready(pending)
+            || !self.channel_wire_bindings_available(pending)
+        {
             return false;
         }
         if pending.event.attack().is_some() {
@@ -2183,16 +2204,16 @@ impl Source {
             // Rule two makes a replacement the same voice as the note it
             // displaces rather than a second one, so the pair holds one
             // reservation and not one each -- the same cell `State` already
-            // reuses for a retrigger. Its predecessor is silent by the time
-            // this onset is prepared, because an unaccepted choke takes the
-            // onset down with it before either is permitted, so that
-            // reservation IS the room this onset needs. Inheriting it retires
+            // reuses for a retrigger. Its predecessor will be silent before
+            // this onset is pushed, while an unaccepted choke takes the onset
+            // down with it under this same preparation, so that reservation
+            // IS the room this onset needs. Inheriting it retires
             // nothing early: the debt moves with the slot, and a successor's
             // terminal cut and time both dominate its predecessor's, so the
             // one credit comes back no sooner than the two would have.
             // Claiming a 65th instead is what left 64 held notes plus a
             // retrigger choked and silent until a later callback.
-            let inherited = self.replaced_reservation(position);
+            let inherited = self.replaced_reservation(position, sequence.is_some());
             let slot = match inherited {
                 Some(slot) => slot,
                 None => {
@@ -2205,6 +2226,12 @@ impl Source {
                         .copied()
                         .filter(|index| *index != NONE)
                         .filter(|index| !self.lives.at(*index).unwrap().reserved)
+                        // This same prepared group pays its predecessor's
+                        // physical Off before the replacement onset. Keep all
+                        // other unreserved obligations in the capacity count;
+                        // a refused first push restores fault cancellation
+                        // before any new reservation can escape.
+                        .filter(|index| sequence.is_none() || *index != first_pending.life)
                         .count();
                     if self.held() + unreserved_offs >= 64 {
                         return false;
@@ -2217,6 +2244,8 @@ impl Source {
             };
             if let Some(offer) = &self.offer {
                 let row = &offer.session.rows[usize::from(offer.lease.slot - 1)];
+                #[cfg(test)]
+                scheduler_tests::close_gate_for_probe(&row.emission_gate);
                 // Claiming the gate is a claim of OPEN. It used to be a claim
                 // of whatever generation the planned `Assignment` recorded, but
                 // the gate holds nothing but OPEN/BUSY/CLOSED, so the writer
@@ -2283,6 +2312,61 @@ impl Source {
             }
             return;
         }
+        // A stale completion is allowed to arrive defensively, but it must not
+        // take the preparation permit owned by the current envelope. For a
+        // replacement the first (release) half is the permit's initial owner;
+        // an accepted release hands the completion filter to the onset below.
+        let owner = completion.group.sequence_parts().map_or(completion.group, |(first, _)| first);
+        let owner_position = owner.token.0[1] as usize;
+        let owner_child = token::child(owner.token);
+        if self.pending.at(owner_position).is_none_or(|parent| {
+            parent.serial != owner.token.0[2] || !parent.staged || parent.selected != owner_child
+        }) {
+            return;
+        }
+        let permit = self.permit.take().map(|permit| match permit {
+            Permit::Ordinary(permit) => permit,
+            Permit::Emergency => unreachable!("ordinary completion requires ordinary preparation"),
+        });
+        if let Some((first, second)) = completion.group.sequence_parts() {
+            let onset_life = self.resolved(second.token.0[1] as usize, NONE).life;
+            let first_completion = api::Completion {
+                group: first,
+                attempted: completion.attempted & 1,
+                accepted: completion.accepted & 1,
+                unattempted: completion.unattempted & 1,
+                disposition: completion.disposition,
+            };
+            if completion.accepted & 1 == 0 {
+                if let Some(permit) = permit {
+                    // Restore the predecessor before a host refusal faults and
+                    // enumerates every still-sounding emergency owner.
+                    self.unwind_ordinary_permit(permit, onset_life);
+                }
+                self.complete_ordinary(first_completion, output, None, false);
+                return;
+            }
+            self.complete_ordinary(first_completion, output, permit, false);
+            let second_completion = api::Completion {
+                group: second,
+                attempted: completion.attempted >> 1,
+                accepted: completion.accepted >> 1,
+                unattempted: completion.unattempted >> 1,
+                disposition: completion.disposition,
+            };
+            self.complete_ordinary(second_completion, output, permit, true);
+            return;
+        }
+        self.complete_ordinary(completion, output, permit, true);
+    }
+
+    fn complete_ordinary(
+        &mut self,
+        completion: api::Completion,
+        output: &mut api::Output<'_>,
+        permit: Option<OrdinaryPermit>,
+        settle_permit: bool,
+    ) {
         let position = completion.group.token.0[1] as usize;
         let child = token::child(completion.group.token);
         let Some(mut parent) = self.pending.at(position).filter(|parent| {
@@ -2305,10 +2389,6 @@ impl Source {
             parent.staged = false;
         }
         self.pending.set(position, parent);
-        let permit = self.permit.take().map(|permit| match permit {
-            Permit::Ordinary(permit) => permit,
-            Permit::Emergency => unreachable!("ordinary completion requires ordinary preparation"),
-        });
         if completion.accepted & 1 != 0 {
             let permit = permit.expect("accepted output requires durable preparation");
             assert_eq!((permit.position, permit.serial), (position, parent.serial));
@@ -2377,7 +2457,7 @@ impl Source {
             if !parent.inline_done || child != NONE {
                 self.finish_work(position, child);
             }
-            if permit.gate {
+            if settle_permit && permit.gate {
                 self.release_gate();
             }
             self.wake_waiters(waiter, output);
@@ -2406,26 +2486,9 @@ impl Source {
                 );
             }
         } else {
-            if let Some(permit) = permit {
-                if permit.credit {
-                    self.return_credit(pending.life);
-                }
-                if permit.inherited != NONE {
-                    // An onset the host never took leaves its predecessor
-                    // exactly as it found it: the borrowed slot goes back, and
-                    // with it the acknowledgement debt it still carries. A
-                    // permit only reaches here after an attempted push, so the
-                    // OUTPUT_FAULT below always accompanies this and no fixture
-                    // can tell the two apart -- this is the symmetric undo of
-                    // the acquisition, like the credit and the gate beside it,
-                    // rather than a state anything downstream still reads.
-                    self.lives.local_mut(pending.life).unwrap().reserved = false;
-                    *self.reserved.iter_mut().find(|v| **v == pending.life).unwrap() =
-                        permit.inherited;
-                    self.lives.local_mut(permit.inherited).unwrap().reserved = true;
-                }
-                if permit.gate {
-                    self.release_gate();
+            if settle_permit {
+                if let Some(permit) = permit {
+                    self.unwind_ordinary_permit(permit, pending.life);
                 }
             }
             if completion.attempted != 0
@@ -2445,6 +2508,23 @@ impl Source {
             self.cancel_cursor = self.pending.front_position();
         }
         self.schedule_emergency(output);
+    }
+
+    fn unwind_ordinary_permit(&mut self, permit: OrdinaryPermit, life: u16) {
+        if permit.credit {
+            self.return_credit(life);
+        }
+        if permit.inherited != NONE {
+            // An onset the host never took leaves its predecessor exactly as
+            // it found it: the borrowed slot goes back, and with it the
+            // acknowledgement debt it still carries.
+            self.lives.local_mut(life).unwrap().reserved = false;
+            *self.reserved.iter_mut().find(|value| **value == life).unwrap() = permit.inherited;
+            self.lives.local_mut(permit.inherited).unwrap().reserved = true;
+        }
+        if permit.gate {
+            self.release_gate();
+        }
     }
 
     fn record(&mut self, event: Event, life: u16, input: i64, actual: i64) -> OutputDelta {
@@ -2560,20 +2640,21 @@ impl Source {
         }
     }
     /// The reservation a replacement takes over instead of claiming a fresh
-    /// one: the slot still held by the note its own forced release has already
-    /// silenced. That release is this attack's own work child, so this is rule
-    /// two's pair and not merely the last note on the key -- an ordinary attack
-    /// after an ordinary release chokes nothing and waits its turn like any
-    /// other. `terminal` with no Note-Off owed is what `arm_release_debt` reads
-    /// to decide a life needs no emergency release of its own, so a slot handed
-    /// on here is one no fault could still have to spend.
-    fn replaced_reservation(&self, position: usize) -> Option<usize> {
+    /// one: the slot held by the note its own forced release silences first in
+    /// the same prepared group. Before that group is pushed, its release is
+    /// this attack's own work child; after an accepted split it is identified
+    /// by the terminal fact. An ordinary attack after an ordinary release has
+    /// neither and waits its turn like any other. A refused first push restores
+    /// the slot before fault cancellation enumerates emergency owners.
+    fn replaced_reservation(&self, position: usize, prepared_with_release: bool) -> Option<usize> {
         let mut child = self.pending.at(position)?.work_head;
         while child != NONE {
             let cell = self.work.at(child);
             if matches!(cell.operation, work::CHOKE | work::NOTE_OFF)
                 && self.lives.at(cell.life).is_some_and(|previous| {
-                    previous.reserved && previous.terminal.is_some() && !previous.note_off_owed
+                    previous.reserved
+                        && (prepared_with_release
+                            || previous.terminal.is_some() && !previous.note_off_owed)
                 })
             {
                 return self.reserved.iter().position(|index| *index == cell.life);
@@ -2923,7 +3004,7 @@ impl Source {
                             || self.sealed_ack.is_some_and(|sealed| delta.sequence <= sealed))
                 })
             }) {
-                let release = self.debt.discharge_release(slot).unwrap();
+                let release = self.debt.discharge_accepted_release(slot).unwrap();
                 self.lives.local_mut(release.life).unwrap().refs -= 1;
                 self.recycle(release.life);
             }
@@ -3706,6 +3787,39 @@ impl Source {
     pub fn test_repeat_emergency_output(&mut self) {
         let delta = self.emergency_output.front().unwrap();
         self.offer.as_mut().unwrap().endpoints.outputs.push(delta).unwrap();
+    }
+    pub fn test_release_slots(&self) -> [Option<(u64, bool, Option<u64>)>; 64] {
+        std::array::from_fn(|slot| {
+            self.debt.release(slot).map(|release| {
+                (
+                    self.lives.at(release.life).unwrap().serial,
+                    release.staged,
+                    release.accepted.map(|delta| delta.sequence),
+                )
+            })
+        })
+    }
+    pub fn test_fill_journal_to_free(&mut self, free: usize) {
+        assert!(free <= self.journal.free());
+        while self.journal.free() > free {
+            self.sequence += 1;
+            self.journal
+                .push(OutputDelta {
+                    decision: 0,
+                    player: 0.0,
+                    incarnation: self.incarnation(),
+                    sequence: self.sequence,
+                    lifetime: 0,
+                    input: 0,
+                    actual: 0,
+                    epoch: self.epoch,
+                    mapped: true,
+                    discontinuity_generation: 0,
+                    event: Event::Midi { port: 0, data: [0xf8, 0, 0], flags: 0 },
+                    outcome: Outcome::wire(NONE, false),
+                })
+                .unwrap_or_else(|_| unreachable!("test reserved journal cell"));
+        }
     }
     pub fn print_test_memory_layout(&self) {
         use std::mem::size_of;
