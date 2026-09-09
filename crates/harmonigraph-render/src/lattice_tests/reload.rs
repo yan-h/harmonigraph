@@ -254,11 +254,16 @@ fn a_reload_rebuilds_and_draws_both_bloom_variants() {
     std::fs::write(&common, COMMON_SRC).unwrap();
     std::fs::write(&lattice, SHADER_SRC).unwrap();
     std::fs::write(&text_path, text::TEXT_SRC).unwrap();
+    let peer = LatticeResources::from_compiled(
+        shooter.resources.get::<LatticeResources>().unwrap().compiled.clone(),
+        &shooter.device,
+        &shooter.queue,
+    );
     let old = {
         let resources = shooter.resources.get_mut::<LatticeResources>().unwrap();
         resources.watcher = ShaderWatcher::watching(lattice, text_path, common.clone());
         assert!(poll_now(&mut resources.watcher).is_none());
-        resources.scenes.each_ref().map(|s| s.nodes.clone())
+        resources.compiled.scenes.each_ref().map(|s| s.nodes.clone())
     };
     std::thread::sleep(std::time::Duration::from_millis(20));
     std::fs::write(&common, format!("{COMMON_SRC}\n// reload both attachments\n")).unwrap();
@@ -266,10 +271,28 @@ fn a_reload_rebuilds_and_draws_both_bloom_variants() {
         std::time::Instant::now();
     assert_eq!(bloomed, shooter.draw(&scene, labels(&scene)));
     let resources = shooter.resources.get::<LatticeResources>().unwrap();
-    for (before, after) in old.iter().zip(&resources.scenes) {
+    for ((before, after), untouched) in
+        old.iter().zip(&resources.compiled.scenes).zip(&peer.compiled.scenes)
+    {
         assert_ne!(*before, after.nodes, "both pipeline variants must rebuild");
+        assert_eq!(
+            *before, untouched.nodes,
+            "reload leaked into another context's compiled handles"
+        );
     }
     scene.bloom_strength = 0.0;
     assert_eq!(plain, shooter.draw(&scene, labels(&scene)));
+
+    // A rejected edit must retain the current context's compiled value too.
+    let accepted = shooter.resources.get::<LatticeResources>().unwrap().compiled.scenes.clone();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&common, "this is not WGSL").unwrap();
+    shooter.resources.get_mut::<LatticeResources>().unwrap().watcher.next_check =
+        std::time::Instant::now();
+    assert_eq!(plain, shooter.draw(&scene, labels(&scene)));
+    let resources = shooter.resources.get::<LatticeResources>().unwrap();
+    for (before, after) in accepted.iter().zip(&resources.compiled.scenes) {
+        assert_eq!(before.nodes, after.nodes, "a rejected edit replaced a pipeline");
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }

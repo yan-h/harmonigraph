@@ -256,27 +256,43 @@ fn precompiled_shadow_blur_probe() {
             .resources
             .get::<LatticeResources>()
             .unwrap()
+            .compiled
             .shadow_cell_pipelines
             .blur_x
             .clone();
         let expected = shooter.shot(&scene);
-        shooter.resources.get_mut::<LatticeResources>().unwrap().shadow_cell_pipelines.blur_x =
-            precompiled.clone();
+        shooter
+            .resources
+            .get_mut::<LatticeResources>()
+            .unwrap()
+            .compiled
+            .shadow_cell_pipelines
+            .blur_x = precompiled.clone();
         let actual = shooter.shot(&scene);
         assert_eq!(
             differing_pixels(&expected, &actual),
             0,
             "precompiled blur changed pixels at width {width}"
         );
-        shooter.resources.get_mut::<LatticeResources>().unwrap().shadow_cell_pipelines.blur_x =
-            erased.clone();
+        shooter
+            .resources
+            .get_mut::<LatticeResources>()
+            .unwrap()
+            .compiled
+            .shadow_cell_pipelines
+            .blur_x = erased.clone();
         let missing = shooter.shot(&scene);
         let changed = differing_pixels(&expected, &missing);
         assert!(changed > 100, "fixture must visibly exercise the replaced blur pipeline");
         eprintln!(
             "METAL_PROBE parity width={width} changed_pixels=0 erased_control_pixels={changed}"
         );
-        shooter.resources.get_mut::<LatticeResources>().unwrap().shadow_cell_pipelines.blur_x =
-            original;
+        shooter
+            .resources
+            .get_mut::<LatticeResources>()
+            .unwrap()
+            .compiled
+            .shadow_cell_pipelines
+            .blur_x = original;
     }
 }

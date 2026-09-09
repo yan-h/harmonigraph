@@ -58,7 +58,7 @@ fn read_glow(shooter: &Shooter) -> Vec<u8> {
         &shader,
         "fs_blit",
         shooter.format,
-        &resources.filter_layout,
+        &resources.compiled.filter_layout,
         None,
     );
     let texture = render_to_texture(
@@ -132,7 +132,7 @@ fn tile_candidates_keep_the_untiled_picture_through_resize_and_reuse() {
                 })],
                 ..Default::default()
             });
-            pass.set_pipeline(&resources.glow_gather_pipeline);
+            pass.set_pipeline(&resources.compiled.glow_gather_pipeline);
             pass.set_bind_group(0, &pane.bind_group, &[]);
             pass.set_bind_group(1, &strip.blurred_bind_group, &[]);
             pass.set_bind_group(2, &pane.glow_node_bind_group, &[]);
