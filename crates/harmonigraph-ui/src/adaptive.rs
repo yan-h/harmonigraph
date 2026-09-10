@@ -54,7 +54,7 @@ impl Default for Neighbourhood {
             nodes: Vec::new(),
             computing: false,
             error: None,
-            visible: true,
+            visible: false,
         }
     }
 }

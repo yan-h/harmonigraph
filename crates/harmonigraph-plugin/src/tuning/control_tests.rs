@@ -177,7 +177,18 @@ fn instance_settings_restore_independently_and_default_missing_fields() {
     assert_eq!(*restored.name.lock().unwrap(), "Reference");
     state.fields.insert("tuning-instance".to_owned(), r#"{"show":false}"#.to_owned());
     adapter.prepare(&state).unwrap().commit();
-    assert_eq!(shared.retuning() & 1, 1);
+    assert_eq!(
+        shared.retuning() & 1,
+        1,
+        "a missing field falls back to this role's default (a Tune defaults on)"
+    );
     assert!(!shared.show.load(Ordering::Acquire));
     assert!(shared.name.lock().unwrap().is_empty());
+
+    setup::Adapter(restored.clone(), None).prepare(&state).unwrap().commit();
+    assert_eq!(
+        restored.retuning() & 1,
+        0,
+        "the same missing field falls back to off for the Hub's own role"
+    );
 }

@@ -178,7 +178,14 @@ impl Device {
         stats.plugin.store(plugin as usize, Ordering::Relaxed);
         assert!(!plugin.is_null());
         assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
-        Self { plugin, _host: host, stats, active: false }
+        let device = Self { plugin, _host: host, stats, active: false };
+        // Retune defaults off for the Hub's own input; these fixtures are
+        // about the configuration/policy pipeline the correction runs
+        // through, so give it the state that pipeline needs.
+        device.wrapper().test_inspect_plugin(|plugin| {
+            plugin.aggregation.as_ref().unwrap().shared.set_retune(true)
+        });
+        device
     }
     fn wrapper(&self) -> &nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph> {
         unsafe { &*((*self.plugin).plugin_data.cast()) }

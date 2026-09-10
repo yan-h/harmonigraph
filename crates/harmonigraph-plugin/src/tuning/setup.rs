@@ -99,7 +99,7 @@ impl Shared {
         Arc::new(Self {
             instance_id: AtomicU64::new(0),
             slot: AtomicU32::new(u32::MAX),
-            retune: AtomicU64::new(1),
+            retune: AtomicU64::new(u64::from(!hub)),
             show: AtomicBool::new(true),
             name: Mutex::new(String::new()),
             held: AtomicU64::new(0),
@@ -223,19 +223,24 @@ pub struct Adapter(pub Arc<Shared>, pub Option<Arc<super::plugin::TuneParams>>);
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct InstanceSettings {
-    retune: bool,
+    /// `None` only when nothing was ever saved for this instance — a blob
+    /// predating this field, or no blob at all — so the fallback can differ
+    /// by role (the Hub's own input defaults off, a Tune defaults on) instead
+    /// of being one static value baked into `Default`.
+    retune: Option<bool>,
     show: bool,
     name: String,
 }
 impl Default for InstanceSettings {
     fn default() -> Self {
-        Self { retune: true, show: true, name: String::new() }
+        Self { retune: None, show: true, name: String::new() }
     }
 }
 struct Restore(Arc<Shared>, InstanceSettings);
 impl Prepared for Restore {
     fn commit(self: Box<Self>) {
-        self.0.set_retune(self.1.retune);
+        let retune = self.1.retune.unwrap_or(!self.0.is_hub());
+        self.0.set_retune(retune);
         self.0.set_show(self.1.show);
         self.0.set_name(self.1.name);
     }
@@ -254,7 +259,7 @@ impl Setup for Adapter {
     }
     fn save(&self, state: &mut PluginState) {
         let settings = InstanceSettings {
-            retune: self.0.retuning() & 1 != 0,
+            retune: Some(self.0.retuning() & 1 != 0),
             show: self.0.show.load(Ordering::Acquire),
             name: self.0.name.lock().unwrap().clone(),
         };
