@@ -165,8 +165,12 @@ impl Sequencer {
         }
         self.memory.append(&mut self.working, self.config.policy);
     }
-    /// Drop a context voice without contributing it to released memory: it
-    /// never sounded, because the source's own state had no cell for it.
+    /// Drop a context voice without contributing it to released memory. Two
+    /// callers, and neither is a note ending: an onset the scheduled state
+    /// could not retain never sounded at all, and a voice a same-key onset
+    /// displaces is taken over rather than released. Both leave a lifetime no
+    /// release will ever address, and neither leaves one for `Memory` to
+    /// remember — which is the whole of the difference from `release_voice`.
     fn forget_voice(&mut self, source: u8, lifetime: u64) {
         if let Some(cell) = self
             .context
@@ -612,12 +616,25 @@ impl Hub {
         let source = usize::from(record.source);
         // A same-key onset takes over the cell admission already found for
         // that identity, so no release will ever address the lifetime it
-        // displaces: it leaves policy context here or never. It is forgotten
-        // rather than released, because nothing ended and released memory owes
-        // this no entry. Before the score, not after: within one sample every
-        // release is sequenced ahead of every onset, so an ordinary
-        // off-then-on is already scored against a context the ending has left,
-        // and a replacement is that transition without the note-off.
+        // displaces: it leaves policy context here or never.
+        //
+        // Forgotten rather than released, and those are NOT the same picture.
+        // A real note-off feeds `Memory`, and `fill` appends that back into
+        // the scoring context at released weight, so an off-then-on IS scored
+        // with its predecessor's pitch present where a replacement is not.
+        // What that difference is worth was measured rather than assumed: over
+        // a harmony change, a clip-loop chain of repeats, a lone repeated note
+        // and a note held until a drifted context respells it, the entry never
+        // moved the chosen spelling. It arrives at `released`/1000 behind
+        // every held voice, and when the retrigger keeps its predecessor's
+        // spelling `Memory::attack` deletes it again on that same decision.
+        // Where it does show is the published reach: a replacement draws one
+        // fewer released node, which is the answer to want, since nothing
+        // ended and released memory owes this no entry.
+        //
+        // Before the score rather than after, because after `fill` the
+        // displaced voice would still be there at HELD weight — a second
+        // full-weight copy of the very pitch being scored.
         self.forget_replaced(record.source, channel, key);
         let player = self.initial_tuning(record, group, group_end);
         let channel_pitch = self.rows[source].state.channel_pitch(channel);
