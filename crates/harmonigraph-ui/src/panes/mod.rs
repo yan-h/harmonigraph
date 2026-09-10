@@ -39,10 +39,22 @@ use tuning::tuning_pane;
 /// dock holds one tab per pane; the Video tab's preview takes 1, and the
 /// offline renderer numbers its placements from 0 in a process of its own.
 ///
-/// It is also the one copy of a pane a person can navigate — the preview
-/// answers no pointer of its own and a render has none — which is what the
-/// Analyzer's gestures gate on.
+/// The Video preview has its own gesture mode, while an offline render has no
+/// pointer at all; Analyzer gesture routing distinguishes all three.
 pub(crate) const DOCKED_SURFACE: usize = 0;
+
+/// The one target chrome both draggable pictures use in the Video preview.
+/// A translucent accent fill keeps the destination legible over either a dark
+/// spectrogram or a busy lattice, while the opaque edge keeps its bounds exact.
+pub(crate) fn paint_preview_drop_target(painter: &egui::Painter, rect: egui::Rect) {
+    painter.rect(
+        rect.shrink(2.0),
+        0.0,
+        crate::theme::accent().gamma_multiply(0.18),
+        egui::Stroke::new(2.0, crate::theme::accent_edge()),
+        egui::StrokeKind::Inside,
+    );
+}
 
 /// Wrap degrees into -180..=180 for display (orbit accumulates yaw
 /// without bound).

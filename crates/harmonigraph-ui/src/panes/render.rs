@@ -49,7 +49,7 @@ pub(crate) fn render_pane(
 
     section(ui, "Preview");
     ui.weak(
-        "Drag pictures to an edge · Shift-drag the analyzer to navigate · Scroll or pinch to zoom · Drag dividers to resize",
+        "Drag pictures to an edge · Shift-drag pictures to navigate · Scroll or pinch to zoom · Drag dividers to resize",
     );
     let frame = state.appearance.render.frame;
     let avail = ui.available_size();
@@ -139,11 +139,24 @@ pub(crate) fn render_pane(
     let translated: Vec<_> =
         placements.iter().map(|(p, r)| (*p, r.translate(box_rect.min.to_vec2()))).collect();
     layout.paint_dividers(ui.painter(), &translated);
-    preview_layout_controls(ui, box_rect, &mut state.appearance.render.frame);
+    let appearance = &mut state.appearance;
+    preview_layout_controls(
+        ui,
+        box_rect,
+        &mut appearance.render.frame,
+        &mut appearance.camera,
+        &mut appearance.view,
+    );
 }
 
 /// Interaction chrome lives over the preview only; exports keep the plain seam.
-fn preview_layout_controls(ui: &mut egui::Ui, rect: egui::Rect, frame: &mut crate::RenderFrame) {
+fn preview_layout_controls(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    frame: &mut crate::RenderFrame,
+    camera: &mut harmonigraph_scene::Camera,
+    view: &mut harmonigraph_scene::ViewConfig,
+) {
     let lattice = preview_lattice_rect(rect, frame.lattice, frame.split);
     let vertical = !frame.lattice.sizes_by_height();
     let seam = match frame.lattice {
@@ -168,10 +181,15 @@ fn preview_layout_controls(ui: &mut egui::Ui, rect: egui::Rect, frame: &mut crat
         LatticeSide::Top => move_rect.max.y = handle.top(),
         LatticeSide::Bottom => move_rect.min.y = handle.bottom(),
     }
+    let navigation_held = ui.input(|i| i.modifiers.shift || i.pointer.middle_down());
     let moving_lattice = ui
         .interact(move_rect, ui.id().with("preview_lattice_move"), Sense::drag())
         .on_hover_cursor(egui::CursorIcon::Grab)
-        .on_hover_text("Drag the lattice to the left, right, top or bottom edge");
+        .on_hover_text(if navigation_held {
+            "Pan the lattice"
+        } else {
+            "Drag the lattice to the left, right, top or bottom edge · Hold Shift and drag to pan"
+        });
     let resizing = ui
         .interact(handle, ui.id().with("preview_lattice_resize"), Sense::drag())
         .on_hover_cursor(if vertical {
@@ -219,23 +237,35 @@ fn preview_layout_controls(ui: &mut egui::Ui, rect: egui::Rect, frame: &mut crat
         };
         ui.painter().line_segment(ends, egui::Stroke::new(2.0, color));
     }
-    if moving_lattice.dragged() || moving_lattice.drag_stopped() {
+    // Freeze the choice made at press time. Letting Shift change during a drag
+    // switch modes would first pan the camera and then redock the picture on
+    // release (or the reverse), which turns one gesture into two edits.
+    let navigation_id = moving_lattice.id.with("preview_navigation");
+    if moving_lattice.drag_started() {
+        ui.data_mut(|data| data.insert_temp(navigation_id, navigation_held));
+    }
+    let navigating =
+        ui.data(|data| data.get_temp::<bool>(navigation_id)).unwrap_or(navigation_held);
+    if navigating && moving_lattice.dragged() {
+        let delta = moving_lattice.drag_delta();
+        camera.pan(glam::Vec2::new(delta.x, delta.y));
+        view.follow_camera(camera);
+        ui.ctx().request_repaint();
+    } else if !navigating && (moving_lattice.dragged() || moving_lattice.drag_stopped()) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         if let Some(side) =
             moving_lattice.interact_pointer_pos().and_then(|p| preview_drop_side(rect, p))
         {
             let target = preview_lattice_rect(rect, side, frame.split);
-            ui.painter().rect_stroke(
-                target.shrink(2.0),
-                0.0,
-                ui.visuals().selection.stroke,
-                egui::StrokeKind::Inside,
-            );
+            super::paint_preview_drop_target(ui.painter(), target);
             if moving_lattice.drag_stopped() {
                 frame.lattice = side;
                 ui.ctx().request_repaint();
             }
         }
+    }
+    if moving_lattice.drag_stopped() {
+        ui.data_mut(|data| data.remove::<bool>(navigation_id));
     }
 }
 
@@ -710,7 +740,11 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| preview_layout_controls(ui, rect, frame),
+                |ui| {
+                    let mut camera = harmonigraph_scene::Camera::default();
+                    let mut view = harmonigraph_scene::ViewConfig::default();
+                    preview_layout_controls(ui, rect, frame, &mut camera, &mut view);
+                },
             );
         }
     }
@@ -823,6 +857,60 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn shift_drag_pans_the_preview_lattice_without_redocking_it() {
+        let ctx = crate::tests::probe::themed();
+        let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        state.appearance.render.frame.lattice = LatticeSide::Left;
+        state.appearance.render.frame.split = 0.4;
+        let before_frame = state.appearance.render.frame;
+        let before_target = state.appearance.camera.target;
+        let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
+        let start = preview_lattice_rect(rect, before_frame.lattice, before_frame.split).center();
+        let end = start + egui::vec2(60.0, 30.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::SHIFT,
+        };
+        for events in [
+            vec![],
+            vec![egui::Event::PointerMoved(start)],
+            vec![button(start, true)],
+            vec![egui::Event::PointerMoved(end)],
+            vec![button(end, false)],
+        ] {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    modifiers: egui::Modifiers::SHIFT,
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let appearance = &mut state.appearance;
+                    preview_layout_controls(
+                        ui,
+                        rect,
+                        &mut appearance.render.frame,
+                        &mut appearance.camera,
+                        &mut appearance.view,
+                    );
+                },
+            );
+        }
+        assert_ne!(state.appearance.camera.target, before_target, "Shift-drag did not pan");
+        assert_eq!(
+            state.appearance.render.frame.lattice, before_frame.lattice,
+            "Shift-drag also redocked the lattice"
+        );
+        assert_eq!(state.appearance.render.frame.split, before_frame.split);
     }
 
     #[test]

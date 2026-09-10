@@ -401,17 +401,35 @@ impl OrientationDrag {
         state: &mut PictureState,
     ) {
         let Some(target) = self.target else { return };
-        let line = match target {
-            crate::SpectralOrientation::Left => [pane.left_top(), pane.left_bottom()],
-            crate::SpectralOrientation::Right => [pane.right_top(), pane.right_bottom()],
-            crate::SpectralOrientation::Top => [pane.left_top(), pane.right_top()],
-            crate::SpectralOrientation::Bottom => [pane.left_bottom(), pane.right_bottom()],
-        };
-        painter.line_segment(line, egui::Stroke::new(2.0, crate::theme::accent_edge()));
+        crate::panes::paint_preview_drop_target(painter, orientation_target(pane, target));
         if self.response.drag_stopped() {
             state.appearance.spectrum.orientation = target;
             painter.ctx().request_repaint();
         }
+    }
+}
+
+/// The outer quarter is both the hit region and the preview of the analyzer's
+/// new direction. Unlike a line, the box remains visible over the lattice's
+/// edges and reads as the same drop target its own rearrangement uses.
+fn orientation_target(pane: egui::Rect, target: crate::SpectralOrientation) -> egui::Rect {
+    match target {
+        crate::SpectralOrientation::Left => egui::Rect::from_min_max(
+            pane.min,
+            egui::pos2(pane.left() + pane.width() * 0.25, pane.bottom()),
+        ),
+        crate::SpectralOrientation::Right => egui::Rect::from_min_max(
+            egui::pos2(pane.right() - pane.width() * 0.25, pane.top()),
+            pane.max,
+        ),
+        crate::SpectralOrientation::Top => egui::Rect::from_min_max(
+            pane.min,
+            egui::pos2(pane.right(), pane.top() + pane.height() * 0.25),
+        ),
+        crate::SpectralOrientation::Bottom => egui::Rect::from_min_max(
+            egui::pos2(pane.left(), pane.bottom() - pane.height() * 0.25),
+            pane.max,
+        ),
     }
 }
 
