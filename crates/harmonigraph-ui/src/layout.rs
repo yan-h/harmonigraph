@@ -35,6 +35,12 @@ use crate::{LatticeSide, Pane};
 /// Default export density: roughly 1280 logical points across the frame.
 /// Shared with the Video preview so point-sized effects shrink with the shot.
 /// Small exports stay at 1:1 and very large ones cap the raster density at 4.
+///
+/// Labels size themselves relative to their pane in logical points. Raising
+/// the density reduces that pane's point size and enlarges its raster scale,
+/// so those factors cancel: it changes raster sharpness rather than making
+/// text larger relative to the frame. Point-sized shadows still depend on the
+/// logical canvas, which is why the preview needs this same conversion.
 pub fn export_pixels_per_point(size: [u32; 2]) -> f32 {
     const REFERENCE_POINTS_ACROSS: f32 = 1280.0;
     (size[0] as f32 / REFERENCE_POINTS_ACROSS).clamp(1.0, 4.0)

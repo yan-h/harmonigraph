@@ -39,8 +39,8 @@ pub struct AudioSpectrum {
     pub(crate) next_hop: u64,
     /// Shell time of sample 0: what turns a sample count into a timestamp.
     ///
-    /// Smoothed rather than taken fresh, on exactly the reasoning behind the
-    /// plugin's own `ClockMapper` (and with its constants). A shell drains its
+    /// Arrival-dated input from [`push_samples`](Self::push_samples) smooths
+    /// this estimate rather than taking it fresh. A shell drains its
     /// audio ring on frame boundaries but the ring fills in audio BLOCKS, so the
     /// number of samples a frame brings swings by a block either way while `now`
     /// advances by a frame — several ms of wobble in what any one batch implies
@@ -48,7 +48,9 @@ pub struct AudioSpectrum {
     /// pass that wobble straight into their spacing, which is what the sample
     /// grid exists to remove: at an 8 ms hop, +-5 ms of it is enough to leave a
     /// 12.8 ms slab empty. Smoothed, the grid is exactly even and still follows
-    /// the shell clock.
+    /// the shell clock. The plugin instead supplies exact source timestamps
+    /// through [`push_source_samples`](Self::push_source_samples), which uses
+    /// its shared presentation-clock mapping without this smoothing.
     pub(crate) anchor: Option<f64>,
     /// When samples last arrived; the curve hides once the source stops
     /// (silent/unrouted input, switched-off synth) rather than freezing.
@@ -380,9 +382,8 @@ impl AudioSpectrum {
     pub(crate) const FFT_INTERVAL: f64 = 0.008;
     /// How long after the last samples the curve keeps drawing.
     pub(crate) const HOLD_SECONDS: f64 = 0.5;
-    /// Per-batch gain and restart threshold for the sample-count anchor (see
-    /// the field). The plugin's `ClockMapper` solves the same problem for MIDI
-    /// event times with the same two numbers.
+    /// Per-batch gain and restart threshold for the arrival-dated sample-count
+    /// anchor (see the field). Source-dated plugin audio bypasses both.
     pub(crate) const ANCHOR_SMOOTHING: f64 = 0.05;
     pub(crate) const ANCHOR_SNAP: f64 = 1.0;
 

@@ -547,6 +547,7 @@ mod tests {
                     }
                     // Exercise the actual scoped draw too: it must restore the
                     // settings that the dock and a subsequent export will read.
+                    assert!(!state.appearance.render.playhead, "the spectral preview must draw");
                     let ctx = egui::Context::default();
                     crate::theme::apply_theme(&ctx);
                     let output = ctx.run_ui(
@@ -559,9 +560,25 @@ mod tests {
                         },
                         |ui| render_pane(ui, &mut state, &mut crate::Interaction::default(), 0.0),
                     );
+                    let callback_rects: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|s| {
+                            if let egui::Shape::Callback(callback) = &s.shape {
+                                callback.rect.is_positive().then_some(callback.rect)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    // The lattice callback alone is not evidence that the
+                    // spectral arm ran. Both panes must emit callbacks in
+                    // their separate regions of the composed frame.
                     assert!(
-                        output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Callback(_))),
-                        "fixture must reach the preview draw callbacks"
+                        callback_rects
+                            .iter()
+                            .any(|a| callback_rects.iter().any(|b| !a.intersect(*b).is_positive())),
+                        "fixture must reach both preview panes, got {callback_rects:?}"
                     );
                     assert_eq!(state.appearance.view.shadow, saved);
                 }
