@@ -282,6 +282,47 @@ pub fn default_renderer_path() -> std::path::PathBuf {
     home_dir().join("Library/Application Support/Harmonigraph/harmonigraph-offline")
 }
 
+/// The two halves of [`RenderTrigger::AtBar`]: the bar the GUI asked the take
+/// to end at, and the latch the audio thread sets once the transport played
+/// through it.
+///
+/// One struct rather than two atomics because they are one setting, and every
+/// construction site of the [`Recorder`]/[`Control`] pair would otherwise carry
+/// both and be able to carry one.
+///
+/// `bar` is `f64` bits in an `AtomicU64`, which is what makes this writable
+/// from a GUI frame and readable from the audio thread without a lock. **Off is
+/// NaN, not zero**: zero is a bar, and a bar can only be crossed from below, so
+/// a zeroed "off" would be indistinguishable from the one value that is
+/// silently unreachable.
+///
+/// [`RenderTrigger::AtBar`]: harmonigraph_take::RenderTrigger::AtBar
+struct StopAtBar {
+    bar: AtomicU64,
+    hit: AtomicBool,
+}
+
+impl Default for StopAtBar {
+    fn default() -> Self {
+        StopAtBar { bar: AtomicU64::new(f64::NAN.to_bits()), hit: AtomicBool::new(false) }
+    }
+}
+
+impl StopAtBar {
+    /// The bar to stop at, or `None` when the trigger is off. A non-finite
+    /// stored value reads as off, so a NaN that arrived any other way than
+    /// through [`set`](Self::set) cannot arm a comparison that is false against
+    /// everything.
+    fn get(&self) -> Option<f64> {
+        let bar = f64::from_bits(self.bar.load(Ordering::Relaxed));
+        bar.is_finite().then_some(bar)
+    }
+
+    fn set(&self, bar: Option<f64>) {
+        self.bar.store(bar.unwrap_or(f64::NAN).to_bits(), Ordering::Relaxed);
+    }
+}
+
 /// The audio-thread half: push entries, gated by an atomic the GUI owns.
 pub struct Recorder {
     /// Pins the writer independently from all GUI Control clones. A retired
@@ -332,6 +373,15 @@ pub struct Recorder {
     /// Published for the GUI: the transport went backwards and the take is done
     /// — the GUI reads this, stops, and renders the one pass.
     hit_rewind: Arc<AtomicBool>,
+    /// The bar the GUI wants the take to end at, and the latch saying it did.
+    /// See [`StopAtBar`] and [`Recorder::observe_bar`].
+    stop_at_bar: Arc<StopAtBar>,
+    /// Bar position of the previous block, for the crossing test in
+    /// [`observe_bar`](Recorder::observe_bar). Separate from `last_position`
+    /// because the two are different clocks and either can be absent: a host
+    /// can report seconds with no beats timeline, and a stop bar must not fire
+    /// off a stale bar the way a missing one would.
+    last_bar: Option<f64>,
     /// Local latch: once the rewind has ended the take, record nothing more
     /// until re-armed, so nothing after it reaches the file.
     finished: bool,
@@ -513,6 +563,8 @@ impl Recorder {
             self.advanced = false;
             self.pending_split = false;
             self.hit_rewind.store(false, Ordering::Relaxed);
+            self.last_bar = None;
+            self.stop_at_bar.hit.store(false, Ordering::Relaxed);
         }
         self.was_armed = armed;
         armed
@@ -714,6 +766,57 @@ impl Recorder {
         rolling
     }
 
+    /// End the take if this block played THROUGH the stop bar, and answer
+    /// whether it did. Called once per block with the transport's bar position,
+    /// AFTER [`observe_transport`](Self::observe_transport) — a block that ends
+    /// the take here contributes nothing, so the cut lands on a block boundary
+    /// at or before the bar rather than a block after it.
+    ///
+    /// **The test is a CROSSING, not a level.** A take armed with the playhead
+    /// already past the bar never sees a position below it, so it never fires
+    /// and simply runs until you disarm — the same graceful nothing
+    /// [`AtLoopEnd`](harmonigraph_take::RenderTrigger::AtLoopEnd) does with
+    /// looping off. A level test would instead end it on the first block, with
+    /// an empty file and a render of nothing, which is #569's failure exactly.
+    ///
+    /// **A crossing also has to be a small step.** A playhead DRAGGED past the
+    /// bar crosses it as surely as playback does, and the two are
+    /// indistinguishable in this API: an offline export reports
+    /// `playing = false` throughout while its position climbs, so the host's
+    /// own flag cannot separate them (#569 eliminated that). What does separate
+    /// them is size — playback advances by a block, a drag by seconds — so a
+    /// crossing wider than `STEP_BARS` below is read as a drag and only moves
+    /// `last_bar`. The residual case is a drag that lands within a bar of where
+    /// it started and straddles the stop bar; it ends the take early, visibly
+    /// (Record take switches off), and re-arming is the whole of the repair.
+    pub fn observe_bar(&mut self, bar: Option<f64>) -> bool {
+        if self.finished {
+            return false;
+        }
+        /// The widest forward step in bars that still counts as playing rather
+        /// than dragging. A block is milliseconds — a hundredth of a bar at any
+        /// tempo a DAW offers — so this is three orders of magnitude of slack
+        /// against the one thing it must not misread, an offline export whose
+        /// blocks are large and whose transport reports itself stopped.
+        const STEP_BARS: f64 = 1.0;
+        let (Some(bar), Some(stop)) = (bar, self.stop_at_bar.get()) else {
+            // Remember the bar even with the trigger off, so switching it on
+            // mid-take compares against a real previous position rather than
+            // against wherever the take started.
+            self.last_bar = bar;
+            return false;
+        };
+        let crossed =
+            self.last_bar.is_some_and(|last| last < stop && stop <= bar && bar - last <= STEP_BARS);
+        self.last_bar = Some(bar);
+        if crossed {
+            self.finished = true;
+            self.stop_at_bar.hit.store(true, Ordering::Relaxed);
+            self.rolling.store(false, Ordering::Relaxed);
+        }
+        crossed
+    }
+
     pub fn enable_configuration(&self) {
         self.fence.enabled.store(true, Ordering::Release);
     }
@@ -838,6 +941,9 @@ pub struct Control {
     /// Set by the audio thread when the transport went backwards: the take is
     /// done and the GUI should stop + render it.
     hit_rewind: Arc<AtomicBool>,
+    /// The bar to end the take at, and the audio thread's latch saying it
+    /// happened. See [`StopAtBar`].
+    stop_at_bar: Arc<StopAtBar>,
     /// How far the background render has got, for the Video pane's bar.
     progress: Arc<Progress>,
     /// Shared by every render this Control starts, so a new request cancels
@@ -865,6 +971,20 @@ impl Control {
     /// take — the GUI's cue to stop recording and render the one pass.
     pub fn hit_rewind(&self) -> bool {
         self.hit_rewind.load(Ordering::Relaxed)
+    }
+
+    /// The bar to end the take at, or `None` for every trigger but
+    /// [`AtBar`](harmonigraph_take::RenderTrigger::AtBar). Called every GUI
+    /// frame, like [`set_end_at_rewind`](Self::set_end_at_rewind), so a
+    /// mid-take change of mind reaches the audio thread.
+    pub fn set_stop_bar(&self, bar: Option<f64>) {
+        self.stop_at_bar.set(bar);
+    }
+
+    /// Whether the audio thread played the take through its stop bar and ended
+    /// it there — the GUI's cue to stop recording and render.
+    pub fn hit_stop_bar(&self) -> bool {
+        self.stop_at_bar.hit.load(Ordering::Relaxed)
     }
 
     /// Whether the audio thread last saw the transport moving.
@@ -968,9 +1088,11 @@ impl Control {
         }
         self.recording.store(true, Ordering::Relaxed);
         self.rolling.store(false, Ordering::Relaxed);
-        // Clear a previous take's rewind latch so it can't end this one before
-        // the transport even rolls. The audio thread also clears it on arm.
+        // Clear a previous take's end latches so neither can end this one
+        // before the transport even rolls. The audio thread also clears them
+        // on arm.
         self.hit_rewind.store(false, Ordering::Relaxed);
+        self.stop_at_bar.hit.store(false, Ordering::Relaxed);
         // Finishing barred Start until every old armed callback retired.
         // An overlapping idle callback captured disarmed and owns no audio,
         // so its activity bit cannot carry ownership into this new epoch.
@@ -1121,6 +1243,7 @@ pub fn channel() -> (Recorder, Control) {
     let with_audio = Arc::new(AtomicBool::new(false));
     let end_at_rewind = Arc::new(AtomicBool::new(false));
     let hit_rewind = Arc::new(AtomicBool::new(false));
+    let stop_at_bar = Arc::new(StopAtBar::default());
     let status = Arc::new(Mutex::new(String::new()));
     let last_take = Arc::new(Mutex::new(None));
     let progress = Arc::new(Progress::default());
@@ -1321,6 +1444,8 @@ pub fn channel() -> (Recorder, Control) {
             with_audio: with_audio.clone(),
             end_at_rewind: end_at_rewind.clone(),
             hit_rewind: hit_rewind.clone(),
+            stop_at_bar: stop_at_bar.clone(),
+            last_bar: None,
             finished: false,
             advanced: false,
             pending_split: false,
@@ -1337,6 +1462,7 @@ pub fn channel() -> (Recorder, Control) {
             with_audio,
             end_at_rewind,
             hit_rewind,
+            stop_at_bar,
             progress,
             render,
         },
@@ -1592,6 +1718,8 @@ pub mod testing {
             audio_started: false,
             end_at_rewind,
             hit_rewind,
+            stop_at_bar: Arc::new(StopAtBar::default()),
+            last_bar: None,
             finished: false,
             advanced: false,
             pending_split: false,
@@ -2947,6 +3075,7 @@ mod tests {
         samples: rtrb::Consumer<f32>,
         end_at_rewind: Arc<AtomicBool>,
         hit_rewind: Arc<AtomicBool>,
+        stop_at_bar: Arc<StopAtBar>,
         dropped: Arc<AtomicU64>,
     }
 
@@ -2956,6 +3085,7 @@ mod tests {
             let (audio, samples) = rtrb::RingBuffer::new(1024);
             let end_at_rewind = Arc::new(AtomicBool::new(false));
             let hit_rewind = Arc::new(AtomicBool::new(false));
+            let stop_at_bar = Arc::new(StopAtBar::default());
             let dropped = Arc::new(AtomicU64::new(0));
             Bench {
                 rec: Recorder {
@@ -2979,6 +3109,8 @@ mod tests {
                     audio_started: false,
                     end_at_rewind: end_at_rewind.clone(),
                     hit_rewind: hit_rewind.clone(),
+                    stop_at_bar: stop_at_bar.clone(),
+                    last_bar: None,
                     finished: false,
                     advanced: false,
                     pending_split: false,
@@ -2987,6 +3119,7 @@ mod tests {
                 samples,
                 end_at_rewind,
                 hit_rewind,
+                stop_at_bar,
                 dropped,
             }
         }
@@ -3003,6 +3136,14 @@ mod tests {
 
         fn hit_rewind(&self) -> bool {
             self.hit_rewind.load(Ordering::Relaxed)
+        }
+
+        fn stop_at_bar(&self, bar: f64) {
+            self.stop_at_bar.set(Some(bar));
+        }
+
+        fn hit_stop_bar(&self) -> bool {
+            self.stop_at_bar.hit.load(Ordering::Relaxed)
         }
 
         /// Everything pushed since the last call, rendered as comparable
@@ -3790,6 +3931,144 @@ mod tests {
         assert!(b.rec.observe_transport(1.0, true));
         assert!(!b.rec.observe_transport(0.0, true), "the real wrap ends the take");
         assert!(b.hit_rewind());
+    }
+
+    /// Play a block at a time towards the stop bar. The block that reaches it
+    /// ends the take and is itself excluded, so nothing at or past the bar
+    /// lands in the file.
+    ///
+    /// Blocks of 0.05 bar rather than a couple of big steps: the crossing test
+    /// is bounded by step SIZE as well as by direction, and a fixture that
+    /// arrived in one leap would pass the direction half while proving nothing
+    /// about the half that separates playback from a drag.
+    #[test]
+    fn playing_through_the_stop_bar_ends_the_take_there() {
+        let mut b = Bench::new();
+        b.arm();
+        // Bar 5 as `observe_bar` counts, which is the arranger's bar 6.
+        b.stop_at_bar(5.0);
+
+        let mut bar = 4.8;
+        while bar < 4.99 {
+            assert!(!b.rec.observe_bar(Some(bar)), "still short of the bar");
+            assert!(!b.hit_stop_bar());
+            bar += 0.05;
+        }
+        assert!(b.rec.observe_bar(Some(bar + 0.05)), "this block reaches the bar");
+        assert!(b.hit_stop_bar(), "the GUI is told to stop and render");
+        assert!(
+            !b.rec.observe_transport(99.0, true),
+            "and nothing after it is recorded, whatever the transport does"
+        );
+    }
+
+    /// Arming with the playhead ALREADY past the stop bar records until you
+    /// disarm, rather than ending immediately on an empty file.
+    ///
+    /// This is why the test is a crossing and not a level. A take that ends
+    /// before it captures anything renders a video of nothing, which is #569's
+    /// failure — and the position it would end at is one the transport never
+    /// played through.
+    #[test]
+    fn arming_past_the_stop_bar_never_ends_the_take() {
+        let mut b = Bench::new();
+        b.arm();
+        b.stop_at_bar(5.0);
+
+        for step in 0..40 {
+            let bar = 12.0 + f64::from(step) * 0.05;
+            assert!(!b.rec.observe_bar(Some(bar)), "never below the bar, so never through it");
+        }
+        assert!(!b.hit_stop_bar());
+    }
+
+    /// A playhead DRAGGED across the stop bar is not playback through it.
+    ///
+    /// Nothing in this API separates the two by the host's own flag — an
+    /// offline export reports `playing = false` for its whole length while its
+    /// position climbs, which is the case the trigger exists for. Size is what
+    /// separates them: a block is a hundredth of a bar, a drag is bars.
+    #[test]
+    fn a_playhead_dragged_across_the_stop_bar_does_not_end_the_take() {
+        let mut b = Bench::new();
+        b.arm();
+        b.stop_at_bar(33.0);
+
+        assert!(!b.rec.observe_bar(Some(1.0)), "parked near the top");
+        assert!(!b.rec.observe_bar(Some(80.0)), "dragged to bar 81 to look at something");
+        assert!(!b.hit_stop_bar(), "a drag is not a take's end");
+
+        // And the take is still live: dragging back and playing through the bar
+        // ends it the way it should have all along.
+        assert!(!b.rec.observe_bar(Some(32.9)), "dragged back");
+        assert!(b.rec.observe_bar(Some(33.0)), "played through");
+        assert!(b.hit_stop_bar());
+    }
+
+    /// A host with no beats timeline reports no bar, and a take under this
+    /// trigger then simply runs until you disarm — the same graceful nothing
+    /// AtLoopEnd does with looping switched off.
+    ///
+    /// The `None`s sit BETWEEN two bars that would otherwise cross, so the test
+    /// fails if a missing bar is skipped over rather than remembered as absent.
+    #[test]
+    fn a_host_that_reports_no_bar_never_ends_the_take() {
+        let mut b = Bench::new();
+        b.arm();
+        b.stop_at_bar(5.0);
+
+        assert!(!b.rec.observe_bar(Some(4.9)));
+        assert!(!b.rec.observe_bar(None), "no beats timeline");
+        assert!(!b.rec.observe_bar(None));
+        assert!(!b.rec.observe_bar(Some(5.1)), "the crossing was never observed");
+        assert!(!b.hit_stop_bar());
+    }
+
+    /// Re-arming clears the latch and the previous take's bar, so the next take
+    /// has to cross the bar for itself.
+    #[test]
+    fn re_arming_clears_the_stop_bar_latch() {
+        let mut b = Bench::new();
+        b.arm();
+        b.stop_at_bar(5.0);
+        assert!(!b.rec.observe_bar(Some(4.9)));
+        assert!(b.rec.observe_bar(Some(5.0)));
+        assert!(b.hit_stop_bar());
+
+        b.rec.fence.intent.store(b.rec.fence.epoch() << 1, Ordering::Release);
+        assert!(!b.rec.is_armed(), "disarmed");
+        b.arm();
+        assert!(!b.hit_stop_bar(), "the latch cleared on re-arm");
+        // Bar 5 again, and with `last_bar` cleared it is a level rather than a
+        // crossing — so the new take runs on, exactly as one armed past the bar
+        // does.
+        assert!(!b.rec.observe_bar(Some(5.0)), "no remembered bar to have crossed from");
+        assert!(!b.rec.observe_bar(Some(5.0)), "nor from the bar itself");
+    }
+
+    /// A backward jump SPLITS an AtBar take rather than ending it, and the pass
+    /// that reaches the bar is the one that ends there.
+    ///
+    /// `ends_at_rewind` is false for this trigger, so play / scrub back / play
+    /// again leaves the last run through the range as the take — which is what
+    /// a second attempt at a section is for.
+    #[test]
+    fn a_rewind_restarts_an_at_bar_take_rather_than_ending_it() {
+        let mut b = Bench::new();
+        b.arm();
+        b.stop_at_bar(5.0);
+        // `end_at_rewind` deliberately NOT set: that is `ends_at_rewind()`'s
+        // answer for AtBar.
+
+        assert!(b.rec.observe_transport(1.0, true));
+        assert!(!b.rec.observe_bar(Some(2.0)));
+        // Back to the top, and forward again through the bar.
+        assert!(b.rec.observe_transport(0.0, true), "a rewind splits, as under OnDisarm");
+        assert!(!b.hit_rewind(), "and does not end the take");
+        assert!(!b.rec.observe_bar(Some(0.0)));
+        assert!(!b.rec.observe_bar(Some(4.98)));
+        assert!(b.rec.observe_bar(Some(5.02)), "the second pass reaches the bar");
+        assert!(b.hit_stop_bar());
     }
 
     /// The backward-jump threshold is there to ignore a host's own jitter

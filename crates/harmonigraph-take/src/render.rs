@@ -54,6 +54,24 @@ pub enum RenderTrigger {
     /// with looping off there is nothing to wrap on and it waits for you to
     /// disarm, like [`OnDisarm`](Self::OnDisarm).
     AtLoopEnd,
+    /// When the transport plays THROUGH [`stop_bar`](RenderConfig::stop_bar):
+    /// the take ends at that bar and renders, with nothing to click.
+    ///
+    /// This is the trigger an AUDIO EXPORT wants. An export renders the
+    /// arrangement range once and never wraps, so
+    /// [`AtLoopEnd`](Self::AtLoopEnd) has nothing to fire on; and it reports
+    /// `playing = false` throughout while running faster than realtime, which
+    /// is the wrong clock for `OnTransportStop`'s frame-counted debounce. A bar
+    /// the transport crosses is neither — it is decided on the audio thread,
+    /// off a position the host reports either way.
+    ///
+    /// Unlike the other two it does NOT end at a backward jump
+    /// ([`ends_at_rewind`](Self::ends_at_rewind) is false), because it has an
+    /// end of its own and does not need to guess at one. A rewind therefore
+    /// splits, as under [`OnDisarm`](Self::OnDisarm), and the pass that renders
+    /// is the one that reached the bar — play, scrub back, play again, and you
+    /// get the last run through the range.
+    AtBar,
 }
 
 impl RenderTrigger {
@@ -69,7 +87,10 @@ impl RenderTrigger {
     /// stop counted in GUI frames can be sure of it.
     pub fn ends_at_rewind(self) -> bool {
         match self {
-            RenderTrigger::OnDisarm => false,
+            // `AtBar` keeps splitting for the opposite reason to `OnDisarm`:
+            // not because it must survive a loop, but because it has its own
+            // end and a backward jump is a restart rather than a finish.
+            RenderTrigger::OnDisarm | RenderTrigger::AtBar => false,
             RenderTrigger::OnTransportStop | RenderTrigger::AtLoopEnd => true,
         }
     }
@@ -86,6 +107,40 @@ mod trigger_tests {
         assert!(!RenderTrigger::OnDisarm.ends_at_rewind());
         assert!(RenderTrigger::OnTransportStop.ends_at_rewind());
         assert!(RenderTrigger::AtLoopEnd.ends_at_rewind());
+        assert!(!RenderTrigger::AtBar.ends_at_rewind());
+    }
+
+    /// The bar only reaches the audio thread under the one trigger that means
+    /// it. Any other choice must publish `None`, or a stop bar left over in a
+    /// saved project would end takes recorded under `OnDisarm`.
+    #[test]
+    fn only_at_bar_publishes_a_stop_bar() {
+        let mut config = super::RenderConfig { stop_bar: 65.0, ..Default::default() };
+        for trigger in
+            [RenderTrigger::OnDisarm, RenderTrigger::OnTransportStop, RenderTrigger::AtLoopEnd]
+        {
+            config.trigger = trigger;
+            assert_eq!(config.stop_at_bar(), None, "{trigger:?} does not stop at a bar");
+        }
+        config.trigger = RenderTrigger::AtBar;
+        assert_eq!(config.stop_at_bar(), Some(65.0));
+    }
+
+    /// A stop bar out of the field's range, or not a number at all, is repaired
+    /// on load rather than carried.
+    ///
+    /// NaN is the one that has to be named separately: it is not merely out of
+    /// range, it compares false against every bar, so a blob carrying one would
+    /// leave the trigger selected and silently unable to fire.
+    #[test]
+    fn a_hand_edited_stop_bar_is_repaired_on_load() {
+        for (given, want) in
+            [(f64::NAN, 65.0), (f64::INFINITY, 65.0), (0.0, 1.0), (1e9, 100_000.0), (33.5, 33.5)]
+        {
+            let mut config = super::RenderConfig { stop_bar: given, ..Default::default() };
+            config.sanitize();
+            assert_eq!(config.stop_bar, want, "stop_bar {given}");
+        }
     }
 }
 
@@ -126,6 +181,13 @@ pub struct RenderConfig {
     pub auto_render: bool,
     /// What "finishes" means; see [`RenderTrigger`].
     pub trigger: RenderTrigger,
+    /// The bar [`AtBar`](RenderTrigger::AtBar) ends the take at, counted the
+    /// way a host's arranger counts: **bar 1 is the song's start**, so 65 here
+    /// is the bar labelled 65 in Bitwig. Ignored under every other trigger.
+    ///
+    /// Fractional, because the field it is edited in is one number and half a
+    /// bar is a legitimate place to cut; nothing rounds it.
+    pub stop_bar: f64,
     /// Path to the `harmonigraph-offline` binary. Empty means the
     /// conventional install location, which `update-plugin.sh` writes to.
     pub renderer_path: String,
@@ -163,6 +225,11 @@ impl Default for RenderConfig {
             record_audio: false,
             auto_render: false,
             trigger: RenderTrigger::OnDisarm,
+            // Off-trigger by default, so this only ever matters once `AtBar`
+            // is chosen. 65 rather than 1: a stop bar equal to the song start
+            // can never be crossed from below, so the take would simply never
+            // end and the trigger would look broken on first use.
+            stop_bar: 65.0,
             renderer_path: String::new(),
             audio_path: String::new(),
             audio_offset: String::new(),
@@ -186,8 +253,31 @@ impl RenderConfig {
     /// one.
     pub fn sanitize(&mut self) {
         self.frame.sanitize();
+        // A NaN read out of a hand-edited blob would compare false against
+        // every bar and quietly disable the trigger; clamping to the range the
+        // field can produce keeps the number on screen the number that fires.
+        if !self.stop_bar.is_finite() {
+            self.stop_bar = 65.0;
+        }
+        self.stop_bar = self.stop_bar.clamp(STOP_BAR_RANGE.0, STOP_BAR_RANGE.1);
+    }
+
+    /// The bar to end the take at, or `None` when the trigger is not
+    /// [`AtBar`](RenderTrigger::AtBar).
+    ///
+    /// The trigger and the number are separate fields so that switching away
+    /// and back keeps the bar you dialed in, which means every reader has to
+    /// ask both. Asking here once is what stops one of them forgetting.
+    pub fn stop_at_bar(&self) -> Option<f64> {
+        (self.trigger == RenderTrigger::AtBar).then_some(self.stop_bar)
     }
 }
+
+/// What [`RenderConfig::stop_bar`]'s field can produce, and so what
+/// [`RenderConfig::sanitize`] holds a blob to. The top end is about nine hours
+/// at 120 bpm in 4/4 — past any piece, and short of where an f64 bar count
+/// stops resolving a fraction of a bar.
+pub const STOP_BAR_RANGE: (f64, f64) = (1.0, 100_000.0);
 
 /// Which side of the video frame the lattice takes; the Spectral pane takes
 /// whatever is left.

@@ -71,7 +71,7 @@ pub(crate) use config::{
     ROLL_LEAD_MAX, ROLL_LEAD_RELEASE_MAX, ROLL_SECONDS_MAX, ROLL_SECONDS_MIN,
 };
 pub use harmonigraph_take::{
-    LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger,
+    LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger, STOP_BAR_RANGE,
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory, WholeSong};
 pub(crate) use state::default_dock;

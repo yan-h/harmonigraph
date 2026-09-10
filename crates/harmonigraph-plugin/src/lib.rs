@@ -415,6 +415,38 @@ fn origin_source(
     }
 }
 
+/// Where the transport sits in BARS, counted the way an arranger counts:
+/// bar 1 is the song's start, so this returns 0.0 there and 64.0 at bar 65.
+/// `None` when the host reports no beats timeline, which reads downstream as
+/// "never crossed a stop bar" — see `Recorder::observe_bar`.
+///
+/// Two sources, and the fallback is the reason both are here. `bar_number`
+/// plus the offset into the bar is exact across a TIME-SIGNATURE CHANGE, where
+/// dividing the beat count by the current meter is not. But CLAP does not put
+/// `bar_number` behind a flag, so a host that fills in none of it hands us a
+/// constant zero — and zero bars is a position that can never be crossed from
+/// below, so that degrades to a take that never ends rather than to one that
+/// ends at the wrong bar. When the bar fields are absent entirely, the beat
+/// count divided by the meter is the honest answer for a song in one meter.
+///
+/// `pos_beats` is in QUARTER notes, so the meter converts as
+/// `numerator * 4 / denominator` — 4 quarters to a 4/4 bar, 3 to a 6/8 one.
+fn bar_position(transport: &Transport) -> Option<f64> {
+    let beats = transport.pos_beats()?;
+    let per_bar = match (transport.time_sig_numerator, transport.time_sig_denominator) {
+        (Some(numerator), Some(denominator)) if numerator > 0 && denominator > 0 => {
+            f64::from(numerator) * 4.0 / f64::from(denominator)
+        }
+        // 4/4 is what a host that reports no meter is almost always in, and
+        // the alternative is refusing to stop at all.
+        _ => 4.0,
+    };
+    match (transport.bar_number, transport.bar_start_pos_beats) {
+        (Some(bar), Some(start)) => Some(f64::from(bar) + (beats - start) / per_bar),
+        _ => Some(beats / per_bar),
+    }
+}
+
 /// Continuous presentation time for the display. The current block contributes
 /// sample offsets at its own rate; raw clock resets cannot retime queued history.
 fn ring_time(block_start: f64, timing: u32, sample_rate: f64) -> f64 {
@@ -659,7 +691,13 @@ impl Plugin for Harmonigraph {
                 // jump under the one-file triggers). It is deliberately more
                 // permissive than the host's `playing` flag — see there.
                 OriginSource::Transport(seconds) => {
-                    self.take.observe_transport(seconds, transport.playing).then_some(seconds)
+                    let rolling = self.take.observe_transport(seconds, transport.playing);
+                    // After `observe_transport`, and its answer is dropped on
+                    // the block that ends the take: a block at or past the stop
+                    // bar belongs to no take, so the cut lands on a block
+                    // boundary at or before the bar rather than one after it.
+                    let stopped = self.take.observe_bar(bar_position(transport));
+                    (rolling && !stopped).then_some(seconds)
                 }
                 OriginSource::LocalClock(seconds) => Some(seconds),
             };
@@ -1483,6 +1521,41 @@ mod tests {
         // Armed, and the host reports nothing at all: the plugin's own sample
         // counter in seconds, so "just record what I play" still works.
         assert_eq!(origin_source(true, None, 22_050, 44_100.0), OriginSource::LocalClock(0.5));
+    }
+
+    /// The bar the stop trigger compares against, off each of the three shapes
+    /// of transport a host actually hands over.
+    ///
+    /// The 6/8 rung is the one that earns its place: `pos_beats` is in QUARTER
+    /// notes, so a bar there is three of them and not six, and reading the
+    /// numerator as the bar length would put the stop bar half again too far
+    /// along in every compound meter.
+    #[test]
+    fn a_bar_position_counts_from_the_songs_start_in_whatever_meter() {
+        let mut transport = Transport::new(48_000.0);
+        assert_eq!(bar_position(&transport), None, "no beats timeline, no bar");
+
+        // 4/4, no bar fields: the beat count over the meter. Beat 258 is two
+        // quarter notes into the arranger's bar 65.
+        transport.pos_beats = Some(258.0);
+        transport.time_sig_numerator = Some(4);
+        transport.time_sig_denominator = Some(4);
+        assert_eq!(bar_position(&transport), Some(64.5));
+
+        // 6/8: three quarter notes to the bar, so the same beat count is
+        // further along than the numerator alone would say.
+        transport.pos_beats = Some(6.0);
+        transport.time_sig_numerator = Some(6);
+        transport.time_sig_denominator = Some(8);
+        assert_eq!(bar_position(&transport), Some(2.0));
+
+        // With the bar fields, the bar number is taken as given and only the
+        // offset into it is divided — which is what survives a meter change
+        // partway through a song.
+        transport.pos_beats = Some(6.0);
+        transport.bar_number = Some(9);
+        transport.bar_start_pos_beats = Some(4.5);
+        assert_eq!(bar_position(&transport), Some(9.5));
     }
 
     /// One event, two clocks. The ring uses continuous presentation seconds,
