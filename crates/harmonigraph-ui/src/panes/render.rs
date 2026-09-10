@@ -97,7 +97,7 @@ pub(crate) fn render_pane(
     for (pane, rect) in &placements {
         let rect = rect.translate(box_rect.min.to_vec2());
         match pane {
-            Pane::Spectral if placeholder => playhead_preview(ui, rect, box_rect, state),
+            Pane::Spectral if placeholder => playhead_preview(ui, rect, state),
             Pane::Spectral => {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                 // Its text sizes itself off the rect it is given, so drawing
@@ -113,7 +113,7 @@ pub(crate) fn render_pane(
                     now,
                     PREVIEW_SURFACE,
                     preview_scale(box_rect.width(), &state.appearance.render),
-                    super::spectral::Navigation::Preview { frame: box_rect },
+                    super::spectral::Navigation::Preview,
                 );
                 state.appearance.view.shadow = shadow;
             }
@@ -572,15 +572,10 @@ fn playhead_placeholder(ui: &egui::Ui, rect: egui::Rect) {
     }
 }
 
-fn playhead_preview(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    frame: egui::Rect,
-    state: &mut PictureState,
-) {
+fn playhead_preview(ui: &mut egui::Ui, rect: egui::Rect, state: &mut PictureState) {
     playhead_placeholder(ui, rect);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-    super::spectral::preview_gestures(&mut child, state, PREVIEW_SURFACE, frame);
+    super::spectral::preview_gestures(&mut child, state, PREVIEW_SURFACE);
 }
 
 /// The largest sub-rect of `outer` with the given width:height aspect, centered
@@ -775,7 +770,7 @@ mod tests {
             },
             |ui| {
                 if placeholder {
-                    playhead_preview(ui, spectral, frame_rect, state);
+                    playhead_preview(ui, spectral, state);
                 } else {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(spectral));
                     super::super::spectral::spectral_pane(
@@ -784,7 +779,7 @@ mod tests {
                         100.0,
                         PREVIEW_SURFACE,
                         1.0,
-                        super::super::spectral::Navigation::Preview { frame: frame_rect },
+                        super::super::spectral::Navigation::Preview,
                     );
                 }
             },
@@ -914,7 +909,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_analyzer_drag_turns_the_picture_to_every_edge_and_cancels_outside() {
+    fn preview_analyzer_drag_turns_at_its_own_edges_and_cancels_outside() {
         let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
         for lattice_side in LatticeSide::ALL {
             for target in LatticeSide::ALL {
@@ -935,10 +930,10 @@ mod tests {
                 );
                 let start = spectral.center();
                 let end = match target {
-                    LatticeSide::Left => rect.left_center() + egui::vec2(2.0, 0.0),
-                    LatticeSide::Right => rect.right_center() - egui::vec2(2.0, 0.0),
-                    LatticeSide::Top => rect.center_top() + egui::vec2(0.0, 2.0),
-                    LatticeSide::Bottom => rect.center_bottom() - egui::vec2(0.0, 2.0),
+                    LatticeSide::Left => spectral.left_center() + egui::vec2(2.0, 0.0),
+                    LatticeSide::Right => spectral.right_center() - egui::vec2(2.0, 0.0),
+                    LatticeSide::Top => spectral.center_top() + egui::vec2(0.0, 2.0),
+                    LatticeSide::Bottom => spectral.center_bottom() - egui::vec2(0.0, 2.0),
                 };
                 let button = |pos, pressed| egui::Event::PointerButton {
                     pos,

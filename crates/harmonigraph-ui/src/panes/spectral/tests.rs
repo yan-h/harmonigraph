@@ -812,7 +812,7 @@ fn drag_pane_with_navigation(
     let screen = egui::vec2(900.0, 900.0);
     let at = Axes::new(rect, &cfg).at(0.5, grab);
     let surface = if matches!(navigation, Navigation::Docked) { 0 } else { 1 };
-    let modifiers = if matches!(navigation, Navigation::Preview { .. }) {
+    let modifiers = if matches!(navigation, Navigation::Preview) {
         egui::Modifiers::SHIFT
     } else {
         egui::Modifiers::NONE
@@ -848,23 +848,13 @@ fn drag_pane_with_navigation(
 fn preview_navigation_reaches_both_depth_zoom_options() {
     let (rect, cfg) = (WIDE, SpectrumConfig::default());
     let axes = Axes::new(rect, &cfg);
-    let span = drag_pane_with_navigation(
-        rect,
-        cfg,
-        0.8,
-        axes.dir_depth() * 40.0,
-        Navigation::Preview { frame: rect },
-    );
+    let span =
+        drag_pane_with_navigation(rect, cfg, 0.8, axes.dir_depth() * 40.0, Navigation::Preview);
     assert!(span.roll_seconds < cfg.roll_seconds - 0.5, "the preview did not zoom Span");
     assert_eq!(span.ceiling_db, cfg.ceiling_db, "the Span gesture moved Level too");
 
-    let level = drag_pane_with_navigation(
-        rect,
-        cfg,
-        0.2,
-        -axes.dir_depth() * 40.0,
-        Navigation::Preview { frame: rect },
-    );
+    let level =
+        drag_pane_with_navigation(rect, cfg, 0.2, -axes.dir_depth() * 40.0, Navigation::Preview);
     assert!(level.ceiling_db < cfg.ceiling_db - 3.0, "the preview did not zoom Level");
     assert_eq!(level.roll_seconds, cfg.roll_seconds, "the Level gesture moved Span too");
 }
@@ -881,7 +871,7 @@ fn preview_wheel_zooms_pitch_without_scrolling_the_video_controls() {
     let remaining_scroll = std::cell::Cell::new(egui::Vec2::ZERO);
     let frame = |events: Vec<egui::Event>, state: &mut PictureState| {
         let _ = events_into(&ctx, egui::vec2(900.0, 900.0), rect, events, |ui| {
-            spectral_pane(ui, state, 100.0, 1, 1.0, Navigation::Preview { frame: rect });
+            spectral_pane(ui, state, 100.0, 1, 1.0, Navigation::Preview);
             remaining_scroll.set(ui.input(|input| input.smooth_scroll_delta));
         });
     };

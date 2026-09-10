@@ -53,15 +53,12 @@ pub(crate) enum Navigation {
     /// The docked picture pane, whose body itself never scrolls.
     Docked,
     /// The live Video preview, nested inside the Video tab's ScrollArea.
-    Preview { frame: egui::Rect },
+    Preview,
 }
 
 impl Navigation {
-    fn preview_frame(self) -> Option<egui::Rect> {
-        match self {
-            Navigation::Preview { frame } => Some(frame),
-            Navigation::None | Navigation::Docked => None,
-        }
+    fn is_preview(self) -> bool {
+        matches!(self, Navigation::Preview)
     }
 }
 
@@ -208,7 +205,7 @@ pub(crate) fn spectral_pane(
     // the analyzer, while Shift-drag navigates it. The narrow divider is
     // registered afterward and remains the topmost target where they overlap.
     let orientation_drag =
-        navigation.preview_frame().map(|frame| gestures::drag_orientation(ui, &response, frame));
+        navigation.is_preview().then(|| gestures::drag_orientation(ui, &response, rect));
 
     // Offline playhead render: the whole take laid out statically with a
     // sweeping playhead. It takes the whole pane (split = 0), which also drops
@@ -684,21 +681,16 @@ pub(crate) fn spectral_pane(
 /// with a placeholder. Replacing the drawing must not turn its surface dead:
 /// these edits remain ready when live mode returns, while orientation and pitch
 /// framing also feed the eventual render.
-pub(crate) fn preview_gestures(
-    ui: &mut egui::Ui,
-    state: &mut PictureState,
-    surface: usize,
-    frame: egui::Rect,
-) {
+pub(crate) fn preview_gestures(ui: &mut egui::Ui, state: &mut PictureState, surface: usize) {
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::drag());
     if rect.width() < 10.0 || rect.height() < 10.0 {
         return;
     }
     let cfg = state.appearance.spectrum;
     let axes = Axes::new(rect, &cfg);
-    let orientation = gestures::drag_orientation(ui, &response, frame);
+    let orientation = gestures::drag_orientation(ui, &response, rect);
     let split = spectrum_split(state, surface);
-    drag_zoom(ui, &axes, &response, state, surface, split, Navigation::Preview { frame });
+    drag_zoom(ui, &axes, &response, state, surface, split, Navigation::Preview);
     orientation.finish(&ui.painter_at(rect), rect, state);
 }
 

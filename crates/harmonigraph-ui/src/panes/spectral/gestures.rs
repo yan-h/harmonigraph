@@ -515,7 +515,7 @@ pub(super) fn drag_zoom(
     // Zoom about the pitch under the pointer, so the note being looked at
     // stays put while the range closes in on it.
     if let Some((scroll, pinch)) = zoom_gesture(ui, response) {
-        if matches!(navigation, Navigation::Preview { .. }) && scroll != 0.0 {
+        if matches!(navigation, Navigation::Preview) && scroll != 0.0 {
             ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
         }
         let factor = (scroll * ZOOM_PER_SCROLL_POINT).exp() * pinch;
@@ -532,7 +532,7 @@ pub(super) fn drag_zoom(
     // Grab the picture. Per-frame deltas rather than the absolute tracking the
     // divider uses — pushed against an end of an axis, an absolute anchor would
     // keep accumulating off-screen and the view would sit still on the way back.
-    let drag_navigates = !matches!(navigation, Navigation::Preview { .. })
+    let drag_navigates = !matches!(navigation, Navigation::Preview)
         || ui
             .data(|data| data.get_temp::<bool>(response.id.with("preview_navigation")))
             .unwrap_or_else(|| ui.input(|i| i.modifiers.shift || i.pointer.middle_down()));
