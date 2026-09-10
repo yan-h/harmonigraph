@@ -143,13 +143,12 @@ fn preview_layout_controls(ui: &mut egui::Ui, rect: egui::Rect, frame: &mut crat
         LatticeSide::Top => lattice.center_bottom(),
         LatticeSide::Bottom => lattice.center_top(),
     };
-    let scale = theme::ui_scale(ui.ctx());
     let handle = egui::Rect::from_center_size(
         seam,
         if vertical {
-            egui::vec2((10.0 * scale).min(lattice.width()), rect.height())
+            egui::vec2(12.0_f32.min(lattice.width()), rect.height())
         } else {
-            egui::vec2(rect.width(), (10.0 * scale).min(lattice.height()))
+            egui::vec2(rect.width(), 12.0_f32.min(lattice.height()))
         },
     );
     // Keep the move target clear of the divider, including at the 5% limit.
@@ -194,13 +193,23 @@ fn preview_layout_controls(ui: &mut egui::Ui, rect: egui::Rect, frame: &mut crat
     if resizing.drag_stopped() {
         ui.data_mut(|d| d.remove::<f32>(grab_id));
     }
-    let color = if resizing.hovered() || resizing.dragged() {
-        ui.visuals().widgets.active.fg_stroke.color
+    // Match the Analyzer's divider: only the existing seam at rest, a full
+    // two-point accent line on hover, and the stronger accent while dragging.
+    let lit = if resizing.dragged() {
+        Some(theme::accent())
+    } else if resizing.hovered() {
+        Some(theme::accent_edge())
     } else {
-        ui.visuals().widgets.inactive.fg_stroke.color
+        None
     };
-    let grip = if vertical { egui::vec2(0.0, 14.0 * scale) } else { egui::vec2(14.0 * scale, 0.0) };
-    ui.painter().line_segment([seam - grip, seam + grip], egui::Stroke::new(3.0 * scale, color));
+    if let Some(color) = lit {
+        let ends = if vertical {
+            [egui::pos2(seam.x, rect.top()), egui::pos2(seam.x, rect.bottom())]
+        } else {
+            [egui::pos2(rect.left(), seam.y), egui::pos2(rect.right(), seam.y)]
+        };
+        ui.painter().line_segment(ends, egui::Stroke::new(2.0, color));
+    }
     if moving.dragged() || moving.drag_stopped() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         if let Some(pointer) = moving.interact_pointer_pos().filter(|p| rect.contains(*p)) {
