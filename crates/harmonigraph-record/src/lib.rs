@@ -395,6 +395,9 @@ pub struct Recorder {
     /// a split — applied at the next block that actually records, not here. See
     /// [`Recorder::observe_transport`].
     pending_split: bool,
+    /// Whether this take has recorded a block yet, without which an owed split
+    /// has nothing to split from. See [`Recorder::observe_transport`].
+    rolled: bool,
 }
 
 impl Recorder {
@@ -562,6 +565,7 @@ impl Recorder {
             self.finished = false;
             self.advanced = false;
             self.pending_split = false;
+            self.rolled = false;
             self.hit_rewind.store(false, Ordering::Relaxed);
             self.last_bar = None;
             self.stop_at_bar.hit.store(false, Ordering::Relaxed);
@@ -748,9 +752,16 @@ impl Recorder {
         // it while the first file is the one that renders. Clearing it here as
         // well as at a backward jump is what makes "one file" hold whichever way
         // the debt comes due.
+        //
+        // So does a take that has not recorded a block yet: its only pass is
+        // empty, and the configuration side learns of a pass only from a block
+        // routed to it. Paid here, the split left that empty pass waiting for a
+        // close nothing would ever send, and Stop never finished — from the
+        // ordinary way to begin a take: arm stopped, return to the start, play.
         if rolling
             && std::mem::take(&mut self.pending_split)
             && !self.end_at_rewind.load(Ordering::Relaxed)
+            && self.rolled
         {
             if let Some(pass) = self.record_pass.checked_add(1) {
                 self.record_pass = pass;
@@ -762,6 +773,7 @@ impl Recorder {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.audio_started = false;
         }
+        self.rolled |= rolling;
         self.rolling.store(rolling, Ordering::Relaxed);
         rolling
     }
@@ -1455,6 +1467,7 @@ pub fn channel() -> (Recorder, Control) {
             finished: false,
             advanced: false,
             pending_split: false,
+            rolled: false,
         },
         Control {
             display: Arc::new(Mutex::new(Some(display_consumer))),
@@ -1729,6 +1742,7 @@ pub mod testing {
             finished: false,
             advanced: false,
             pending_split: false,
+            rolled: false,
         };
         let capture = Capture {
             fence,
@@ -3120,6 +3134,7 @@ mod tests {
                     finished: false,
                     advanced: false,
                     pending_split: false,
+                    rolled: false,
                 },
                 entries,
                 samples,
@@ -4258,9 +4273,11 @@ mod tests {
     fn switching_to_a_one_file_trigger_drops_a_split_the_take_owed() {
         let mut b = Bench::new();
         b.arm();
-        // OnDisarm: parked past the start, then dragged back with the transport
-        // stopped, which owes a split and has advanced nothing.
-        assert!(!b.rec.observe_transport(10.0, false));
+        // OnDisarm: one block recorded, then dragged back with the transport
+        // stopped, which owes a split and has advanced nothing. The block has to
+        // record, or the split is dropped as one owed by an empty take and this
+        // passes without reaching the one-file rule at all.
+        assert!(b.rec.observe_transport(10.0, true));
         assert!(!b.rec.observe_transport(5.0, false));
         assert!(b.pushed().is_empty());
 
