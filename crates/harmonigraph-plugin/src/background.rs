@@ -277,6 +277,12 @@ fn tick(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Re
     shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
     let now = shared.input.display_now(now);
     shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
+    // A take can end itself while nobody is watching, and an audio export with
+    // the plugin window shut is precisely that. Every trigger but OnDisarm is
+    // decided in this call, which until now only a GUI frame ever made — so a
+    // shut window meant an armed take ran to whenever it was noticed and no
+    // video was ever rendered. See `EditorShared::poll_take_end`.
+    shared.poll_take_end();
 }
 
 /// Drain, sleep, repeat, until the plugin goes away.
@@ -541,6 +547,46 @@ mod tests {
         h.tick();
         assert!(h.columns() > 0, "the open round ate the audio ring");
         assert_eq!(h.voices(), 1, "the open round ate the note ring");
+    }
+
+    /// A take ends itself with the window SHUT, which is the state a Bitwig
+    /// audio export leaves the plugin in.
+    ///
+    /// Every trigger but `OnDisarm` is decided in `poll_take_end`, and until
+    /// this call that only ever ran inside a GUI frame — so an armed take with
+    /// nobody watching ran on and rendered nothing, whichever trigger was
+    /// chosen. Driven here through `OnTransportStop`'s frame-counted debounce
+    /// rather than the bar, because that path needs no audio thread to latch
+    /// anything: what is being claimed is that the DECISION runs at all, not
+    /// which signal reaches it.
+    #[test]
+    fn a_take_ends_itself_while_the_editor_window_is_shut() {
+        let mut h = harness();
+        let directory =
+            std::env::temp_dir().join(format!("background-take-end-{}", std::process::id()));
+        {
+            let mut shared = h.shared.lock();
+            let _probe = harmonigraph_record::testing::worker_probe(&shared.take, directory);
+            shared.ui.picture.appearance.render.trigger =
+                harmonigraph_ui::RenderTrigger::OnTransportStop;
+            // Armed through the Control directly, which is what the Video
+            // pane's toggle reaches: this test is about what happens with no
+            // frame running, so it must not need one to set up either.
+            let appearance = shared.ui.picture.appearance.serialize();
+            shared.take.start(48_000.0, appearance, false);
+            assert!(shared.take.is_recording(), "armed");
+            // Something captured, and the transport since stopped: the two
+            // conditions the debounce needs before it will end a take.
+            shared.take_events.store(1, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        h.editor_state.set_open(false);
+        for round in 0..EditorShared::STOP_FRAMES - 1 {
+            h.tick();
+            assert!(h.shared.lock().take.is_recording(), "still debouncing at round {round}");
+        }
+        h.tick();
+        assert!(!h.shared.lock().take.is_recording(), "the shut window ended the take");
     }
 
     /// The handover is the user-visible half: audio split across a window

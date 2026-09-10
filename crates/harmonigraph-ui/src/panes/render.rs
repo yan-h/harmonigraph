@@ -306,8 +306,31 @@ fn render_controls(
                 "Loop end",
                 "Record one loop, then render when playback wraps to its start. Enable looping in the host; without a wrap, recording continues until you turn Record take off.",
             ),
+            (
+                crate::RenderTrigger::AtBar,
+                "Bar",
+                "Finish recording and render when the transport plays through the bar below. The one that works during an audio export, which never loops and never reports itself playing.",
+            ),
         ],
     );
+    // Only under the trigger that reads it — a bar shown beside three triggers
+    // that ignore it is a dial that appears to do nothing three times out of
+    // four. The value is kept either way, so switching away and back does not
+    // lose it.
+    if state.appearance.render.trigger == crate::RenderTrigger::AtBar {
+        button_row(ui, |ui| {
+            ui.label("Stop at bar").on_hover_text(
+                "Counted as the host's arranger counts: bar 1 is the song's start. \
+                 Recording must reach this bar from before it — arming with the playhead \
+                 already past it records until you turn Record take off.",
+            );
+            ui.add(
+                egui::DragValue::new(&mut state.appearance.render.stop_bar)
+                    .range(crate::STOP_BAR_RANGE.0..=crate::STOP_BAR_RANGE.1)
+                    .speed(0.25),
+            );
+        });
+    }
 
     // Re-render the last take with the frame you've dialed in since recording.
     // The take carries only a record-time snapshot, so this is how a reframed

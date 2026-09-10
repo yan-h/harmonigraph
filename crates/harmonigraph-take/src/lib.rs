@@ -41,7 +41,9 @@ pub use configuration::ConfigurationRecord;
 pub mod render;
 
 pub use params::{ParamKey, MAX_TUNING_OFFSET};
-pub use render::{LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger};
+pub use render::{
+    LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger, STOP_BAR_RANGE,
+};
 
 use std::io::{BufRead, Write};
 

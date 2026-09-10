@@ -126,9 +126,13 @@ pub struct EditorShared {
     /// Param key currently inside a begin_set/end_set automation gesture.
     gesture: std::cell::Cell<Option<harmonigraph_ui::params::ParamKey>>,
     /// Take recording, driven from the Video pane's toggle.
-    take: harmonigraph_record::Control,
+    ///
+    /// `pub(crate)` for the same reason [`ui`](Self::ui) is: the background
+    /// analyzer polls the end of a take through this state while the window is
+    /// shut, and its tests read back what that round decided.
+    pub(crate) take: harmonigraph_record::Control,
     /// Events the audio thread has recorded into the current take.
-    take_events: Arc<std::sync::atomic::AtomicU64>,
+    pub(crate) take_events: Arc<std::sync::atomic::AtomicU64>,
     /// Whether the transport was rolling as of the last recorded event,
     /// for the status line. Derived, not authoritative.
     take_rolling: bool,
@@ -174,7 +178,12 @@ impl EditorShared {
     /// take. At the editor's repaint rate this is a fraction of a second
     /// — long enough to ride out a host reporting one stalled block,
     /// short enough that the render feels immediate.
-    const STOP_FRAMES: u32 = 20;
+    ///
+    /// Counted in calls to [`poll_take_end`](Self::poll_take_end) rather than
+    /// in frames as such, so with the window shut it is 20 rounds of the
+    /// background analyzer's poll instead — 0.4 s against 0.33 s at 60 fps,
+    /// which is the same fraction of a second and needs no second constant.
+    pub(crate) const STOP_FRAMES: u32 = 20;
 
     /// Reflect the Video pane's toggle into the recorder, and the
     /// recorder's progress back into the pane. Called once per frame,
@@ -217,6 +226,34 @@ impl EditorShared {
             self.take.cancel_render();
         }
 
+        self.poll_take_end();
+        self.take.tick(self.take_rolling, self.take_last_count);
+        self.ui.workspace.interaction.take.status = self.take.status();
+        self.ui.workspace.interaction.take.render_progress = self.take.render_progress();
+        // The shell may have refused to start (unwritable directory);
+        // don't leave the indicator claiming otherwise.
+        self.ui.workspace.interaction.take.recording = self.take.is_recording();
+        // Steady dot vs. breathing one: whether capture is actually happening.
+        self.ui.workspace.interaction.take.rolling = self.take_rolling;
+    }
+
+    /// Everything that can end a take without you clicking anything: publish
+    /// the two settings the audio thread decides on, then act on whichever
+    /// signal came back.
+    ///
+    /// **Split out of [`sync_take`](Self::sync_take) so it can also run with
+    /// the editor window SHUT.** Every trigger but `OnDisarm` decides here,
+    /// which meant a take armed and then left with the window closed — a Bitwig
+    /// audio export is exactly that — never ended itself and never rendered, no
+    /// matter which trigger was chosen. The background analyzer already holds
+    /// this lock at a 20 ms poll to keep the spectrogram filling; it calls this
+    /// on the same round, so the decision no longer depends on anyone watching.
+    ///
+    /// Nothing here draws or reads a widget, which is what makes it callable
+    /// from that thread: it moves settings out to the recorder and take state
+    /// back into `Interaction`, and the next frame — whenever there is one —
+    /// draws what it left.
+    pub(crate) fn poll_take_end(&mut self) {
         let count = self.take_events.load(std::sync::atomic::Ordering::Relaxed);
         self.take_last_count = count;
         // The audio thread's own view, rather than inferring it from
@@ -226,15 +263,21 @@ impl EditorShared {
         // Whether a backward jump ends the take on the audio thread.
         let ends_at_rewind = self.ui.picture.appearance.render.trigger.ends_at_rewind();
         self.take.set_end_at_rewind(ends_at_rewind);
+        // And the bar it ends at, which is `None` under every other trigger —
+        // so a stop bar saved in a project cannot end a take recorded under one
+        // of them.
+        self.take.set_stop_bar(self.ui.picture.appearance.render.stop_at_bar());
 
-        // The audio thread saw the transport go backwards and ended the take
-        // there — one pass, cut exactly at the loop boundary or at the point the
-        // host took the playhead back. Reflect it in the toggle and render that
-        // pass. This is what the export case needs and the frame-counted stop
-        // below cannot give it: a host that restores the playhead does so before
-        // the debounce runs out, and whatever the transport does next would
+        // The audio thread ended the take itself, either because the transport
+        // went backwards — one pass, cut exactly at the loop boundary or at the
+        // point the host took the playhead back — or because it played through
+        // the stop bar. Reflect it in the toggle and render that pass. This is
+        // what the export case needs and the frame-counted stop below cannot
+        // give it: a host that restores the playhead does so before the
+        // debounce runs out, and whatever the transport does next would
         // otherwise open a pass that ends up being the one rendered.
-        if self.take.is_recording() && ends_at_rewind && self.take.hit_rewind() {
+        let ended = (ends_at_rewind && self.take.hit_rewind()) || self.take.hit_stop_bar();
+        if self.take.is_recording() && ended {
             self.ui.workspace.interaction.take.recording = false;
             self.take.stop(harmonigraph_record::RenderRequest::from_config(
                 &self.ui.picture.appearance.render,
@@ -264,14 +307,6 @@ impl EditorShared {
         } else {
             self.take_still_frames = 0;
         }
-        self.take.tick(self.take_rolling, count);
-        self.ui.workspace.interaction.take.status = self.take.status();
-        self.ui.workspace.interaction.take.render_progress = self.take.render_progress();
-        // The shell may have refused to start (unwritable directory);
-        // don't leave the indicator claiming otherwise.
-        self.ui.workspace.interaction.take.recording = self.take.is_recording();
-        // Steady dot vs. breathing one: whether capture is actually happening.
-        self.ui.workspace.interaction.take.rolling = self.take_rolling;
     }
 
     /// Record a GUI frame, logging a console warning when the event loop

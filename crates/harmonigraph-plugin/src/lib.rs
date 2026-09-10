@@ -415,6 +415,38 @@ fn origin_source(
     }
 }
 
+/// Where the transport sits in BARS, counted the way an arranger counts:
+/// bar 1 is the song's start, so this returns 0.0 there and 64.0 at bar 65.
+/// `None` when the host reports no beats timeline, which reads downstream as
+/// "never crossed a stop bar" — see `Recorder::observe_bar`.
+///
+/// Two sources, and the fallback is the reason both are here. `bar_number`
+/// plus the offset into the bar is exact across a TIME-SIGNATURE CHANGE, where
+/// dividing the beat count by the current meter is not. But CLAP does not put
+/// `bar_number` behind a flag, so a host that fills in none of it hands us a
+/// constant zero — and zero bars is a position that can never be crossed from
+/// below, so that degrades to a take that never ends rather than to one that
+/// ends at the wrong bar. When the bar fields are absent entirely, the beat
+/// count divided by the meter is the honest answer for a song in one meter.
+///
+/// `pos_beats` is in QUARTER notes, so the meter converts as
+/// `numerator * 4 / denominator` — 4 quarters to a 4/4 bar, 3 to a 6/8 one.
+fn bar_position(transport: &Transport) -> Option<f64> {
+    let beats = transport.pos_beats()?;
+    let per_bar = match (transport.time_sig_numerator, transport.time_sig_denominator) {
+        (Some(numerator), Some(denominator)) if numerator > 0 && denominator > 0 => {
+            f64::from(numerator) * 4.0 / f64::from(denominator)
+        }
+        // 4/4 is what a host that reports no meter is almost always in, and
+        // the alternative is refusing to stop at all.
+        _ => 4.0,
+    };
+    match (transport.bar_number, transport.bar_start_pos_beats) {
+        (Some(bar), Some(start)) => Some(f64::from(bar) + (beats - start) / per_bar),
+        _ => Some(beats / per_bar),
+    }
+}
+
 /// Continuous presentation time for the display. The current block contributes
 /// sample offsets at its own rate; raw clock resets cannot retime queued history.
 fn ring_time(block_start: f64, timing: u32, sample_rate: f64) -> f64 {
@@ -659,7 +691,21 @@ impl Plugin for Harmonigraph {
                 // jump under the one-file triggers). It is deliberately more
                 // permissive than the host's `playing` flag — see there.
                 OriginSource::Transport(seconds) => {
-                    self.take.observe_transport(seconds, transport.playing).then_some(seconds)
+                    // The stop bar is asked FIRST, and the order is load-
+                    // bearing. A block at or past the bar belongs to no take,
+                    // so the cut lands on a block boundary at or before the bar
+                    // rather than one after it — but more than that,
+                    // `observe_transport` pays any split the take owes on the
+                    // first block that records, and an AtBar take owes splits
+                    // (`ends_at_rewind` is false for it). Asking afterwards
+                    // would let a block that both pays the debt and crosses the
+                    // bar open a fresh pass and finish it empty — and the
+                    // newest file is the one that renders. Latching `finished`
+                    // here instead makes `observe_transport` return on its own
+                    // guard, so no pass is opened at all.
+                    let stopped = self.take.observe_bar(bar_position(transport));
+                    let rolling = self.take.observe_transport(seconds, transport.playing);
+                    (rolling && !stopped).then_some(seconds)
                 }
                 OriginSource::LocalClock(seconds) => Some(seconds),
             };
@@ -1483,6 +1529,69 @@ mod tests {
         // Armed, and the host reports nothing at all: the plugin's own sample
         // counter in seconds, so "just record what I play" still works.
         assert_eq!(origin_source(true, None, 22_050, 44_100.0), OriginSource::LocalClock(0.5));
+    }
+
+    /// The bar the stop trigger compares against, off each of the three shapes
+    /// of transport a host actually hands over.
+    ///
+    /// The 6/8 rung is the one that earns its place: `pos_beats` is in QUARTER
+    /// notes, so a bar there is three of them and not six, and reading the
+    /// numerator as the bar length would put the stop bar half again too far
+    /// along in every compound meter.
+    #[test]
+    fn a_bar_position_counts_from_the_songs_start_in_whatever_meter() {
+        let mut transport = Transport::new(48_000.0);
+        assert_eq!(bar_position(&transport), None, "no beats timeline, no bar");
+
+        // 4/4, no bar fields: the beat count over the meter. Beat 258 is two
+        // quarter notes into the arranger's bar 65.
+        transport.pos_beats = Some(258.0);
+        transport.time_sig_numerator = Some(4);
+        transport.time_sig_denominator = Some(4);
+        assert_eq!(bar_position(&transport), Some(64.5));
+
+        // 6/8: three quarter notes to the bar, so the same beat count is
+        // further along than the numerator alone would say.
+        transport.pos_beats = Some(6.0);
+        transport.time_sig_numerator = Some(6);
+        transport.time_sig_denominator = Some(8);
+        assert_eq!(bar_position(&transport), Some(2.0));
+
+        // With the bar fields, the bar number is taken as given and only the
+        // offset into it is divided — which is what survives a meter change
+        // partway through a song.
+        transport.pos_beats = Some(6.0);
+        transport.bar_number = Some(9);
+        transport.bar_start_pos_beats = Some(4.5);
+        assert_eq!(bar_position(&transport), Some(9.5));
+    }
+
+    /// The bar Yan types and the bar the transport reports are the same bar.
+    ///
+    /// This is the one test that spans the base change, and its absence is what
+    /// let an off-by-one ship: `stop_bar` is the arranger's 1-based number and
+    /// `bar_position` counts the song's first bar as zero, but every other test
+    /// is written in its own side's units and passes either way. Asserting the
+    /// two against each other is the only shape that fails when the conversion
+    /// in `RenderConfig::stop_at_bar` goes missing.
+    #[test]
+    fn the_stop_bar_names_the_bar_the_transport_is_reporting() {
+        let config = harmonigraph_ui::RenderConfig {
+            trigger: harmonigraph_ui::RenderTrigger::AtBar,
+            stop_bar: 65.0,
+            ..Default::default()
+        };
+        // Where Bitwig's arranger says bar 65 in 4/4: 64 bars of four quarter
+        // notes behind it.
+        let mut transport = Transport::new(48_000.0);
+        transport.pos_beats = Some(64.0 * 4.0);
+        transport.time_sig_numerator = Some(4);
+        transport.time_sig_denominator = Some(4);
+        assert_eq!(
+            bar_position(&transport),
+            config.stop_at_bar(),
+            "asking to stop at bar 65 must stop where the host says bar 65 is"
+        );
     }
 
     /// One event, two clocks. The ring uses continuous presentation seconds,
