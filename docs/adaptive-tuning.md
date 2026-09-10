@@ -565,18 +565,27 @@ giving each consumer its own copy would add cost and a mechanism instead of remo
 `Group`, `Lane`, `Token`, `Completion`, `Disposition`, the ready heap, the cell pool and the emergency lane are deleted, and with them the `clap_performance_prepare` and `clap_performance_complete` hooks that had nothing left to decide.
 `Output` is now a borrow of the host's `clap_output_events` with one method:
 `push(value, time)` calls `try_push` and hands back the host's answer.
-The one capacity that survives is the 512 the normal lane was also serving as a per-callback bound on the wrapper's OWN parameter output;
-it is now `PARAMETER_OUTPUT_ATTEMPTS`, and it counts nothing the plugin pushes.
+The normal lane's 512 was doing two jobs besides the scheduler's, and both are kept where they belong.
+It bounded the wrapper's own parameter output per callback, which is now `PARAMETER_OUTPUT_ATTEMPTS` and counts nothing the plugin pushes.
+It also bounded the plugin's output per callback, which is now Tune's own `EMIT_PER_CALLBACK`:
+the delay line and the cut bound the backlog but not the burst, so without it the first callback after a stretch of blind or refusing ones would spend every held event's host call inline on the audio thread.
 
 What that moves to the plugin is the chronological floor.
 A CLAP output list is sorted by time, so Tune keeps its own cursor and emits at `max(cursor, block.start)` —
 which it can, because the delay line already emits in due order.
-The wrapper's own parameter and configuration output no longer shares that cursor;
-it is pinned to the last sample of each sub-block, after the plugin's events for that sub-block.
-That is the ordering the two halves used to negotiate by interleaving on time, settled once instead:
-a parameter at `start + frames - 1` is at or after every note in `[start, start + frames)` and before every note in the next sub-block, so neither side has to learn the other's times.
+
+The two halves no longer share that cursor, and the ordering they used to negotiate by interleaving on time is settled once instead:
+**the wrapper's own parameter and configuration output follows the plugin's, floored at the high-water mark of what the callback has already put on the wire.** Which side gives way is the decision.
+A note's offset is the output's content;
+a parameter report only has to be recorded in order, so where the two would cross it is the parameter that moves later.
 It also reads correctly, because a value observed during a callback shaped none of that callback's notes —
 the configuration in force was frozen at `clap_configuration_adopt` before the first of them.
+
+The floor is a mark rather than a pin because what the host RECORDS is the other thing at stake in an offset.
+A notification keeps its own mapped sample unless something later is already out, so nothing is moved that did not have to be;
+pinning every one of them to the sub-block's last sample would have been a line shorter and would have cost them all their timing, since without `SAMPLE_ACCURATE_AUTOMATION` a steady-transport callback is a single sub-block and that sample is the whole buffer's last.
+The mark cannot exceed that sample either, because the plugin's events for a sub-block are all inside it —
+so a notification mapping past the sub-block still waits for the one that contains it.
 
 An error exit is the one place the plugin's output goes dark:
 invalid input, a missing host list and `CLAP_PROCESS_ERROR` all give `clap_performance_finalize` a writer that refuses everything, so the Tune retains its flush for a callback the host will read instead of spending it on one it has already lost.

@@ -40,8 +40,9 @@ The ordinary processing walker, configuration owner and performance owner each k
 The retain-and-acknowledge contract that used to sit on top of that pool is gone;
 a plugin that cannot take an input reports a bounded failure instead of holding it.
 The output side allocates nothing: `Output` is a borrow of the host's `clap_output_events` whose one `push(value, time)` calls `try_push` and returns the host's answer, which is what an opted-in plugin cannot get from legacy `send_event`.
-Keeping the list sorted is the caller's contract rather than the wrapper's, because the wrapper pins the parameter and configuration output it pushes itself to the last sample of each sub-block, after the plugin's events for that sub-block.
-`PARAMETER_OUTPUT_ATTEMPTS` bounds that half at 512 pushes per callback; the plugin's own output is bounded by whatever the plugin retains.
+Keeping the list sorted is the caller's contract rather than the wrapper's:
+both halves raise a per-callback high-water mark, the plugin never reads it, and the wrapper floors its own parameter and configuration output at it so that traffic follows the plugin's rather than interleaving with it by time.
+`PARAMETER_OUTPUT_ATTEMPTS` bounds that half at 512 pushes per callback; the plugin bounds its own.
 The process trace observes the wrapper's output only, since its hook takes the plugin lock and an opted-in plugin pushes while holding it.
 Prepared nonautomatable setup validates and reserves capacity before parameter/state mutation, then adopts at the enclosing input boundary.
 Main-thread registration, setup service and joined lifecycle hooks keep registry locking and endpoint reclamation outside audio callbacks.

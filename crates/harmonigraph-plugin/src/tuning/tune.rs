@@ -14,7 +14,9 @@ use std::sync::Arc;
 use super::event::Event;
 use super::queue::Queue;
 use super::session::{self, Attached, Capture, Reply};
-use super::{setup, CAPTURE_RING, CUT_EVENTS, HELD_PER_SOURCE, PENDING_EVENTS, REPLY_RING};
+use super::{
+    setup, CAPTURE_RING, CUT_EVENTS, EMIT_PER_CALLBACK, HELD_PER_SOURCE, PENDING_EVENTS, REPLY_RING,
+};
 
 /// Controllers the cut owes a neutral value for. Sustain, sostenuto and legato
 /// outlive the note-offs beside them, so a cut that left one down would hold
@@ -86,6 +88,8 @@ pub struct Tune {
     /// whole of what keeps it sorted: every emission takes
     /// `max(self.cursor, block.start)` and moves it.
     cursor: u32,
+    /// Events put on the wire in this callback, against [`EMIT_PER_CALLBACK`].
+    emitted: u32,
     /// The transport was playing at the last callback. A falling edge is a
     /// Stop, and a Stop is a cut for the whole session.
     playing: bool,
@@ -123,6 +127,7 @@ impl Tune {
             pedals: [0; 16],
             status: 0,
             cursor: 0,
+            emitted: 0,
             playing: false,
             misses: 0,
             dropped: 0,
@@ -290,6 +295,7 @@ impl Tune {
     pub fn begin(&mut self, callback: api::Callback) {
         self.callback = Some(callback);
         self.cursor = 0;
+        self.emitted = 0;
         self.adopt();
         if callback.steady_time < 0 {
             self.status |= session::CLOCK;
@@ -492,6 +498,9 @@ impl Tune {
         let end =
             base.saturating_add(i64::from(block.start)).saturating_add(i64::from(block.frames));
         while let Some(event) = self.cut.front() {
+            if self.emitted >= EMIT_PER_CALLBACK {
+                return;
+            }
             let time = self.cursor.max(block.start).min(callback.frames.saturating_sub(1));
             if !self.emit(output, time, event, None, 0) {
                 return;
@@ -499,7 +508,7 @@ impl Tune {
             self.cut.pop();
         }
         while let Some(pending) = self.line.front() {
-            if pending.due >= end {
+            if pending.due >= end || self.emitted >= EMIT_PER_CALLBACK {
                 break;
             }
             let offset = pending.due.saturating_sub(base).clamp(0, i64::from(u32::MAX)) as u32;
@@ -571,13 +580,16 @@ impl Tune {
             return false;
         }
         self.cursor = time;
+        self.emitted += 1;
         // The tuning expression addresses the voice the note just created, so
         // it can only follow the note, and a refusal here costs the correction
         // rather than the note. Losing both would be the one thing this design
         // exists to stop, and re-emitting the note to recover the pair would
         // sound it twice.
         if let Some(tuning) = tuning {
-            if !tuning.emittable() || !output.push(tuning.input(), time) {
+            if tuning.emittable() && output.push(tuning.input(), time) {
+                self.emitted += 1;
+            } else {
                 self.status |= session::DROPPED;
             }
         }

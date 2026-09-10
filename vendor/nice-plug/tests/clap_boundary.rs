@@ -336,6 +336,30 @@ fn tuning() -> InputValue {
         flags: CLAP_EVENT_DONT_RECORD,
     }
 }
+fn nan_velocity() -> InputValue {
+    match note(CLAP_EVENT_NOTE_OFF) {
+        InputValue::Note { kind, note_id, port, channel, key, flags, .. } => {
+            InputValue::Note { kind, note_id, port, channel, key, velocity: f64::NAN, flags }
+        }
+        _ => unreachable!(),
+    }
+}
+fn infinite_tuning() -> InputValue {
+    match tuning() {
+        InputValue::Expression { expression, note_id, port, channel, key, flags, .. } => {
+            InputValue::Expression {
+                expression,
+                note_id,
+                port,
+                channel,
+                key,
+                value: f64::INFINITY,
+                flags,
+            }
+        }
+        _ => unreachable!(),
+    }
+}
 fn header<T>(kind: u16, time: u32) -> clap_event_header {
     clap_event_header {
         size: std::mem::size_of::<T>() as u32,
@@ -1111,10 +1135,15 @@ fn pushed_values_reach_the_host_with_exact_fields_and_times() {
                 (5, note(CLAP_EVENT_NOTE_ON)),
                 (5, tuning()),
                 (47, midi),
-                // No output encoding exists for these, so the host never sees
-                // them and the caller is told so.
+                // No output encoding exists for any of these, so the host never
+                // sees them and the caller is told so. The last two are the
+                // staging validator's checks, which live here now: a note type
+                // CLAP has no event for, and a magnitude it cannot carry.
                 (47, InputValue::Parameter { id: 1, value: 0.5, modulation: false }),
                 (47, InputValue::Other),
+                (47, note(7)),
+                (47, nan_velocity()),
+                (47, infinite_tuning()),
             ]),
             ..Default::default()
         },
@@ -1122,7 +1151,7 @@ fn pushed_values_reach_the_host_with_exact_fields_and_times() {
     );
     d.run(0, 64, vec![], true);
     let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    assert_eq!(o.pushes, [true, true, true, false, false]);
+    assert_eq!(o.pushes, [true, true, true, false, false, false, false, false]);
     assert_eq!(
         d.sink.attempts.iter().map(|a| (a.kind, a.time)).collect::<Vec<_>>(),
         [(CLAP_EVENT_NOTE_ON, 5), (CLAP_EVENT_NOTE_EXPRESSION, 5), (CLAP_EVENT_MIDI, 47)]
@@ -1240,9 +1269,10 @@ fn unsupported_input_and_legacy_send_misuse_are_explicit() {
 fn allocated_boundary_layouts_fit_declared_budgets() {
     assert!(std::mem::size_of::<Option<OwnedInput>>() <= 192);
     assert_eq!(std::mem::align_of::<Option<OwnedInput>>(), 8);
-    // The output side allocates nothing now: `Output` is a borrow of the host's
-    // list, so the input pool is the whole of the boundary's storage.
-    assert!(std::mem::size_of::<perf::Output<'_>>() <= 8);
+    // The output side allocates nothing now: `Output` is two borrows -- the
+    // host's list and the callback's high-water mark -- so the input pool is
+    // the whole of the boundary's storage.
+    assert!(std::mem::size_of::<perf::Output<'_>>() <= 16);
     println!(
         "input={} input_pool={}",
         std::mem::size_of::<Option<OwnedInput>>(),

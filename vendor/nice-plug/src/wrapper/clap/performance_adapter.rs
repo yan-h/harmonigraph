@@ -11,9 +11,11 @@ impl<P: ClapPlugin> Wrapper<P> {
         self.performance_audio.store(true, Ordering::Release);
         self.legacy_send_misuse.store(false, Ordering::Release);
         self.parameter_attempts.store(0, Ordering::Release);
+        self.output_high_water.store(0, Ordering::Release);
         self.begin_configuration_notifications();
         let writable = callback.input_status == performance::InputStatus::Complete;
-        let mut output = unsafe { performance::Output::new(output, writable) };
+        let mut output =
+            unsafe { performance::Output::new(output, &self.output_high_water, writable) };
         self.plugin.lock().clap_performance_begin(callback, &mut output);
     }
 
@@ -34,7 +36,9 @@ impl<P: ClapPlugin> Wrapper<P> {
         let writable = status != CLAP_PROCESS_ERROR
             && callback.input_status == performance::InputStatus::Complete;
         {
-            let mut writer = unsafe { performance::Output::new(plugin_output, writable) };
+            let mut writer = unsafe {
+                performance::Output::new(plugin_output, &self.output_high_water, writable)
+            };
             self.plugin.lock().clap_performance_finalize(callback, status, &mut writer);
         }
         // The parameter half drains with the real list even on an error exit:
@@ -59,14 +63,25 @@ impl<P: ClapPlugin> Wrapper<P> {
     }
 
     /// The wrapper's own parameter and configuration output for one sub-block,
-    /// pinned to `through` — its last sample, and the sample the plugin's own
-    /// output for that sub-block is at or before. [`performance::Output::push`]
-    /// holds the whole ordering argument.
+    /// bounded by `through` — its last sample — and floored at the high-water
+    /// mark of what this callback has already put on the wire.
+    /// [`performance::Output::push`] holds the whole ordering argument.
     ///
-    /// Passing `through` as the notification cursor is what pins it: a value
-    /// whose mapped offset is inside the sub-block comes back at exactly
-    /// `through`, and one beyond it is filtered out and waits for the sub-block
-    /// that contains it.
+    /// The mark is what the notification cursor carries, so a value keeps its
+    /// own mapped offset unless something later is already on the wire, in which
+    /// case it lands just after that. Pinning to `through` instead would be one
+    /// line shorter and would cost every notification its sample: without
+    /// `SAMPLE_ACCURATE_AUTOMATION` a steady-transport callback is a single
+    /// sub-block, so `through` is the whole buffer's last sample and distinct
+    /// source samples would collapse onto it. What the plugin plays is not the
+    /// only thing at stake in an offset; what the host RECORDS is the other,
+    /// and it is the one this half exists for.
+    ///
+    /// The mark cannot exceed `through`, because the plugin's events for this
+    /// sub-block are all inside it — so a notification whose offset maps past
+    /// `through` still fails the `time <= through` filter and waits for the
+    /// sub-block that contains it, exactly as before. A caller that broke that
+    /// contract would starve its own notifications rather than unsort the list.
     ///
     /// [`performance::PARAMETER_OUTPUT_ATTEMPTS`] bounds what one callback
     /// spends here across all of its sub-block drains. The loop would terminate
@@ -84,7 +99,8 @@ impl<P: ClapPlugin> Wrapper<P> {
         while self.parameter_attempts.load(Ordering::Acquire)
             < performance::PARAMETER_OUTPUT_ATTEMPTS
         {
-            let notification = self.next_configuration_notification(through, through);
+            let floor = self.output_high_water.load(Ordering::Acquire);
+            let notification = self.next_configuration_notification(through, floor);
             // Copy before host callbacks. Only the captured/admitted prefix can
             // notify; a GUI arrival during this callback waits for its next one.
             let ordinary = self.output_parameter_events.borrow_mut().notification();
@@ -92,17 +108,28 @@ impl<P: ClapPlugin> Wrapper<P> {
                 break;
             }
             self.parameter_attempts.fetch_add(1, Ordering::AcqRel);
-            if let Some(change) = ordinary {
-                // A refused GUI value ends the drain rather than letting a
-                // notification overtake the value the host just declined.
-                if !unsafe { self.push_parameter(output, change, through) } {
-                    break;
+            // A GUI edit has no source sample of its own, so it takes the floor.
+            let time = if ordinary.is_some() { floor } else { notification.unwrap().time };
+            let accepted = if let Some(change) = ordinary {
+                let accepted = unsafe { self.push_parameter(output, change, time) };
+                if accepted {
+                    self.output_parameter_events.borrow_mut().accept();
                 }
-                self.output_parameter_events.borrow_mut().accept();
+                accepted
             } else {
                 let notification = notification.unwrap();
                 let accepted = unsafe { notification.push(output) };
                 self.complete_configuration_notification(notification, accepted);
+                accepted
+            };
+            if accepted {
+                // Raise the floor for the next iteration, or two values with
+                // distinct offsets could leave in the wrong order.
+                self.output_high_water.fetch_max(time, Ordering::AcqRel);
+            } else if ordinary.is_some() {
+                // A refused GUI value ends the drain rather than letting a
+                // notification overtake the value the host just declined.
+                break;
             }
         }
     }

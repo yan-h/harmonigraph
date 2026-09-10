@@ -3,6 +3,7 @@
 //! wrapper supplies is the exact value, its provenance, and the host's answer.
 use super::configuration::InputValue;
 use clap_sys::events::*;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// How many parameter values and configuration notifications the wrapper will
 /// push in one enclosing callback. The plugin's own output is not counted and
@@ -115,9 +116,16 @@ pub struct Summary {
     pub legacy_send_misuse: bool,
 }
 
-/// A borrow of the host's output list for the duration of one plugin callback.
+/// A borrow of the host's output list for the duration of one plugin callback,
+/// and of the high-water mark both halves of the boundary raise. The lifetime
+/// is carried by that borrow rather than by prose, so an `Output` cannot outlive
+/// the callback it was handed to.
 pub struct Output<'a> {
     list: Option<&'a clap_output_events>,
+    /// The latest offset anything in this enclosing callback has actually put
+    /// on the wire. The plugin never reads it -- its own contract is local --
+    /// but the wrapper does, and floors its own output at it.
+    high_water: &'a AtomicU32,
 }
 
 impl<'a> Output<'a> {
@@ -127,34 +135,51 @@ impl<'a> Output<'a> {
     ///
     /// # Safety
     /// `list` must be null or a valid host output list for all of `'a`.
-    pub(crate) unsafe fn new(list: *const clap_output_events, writable: bool) -> Self {
+    pub(crate) unsafe fn new(
+        list: *const clap_output_events,
+        high_water: &'a AtomicU32,
+        writable: bool,
+    ) -> Self {
         let list = unsafe { list.as_ref() };
-        Self { list: list.filter(|list| writable && list.try_push.is_some()) }
+        Self { list: list.filter(|list| writable && list.try_push.is_some()), high_water }
     }
 
     /// Push one event at `time` and return the host's answer. False also covers
-    /// an unavailable output list and a value with no output encoding, so the
-    /// caller never has to tell a refusal apart from a value it cannot send.
+    /// an unavailable output list and a value [`push_value`] cannot encode, so
+    /// the caller never has to tell a refusal apart from a value it cannot send.
     ///
     /// **The chronological floor is the caller's contract.** A CLAP output event
-    /// list is sorted by time, and nothing here checks that any more: the times
-    /// one callback pushes must not decrease, and each must fall inside the
-    /// sub-block the caller was handed. A delay line emitting in due order,
-    /// floored at the sub-block's start, satisfies both.
+    /// list is sorted by time: the times one callback pushes must not decrease,
+    /// and each must fall inside the sub-block the caller was handed. A delay
+    /// line emitting in due order, floored at the sub-block's start, satisfies
+    /// both. The `debug_assert` is the only check, because the release path is
+    /// a `try_push` and nothing else.
     ///
-    /// The wrapper's own parameter and configuration output is what that floor
-    /// used to have to negotiate with through a shared cursor, and it no longer
-    /// does. The wrapper pins every event it pushes itself to the LAST sample of
-    /// the sub-block it is draining, after the caller's events for that
-    /// sub-block, so the two halves cannot cross without either side learning
-    /// the other's times: a parameter at `start + frames - 1` is at or after
-    /// every note in `[start, start + frames)` and before every note in the
-    /// next sub-block. Of the two samples the wrapper could prove correct, it
-    /// takes the later one, because a value observed during a callback shaped
-    /// none of that callback's notes -- the configuration in force was frozen at
-    /// `clap_configuration_adopt` before the first of them.
+    /// The caller owes nothing to the wrapper's own parameter and configuration
+    /// output, which is the half that used to negotiate with it through a shared
+    /// cursor. That traffic is floored at this high-water mark instead, so it
+    /// lands at or after every event already on the wire and before anything the
+    /// next sub-block pushes -- an ordering the wrapper can hold up on its own,
+    /// by reading a mark rather than by asking the caller for its times. Which
+    /// side gives way is deliberate: a note's offset is the output's content,
+    /// while a parameter report only has to be recorded in order, so where the
+    /// two would cross it is the parameter that moves later. A value observed
+    /// during a callback shaped none of that callback's notes anyway -- the
+    /// configuration in force was frozen at `clap_configuration_adopt` before
+    /// the first of them -- so later is also the reading that matches cause.
     pub fn push(&mut self, value: InputValue, time: u32) -> bool {
-        self.list.is_some_and(|list| unsafe { push_value(list, value, time) })
+        debug_assert!(
+            time >= self.high_water.load(Ordering::Relaxed),
+            "CLAP output must be sorted by time"
+        );
+        let Some(list) = self.list else { return false };
+        if !unsafe { push_value(list, value, time) } {
+            return false;
+        }
+        // Only what the host took raises the mark. A refused event is not on
+        // the wire, so it cannot be something a later one has to follow.
+        self.high_water.fetch_max(time, Ordering::AcqRel);
+        true
     }
 }
 
@@ -167,7 +192,18 @@ pub(crate) unsafe fn push_value(output: &clap_output_events, value: InputValue, 
         flags,
     };
     match value {
-        InputValue::Note { kind, note_id, port, channel, key, velocity, flags } => {
+        // The staging validator's checks, kept here rather than left to one
+        // caller: an unknown note type or a non-finite magnitude would otherwise
+        // reach the host's list, where staging used to refuse it outright.
+        InputValue::Note { kind, note_id, port, channel, key, velocity, flags }
+            if matches!(
+                kind,
+                CLAP_EVENT_NOTE_ON
+                    | CLAP_EVENT_NOTE_OFF
+                    | CLAP_EVENT_NOTE_CHOKE
+                    | CLAP_EVENT_NOTE_END
+            ) && velocity.is_finite() =>
+        {
             let event = clap_event_note {
                 header: header(std::mem::size_of::<clap_event_note>() as u32, kind, flags),
                 note_id,
@@ -178,7 +214,9 @@ pub(crate) unsafe fn push_value(output: &clap_output_events, value: InputValue, 
             };
             unsafe { (output.try_push.unwrap())(output, &event.header) }
         }
-        InputValue::Expression { expression, note_id, port, channel, key, value, flags } => {
+        InputValue::Expression { expression, note_id, port, channel, key, value, flags }
+            if value.is_finite() =>
+        {
             let event = clap_event_note_expression {
                 header: header(
                     std::mem::size_of::<clap_event_note_expression>() as u32,
@@ -206,10 +244,13 @@ pub(crate) unsafe fn push_value(output: &clap_output_events, value: InputValue, 
             };
             unsafe { (output.try_push.unwrap())(output, &event.header) }
         }
-        // Parameter, transport and unsupported values have no output encoding
-        // here. Staging used to reject them before they could be retained at
-        // all; refusing them at the wire is the same answer one step later, and
-        // the caller reads it the same way it reads a host refusal.
-        InputValue::Parameter { .. } | InputValue::Transport(_) | InputValue::Other => false,
+        // A value with no output encoding: a parameter, a transport, an
+        // unsupported header, or a note/expression the arms above refused.
+        // Staging used to reject these before they could be retained at all;
+        // refusing them at the wire is the same answer one step later, and the
+        // caller reads it the same way it reads a host refusal. A caller that
+        // would retain on false owes itself a check that the value can ever be
+        // sent, or it retains it forever.
+        _ => false,
     }
 }

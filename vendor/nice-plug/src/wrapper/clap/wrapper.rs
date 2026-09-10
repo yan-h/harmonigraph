@@ -144,6 +144,9 @@ pub struct Wrapper<P: ClapPlugin> {
     pub(super) legacy_send_misuse: AtomicBool,
     /// Audio-thread only, spanning every sub-block drain of one callback.
     pub(super) parameter_attempts: AtomicUsize,
+    /// The latest offset this enclosing callback has put on the host's output
+    /// list, from either half of the boundary. Audio-thread only.
+    pub(super) output_high_water: AtomicU32,
     performance_audio: AtomicBool,
     deferred_host_callback: AtomicBool,
     #[cfg(feature = "clap-boundary-tests")]
@@ -704,6 +707,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             owned_input: Mutex::new((P::CLAP_CONFIGURATION || P::CLAP_PERFORMANCE).then(input_adapter::Runtime::default)),
             legacy_send_misuse: AtomicBool::new(false),
             parameter_attempts: AtomicUsize::new(0),
+            output_high_water: AtomicU32::new(0),
             performance_audio: AtomicBool::new(false),
             deferred_host_callback: AtomicBool::new(false),
             #[cfg(feature = "clap-boundary-tests")]
@@ -2577,7 +2581,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                         });
                     }
                     let result = if P::CLAP_PERFORMANCE {
-                        let mut output = unsafe { performance::Output::new(host_process.out_events, true) };
+                        let mut output = unsafe { performance::Output::new(host_process.out_events, &wrapper.output_high_water, true) };
                         plugin.clap_performance_process(buffers.main_buffer, &mut aux, &mut context,
                             performance::Block { callback, start: block_start as u32, frames: block_len as u32,
                                 transport: unsafe { transport_info.as_ref().copied() } },
@@ -3496,6 +3500,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                     // attempt offset zero; owned input waits for a process boundary.
                     wrapper.begin_configuration_notifications();
                     wrapper.parameter_attempts.store(0, Ordering::Release);
+                    wrapper.output_high_water.store(0, Ordering::Release);
                     unsafe { wrapper.drain_performance(out, 0); }
                 } else if status == performance::InputStatus::Complete {
                     if !in_.is_null() { unsafe { wrapper.handle_in_events(&*in_, 0, 0); } }
