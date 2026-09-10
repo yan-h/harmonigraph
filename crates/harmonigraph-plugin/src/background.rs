@@ -12,12 +12,10 @@
 //! is what this is for.
 //!
 //! Both rings are drained here, not just the audio one, and the second is not a
-//! bonus. A full ring drops the NEWEST, so once the note ring saturates the
-//! events that survive are the OLD ones, and `ClockMapper` then snaps the
-//! batch's newest to `now` and shifts the whole backlog forward. Leaving the
-//! notes to the reopen while the columns are captured at their true times would
-//! draw ribbons and ridges that disagree — and a heatmap that disagrees with
-//! the roll above it is worse than one that admits the gap.
+//! bonus. A full ring drops the NEWEST, so leaving the notes to the reopen
+//! would retain old events while losing the ones beside the fresh audio.
+//! Draining both also keeps their shared presentation clock current, whether
+//! the host runs in realtime or bounces faster than a window could draw.
 //!
 //! **What it costs is a continuous FFT.** 0.23 ms per stereo column at the
 //! default 8192-point window, 125 columns a second: about 3% of a core for as
@@ -277,6 +275,7 @@ fn tick(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Re
     restore.adopt(shared);
     let now = shared.input.now();
     shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
+    let now = shared.input.display_now(now);
     shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
 }
 
@@ -472,9 +471,8 @@ mod tests {
     }
 
     /// The notes travel with them, and not as a bonus: a full ring drops the
-    /// NEWEST, so notes left to pile up until the reopen are the ones
-    /// `ClockMapper` then shifts forward to meet `now`. Captured here instead,
-    /// the ribbons stay over the ridges they made.
+    /// NEWEST, so notes left to pile up until the reopen would lose the recent
+    /// ribbons beside the audio. Captured here instead, both streams stay current.
     #[test]
     fn a_closed_window_still_reaches_the_roll() {
         let mut h = harness();
@@ -562,12 +560,9 @@ mod tests {
     /// evidence that `frame` still routes through `LiveInput::drain`. That claim is
     /// `catch_up_answers_whether_notes_arrived`'s, one file over.
     ///
-    /// It is the column GRID this pins and deliberately not the timestamps.
-    /// Those use the shared note ClockMapper conversion to the SHELL clock —
-    /// so feeding half a second of audio in no time at all, as a test must,
-    /// corrects that mapping by design and says nothing about the handover. A host
-    /// hands this thread one poll of audio per poll of wall clock, and the two
-    /// advance together.
+    /// It is the column GRID this pins. Timeline equivalence across delivery
+    /// speeds is covered by `fast_bounce_preserves_the_realtime_picture_timeline`
+    /// in the editor tests, with a deterministic clock instead of real sleeps.
     #[test]
     fn the_handover_neither_drops_a_column_nor_repeats_one() {
         // The same audio, drained entirely by frames.
