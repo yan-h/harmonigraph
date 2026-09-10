@@ -123,7 +123,7 @@ mod trigger_tests {
             assert_eq!(config.stop_at_bar(), None, "{trigger:?} does not stop at a bar");
         }
         config.trigger = RenderTrigger::AtBar;
-        assert_eq!(config.stop_at_bar(), Some(65.0));
+        assert_eq!(config.stop_at_bar(), Some(64.0), "and it converts to a 0-based bar");
     }
 
     /// A stop bar out of the field's range, or not a number at all, is repaired
@@ -135,7 +135,7 @@ mod trigger_tests {
     #[test]
     fn a_hand_edited_stop_bar_is_repaired_on_load() {
         for (given, want) in
-            [(f64::NAN, 65.0), (f64::INFINITY, 65.0), (0.0, 1.0), (1e9, 100_000.0), (33.5, 33.5)]
+            [(f64::NAN, 65.0), (f64::INFINITY, 65.0), (0.0, 2.0), (1e9, 100_000.0), (33.5, 33.5)]
         {
             let mut config = super::RenderConfig { stop_bar: given, ..Default::default() };
             config.sanitize();
@@ -268,8 +268,17 @@ impl RenderConfig {
     /// The trigger and the number are separate fields so that switching away
     /// and back keeps the bar you dialed in, which means every reader has to
     /// ask both. Asking here once is what stops one of them forgetting.
+    ///
+    /// **This is where the bar changes base**, and it is the whole reason the
+    /// conversion lives in one function. [`stop_bar`](Self::stop_bar) is the
+    /// arranger's 1-based bar because that is the number on screen in the host;
+    /// the transport position it is compared against counts the song's first
+    /// bar as zero. Passing the field through unconverted stops a bar LATE —
+    /// and if the bar asked for was the arrangement's last, the comparison
+    /// point is never reached at all and the take never ends, which is the
+    /// failure this trigger exists to remove.
     pub fn stop_at_bar(&self) -> Option<f64> {
-        (self.trigger == RenderTrigger::AtBar).then_some(self.stop_bar)
+        (self.trigger == RenderTrigger::AtBar).then_some(self.stop_bar - 1.0)
     }
 }
 
@@ -277,7 +286,12 @@ impl RenderConfig {
 /// [`RenderConfig::sanitize`] holds a blob to. The top end is about nine hours
 /// at 120 bpm in 4/4 — past any piece, and short of where an f64 bar count
 /// stops resolving a fraction of a bar.
-pub const STOP_BAR_RANGE: (f64, f64) = (1.0, 100_000.0);
+///
+/// The bottom end is 2 rather than 1 because a take ends where it plays THROUGH
+/// the bar, and nothing is before the song's start to play through bar 1 from.
+/// Allowing it would put a settable, plausible-looking value on the dial that
+/// provably never fires.
+pub const STOP_BAR_RANGE: (f64, f64) = (2.0, 100_000.0);
 
 /// Which side of the video frame the lattice takes; the Spectral pane takes
 /// whatever is left.

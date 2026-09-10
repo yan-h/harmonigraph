@@ -768,9 +768,15 @@ impl Recorder {
 
     /// End the take if this block played THROUGH the stop bar, and answer
     /// whether it did. Called once per block with the transport's bar position,
-    /// AFTER [`observe_transport`](Self::observe_transport) — a block that ends
+    /// BEFORE [`observe_transport`](Self::observe_transport): a block that ends
     /// the take here contributes nothing, so the cut lands on a block boundary
-    /// at or before the bar rather than a block after it.
+    /// at or before the bar rather than a block after it, and latching
+    /// `finished` first is also what stops `observe_transport` paying an owed
+    /// split into a pass that this same block immediately finishes empty.
+    ///
+    /// The bar is counted from ZERO at the song's start, which is the base the
+    /// transport reports; the arranger's 1-based number is converted on the way
+    /// in by `RenderConfig::stop_at_bar`.
     ///
     /// **The test is a CROSSING, not a level.** A take armed with the playhead
     /// already past the bar never sees a position below it, so it never fires
@@ -4069,6 +4075,50 @@ mod tests {
         assert!(!b.rec.observe_bar(Some(4.98)));
         assert!(b.rec.observe_bar(Some(5.02)), "the second pass reaches the bar");
         assert!(b.hit_stop_bar());
+    }
+
+    /// A block that both pays an owed split and crosses the stop bar must not
+    /// open a pass, because it is about to finish one.
+    ///
+    /// An AtBar take splits at a backward jump, and a jump made with the
+    /// transport STOPPED only owes the split — it is paid by the next block
+    /// that records. Park the playhead a hair before the stop bar and hit play
+    /// and that is the same block: pay the debt first and the take rolls over
+    /// into a fresh file which this block immediately finishes with nothing in
+    /// it, and the newest file is the one that renders. Asking the bar first is
+    /// what stops it, by latching `finished` before `observe_transport` reaches
+    /// its debt.
+    ///
+    /// The fixture has to park WITHIN a block of the bar, or the crossing is
+    /// too wide a step to fire and the test passes without reaching the hazard
+    /// at all.
+    #[test]
+    fn a_block_that_both_owes_a_split_and_crosses_the_bar_opens_no_pass() {
+        let mut b = Bench::new();
+        b.arm();
+        b.stop_at_bar(5.0);
+
+        // Rolling, well short of the bar, then on past it to somewhere else.
+        assert!(!b.rec.observe_bar(Some(4.0)));
+        assert!(b.rec.observe_transport(8.0, true));
+        assert!(!b.rec.observe_bar(Some(20.0)), "a leap, not playback");
+        assert!(b.rec.observe_transport(40.0, true));
+        let _ = b.pushed();
+
+        // Dragged back to a hair before the bar with the transport stopped: a
+        // split is owed, not paid.
+        assert!(!b.rec.observe_bar(Some(4.99)));
+        assert!(!b.rec.observe_transport(9.98, false), "parked after the drag");
+
+        // Hit play, and the first block that would record is also the one that
+        // crosses the bar.
+        assert!(b.rec.observe_bar(Some(5.02)), "the crossing");
+        assert!(!b.rec.observe_transport(10.04, true), "the take is already over");
+        let after = b.pushed();
+        assert!(
+            after.is_empty(),
+            "no pass may be opened for a block that ends the take: {after:?}"
+        );
     }
 
     /// The backward-jump threshold is there to ignore a host's own jitter

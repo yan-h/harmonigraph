@@ -691,12 +691,20 @@ impl Plugin for Harmonigraph {
                 // jump under the one-file triggers). It is deliberately more
                 // permissive than the host's `playing` flag — see there.
                 OriginSource::Transport(seconds) => {
-                    let rolling = self.take.observe_transport(seconds, transport.playing);
-                    // After `observe_transport`, and its answer is dropped on
-                    // the block that ends the take: a block at or past the stop
-                    // bar belongs to no take, so the cut lands on a block
-                    // boundary at or before the bar rather than one after it.
+                    // The stop bar is asked FIRST, and the order is load-
+                    // bearing. A block at or past the bar belongs to no take,
+                    // so the cut lands on a block boundary at or before the bar
+                    // rather than one after it — but more than that,
+                    // `observe_transport` pays any split the take owes on the
+                    // first block that records, and an AtBar take owes splits
+                    // (`ends_at_rewind` is false for it). Asking afterwards
+                    // would let a block that both pays the debt and crosses the
+                    // bar open a fresh pass and finish it empty — and the
+                    // newest file is the one that renders. Latching `finished`
+                    // here instead makes `observe_transport` return on its own
+                    // guard, so no pass is opened at all.
                     let stopped = self.take.observe_bar(bar_position(transport));
+                    let rolling = self.take.observe_transport(seconds, transport.playing);
                     (rolling && !stopped).then_some(seconds)
                 }
                 OriginSource::LocalClock(seconds) => Some(seconds),
@@ -1556,6 +1564,34 @@ mod tests {
         transport.bar_number = Some(9);
         transport.bar_start_pos_beats = Some(4.5);
         assert_eq!(bar_position(&transport), Some(9.5));
+    }
+
+    /// The bar Yan types and the bar the transport reports are the same bar.
+    ///
+    /// This is the one test that spans the base change, and its absence is what
+    /// let an off-by-one ship: `stop_bar` is the arranger's 1-based number and
+    /// `bar_position` counts the song's first bar as zero, but every other test
+    /// is written in its own side's units and passes either way. Asserting the
+    /// two against each other is the only shape that fails when the conversion
+    /// in `RenderConfig::stop_at_bar` goes missing.
+    #[test]
+    fn the_stop_bar_names_the_bar_the_transport_is_reporting() {
+        let config = harmonigraph_ui::RenderConfig {
+            trigger: harmonigraph_ui::RenderTrigger::AtBar,
+            stop_bar: 65.0,
+            ..Default::default()
+        };
+        // Where Bitwig's arranger says bar 65 in 4/4: 64 bars of four quarter
+        // notes behind it.
+        let mut transport = Transport::new(48_000.0);
+        transport.pos_beats = Some(64.0 * 4.0);
+        transport.time_sig_numerator = Some(4);
+        transport.time_sig_denominator = Some(4);
+        assert_eq!(
+            bar_position(&transport),
+            config.stop_at_bar(),
+            "asking to stop at bar 65 must stop where the host says bar 65 is"
+        );
     }
 
     /// One event, two clocks. The ring uses continuous presentation seconds,
