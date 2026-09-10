@@ -165,8 +165,12 @@ impl Sequencer {
         }
         self.memory.append(&mut self.working, self.config.policy);
     }
-    /// Drop a context voice without contributing it to released memory: it
-    /// never sounded, because the source's own state had no cell for it.
+    /// Drop a context voice without contributing it to released memory. Two
+    /// callers, and neither is a note ending: an onset the scheduled state
+    /// could not retain never sounded at all, and a voice a same-key onset
+    /// displaces is taken over rather than released. Both leave a lifetime no
+    /// release will ever address, and neither leaves one for `Memory` to
+    /// remember — which is the whole of the difference from `release_voice`.
     fn forget_voice(&mut self, source: u8, lifetime: u64) {
         if let Some(cell) = self
             .context
@@ -567,14 +571,24 @@ impl Hub {
         self.schedule_delta(record.event, record, scheduled, assignment);
     }
 
-    fn release_addressed(&mut self, record: Record, channel: u8, key: u8) {
-        let lifetime = self.rows[usize::from(record.source)]
+    /// The lifetime one source's state holds for a `(channel, key)`: the voice
+    /// a termination ends, and the one a same-key onset takes over.
+    fn addressed_lifetime(&self, source: u8, channel: u8, key: u8) -> Option<u64> {
+        self.rows[usize::from(source)]
             .state
             .voices()
             .find(|voice| voice.channel == channel && voice.note == key)
-            .map(|voice| voice.lifetime);
-        if let Some(lifetime) = lifetime {
+            .map(|voice| voice.lifetime)
+    }
+    fn release_addressed(&mut self, record: Record, channel: u8, key: u8) {
+        if let Some(lifetime) = self.addressed_lifetime(record.source, channel, key) {
             self.sequencer.release_voice(record.source, lifetime, record.sample);
+        }
+    }
+    /// Let go of whatever an onset is about to displace, before it is scored.
+    fn forget_replaced(&mut self, source: u8, channel: u8, key: u8) {
+        if let Some(lifetime) = self.addressed_lifetime(source, channel, key) {
+            self.sequencer.forget_voice(source, lifetime);
         }
     }
     fn release_matching(&mut self, record: Record) {
@@ -600,6 +614,28 @@ impl Hub {
     ) -> Option<Assigned> {
         let (_, channel, key, _) = record.event.attack()?;
         let source = usize::from(record.source);
+        // A same-key onset takes over the cell admission already found for
+        // that identity, so no release will ever address the lifetime it
+        // displaces: it leaves policy context here or never.
+        //
+        // Forgotten rather than released, and those are NOT the same picture.
+        // A real note-off feeds `Memory`, and `fill` appends that back into
+        // the scoring context at released weight, so an off-then-on IS scored
+        // with its predecessor's pitch present where a replacement is not.
+        // What that difference is worth was measured rather than assumed: over
+        // a harmony change, a clip-loop chain of repeats, a lone repeated note
+        // and a note held until a drifted context respells it, the entry never
+        // moved the chosen spelling. It arrives at `released`/1000 behind
+        // every held voice, and when the retrigger keeps its predecessor's
+        // spelling `Memory::attack` deletes it again on that same decision.
+        // Where it does show is the published reach: a replacement draws one
+        // fewer released node, which is the answer to want, since nothing
+        // ended and released memory owes this no entry.
+        //
+        // Before the score rather than after, because after `fill` the
+        // displaced voice would still be there at HELD weight — a second
+        // full-weight copy of the very pitch being scored.
+        self.forget_replaced(record.source, channel, key);
         let player = self.initial_tuning(record, group, group_end);
         let channel_pitch = self.rows[source].state.channel_pitch(channel);
         if self.sequencer.loop_pending {
