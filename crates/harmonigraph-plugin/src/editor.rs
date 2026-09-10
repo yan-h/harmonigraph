@@ -44,25 +44,26 @@ pub(crate) const DEFAULT_SIZE: (u32, u32) = (1000, 700);
 /// nobody else's business.
 const MIN_SIZE: (u32, u32) = (harmonigraph_ui::shell::MIN_WINDOW_WIDTH as u32, 300);
 
-/// Maps audio-clock timestamps (seconds on the plugin's sample clock)
-/// onto the GUI clock. A smoothed offset estimate preserves the relative
-/// spacing of events - re-stamping on arrival would squash every event in a
-/// batch onto the same GUI frame time.
+/// One presentation clock for notes, audio columns and drawing. While audio
+/// flows its sample time owns the clock, including faster-than-realtime bounces.
+/// Moving the offset towards wall time each drain compresses history across
+/// batches: old columns keep their dates while new ones move backwards.
 pub(crate) struct ClockMapper {
-    /// Estimated `gui_time - audio_time` (includes average delivery
-    /// latency, which is fine: it's constant-ish, so spacing survives).
+    /// Initial delivery offset, held until callbacks pause or the source rewinds.
     offset: Option<f64>,
     observed_audio: Option<f64>,
+    observed_wall: f64,
+    shown: f64,
 }
 
 impl ClockMapper {
-    /// An offset jump larger than this means the audio clock restarted
-    /// (transport reset, sample-rate change): snap instead of smoothing.
-    const SNAP_THRESHOLD: f64 = 1.0;
-    const SMOOTHING: f64 = 0.05;
+    /// Ignore ordinary callback jitter; a real callback pause leaves room for
+    /// wall-clock fades before the source resumes. Transport stops usually keep
+    /// streaming silence and need no special handling.
+    const PAUSE_SECONDS: f64 = 1.0;
 
     pub fn new() -> Self {
-        ClockMapper { offset: None, observed_audio: None }
+        ClockMapper { offset: None, observed_audio: None, observed_wall: 0.0, shown: 0.0 }
     }
 
     /// Observe a fresh audio heartbeat, independently of historical delivery.
@@ -71,13 +72,30 @@ impl ClockMapper {
         if self.observed_audio == Some(newest_audio_time) {
             return;
         }
-        self.observed_audio = Some(newest_audio_time);
-        let candidate = gui_now - newest_audio_time;
-        self.offset = Some(match self.offset {
-            None => candidate,
-            Some(prev) if (candidate - prev).abs() > Self::SNAP_THRESHOLD => candidate,
-            Some(prev) => prev + (candidate - prev) * Self::SMOOTHING,
+        let candidate = self.shown.max(gui_now) - newest_audio_time;
+        self.offset = Some(match (self.offset, self.observed_audio) {
+            (Some(offset), Some(previous)) if newest_audio_time >= previous => {
+                let pause = (gui_now - self.observed_wall) - (newest_audio_time - previous);
+                offset + if pause > Self::PAUSE_SECONDS { pause } else { 0.0 }
+            }
+            _ => candidate,
         });
+        self.observed_audio = Some(newest_audio_time);
+        self.observed_wall = gui_now;
+    }
+
+    /// Follow fresh audio exactly; keep ageing when callbacks stop arriving.
+    pub fn now(&mut self, wall_now: f64) -> f64 {
+        let now = match (self.observed_audio, self.offset) {
+            (Some(audio), Some(offset)) => {
+                audio + offset + (wall_now - self.observed_wall).max(0.0)
+            }
+            _ => wall_now,
+        };
+        // A short callback gap can resume behind an extrapolated frame. Hold
+        // until audio catches up rather than rewind histories already pruned.
+        self.shown = self.shown.max(now);
+        self.shown
     }
 
     /// Map an audio timestamp to GUI time (clamped: never in the future).
@@ -316,6 +334,7 @@ fn frame(
         // New MIDI must render this tick, not at the idle poll.
         ui.ctx().request_repaint();
     }
+    let now = shared.input.display_now(now);
     let sample_rate = shared.input.sample_rate();
     shared.sync_take(sample_rate);
 
@@ -960,7 +979,7 @@ pub(crate) struct LiveInput {
     audio_position: Option<(u64, u64)>,
     /// Presentation seconds of the retained run’s frame zero, before mapping.
     audio_origin: f64,
-    /// GUI clock epoch; audio event times are mapped onto this clock.
+    /// Wall-clock epoch, also used to age the picture when callbacks stop.
     start: Instant,
     /// Audio->GUI clock mapping (see ClockMapper).
     clock: ClockMapper,
@@ -1041,7 +1060,7 @@ impl LiveInput {
             self.audio_position = Some((block.epoch, block.first_frame + block.frames as u64));
         });
     }
-    /// The clock everything the editor stamps is measured on: seconds since
+    /// The wall clock used to observe incoming batches: seconds since
     /// the PLUGIN was instantiated, not since the window opened.
     ///
     /// That distinction is what makes a closed window recoverable at all. The
@@ -1050,6 +1069,9 @@ impl LiveInput {
     /// heatmap has no seam to hide.
     pub(crate) fn now(&self) -> f64 {
         self.start.elapsed().as_secs_f64()
+    }
+    pub(crate) fn display_now(&mut self, wall_now: f64) -> f64 {
+        self.clock.now(wall_now)
     }
     /// Drain the sole note and audio streams into borrowed runtime storage.
     /// Both the open frame and closed scheduler use this ordering. Input feeding
@@ -1150,33 +1172,75 @@ mod tests {
         }
     }
 
+    /// Several seconds across many drains, so a wall-clock mapper has time to
+    /// squeeze successive batches together. Compare the real analyzer and note
+    /// publication paths, not just timestamps computed by the clock in isolation.
     #[test]
-    fn source_audio_follows_the_shared_clock_correction_without_second_smoothing() {
-        let (mut tx, mut shared) = audio_harness(crate::AUDIO_RING_CAPACITY);
-        shared.input.clock = ClockMapper::new();
-        shared.input.clock.observe(0.10, 0.35);
-        let format =
-            crate::audio_ingress::Format { channels: 1, sample_rate: 48_000.0, sidechain: false };
-        let frames = 24_000;
-        tx.publish(frames, format, 0.0, std::iter::repeat(0.5));
-        drain_audio(&mut shared, 0.75);
-        let before = shared.ui.picture.runtime.spectrum.history().len();
-        assert!(before > 10);
-        for i in 1..=60 {
-            let audio = 0.1 + i as f64 * 0.01;
-            shared.input.clock.observe(audio, audio);
+    fn fast_bounce_preserves_the_realtime_picture_timeline() {
+        let run = |speed: f64| {
+            let (mut notes, consumer) = harmonigraph_record::publication::channel();
+            let (mut audio, audio_consumer) =
+                crate::audio_ingress::channel(crate::AUDIO_RING_CAPACITY);
+            let (_recorder, control) = harmonigraph_record::channel();
+            let mut shared = EditorShared::new(
+                consumer,
+                audio_consumer,
+                Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
+                control,
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            );
+            notes.observe_clock(0.0);
+            drain_audio(&mut shared, 0.0);
+            let format = crate::audio_ingress::Format {
+                channels: 1,
+                sample_rate: 48_000.0,
+                sidechain: false,
+            };
+            let mut now = 0.0;
+            for batch in 0..16usize {
+                let start = batch as f64 * 0.25;
+                let end = start + 0.25;
+                audio.publish(
+                    12_000,
+                    format,
+                    start,
+                    (0..12_000).map(|i| ((batch * 12_000 + i) as f32 * 0.047).sin()),
+                );
+                notes
+                    .note(
+                        NoteEvent::on(start + 0.125, SourceId::DIRECT, 0, 48 + batch as u8, 0.8)
+                            .into(),
+                        Default::default(),
+                    )
+                    .unwrap();
+                notes.observe_clock(end);
+                drain_audio(&mut shared, end / speed);
+                now = shared.input.display_now(end / speed);
+                shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
+            }
+            let columns: Vec<_> = shared
+                .ui
+                .picture
+                .runtime
+                .spectrum
+                .history()
+                .iter()
+                .map(|c| (c.time, c.db.clone()))
+                .collect();
+            let onsets: Vec<_> =
+                shared.ui.picture.runtime.tracker.roll().notes().map(|n| n.start).collect();
+            assert!(columns.len() > 400, "fixture must retain four seconds of FFT hops");
+            assert_eq!(onsets.len(), 16);
+            (now, columns, onsets)
+        };
+        let realtime = run(1.0);
+        assert_eq!(realtime.0, 4.0);
+        for speed in [8.0, 32.0] {
+            let fast = run(speed);
+            assert_eq!(fast.0, realtime.0, "{speed}x changed the playhead");
+            assert_eq!(fast.2, realtime.2, "{speed}x retimed the notes");
+            assert!(fast.1 == realtime.1, "{speed}x changed the spectrogram columns");
         }
-        let offset = shared.input.clock.offset.unwrap();
-        assert!(offset < 0.012, "initial 250ms delivery bias must correct");
-        tx.publish(frames, format, 0.5, std::iter::repeat(0.5));
-        drain_audio(&mut shared, 1.0 + offset);
-        let spectrum = &shared.ui.picture.runtime.spectrum;
-        assert!(spectrum.history().len() > before);
-        let last = spectrum.history().iter().last().unwrap();
-        // 48000 frames is exactly 125 hops. Timestamp names the newest frame
-        // minus the unchanged half-window offset, on the CURRENT note clock.
-        let expected = 47_999.0 / 48_000.0 - spectrum.column_lag() + offset;
-        assert!((last.time - expected).abs() < 1e-12, "{} != {expected}", last.time);
     }
 
     #[test]
@@ -1465,7 +1529,7 @@ mod tests {
         assert!(note.history_complete, "baseline retains the matching observed lifetime");
         assert!(
             (shared.ui.picture.runtime.tracker.source_baseline(SourceId::DIRECT).unwrap().time
-                - 13.01)
+                - 13.0)
                 .abs()
                 < 1e-9
         );
@@ -1606,23 +1670,48 @@ mod tests {
     }
 
     #[test]
-    fn snaps_on_transport_reset() {
+    fn source_rewind_preserves_the_display_clock() {
         let mut clock = ClockMapper::new();
-        clock.observe(100.0, 7.0);
-        // Transport reset: audio clock restarts near zero.
-        clock.observe(0.1, 7.5);
-        let mapped = clock.map(0.1, 7.5);
-        assert!((mapped - 7.5).abs() < 1e-9, "did not snap: {mapped}");
+        clock.observe(0.0, 0.0);
+        clock.observe(10.0, 1.0);
+        assert_eq!(clock.now(1.0), 10.0);
+        // Even a source rewind after a fast bounce starts at the visible
+        // timeline, so new events cannot fall behind an already-pruned frame.
+        clock.observe(0.1, 2.0);
+        let now = clock.now(2.0);
+        assert_eq!(now, 10.0);
+        assert_eq!(clock.map(0.1, now), now);
     }
 
     #[test]
-    fn smooths_small_jitter() {
+    fn callback_jitter_does_not_retime_history() {
         let mut clock = ClockMapper::new();
         clock.observe(100.0, 7.0); // offset -93
         clock.observe(101.0, 8.1); // candidate -92.9: jitter, not a reset
         let mapped = clock.map(101.0, 9.0);
-        // Offset moved only 5% of the way toward the new candidate.
-        assert!((mapped - (101.0 - 93.0 + 0.005)).abs() < 1e-9, "got {mapped}");
+        assert_eq!(mapped, 8.0, "delivery jitter must not move already-stamped history");
+        assert_eq!(clock.now(8.1), 8.0);
+    }
+
+    #[test]
+    fn presentation_clock_keeps_fading_after_a_fast_bounce_stops() {
+        let mut clock = ClockMapper::new();
+        clock.observe(0.0, 0.0);
+        clock.observe(10.0, 1.0);
+        assert_eq!(clock.now(1.0), 10.0);
+        assert_eq!(clock.now(3.0), 12.0);
+        // Idle polls must not reset the fade clock to the last callback.
+        clock.observe(10.0, 3.0);
+        assert_eq!(clock.now(3.0), 12.0);
+        clock.observe(10.25, 3.25);
+        assert_eq!(clock.now(3.25), 12.25, "resuming preserves the idle gap");
+        assert_eq!(clock.offset, Some(2.0));
+        // A shorter callback gap holds the drawn time until audio catches up.
+        assert_eq!(clock.now(3.75), 12.75);
+        clock.observe(10.5, 3.8);
+        assert_eq!(clock.now(3.8), 12.75);
+        clock.observe(11.0, 4.0);
+        assert_eq!(clock.now(4.0), 13.0);
     }
 
     #[test]

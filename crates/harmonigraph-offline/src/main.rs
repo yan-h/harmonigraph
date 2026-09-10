@@ -21,6 +21,7 @@ mod replay;
 mod sink;
 mod wav;
 
+use harmonigraph_ui::layout::export_pixels_per_point as default_scale;
 use harmonigraph_ui::{Layout, PRESETS};
 use render::Settings;
 use replay::Replay;
@@ -244,26 +245,6 @@ fn parse_size(text: &str) -> Result<[u32; 2], String> {
         .split_once(['x', 'X', '*'])
         .ok_or_else(|| format!("--size: expected WxH, got {text:?}"))?;
     Ok([parse_number("--size", w)?, parse_number("--size", h)?])
-}
-
-/// Pixels per point when the caller didn't say.
-///
-/// Point sizes are the UI's type and padding scale, so this is really
-/// "how big is the UI relative to the frame". The plugin's own window is
-/// 1000x700 points, so matching that density means giving the render
-/// about the same number of points across — hence dividing the output
-/// width by a reference width rather than by anything about the display.
-///
-/// It decides how SHARPLY the type is rasterized and nothing else about its
-/// size: every label sizes itself off the pane it is drawn on, in points, and
-/// a pane's points are its pixels over this — so the two cancel and a render
-/// of the same frame at any resolution carries the same type, larger. That is
-/// the point of it, but it used to work the other way about (point sizes were
-/// fixed, so this scaled them), and the difference matters if anyone ever
-/// reaches for `--scale` to make the text bigger. It will not.
-fn default_scale(size: [u32; 2]) -> f32 {
-    const REFERENCE_POINTS_ACROSS: f32 = 1280.0;
-    (size[0] as f32 / REFERENCE_POINTS_ACROSS).clamp(1.0, 4.0)
 }
 
 /// The pixels a render lands on: `--size` if it was given, otherwise the take's

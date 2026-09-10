@@ -163,6 +163,11 @@ there was one, defaulting to `--size 1920x1080`, and since the renderer reads `-
 a 9:16 frame previewed tall and rendered wide.
 The flags it could reach are all reachable by running the renderer on the take by hand, which has completion, `--help`, and real error messages.
 
+The Video preview scales spectral shadows with the output frame and follows audio time during a faster-than-realtime bounce,
+so shadow width and spectrogram duration stay representative of the export.
+The display can skip ahead between updates during a fast bounce;
+it does not need to draw every video frame to preserve those proportions.
+
 **Render when** has three settings:
 
 | setting | what ends the take |
