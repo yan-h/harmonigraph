@@ -18,6 +18,24 @@ mod configuration;
 mod editor;
 #[cfg(all(feature = "startup-probe", target_os = "macos"))]
 pub use editor::startup_probe::run as editor_startup_probe;
+// The allocator that makes `configuration::tests`' `assert_no_alloc` blocks
+// mean anything, in the one profile nice-plug does not cover.
+//
+// `assert_no_alloc` only raises a thread-local forbid count; the abort lives in
+// the global allocator that reads it. nice-plug installs one
+// (`MeasuredAllocator` over `AllocDisabler`), but both of its declarations are
+// `#[cfg(debug_assertions)]` — see `vendor/nice-plug/src/wrapper/util.rs`. A
+// `--release` test binary therefore runs on the system allocator and the guard
+// passes without guarding: measured, a deliberate 64-byte `Vec` inside
+// `canonical_publication_slots_and_loss_are_allocation_free` was reported `ok`.
+//
+// The two declarations cannot collide into a duplicate `#[global_allocator]`,
+// because both read `debug_assertions` out of the same profile and this one is
+// the complement.
+#[cfg(all(test, not(debug_assertions)))]
+#[global_allocator]
+static ALLOCATOR: nice_assert_no_alloc::AllocDisabler = nice_assert_no_alloc::AllocDisabler;
+
 #[cfg(test)]
 mod test_scope;
 mod tuning;

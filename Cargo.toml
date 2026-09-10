@@ -126,6 +126,35 @@ lto = false
 # that already names the function.
 strip = "debuginfo"
 
+# The audio-thread allocation guard has to survive `--release`, and the only
+# lever that reaches it is this one.
+#
+# `nice-assert-no-alloc` gates its whole implementation — `AllocDisabler` and
+# the enforcing `assert_no_alloc` alike — on
+# `not(all(feature = "disable_release", not(debug_assertions)))`, and ships
+# `disable_release` in its default features. Under `--release` that deletes the
+# type `harmonigraph-record`'s audio tests name as their global allocator, so
+# `cargo test --release --workspace` does not compile (#805); worse, every
+# `assert_no_alloc` call elsewhere in the tree keeps compiling against the
+# crate's release no-op arm and passes without guarding anything.
+#
+# Turning the feature off is not reachable from here. FOUR manifests declare
+# this dependency and only three are ours: `crates/harmonigraph-record`,
+# `crates/harmonigraph-plugin` and `vendor/nice-plug`. The fourth is
+# `nice-plug-core` 0.1.5, a registry crate that declares it with default
+# features on, and under `resolver = "2"` features unify across the graph for
+# one build — so `default`, and with it `disable_release`, comes back however
+# the three we own are written. Verified with
+# `cargo tree -e features -i nice-assert-no-alloc`.
+#
+# Compiling that one package with debug assertions on satisfies the gate
+# directly. The override is scoped to the package, so nothing else in the graph
+# changes codegen, and the crate is reachable only through dev-dependencies and
+# nice-plug's optional `assert_process_allocs` — a plugin or offline release
+# build never compiles it at all, and the shipped bundle is byte-unaffected.
+[profile.release.package.nice-assert-no-alloc]
+debug-assertions = true
+
 # Plugin GUIs are unusable in unoptimized debug builds; opt-level 2 keeps
 # dev iteration usable while still compiling fast-ish.
 #
