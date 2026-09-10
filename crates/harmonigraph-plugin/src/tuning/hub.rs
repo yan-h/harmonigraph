@@ -43,6 +43,7 @@ fn identity(source: u8) -> SourceId {
 /// One copied record staged for the ordering pass, with the row it came from.
 #[derive(Clone, Copy)]
 struct Record {
+    retune: u64,
     source: u8,
     sample: i64,
     serial: u64,
@@ -124,6 +125,7 @@ struct Sequencer {
     /// A loop or seek was detected and the next attack clears memory, if the
     /// control says so. Held notes keep their frozen assignments either way.
     loop_pending: bool,
+    reference_source: Option<u8>,
 }
 
 impl Default for Sequencer {
@@ -140,11 +142,26 @@ impl Default for Sequencer {
             last_release: None,
             decision: 0,
             loop_pending: false,
+            reference_source: None,
         }
     }
 }
 
 impl Sequencer {
+    /// Participation ends without releasing anything onto the wire or into
+    /// musical memory. The moving reference must not retain this source either.
+    fn forget_source(&mut self, source: u8) {
+        for cell in self.context.iter_mut() {
+            if cell.is_some_and(|voice| voice.source == source) {
+                *cell = None;
+            }
+        }
+        self.memory.forget_source(source);
+        if self.reference_source == Some(source) {
+            self.memory.reference = 0;
+            self.reference_source = None;
+        }
+    }
     /// The context one assignment sees: every held voice newest first,
     /// deduplicated within the repetition tolerance, then released memory.
     fn fill(&mut self) {
@@ -233,6 +250,8 @@ impl Sequencer {
 
 #[derive(Default)]
 struct Row {
+    retune: u64,
+    show: bool,
     /// A Tune holds this row. Read from the row's own owner each callback.
     live: bool,
     state: State,
@@ -320,6 +339,8 @@ impl Hub {
         // input is already at the Hub, so one buffer is all its own round trip
         // can need.
         self.tune.activate(rate, frames, 1);
+        self.shared.active_multiplier.store(1, Ordering::Release);
+        self.shared.publish_format(rate, frames);
     }
 
     pub fn begin(&mut self, callback: api::Callback, owner: &mut Owner, presentation: f64) {
@@ -338,6 +359,11 @@ impl Hub {
         // into the epoch bump this callback then adopts.
         self.tune.begin(callback);
         self.adopt();
+        for (source, row) in self.rows.iter().enumerate() {
+            if row.retune & 1 == 0 {
+                Self::confirm(row, identity(source as u8), &mut owner.confirmed);
+            }
+        }
         self.detect_loop(callback);
         self.sequencer.publish_neighbourhood(&self.shared, owner.reducer.resolved().into());
         // Silence expires released memory against the completed input
@@ -392,6 +418,22 @@ impl Hub {
         }
         self.rows[usize::from(DIRECT)].live = true;
         self.rows[usize::from(DIRECT)].delay = self.tune.delay();
+        for source in 0..=TUNERS {
+            let (retune, show) = if source == usize::from(DIRECT) {
+                (self.shared.retuning(), self.shared.show.load(Ordering::Acquire))
+            } else {
+                let row = session.row(source as u8);
+                (row.retune.load(Ordering::Acquire), row.show.load(Ordering::Acquire))
+            };
+            if self.rows[source].retune != retune {
+                self.sequencer.forget_source(source as u8);
+                self.rows[source].retune = retune;
+            }
+            if self.rows[source].show != show {
+                self.rows[source].show = show;
+                self.rows[source].repair = publication::Lanes::both(true);
+            }
+        }
         // Sticky until the cut. A policy refusal or a lost report inside one
         // callback would otherwise be gone before the once-a-second summary
         // that is meant to show it.
@@ -500,6 +542,7 @@ impl Hub {
             let Some(capture) = self.tune.take_direct() else { break };
             if capture.epoch == direct_epoch {
                 self.batch.push(Record {
+                    retune: capture.retune,
                     source: DIRECT,
                     sample: capture.sample,
                     serial: capture.serial,
@@ -524,6 +567,7 @@ impl Hub {
                     continue;
                 }
                 self.batch.push(Record {
+                    retune: capture.retune,
                     source: slot as u8,
                     sample: capture.sample,
                     serial: capture.serial,
@@ -638,6 +682,21 @@ impl Hub {
         self.forget_replaced(record.source, channel, key);
         let player = self.initial_tuning(record, group, group_end);
         let channel_pitch = self.rows[source].state.channel_pitch(channel);
+        // Captures remain visible with Retune off. Only a still-current,
+        // enabled arrival may make a decision or enter the musical context.
+        if record.retune & 1 == 0 || record.retune != self.rows[source].retune {
+            if record.retune & 1 != 0 {
+                self.reply(record, 0);
+            }
+            return Some(Assigned {
+                correction: 0,
+                node: None,
+                decision: 0,
+                player,
+                channel_pitch,
+                configuration: config,
+            });
+        }
         if self.sequencer.loop_pending {
             if config.policy.reset_loop {
                 self.sequencer.memory.clear();
@@ -683,6 +742,7 @@ impl Hub {
                 correction,
                 self.sequencer.config.policy,
             );
+            self.sequencer.reference_source = Some(record.source);
         }
         let voice = Voice {
             source: record.source,
@@ -859,7 +919,11 @@ impl Hub {
         source: SourceId,
         confirmed: &mut harmonigraph_core::confirmed::ConfirmedPitches,
     ) {
-        let _ = row.state.publish_confirmed(source, row.state.complete, confirmed);
+        let _ = row.state.publish_confirmed(
+            source,
+            row.state.complete && row.retune & 1 != 0,
+            confirmed,
+        );
     }
 
     fn presentation(&self, sample: i64) -> f64 {
@@ -908,10 +972,11 @@ impl Hub {
                 }
                 let Some(id) = self.rows[index].baseline_id[lane].checked_add(1) else { continue };
                 let applied = self.rows[index].applied;
-                let Some(frame) = self.rows[index].state.baseline(identity, id, applied, time)
+                let Some(mut frame) = self.rows[index].state.baseline(identity, id, applied, time)
                 else {
                     continue;
                 };
+                frame.participating = self.rows[index].show;
                 if recorder.publish_baseline(lane, &frame, route).is_ok() {
                     self.rows[index].baseline_id[lane] = id;
                     self.rows[index].repair[lane] = false;
@@ -1003,4 +1068,4 @@ impl Hub {
     }
 }
 
-const _: () = assert!(std::mem::size_of::<Record>() <= 80);
+const _: () = assert!(std::mem::size_of::<Record>() <= 88);

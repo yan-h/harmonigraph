@@ -94,10 +94,7 @@ impl Plugin for HarmonigraphTune {
     }
     #[cfg(target_os = "macos")]
     fn editor(&mut self, _: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        Some(Box::new(super::native::NativeEditor {
-            shared: self.shared.clone(),
-            params: self.params.clone(),
-        }))
+        Some(Box::new(super::native::NativeEditor { shared: self.shared.clone() }))
     }
     fn process(
         &mut self,
@@ -127,6 +124,7 @@ impl ClapPlugin for HarmonigraphTune {
     fn clap_main_activate(&mut self, config: &BufferConfig) -> bool {
         self.frames = config.max_buffer_size;
         let multiplier = self.multiplier();
+        self.shared.requested_multiplier.store(multiplier, Ordering::Release);
         self.shared.active_multiplier.store(multiplier, Ordering::Release);
         self.shared.publish_format(f64::from(config.sample_rate), config.max_buffer_size);
         self.tune().activate(f64::from(config.sample_rate), config.max_buffer_size, multiplier);

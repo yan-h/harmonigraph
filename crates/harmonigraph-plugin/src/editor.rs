@@ -380,11 +380,6 @@ fn frame(
     let fps_cap = shared.ui.workspace.interaction.fps_cap;
     let display_max_fps = queue.display_max_fps();
     drop(guard);
-    if state.params.configuration.get().is_some() {
-        if let Some(session) = state.params.session.get() {
-            session_controls(ui.ctx(), session, &mut state.session_delay);
-        }
-    }
     if let Some(interval) = pace(state, fps_cap, display_max_fps) {
         queue.set_frame_interval(interval);
     }
@@ -689,7 +684,6 @@ struct WindowState {
     params: Arc<HarmonigraphParams>,
     /// The multiplier the "apply to all paired Tunes" button would send. It is
     /// a draft in this menu, not anybody's saved value.
-    session_delay: i32,
     /// The frame interval armed on THIS window's timer, so an unchanged
     /// cadence doesn't rebuild the run-loop timer every frame. `None` until
     /// the first frame arms one.
@@ -707,7 +701,7 @@ struct WindowState {
 
 impl WindowState {
     fn new(shared: Arc<Mutex<EditorShared>>, params: Arc<HarmonigraphParams>) -> Self {
-        WindowState { shared, params, frame_interval: None, session_delay: 1 }
+        WindowState { shared, params, frame_interval: None }
     }
 
     /// The interval to arm on the window's frame timer, or `None` when it
@@ -913,42 +907,6 @@ impl Drop for LatticeEditorHandle {
 /// Two controls survive the fault cut: Reset, and the delay every Tune owns
 /// its own copy of. Pairing is a load of one process-wide slot, so there is no
 /// hub to choose and no routing offset to calibrate.
-fn session_controls(
-    ctx: &egui::Context,
-    shared: &Arc<crate::tuning::setup::Shared>,
-    delay: &mut i32,
-) {
-    use crate::tuning::{session, setup, DELAY_MULTIPLIER_MAX};
-    egui::Area::new(egui::Id::new("harmonigraph-session-setup"))
-        .anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0])
-        .show(ctx, |ui| {
-            ui.menu_button("Session", |ui| {
-                let status = shared.status();
-                ui.label(format!("Session epoch {}", session::session().epoch()));
-                ui.label("Pairing is automatic: one Harmonigraph per process.");
-                if ui.button("Reset voices").clicked() {
-                    shared.request_reset();
-                }
-                ui.separator();
-                // The delay belongs to each Tune's own saved parameter; this is
-                // a convenience that asks all of them at once, and each one
-                // then requests its own reactivation.
-                ui.label("Tuning delay applies per Tune; this asks all of them at once.");
-                ui.horizontal(|ui| {
-                    ui.label("Buffers of delay");
-                    ui.add(egui::DragValue::new(delay).range(1..=DELAY_MULTIPLIER_MAX));
-                });
-                if ui.button("Apply to all Tunes").clicked() {
-                    setup::Shared::request_delay_for_all(*delay as u32);
-                }
-                ui.separator();
-                ui.label(session::status_text(status));
-                ui.label(setup::deadline_text(status, shared.misses.load(Ordering::Relaxed)));
-                ui.label(harmonigraph_perf::BUILD_TAG);
-            });
-        });
-}
-
 /// The sole display and analyzer ingress, retained for the plugin lifetime.
 /// Synchronous draining never acquires the audio callback or a window.
 pub(crate) struct LiveInput {

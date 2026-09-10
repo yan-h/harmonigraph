@@ -34,6 +34,12 @@ pub enum AnalysisInput {
 /// one-shot changes (preset buttons, typed values) — backends wrap those in
 /// an implicit gesture.
 pub trait ParamBackend {
+    /// Live plugin instances; absent in offline and standalone pictures.
+    fn tuning_instances(&self) -> Vec<TuningInstance> {
+        Vec::new()
+    }
+    fn edit_tuning_instance(&self, _id: u64, _edit: InstanceEdit) {}
+
     /// Coherent audio-owned CLAP configuration, when the shell provides one.
     fn configuration(&self) -> Option<ConfigurationView> {
         None
@@ -64,6 +70,34 @@ pub trait ParamBackend {
     fn end_set(&self, key: ParamKey) {
         let _ = key;
     }
+}
+
+/// Cosmetic snapshots and main-thread commands, never audio-owned references.
+#[derive(Clone, Debug)]
+pub struct TuningInstance {
+    pub id: u64,
+    pub name: String,
+    pub is_hub: bool,
+    pub retune: bool,
+    pub show: bool,
+    pub held: u64,
+    pub notes_in: u64,
+    pub notes_out: u64,
+    pub misses: u64,
+    pub delay: u32,
+    pub max_delay: u32,
+    pub delay_text: String,
+    pub status: String,
+    pub last_pitch: Option<(f64, f64)>,
+}
+
+#[derive(Clone, Debug)]
+pub enum InstanceEdit {
+    Retune(bool),
+    Show(bool),
+    Name(String),
+    Delay(u32),
+    Reset,
 }
 
 /// Assemble a [`harmonigraph_core::Tuning`] from the current parameter values.

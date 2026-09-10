@@ -5,7 +5,7 @@
 //! audio callback does is one atomic load of [`Session::hub`], and one of
 //! [`Session::epoch`] to learn whether it owes a cut. Nothing is offered,
 //! returned, leased or acknowledged, so there is nothing here that can stall.
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use super::{event::Event, CAPTURE_RING, REPLY_RING, TUNERS};
@@ -58,6 +58,8 @@ pub fn status_text(status: u32) -> String {
 /// input is here; nothing points back into the Tune's storage.
 #[derive(Clone, Copy, Debug)]
 pub struct Capture {
+    /// Participation at arrival, including its edit generation.
+    pub retune: u64,
     pub epoch: u64,
     /// The originating Tune's own input sequence. A reply addresses this.
     pub serial: u64,
@@ -101,6 +103,8 @@ impl Ends {
 }
 
 pub struct Row {
+    pub retune: AtomicU64,
+    pub show: AtomicBool,
     /// Registration id of the Tune holding this row, or zero.
     owner: AtomicU64,
     /// This Tune's activation-fixed delay in samples. The Tune is the only
@@ -111,8 +115,23 @@ pub struct Row {
 }
 
 impl Row {
+    /// Main/UI thread. Holding the endpoint lock keeps a retiring/reused row
+    /// from receiving an edit addressed to its previous instance.
+    pub fn update_controls(&self, shared: &super::setup::Shared) {
+        let _guard = self.ends.lock().unwrap();
+        if self.owner.load(Ordering::Acquire) == shared.instance_id.load(Ordering::Acquire) {
+            self.retune.store(shared.retuning(), Ordering::Release);
+            self.show.store(shared.show.load(Ordering::Acquire), Ordering::Release);
+        }
+    }
     fn new() -> Self {
-        Self { owner: AtomicU64::new(0), delay: AtomicI64::new(0), ends: Mutex::new(Ends::new()) }
+        Self {
+            retune: AtomicU64::new(1),
+            show: AtomicBool::new(true),
+            owner: AtomicU64::new(0),
+            delay: AtomicI64::new(0),
+            ends: Mutex::new(Ends::new()),
+        }
     }
     pub fn held(&self) -> bool {
         self.owner.load(Ordering::Acquire) != 0
@@ -134,10 +153,6 @@ pub struct Session {
     /// it was, because only they decide what happens to released memory.
     reset_epoch: AtomicU64,
     stop_epoch: AtomicU64,
-    /// The Hub's "apply this multiplier to every Tune", as generation in the
-    /// high half and multiplier in the low. A generation rather than a value
-    /// to consume, so every Tune sees the same request.
-    delay_request: AtomicU64,
     next: AtomicU64,
     rows: [Row; TUNERS],
 }
@@ -153,7 +168,6 @@ pub fn session() -> &'static Session {
         epoch: AtomicU64::new(1),
         reset_epoch: AtomicU64::new(0),
         stop_epoch: AtomicU64::new(0),
-        delay_request: AtomicU64::new(0),
         next: AtomicU64::new(0),
         rows: std::array::from_fn(|_| Row::new()),
     })
@@ -244,14 +258,18 @@ impl Session {
     /// passing its notes through. Safe from a callback: the claim is a compare
     /// exchange and the endpoints come out under `try_lock`, which never
     /// blocks. A Tune that loses the race simply asks again next callback.
-    pub fn try_attach_row(&self, id: u64) -> Option<(u8, TuneEnds)> {
+    pub fn try_attach_row(&self, id: u64, shared: &super::setup::Shared) -> Option<(u8, TuneEnds)> {
         for (slot, row) in self.rows.iter().enumerate() {
+            let Ok(mut storage) = row.ends.try_lock() else { continue };
             if row.owner.compare_exchange(0, id, Ordering::AcqRel, Ordering::Acquire).is_ok() {
-                let ends = row.ends.try_lock().ok().and_then(|mut ends| ends.tune.take());
+                let ends = storage.tune.take();
                 let Some(ends) = ends else {
                     row.owner.store(0, Ordering::Release);
                     continue;
                 };
+                shared.slot.store(slot as u32, Ordering::Release);
+                row.retune.store(shared.retuning(), Ordering::Release);
+                row.show.store(shared.show.load(Ordering::Acquire), Ordering::Release);
                 self.bump();
                 return Some((slot as u8, ends));
             }
@@ -262,22 +280,11 @@ impl Session {
     /// the Hub on their epoch, so there is nothing to drain here.
     pub fn detach_row(&self, slot: u8, id: u64, ends: TuneEnds) {
         let row = &self.rows[usize::from(slot)];
-        row.ends.lock().unwrap().tune = Some(ends);
+        let mut storage = row.ends.lock().unwrap();
+        storage.tune = Some(ends);
         row.delay.store(0, Ordering::Release);
         let _ = row.owner.compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire);
         self.bump();
-    }
-
-    /// The Hub asking every Tune in the process to adopt one multiplier. Each
-    /// Tune writes its own parameter for it, on its own main thread, so no
-    /// instance ever owns another's saved value.
-    pub fn request_delay(&self, multiplier: u32) {
-        let generation = (self.delay_request.load(Ordering::Acquire) >> 32) + 1;
-        self.delay_request.store(generation << 32 | u64::from(multiplier), Ordering::Release);
-    }
-    pub fn delay_request(&self) -> (u64, u32) {
-        let value = self.delay_request.load(Ordering::Acquire);
-        (value >> 32, value as u32)
     }
 
     /// Between fixtures. A panicking test can leave a row claimed by a Tune
@@ -288,6 +295,8 @@ impl Session {
         for row in &self.rows {
             row.owner.store(0, Ordering::Release);
             row.delay.store(0, Ordering::Release);
+            row.retune.store(1, Ordering::Release);
+            row.show.store(true, Ordering::Release);
             *row.ends.lock().unwrap_or_else(|e| e.into_inner()) = Ends::new();
         }
         self.hub.store(0, Ordering::Release);
@@ -303,5 +312,5 @@ pub struct Attached {
     pub ends: TuneEnds,
 }
 
-const _: () = assert!(std::mem::size_of::<Capture>() <= 80);
+const _: () = assert!(std::mem::size_of::<Capture>() <= 88);
 const _: () = assert!(std::mem::size_of::<Reply>() <= 24);
