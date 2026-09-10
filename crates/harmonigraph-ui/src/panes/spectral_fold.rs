@@ -58,7 +58,7 @@
 //! discrete partials: every value is a kernel-weighted mean of power over a
 //! window of the log-pitch grid, so a partial drifting off a node dims
 //! smoothly instead of switching off, and ±15¢ of vibrato reads as breathing.
-//! `harmonigraph_core::spectrum`'s own doc records what the alternative cost
+//! `harmonigraph_analysis`'s own doc records what the alternative cost
 //! the spectrogram — a peak-only fill drew broadband sound as flickering
 //! speckle, because broadband sound has no peaks to find.
 //!
@@ -1602,5 +1602,94 @@ mod tests {
             coarse.abs_diff(fine) <= 1,
             "one 100 ms step reads {coarse} where ten 10 ms steps read {fine}",
         );
+    }
+    /// Real analyzer windows cross both gate thresholds on an idle A node,
+    /// and its carried fade rises inside the band before falling below it.
+    /// Gains bracket measured thresholds with 2% margin: the one-ULP backend
+    /// differences are characterized separately in docs/realfft-adoption.md.
+    #[test]
+    fn analyzed_audio_crosses_the_gate_and_carries_its_hysteresis_fade() {
+        use crate::{SpectrumTapers, SpectrumWindow};
+        for (window, tapers, reading, strict, held) in [
+            (
+                SpectrumWindow::Balanced,
+                SpectrumTapers::One,
+                SpectralReading::Fold,
+                0.0017949624,
+                0.0009317393,
+            ),
+            (
+                SpectrumWindow::Balanced,
+                SpectrumTapers::One,
+                SpectralReading::Spectrum,
+                0.0017388298,
+                0.0009026015,
+            ),
+            (
+                SpectrumWindow::Precise,
+                SpectrumTapers::Five,
+                SpectralReading::Fold,
+                0.0017120556,
+                0.0008887034,
+            ),
+            (
+                SpectrumWindow::Precise,
+                SpectrumTapers::Five,
+                SpectralReading::Spectrum,
+                0.0017113218,
+                0.0008883227,
+            ),
+        ] {
+            let mut state = ringing();
+            state.appearance.spectrum.window = window;
+            state.appearance.spectrum.tapers = tapers;
+            state.appearance.spectrum.attack = 0.0;
+            state.appearance.spectrum.release = 0.0;
+            state.appearance.spectrum.tilt = 0.0;
+            state.appearance.view.spectral_reading = reading;
+            state.appearance.view.spectral_ring_attack = 0.0;
+            state.appearance.view.spectral_ring_release = 0.0;
+            state.appearance.view.spectral_ring_gate = 128.0 / 255.0;
+            state.appearance.view.spectral_ring_hysteresis = 26.0 / 255.0;
+            state.appearance.view.fade_shape = 0.0;
+            state.runtime.frame_params.fade_time = 1.0;
+            let cfg = state.appearance.spectrum;
+            // The next scheduled hop must see a FULL configured window.
+            let frames = window.samples().div_ceil(384) * 384;
+            let unit: Vec<_> = (0..frames)
+                .map(|i| (std::f64::consts::TAU * 880.0 * i as f64 / f64::from(SR)).sin() as f32)
+                .collect();
+            let gains = [
+                0.0,
+                strict * 0.98,
+                strict * 1.02,
+                (strict + held) * 0.5,
+                held * 0.98,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ];
+            let mut levels = Vec::new();
+            for (phase, gain) in gains.into_iter().enumerate() {
+                let now = (phase + 1) as f64 * frames as f64 / f64::from(SR);
+                let samples: Vec<_> = unit.iter().flat_map(|x| [x * gain, -x * gain]).collect();
+                state.runtime.spectrum.push_samples(&samples, 2, SR, now, &cfg);
+                let scene = scene_of_at(&mut state, now);
+                let node = scene
+                    .nodes
+                    .iter()
+                    .min_by(|a, b| (a.cents - 900.0).abs().total_cmp(&(b.cents - 900.0).abs()))
+                    .expect("the lattice contains an A node");
+                assert!((node.cents - 900.0).abs() < 0.01);
+                assert_eq!(node.activation, 0.0, "MIDI must not hold the ring open");
+                levels.push(node.audio_ring);
+            }
+            assert_eq!(levels[1], 0.0, "below the strict threshold: {levels:?}");
+            assert!(levels[2] > 0.0 && levels[2] < 1.0, "opening fade: {levels:?}");
+            assert!(levels[3] > levels[2], "held inside the band: {levels:?}");
+            assert!(levels[4] < levels[3] && levels[4] > 0.0, "closing fade: {levels:?}");
+            assert_eq!(*levels.last().unwrap(), 0.0, "silence finishes the fade");
+        }
     }
 }

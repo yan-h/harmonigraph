@@ -1,0 +1,17 @@
+  PID  %CPU COMM
+85262  65.4 /Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+  412  37.7 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+83396  12.8 /Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+83584  10.1 /Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+53666   9.9 /Applications/ChatGPT.app/Contents/Resources/codex
+  670   7.8 /Users/yan/Applications/iTerm.app/Contents/MacOS/iTerm2
+  425   3.6 /usr/sbin/coreaudiod
+53669   2.9 /Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/152.0.7977.83/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)
+53577   2.4 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT
+44978   1.7 /Users/yan/.local/share/claude/versions/2.1.266
+  680   1.6 /Applications/Zed.app/Contents/MacOS/zed
+47658   1.6 /System/Library/DriverExtensions/com.apple.DriverKit.AppleUserECM.dext/com.apple.DriverKit.AppleUserECM
+  597   1.2 /System/Library/DriverExtensions/com.apple.AppleUserHIDDrivers.dext/com.apple.AppleUserHIDDrivers
+17655   1.2 /System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU
+85266   1.1 /Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+39694   1.0 claude

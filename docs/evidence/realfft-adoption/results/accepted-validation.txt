@@ -1,0 +1,14 @@
+Acceptance follows Yan's request to merge the documented numerical/picture/gate changes.
+Compared against pre-acceptance commit e95b7d238310a8359ff5d727ecb801c533bb6258.
+
+HARMONIGRAPH_BLESS=1 RUSTC_WRAPPER='' cargo test --offline --workspace golden
+Exit 0; only the three reviewed offline spectral PNGs changed.
+Decoded-pixel deltas: short one channel, tall one channel, whole-song four channels; every delta is 1/255.
+
+RUSTC_WRAPPER='' cargo test --offline --workspace golden
+Exit 0; 20 passed, 0 failed, 2 ignored.
+
+RUSTC_WRAPPER='' cargo test --offline --workspace
+Exit 0; 1557 passed, 0 failed, 31 ignored.
+
+No production source, dependency, scalar-feature override or shared DAW slot changed.

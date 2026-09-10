@@ -162,9 +162,12 @@ the fun layers never touch plugin plumbing.
 harmonigraph-core        pure logic, no dependencies at all. PitchClass
                          (integer microcents) and Tuning; lattice coordinates;
                          NoteTracker (what sounds now); NoteHistory/NoteRoll
-                         (what was played, by pitch and by time); the FFT
-                         spectrum analyzer and its spectrogram history.
+                         (what was played, by pitch and by time); the pitch axis
+                         and spectrogram history.
                          Unit-tested. One module per concern.
+harmonigraph-analysis    rolling audio analysis, planned real-input FFT and
+                         channel power combination. Depends only on core
+                         and RealFFT; shared by live and offline UI.
 harmonigraph-scene       per-frame view model: derive_scene() turns
                          tracker+tuning into NodeInstances; orbit Camera;
                          envelopes; CPU picking. Split style/view/camera/
@@ -243,12 +246,15 @@ See the GNU General Public License for more details.
 ### Exceptions
 
 [`crates/harmonigraph-core`](crates/harmonigraph-core) is **`MIT OR Apache-2.0`**, not GPL.
-It is the one general-purpose library here —
+It is a general-purpose library —
 dependency-free just-intonation math, Tonnetz coordinates, and note spelling —
 and much of that math descends from the permissively licensed [midi_lattice v1](https://github.com/yan-h/midi_lattice), so it stays permissive too.
 `ci.sh` enforces the property that justifies the split:
 the crate must remain dependency-free.
 See [its README](crates/harmonigraph-core/README.md).
+
+[`crates/harmonigraph-analysis`](crates/harmonigraph-analysis) also retains **`MIT OR Apache-2.0`** for the audio analysis extracted from core.
+Its RealFFT dependency leaves the pitch-math library dependency-free.
 
 The vendored forks under [`vendor/`](vendor) (`baseview`, `egui-baseview`) are likewise **not** covered by the GPL —
 they remain under their upstream `MIT OR Apache-2.0` terms, with their own license files in each directory.

@@ -9,7 +9,8 @@ detection, and tuning inference from held chords.
 thirds / harmonic sevenths), plus note spelling with comma marks.
 - `notes` — MIDI voice tracking with release fades and channel roles.
 - `history` — recently-played pitch memory.
-- `spectrum` — a hand-rolled radix-2 FFT and peak picker.
+- `spectrum` — the shared pitch axis and Hz/MIDI conversions.
+- `spectrogram` — quantized, age-tiered spectrum history.
 
 ## License
 
@@ -18,11 +19,11 @@ thirds / harmonic sevenths), plus note spelling with comma marks.
 See [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE).
 
 Two reasons for the split.
-This crate is the only part of the workspace that is a general-purpose library rather than application code —
+This crate is a general-purpose library rather than application code —
 dependency-free microtonal math is useful to anyone writing a tuning tool, a Scala-file reader, or another plugin, and copyleft is exactly what would stop them.
 And a meaningful share of the pitch math (the microcent `PitchClass` representation, note spelling, tuning inference) descends from [midi_lattice v1](https://github.com/yan-h/midi_lattice), which is permissively licensed;
 relicensing that work under the GPL here would have reversed an earlier decision without anyone actually making it.
 
 The dependency-free property is what keeps the boundary honest, so `ci.sh` enforces it:
 adding a dependency to this crate fails CI.
-If one is ever genuinely needed it must be permissively licensed, and the guard must be updated deliberately rather than by accident.
+Audio analysis lives in the separately permissive [`harmonigraph-analysis`](../harmonigraph-analysis), which depends on this axis contract and can use an FFT library without changing the guard.

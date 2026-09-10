@@ -648,7 +648,7 @@ impl Plugin for Harmonigraph {
         // The selected input for the GUI's spectrum analyzer, INTERLEAVED:
         // it analyzes the channels separately and combines them in the power
         // domain, so a mixdown here would cancel anti-phase content before it
-        // could (see `harmonigraph_core::spectrum::ChannelBank`). A full ring — editor
+        // could (see `harmonigraph_analysis::ChannelBank`). A full ring — editor
         // closed, or its thread stalled — drops frames. The next retained
         // source position explicitly resets analysis across that gap.
         // Read the parameter and choose ONCE per block: the same buffer goes to

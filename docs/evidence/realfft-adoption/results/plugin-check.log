@@ -1,0 +1,76 @@
+   Compiling serde_core v1.0.228
+   Compiling syn v2.0.119
+    Checking objc2 v0.5.2
+    Checking miniz_oxide v0.8.9
+    Checking core-foundation-sys v0.8.7
+    Checking core-foundation v0.10.1
+    Checking backtrace v0.3.76
+    Checking bitflags v2.13.1
+    Checking uuid v1.24.0
+    Checking glam v0.33.6
+    Checking serde_json v1.0.150
+    Checking objc2-core-foundation v0.3.2
+    Checking objc2-foundation v0.2.2
+   Compiling proc-macro2-diagnostics v0.10.1
+    Checking objc2-app-kit v0.2.2
+    Checking objc2-foundation v0.3.2
+    Checking objc2-core-video v0.3.2
+    Checking objc2-core-graphics v0.3.2
+    Checking copypasta v0.10.2
+   Compiling serde_derive v1.0.228
+   Compiling bytemuck_derive v1.11.0
+   Compiling thiserror-impl v2.0.18
+   Compiling zerocopy-derive v0.8.54
+   Compiling enumn v0.1.14
+   Compiling tracing-attributes v0.1.31
+   Compiling duplicate v2.0.1
+    Checking objc2-metal v0.3.2
+    Checking objc2-app-kit v0.3.2
+    Checking tracing v0.1.41
+    Checking bytemuck v1.25.1
+    Checking objc2-quartz-core v0.3.2
+    Checking color v0.3.3
+    Checking wgpu-types v29.0.4
+    Checking raw-window-metal v1.1.0
+    Checking thiserror v2.0.18
+    Checking baseview v0.1.4 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/vendor/baseview)
+    Checking zerocopy v0.8.54
+    Checking serde v1.0.228
+    Checking smallvec v1.15.2
+    Checking font-types v0.11.3
+    Checking emath v0.35.0
+    Checking accesskit v0.24.1
+    Checking harmonigraph-scene v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-scene)
+    Checking ron v0.12.2
+    Checking parking_lot_core v0.9.12
+    Checking kurbo v0.13.1
+    Checking parking_lot v0.12.5
+    Checking ecolor v0.35.0
+    Checking read-fonts v0.39.2
+    Checking nice-plug-core v0.1.5
+    Checking harmonigraph-take v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-take)
+    Checking peniko v0.6.1
+    Checking nice-plug v0.1.10 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/vendor/nice-plug)
+    Checking vello_common v0.0.9
+    Checking harmonigraph-record v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-record)
+    Checking vello_cpu v0.0.9
+    Checking half v2.7.1
+    Checking ahash v0.8.12
+    Checking naga v29.0.4
+    Checking skrifa v0.42.1
+    Checking harfrust v0.7.0
+    Checking epaint v0.35.0
+    Checking wgpu-naga-bridge v29.0.4
+    Checking wgpu-hal v29.0.4 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/vendor/wgpu-hal)
+    Checking wgpu-core-deps-apple v29.0.4
+    Checking wgpu-core v29.0.4
+    Checking egui v0.35.0
+    Checking wgpu v29.0.4
+    Checking egui_dock v0.20.1
+    Checking egui-wgpu v0.35.0
+    Checking harmonigraph-render v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-render)
+    Checking egui-baseview v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/vendor/egui-baseview)
+    Checking harmonigraph-perf v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-perf)
+    Checking harmonigraph-ui v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-ui)
+    Checking harmonigraph-plugin v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-plugin)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 35.89s

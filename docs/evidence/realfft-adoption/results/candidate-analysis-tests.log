@@ -1,0 +1,36 @@
+   Compiling harmonigraph-core v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-core)
+   Compiling harmonigraph-analysis v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-analysis)
+    Finished `release` profile [optimized] target(s) in 7.89s
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_analysis-d6cb4284aef082dc)
+
+running 22 tests
+test tests::empty_analyzer_reports_nothing ... ok
+test tests::dyad_shows_both_pitches ... ok
+test tests::a440_lands_on_a4 ... ok
+test tests::one_taper_is_the_hann_window_and_the_arithmetic_under_it ... ok
+test tests::out_of_range_partials_are_dropped_not_wrapped ... ok
+test tests::every_channel_of_a_bank_measures_through_the_same_tapers ... ok
+test tests::octaves_show_as_separate_peaks ... ok
+test tests::sample_rate_change_resets_the_window ... ok
+test tests::an_anti_phase_pair_reads_at_full_level_where_a_mixdown_would_see_silence ... ok
+test tests::set_fft_size_resets_the_window_and_noops_at_the_current_size ... ok
+test tests::the_lowest_buckets_draw_at_every_window_length ... ok
+test tests::set_tapers_resets_the_window_and_noops_at_the_current_count ... ok
+test tests::silent_windows_keep_readiness_retained_audio_and_resume ... ok
+test tests::the_reconstruction_has_no_seam_at_a_bin ... ok
+test tests::the_taper_table ... ignored
+test tests::the_reconstruction_never_overshoots_the_bins_it_reads ... ok
+test tests::the_power_sum_keeps_the_full_scale_calibration_and_drops_pan_from_it ... ok
+test tests::a_full_scale_sine_reads_unity_at_every_taper_count ... ok
+test tests::the_noise_floor_reads_higher_as_tapers_are_added ... ok
+test tests::more_tapers_steady_a_bucket_against_noise ... ok
+test tests::configured_analyzer_matches_direct_dft_after_ring_wrap ... ok
+test tests::the_reconstruction_beats_a_straight_line_between_bins ... ok
+
+test result: ok. 21 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+   Doc-tests harmonigraph_analysis
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

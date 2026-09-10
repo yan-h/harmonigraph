@@ -1,0 +1,94 @@
+   Compiling syn v2.0.119
+   Compiling once_cell v1.21.4
+   Compiling objc2-core-foundation v0.3.2
+   Compiling harmonigraph-golden v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-golden)
+   Compiling objc2-foundation v0.3.2
+   Compiling proc-macro2-diagnostics v0.10.1
+   Compiling serde_derive v1.0.228
+   Compiling bytemuck_derive v1.11.0
+   Compiling thiserror-impl v2.0.18
+   Compiling zerocopy-derive v0.8.54
+   Compiling enumn v0.1.14
+   Compiling duplicate v2.0.1
+   Compiling objc2-metal v0.3.2
+   Compiling bytemuck v1.25.1
+   Compiling thiserror v2.0.18
+   Compiling zerocopy v0.8.54
+   Compiling color v0.3.3
+   Compiling wgpu-types v29.0.4
+   Compiling image v0.25.10
+   Compiling serde v1.0.228
+   Compiling smallvec v1.15.2
+   Compiling font-types v0.11.3
+   Compiling emath v0.35.0
+   Compiling accesskit v0.24.1
+   Compiling parking_lot_core v0.9.12
+   Compiling parking_lot v0.12.5
+   Compiling kurbo v0.13.1
+   Compiling read-fonts v0.39.2
+   Compiling objc2-quartz-core v0.3.2
+   Compiling peniko v0.6.1
+   Compiling raw-window-metal v1.1.0
+   Compiling vello_common v0.0.9
+   Compiling ecolor v0.35.0
+   Compiling half v2.7.1
+   Compiling ahash v0.8.12
+   Compiling harmonigraph-scene v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-scene)
+   Compiling ron v0.12.2
+   Compiling naga v29.0.4
+   Compiling vello_cpu v0.0.9
+   Compiling harmonigraph-take v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-take)
+   Compiling skrifa v0.42.1
+   Compiling harfrust v0.7.0
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling epaint v0.35.0
+   Compiling wgpu-hal v29.0.4 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/vendor/wgpu-hal)
+   Compiling wgpu-core-deps-apple v29.0.4
+   Compiling egui v0.35.0
+   Compiling wgpu-core v29.0.4
+   Compiling wgpu v29.0.4
+   Compiling egui-wgpu v0.35.0
+   Compiling egui_dock v0.20.1
+   Compiling harmonigraph-render v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-render)
+   Compiling harmonigraph-perf v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-perf)
+   Compiling harmonigraph-ui v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-ui)
+   Compiling harmonigraph-offline v0.3.0 (/Users/yan/.codex/worktrees/cbf1/harmonigraph/crates/harmonigraph-offline)
+    Finished `release` profile [optimized] target(s) in 1m 05s
+     Running unittests src/main.rs (target/release/deps/harmonigraph_offline-0c2ad0890a8b3661)
+
+running 7 tests
+test golden::a_short_pane_zoomed_out_draws_the_frame_on_record ... ok
+test golden::a_tall_pane_zoomed_out_draws_the_frame_on_record ... ok
+test golden::a_zoomed_in_pane_draws_the_frame_on_record ... ok
+test golden::mixed_spectral_shadows_draw_the_frame_on_record ... ok
+test golden::the_whole_song_layout_draws_the_frame_on_record ... ok
+test golden::what_the_heatmap_costs_a_frame ... ignored
+test golden::what_the_spectral_shadow_routes_cost_a_frame ... ignored
+
+test result: ok. 5 passed; 0 failed; 2 ignored; 0 measured; 67 filtered out; finished in 0.57s
+
+     Running tests/take_warning.rs (target/release/deps/take_warning-367b38b6e463d3f8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_render-3dbcc80e14394dec)
+
+running 14 tests
+test lattice_tests::golden::a_chord_at_a_wide_reach_draws_the_frame_on_record ... ok
+test lattice_tests::golden::a_chord_at_the_fresh_view_draws_the_frame_on_record ... ok
+test lattice_tests::golden::a_name_at_render_scale_2_draws_the_frame_on_record ... ok
+test lattice_tests::golden::a_name_on_a_nodes_band_draws_the_frame_on_record ... ok
+test lattice_tests::golden::a_node_in_its_own_shadow_draws_the_frame_on_record ... ok
+test lattice_tests::golden::a_sheet_behind_a_node_draws_the_frame_on_record ... ok
+test lattice_tests::golden::names_overlapping_on_one_sheet_draw_the_frame_on_record ... ok
+test lattice_tests::golden::the_live_view_at_the_top_of_the_distance_row_draws_the_frame_on_record ... ok
+test lattice_tests::golden::the_live_view_draws_the_frame_on_record ... ok
+test lattice_tests::golden::the_live_view_goldens_exercise_both_shadow_kernels ... ok
+test lattice_tests::golden::the_live_view_on_the_distance_row_draws_the_frame_on_record ... ok
+test lattice_tests::golden::the_resting_marker_field_draws_the_frame_on_record ... ok
+test lattice_tests::golden::the_zoomed_out_view_on_the_distance_row_draws_the_frame_on_record ... ok
+test lattice_tests::golden::two_strokes_of_one_name_draw_the_frame_on_record ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 237 filtered out; finished in 0.44s

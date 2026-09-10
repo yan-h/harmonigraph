@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 description = "Just-intonation pitch math, Tonnetz lattice coordinates, and note spelling. No dependencies."
 readme = "README.md"
-# Deliberately NOT the workspace's GPL-3.0-or-later: this crate is the one
+# Deliberately NOT the workspace's GPL-3.0-or-later: this crate is a
 # reusable library in the workspace, and much of its pitch math descends from
 # the MIT-licensed midi_lattice v1. See README.md for the rationale, and
 # ci.sh for the guard that keeps this crate dependency-free.

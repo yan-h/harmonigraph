@@ -1,7 +1,7 @@
 //! The spectrogram's stored history: what the analyzer measured, kept over
 //! time in the form the heatmap reads it back.
 //!
-//! [`spectrum`](crate::spectrum) answers "what is sounding now"; this answers
+//! `harmonigraph-analysis` answers "what is sounding now"; this answers
 //! "what has been sounding", which is a memory question — one column is a whole
 //! pitch spectrum, and they arrive at the analyzer's rate for as long as the
 //! plugin is open. Two decisions do the work, and both come from what the
@@ -62,7 +62,7 @@ pub const DB_STEP: f32 = 0.5;
 /// spectrum, which [`quantize`] answers without reaching for a `log10`.
 const POWER_FLOOR: f32 = 1e-12;
 
-/// Store a bucket's absolute power (as [`crate::spectrum::SpectrumAnalyzer`]
+/// Store a bucket's absolute power (as `harmonigraph-analysis::SpectrumAnalyzer`
 /// reports it) on the dB grid.
 pub fn quantize(power: f32) -> BucketDb {
     if power <= POWER_FLOOR {

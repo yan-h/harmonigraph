@@ -37,7 +37,7 @@ impl SpectrumWindow {
 /// The window length above trades TIME against PITCH and leaves the estimate's
 /// noise exactly where it is; this trades COST and CONTRAST against that noise,
 /// which is a different axis and the reason it is a second control rather than
-/// more entries on the first. `harmonigraph_core::spectrum::build_tapers`
+/// more entries on the first. `harmonigraph_analysis::build_tapers`
 /// carries the mechanism; what a reader of this needs is the shape of the
 /// trade, measured at a mid-axis bucket under white noise:
 ///

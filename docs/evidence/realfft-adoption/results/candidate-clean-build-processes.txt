@@ -1,0 +1,17 @@
+  PID  %CPU COMM
+85262  70.0 /Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON
+  412  42.3 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+19984  37.2 /System/Library/PrivateFrameworks/ModelCatalogRuntime.framework/Versions/A/ModelCatalogAgent
+18230  31.7 /System/Library/PrivateFrameworks/VoiceShortcuts.framework/Versions/A/Support/siriactionsd
+83396  15.4 /Applications/Bitwig Studio.app/Contents/MacOS/BitwigStudio
+53666  14.3 /Applications/ChatGPT.app/Contents/Resources/codex
+42337  12.2 /Applications/GeForceNOW.app/Contents/Frameworks/GeForceNOW Helper (Renderer).app/Contents/MacOS/GeForceNOW Helper (Renderer)
+83584  11.1 /Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON
+  633   7.3 /System/Library/PrivateFrameworks/BiomeStreams.framework/Support/BiomeAgent
+42320   6.4 /Applications/GeForceNOW.app/Contents/Frameworks/GeForceNOW Helper (GPU).app/Contents/MacOS/GeForceNOW Helper (GPU)
+  699   5.8 /System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+41952   5.7 /Applications/GeForceNOW.app/Contents/MacOS/GeForceNOW
+  425   3.7 /usr/sbin/coreaudiod
+  877   3.6 /usr/libexec/sysmond
+  343   3.5 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+  670   3.4 /Users/yan/Applications/iTerm.app/Contents/MacOS/iTerm2
