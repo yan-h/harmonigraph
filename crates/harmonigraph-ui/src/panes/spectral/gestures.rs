@@ -15,6 +15,7 @@
 //! one answer every layer of the pane takes its boundary from.
 
 use super::axes::{spectrum_share, widest_span, Axes};
+use super::Navigation;
 use crate::panes::{zoom_gesture, DOCKED_SURFACE};
 use crate::PictureState;
 use egui::Sense;
@@ -350,6 +351,113 @@ enum DepthZoom {
     Level,
 }
 
+/// A preview-only drag that turns the analyzer toward one of the render
+/// frame's four edges. Kept beside the other gesture routing because it shares
+/// the pane-wide response with navigation; the internal divider is registered
+/// afterward and stays above both.
+pub(super) struct OrientationDrag {
+    response: egui::Response,
+    target: Option<crate::SpectralOrientation>,
+}
+
+pub(super) fn drag_orientation(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    frame: egui::Rect,
+) -> OrientationDrag {
+    let held = ui.input(|i| i.modifiers.shift || i.pointer.middle_down());
+    let response = response.clone();
+    let mode_id = response.id.with("preview_navigation");
+    if response.drag_started() {
+        ui.data_mut(|data| data.insert_temp(mode_id, held));
+    }
+    let navigating = ui.data(|data| data.get_temp::<bool>(mode_id)).unwrap_or(held);
+    let response = if navigating {
+        response
+    } else {
+        response
+            .on_hover_cursor(egui::CursorIcon::Grab)
+            .on_hover_text("Drag to an edge to turn the analyzer · Hold Shift and drag to navigate")
+    };
+    // A drag-only egui widget claims the pointer immediately on press, before
+    // it knows whether the gesture will move. Keep the target and the persisted
+    // edit dark until the pointer has crossed egui's own click threshold.
+    let active = !navigating
+        && (response.dragged() || response.drag_stopped())
+        && !ui.input(|i| i.pointer.could_any_button_be_click());
+    if active {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    let target = active
+        .then(|| response.interact_pointer_pos())
+        .flatten()
+        .and_then(|pointer| orientation_at(frame, pointer));
+    if response.drag_stopped() {
+        ui.data_mut(|data| data.remove::<bool>(mode_id));
+    }
+    OrientationDrag { response, target }
+}
+
+impl OrientationDrag {
+    pub(super) fn finish(
+        self,
+        painter: &egui::Painter,
+        pane: egui::Rect,
+        state: &mut PictureState,
+    ) {
+        let Some(target) = self.target else { return };
+        crate::panes::paint_preview_drop_target(painter, orientation_target(pane, target));
+        if self.response.drag_stopped() {
+            state.appearance.spectrum.orientation = target;
+            painter.ctx().request_repaint();
+        }
+    }
+}
+
+/// The outer quarter is both the hit region and the preview of the analyzer's
+/// new direction. Unlike a line, the box remains visible over the lattice's
+/// edges and reads as the same drop target its own rearrangement uses.
+fn orientation_target(pane: egui::Rect, target: crate::SpectralOrientation) -> egui::Rect {
+    match target {
+        crate::SpectralOrientation::Left => egui::Rect::from_min_max(
+            pane.min,
+            egui::pos2(pane.left() + pane.width() * 0.25, pane.bottom()),
+        ),
+        crate::SpectralOrientation::Right => egui::Rect::from_min_max(
+            egui::pos2(pane.right() - pane.width() * 0.25, pane.top()),
+            pane.max,
+        ),
+        crate::SpectralOrientation::Top => egui::Rect::from_min_max(
+            pane.min,
+            egui::pos2(pane.right(), pane.top() + pane.height() * 0.25),
+        ),
+        crate::SpectralOrientation::Bottom => egui::Rect::from_min_max(
+            egui::pos2(pane.left(), pane.bottom() - pane.height() * 0.25),
+            pane.max,
+        ),
+    }
+}
+
+fn orientation_at(frame: egui::Rect, pointer: egui::Pos2) -> Option<crate::SpectralOrientation> {
+    use crate::SpectralOrientation;
+
+    if !frame.contains(pointer) {
+        return None;
+    }
+    let x = (pointer.x - frame.left()) / frame.width();
+    let y = (pointer.y - frame.top()) / frame.height();
+    let (distance, orientation) = [
+        (x, SpectralOrientation::Left),
+        (1.0 - x, SpectralOrientation::Right),
+        (y, SpectralOrientation::Top),
+        (1.0 - y, SpectralOrientation::Bottom),
+    ]
+    .into_iter()
+    .min_by(|a, b| a.0.total_cmp(&b.0))
+    .unwrap();
+    (distance <= 0.25).then_some(orientation)
+}
+
 /// Drag or scroll to navigate the picture instead of aiming the Analyzer section's
 /// bars at it: across the pitch axis to pan the range, the wheel to zoom it,
 /// and along the depth axis to zoom what that part of the depth axis measures —
@@ -375,12 +483,12 @@ enum DepthZoom {
 /// mode — a drag moves whatever it is on top of, and the two regions are drawn
 /// far enough apart to aim at.
 ///
-/// Docked pane only. The Video tab draws this same pane as its preview, and
-/// that tab's body is a vertical `ScrollArea` — a wheel spent zooming there is
-/// a wheel the tab cannot be scrolled with, which is the only thing
-/// that keeps its controls reachable when the preview squeezes it. (The
-/// divider is a different case and stays live in the preview: it is a handle
-/// you aim at, not a gesture over the whole surface.)
+/// The dock and Video preview both navigate. In the preview, an unmodified
+/// drag belongs to the orientation overlay above this pane, while Shift-drag
+/// leaves that overlay inert and reaches the pan/Span/Level paths here. Its
+/// wheel is consumed after zooming so the Video tab's enclosing vertical
+/// `ScrollArea` does not move the controls at the same time. Headless/offline
+/// copies opt out explicitly.
 pub(super) fn drag_zoom(
     ui: &egui::Ui,
     axes: &Axes,
@@ -394,10 +502,11 @@ pub(super) fn drag_zoom(
     // (both layers off, or the divider dragged shut) and the Span has nothing on
     // screen to zoom; at 0.0 the spectrum is the one with nothing.
     split: f32,
+    navigation: Navigation,
 ) {
     use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
 
-    if surface != DOCKED_SURFACE {
+    if matches!(navigation, Navigation::None) {
         return;
     }
     let cfg = &mut state.appearance.spectrum;
@@ -411,6 +520,9 @@ pub(super) fn drag_zoom(
     // Zoom about the pitch under the pointer, so the note being looked at
     // stays put while the range closes in on it.
     if let Some((scroll, pinch)) = zoom_gesture(ui, response) {
+        if matches!(navigation, Navigation::Preview) && scroll != 0.0 {
+            ui.input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+        }
         let factor = (scroll * ZOOM_PER_SCROLL_POINT).exp() * pinch;
         if (factor - 1.0).abs() > 1e-4 {
             let anchor =
@@ -425,7 +537,11 @@ pub(super) fn drag_zoom(
     // Grab the picture. Per-frame deltas rather than the absolute tracking the
     // divider uses — pushed against an end of an axis, an absolute anchor would
     // keep accumulating off-screen and the view would sit still on the way back.
-    if response.dragged() {
+    let drag_navigates = !matches!(navigation, Navigation::Preview)
+        || ui
+            .data(|data| data.get_temp::<bool>(response.id.with("preview_navigation")))
+            .unwrap_or_else(|| ui.input(|i| i.modifiers.shift || i.pointer.middle_down()));
+    if response.dragged() && drag_navigates {
         let delta = response.drag_delta();
         // Which axis this drag is on — see [`lean_is_depth`]. What comes back is
         // the depth the PRESS landed at, which then says which value the zoom

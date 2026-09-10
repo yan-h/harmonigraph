@@ -5,9 +5,7 @@ use super::axes::*;
 use super::gestures::*;
 use super::settings::*;
 use super::*;
-use crate::tests::probe::{
-    events_into, fresh_picture as fresh, painted_full, painted_into, press, themed,
-};
+use crate::tests::probe::{fresh_picture as fresh, painted_full, painted_into, themed};
 use crate::{SpectralOrientation, SpectrumConfig};
 use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
@@ -35,7 +33,7 @@ impl crate::params::ParamBackend for SettingsParams {
 /// One frame of the whole Spectral pane into `rect` at `now`, on a themed
 /// context of its own.
 fn painted_pane(rect: egui::Rect, state: &mut PictureState, now: f64) -> egui::FullOutput {
-    painted_into(SCREEN, rect, |ui| spectral_pane(ui, state, now, 0, 1.0))
+    painted_into(SCREEN, rect, |ui| spectral_pane(ui, state, now, 0, 1.0, Navigation::Docked))
 }
 
 fn axes(rect: egui::Rect, orientation: SpectralOrientation) -> Axes {
@@ -794,6 +792,16 @@ fn drag_pane(
     grab: f32,
     delta: egui::Vec2,
 ) -> SpectrumConfig {
+    drag_pane_with_navigation(rect, cfg, grab, delta, Navigation::Docked)
+}
+
+fn drag_pane_with_navigation(
+    rect: egui::Rect,
+    cfg: SpectrumConfig,
+    grab: f32,
+    delta: egui::Vec2,
+    navigation: Navigation,
+) -> SpectrumConfig {
     let mut state = fresh();
     state.appearance.spectrum = cfg;
     let ctx = themed();
@@ -801,16 +809,107 @@ fn drag_pane(
     // is bounded by the pane rather than by the screen's edge.
     let screen = egui::vec2(900.0, 900.0);
     let at = Axes::new(rect, &cfg).at(0.5, grab);
+    let surface = if matches!(navigation, Navigation::Docked) { 0 } else { 1 };
+    let modifiers = if matches!(navigation, Navigation::Preview) {
+        egui::Modifiers::SHIFT
+    } else {
+        egui::Modifiers::NONE
+    };
     let frame = |events: Vec<egui::Event>, state: &mut PictureState| {
-        let _ = events_into(&ctx, screen, rect, events, |ui| {
-            spectral_pane(ui, state, 100.0, 0, 1.0);
-        });
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, screen)),
+                modifiers,
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                spectral_pane(&mut child, state, 100.0, surface, 1.0, navigation);
+            },
+        );
+    };
+    let button = |pressed| egui::Event::PointerButton {
+        pos: if pressed { at } else { at + delta },
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers,
     };
     frame(vec![egui::Event::PointerMoved(at)], &mut state);
-    frame(vec![egui::Event::PointerMoved(at), press(at, true)], &mut state);
+    frame(vec![egui::Event::PointerMoved(at), button(true)], &mut state);
     frame(vec![egui::Event::PointerMoved(at + delta)], &mut state);
-    frame(vec![press(at + delta, false)], &mut state);
+    frame(vec![button(false)], &mut state);
     state.appearance.spectrum
+}
+
+#[test]
+fn preview_navigation_reaches_both_depth_zoom_options() {
+    let (rect, cfg) = (WIDE, SpectrumConfig::default());
+    let axes = Axes::new(rect, &cfg);
+    let span =
+        drag_pane_with_navigation(rect, cfg, 0.8, axes.dir_depth() * 40.0, Navigation::Preview);
+    assert!(span.roll_seconds < cfg.roll_seconds - 0.5, "the preview did not zoom Span");
+    assert_eq!(span.ceiling_db, cfg.ceiling_db, "the Span gesture moved Level too");
+
+    let level =
+        drag_pane_with_navigation(rect, cfg, 0.2, -axes.dir_depth() * 40.0, Navigation::Preview);
+    assert!(level.ceiling_db < cfg.ceiling_db - 3.0, "the preview did not zoom Level");
+    assert_eq!(level.roll_seconds, cfg.roll_seconds, "the Level gesture moved Span too");
+}
+
+#[test]
+fn preview_wheel_zooms_pitch_with_or_without_shift_and_consumes_both_axes() {
+    let rect = WIDE;
+    let pointer = rect.center();
+    for modifiers in [egui::Modifiers::NONE, egui::Modifiers::SHIFT] {
+        let mut state = fresh();
+        state.appearance.spectrum.low_midi = 36.0;
+        state.appearance.spectrum.high_midi = 96.0;
+        let before = state.appearance.spectrum;
+        let ctx = themed();
+        let remaining_scroll = std::cell::Cell::new(egui::Vec2::ZERO);
+        for events in [
+            vec![egui::Event::PointerMoved(pointer)],
+            vec![egui::Event::PointerMoved(pointer)],
+            vec![
+                egui::Event::PointerMoved(pointer),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, 40.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers,
+                },
+            ],
+        ] {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 900.0),
+                    )),
+                    modifiers,
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    spectral_pane(&mut child, &mut state, 100.0, 1, 1.0, Navigation::Preview);
+                    remaining_scroll.set(ui.input(|input| input.smooth_scroll_delta));
+                },
+            );
+        }
+        let after = state.appearance.spectrum;
+        assert!(
+            after.high_midi - after.low_midi < before.high_midi - before.low_midi - 1.0,
+            "{modifiers:?} wheel did not zoom pitch",
+        );
+        assert_eq!(after.roll_seconds, before.roll_seconds, "the preview wheel moved Span");
+        assert_eq!(
+            remaining_scroll.get(),
+            egui::Vec2::ZERO,
+            "{modifiers:?} wheel escaped to the Video scroll area"
+        );
+    }
 }
 
 /// Where the curve grows from its baseline, as a screen direction: away
@@ -1704,7 +1803,7 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
     // not hold, and this fixture is about what the curve reaches inside the
     // pane rather than about anything at the window's edge.
     let output = painted_into(egui::vec2(2000.0, 2000.0), rect, |ui| {
-        spectral_pane(ui, &mut state, 1.0, 0, 1.0);
+        spectral_pane(ui, &mut state, 1.0, 0, 1.0, Navigation::Docked);
     });
     output.shapes.into_iter().map(|s| s.shape).collect()
 }

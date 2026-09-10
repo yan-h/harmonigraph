@@ -39,10 +39,22 @@ use tuning::tuning_pane;
 /// dock holds one tab per pane; the Video tab's preview takes 1, and the
 /// offline renderer numbers its placements from 0 in a process of its own.
 ///
-/// It is also the one copy of a pane a person can navigate — the preview
-/// answers no pointer of its own and a render has none — which is what the
-/// Analyzer's gestures gate on.
+/// The Video preview has its own gesture mode, while an offline render has no
+/// pointer at all; Analyzer gesture routing distinguishes all three.
 pub(crate) const DOCKED_SURFACE: usize = 0;
+
+/// The one target chrome both draggable pictures use in the Video preview.
+/// A translucent accent fill keeps the destination legible over either a dark
+/// spectrogram or a busy lattice, while the opaque edge keeps its bounds exact.
+pub(crate) fn paint_preview_drop_target(painter: &egui::Painter, rect: egui::Rect) {
+    painter.rect(
+        rect.shrink(2.0),
+        0.0,
+        crate::theme::accent().gamma_multiply(0.18),
+        egui::Stroke::new(2.0, crate::theme::accent_edge()),
+        egui::StrokeKind::Inside,
+    );
+}
 
 /// Wrap degrees into -180..=180 for display (orbit accumulates yaw
 /// without bound).
@@ -253,7 +265,14 @@ impl egui_dock::TabViewer for Viewer<'_> {
                 // a second answer overwriting this one in the single fraction
                 // all three compose from.
                 spectral::hold_spectrum(self.state, ui.available_size());
-                spectral_pane(ui, self.state, self.now, DOCKED_SURFACE, 1.0)
+                spectral_pane(
+                    ui,
+                    self.state,
+                    self.now,
+                    DOCKED_SURFACE,
+                    1.0,
+                    spectral::Navigation::Docked,
+                )
             }
             Tab::Spiral => spiral_pane(ui, self.state, self.now, DOCKED_SURFACE),
             Tab::Notes => notes_pane(ui, self.state),
@@ -371,8 +390,20 @@ pub(super) fn window_shows_node(
 /// handed back raw: a trackpad pinch or a ctrl+wheel arrives as a zoom
 /// factor, not a scroll delta (egui zeroes the scroll for those), so a
 /// caller that read only one would miss whichever gesture didn't use it.
+/// Shift-wheel is the other spelling to preserve: egui deliberately turns its
+/// vertical delta into a horizontal one for scroll areas, but on a picture
+/// Shift selects a drag mode and must not disable the wheel's zoom.
 pub(super) fn zoom_gesture(ui: &egui::Ui, response: &egui::Response) -> Option<(f32, f32)> {
-    response.contains_pointer().then(|| ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta())))
+    response.contains_pointer().then(|| {
+        ui.input(|i| {
+            let scroll = if i.modifiers.shift {
+                i.smooth_scroll_delta.x + i.smooth_scroll_delta.y
+            } else {
+                i.smooth_scroll_delta.y
+            };
+            (scroll, i.zoom_delta())
+        })
+    })
 }
 
 /// Attention pulse for armed-mode indicators: a slow, shallow breathe

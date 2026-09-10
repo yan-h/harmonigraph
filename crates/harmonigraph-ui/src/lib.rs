@@ -497,7 +497,14 @@ pub fn draw_pane(
     match pane {
         Pane::Lattice => panes::lattice::lattice_pane(ui, state, now, surface),
         // Text sizes itself off the pane, here as everywhere.
-        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now, surface, 1.0),
+        Pane::Spectral => panes::spectral::spectral_pane(
+            ui,
+            state,
+            now,
+            surface,
+            1.0,
+            panes::spectral::Navigation::None,
+        ),
         Pane::Spiral => panes::spiral::spiral_pane(ui, state, now, surface),
     }
 }
