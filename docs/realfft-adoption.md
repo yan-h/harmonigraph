@@ -2,7 +2,8 @@
 
 This adopts the backend evaluated in [PR #803's report](fft-backend-evaluation.md).
 Baseline: freshly fetched `origin/main` at `d34d66cfd5e739fbe2528e084ddab001bb4e8b4b`.
-Yan accepted the documented numerical, picture and gate behavior after reviewing the comparisons and requested the merge.
+Yan requested merge after the documented numerical, picture and gate differences and comparisons were presented.
+That instruction records acceptance of this behavior.
 The three reviewed spectral goldens now record that accepted output.
 No shared DAW slot was changed.
 

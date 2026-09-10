@@ -71,7 +71,8 @@ A full workspace `--release` test command is not a substitute for the normal pro
 Large node dumps and RGBA streams are reproducible rather than committed;
 `generated-SHA256SUMS` identifies those measured files and binaries.
 `images/` preserves the original baseline/candidate/amplified contact sheets from before acceptance.
-After reviewing that evidence, Yan accepted the documented picture and gate behavior and requested merge.
+After the documented differences and comparisons were presented, Yan requested merge;
+that instruction records acceptance of the picture and gate behavior.
 Only the three reviewed spectral goldens were then updated with the repository blessing command;
 `accepted-golden-deltas.csv` records their exact one/one/four channel changes, all by 1/255.
 Subsequent unblessed golden and full-workspace checks verify the accepted state.
