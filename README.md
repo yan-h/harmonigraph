@@ -63,6 +63,20 @@ it does not claim to identify or correct them automatically.
 > **Chord illustration placeholder:** after choosing an image,
 > place `docs/images/lattice-c-major-shape.png` here to compare C-E-G with the transposed D-F♯-A shape.
 
+## How I use it
+
+I usually start by improvising in a tuning close to [31-tone equal temperament](https://en.wikipedia.org/wiki/31_equal_temperament) or [quarter-comma meantone](https://en.wikipedia.org/wiki/Quarter-comma_meantone).
+In 31-tone equal temperament,
+the octave is divided into 31 equal steps.
+The lattice helps me recognize chords and follow their relationships while I play.
+
+Later,
+I return to just intonation for the finished piece where possible.
+Seeing the harmonic paths makes it easier to understand where that works and where wolf intervals or comma pumps complicate the move.
+
+Once the music is finished,
+I use Harmonigraph to create its video.
+
 ## What it does
 
 - **Lattice MIDI visualization.** Incoming notes become interval shapes on a tunable Tonnetz,
