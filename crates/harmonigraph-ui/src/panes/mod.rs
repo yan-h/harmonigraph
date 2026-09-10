@@ -253,7 +253,14 @@ impl egui_dock::TabViewer for Viewer<'_> {
                 // a second answer overwriting this one in the single fraction
                 // all three compose from.
                 spectral::hold_spectrum(self.state, ui.available_size());
-                spectral_pane(ui, self.state, self.now, DOCKED_SURFACE, 1.0)
+                spectral_pane(
+                    ui,
+                    self.state,
+                    self.now,
+                    DOCKED_SURFACE,
+                    1.0,
+                    spectral::Navigation::Docked,
+                )
             }
             Tab::Spiral => spiral_pane(ui, self.state, self.now, DOCKED_SURFACE),
             Tab::Notes => notes_pane(ui, self.state),

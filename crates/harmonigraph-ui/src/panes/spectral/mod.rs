@@ -44,6 +44,27 @@ use axes::{
 use egui::Sense;
 use gestures::{drag_split, drag_zoom, spectrum_split};
 
+/// Whether this copy of the pane accepts navigation, and whether its wheel
+/// lives inside a scrollable settings body.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Navigation {
+    /// Headless/offline drawing: there is no pointer to navigate with.
+    None,
+    /// The docked picture pane, whose body itself never scrolls.
+    Docked,
+    /// The live Video preview, nested inside the Video tab's ScrollArea.
+    Preview { frame: egui::Rect },
+}
+
+impl Navigation {
+    fn preview_frame(self) -> Option<egui::Rect> {
+        match self {
+            Navigation::Preview { frame } => Some(frame),
+            Navigation::None | Navigation::Docked => None,
+        }
+    }
+}
+
 /// The compact frequency spelling drawn along the pane's pitch axis.
 pub(crate) fn frequency_label(hz: f32) -> String {
     if hz >= 1_000.0 {
@@ -165,6 +186,7 @@ pub(crate) fn spectral_pane(
     // its hairline fallback is the only width that is not relative to the
     // pane's pitch axis.
     ribbon_floor_scale: f32,
+    navigation: Navigation,
 ) {
     use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
@@ -182,6 +204,11 @@ pub(crate) fn spectral_pane(
     painter.rect_filled(rect, 0.0, theme::well());
 
     let axes = Axes::new(rect, &cfg);
+    // The pane-wide response means two things in the preview: plain drag turns
+    // the analyzer, while Shift-drag navigates it. The narrow divider is
+    // registered afterward and remains the topmost target where they overlap.
+    let orientation_drag =
+        navigation.preview_frame().map(|frame| gestures::drag_orientation(ui, &response, frame));
 
     // Offline playhead render: the whole take laid out statically with a
     // sweeping playhead. It takes the whole pane (split = 0), which also drops
@@ -199,7 +226,7 @@ pub(crate) fn spectral_pane(
     let at_split = spectrum_split(state, surface);
     let divider = (!whole_song && (cfg.show_roll || cfg.show_spectrogram))
         .then(|| drag_split(ui, &axes, state, surface, at_split));
-    drag_zoom(ui, &axes, &response, state, surface, at_split);
+    drag_zoom(ui, &axes, &response, state, surface, at_split, navigation);
     // Re-snapshot: the two drags above just wrote `roll_fraction`, the pitch
     // range, the Span or the level ceiling, and everything below has to be this
     // frame's values, not the ones from before the drag. The ceiling is the
@@ -648,6 +675,31 @@ pub(crate) fn spectral_pane(
             painter.line_segment(axes.across_pitch(split), egui::Stroke::new(2.0, color));
         }
     }
+    if let Some(drag) = orientation_drag {
+        drag.finish(&painter, rect, state);
+    }
+}
+
+/// The preview's interaction layer when Playhead mode replaces the live pane
+/// with a placeholder. Replacing the drawing must not turn its surface dead:
+/// these edits remain ready when live mode returns, while orientation and pitch
+/// framing also feed the eventual render.
+pub(crate) fn preview_gestures(
+    ui: &mut egui::Ui,
+    state: &mut PictureState,
+    surface: usize,
+    frame: egui::Rect,
+) {
+    let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::drag());
+    if rect.width() < 10.0 || rect.height() < 10.0 {
+        return;
+    }
+    let cfg = state.appearance.spectrum;
+    let axes = Axes::new(rect, &cfg);
+    let orientation = gestures::drag_orientation(ui, &response, frame);
+    let split = spectrum_split(state, surface);
+    drag_zoom(ui, &axes, &response, state, surface, split, Navigation::Preview { frame });
+    orientation.finish(&ui.painter_at(rect), rect, state);
 }
 
 /// Which way this pane's text travels, for the glyph shader's reconstruction

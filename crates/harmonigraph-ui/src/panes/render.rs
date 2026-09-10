@@ -48,7 +48,9 @@ pub(crate) fn render_pane(
     render_controls(ui, state, interaction);
 
     section(ui, "Preview");
-    ui.weak("Drag the divider to resize · Drag the lattice to an edge to move it");
+    ui.weak(
+        "Drag pictures to an edge · Shift-drag the analyzer to navigate · Scroll or pinch to zoom · Drag dividers to resize",
+    );
     let frame = state.appearance.render.frame;
     let avail = ui.available_size();
     if avail.x < 20.0 {
@@ -95,7 +97,7 @@ pub(crate) fn render_pane(
     for (pane, rect) in &placements {
         let rect = rect.translate(box_rect.min.to_vec2());
         match pane {
-            Pane::Spectral if placeholder => playhead_placeholder(ui, rect),
+            Pane::Spectral if placeholder => playhead_preview(ui, rect, box_rect, state),
             Pane::Spectral => {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                 // Its text sizes itself off the rect it is given, so drawing
@@ -111,6 +113,7 @@ pub(crate) fn render_pane(
                     now,
                     PREVIEW_SURFACE,
                     preview_scale(box_rect.width(), &state.appearance.render),
+                    super::spectral::Navigation::Preview { frame: box_rect },
                 );
                 state.appearance.view.shadow = shadow;
             }
@@ -165,7 +168,7 @@ fn preview_layout_controls(ui: &mut egui::Ui, rect: egui::Rect, frame: &mut crat
         LatticeSide::Top => move_rect.max.y = handle.top(),
         LatticeSide::Bottom => move_rect.min.y = handle.bottom(),
     }
-    let moving = ui
+    let moving_lattice = ui
         .interact(move_rect, ui.id().with("preview_lattice_move"), Sense::drag())
         .on_hover_cursor(egui::CursorIcon::Grab)
         .on_hover_text("Drag the lattice to the left, right, top or bottom edge");
@@ -216,9 +219,11 @@ fn preview_layout_controls(ui: &mut egui::Ui, rect: egui::Rect, frame: &mut crat
         };
         ui.painter().line_segment(ends, egui::Stroke::new(2.0, color));
     }
-    if moving.dragged() || moving.drag_stopped() {
+    if moving_lattice.dragged() || moving_lattice.drag_stopped() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-        if let Some(side) = moving.interact_pointer_pos().and_then(|p| preview_drop_side(rect, p)) {
+        if let Some(side) =
+            moving_lattice.interact_pointer_pos().and_then(|p| preview_drop_side(rect, p))
+        {
             let target = preview_lattice_rect(rect, side, frame.split);
             ui.painter().rect_stroke(
                 target.shrink(2.0),
@@ -226,7 +231,7 @@ fn preview_layout_controls(ui: &mut egui::Ui, rect: egui::Rect, frame: &mut crat
                 ui.visuals().selection.stroke,
                 egui::StrokeKind::Inside,
             );
-            if moving.drag_stopped() {
+            if moving_lattice.drag_stopped() {
                 frame.lattice = side;
                 ui.ctx().request_repaint();
             }
@@ -237,8 +242,12 @@ fn preview_layout_controls(ui: &mut egui::Ui, rect: egui::Rect, frame: &mut crat
 /// Keep the interaction geometry even when the preview is too small to draw
 /// a pane: `Layout::resolve` culls sub-point panes, but the controls still need them.
 fn preview_lattice_rect(rect: egui::Rect, side: LatticeSide, split: f32) -> egui::Rect {
+    preview_pane_rect(rect, side, split, Pane::Lattice)
+}
+
+fn preview_pane_rect(rect: egui::Rect, side: LatticeSide, split: f32, pane: Pane) -> egui::Rect {
     let layout = Layout::split(side, split);
-    let (x0, y0, x1, y1) = layout.panes.iter().find(|p| p.pane == Pane::Lattice).unwrap().rect;
+    let (x0, y0, x1, y1) = layout.panes.iter().find(|p| p.pane == pane).unwrap().rect;
     egui::Rect::from_min_max(
         rect.min + rect.size() * egui::vec2(x0, y0),
         rect.min + rect.size() * egui::vec2(x1, y1),
@@ -533,6 +542,17 @@ fn playhead_placeholder(ui: &egui::Ui, rect: egui::Rect) {
     }
 }
 
+fn playhead_preview(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    frame: egui::Rect,
+    state: &mut PictureState,
+) {
+    playhead_placeholder(ui, rect);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+    super::spectral::preview_gestures(&mut child, state, PREVIEW_SURFACE, frame);
+}
+
 /// The largest sub-rect of `outer` with the given width:height aspect, centered
 /// — the render frame letterboxed inside the pane.
 fn letterbox(outer: egui::Rect, aspect: f32) -> egui::Rect {
@@ -544,8 +564,8 @@ fn letterbox(outer: egui::Rect, aspect: f32) -> egui::Rect {
 
 /// A second live lattice view at the preview rect's aspect. Aspect is taken
 /// from `rect` inside the render callback, so this frames exactly as the render
-/// will. Non-interactive: `hovered` is left `None`, and the camera is framed in
-/// the Lattice tab (shared state), not here.
+/// will. The wheel and pinch zoom the shared camera here; picking, note hover
+/// and the learn badge stay off, so `draw_lattice` still receives no response.
 ///
 /// Runs the same draw sequence the docked Lattice tab does (see
 /// [`super::lattice::lattice_pane`]) with its own GPU pane id, so a second
@@ -563,6 +583,19 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &mut PictureState
         Layout::split(state.appearance.render.frame.lattice, state.appearance.render.frame.split)
             .background,
     );
+    let response = ui.interact(rect, ui.id().with("preview_lattice_zoom"), Sense::hover());
+    if let Some((scroll, zoom)) = super::zoom_gesture(ui, &response) {
+        if scroll != 0.0 {
+            state.appearance.camera.zoom(scroll);
+            // This pane lives inside the Video tab's vertical ScrollArea. A
+            // wheel over the picture belongs to its zoom; taking it here keeps
+            // the parent from scrolling the controls at the same time.
+            ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
+        }
+        if zoom != 1.0 {
+            state.appearance.camera.zoom_by(zoom);
+        }
+    }
     super::lattice::draw_lattice(ui, rect, state, now, PREVIEW_SURFACE, background, None, None);
 }
 
@@ -645,6 +678,7 @@ fn render_progress(ui: &mut egui::Ui, interaction: &mut crate::Interaction) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SpectralOrientation;
 
     fn drag_preview(
         frame: &mut crate::RenderFrame,
@@ -679,6 +713,48 @@ mod tests {
                 |ui| preview_layout_controls(ui, rect, frame),
             );
         }
+    }
+
+    fn spectral_preview_frame(
+        ctx: &egui::Context,
+        state: &mut PictureState,
+        frame_rect: egui::Rect,
+        modifiers: egui::Modifiers,
+        events: Vec<egui::Event>,
+        placeholder: bool,
+    ) {
+        let spectral = preview_pane_rect(
+            frame_rect,
+            state.appearance.render.frame.lattice,
+            state.appearance.render.frame.split,
+            Pane::Spectral,
+        );
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                modifiers,
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                if placeholder {
+                    playhead_preview(ui, spectral, frame_rect, state);
+                } else {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(spectral));
+                    super::super::spectral::spectral_pane(
+                        &mut child,
+                        state,
+                        100.0,
+                        PREVIEW_SURFACE,
+                        1.0,
+                        super::super::spectral::Navigation::Preview { frame: frame_rect },
+                    );
+                }
+            },
+        );
     }
 
     #[test]
@@ -750,6 +826,231 @@ mod tests {
     }
 
     #[test]
+    fn preview_analyzer_drag_turns_the_picture_to_every_edge_and_cancels_outside() {
+        let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
+        for lattice_side in LatticeSide::ALL {
+            for target in LatticeSide::ALL {
+                let ctx = crate::tests::probe::themed();
+                let mut state =
+                    PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+                state.appearance.render.frame.lattice = lattice_side;
+                state.appearance.render.frame.split = 0.55;
+                state.appearance.spectrum.orientation = match target {
+                    LatticeSide::Left => SpectralOrientation::Right,
+                    _ => SpectralOrientation::Left,
+                };
+                let spectral = preview_pane_rect(
+                    rect,
+                    state.appearance.render.frame.lattice,
+                    state.appearance.render.frame.split,
+                    Pane::Spectral,
+                );
+                let start = spectral.center();
+                let end = match target {
+                    LatticeSide::Left => rect.left_center() + egui::vec2(2.0, 0.0),
+                    LatticeSide::Right => rect.right_center() - egui::vec2(2.0, 0.0),
+                    LatticeSide::Top => rect.center_top() + egui::vec2(0.0, 2.0),
+                    LatticeSide::Bottom => rect.center_bottom() - egui::vec2(0.0, 2.0),
+                };
+                let button = |pos, pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                for events in [
+                    vec![egui::Event::PointerMoved(start)],
+                    vec![egui::Event::PointerMoved(start), button(start, true)],
+                    vec![egui::Event::PointerMoved(end)],
+                    vec![button(end, false)],
+                ] {
+                    spectral_preview_frame(
+                        &ctx,
+                        &mut state,
+                        rect,
+                        egui::Modifiers::NONE,
+                        events,
+                        false,
+                    );
+                }
+                let expected = match target {
+                    LatticeSide::Left => SpectralOrientation::Left,
+                    LatticeSide::Right => SpectralOrientation::Right,
+                    LatticeSide::Top => SpectralOrientation::Top,
+                    LatticeSide::Bottom => SpectralOrientation::Bottom,
+                };
+                assert_eq!(
+                    state.appearance.spectrum.orientation, expected,
+                    "lattice on {lattice_side:?}"
+                );
+                assert_eq!(
+                    state.appearance.render.frame.lattice, lattice_side,
+                    "turning the analyzer moved the lattice"
+                );
+
+                let before = state.appearance.spectrum.orientation;
+                let outside = rect.max + egui::vec2(20.0, 20.0);
+                for events in [
+                    vec![egui::Event::PointerMoved(start)],
+                    vec![egui::Event::PointerMoved(start), button(start, true)],
+                    vec![egui::Event::PointerMoved(outside)],
+                    vec![button(outside, false)],
+                ] {
+                    spectral_preview_frame(
+                        &ctx,
+                        &mut state,
+                        rect,
+                        egui::Modifiers::NONE,
+                        events,
+                        false,
+                    );
+                }
+                assert_eq!(
+                    state.appearance.spectrum.orientation, before,
+                    "a drop outside changed the orientation"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn playhead_placeholder_keeps_analyzer_orientation_and_pitch_zoom_live() {
+        let ctx = crate::tests::probe::themed();
+        let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        state.appearance.render.playhead = true;
+        state.appearance.render.frame.lattice = LatticeSide::Left;
+        state.appearance.render.frame.split = 0.3;
+        state.appearance.spectrum.low_midi = 36.0;
+        state.appearance.spectrum.high_midi = 96.0;
+        let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
+        let spectral = preview_pane_rect(
+            rect,
+            state.appearance.render.frame.lattice,
+            state.appearance.render.frame.split,
+            Pane::Spectral,
+        );
+        let start = spectral.center();
+        let end = rect.center_top() + egui::vec2(0.0, 2.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(start)],
+            vec![egui::Event::PointerMoved(start), button(start, true)],
+            vec![egui::Event::PointerMoved(end)],
+            vec![button(end, false)],
+        ] {
+            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events, true);
+        }
+        assert_eq!(state.appearance.spectrum.orientation, SpectralOrientation::Top);
+
+        let before = state.appearance.spectrum.high_midi - state.appearance.spectrum.low_midi;
+        for events in [
+            vec![egui::Event::PointerMoved(start)],
+            vec![egui::Event::PointerMoved(start)],
+            vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, 40.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        ] {
+            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events, true);
+        }
+        let after = state.appearance.spectrum.high_midi - state.appearance.spectrum.low_midi;
+        assert!(after < before - 1.0, "the placeholder swallowed pitch zoom");
+    }
+
+    #[test]
+    fn shift_drag_reaches_analyzer_zoom_beneath_the_orientation_overlay() {
+        let ctx = crate::tests::probe::themed();
+        let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        state.appearance.render.frame.lattice = LatticeSide::Left;
+        state.appearance.render.frame.split = 0.3;
+        let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
+        let spectral = preview_pane_rect(
+            rect,
+            state.appearance.render.frame.lattice,
+            state.appearance.render.frame.split,
+            Pane::Spectral,
+        );
+        // Left orientation runs time rightward. Start well inside the far
+        // region, clear of both dividers, and pull toward the past.
+        let start = egui::pos2(spectral.left() + spectral.width() * 0.75, spectral.center().y);
+        let end = start + egui::vec2(80.0, 0.0);
+        let before = state.appearance.spectrum;
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::SHIFT,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(start)],
+            vec![egui::Event::PointerMoved(start), button(start, true)],
+            vec![egui::Event::PointerMoved(end)],
+            vec![button(end, false)],
+        ] {
+            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::SHIFT, events, false);
+        }
+        assert!(
+            state.appearance.spectrum.roll_seconds < before.roll_seconds * 0.75,
+            "Shift-drag never reached the preview's Span zoom",
+        );
+        assert_eq!(
+            state.appearance.spectrum.orientation, before.orientation,
+            "navigating also changed orientation",
+        );
+    }
+
+    #[test]
+    fn analyzer_divider_stays_above_the_preview_orientation_drag() {
+        let ctx = crate::tests::probe::themed();
+        let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        state.appearance.render.frame.lattice = LatticeSide::Left;
+        state.appearance.render.frame.split = 0.3;
+        let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
+        let spectral = preview_pane_rect(
+            rect,
+            state.appearance.render.frame.lattice,
+            state.appearance.render.frame.split,
+            Pane::Spectral,
+        );
+        let before = state.appearance.spectrum;
+        let split = 1.0 - before.roll_fraction;
+        let start = egui::pos2(spectral.left() + spectral.width() * split, spectral.center().y);
+        let end = start + egui::vec2(40.0, 0.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(start)],
+            vec![egui::Event::PointerMoved(start), button(start, true)],
+            vec![egui::Event::PointerMoved(end)],
+            vec![button(end, false)],
+        ] {
+            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events, false);
+        }
+        assert!(
+            state.appearance.spectrum.roll_fraction < before.roll_fraction - 0.05,
+            "the analyzer divider did not move",
+        );
+        assert_eq!(
+            state.appearance.spectrum.orientation, before.orientation,
+            "dragging the analyzer divider also turned the pane",
+        );
+    }
+
+    #[test]
     fn dragging_inside_a_wide_lattice_does_not_redock_it() {
         let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(400.0, 300.0));
         for side in LatticeSide::ALL {
@@ -767,6 +1068,59 @@ mod tests {
             drag_preview(&mut frame, rect, start, end);
             assert_eq!(frame.lattice, side);
             assert_eq!(frame.split, 0.95);
+        }
+    }
+
+    #[test]
+    fn preview_lattice_accepts_plain_wheel_and_pinch_zoom() {
+        let gestures = [
+            (
+                "plain wheel",
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: egui::vec2(0.0, 1.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ),
+            ("pinch", egui::Event::Zoom(1.5)),
+        ];
+        for (gesture, event) in gestures {
+            let ctx = crate::tests::probe::themed();
+            let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+            let before = state.appearance.camera.distance;
+            let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
+            let pointer = rect.center();
+            let remaining_scroll = std::cell::Cell::new(egui::Vec2::ZERO);
+            for events in [
+                vec![egui::Event::PointerMoved(pointer)],
+                vec![egui::Event::PointerMoved(pointer)],
+                vec![egui::Event::PointerMoved(pointer), event],
+            ] {
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        preview_lattice(ui, rect, &mut state, 0.0);
+                        remaining_scroll.set(ui.input(|input| input.smooth_scroll_delta));
+                    },
+                );
+            }
+            assert!(
+                state.appearance.camera.distance < before,
+                "{gesture} did not zoom the preview lattice",
+            );
+            assert_eq!(
+                remaining_scroll.get().y,
+                0.0,
+                "plain wheel would also scroll the Video controls",
+            );
         }
     }
 
