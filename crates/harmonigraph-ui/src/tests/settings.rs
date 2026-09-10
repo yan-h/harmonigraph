@@ -1116,6 +1116,34 @@ fn the_commas_section_lays_its_rows_out_as_a_table() {
     }
 }
 
+/// A policy bar sends one configuration command on every changed drag frame,
+/// and the audio thread can adopt each one before the next frame arrives. The
+/// pending notice therefore comes and goes DURING one gesture. It must not sit
+/// above the bar it describes: moving the bar under a stationary pointer makes
+/// the next frame write a different value, which brings the notice back and
+/// makes the whole Adaptive tuning section flicker between two positions.
+#[test]
+fn a_transient_tuning_status_does_not_move_the_adaptive_controls() {
+    let adaptive_y = |pending| {
+        let mut state = fresh();
+        state.picture.runtime.configuration_pending = pending;
+        let output = tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT);
+        if pending {
+            assert!(
+                text_y(&output.shapes, "Tuning change pending audio adoption").is_some(),
+                "the pending fixture never drew the transient status",
+            );
+        }
+        one_text_y(&output.shapes, "Adaptive tuning")
+    };
+
+    let (settled, pending) = (adaptive_y(false), adaptive_y(true));
+    assert_eq!(
+        pending, settled,
+        "the transient status moved Adaptive tuning from {settled} to {pending}",
+    );
+}
+
 /// The size a settings pane is soloed at to make it scroll: narrow enough that
 /// the bars run the width of the column, and short enough that every pane in
 /// the sweep — System, the shortest list of them — overflows it.
