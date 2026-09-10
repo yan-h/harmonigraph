@@ -105,7 +105,13 @@ pub(crate) fn render_pane(
                 let shadow = state.appearance.view.shadow;
                 state.appearance.view.shadow =
                     preview_shadows(shadow, box_rect.width(), &state.appearance.render);
-                super::spectral::spectral_pane(&mut child, state, now, PREVIEW_SURFACE);
+                super::spectral::spectral_pane(
+                    &mut child,
+                    state,
+                    now,
+                    PREVIEW_SURFACE,
+                    preview_scale(box_rect.width(), &state.appearance.render),
+                );
                 state.appearance.view.shadow = shadow;
             }
             // Unreachable, and here for the match rather than for the picture:
@@ -265,14 +271,21 @@ fn preview_shadows(
     width: f32,
     config: &crate::RenderConfig,
 ) -> harmonigraph_scene::ShadowSettings {
+    let scale = preview_scale(width, config);
+    shadow.spectral_geometry.width *= scale;
+    shadow.spectral_text.width *= scale;
+    shadow
+}
+
+/// The preview's logical frame size relative to the one the export uses.
+/// Point-sized effects use this so a smaller live preview remains the same
+/// composition rather than making fixed-width ink look heavier.
+fn preview_scale(width: f32, config: &crate::RenderConfig) -> f32 {
     let pixels = config.frame.pixels(config.short_edge);
     let export_width = pixels[0] as f32 / crate::layout::export_pixels_per_point(pixels);
     // The live preview normally shrinks the shot. At larger-than-export sizes
     // keep the dial's maximum rather than manufacture an out-of-range style.
-    let scale = (width / export_width).clamp(0.0, 1.0);
-    shadow.spectral_geometry.width *= scale;
-    shadow.spectral_text.width *= scale;
-    shadow
+    (width / export_width).clamp(0.0, 1.0)
 }
 
 /// Aspect ratio and resolution — editing the persisted
@@ -832,5 +845,16 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn preview_scale_tracks_the_logical_frame_and_caps_at_export_size() {
+        let state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        let pixels = state.appearance.render.frame.pixels(state.appearance.render.short_edge);
+        let export_width = pixels[0] as f32 / crate::layout::export_pixels_per_point(pixels);
+
+        assert!((preview_scale(export_width, &state.appearance.render) - 1.0).abs() < 1e-6);
+        assert!((preview_scale(export_width * 0.25, &state.appearance.render) - 0.25).abs() < 1e-6);
+        assert_eq!(preview_scale(export_width * 2.0, &state.appearance.render), 1.0);
     }
 }

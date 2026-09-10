@@ -35,7 +35,7 @@ impl crate::params::ParamBackend for SettingsParams {
 /// One frame of the whole Spectral pane into `rect` at `now`, on a themed
 /// context of its own.
 fn painted_pane(rect: egui::Rect, state: &mut PictureState, now: f64) -> egui::FullOutput {
-    painted_into(SCREEN, rect, |ui| spectral_pane(ui, state, now, 0))
+    painted_into(SCREEN, rect, |ui| spectral_pane(ui, state, now, 0, 1.0))
 }
 
 fn axes(rect: egui::Rect, orientation: SpectralOrientation) -> Axes {
@@ -803,7 +803,7 @@ fn drag_pane(
     let at = Axes::new(rect, &cfg).at(0.5, grab);
     let frame = |events: Vec<egui::Event>, state: &mut PictureState| {
         let _ = events_into(&ctx, screen, rect, events, |ui| {
-            spectral_pane(ui, state, 100.0, 0);
+            spectral_pane(ui, state, 100.0, 0, 1.0);
         });
     };
     frame(vec![egui::Event::PointerMoved(at)], &mut state);
@@ -1704,7 +1704,7 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
     // not hold, and this fixture is about what the curve reaches inside the
     // pane rather than about anything at the window's edge.
     let output = painted_into(egui::vec2(2000.0, 2000.0), rect, |ui| {
-        spectral_pane(ui, &mut state, 1.0, 0);
+        spectral_pane(ui, &mut state, 1.0, 0, 1.0);
     });
     output.shapes.into_iter().map(|s| s.shape).collect()
 }
@@ -2668,7 +2668,18 @@ fn the_rolls_ink_stops_at_the_now_line() {
             let near = split - lead * split;
             let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
             let output = painted_into(SCREEN, WIDE, |ui| {
-                roll::draw_roll(ui.painter(), &a, &scale, &state, split, 100.0, 0);
+                roll::draw_roll(
+                    ui.painter(),
+                    &a,
+                    &scale,
+                    &state,
+                    roll::RollDrawOptions {
+                        split,
+                        now: 100.0,
+                        surface: 0,
+                        ribbon_floor_scale: 1.0,
+                    },
+                );
             });
 
             let rolls: Vec<&egui::epaint::ClippedShape> = output

@@ -74,7 +74,7 @@ const MIN_RIBBON_PX: f32 = 1.5;
 /// A BENT segment pays a second time, in its shear: the box it is drawn in is
 /// longer than the drift it carries, so the drift spreads over the floored
 /// length and reads as a shallower bend. That is deliberate, and the
-/// alternative is much worse — see the shear in [`note_instances`], where the
+/// alternative is much worse — see the shear in [`note_instances_with_floor`], where the
 /// two are one product and holding the rate instead puts ink at pitches
 /// nothing sounded.
 const MIN_LENGTH_DEVICE_PX: f32 = 2.0;
@@ -238,18 +238,32 @@ fn lead_alpha(note: &RollNote, now: f64, release: f32) -> f32 {
 /// vertices, 4-5 ms of pure upload, the dominant cost of the frame. Four
 /// vertices a note and a distance field for the bands costs neither. See
 /// `harmonigraph_render::roll` for the measurement and the shape of the fix.
+#[derive(Clone, Copy)]
+pub(super) struct RollDrawOptions {
+    pub(super) split: f32,
+    pub(super) now: f64,
+    pub(super) surface: usize,
+    pub(super) ribbon_floor_scale: f32,
+}
+
 pub(super) fn draw_roll(
     painter: &egui::Painter,
     axes: &Axes,
     scale: &PitchScale,
     state: &PictureState,
-    split: f32,
-    now: f64,
-    surface: usize,
+    options: RollDrawOptions,
 ) {
     let ppp = painter.ctx().pixels_per_point().max(1.0);
-    let notes = note_instances(axes, scale, state, split, now, ppp);
-    if surface == crate::panes::DOCKED_SURFACE {
+    let notes = note_instances_with_floor(
+        axes,
+        scale,
+        state,
+        options.split,
+        options.now,
+        ppp,
+        options.ribbon_floor_scale,
+    );
+    if options.surface == crate::panes::DOCKED_SURFACE {
         // What the roll costs, for the performance overlay: this geometry
         // does not pass through egui's vertex buffer, so the `verts` row
         // cannot see it. The overlay reads one number, so only the copy a
@@ -282,8 +296,8 @@ pub(super) fn draw_roll(
     // oldest edge and slide out under the scissor (see `note_instances`), and
     // this is the same edge in the same place.
     let (lead_px, _) =
-        lead(&state.appearance.spectrum, axes, state.runtime.whole_song.is_some(), split);
-    let near = (split - lead_px / axes.depth_len().max(1.0)).max(0.0);
+        lead(&state.appearance.spectrum, axes, state.runtime.whole_song.is_some(), options.split);
+    let near = (options.split - lead_px / axes.depth_len().max(1.0)).max(0.0);
     let region = egui::Rect::from_two_pos(axes.at(0.0, near), axes.at(1.0, 1.0));
     let painter = painter.with_clip_rect(painter.clip_rect().intersect(region));
     let dir = |v: egui::Vec2| [v.x, v.y];
@@ -301,8 +315,8 @@ pub(super) fn draw_roll(
         harmonigraph_render::bloom_strength(state.appearance.view.bloom_strength),
         state.appearance.view.shadow.spectral_geometry,
         state.surfaces.target_format,
-        crate::panes::lattice::pane_id(surface),
-        crate::text::spectral_shadow_surface(surface),
+        crate::panes::lattice::pane_id(options.surface),
+        crate::text::spectral_shadow_surface(options.surface),
         painter.ctx().cumulative_pass_nr(),
     ));
 }
@@ -318,6 +332,7 @@ pub(super) fn draw_roll(
 /// truncation below honest — a note crossing the window's oldest edge has
 /// its geometry rewritten while it leaves, so it is not the immutable thing
 /// a cache would need it to be.
+#[cfg(test)]
 pub(super) fn note_instances(
     axes: &Axes,
     scale: &PitchScale,
@@ -326,6 +341,23 @@ pub(super) fn note_instances(
     now: f64,
     // Physical pixels per point, which [`MIN_LENGTH_DEVICE_PX`] is quoted in.
     ppp: f32,
+) -> Vec<RollInstance> {
+    note_instances_with_floor(axes, scale, state, split, now, ppp, 1.0)
+}
+
+/// This is the geometry used by the test-only `note_instances` wrapper, with
+/// the point-sized pitch floor scaled for a composed preview. The configured
+/// width is in semitones and already follows the preview's pitch axis; only
+/// the fallback for hairline notes needs this extra scale to keep its relative
+/// size matched to the export.
+fn note_instances_with_floor(
+    axes: &Axes,
+    scale: &PitchScale,
+    state: &PictureState,
+    split: f32,
+    now: f64,
+    ppp: f32,
+    ribbon_floor_scale: f32,
 ) -> Vec<RollInstance> {
     let cfg = &state.appearance.spectrum;
     // Shared time<->depth mapping: a `now`-anchored scrolling window live, or
@@ -339,7 +371,8 @@ pub(super) fn note_instances(
     // under a pixel, where a rectangle fades out to nothing and the roll stops
     // saying a note was played there.
     let half_pitch = (cfg.roll_thickness * 0.5 / scale.span).max(0.0) * axes.pitch_len();
-    let half_pitch = half_pitch.max(MIN_RIBBON_PX * 0.5);
+    let min_ribbon_px = MIN_RIBBON_PX * ribbon_floor_scale.clamp(0.0, 1.0);
+    let half_pitch = half_pitch.max(min_ribbon_px * 0.5);
     // The other axis' floor, in points at this display's density — the one that
     // stops a brief note pulsing as it scrolls. See [`MIN_LENGTH_DEVICE_PX`].
     let min_half_depth = 0.5 * MIN_LENGTH_DEVICE_PX / ppp.max(1e-3);
@@ -1072,6 +1105,33 @@ mod tests {
             MIN_RIBBON_PX * 0.5,
             "a hairline ribbon was not floored at the width it can be seen at",
         );
+    }
+
+    /// The Video preview is a smaller logical copy of the export frame. Its
+    /// configured semitone width already follows the smaller pitch axis, but a
+    /// hairline note would otherwise keep the export-sized point floor and read
+    /// too heavy in the preview.
+    #[test]
+    fn a_preview_hairline_ribbon_uses_the_preview_frame_scale() {
+        let mut state = fresh();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.low_midi = 60.0 - 300.0;
+        state.appearance.spectrum.high_midi = 60.0 + 300.0;
+        state.appearance.spectrum.roll_thickness = 0.2;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+
+        let cfg = &state.appearance.spectrum;
+        let axes = Axes::new(PANE, cfg);
+        let scale = PitchScale { min_midi: -240.0, max_midi: 360.0, span: 600.0 };
+        let split = super::super::axes::spectrum_share(cfg);
+        let at = |floor_scale| {
+            one(&note_instances_with_floor(&axes, &scale, &state, split, 0.05, PPP, floor_scale))
+                .half_extent[0]
+        };
+
+        assert!((at(1.0) - 0.5 * MIN_RIBBON_PX).abs() < 1e-3);
+        assert!((at(0.25) - 0.125 * MIN_RIBBON_PX).abs() < 1e-3);
+        assert!(at(0.25) < at(1.0), "the preview kept the export-sized pitch floor");
     }
 
     /// A note too brief to fill two device pixels is drawn at that length
