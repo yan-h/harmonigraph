@@ -21,10 +21,12 @@ substring is fine).
 It copies only, never builds;
 a build must already exist in the worktree.
 Stale builds (dylib older than the branch's HEAD) are flagged but still loadable.
-Fully quit Bitwig before loading a build, then reopen it after the swap.
+After installing a build,
+deactivate and reactivate Bitwig's audio engine.
 The loader signs a staging bundle and atomically installs a fresh executable inode;
 existing host processes deliberately keep their old mapped code until they exit.
-A device deactivate/reactivate, editor reopen or rescan alone may leave that process alive.
+An individual device toggle,
+editor reopen or rescan alone may leave that process alive.
 After installing, the loader reports observed old/current executable identities in Bitwig plug-in hosts and the audio engine, with PID and start time when it can recheck them.
 It compares mapped device/inode pairs with the replaced and installed files;
 a pathname alone or unavailable process information is reported as uncertain.
@@ -117,17 +119,27 @@ a build made with uncommitted edits carries the commit under it.
 So commit BEFORE you build if you want the tag to distinguish your work;
 if you build first, the tag is still the truth about the binary, and it is the branch HEAD that is ahead.
 
-## A build change requires the old host process to exit
+## Reload a build through the audio engine
 
-Deactivate + reactivate re-reads the binary only when Bitwig's plug-in host PROCESS for Harmonigraph exits on the unload.
-That is decided by **Settings → Plug-ins → "Create a plug-in sandbox for:"**, and the default, `by Vendor`, groups every plug-in sharing a `VENDOR` string into ONE process which lives as long as ANY of them is loaded.
-A second plug-in of Yan's in the same project therefore holds the old Harmonigraph image in memory and the reactivate is a no-op —
-the DAW keeps drawing the previous build with nothing on screen saying so, and only a full Bitwig restart clears it.
+The installed executable is re-read when Bitwig replaces the process that mapped the old one.
+After the loader finishes,
+deactivate and reactivate Bitwig's audio engine;
+that is the supported reload gesture in the tested setup.
+
+Individual device deactivation is a narrower lifecycle.
+Its behaviour depends on **Settings → Plug-ins → "Create a plug-in sandbox for:"**:
+the default,
+`by Vendor`,
+groups every plug-in sharing a `VENDOR` string into one process that can live as long as any of them is loaded.
+A second plug-in of Yan's in the same project can therefore keep the old Harmonigraph image mapped across one device's toggle.
 `by Plug-in` and `Individually` each give it a process of its own;
-`with Bitwig` loads it into the audio engine, which unloads nothing.
+`with Bitwig` maps it in the audio engine itself,
+making the engine cycle the relevant lifecycle boundary.
 
-Use a full Bitwig quit/reopen for the handoff rather than relying on a device toggle.
+Use the audio-engine cycle for the handoff rather than relying on an individual device toggle.
 The symptom of a surviving process is a HUD whose tag does not change after a successful installation.
+If that happens,
+read the loader's process diagnostic and fall back to a full Bitwig restart.
 The loader intentionally preserves that process's old file instead of changing mapped executable bytes underneath it.
 
 ## Recovering a build someone else's swap evicted
