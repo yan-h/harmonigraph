@@ -862,9 +862,10 @@ fn rejected_gesture_end_is_retried_before_another_begin() {
     mailbox.submit(packet(ConfigEdit::axis(1, 690_000_000))).unwrap();
     let (_, rejected) =
         device.run_reject_kind(0, vec![], false, Some(CLAP_EVENT_PARAM_GESTURE_END));
+    // 63 is the sub-block's last sample, where the wrapper pins its own output.
     assert!(rejected.attempts.contains(&(
         CLAP_EVENT_PARAM_GESTURE_END,
-        0,
+        63,
         device.id(ParamKey::Three),
         false
     )));
@@ -937,7 +938,10 @@ fn learning_notifications_land_at_the_boundary_and_merge_with_performance() {
         .filter(|e| e.0 == CLAP_EVENT_PARAM_VALUE && e.2 == device.id(ParamKey::Three))
         .collect();
     assert_eq!(fifth.len(), 1);
-    assert_eq!(fifth[0].1, 0, "learning reads the whole block and lands at its boundary");
+    // The closing boundary, not the opening one: the wrapper pins its own
+    // parameter output to the last sample of the sub-block it drains, so that
+    // it cannot precede a note the plugin already pushed for that sub-block.
+    assert_eq!(fifth[0].1, 63, "learning reads the whole block and lands at its boundary");
     assert!(
         sink.attempts.windows(2).all(|events| events[0].1 <= events[1].1),
         "configuration and performance outputs must share chronological order"

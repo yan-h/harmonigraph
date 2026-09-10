@@ -775,20 +775,10 @@ impl ClapPlugin for Harmonigraph {
         self.aggregation.as_mut().unwrap().schedule(block, output);
         self.process(buffer, aux, context)
     }
-    /// Every staged group is emitted. Nothing is eligible or ineligible any
-    /// more, and what the host does with an event is outside the protocol.
-    fn clap_performance_prepare(
-        &mut self,
-        _group: nice_plug::wrapper::clap::performance::Group,
-    ) -> bool {
-        true
-    }
-    fn clap_performance_complete(
-        &mut self,
-        _completion: nice_plug::wrapper::clap::performance::Completion,
-        _output: &mut nice_plug::wrapper::clap::performance::Output<'_>,
-    ) {
-    }
+    /// The whole callback's remaining horizon, emitted at its final sample.
+    /// `start` is the chronological floor the sub-blocks already passed, not a
+    /// new interval: the wrapper's parameter output for the last sub-block is
+    /// pinned there too, so anything emitted before it would unsort the list.
     fn clap_performance_finalize(
         &mut self,
         callback: nice_plug::wrapper::clap::performance::Callback,
@@ -798,8 +788,8 @@ impl ClapPlugin for Harmonigraph {
         self.aggregation.as_mut().unwrap().schedule(
             nice_plug::wrapper::clap::performance::Block {
                 callback,
-                start: 0,
-                frames: callback.frames,
+                start: callback.frames.saturating_sub(1),
+                frames: 1,
                 transport: callback.transport,
             },
             output,

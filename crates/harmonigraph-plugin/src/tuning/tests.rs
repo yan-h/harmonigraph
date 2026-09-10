@@ -413,8 +413,14 @@ impl Device {
             get: Some(get),
         };
         let mut sink = Sink {
-            values: Vec::with_capacity(640),
-            rejected: Vec::with_capacity(640),
+            // One callback can now emit everything whose time has come, so this
+            // has to hold the Tune's whole line (each pending onset costing a
+            // note and a tuning expression) plus a full cut. The wrapper used
+            // to stop it at 512 attempts; that budget went with the scheduler,
+            // and a sink too small to hold the rest aborts under the allocation
+            // guard rather than reporting what overflowed.
+            values: Vec::with_capacity(2 * PENDING_EVENTS + CUT_EVENTS),
+            rejected: Vec::with_capacity(2 * PENDING_EVENTS + CUT_EVENTS),
             attempts: 0,
             reject_kind,
             reject_attempt,

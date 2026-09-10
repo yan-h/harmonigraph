@@ -39,8 +39,10 @@ the exported-factory fixture checks one initial latency notification and no rest
 The ordinary processing walker, configuration owner and performance owner each keep a progress cursor over it, and an owned cell is reused only once all three have passed.
 The retain-and-acknowledge contract that used to sit on top of that pool is gone;
 a plugin that cannot take an input reports a bounded failure instead of holding it.
-The fixed 512-normal/128-emergency scheduler exposes prepare, actual accepted-prefix completion and finalization;
-an opted-in plugin cannot infer acceptance from legacy `send_event`.
+The output side allocates nothing: `Output` is a borrow of the host's `clap_output_events` whose one `push(value, time)` calls `try_push` and returns the host's answer, which is what an opted-in plugin cannot get from legacy `send_event`.
+Keeping the list sorted is the caller's contract rather than the wrapper's, because the wrapper pins the parameter and configuration output it pushes itself to the last sample of each sub-block, after the plugin's events for that sub-block.
+`PARAMETER_OUTPUT_ATTEMPTS` bounds that half at 512 pushes per callback; the plugin's own output is bounded by whatever the plugin retains.
+The process trace observes the wrapper's output only, since its hook takes the plugin lock and an opted-in plugin pushes while holding it.
 Prepared nonautomatable setup validates and reserves capacity before parameter/state mutation, then adopts at the enclosing input boundary.
 Main-thread registration, setup service and joined lifecycle hooks keep registry locking and endpoint reclamation outside audio callbacks.
 Joined wrapper destruction takes the configuration runtime and calls `clap_configuration_retire(unfinished)` before `clap_main_destroy` transfers recording ownership.
@@ -49,7 +51,7 @@ the plugin retains original recording routes until joined actual output has a pu
 Tune's performance-only opt-in creates no configuration mailbox.
 `allocation_probe.rs` instruments the actual debug allocation guard on the calling thread, including deallocation, for exported-factory ownership fixtures;
 it does not measure RSS or other threads.
-See [the adaptive tuning design](docs/adaptive-tuning.md#the-framework-boundary) for what the plugin asks of this boundary, and for the output scheduler that is still here and still owes its own removal.
+See [the adaptive tuning design](docs/adaptive-tuning.md#the-framework-boundary) for what the plugin asks of this boundary.
 - **Auxiliary descriptor bounds** (`src/wrapper/clap/wrapper.rs`): stop both auxiliary-port loops at the host's declared input/output count, before dereferencing the one-past descriptor (#638).
 Missing inputs keep the existing silent-buffer fallback;
 missing outputs keep the existing skip-processing behavior and leave undeclared storage untouched.

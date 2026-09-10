@@ -168,18 +168,10 @@ impl ClapPlugin for HarmonigraphTune {
         self.tune().schedule(block, output);
         ProcessStatus::KeepAlive
     }
-    /// Every staged group is emitted. There is no eligibility left to check
-    /// here and no acceptance to record: what the host does with an event is
-    /// outside the protocol, which residual case 2 of #786 states plainly.
-    fn clap_performance_prepare(&mut self, _group: api::Group) -> bool {
-        true
-    }
-    fn clap_performance_complete(
-        &mut self,
-        _completion: api::Completion,
-        _output: &mut api::Output<'_>,
-    ) {
-    }
+    /// The whole callback's remaining horizon, emitted at its final sample.
+    /// `start` is the chronological floor the sub-blocks already passed, not a
+    /// new interval: the wrapper's parameter output for the last sub-block is
+    /// pinned there too, so anything emitted before it would unsort the list.
     fn clap_performance_finalize(
         &mut self,
         callback: api::Callback,
@@ -189,8 +181,8 @@ impl ClapPlugin for HarmonigraphTune {
         self.tune().schedule(
             api::Block {
                 callback,
-                start: 0,
-                frames: callback.frames,
+                start: callback.frames.saturating_sub(1),
+                frames: 1,
                 transport: callback.transport,
             },
             output,

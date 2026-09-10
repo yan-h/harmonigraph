@@ -81,7 +81,11 @@ pub struct Tune {
     /// Per channel, which of [`PEDALS`] is currently down.
     pedals: [u8; 16],
     status: u32,
-    attempt: u64,
+    /// The last offset emitted in this callback. A CLAP output list is sorted
+    /// by time and the wrapper no longer holds the floor for us, so this is the
+    /// whole of what keeps it sorted: every emission takes
+    /// `max(self.cursor, block.start)` and moves it.
+    cursor: u32,
     /// The transport was playing at the last callback. A falling edge is a
     /// Stop, and a Stop is a cut for the whole session.
     playing: bool,
@@ -118,7 +122,7 @@ impl Tune {
             held: [None; HELD_PER_SOURCE],
             pedals: [0; 16],
             status: 0,
-            attempt: 0,
+            cursor: 0,
             playing: false,
             misses: 0,
             dropped: 0,
@@ -285,6 +289,7 @@ impl Tune {
 
     pub fn begin(&mut self, callback: api::Callback) {
         self.callback = Some(callback);
+        self.cursor = 0;
         self.adopt();
         if callback.steady_time < 0 {
             self.status |= session::CLOCK;
@@ -322,10 +327,11 @@ impl Tune {
         let (Some(sample), Some(event)) = (input.sample, Event::from_input(input.value)) else {
             return;
         };
-        // Admission may rely on a queued release freeing a cell. Use the
-        // output boundary's validator now, so that release cannot later be
-        // discarded by Group construction after it made room for an onset.
-        if api::Group::single(api::Token([0; 4]), api::Lane::Normal, 0, event.input()).is_err() {
+        // Admission may rely on a queued release freeing a cell. The output
+        // boundary no longer validates anything at staging time, so the same
+        // check has to happen here: a release that could never reach the wire
+        // must not make room for an onset first.
+        if !event.emittable() {
             self.status |= session::DROPPED;
             self.dropped += 1;
             return;
@@ -486,7 +492,7 @@ impl Tune {
         let end =
             base.saturating_add(i64::from(block.start)).saturating_add(i64::from(block.frames));
         while let Some(event) = self.cut.front() {
-            let time = output.cursor().max(block.start).min(callback.frames.saturating_sub(1));
+            let time = self.cursor.max(block.start).min(callback.frames.saturating_sub(1));
             if !self.emit(output, time, event, None, 0) {
                 return;
             }
@@ -497,7 +503,7 @@ impl Tune {
                 break;
             }
             let offset = pending.due.saturating_sub(base).clamp(0, i64::from(u32::MAX)) as u32;
-            let time = offset.max(output.cursor());
+            let time = offset.max(self.cursor).max(block.start);
             if time >= callback.frames {
                 break;
             }
@@ -554,28 +560,26 @@ impl Tune {
         tuning: Option<Event>,
         correction: i64,
     ) -> bool {
-        self.attempt += 1;
-        let token = api::Token([self.attempt, 0, 0, 0]);
-        let group = match tuning {
-            Some(tuning) => api::Group::onset(token, time, event.input(), tuning.input()),
-            None => api::Group::single(token, api::Lane::Normal, time, event.input()),
-        };
-        let group = match group {
-            Ok(group) => group,
-            // A pair the wrapper refuses costs the correction, not the note.
-            // Losing both would be the one thing this design exists to stop.
-            Err(_) if tuning.is_some() => {
-                self.status |= session::DROPPED;
-                return self.emit(output, time, event, None, 0);
-            }
-            Err(_) => {
-                self.dropped += 1;
-                self.status |= session::DROPPED;
-                return true;
-            }
-        };
-        if output.stage(group).is_err() {
+        if !event.emittable() {
+            self.dropped += 1;
+            self.status |= session::DROPPED;
+            return true;
+        }
+        // A refused note is the host's whole answer: nothing left, nothing is
+        // tracked, and `schedule` keeps the line entry for a later callback.
+        if !output.push(event.input(), time) {
             return false;
+        }
+        self.cursor = time;
+        // The tuning expression addresses the voice the note just created, so
+        // it can only follow the note, and a refusal here costs the correction
+        // rather than the note. Losing both would be the one thing this design
+        // exists to stop, and re-emitting the note to recover the pair would
+        // sound it twice.
+        if let Some(tuning) = tuning {
+            if !tuning.emittable() || !output.push(tuning.input(), time) {
+                self.status |= session::DROPPED;
+            }
         }
         self.track(event, correction);
         true

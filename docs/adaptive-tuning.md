@@ -553,6 +553,7 @@ The vendored `nice-plug` wrapper supplies what the plugin cannot get for itself:
 - **Steady time**, which nice-plug-core's `Transport` did not expose.
 - **Lossless CLAP identity**, since `NoteEvent::PolyTuning` carries `f32` and drops the note id, flags and `f64`.
 - **Per-event host-acceptance feedback**, because `send_event` throws the result away and a plugin that owns downstream note ownership cannot infer acceptance.
+It is now the return value of the push rather than a later completion, which is why the callback that chose the event is the one that hears about it.
 
 Removed from it during the #712 simplification:
 the retain-and-acknowledge input contract (`Consumption::Pending`), the legacy input walker, and a second complete notification emitter reachable only from fixtures.
@@ -560,13 +561,25 @@ Kept, against an earlier plan to remove them:
 the three input cursors, which turned out to be one progress mark per consumer over a single shared pool rather than the retain machinery —
 giving each consumer its own copy would add cost and a mechanism instead of removing one.
 
-**The broader group/lane/heap output-scheduler simplification remains deferred, and is now unused rather than load-bearing.** [#786](https://github.com/yan-h/harmonigraph/issues/786) listed `Group`, `Output`, `Lane`, `Token` and `Completion` for deletion along with per-event acceptance feedback.
-The plugin side of that is done:
-`clap_performance_prepare` returns `true` unconditionally and `clap_performance_complete` ignores its argument, because there is no eligibility left to check and no acceptance to record.
-The vendored code is still there.
-Deleting it means giving `Output` the host's event pointer so `push(value, time)` can call `try_push` directly, and rewriting the 1,644-line boundary suite that tests the scheduler;
-that is a second, self-contained change in a vendored crate and it was left out of stage 8 deliberately rather than forgotten.
-The emergency lane and the two-event onset group are the only shapes the plugin still stages.
+**The output scheduler is gone** ([#789](https://github.com/yan-h/harmonigraph/issues/789), after [#786](https://github.com/yan-h/harmonigraph/issues/786) and [#788](https://github.com/yan-h/harmonigraph/issues/788) had already emptied it of callers).
+`Group`, `Lane`, `Token`, `Completion`, `Disposition`, the ready heap, the cell pool and the emergency lane are deleted, and with them the `clap_performance_prepare` and `clap_performance_complete` hooks that had nothing left to decide.
+`Output` is now a borrow of the host's `clap_output_events` with one method:
+`push(value, time)` calls `try_push` and hands back the host's answer.
+The one capacity that survives is the 512 the normal lane was also serving as a per-callback bound on the wrapper's OWN parameter output;
+it is now `PARAMETER_OUTPUT_ATTEMPTS`, and it counts nothing the plugin pushes.
+
+What that moves to the plugin is the chronological floor.
+A CLAP output list is sorted by time, so Tune keeps its own cursor and emits at `max(cursor, block.start)` —
+which it can, because the delay line already emits in due order.
+The wrapper's own parameter and configuration output no longer shares that cursor;
+it is pinned to the last sample of each sub-block, after the plugin's events for that sub-block.
+That is the ordering the two halves used to negotiate by interleaving on time, settled once instead:
+a parameter at `start + frames - 1` is at or after every note in `[start, start + frames)` and before every note in the next sub-block, so neither side has to learn the other's times.
+It also reads correctly, because a value observed during a callback shaped none of that callback's notes —
+the configuration in force was frozen at `clap_configuration_adopt` before the first of them.
+
+An error exit is the one place the plugin's output goes dark:
+invalid input, a missing host list and `CLAP_PROCESS_ERROR` all give `clap_performance_finalize` a writer that refuses everything, so the Tune retains its flush for a callback the host will read instead of spending it on one it has already lost.
 
 ## Setting it up in Bitwig
 
@@ -655,9 +668,6 @@ the second is what keeps Learn from becoming a fixed point.
 12. [#783](https://github.com/yan-h/harmonigraph/issues/783), intermediate bend trajectories, is unchanged by this pass.
 
 ## Open, deferred and not built
-
-**Deferred framework simplification.** The nice-plug output scheduler is now unused by the plugin but still vendored;
-[#789](https://github.com/yan-h/harmonigraph/issues/789) holds the exact remaining edit and the one non-mechanical question in it.
 
 **Deferred policy choices.** Pedal-aware harmonic holding, a successor to the deliberately temporary bounded recent-note memory, and explicit anchors or additional root and excluded-pitch controls remain unbuilt.
 The shipped policy-v2 controls do not imply those choices were made.
