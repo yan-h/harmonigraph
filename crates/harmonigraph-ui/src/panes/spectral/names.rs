@@ -740,6 +740,20 @@ pub(super) fn plan(
         let (_, latest) = name_span(edge.time, room - gap + inset, backward);
         latest >= oldest
     };
+    // The pitches whose ribbon still reaches into the pitch zoom: the zoom
+    // widened by half a ribbon, whose width is set in semitones. A ribbon's
+    // ink meets the edge that half width before its centre does, so asked of
+    // the centre alone a name went with half its ribbon still drawn (#825).
+    //
+    // The RIBBON's width and not the name's box, for the reason the note's own
+    // term below gives across time: a name taller than its ribbon would keep a
+    // sliver of itself on the pane after the ribbon had gone. So such a name
+    // goes with the edge of its box still inside — the same trade the far edge
+    // makes — and the ribbon's outline, which the roll adds in points, is not
+    // waited for either. Past the edge the scissor cuts the name as it cuts
+    // the ribbon.
+    let half_ribbon = cfg.roll_thickness * 0.5;
+    let ribbon_reach = scale.min_midi - half_ribbon..=scale.max_midi + half_ribbon;
 
     let mut occupied = Occupancy::default();
     let mut placed: Vec<NoteLabel> = Vec::new();
@@ -759,8 +773,8 @@ pub(super) fn plan(
         // for the reason [`drawn_edge`] gives.
         //
         // Three questions, and the last one is the anchor's: the note has
-        // ribbon on the pane, that ribbon is inside the pitch zoom, and the
-        // NAME still has ink there ([`shows`](plan)).
+        // ribbon on the pane, that ribbon still reaches into the pitch zoom
+        // (`ribbon_reach`), and the NAME still has ink there ([`shows`](plan)).
         //
         // The third is what makes a travelling name leave with the end it is
         // written on. At the leading edge it asks nothing the first has not —
@@ -785,7 +799,7 @@ pub(super) fn plan(
         //
         let drawn = drawn_edge(note, &edge, now, &time);
         let visible = note.stop(now) >= oldest
-            && scale.contains(drawn.pitch)
+            && ribbon_reach.contains(&drawn.pitch)
             && shows(&drawn, naming(edge.pitch, &mut names).1);
         // A held note whose name is anchored on the LEADING EDGE stands outside
         // the sweep in BOTH directions: it is named whatever is already there,
@@ -2682,6 +2696,61 @@ mod tests {
                      it (name {named}, ribbon {drawn})",
                 );
             }
+        }
+    }
+
+    /// A name leaves the pitch zoom WITH ITS RIBBON: not when the note's centre
+    /// crosses the edge with half the ribbon still drawn (#825), and never after
+    /// the ribbon has gone.
+    ///
+    /// Swept by panning the range across a picture held still, off the bottom
+    /// and off the top. At the widest ribbon the bar allows, because the gap
+    /// being measured IS the ribbon's half width: at the default 0.3 st it is
+    /// 0.15 st, inside the slack. On [`BIG`], where a semitone is tens of points
+    /// and the ribbon's outline — ink past its box that the name does not wait
+    /// for — is a small part of one.
+    #[test]
+    fn a_name_leaves_the_pitch_range_with_its_ribbon() {
+        for direction in [1.0f32, -1.0] {
+            let mut state = state(24.0, 10.0);
+            state.appearance.spectrum.roll_thickness = 2.0;
+            state.runtime.tracker.handle_event(on(1.0, 60));
+            state.runtime.tracker.handle_event(off(3.0, 60));
+
+            let axes = Axes::new(BIG, &state.appearance.spectrum);
+            let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
+            // How far the range has been panned, in semitones: the note's centre
+            // is on the edge at 12, its ribbon's box clears it at 13.
+            let (mut named, mut drawn) = (f32::NAN, f32::NAN);
+            let mut shift = 10.0f32;
+            while shift < 15.0 {
+                let cfg = &mut state.appearance.spectrum;
+                cfg.low_midi = 48.0 + direction * shift;
+                cfg.high_midi = 72.0 + direction * shift;
+                if !labels_in(&state, 5.0, BIG).is_empty() {
+                    named = shift;
+                }
+                let scale = scale_of(&state);
+                if !super::super::roll::note_instances(&axes, &scale, &state, split, 5.0, 2.0)
+                    .is_empty()
+                {
+                    drawn = shift;
+                }
+                shift += 0.01;
+            }
+            assert!(drawn < 14.9, "the fixture is vacuous: the ribbon never left ({drawn})");
+            let over = drawn - named;
+            assert!(
+                over >= 0.0,
+                "panned {direction}: the name outlasted its ribbon by {} st (name {named}, \
+                 ribbon {drawn})",
+                -over,
+            );
+            assert!(
+                over < 0.25,
+                "panned {direction}: the name went {over} st before its ribbon did, where the \
+                 ribbon reaches 1 st either side of its centre (name {named}, ribbon {drawn})",
+            );
         }
     }
 
