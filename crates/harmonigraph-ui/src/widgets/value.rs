@@ -4,7 +4,7 @@ use std::ops::RangeInclusive;
 
 use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
-use super::bar::{bar_radius, bar_width, elided_name, track_fill, BAR_TEXT_PAD};
+use super::bar::{anchored_fill, bar_radius, bar_width, elided_name, track_fill, BAR_TEXT_PAD};
 use crate::theme;
 
 /// How many segments a [`ValueBar::curve`] preview is drawn in.
@@ -347,9 +347,11 @@ impl<'a> ValueBar<'a> {
 
         let t = self.to_t(*self.value);
         let fill_color = track_fill(&response);
-        let mut fill = rect;
-        fill.set_width(rect.width() * t);
-        painter.rect_filled(fill, radius, fill_color);
+        if let Some((painter, fill)) =
+            anchored_fill(painter, rect, rect.left() + rect.width() * t, bar_radius(scale))
+        {
+            painter.rect_filled(fill, radius, fill_color);
+        }
 
         // Over the fill and under the text: the fill is what the curve is
         // drawn ON and the two text runs are what it is drawn UNDER, which is
@@ -510,8 +512,12 @@ const OUTLINE_STEPS: usize = 4;
 /// be cut against.
 ///
 /// The radius is clamped the way epaint clamps a rect shape's — to half the
-/// shorter side — so the cutter and the fill it is cutting to agree about the
-/// shape of a nearly-empty bar, where the fill is narrower than two corners.
+/// shorter side — so the cutter and the fill it is cutting to agree wherever
+/// that clamp bites. A nearly-empty bar is no longer where it does:
+/// [`anchored_fill`] hands over a fill already widened past two corners, for
+/// the sake of the corner the clamp would otherwise take off it. What is left
+/// is a TRACK too narrow for its own corner, which is a pane dragged to a few
+/// points wide — and there the well is clamped as well, so the two still agree.
 fn rounded_outline(rect: egui::Rect, radius: f32) -> Vec<egui::Pos2> {
     let radius = radius.clamp(0.0, rect.width().min(rect.height()) * 0.5);
     // Each corner as the centre it turns about and the direction it starts
@@ -666,11 +672,7 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
 
     let corner = bar_radius(scale);
     let radius = CornerRadius::same(corner);
-    let fill = fraction.map(|t| {
-        let mut fill = rect;
-        fill.set_width(rect.width() * t.clamp(0.0, 1.0));
-        fill
-    });
+    let reach = fraction.map(|t| rect.left() + rect.width() * t.clamp(0.0, 1.0));
 
     // Where the pattern stands this frame, from the CLOCK alone: two of these
     // bars on screen stripe together rather than each from whenever it
@@ -690,7 +692,9 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
     // The rung a raised surface sits at, which is what the skin keeps this grey
     // for. On the dark side of the frontier it is the only thing in the well.
     stripes(painter, rect, rect, corner, pitch, travel, theme::surface_faint());
-    if let Some(fill) = fill {
+    if let Some((painter, fill)) =
+        reach.and_then(|reach| anchored_fill(painter, rect, reach, corner))
+    {
         // Opaque over the pass above, so the pattern CHANGES colour at the
         // frontier rather than showing two of itself through one. The stripes
         // under the fill are painted and covered rather than skipped: what
@@ -701,7 +705,13 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
         // new one, so a stripe cannot read as a state the bar has entered.
         // Opaque, like every accent mix in the skin — an alpha over the fill
         // would be a third colour that exists nowhere else in the panel.
-        stripes(painter, rect, fill, corner, pitch, travel, theme::accent_fill_hover());
+        //
+        // Cut to the fill AS DRAWN and painted through its clip, which is the
+        // pair [`anchored_fill`] hands back for exactly this: on a barely
+        // started render the fill is widened to keep its corner, and a cutter
+        // reading the reach instead would trim the stripes to a shape the fill
+        // no longer has.
+        stripes(&painter, rect, fill, corner, pitch, travel, theme::accent_fill_hover());
     }
 
     // Value laid out first and the name elided into what is left, the order
@@ -936,6 +946,107 @@ mod tests {
     fn a_bar_with_no_curve_paints_no_line() {
         let shapes = paint_value_bar(240.0, 0.35, None);
         assert!(curve_points(&shapes).is_empty(), "a plain bar painted a preview line",);
+    }
+
+    /// The fill and the clip it was painted through, and the track under it.
+    ///
+    /// Reads CLIPPED shapes because the clip is half the mechanism: a fill too
+    /// narrow for its own corner is drawn wider than the value asks for, and
+    /// what says it stops where the value does is the clip alone.
+    fn fill_and_track(
+        shapes: &[egui::epaint::ClippedShape],
+    ) -> ((egui::Rect, egui::Rect), egui::Rect) {
+        let rect_of = |want| {
+            shapes.iter().find_map(move |s| match &s.shape {
+                egui::Shape::Rect(r) if r.fill == want => Some((r.rect, s.clip_rect)),
+                _ => None,
+            })
+        };
+        (
+            rect_of(theme::accent_fill()).expect("the bar painted no fill"),
+            rect_of(theme::well()).expect("the bar painted no track").0,
+        )
+    }
+
+    /// A bar filled to a SLIVER keeps the track's corner, and still stops where
+    /// its value says.
+    ///
+    /// epaint holds a rect's corner radius to half its shortest side, so a fill
+    /// under two corners wide rounds tighter than the well it sits in — and the
+    /// two share their left corner, so tighter means the fill's edge standing
+    /// OUTSIDE the well's arc, in accent, on the panel. That is the bar visibly
+    /// coming away from its track at the bottom of its travel.
+    ///
+    /// Invisible in the shapes themselves, the way it is for the same clamp at
+    /// the other end of a [`RangeBar`]
+    /// (`a_fully_soft_edge_keeps_the_fills_corner_round`): the radius handed to
+    /// `rect_filled` is the same either way and only the tessellator clamps it.
+    /// So the WIDTH is what this asks about, and the clip is what keeps the
+    /// widening honest — a fill drawn past its value would read as a bar that
+    /// cannot go below a few percent.
+    ///
+    /// Both bars that anchor a fill to the track's own end, since the widening
+    /// lives under the two of them. The last fraction is over two corners at
+    /// this width and so is the case that must come through untouched, clip
+    /// included: a frontier the clip decides lands on a whole pixel, and an
+    /// ordinary bar's has no business leaving the feathered edge it moves on.
+    ///
+    /// [`RangeBar`]: super::super::range::RangeBar
+    #[test]
+    fn a_bar_filled_to_a_sliver_keeps_the_tracks_corner() {
+        const WIDTH: f32 = 300.0;
+        let radius = f32::from(bar_radius(1.0));
+        for t in [0.0005f32, 0.005, 0.015, 0.03, 0.2] {
+            let mut value = t;
+            let bar = painted(WIDTH, |ui| {
+                ValueBar::new(&mut value, 0.0..=1.0, "Amount").show(ui);
+            });
+            let progress = painted(WIDTH, |ui| {
+                progress_bar(ui, Some(t), "Rendering", "12/5400");
+            });
+            for (what, shapes) in [("a value bar", bar), ("a progress bar", progress)] {
+                let ((fill, clip), track) = fill_and_track(&shapes);
+                assert!(
+                    (fill.left() - track.left()).abs() < 0.01,
+                    "{what} at {t} starts its fill at {}, not on the track's own end ({})",
+                    fill.left(),
+                    track.left(),
+                );
+                assert!(
+                    fill.width() >= 2.0 * radius - 0.01,
+                    "{what} at {t} drew a {:.1}pt fill, under the {:.1}pt its own corner needs",
+                    fill.width(),
+                    2.0 * radius,
+                );
+                let reach = track.left() + track.width() * t;
+                let stops_at = fill.right().min(clip.right());
+                assert!(
+                    (stops_at - reach).abs() < 0.01,
+                    "{what} at {t} shows fill out to {stops_at}, not to the {reach} it is worth",
+                );
+                // And nothing cut to the fill outruns it either. A progress
+                // bar's lit stripes are cut to the fill AS DRAWN, so past the
+                // widening they reach further than the value does and it is
+                // the shared clip that has to hold them — the one thing
+                // `a_stripe_takes_the_shade_of_the_side_it_stands_on` cannot
+                // see, reading bare shapes.
+                for s in &shapes {
+                    let egui::Shape::Path(p) = &s.shape else { continue };
+                    if p.fill != theme::accent_fill_hover() {
+                        continue;
+                    }
+                    let lit = p
+                        .points
+                        .iter()
+                        .fold(f32::NEG_INFINITY, |right, at| right.max(at.x))
+                        .min(s.clip_rect.right());
+                    assert!(
+                        lit <= reach + 0.01,
+                        "{what} at {t} lights a stripe out to {lit}, past the {reach} it is worth",
+                    );
+                }
+            }
+        }
     }
 
     fn round_trips(range: RangeInclusive<f32>, eased: bool) {
@@ -1275,10 +1386,15 @@ mod tests {
     /// bar whose whole meaning is that nothing has happened there yet.
     ///
     /// Cut to the fill's own rounded shape rather than to the track's, which is
-    /// what a nearly-empty bar is here to catch: a fill narrower than two
-    /// corners is rounded to HALF ITS WIDTH, the clamp epaint puts on a rect
-    /// shape, so a stripe cut to the track's radius would stand outside the
-    /// fill it is meant to be lighting.
+    /// what the nearly-empty bar is here to catch: a few percent in, the fill
+    /// is a tenth of the track and a stripe cut to the track would carry the
+    /// lit shade the whole way across it.
+    ///
+    /// To the fill AS DRAWN, which past the first two corners is not the same
+    /// thing as the reach — [`anchored_fill`] widens a fill that narrow to keep
+    /// its corner, and the clip is what takes the excess back. So this measures
+    /// the cut and `a_bar_filled_to_a_sliver_keeps_the_tracks_corner` measures
+    /// the clip, where the same reading is taken of the stripes as well.
     #[test]
     fn a_stripe_takes_the_shade_of_the_side_it_stands_on() {
         for step in 0..6 {
