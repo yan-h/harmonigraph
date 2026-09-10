@@ -160,6 +160,11 @@ pub(crate) fn spectral_pane(
     // Which live copy of the pane this is (see `crate::draw_pane`): two live
     // spectrograms in a frame need their own grid.
     surface: usize,
+    // Scale for the point-sized pitch visibility floor when this pane is part
+    // of a composed preview. The configured semitone width needs no scale;
+    // its hairline fallback is the only width that is not relative to the
+    // pane's pitch axis.
+    ribbon_floor_scale: f32,
 ) {
     use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
@@ -489,7 +494,7 @@ pub(crate) fn spectral_pane(
     // lead a little way past, into the spectrum peak it is making (see
     // `roll::lead`, and the divider below for what still draws over it).
     if split < 1.0 && cfg.show_roll {
-        roll::draw_roll(&painter, &axes, &scale, state, split, now, surface);
+        roll::draw_roll(&painter, &axes, &scale, state, split, now, surface, ribbon_floor_scale);
     }
 
     // The now-line, where the roll hands over to the spectrum — drawn after
