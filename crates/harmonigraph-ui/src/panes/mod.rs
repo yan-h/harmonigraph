@@ -390,8 +390,20 @@ pub(super) fn window_shows_node(
 /// handed back raw: a trackpad pinch or a ctrl+wheel arrives as a zoom
 /// factor, not a scroll delta (egui zeroes the scroll for those), so a
 /// caller that read only one would miss whichever gesture didn't use it.
+/// Shift-wheel is the other spelling to preserve: egui deliberately turns its
+/// vertical delta into a horizontal one for scroll areas, but on a picture
+/// Shift selects a drag mode and must not disable the wheel's zoom.
 pub(super) fn zoom_gesture(ui: &egui::Ui, response: &egui::Response) -> Option<(f32, f32)> {
-    response.contains_pointer().then(|| ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta())))
+    response.contains_pointer().then(|| {
+        ui.input(|i| {
+            let scroll = if i.modifiers.shift {
+                i.smooth_scroll_delta.x + i.smooth_scroll_delta.y
+            } else {
+                i.smooth_scroll_delta.y
+            };
+            (scroll, i.zoom_delta())
+        })
+    })
 }
 
 /// Attention pulse for armed-mode indicators: a slow, shallow breathe

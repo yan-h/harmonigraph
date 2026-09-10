@@ -615,7 +615,7 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &mut PictureState
             // This pane lives inside the Video tab's vertical ScrollArea. A
             // wheel over the picture belongs to its zoom; taking it here keeps
             // the parent from scrolling the controls at the same time.
-            ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
+            ui.input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
         }
         if zoom != 1.0 {
             state.appearance.camera.zoom_by(zoom);
@@ -1155,7 +1155,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_lattice_accepts_plain_wheel_and_pinch_zoom() {
+    fn preview_lattice_accepts_wheel_with_or_without_shift_and_pinch_zoom() {
         let gestures = [
             (
                 "plain wheel",
@@ -1165,10 +1165,21 @@ mod tests {
                     phase: egui::TouchPhase::Move,
                     modifiers: egui::Modifiers::NONE,
                 },
+                egui::Modifiers::NONE,
             ),
-            ("pinch", egui::Event::Zoom(1.5)),
+            (
+                "Shift-wheel",
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: egui::vec2(0.0, 1.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::SHIFT,
+                },
+                egui::Modifiers::SHIFT,
+            ),
+            ("pinch", egui::Event::Zoom(1.5), egui::Modifiers::NONE),
         ];
-        for (gesture, event) in gestures {
+        for (gesture, event, modifiers) in gestures {
             let ctx = crate::tests::probe::themed();
             let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
             let before = state.appearance.camera.distance;
@@ -1186,6 +1197,7 @@ mod tests {
                             egui::Pos2::ZERO,
                             egui::vec2(800.0, 600.0),
                         )),
+                        modifiers,
                         events,
                         ..Default::default()
                     },
@@ -1200,9 +1212,9 @@ mod tests {
                 "{gesture} did not zoom the preview lattice",
             );
             assert_eq!(
-                remaining_scroll.get().y,
-                0.0,
-                "plain wheel would also scroll the Video controls",
+                remaining_scroll.get(),
+                egui::Vec2::ZERO,
+                "{gesture} would also scroll the Video controls",
             );
         }
     }

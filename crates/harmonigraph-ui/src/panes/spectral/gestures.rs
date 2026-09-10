@@ -516,7 +516,7 @@ pub(super) fn drag_zoom(
     // stays put while the range closes in on it.
     if let Some((scroll, pinch)) = zoom_gesture(ui, response) {
         if matches!(navigation, Navigation::Preview) && scroll != 0.0 {
-            ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
+            ui.input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
         }
         let factor = (scroll * ZOOM_PER_SCROLL_POINT).exp() * pinch;
         if (factor - 1.0).abs() > 1e-4 {

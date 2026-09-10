@@ -5,9 +5,7 @@ use super::axes::*;
 use super::gestures::*;
 use super::settings::*;
 use super::*;
-use crate::tests::probe::{
-    events_into, fresh_picture as fresh, painted_full, painted_into, themed,
-};
+use crate::tests::probe::{fresh_picture as fresh, painted_full, painted_into, themed};
 use crate::{SpectralOrientation, SpectrumConfig};
 use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
@@ -860,42 +858,58 @@ fn preview_navigation_reaches_both_depth_zoom_options() {
 }
 
 #[test]
-fn preview_wheel_zooms_pitch_without_scrolling_the_video_controls() {
+fn preview_wheel_zooms_pitch_with_or_without_shift_and_consumes_both_axes() {
     let rect = WIDE;
-    let mut state = fresh();
-    state.appearance.spectrum.low_midi = 36.0;
-    state.appearance.spectrum.high_midi = 96.0;
-    let before = state.appearance.spectrum;
-    let ctx = themed();
     let pointer = rect.center();
-    let remaining_scroll = std::cell::Cell::new(egui::Vec2::ZERO);
-    let frame = |events: Vec<egui::Event>, state: &mut PictureState| {
-        let _ = events_into(&ctx, egui::vec2(900.0, 900.0), rect, events, |ui| {
-            spectral_pane(ui, state, 100.0, 1, 1.0, Navigation::Preview);
-            remaining_scroll.set(ui.input(|input| input.smooth_scroll_delta));
-        });
-    };
-    frame(vec![egui::Event::PointerMoved(pointer)], &mut state);
-    frame(vec![egui::Event::PointerMoved(pointer)], &mut state);
-    frame(
-        vec![
-            egui::Event::PointerMoved(pointer),
-            egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                delta: egui::vec2(0.0, 40.0),
-                phase: egui::TouchPhase::Move,
-                modifiers: egui::Modifiers::NONE,
-            },
-        ],
-        &mut state,
-    );
-    let after = state.appearance.spectrum;
-    assert!(
-        after.high_midi - after.low_midi < before.high_midi - before.low_midi - 1.0,
-        "the preview wheel did not zoom pitch",
-    );
-    assert_eq!(after.roll_seconds, before.roll_seconds, "the preview wheel moved Span");
-    assert_eq!(remaining_scroll.get().y, 0.0, "the wheel escaped to the Video scroll area");
+    for modifiers in [egui::Modifiers::NONE, egui::Modifiers::SHIFT] {
+        let mut state = fresh();
+        state.appearance.spectrum.low_midi = 36.0;
+        state.appearance.spectrum.high_midi = 96.0;
+        let before = state.appearance.spectrum;
+        let ctx = themed();
+        let remaining_scroll = std::cell::Cell::new(egui::Vec2::ZERO);
+        for events in [
+            vec![egui::Event::PointerMoved(pointer)],
+            vec![egui::Event::PointerMoved(pointer)],
+            vec![
+                egui::Event::PointerMoved(pointer),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, 40.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers,
+                },
+            ],
+        ] {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 900.0),
+                    )),
+                    modifiers,
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    spectral_pane(&mut child, &mut state, 100.0, 1, 1.0, Navigation::Preview);
+                    remaining_scroll.set(ui.input(|input| input.smooth_scroll_delta));
+                },
+            );
+        }
+        let after = state.appearance.spectrum;
+        assert!(
+            after.high_midi - after.low_midi < before.high_midi - before.low_midi - 1.0,
+            "{modifiers:?} wheel did not zoom pitch",
+        );
+        assert_eq!(after.roll_seconds, before.roll_seconds, "the preview wheel moved Span");
+        assert_eq!(
+            remaining_scroll.get(),
+            egui::Vec2::ZERO,
+            "{modifiers:?} wheel escaped to the Video scroll area"
+        );
+    }
 }
 
 /// Where the curve grows from its baseline, as a screen direction: away
