@@ -567,14 +567,24 @@ impl Hub {
         self.schedule_delta(record.event, record, scheduled, assignment);
     }
 
-    fn release_addressed(&mut self, record: Record, channel: u8, key: u8) {
-        let lifetime = self.rows[usize::from(record.source)]
+    /// The lifetime one source's state holds for a `(channel, key)`: the voice
+    /// a termination ends, and the one a same-key onset takes over.
+    fn addressed_lifetime(&self, source: u8, channel: u8, key: u8) -> Option<u64> {
+        self.rows[usize::from(source)]
             .state
             .voices()
             .find(|voice| voice.channel == channel && voice.note == key)
-            .map(|voice| voice.lifetime);
-        if let Some(lifetime) = lifetime {
+            .map(|voice| voice.lifetime)
+    }
+    fn release_addressed(&mut self, record: Record, channel: u8, key: u8) {
+        if let Some(lifetime) = self.addressed_lifetime(record.source, channel, key) {
             self.sequencer.release_voice(record.source, lifetime, record.sample);
+        }
+    }
+    /// Let go of whatever an onset is about to displace, before it is scored.
+    fn forget_replaced(&mut self, source: u8, channel: u8, key: u8) {
+        if let Some(lifetime) = self.addressed_lifetime(source, channel, key) {
+            self.sequencer.forget_voice(source, lifetime);
         }
     }
     fn release_matching(&mut self, record: Record) {
@@ -600,6 +610,15 @@ impl Hub {
     ) -> Option<Assigned> {
         let (_, channel, key, _) = record.event.attack()?;
         let source = usize::from(record.source);
+        // A same-key onset takes over the cell admission already found for
+        // that identity, so no release will ever address the lifetime it
+        // displaces: it leaves policy context here or never. It is forgotten
+        // rather than released, because nothing ended and released memory owes
+        // this no entry. Before the score, not after: within one sample every
+        // release is sequenced ahead of every onset, so an ordinary
+        // off-then-on is already scored against a context the ending has left,
+        // and a replacement is that transition without the note-off.
+        self.forget_replaced(record.source, channel, key);
         let player = self.initial_tuning(record, group, group_end);
         let channel_pitch = self.rows[source].state.channel_pitch(channel);
         if self.sequencer.loop_pending {
