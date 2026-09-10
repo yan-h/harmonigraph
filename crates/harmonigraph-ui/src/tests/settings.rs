@@ -646,14 +646,16 @@ fn the_render_bar_fills_to_the_share_of_frames_done() {
     let shapes =
         settings_pane_at_width(SettingsPane::Tab(panes::Tab::Video), WIDTH, PROJECTIONS[0]);
     let share = FIXTURE_RENDER.fraction().expect("the fixture render knows its total");
+    // A polygon rather than a rect: a fill is the part of its track left of
+    // the frontier (`filled_part`), so what is measured is the reach of the
+    // shape the bar actually painted. Its box is a full row tall wherever the
+    // frontier is clear of the track's own corner, which both bars here are.
     let fills: Vec<f32> = shapes
         .iter()
         .filter_map(|cs| match &cs.shape {
-            egui::Shape::Rect(r)
-                if r.fill == crate::theme::accent_fill()
-                    && (r.rect.height() - 20.0).abs() < 0.6 =>
-            {
-                Some(r.rect.width() / WIDTH)
+            egui::Shape::Path(path) if path.fill == crate::theme::accent_fill() => {
+                let box_of = egui::Rect::from_points(&path.points);
+                ((box_of.height() - 20.0).abs() < 0.6).then(|| box_of.width() / WIDTH)
             }
             _ => None,
         })
