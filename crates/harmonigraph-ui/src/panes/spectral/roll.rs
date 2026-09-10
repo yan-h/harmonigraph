@@ -246,6 +246,28 @@ pub(super) struct RollDrawOptions {
     pub(super) ribbon_floor_scale: f32,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RollDrawProbe {
+    pub(crate) surface: usize,
+    pub(crate) pitch_len: f32,
+    pub(crate) ribbon_floor_scale: f32,
+    pub(crate) note_count: usize,
+    pub(crate) first_half_pitch: Option<f32>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static ROLL_DRAW_PROBE: std::cell::Cell<Option<RollDrawProbe>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+#[cfg(test)]
+pub(crate) fn take_roll_draw_probe() -> Option<RollDrawProbe> {
+    ROLL_DRAW_PROBE.with(std::cell::Cell::take)
+}
+
 pub(super) fn draw_roll(
     painter: &egui::Painter,
     axes: &Axes,
@@ -263,6 +285,16 @@ pub(super) fn draw_roll(
         ppp,
         options.ribbon_floor_scale,
     );
+    #[cfg(test)]
+    ROLL_DRAW_PROBE.with(|probe| {
+        probe.set(Some(RollDrawProbe {
+            surface: options.surface,
+            pitch_len: axes.pitch_len(),
+            ribbon_floor_scale: options.ribbon_floor_scale,
+            note_count: notes.len(),
+            first_half_pitch: notes.first().map(|note| note.half_extent[0]),
+        }));
+    });
     if options.surface == crate::panes::DOCKED_SURFACE {
         // What the roll costs, for the performance overlay: this geometry
         // does not pass through egui's vertex buffer, so the `verts` row
@@ -371,7 +403,7 @@ fn note_instances_with_floor(
     // under a pixel, where a rectangle fades out to nothing and the roll stops
     // saying a note was played there.
     let half_pitch = (cfg.roll_thickness * 0.5 / scale.span).max(0.0) * axes.pitch_len();
-    let min_ribbon_px = MIN_RIBBON_PX * ribbon_floor_scale.clamp(0.0, 1.0);
+    let min_ribbon_px = MIN_RIBBON_PX * ribbon_floor_scale.max(0.0);
     let half_pitch = half_pitch.max(min_ribbon_px * 0.5);
     // The other axis' floor, in points at this display's density — the one that
     // stops a brief note pulsing as it scrolls. See [`MIN_LENGTH_DEVICE_PX`].
@@ -1131,7 +1163,9 @@ mod tests {
 
         assert!((at(1.0) - 0.5 * MIN_RIBBON_PX).abs() < 1e-3);
         assert!((at(0.25) - 0.125 * MIN_RIBBON_PX).abs() < 1e-3);
+        assert!((at(2.0) - MIN_RIBBON_PX).abs() < 1e-3);
         assert!(at(0.25) < at(1.0), "the preview kept the export-sized pitch floor");
+        assert!(at(2.0) > at(1.0), "an enlarged preview capped the pitch floor");
     }
 
     /// A note too brief to fill two device pixels is drawn at that length
