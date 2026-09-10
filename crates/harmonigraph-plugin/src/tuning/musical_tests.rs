@@ -9,7 +9,7 @@ use super::*;
 use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig};
 use harmonigraph_core::{canonical::VoiceBaseline, LatticePos, Tuning};
 
-fn configure(hub: &Device, tuning: Tuning) {
+pub(super) fn configure(hub: &Device, tuning: Tuning) {
     submit(
         hub,
         ConfigEdit {

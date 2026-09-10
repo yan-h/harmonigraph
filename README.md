@@ -25,19 +25,23 @@ Successor to [midi_lattice](https://github.com/yan-h/midi_lattice).
 
 ## Adaptive tuning in CLAP
 
-The CLAP bundle includes a lightweight Harmonigraph Tune note effect before each participating instrument path;
-one full Harmonigraph sequences new attacks across tracks and returns their tuning assignments for output after a chosen delay.
+The CLAP bundle includes a lightweight Harmonigraph Tune note effect, placed before each instrument path that should be tuned;
+one full Harmonigraph — the Hub, normally on Master — sequences new attacks across tracks and returns their tuning assignments for output after a chosen delay.
 Each assignment takes the preceding ones into account, and its adaptive correction stays fixed through release while composing with later player pitch expression.
-A missed assignment deadline delays that note further and reports it, rather than dropping the note or emitting an unretuned attack.
+A note whose correction has not arrived by its emission time sounds at its raw pitch and counts as a miss, rather than waiting or being dropped;
+the counter is on screen, and a larger delay is the remedy unless the status names a missing Hub or no free row.
 The delay is a per-Tune **Tuning delay** parameter, 1 to 16 multiples of the host's advertised maximum callback size, adopted at activation and reported to the host as latency.
-Only the note that missed its deadline is late;
-the rest of the track keeps its schedule.
-Explicit Stop/Reset cancels pending attacks and releases affected voices;
-actual storage exhaustion latches a visible fault that rejects new attacks until Reset.
-Start with the [setup and musical verification checklist](docs/adaptive-tuning.md#setting-it-up-in-bitwig) and the [measured process/routing requirements](docs/adaptive-tuning.md#session-pairing-and-process-boundary).
-Use one Master hub, Tune before each instrument, Bitwig **by Vendor** hosting with individual overrides off, and each instance's adopted routing offset.
-Sample rate and maximum buffer size come from the host automatically;
-the only clock setup is validating the signed routing offset and applying/reinitializing it.
+Nothing waits on a correction, so nothing is ever late;
+a reply that arrives after its note has emitted is discarded where it is found.
+Explicit Reset, transport Stop, a Tune attaching or detaching and a host-format change are all one cut, and it falls on every track at once:
+Note-Off every held voice, neutralise the pedals, clear the delay line, adopt the new epoch.
+A fault is a status bit rather than a latched emission gate, so a missing Hub or a full copy ring costs a note its correction and not its attack;
+a full delay line or held set is the hard boundary, refusing the incoming event before either scheduling path sees it and counting it as dropped.
+Start with the [setup and musical verification checklist](docs/adaptive-tuning.md#setting-it-up-in-bitwig) and the [measured process and hosting requirements](docs/adaptive-tuning.md#session-pairing-and-process-boundary).
+Use one Master Hub, Tune before each instrument, and Bitwig **by Vendor** hosting with individual overrides off;
+there is nothing to pair, because each Tune finds the one Harmonigraph in its process at activation.
+Sample rate and maximum buffer size come from the host automatically, and there is nothing else to configure —
+a host that does not supply valid steady sample time is unsupported, and the CLAP wrapper refuses its callback rather than running on a guessed clock.
 The default locked 12-TET configuration produces zero adaptive correction;
 choose **Just** with **Auto** and **Learn** off to verify independent Just tuning.
 VST3 still exports full Harmonigraph only.

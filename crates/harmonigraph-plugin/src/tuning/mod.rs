@@ -7,6 +7,7 @@
 pub(crate) mod diagnostics;
 pub mod event;
 pub(crate) mod hub;
+pub(crate) mod instances;
 #[cfg(target_os = "macos")]
 mod native;
 mod neighbourhood;

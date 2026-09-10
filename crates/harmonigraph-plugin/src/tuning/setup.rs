@@ -1,14 +1,9 @@
-//! Instance-owned off-audio state: the diagnostics snapshot, the published
-//! next-attack context, the status bits and the one button left.
-//!
-//! Nothing here is persisted. The Tune's pairing UUID, its routing offset and
-//! its Participating flag are gone, and so is the Hub's session UUID: pairing
-//! is a load of one process-wide slot, so there is no saved choice for a
-//! project to restore and no calibration for it to carry.
+//! Instance settings and diagnostics. Saved participation and visibility are
+//! independent; pairing remains automatic and has no persisted identity.
 use nice_plug::plugin::PluginState;
 use nice_plug::wrapper::clap::setup::{Prepared, Setup};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::session;
 
@@ -58,9 +53,23 @@ pub fn deadline_text(status: u32, misses: u64) -> String {
 }
 
 pub struct Shared {
+    pub instance_id: AtomicU64,
+    pub slot: AtomicU32,
+    /// Low bit is enabled; upper bits change on every participation edit so
+    /// even an off/on between callbacks forgets this source's old context.
+    retune: AtomicU64,
+    pub show: AtomicBool,
+    pub name: Mutex<String>,
+    pub held: AtomicU64,
+    pub notes_in: AtomicU64,
+    pub notes_out: AtomicU64,
+    pub last_input: AtomicI64,
+    pub last_output: AtomicI64,
+    pub requested_multiplier: AtomicU32,
+    pending_multiplier: AtomicU32,
     pub(super) diagnostics: super::diagnostics::Shared,
     pub(super) neighbourhood: super::neighbourhood::Published,
-    /// The whole of this instance's setup: a Reset counter the editor bumps
+    /// The Reset counter the editor bumps
     /// and the audio owner turns into one cut for the session.
     reset: AtomicU64,
     wake: OnceLock<Arc<dyn Fn() + Send + Sync>>,
@@ -76,10 +85,6 @@ pub struct Shared {
     active_rate: AtomicU64,
     /// Onsets this instance emitted without a correction, since its last cut.
     pub misses: AtomicU64,
-    /// The session's "apply to all" request this instance has already adopted.
-    /// A generation rather than a consumed value, so every Tune sees the same
-    /// request and none of them races another for it.
-    adopted_delay_request: AtomicU64,
     hub: bool,
 }
 
@@ -92,6 +97,18 @@ impl Shared {
     }
     fn new(hub: bool) -> Arc<Self> {
         Arc::new(Self {
+            instance_id: AtomicU64::new(0),
+            slot: AtomicU32::new(u32::MAX),
+            retune: AtomicU64::new(1),
+            show: AtomicBool::new(true),
+            name: Mutex::new(String::new()),
+            held: AtomicU64::new(0),
+            notes_in: AtomicU64::new(0),
+            notes_out: AtomicU64::new(0),
+            last_input: AtomicI64::new(i64::MIN),
+            last_output: AtomicI64::new(i64::MIN),
+            requested_multiplier: AtomicU32::new(1),
+            pending_multiplier: AtomicU32::new(0),
             diagnostics: super::diagnostics::Shared::new(hub),
             neighbourhood: Default::default(),
             reset: AtomicU64::new(0),
@@ -102,13 +119,62 @@ impl Shared {
             active_frames: AtomicU32::new(0),
             active_rate: AtomicU64::new(0),
             misses: AtomicU64::new(0),
-            adopted_delay_request: AtomicU64::new(0),
             hub,
         })
     }
     pub fn publish_format(&self, rate: f64, frames: u32) {
         self.active_frames.store(frames, Ordering::Release);
         self.active_rate.store(rate.to_bits(), Ordering::Release);
+    }
+    pub fn retuning(&self) -> u64 {
+        self.retune.load(Ordering::Acquire)
+    }
+    fn changed(&self) {
+        self.dirty.store(true, Ordering::Release);
+        self.request_main();
+    }
+    pub fn set_retune(&self, value: bool) {
+        let _ = self.retune.fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
+            ((old & 1 != 0) != value).then_some(((old & !1) + 2) | u64::from(value))
+        });
+        self.publish_controls();
+        self.changed();
+    }
+    pub fn set_show(&self, value: bool) {
+        self.show.store(value, Ordering::Release);
+        self.publish_controls();
+        self.changed();
+    }
+    /// UI/main thread only. A stopped tuner still has a visible held set, so
+    /// control edits must reach the Hub without waiting for that tuner's audio.
+    fn publish_controls(&self) {
+        let slot = self.slot.load(Ordering::Acquire);
+        if slot < super::TUNERS as u32 {
+            session::session().row(slot as u8).update_controls(self);
+        }
+    }
+    pub fn display_name(&self) -> String {
+        let name = self.name.lock().unwrap();
+        if !name.is_empty() {
+            return name.clone();
+        }
+        if self.hub {
+            "Harmonigraph input".to_owned()
+        } else {
+            format!("Tune {}", self.instance_id.load(Ordering::Acquire))
+        }
+    }
+    pub fn set_name(&self, value: String) {
+        *self.name.lock().unwrap() = value.chars().take(80).collect();
+        self.changed();
+    }
+    pub fn request_delay(&self, value: u32) {
+        if !self.hub {
+            let value = value.clamp(1, super::DELAY_MULTIPLIER_MAX as u32);
+            self.requested_multiplier.store(value, Ordering::Release);
+            self.pending_multiplier.store(value, Ordering::Release);
+            self.request_main();
+        }
     }
     /// Sample rate and maximum callback size, as this activation advertised.
     pub fn format(&self) -> (f64, u32) {
@@ -143,44 +209,70 @@ impl Shared {
             wake();
         }
     }
-    /// Ask every Tune in the process to adopt one multiplier. The Hub owns the
-    /// request; each Tune owns the parameter it then writes.
-    pub fn request_delay_for_all(multiplier: u32) {
-        session::session().request_delay(multiplier);
-    }
-    /// The multiplier this instance still owes the session, or none.
     fn pending_delay(&self) -> Option<u32> {
-        let (generation, multiplier) = session::session().delay_request();
-        (generation != 0
-            && self.adopted_delay_request.swap(generation, Ordering::AcqRel) != generation)
-            .then_some(multiplier)
+        let requested = self.pending_multiplier.swap(0, Ordering::AcqRel);
+        (requested != 0).then_some(requested)
     }
 }
 
 /// Arc adapter, so the wrapper's main-thread service reaches this instance. A
-/// Tune also hands over its parameters, because the only value the Hub can ask
-/// it to change is one this instance owns and must write itself.
+/// Tune also hands over its delay parameter so a central timing edit is saved
+/// and reported to that instance's own host.
 pub struct Adapter(pub Arc<Shared>, pub Option<Arc<super::plugin::TuneParams>>);
 
-/// Nothing is restored, so preparation cannot fail and commit has nothing to
-/// publish. The two field keys the old design saved are simply absent now; a
-/// project that still carries them is read without them.
-struct Nothing;
-impl Prepared for Nothing {
-    fn commit(self: Box<Self>) {}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct InstanceSettings {
+    retune: bool,
+    show: bool,
+    name: String,
+}
+impl Default for InstanceSettings {
+    fn default() -> Self {
+        Self { retune: true, show: true, name: String::new() }
+    }
+}
+struct Restore(Arc<Shared>, InstanceSettings);
+impl Prepared for Restore {
+    fn commit(self: Box<Self>) {
+        self.0.set_retune(self.1.retune);
+        self.0.set_show(self.1.show);
+        self.0.set_name(self.1.name);
+    }
 }
 
 impl Setup for Adapter {
-    fn prepare(&self, _: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
-        Ok(Box::new(Nothing))
+    fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
+        let settings = match state.fields.get("tuning-instance") {
+            Some(json) => serde_json::from_str(json).map_err(|error| {
+                nice_plug::nice_error!("Tuning instance settings refused: {error}");
+                "invalid tuning instance settings"
+            })?,
+            None => InstanceSettings::default(),
+        };
+        Ok(Box::new(Restore(self.0.clone(), settings)))
     }
-    fn save(&self, _: &mut PluginState) {}
+    fn save(&self, state: &mut PluginState) {
+        let settings = InstanceSettings {
+            retune: self.0.retuning() & 1 != 0,
+            show: self.0.show.load(Ordering::Acquire),
+            name: self.0.name.lock().unwrap().clone(),
+        };
+        state
+            .fields
+            .insert("tuning-instance".to_owned(), serde_json::to_string(&settings).unwrap());
+    }
     fn install_wakeup(&self, wake: Box<dyn Fn() + Send + Sync>) {
         assert!(self.0.wake.set(wake.into()).is_ok());
     }
     fn service(&self) -> bool {
         self.0.diagnostics.log(&self.0);
         let adopted = self.adopt_requested_delay();
+        if let Some(params) = &self.1 {
+            self.0
+                .requested_multiplier
+                .store(params.delay.value().max(1) as u32, Ordering::Release);
+        }
         self.0.dirty.swap(false, Ordering::AcqRel) || adopted
     }
 }

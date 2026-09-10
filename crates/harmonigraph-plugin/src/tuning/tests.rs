@@ -16,6 +16,8 @@ use clap_sys::{
 };
 use event::Event;
 
+#[path = "control_tests.rs"]
+mod control_tests;
 #[path = "musical_tests.rs"]
 mod musical_tests;
 use std::ffi::{c_char, c_void, CStr};
@@ -1030,6 +1032,39 @@ fn pending_retriggers_and_endings_reuse_held_capacity_in_wire_order() {
         assert_eq!(cut.iter().filter(|(_, e)| e.release()).count(), held);
         assert!(cut.iter().any(|(_, e)| matches!(e, Event::Note { kind: 1, id: 201, .. })));
     }
+}
+
+/// A same-key onset replaces the voice State holds for that identity, so the
+/// lifetime it replaced will never be addressed by a release. Policy context
+/// has to let go of it at the replacement, or the ghost both biases every
+/// later assignment and occupies one of the 256 session slots for good.
+#[test]
+fn a_same_key_retrigger_forgets_the_lifetime_it_replaced_from_policy_context() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    pair.step(vec![note(1, 0, 60, 0, true)]);
+    assert!(tuning_of(&pair.idle()).is_some());
+    assert_eq!(inspect_hub(&pair.hub, |hub| (hub.test_held(0), hub.test_context())), (1, 1));
+    pair.step(vec![note(2, 0, 60, 0, true)]);
+    assert!(tuning_of(&pair.idle()).is_some(), "the replacement is assigned in its own right");
+    assert_eq!(
+        inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, 60).unwrap().host_note_id),
+        2,
+        "the fixture reaches the replacement rather than a second cell"
+    );
+    assert_eq!(
+        inspect_hub(&pair.hub, |hub| (hub.test_held(0), hub.test_context())),
+        (1, 1),
+        "one sounding note is one context voice, not the replaced one as well"
+    );
+    pair.step(vec![note(2, 0, 60, 0, false)]);
+    pair.idle();
+    assert_eq!(inspect_tune(&pair.tune, |tune| tune.held()), 0);
+    assert_eq!(
+        inspect_hub(&pair.hub, |hub| (hub.test_held(0), hub.test_context())),
+        (0, 0),
+        "and the release of the surviving lifetime empties context"
+    );
 }
 
 /// Losing a release copy can leave the Hub at capacity after the Tune has

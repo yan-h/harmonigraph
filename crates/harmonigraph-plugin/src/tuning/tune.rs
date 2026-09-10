@@ -140,6 +140,8 @@ impl Tune {
     pub fn register(&mut self) {
         if self.id == 0 {
             self.id = session::session().register();
+            self.shared.instance_id.store(self.id, Ordering::Release);
+            super::instances::register(self.id, &self.shared);
         }
     }
     pub fn status(&self) -> u32 {
@@ -182,6 +184,8 @@ impl Tune {
     /// records left in the ring carry the old epoch and the Hub refuses them,
     /// so there is nothing to drain and nobody to tell.
     pub fn retire(&mut self) {
+        super::instances::retire(self.id);
+        self.shared.slot.store(u32::MAX, Ordering::Release);
         if let Link::Row(attached) = std::mem::replace(&mut self.link, Link::Detached) {
             session::session().detach_row(attached.slot, self.id, attached.ends);
         }
@@ -191,8 +195,9 @@ impl Tune {
         if self.id == 0 || !matches!(self.link, Link::Detached) {
             return;
         }
-        if let Some((slot, ends)) = session::session().try_attach_row(self.id) {
+        if let Some((slot, ends)) = session::session().try_attach_row(self.id, &self.shared) {
             self.link = Link::Row(Attached { slot, ends });
+            self.publish_delay();
         }
     }
     fn publish_delay(&self) {
@@ -206,7 +211,7 @@ impl Tune {
     fn adopt(&mut self) {
         let session = session::session();
         self.claim();
-        // The editor's Reset, which is the one setup action left. It bumps the
+        // The editor's Reset bumps the
         // session epoch, so every paired track cuts, not just this one.
         let setup = self.shared.reset_generation();
         if setup != self.setup {
@@ -364,17 +369,20 @@ impl Tune {
         }
         let position = self.line.position(self.line.len() - 1).unwrap();
         let asking = self.asking();
-        let copied = asking && self.copy(Capture { epoch: self.epoch, serial, sample, event });
+        let retune = self.shared.retuning();
+        let copied =
+            asking && self.copy(Capture { retune, epoch: self.epoch, serial, sample, event });
         if asking && !copied {
             self.status |= session::RING_FULL;
             self.dropped += 1;
-            if onset {
+            if onset && retune & 1 != 0 {
                 // The Hub will never see this note, so it can neither correct
                 // it nor hold it as context. It sounds raw, and says so.
                 self.misses += 1;
             }
         }
-        self.line.set(position, Pending { awaiting: onset && copied, ..pending });
+        self.line
+            .set(position, Pending { awaiting: onset && copied && retune & 1 != 0, ..pending });
         self.bind_initial_tuning(due, event);
     }
 
@@ -520,6 +528,11 @@ impl Tune {
             if !self.emit(output, time, event, tuning, correction) {
                 break;
             }
+            if let Some((_, _, key, _)) = event.attack() {
+                let input = ((f64::from(key) + pending.player) * 100_000_000.0).round() as i64;
+                self.shared.last_input.store(input, Ordering::Relaxed);
+                self.shared.last_output.store(input + correction, Ordering::Relaxed);
+            }
             // Counted where the note actually leaves, not where it is
             // resolved: a staging failure re-resolves the same entry next
             // callback, and one note must not count as two misses.
@@ -661,6 +674,9 @@ impl Tune {
 
     pub fn end(&mut self) {
         if let Some(callback) = self.callback.take() {
+            self.shared.held.store(self.held() as u64, Ordering::Relaxed);
+            self.shared.notes_in.store(self.notes_in, Ordering::Relaxed);
+            self.shared.notes_out.store(self.notes_out, Ordering::Relaxed);
             self.shared.status.store(self.status, Ordering::Release);
             self.shared.misses.store(self.misses, Ordering::Release);
             if self.shared.diagnostics.due(callback.frames, self.rate) {

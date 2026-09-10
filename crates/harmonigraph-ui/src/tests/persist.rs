@@ -1538,6 +1538,79 @@ fn a_shadow_endpoint_missing_any_one_group_keeps_the_other_three() {
     }
 }
 
+/// The other half of that pair, one layer in: a group the blob CARRIES with one
+/// of its FIELDS missing fills that field from the bare
+/// [`ShadowStyle::default`](harmonigraph_scene::ShadowStyle::default), not from
+/// that group's entry in `ShadowSettings::default()` — the answer the sweep
+/// above pins for a whole group gone. The two are entitled to differ (see the
+/// rationale on `impl Default for ShadowStyle`), and this is what says the
+/// field-level one is deliberate rather than residual.
+#[test]
+fn a_shadow_group_missing_one_field_fills_it_from_the_bare_style() {
+    use harmonigraph_scene::{ShadowKernel, ShadowSettings, ShadowStyle};
+
+    let bare = ShadowStyle::default();
+    let group = ShadowSettings::default().lattice_geometry;
+    // Every field off BOTH defaults, so each of the three places a loaded field
+    // could have come from — the blob, the bare style, this group's fresh value
+    // — is a distinct number, and one filled from the wrong one cannot pass.
+    let held =
+        ShadowStyle { kernel: ShadowKernel::Gaussian, width: 0.55, depth: 0.66, falloff: 1.2 };
+
+    let mut state = fresh();
+    // A witness outside the section, so "the blob survived" is distinguishable
+    // from "it sank and everything reverted".
+    state.picture.appearance.camera.yaw = 1.23;
+    state.picture.appearance.view.shadow.lattice_geometry = held;
+    let saved = state.save_persist();
+
+    let whole = ron::to_string(&held).expect("a shadow style serializes");
+    let pairs = top_level_pairs(&whole);
+    assert_eq!(pairs.len(), 4, "the probe must see the whole style, got {pairs:?}");
+
+    for (key, _) in &pairs {
+        // (what the group must come back as, the two fallbacks the drop is
+        // meant to tell apart).
+        let (want, fallbacks) = match key.as_str() {
+            "width" => (ShadowStyle { width: bare.width, ..held }, (bare.width, group.width)),
+            "depth" => (ShadowStyle { depth: bare.depth, ..held }, (bare.depth, group.depth)),
+            "falloff" => {
+                (ShadowStyle { falloff: bare.falloff, ..held }, (bare.falloff, group.falloff))
+            }
+            // Both defaults are Distance, so a dropped kernel comes back the
+            // same whichever fallback ran: the fixture cannot reach the claim,
+            // so it is skipped rather than asserted for the wrong reason.
+            "kernel" => continue,
+            other => panic!("a shadow style grew a {other:?} field this sweep does not name"),
+        };
+        assert_ne!(
+            fallbacks.0, fallbacks.1,
+            "the two fallbacks agree on {key:?}, so dropping it cannot tell them apart",
+        );
+
+        let kept: Vec<&str> =
+            pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();
+        let short = format!("({})", kept.join(","));
+        let without = replace_pair(&saved, "lattice_geometry", &whole, &short);
+        assert_ne!(without, saved, "the group's {key:?} must be in the blob to drop");
+
+        let mut restored = fresh();
+        assert!(
+            restored.load_persist(&without),
+            "dropping the group's {key:?} sank the whole document instead of costing itself",
+        );
+        assert_eq!(
+            restored.picture.appearance.camera.yaw, 1.23,
+            "dropping the group's {key:?} cost the camera too",
+        );
+        assert_eq!(
+            restored.picture.appearance.view.shadow.lattice_geometry, want,
+            "dropping the group's {key:?} did not fill it from the bare style, \
+             or cost the fields beside it",
+        );
+    }
+}
+
 /// A missing shape inside the glow curve costs that field alone. The curve is
 /// a persisted struct nested inside `ViewConfig`, so the view-level sweep
 /// above only proves the whole curve has a fallback; it cannot see whether its

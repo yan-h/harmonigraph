@@ -11,25 +11,41 @@ not judgement.
 `ci.sh`'s own header is the list to copy when this one looks stale.
 The tracked pre-push hook checks formatting only, keeping compilation off the local push path.
 
-**No session reviews its own branch, and it has no command to do it with.** `/code-review` is a built-in whose frontmatter sets `disable-model-invocation`, and the harness treats that as locked:
-no setting re-enables it, and there is no Bash route to a slash command either —
-for the `/code-review ultra` variant, sessions are told in so many words not to try.
-It is billed, so it is Yan's to run, at the effort and on the target he picks.
-The gate is per-skill and deliberate —
-`/simplify` sits beside it in the same built-in family and is model-invocable —
-so this is a boundary to work within, not an oversight to work around.
+**A session can run the ordinary review itself:** invoke `code-review` through the Skill tool, which is neither a typed slash command nor a Bash route to one.
+It forks, runs in the background, and reports its findings back.
+That is on record rather than inferred:
+on 2026-09-09 a session ran it against PR #809 and it caught a defect the issue author and the implementing session had both missed —
+a same-key retrigger calling `forget_voice` where the fix's own stated justification, that a replacement is an off-then-on without the note-off, argued for `release_voice`, because `Sequencer::fill` re-appends released pitches into the scoring context and `forget` does not.
 
-A project-local `/self-review` used to fill that gap with a `diff-reviewer` subagent over `git diff main...HEAD`.
+**`/code-review ultra` is the exception, and is Yan's alone.** The harness tells sessions in so many words that the deep multi-agent variant is user-triggered and billed to him, that they cannot launch it, and not to attempt it through Bash or otherwise.
+Hold the two claims apart when reading this:
+the ordinary review is reachable, `ultra` is not.
+
+**Spend it at the merge boundary,** on a diff whose risk earns it, or when Yan asks.
+An audio-path change, a persistence change, a cache key, a concurrency change:
+worth it.
+A docs edit, a rename, a backlog note:
+not.
+Not mid-loop either, where it reads work that is about to be rewritten anyway.
+`/simplify` sits beside it and is invocable the same way, but it is quality-only and does not hunt for bugs, so it is no substitute when correctness is the worry.
+
+**`--fix` needs an explicit range, or it can stage a revert.** On already-committed work with a clean tree it finds an empty diff, and on PR #592 (2026-09-03) it resolved that by checking `main`'s copy of a file into the index.
+`origin/main...HEAD` ran cleanly on 2026-09-06 and left its fixes uncommitted, which is the readable outcome anyway.
+Write `origin/main` and not `main`:
+a worktree's local `main` ref goes stale, so `main...HEAD` silently pulls in other sessions' merged PRs.
+
+A project-local `/self-review` once did the per-branch half with a `diff-reviewer` subagent over `git diff main...HEAD`.
 It is retired, and the reasoning is here so it is not rebuilt:
-it existed to be the one review a session could start on its own, and once it became manual-trigger-only it cost a typed command exactly like `/code-review` while returning findings no refuter had touched, triaged by the session that wrote the code.
-It was 11% of all credit spend across 189 runs.
+it was 11% of all credit spend across 189 runs, and what it returned for that were findings no refuter had touched, triaged by the same session that wrote the code.
+That second half is the contrast worth keeping, because it is what `code-review` does differently:
+it runs a verification pass and marks each finding CONFIRMED or PLAUSIBLE, so a finding has been argued against before anyone acts on it.
 The two readings in it that were not generic —
 a cache key asked in both directions, and whether a fixture is big enough to reach the path it claims to test —
 moved to the root `CLAUDE.md`, where they shape code as it is written rather than catching it afterwards.
 
-Nothing agent-shaped replaces the per-branch half, because the class that actually slips through here is a picture change and no diff reader sees one at any effort:
+No review of any shape covers the class that actually slips through here, because that class is a picture change and no diff reader sees one at any effort:
 #453 moved the frame by a mean 3.3–3.7/255 with local swings of −90 while the suite stayed 146/0 green.
-What replaces it is mechanical —
+What covers it is mechanical —
 byte-exact frames, covering both the parts a feature PR is not supposed to reach and the ones a given rework is.
 There are two sets, drawn by different paths:
 the lattice's in `harmonigraph-render`'s `lattice_tests::golden`, and the spectral pane's in `harmonigraph-offline`'s `golden`, which needs a whole UI frame and so cannot live beside the first.
