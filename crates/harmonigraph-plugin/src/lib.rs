@@ -29,9 +29,32 @@ pub use editor::startup_probe::run as editor_startup_probe;
 // passes without guarding: measured, a deliberate 64-byte `Vec` inside
 // `canonical_publication_slots_and_loss_are_allocation_free` was reported `ok`.
 //
-// The two declarations cannot collide into a duplicate `#[global_allocator]`,
-// because both read `debug_assertions` out of the same profile and this one is
-// the complement.
+// The two declarations are complements only while the profiles they read agree
+// about `debug_assertions`, and that is an agreement BETWEEN two profiles
+// rather than a property of one: a `cargo test` lib-test unit compiles under
+// `test` while nice-plug compiles under `dev`. They agree by default, and this
+// workspace already customises `dev`, `dev.package."*"` and
+// `release.package.*`, so both ways of breaking it are reachable from
+// `Cargo.toml`:
+//
+//   * `[profile.test] debug-assertions = false` leaves nice-plug's on and turns
+//     this one on too — two `#[global_allocator]`s in one binary, which is a
+//     hard "cannot define multiple global allocators" and therefore audible.
+//   * `[profile.dev.package."*"] debug-assertions = false`, the usual
+//     build-speed trick, reaches nice-plug (not a workspace member) and not
+//     this crate, so NEITHER is installed and the guard silently goes back to
+//     passing without guarding. That is the direction to check for whenever
+//     either profile's assertions move.
+//
+// If a guarded block here ever needs an escape hatch, it must call
+// `nice_assert_no_alloc::permit_alloc` and NOT `nice_plug::util::permit_alloc`,
+// which is what the rest of the tree and all of `vendor/nice-plug` reach for.
+// nice-plug-core gates its helper on
+// `all(debug_assertions, feature = "assert_process_allocs")`, so under
+// `--release` it is an identity function and the allocation it was supposed to
+// permit aborts the WHOLE test binary, taking every other test's result with
+// it. The `nice_assert_no_alloc` one is live in both profiles, because the
+// workspace `Cargo.toml` compiles that package with debug assertions on.
 #[cfg(all(test, not(debug_assertions)))]
 #[global_allocator]
 static ALLOCATOR: nice_assert_no_alloc::AllocDisabler = nice_assert_no_alloc::AllocDisabler;
