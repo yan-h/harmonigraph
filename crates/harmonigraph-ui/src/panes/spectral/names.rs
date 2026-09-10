@@ -235,9 +235,14 @@ struct Occupancy {
 /// dependence on what was kept. A note's fate therefore rests on two adjacent
 /// cells of take time, and nothing outside them can reach it.
 ///
-/// The grid is a name's room, which is what keeps the density the chain had:
-/// in a run of repeats the offers fall exactly one room apart, and each clears
-/// the last by exactly nothing to spare.
+/// The grid is a name's room snapped up to a power of two ([`snap_grid`]),
+/// which keeps within half the density the chain had: in a run of repeats the
+/// offers fall one cell apart, between one and two rooms, and each clears the
+/// last by the gap's share of the cell. The snap is what holds the grid still
+/// through a ZOOM, as laying it in absolute time holds it through a scroll.
+///
+/// The figures in the rest of this comment and in [`GLYPH_ADVANCE`]'s were
+/// measured before the snap, which moves them and neither defect.
 ///
 /// WHICH name is the unsound part, and there are two known defects in it. A
 /// lane is [`LANE_CENTS`] — ten — wide, while a name is matched to a node at
@@ -288,9 +293,13 @@ struct Occupancy {
 /// drawn on top of each other.
 #[derive(Clone, Copy)]
 struct Lane {
-    /// Cell width in seconds: a name's room plus the gap it asks for — see the
-    /// two defects above for WHOSE name, which is not reliably this pitch's.
+    /// Cell width in seconds: a name's room plus the gap it asks for, snapped
+    /// up to a power of two ([`snap_grid`]) — see the two defects above for
+    /// WHOSE name, which is not reliably this pitch's.
     grid: f64,
+    /// How far an offer reaches along time: the name's own share of its room,
+    /// taken of the snapped cell rather than of the room so that it snaps too.
+    reach: f64,
     /// The last cell that offered a name here.
     cell: i64,
     /// How far that offer reached, whether or not it was kept.
@@ -298,8 +307,51 @@ struct Lane {
 }
 
 impl Lane {
-    fn new(grid: f64) -> Lane {
-        Lane { grid, cell: i64::MIN, reached: f64::NEG_INFINITY }
+    /// A lane for a name wanting `room` seconds, `gap` of which is the clear
+    /// time it asks for past its own box.
+    fn new(room: f64, gap: f64) -> Lane {
+        let grid = snap_grid(room);
+        // The box's share of the room is the same at every zoom — box and gap
+        // are both the type's size times seconds per point — so this moves
+        // only when the cell does.
+        let reach = if room > 0.0 { grid * (room - gap) / room } else { 0.0 };
+        Lane { grid, reach, cell: i64::MIN, reached: f64::NEG_INFINITY }
+    }
+}
+
+/// A lane's cell width: `room` rounded UP to a power of two seconds.
+///
+/// The grid is laid in absolute take time, which is what holds it still as the
+/// picture scrolls, and the n-th boundary sits at n widths — so a width that
+/// followed the zoom continuously moved every boundary n times as far as the
+/// first. Minutes into a take n is in the hundreds, and a tenth of a percent of
+/// zoom moved them all a whole cell: each frame of a drag dealt the lane a fresh
+/// partition and re-decided every contested name. Measured on `phrase`, 541
+/// blinks over one sweep of the Span
+/// (`a_name_never_blinks_out_and_back_as_the_zoom_is_dragged`).
+///
+/// Snapped, the width does not move until the room crosses the next power of
+/// two, so between doublings of either zoom the thinning holds exactly still.
+/// Two rather than any finer ratio because it is the only ladder that NESTS:
+/// every boundary of the coarser grid is one of the finer, so a note first in
+/// its coarse cell was first in its fine one too, and a doubling drops about
+/// half the contested offers without re-dealing the rest.
+///
+/// What it costs is density. A cell is up to twice the room its name needs, so
+/// a run of repeats is named between one and two rooms apart depending on where
+/// in its doubling the zoom sits — up to half as many names as would fit.
+///
+/// Two residues, both at a doubling and never between one. A zoom resting
+/// exactly on one flips the lane with every sub-point of drag. And an offer
+/// clears the previous OFFER rather than the previous name, so a note refused
+/// at one width can be named at the next coarser one, where the neighbour that
+/// blocked it is no longer offered: across two doublings of a one-way zoom, a
+/// name can go and come back.
+fn snap_grid(room: f64) -> f64 {
+    if room > 0.0 && room.is_finite() {
+        2f64.powi(room.log2().ceil() as i32)
+    } else {
+        room
     }
 }
 
@@ -476,7 +528,7 @@ pub(super) fn plan(
     // an anchor off the far edge still be drawing). That slack is bounded by
     // one room, and the lookback is four, so the cells this cannot vouch for
     // stay clear of the picture with a whole cell to spare.
-    let lookback = 4.0 * room(&WIDEST_NAME);
+    let lookback = 4.0 * snap_grid(room(&WIDEST_NAME));
     let oldest = time.oldest();
     let sweep_from =
         if time.whole_song() { time.time_at(0.0) - lookback } else { oldest - lookback };
@@ -791,28 +843,28 @@ pub(super) fn plan(
         let key = pitch_key(edge.pitch);
         let lane = match occupied.pitches.entry(key) {
             std::collections::hash_map::Entry::Occupied(lane) => lane.into_mut(),
-            // A lane's grid is its own name's room. Every note at one pitch
-            // spells the same, so this is asked once per pitch rather than
-            // once per note — and the room it yields is the same whichever
+            // A lane's grid is its own name's room, snapped. Every note at one
+            // pitch spells the same, so this is asked once per pitch rather
+            // than once per note — and the room it yields is the same whichever
             // note in the lane the sweep reaches first.
             std::collections::hash_map::Entry::Vacant(slot) => {
-                slot.insert(Lane::new(naming(edge.pitch, &mut names).1))
+                slot.insert(Lane::new(naming(edge.pitch, &mut names).1, gap))
             }
         };
         let cell = (edge.time / lane.grid).floor() as i64;
         if cell == lane.cell {
             continue;
         }
-        // The lane's grid IS a name's room here, so the reach is what is left
-        // of it once the gap is taken back out.
+        // The lane's grid IS a name's room here, snapped, so the reach is what
+        // is left of it once the gap's share is taken back out.
         //
         // What the offer has to clear is the previous one's INK, with no gap
         // demanded on top: the gap is already built into the cell, so a run of
-        // repeats lands its offers one room apart and clears by exactly the
-        // gap. Asking for it twice would refuse an offer whenever a note fell
-        // late in its cell and the next fell early — which is most of them,
-        // and cost half the names in a dense run.
-        let (from, to) = name_span(edge.time, lane.grid - gap, backward);
+        // repeats lands its offers one cell apart and clears by exactly the
+        // gap's share of it. Asking for it twice would refuse an offer whenever
+        // a note fell late in its cell and the next fell early — which is most
+        // of them, and cost half the names in a dense run.
+        let (from, to) = name_span(edge.time, lane.reach, backward);
         let clear = from >= lane.reached;
         lane.cell = cell;
         lane.reached = to;
@@ -2791,6 +2843,59 @@ mod tests {
         assert_eq!(blinks(travelling, 1.0), 0, "...and at the dialled size");
     }
 
+    /// A name never vanishes and comes back as either zoom is dragged.
+    ///
+    /// Scrolling holds still because the grid is laid in absolute take time.
+    /// What a zoom changes is the grid's WIDTH, and the n-th cell boundary sits
+    /// at n widths — so a width that followed the zoom continuously moved every
+    /// boundary n times as far as the first, and each frame of a drag dealt the
+    /// lane a fresh partition. See [`snap_grid`].
+    ///
+    /// Both zooms reach the width: the Span through seconds per point, the pitch
+    /// range through the size the type is set at. The clock is held, so the zoom
+    /// is the only thing moving, and each sweep runs one way across two
+    /// doublings so that the step at each is crossed rather than avoided.
+    #[test]
+    fn a_name_never_blinks_out_and_back_as_the_zoom_is_dragged() {
+        const NOW: f64 = 20.0;
+        const FRAMES: usize = 480;
+        let sweep = |frame: usize| 4f32.powf(frame as f32 / (FRAMES - 1) as f32);
+        let at = |span: f32, label: f32| {
+            let mut state = phrase(f64::NEG_INFINITY);
+            state.appearance.spectrum.roll_seconds = span;
+            let cfg = state.appearance.spectrum;
+            let split = super::super::axes::spectrum_share(&cfg);
+            plan(&state, &Axes::new(BIG, &cfg), &scale_of(&state), split, NOW, zoomed(label))
+        };
+        let span = |frame| at(5.0 * sweep(frame), 2.23);
+        let pitch = |frame| at(10.0, sweep(frame));
+
+        // Vacuity guard: names compete from the start of each sweep, and the
+        // end has fewer of them, so a doubling was crossed on the way.
+        let notes = phrase(f64::NEG_INFINITY).runtime.tracker.roll().notes().count();
+        for (what, frames) in [("span", &span as &dyn Fn(usize) -> _), ("pitch", &pitch)] {
+            let (first, last) = (frames(0).len(), frames(FRAMES - 1).len());
+            assert!(first < notes, "{what}: {first} names for {notes} notes, nothing thinned");
+            assert!(last < first, "{what}: {first} names at the start and {last} at the end");
+        }
+
+        assert_eq!(blinks_over((0..FRAMES).map(span)), 0, "dragging the Span");
+        assert_eq!(blinks_over((0..FRAMES).map(pitch)), 0, "zooming the pitch range");
+    }
+
+    /// How many times a name vanishes from a run of frames and comes back — the
+    /// count [`blinks`] takes over the clock, over whatever `frames` varies.
+    fn blinks_over(frames: impl Iterator<Item = Vec<NoteLabel>>) -> usize {
+        let mut seen: HashMap<(String, i64), Vec<usize>> = HashMap::new();
+        for (frame, labels) in frames.enumerate() {
+            for label in labels {
+                let key = (label.name.to_string(), (label.at * 1000.0).round() as i64);
+                seen.entry(key).or_default().push(frame);
+            }
+        }
+        seen.values().map(|f| f.windows(2).filter(|w| w[1] != w[0] + 1).count()).sum()
+    }
+
     /// Notes off the pitch zoom are not named, and the zoom is the ordinary
     /// way to look at a few semitones of a piece that spans four octaves.
     #[test]
@@ -2850,8 +2955,11 @@ mod tests {
         for pair in xs.windows(2) {
             assert!(pair[1] - pair[0] >= 15.0, "names crowd at {pair:?}");
             // ...and by ONE gap, not two: the room a name demands is added to
-            // whoever is tested against it, never stored on both sides.
-            assert!(pair[1] - pair[0] < 26.0, "names sit twice as far apart as asked: {pair:?}");
+            // whoever is tested against it, never stored on both sides. Here
+            // that is one cell apart — a room near twenty points, snapped up
+            // to a whole second, which is 30 ([`snap_grid`]) — where a gap
+            // counted twice refuses every other offer and spaces them 60.
+            assert!(pair[1] - pair[0] < 45.0, "names sit two cells apart: {pair:?}");
         }
     }
 
