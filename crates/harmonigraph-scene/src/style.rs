@@ -745,6 +745,16 @@ impl Default for ShadowStyle {
     /// fallback for a caster handed no style. Not what a fresh VIEW draws —
     /// its four groups are [`ShadowSettings::default`], and each of them
     /// differs from this.
+    ///
+    /// It is ALSO what a group a blob carries with one FIELD missing fills that
+    /// field from, where a blob missing the whole GROUP fills it from
+    /// [`ShadowSettings::default`]'s matching group: serde resolves a missing
+    /// field against the container it sits in, and both containers carry a
+    /// default. Deliberate rather than residual (#719) — "a shadow with nothing
+    /// said about it" and "what this group opens on" are different questions, so
+    /// the two answers are under no obligation to draw the same fresh picture.
+    /// `a_shadow_group_missing_one_field_fills_it_from_the_bare_style` in the UI
+    /// persist tests holds it, beside the missing-group sweep.
     fn default() -> ShadowStyle {
         ShadowStyle {
             // Distance keeps a caster's form at this broad shadow width, where
@@ -819,7 +829,9 @@ pub struct ShadowSettings {
 
 impl Default for ShadowSettings {
     /// The four groups a fresh view opens on, and the fallback for any one of
-    /// them missing from a blob (the container-level `serde(default)` above).
+    /// them missing from a blob (the container-level `serde(default)` above) —
+    /// a group PRESENT with one field missing fills that field from
+    /// [`ShadowStyle::default`] instead, which is written out there.
     ///
     /// Four styles rather than one, last captured from the DAW on 2026-09-08: the
     /// picture as dialled, group by group. Every group is a distance shadow
