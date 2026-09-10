@@ -99,7 +99,13 @@ pub(crate) fn render_pane(
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                 // Its text sizes itself off the rect it is given, so drawing
                 // the pane small draws its type small, as the render will.
+                // Shadows instead use screen points. Scale their widths for
+                // this drawing only, including the reach used by roll culling.
+                let shadow = state.appearance.view.shadow;
+                state.appearance.view.shadow =
+                    preview_shadows(shadow, box_rect.width(), &state.appearance.render);
                 super::spectral::spectral_pane(&mut child, state, now, PREVIEW_SURFACE);
+                state.appearance.view.shadow = shadow;
             }
             // Unreachable, and here for the match rather than for the picture:
             // this preview composes `Layout::split`, which places the lattice
@@ -123,6 +129,21 @@ pub(crate) fn render_pane(
     let translated: Vec<_> =
         placements.iter().map(|(p, r)| (*p, r.translate(box_rect.min.to_vec2()))).collect();
     layout.paint_dividers(ui.painter(), &translated);
+}
+
+fn preview_shadows(
+    mut shadow: harmonigraph_scene::ShadowSettings,
+    width: f32,
+    config: &crate::RenderConfig,
+) -> harmonigraph_scene::ShadowSettings {
+    let pixels = config.frame.pixels(config.short_edge);
+    let export_width = pixels[0] as f32 / crate::layout::export_pixels_per_point(pixels);
+    // The live preview normally shrinks the shot. At larger-than-export sizes
+    // keep the dial's maximum rather than manufacture an out-of-range style.
+    let scale = (width / export_width).clamp(0.0, 1.0);
+    shadow.spectral_geometry.width *= scale;
+    shadow.spectral_text.width *= scale;
+    shadow
 }
 
 /// Aspect ratio, resolution, arrangement, and split — editing the persisted
@@ -505,4 +526,86 @@ fn render_progress(ui: &mut egui::Ui, interaction: &mut crate::Interaction) {
             interaction.take.cancel_render = true;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_shadows_keep_the_exports_relative_reach_without_changing_the_dials() {
+        use harmonigraph_render::spectral_shadow_reach;
+        use harmonigraph_scene::ShadowKernel;
+
+        let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        for aspect in [(16, 9), (9, 16)] {
+            state.appearance.render.frame.aspect_w = aspect.0;
+            state.appearance.render.frame.aspect_h = aspect.1;
+            for short_edge in [1080, 2160] {
+                state.appearance.render.short_edge = short_edge;
+                let pixels = state.appearance.render.frame.pixels(short_edge);
+                let export_width =
+                    pixels[0] as f32 / crate::layout::export_pixels_per_point(pixels);
+                for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
+                    state.appearance.view.shadow.spectral_geometry.kernel = kernel;
+                    state.appearance.view.shadow.spectral_text.kernel = kernel;
+                    let saved = state.appearance.view.shadow;
+                    for width in [240.0, 480.0] {
+                        let scaled = preview_shadows(saved, width, &state.appearance.render);
+                        for (preview, export) in [
+                            (scaled.spectral_geometry, saved.spectral_geometry),
+                            (scaled.spectral_text, saved.spectral_text),
+                        ] {
+                            let reach = spectral_shadow_reach(export);
+                            assert!(reach > 0.0, "both shadow groups must cast");
+                            assert!(
+                                (spectral_shadow_reach(preview) / width - reach / export_width)
+                                    .abs()
+                                    < 1e-6
+                            );
+                            assert_eq!(preview.depth, export.depth);
+                            assert_eq!(preview.falloff, export.falloff);
+                            assert_eq!(preview.kernel, export.kernel);
+                        }
+                    }
+                    // Exercise the actual scoped draw too: it must restore the
+                    // settings that the dock and a subsequent export will read.
+                    assert!(!state.appearance.render.playhead, "the spectral preview must draw");
+                    let ctx = egui::Context::default();
+                    crate::theme::apply_theme(&ctx);
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(480.0, 1200.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| render_pane(ui, &mut state, &mut crate::Interaction::default(), 0.0),
+                    );
+                    let callback_rects: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|s| {
+                            if let egui::Shape::Callback(callback) = &s.shape {
+                                callback.rect.is_positive().then_some(callback.rect)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    // The lattice callback alone is not evidence that the
+                    // spectral arm ran. Both panes must emit callbacks in
+                    // their separate regions of the composed frame.
+                    assert!(
+                        callback_rects
+                            .iter()
+                            .any(|a| callback_rects.iter().any(|b| !a.intersect(*b).is_positive())),
+                        "fixture must reach both preview panes, got {callback_rects:?}"
+                    );
+                    assert_eq!(state.appearance.view.shadow, saved);
+                }
+            }
+        }
+    }
 }
