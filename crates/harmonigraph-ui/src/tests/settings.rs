@@ -633,13 +633,6 @@ fn every_gradient_group_previews_itself_above_its_bars() {
 /// The render bar fills to the share of frames done — which is the whole
 /// reason it is a bar and not another sentence in the status line, since a
 /// render is minutes long and the sentence never changes while it runs.
-///
-/// The fraction is also what tells it apart from the `ValueBar` beside it,
-/// which paints the same accent fill. The split bar fills to its position in
-/// its RANGE, not to its value: 0.20 across 0.05..=0.95 is a sixth of the
-/// track, against the fixture render's eighth. They have to stay further
-/// apart than the tolerance below, so moving the split's default or its range
-/// close to an eighth is what would make this pass on the wrong bar.
 #[test]
 fn the_render_bar_fills_to_the_share_of_frames_done() {
     const WIDTH: f32 = 400.0;
@@ -649,7 +642,7 @@ fn the_render_bar_fills_to_the_share_of_frames_done() {
     // A polygon rather than a rect: a fill is the part of its track left of
     // the frontier (`filled_part`), so what is measured is the reach of the
     // shape the bar actually painted. Its box is a full row tall wherever the
-    // frontier is clear of the track's own corner, which both bars here are.
+    // frontier is clear of the track's own corner, as it is in this fixture.
     let fills: Vec<f32> = shapes
         .iter()
         .filter_map(|cs| match &cs.shape {

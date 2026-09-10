@@ -16,7 +16,7 @@
 use egui::Sense;
 
 use super::section;
-use crate::widgets::{button_row, choice_row, option_label, record_button, ValueBar};
+use crate::widgets::{button_row, choice_row, option_label, record_button};
 use crate::{theme, LatticeSide, Layout, Pane, PictureState};
 
 /// The surface this preview's panes draw on. Every copy of a pane holds
@@ -48,6 +48,7 @@ pub(crate) fn render_pane(
     render_controls(ui, state, interaction);
 
     section(ui, "Preview");
+    ui.weak("Drag the divider to resize · Drag the lattice to an edge to move it");
     let frame = state.appearance.render.frame;
     let avail = ui.available_size();
     if avail.x < 20.0 {
@@ -129,6 +130,134 @@ pub(crate) fn render_pane(
     let translated: Vec<_> =
         placements.iter().map(|(p, r)| (*p, r.translate(box_rect.min.to_vec2()))).collect();
     layout.paint_dividers(ui.painter(), &translated);
+    preview_layout_controls(ui, box_rect, &mut state.appearance.render.frame);
+}
+
+/// Interaction chrome lives over the preview only; exports keep the plain seam.
+fn preview_layout_controls(ui: &mut egui::Ui, rect: egui::Rect, frame: &mut crate::RenderFrame) {
+    let lattice = preview_lattice_rect(rect, frame.lattice, frame.split);
+    let vertical = !frame.lattice.sizes_by_height();
+    let seam = match frame.lattice {
+        LatticeSide::Left => lattice.right_center(),
+        LatticeSide::Right => lattice.left_center(),
+        LatticeSide::Top => lattice.center_bottom(),
+        LatticeSide::Bottom => lattice.center_top(),
+    };
+    let handle = egui::Rect::from_center_size(
+        seam,
+        if vertical {
+            egui::vec2(12.0_f32.min(lattice.width()), rect.height())
+        } else {
+            egui::vec2(rect.width(), 12.0_f32.min(lattice.height()))
+        },
+    );
+    // Keep the move target clear of the divider, including at the 5% limit.
+    let mut move_rect = lattice;
+    match frame.lattice {
+        LatticeSide::Left => move_rect.max.x = handle.left(),
+        LatticeSide::Right => move_rect.min.x = handle.right(),
+        LatticeSide::Top => move_rect.max.y = handle.top(),
+        LatticeSide::Bottom => move_rect.min.y = handle.bottom(),
+    }
+    let moving = ui
+        .interact(move_rect, ui.id().with("preview_lattice_move"), Sense::drag())
+        .on_hover_cursor(egui::CursorIcon::Grab)
+        .on_hover_text("Drag the lattice to the left, right, top or bottom edge");
+    let resizing = ui
+        .interact(handle, ui.id().with("preview_lattice_resize"), Sense::drag())
+        .on_hover_cursor(if vertical {
+            egui::CursorIcon::ResizeHorizontal
+        } else {
+            egui::CursorIcon::ResizeVertical
+        })
+        .on_hover_text("Drag to resize the lattice");
+    let grab_id = resizing.id.with("grab_offset");
+    let fraction_at = |pointer: egui::Pos2| match frame.lattice {
+        LatticeSide::Left => (pointer.x - rect.left()) / rect.width(),
+        LatticeSide::Right => (rect.right() - pointer.x) / rect.width(),
+        LatticeSide::Top => (pointer.y - rect.top()) / rect.height(),
+        LatticeSide::Bottom => (rect.bottom() - pointer.y) / rect.height(),
+    };
+    if resizing.drag_started() {
+        if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
+            ui.data_mut(|d| d.insert_temp(grab_id, frame.split - fraction_at(origin)));
+        }
+    }
+    if resizing.dragged() {
+        if let Some(pointer) = resizing.interact_pointer_pos() {
+            let offset = ui.data(|d| d.get_temp::<f32>(grab_id)).unwrap_or(0.0);
+            frame.split = (fraction_at(pointer) + offset).clamp(0.05, 0.95);
+            ui.ctx().request_repaint();
+        }
+    }
+    if resizing.drag_stopped() {
+        ui.data_mut(|d| d.remove::<f32>(grab_id));
+    }
+    // Match the Analyzer's divider: only the existing seam at rest, a full
+    // two-point accent line on hover, and the stronger accent while dragging.
+    let lit = if resizing.dragged() {
+        Some(theme::accent())
+    } else if resizing.hovered() {
+        Some(theme::accent_edge())
+    } else {
+        None
+    };
+    if let Some(color) = lit {
+        let ends = if vertical {
+            [egui::pos2(seam.x, rect.top()), egui::pos2(seam.x, rect.bottom())]
+        } else {
+            [egui::pos2(rect.left(), seam.y), egui::pos2(rect.right(), seam.y)]
+        };
+        ui.painter().line_segment(ends, egui::Stroke::new(2.0, color));
+    }
+    if moving.dragged() || moving.drag_stopped() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        if let Some(side) = moving.interact_pointer_pos().and_then(|p| preview_drop_side(rect, p)) {
+            let target = preview_lattice_rect(rect, side, frame.split);
+            ui.painter().rect_stroke(
+                target.shrink(2.0),
+                0.0,
+                ui.visuals().selection.stroke,
+                egui::StrokeKind::Inside,
+            );
+            if moving.drag_stopped() {
+                frame.lattice = side;
+                ui.ctx().request_repaint();
+            }
+        }
+    }
+}
+
+/// Keep the interaction geometry even when the preview is too small to draw
+/// a pane: `Layout::resolve` culls sub-point panes, but the controls still need them.
+fn preview_lattice_rect(rect: egui::Rect, side: LatticeSide, split: f32) -> egui::Rect {
+    let layout = Layout::split(side, split);
+    let (x0, y0, x1, y1) = layout.panes.iter().find(|p| p.pane == Pane::Lattice).unwrap().rect;
+    egui::Rect::from_min_max(
+        rect.min + rect.size() * egui::vec2(x0, y0),
+        rect.min + rect.size() * egui::vec2(x1, y1),
+    )
+}
+
+/// Normalized edge distances give every side an equal target on portrait and landscape frames.
+/// The middle half of each axis is a cancel region, so a small drag inside a
+/// wide lattice cannot silently dock it to the opposite side.
+fn preview_drop_side(rect: egui::Rect, pointer: egui::Pos2) -> Option<LatticeSide> {
+    if !rect.contains(pointer) {
+        return None;
+    }
+    let x = (pointer.x - rect.left()) / rect.width();
+    let y = (pointer.y - rect.top()) / rect.height();
+    let (distance, side) = [
+        (x, LatticeSide::Left),
+        (1.0 - x, LatticeSide::Right),
+        (y, LatticeSide::Top),
+        (1.0 - y, LatticeSide::Bottom),
+    ]
+    .into_iter()
+    .min_by(|a, b| a.0.total_cmp(&b.0))
+    .unwrap();
+    (distance <= 0.25).then_some(side)
 }
 
 fn preview_shadows(
@@ -146,7 +275,7 @@ fn preview_shadows(
     shadow
 }
 
-/// Aspect ratio, resolution, arrangement, and split — editing the persisted
+/// Aspect ratio and resolution — editing the persisted
 /// `RenderFrame` and the resolution beside it.
 fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
     section(ui, "Frame");
@@ -183,34 +312,6 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
     let options: Vec<(u32, &str, &str)> =
         sizes.iter().map(|(v, label, hint)| (*v, label.as_str(), hint.as_str())).collect();
     choice_row(ui, "Short edge (px)", &mut state.appearance.render.short_edge, &options);
-    let f = &mut state.appearance.render.frame;
-    // Named for where the LATTICE goes, so the row reads as the placement it
-    // is — "Lattice: Top" rather than an axis plus a convention about which
-    // pane leads. Off `ALL` with an exhaustive match, like the Spectral pane's
-    // own four-sided row: a fifth side cannot reach the pane without a name
-    // and a hint of its own.
-    let sides = LatticeSide::ALL.map(|side| {
-        let (label, hint) = match side {
-            LatticeSide::Left => ("Left", "Lattice left, Analyzer right"),
-            LatticeSide::Right => ("Right", "Lattice right, Analyzer left"),
-            LatticeSide::Top => ("Top", "Lattice above, Analyzer below"),
-            LatticeSide::Bottom => ("Bottom", "Lattice below, Analyzer above"),
-        };
-        (side, label, hint)
-    });
-    choice_row(ui, "Lattice", &mut f.lattice, &sides);
-    let label = if f.lattice.sizes_by_height() { "Lattice height" } else { "Lattice width" };
-    // The range `Layout::split` itself honours, rather than a tighter one on
-    // top of it: the layout clamps to 0.05..=0.95, so a bar that went wider
-    // would move under the pointer and render the same picture either side of
-    // the clamp. Both panes stay on screen at the ends — a frame that is all
-    // lattice or all spectrum is what the `lattice` and `spectral` layout
-    // presets are for, and they say so in the render rather than by a slider
-    // pushed to its stop.
-    ValueBar::new(&mut f.split, 0.05..=0.95, label).percent().show(ui).on_hover_text(
-        "How much of the frame the lattice takes; the Analyzer gets the \
-         rest.",
-    );
 }
 
 /// Empty the four things that accumulate, in one press, next to the button
@@ -531,6 +632,130 @@ fn render_progress(ui: &mut egui::Ui, interaction: &mut crate::Interaction) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn drag_preview(
+        frame: &mut crate::RenderFrame,
+        rect: egui::Rect,
+        start: egui::Pos2,
+        end: egui::Pos2,
+    ) {
+        let ctx = crate::tests::probe::themed();
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![],
+            vec![egui::Event::PointerMoved(start)],
+            vec![button(start, true)],
+            vec![egui::Event::PointerMoved(start.lerp(end, 0.02))],
+            vec![egui::Event::PointerMoved(end)],
+            vec![button(end, false)],
+        ] {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 1000.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| preview_layout_controls(ui, rect, frame),
+            );
+        }
+    }
+
+    #[test]
+    fn preview_divider_drag_resizes_each_side_and_clamps() {
+        let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(400.0, 300.0));
+        for side in LatticeSide::ALL {
+            for target in [0.01_f32, 0.7, 0.99] {
+                let mut frame =
+                    crate::RenderFrame { lattice: side, split: 0.5, ..Default::default() };
+                let end = match side {
+                    LatticeSide::Left => {
+                        egui::pos2(rect.left() + rect.width() * target, rect.center().y)
+                    }
+                    LatticeSide::Right => {
+                        egui::pos2(rect.right() - rect.width() * target, rect.center().y)
+                    }
+                    LatticeSide::Top => {
+                        egui::pos2(rect.center().x, rect.top() + rect.height() * target)
+                    }
+                    LatticeSide::Bottom => {
+                        egui::pos2(rect.center().x, rect.bottom() - rect.height() * target)
+                    }
+                };
+                drag_preview(&mut frame, rect, rect.center(), end);
+                assert!(
+                    (frame.split - target.clamp(0.05, 0.95)).abs() < 0.001,
+                    "{side:?}: {}",
+                    frame.split
+                );
+                assert_eq!(frame.lattice, side);
+            }
+        }
+    }
+
+    #[test]
+    fn preview_lattice_drag_docks_to_every_edge_and_cancels_outside() {
+        for size in [egui::vec2(600.0, 300.0), egui::vec2(300.0, 600.0), egui::vec2(16.0, 16.0)] {
+            let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), size);
+            for from in LatticeSide::ALL {
+                for to in LatticeSide::ALL {
+                    let mut frame =
+                        crate::RenderFrame { lattice: from, split: 0.05, ..Default::default() };
+                    let lattice = preview_lattice_rect(rect, from, frame.split);
+                    // The outer quarter stays outside even a narrowed divider hit area.
+                    let start = lattice.center().lerp(
+                        match from {
+                            LatticeSide::Left => lattice.left_center(),
+                            LatticeSide::Right => lattice.right_center(),
+                            LatticeSide::Top => lattice.center_top(),
+                            LatticeSide::Bottom => lattice.center_bottom(),
+                        },
+                        0.5,
+                    );
+                    let end = match to {
+                        LatticeSide::Left => rect.left_center() + egui::vec2(2.0, 0.0),
+                        LatticeSide::Right => rect.right_center() - egui::vec2(2.0, 0.0),
+                        LatticeSide::Top => rect.center_top() + egui::vec2(0.0, 2.0),
+                        LatticeSide::Bottom => rect.center_bottom() - egui::vec2(0.0, 2.0),
+                    };
+                    drag_preview(&mut frame, rect, start, end);
+                    assert_eq!(frame.lattice, to, "from {from:?}");
+                    assert_eq!(frame.split, 0.05);
+                    frame.lattice = from;
+                    drag_preview(&mut frame, rect, start, rect.max + egui::vec2(20.0, 20.0));
+                    assert_eq!(frame.lattice, from);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dragging_inside_a_wide_lattice_does_not_redock_it() {
+        let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(400.0, 300.0));
+        for side in LatticeSide::ALL {
+            let mut frame = crate::RenderFrame { lattice: side, split: 0.95, ..Default::default() };
+            let direction = match side {
+                LatticeSide::Left => egui::vec2(1.0, 0.0),
+                LatticeSide::Right => egui::vec2(-1.0, 0.0),
+                LatticeSide::Top => egui::vec2(0.0, 1.0),
+                LatticeSide::Bottom => egui::vec2(0.0, -1.0),
+            };
+            // Both points are past the midline, toward the opposite side,
+            // and the movement exceeds the drag threshold without reaching an edge band.
+            let start = rect.center() + rect.size() * direction * 0.1;
+            let end = rect.center() + rect.size() * direction * 0.2;
+            drag_preview(&mut frame, rect, start, end);
+            assert_eq!(frame.lattice, side);
+            assert_eq!(frame.split, 0.95);
+        }
+    }
 
     #[test]
     fn preview_shadows_keep_the_exports_relative_reach_without_changing_the_dials() {

@@ -355,6 +355,7 @@ fn every_settings_row_is_one_row_high() {
 /// Sweeping the real panes makes every full-width well enter the census at the
 /// site where it is used. The `SpectrumBar` gives the right end of its row to
 /// a button, so its declared track width is recognised too.
+/// Video has no value bars now that its split is resized directly in the preview.
 #[test]
 fn every_bar_has_its_declared_height() {
     for pane in [
@@ -363,7 +364,6 @@ fn every_bar_has_its_declared_height() {
         SettingsPane::Page(DisplayPage::Lattice),
         SettingsPane::Page(DisplayPage::Analyzer),
         SettingsPane::Page(DisplayPage::Lighting),
-        SettingsPane::Tab(panes::Tab::Video),
     ] {
         for step in 0..=16u8 {
             let scale = 0.7 + 0.05 * f32::from(step);
