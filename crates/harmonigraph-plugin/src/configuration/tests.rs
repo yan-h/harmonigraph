@@ -937,7 +937,11 @@ fn learning_notifications_land_at_the_boundary_and_merge_with_performance() {
         .filter(|e| e.0 == CLAP_EVENT_PARAM_VALUE && e.2 == device.id(ParamKey::Three))
         .collect();
     assert_eq!(fifth.len(), 1);
-    assert_eq!(fifth[0].1, 0, "learning reads the whole block and lands at its boundary");
+    // The boundary is which callback, not which offset. Inside it the value is
+    // floored at the last thing already on the wire -- the note this block
+    // emitted at 31 -- because the wrapper's own output follows the plugin's
+    // rather than interleaving with it by time.
+    assert_eq!(fifth[0].1, 31, "learning reads the whole block and lands at its boundary");
     assert!(
         sink.attempts.windows(2).all(|events| events[0].1 <= events[1].1),
         "configuration and performance outputs must share chronological order"

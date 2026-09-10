@@ -47,6 +47,20 @@ impl Event {
         }
     }
 
+    /// Can reach a CLAP output list as itself. This is what the deleted
+    /// `nice_plug` staging validator checked before it would retain a value:
+    /// `Output::push` now encodes whatever it is handed, so a kind CLAP has no
+    /// note event for, or a magnitude it cannot carry, has to be refused here
+    /// instead. MIDI is already narrowed by [`Self::from_input`].
+    pub fn emittable(self) -> bool {
+        match self {
+            Self::Note { kind: 0..=3, velocity, .. } => velocity.is_finite(),
+            Self::Note { .. } => false,
+            Self::Expression { value, .. } => value.is_finite(),
+            Self::Midi { .. } => true,
+        }
+    }
+
     /// true=All Sound Off (choke), false=All Notes Off (logical note-off).
     pub fn channel_termination(self) -> Option<bool> {
         match self {

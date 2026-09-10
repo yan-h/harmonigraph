@@ -44,3 +44,11 @@ pub const BATCH_EVENTS: usize = 2048;
 /// sustain, sostenuto and legato on each of sixteen channels. A cut does not
 /// recentre the bend, because a Tune does not track one.
 pub const CUT_EVENTS: usize = HELD_PER_SOURCE + 16 * 3;
+/// Events one Tune puts on the wire in one enclosing callback. The delay line
+/// and the cut bound the backlog but not the burst: a stretch of blind or
+/// refusing callbacks fills the line, and without this the first callback that
+/// can write would spend `2 * PENDING_EVENTS + CUT_EVENTS` host calls inline on
+/// the audio thread. The vendored boundary applied exactly this number until
+/// its output scheduler was deleted; the surplus waits one callback, and a
+/// backlog this deep is already late.
+pub const EMIT_PER_CALLBACK: u32 = 512;

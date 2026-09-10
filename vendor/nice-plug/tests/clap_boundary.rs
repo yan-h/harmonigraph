@@ -30,7 +30,8 @@ struct Parameters {
 struct Instruction {
     callback: usize,
     block: u32,
-    group: perf::Group,
+    time: u32,
+    value: InputValue,
 }
 struct Control {
     script: Vec<Instruction>,
@@ -47,11 +48,7 @@ struct Control {
     value_entered: AtomicBool,
     value_resume: AtomicBool,
     observed: Mutex<Observed>,
-    closed: AtomicBool,
-    busy: AtomicBool,
-    fence_on_push: AtomicBool,
-    auto_emergency: bool,
-    final_emergency: bool,
+    final_flush: bool,
     process_error: bool,
     misuse: bool,
     apply_limit: AtomicUsize,
@@ -63,16 +60,15 @@ struct Observed {
     inputs: Vec<OwnedInput>,
     configuration: Vec<OwnedInput>,
     blocks: Vec<(i64, u32, u32)>,
-    completions: Vec<perf::Completion>,
     summaries: Vec<perf::Summary>,
     callbacks: Vec<perf::Callback>,
-    admissions: Vec<Result<(), perf::StageError>>,
+    /// The host's answer to each push the fixture made, in push order.
+    pushes: Vec<bool>,
     applies: Vec<i64>,
     legacy: usize,
     finals: usize,
     traces: usize,
     faults: usize,
-    prepares: usize,
 }
 impl Default for Control {
     fn default() -> Self {
@@ -94,18 +90,13 @@ impl Default for Control {
                 inputs: Vec::with_capacity(8000),
                 configuration: Vec::with_capacity(5000),
                 blocks: Vec::with_capacity(5000),
-                completions: Vec::with_capacity(3000),
                 summaries: Vec::with_capacity(100),
                 callbacks: Vec::with_capacity(100),
-                admissions: Vec::with_capacity(3000),
+                pushes: Vec::with_capacity(3000),
                 applies: Vec::with_capacity(5000),
                 ..Default::default()
             }),
-            closed: AtomicBool::new(false),
-            busy: AtomicBool::new(false),
-            fence_on_push: AtomicBool::new(false),
-            auto_emergency: false,
-            final_emergency: false,
+            final_flush: false,
             process_error: false,
             misuse: false,
             apply_limit: AtomicUsize::new(usize::MAX),
@@ -284,13 +275,13 @@ impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
         }
         for instruction in &self.control.script {
             if instruction.callback == self.callback && instruction.block == block.start {
-                let result = output.stage(instruction.group);
+                let accepted = output.push(instruction.value, instruction.time);
                 self.control
                     .observed
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .admissions
-                    .push(result);
+                    .pushes
+                    .push(accepted);
             }
         }
         if self.control.process_error {
@@ -299,66 +290,22 @@ impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
             ProcessStatus::Normal
         }
     }
-    fn clap_performance_prepare(&mut self, group: perf::Group) -> bool {
-        self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).prepares += 1;
-        if (0..group.event_count()).any(|index| match group.event(index) {
-            Some(InputValue::Note { kind: CLAP_EVENT_NOTE_ON, .. }) => true,
-            Some(InputValue::Midi { data: [status, _, velocity], .. }) => status & 0xf0 == 0x90 && velocity != 0,
-            _ => false,
-        })
-            && self.control.closed.load(Ordering::Acquire)
-        {
-            return false;
-        }
-        assert!(!self.control.busy.swap(true, Ordering::AcqRel));
-        true
-    }
-    fn clap_performance_complete(
-        &mut self,
-        completion: perf::Completion,
-        output: &mut perf::Output<'_>,
-    ) {
-        self.control
-            .observed
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .completions
-            .push(completion);
-        if self.control.auto_emergency
-            && completion.accepted == 1
-            && completion.group.event_count() == 2
-        {
-            output
-                .stage(single(
-                    999,
-                    perf::Lane::Emergency,
-                    output.cursor(),
-                    note(CLAP_EVENT_NOTE_CHOKE),
-                ))
-                .unwrap();
-        }
-        self.control.busy.store(false, Ordering::Release);
-    }
     fn clap_performance_finalize(
         &mut self,
-        _: perf::Callback,
+        callback: perf::Callback,
         _: clap_process_status,
         output: &mut perf::Output<'_>,
     ) {
-        self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).finals += 1;
-        if self.control.final_emergency {
-            output
-                .stage(single(
-                    998,
-                    perf::Lane::Emergency,
-                    output.cursor(),
-                    note(CLAP_EVENT_NOTE_CHOKE),
-                ))
-                .unwrap();
+        let mut observed = self.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+        observed.finals += 1;
+        if self.control.final_flush {
+            // The callback's last sample: the only offset a final flush can
+            // take without preceding output the sub-blocks already pushed.
+            let time = callback.frames.saturating_sub(1);
+            observed.pushes.push(output.push(note(CLAP_EVENT_NOTE_CHOKE), time));
         }
     }
     fn clap_performance_end(&mut self, _: perf::Callback, summary: perf::Summary) {
-        assert!(!self.control.busy.load(Ordering::Acquire));
         self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).summaries.push(summary);
     }
     fn clap_process_trace(&mut self, _: ProcessTrace<'_>) {
@@ -389,21 +336,29 @@ fn tuning() -> InputValue {
         flags: CLAP_EVENT_DONT_RECORD,
     }
 }
-fn token(n: u64) -> perf::Token {
-    perf::Token([n, 0, 0, 0])
+fn nan_velocity() -> InputValue {
+    match note(CLAP_EVENT_NOTE_OFF) {
+        InputValue::Note { kind, note_id, port, channel, key, flags, .. } => {
+            InputValue::Note { kind, note_id, port, channel, key, velocity: f64::NAN, flags }
+        }
+        _ => unreachable!(),
+    }
 }
-fn single(n: u64, lane: perf::Lane, time: u32, value: InputValue) -> perf::Group {
-    perf::Group::single(token(n), lane, time, value).unwrap()
-}
-fn pair(n: u64, time: u32) -> perf::Group {
-    perf::Group::onset(token(n), time, note(CLAP_EVENT_NOTE_ON), tuning()).unwrap()
-}
-fn replacement(n: u64, time: u32) -> perf::Group {
-    perf::Group::sequence(
-        single(n, perf::Lane::Normal, time, note(CLAP_EVENT_NOTE_CHOKE)),
-        pair(n + 1, time),
-    )
-    .unwrap()
+fn infinite_tuning() -> InputValue {
+    match tuning() {
+        InputValue::Expression { expression, note_id, port, channel, key, flags, .. } => {
+            InputValue::Expression {
+                expression,
+                note_id,
+                port,
+                channel,
+                key,
+                value: f64::INFINITY,
+                flags,
+            }
+        }
+        _ => unreachable!(),
+    }
 }
 fn header<T>(kind: u16, time: u32) -> clap_event_header {
     clap_event_header {
@@ -575,12 +530,6 @@ unsafe extern "C" fn push(
     };
     assert!(sink.attempts.len() < sink.attempts.capacity());
     sink.attempts.push(Attempt { kind: header.type_, time: header.time, accepted, value });
-    if header.type_ == CLAP_EVENT_NOTE_ON
-        && sink.control.fence_on_push.swap(false, Ordering::AcqRel)
-    {
-        assert!(sink.control.busy.load(Ordering::Acquire));
-        sink.control.closed.store(true, Ordering::Release);
-    }
     accepted
 }
 struct Device {
@@ -756,8 +705,11 @@ impl Drop for Device {
         }
     }
 }
-fn instructions(groups: impl IntoIterator<Item = perf::Group>) -> Vec<Instruction> {
-    groups.into_iter().map(|group| Instruction { callback: 1, block: 0, group }).collect()
+fn instructions(values: impl IntoIterator<Item = (u32, InputValue)>) -> Vec<Instruction> {
+    values
+        .into_iter()
+        .map(|(time, value)| Instruction { callback: 1, block: 0, time, value })
+        .collect()
 }
 
 #[test]
@@ -1145,7 +1097,7 @@ fn raw_signed_addresses_and_f64_are_preserved_without_hub_mailbox() {
 fn one_batch_scan_limit_includes_nonperformance_events() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let mut d =
-        Device::new(Control { final_emergency: true, ..Default::default() }, c"fixture.combined");
+        Device::new(Control { final_flush: true, ..Default::default() }, c"fixture.combined");
     let mut input = vec![on(0); INPUT_SCAN - 1];
     input[0] = d.param(0);
     input.push(transport(32, false, 100));
@@ -1161,237 +1113,139 @@ fn one_batch_scan_limit_includes_nonperformance_events() {
         perf::InputStatus::Full
     );
     assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).finals, 2);
-    assert_eq!(d.sink.attempts.len(), 2);
+    // Only the callback whose input was captured carries the final flush; the
+    // Full one finalizes with a blind writer.
+    assert_eq!(d.sink.attempts.len(), 1);
     let mut d = Device::new(
-        Control { final_emergency: true, ..Default::default() },
+        Control { final_flush: true, ..Default::default() },
         c"fixture.performance",
     );
     assert_eq!(d.run(0, 64, vec![on(0); INPUT_SCAN + 1], true), CLAP_PROCESS_ERROR);
     assert!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.is_empty());
-    assert_eq!(d.sink.attempts.len(), 1);
+    assert!(d.sink.attempts.is_empty());
 }
 
 #[test]
-fn enclosing_output_budget_is_shared_across_subblocks_and_emergency() {
+fn pushed_values_reach_the_host_with_exact_fields_and_times() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut script =
-        instructions((0..300).map(|n| single(n, perf::Lane::Normal, 0, note(CLAP_EVENT_NOTE_OFF))));
-    script.extend((300..513).map(|n| Instruction {
-        callback: 1,
-        block: 32,
-        group: single(n, perf::Lane::Normal, 32, note(CLAP_EVENT_NOTE_OFF)),
-    }));
-    script.extend((0..129).map(|n| Instruction {
-        callback: 1,
-        block: 32,
-        group: single(1000 + n, perf::Lane::Emergency, 32, note(CLAP_EVENT_NOTE_CHOKE)),
-    }));
-    let mut d = Device::new(Control { script, ..Default::default() }, c"fixture.performance");
-    d.run(0, 64, vec![transport(32, false, 0)], true);
-    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    assert_eq!(d.sink.attempts.len(), 640);
-    assert_eq!(o.summaries[0].normal_attempts, 512);
-    assert_eq!(o.summaries[0].emergency_attempts, 128);
-    assert_eq!(o.admissions.iter().filter(|r| **r == Err(perf::StageError::Full)).count(), 2);
-}
-
-#[test]
-fn onset_pair_reserves_two_credits_when_only_one_is_left() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut script =
-        instructions((0..511).map(|n| single(n, perf::Lane::Normal, 0, note(CLAP_EVENT_NOTE_OFF))));
-    script.extend(instructions([
-        pair(600, 0),
-        single(601, perf::Lane::Normal, 0, note(CLAP_EVENT_NOTE_OFF)),
-    ]));
-    let mut d = Device::new(Control { script, ..Default::default() }, c"fixture.performance");
-    d.run(0, 64, vec![], true);
-    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    assert_eq!(o.admissions[511], Err(perf::StageError::Full));
-    assert_eq!(o.admissions[512], Ok(()));
-    assert_eq!(d.sink.attempts.len(), 512);
-    assert_eq!(o.completions.len(), 512);
-}
-
-#[test]
-fn replacement_sequence_has_one_prepare_and_reports_its_exact_accepted_prefix() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for (acceptance, expected) in [
-        (vec![false], (1, 0, 6)),
-        (vec![true, false], (3, 1, 4)),
-        (vec![true, true, false], (7, 3, 0)),
-        (vec![true, true, true], (7, 7, 0)),
-    ] {
-        let mut d = Device::new(
-            Control { script: instructions([replacement(40, 7)]), ..Default::default() },
-            c"fixture.performance",
-        );
-        d.sink.script = acceptance;
-        d.run(0, 64, vec![], true);
-        let observed = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-        assert_eq!(observed.prepares, 1);
-        assert_eq!(observed.completions.len(), 1);
-        let completion = observed.completions[0];
-        assert_eq!(
-            (completion.attempted, completion.accepted, completion.unattempted),
-            expected
-        );
-        let (release, onset) = completion.group.sequence_parts().unwrap();
-        assert_eq!((release.event_count(), onset.event_count()), (1, 2));
-        assert_eq!((release.token, onset.token), (token(40), token(41)));
-    }
-}
-
-#[test]
-fn rejected_onset_suppresses_tuning_and_dependent_normal_groups() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let midi = InputValue::Midi { port: 0, data: [0x90, 61, 100], flags: CLAP_EVENT_IS_LIVE };
     let mut d = Device::new(
-        Control { script: instructions([pair(1, 5), pair(2, 6)]), ..Default::default() },
+        Control {
+            script: instructions([
+                (5, note(CLAP_EVENT_NOTE_ON)),
+                (5, tuning()),
+                (47, midi),
+                // No output encoding exists for any of these, so the host never
+                // sees them and the caller is told so. The last two are the
+                // staging validator's checks, which live here now: a note type
+                // CLAP has no event for, and a magnitude it cannot carry.
+                (47, InputValue::Parameter { id: 1, value: 0.5, modulation: false }),
+                (47, InputValue::Other),
+                (47, note(7)),
+                (47, nan_velocity()),
+                (47, infinite_tuning()),
+            ]),
+            ..Default::default()
+        },
         c"fixture.performance",
     );
-    d.sink.script = vec![false];
     d.run(0, 64, vec![], true);
     let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    assert_eq!(d.sink.attempts.len(), 1);
+    assert_eq!(o.pushes, [true, true, true, false, false, false, false, false]);
     assert_eq!(
-        (o.completions[0].attempted, o.completions[0].accepted, o.completions[0].unattempted),
-        (1, 0, 2)
-    );
-    assert_eq!(o.completions[1].disposition, perf::Disposition::Inhibited);
-}
-
-#[test]
-fn partial_onset_reports_exact_prefix_and_emergency_at_legal_future_cursor() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(
-        Control { script: instructions([pair(1, 47)]), auto_emergency: true, ..Default::default() },
-        c"fixture.performance",
-    );
-    d.sink.script = vec![true, false, true];
-    d.run(0, 64, vec![], true);
-    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    assert_eq!(
-        (o.completions[0].attempted, o.completions[0].accepted, o.completions[0].unattempted),
-        (3, 1, 0)
-    );
-    assert_eq!(
-        d.sink.attempts.iter().map(|a| (a.kind, a.time, a.accepted)).collect::<Vec<_>>(),
-        [
-            (CLAP_EVENT_NOTE_ON, 47, true),
-            (CLAP_EVENT_NOTE_EXPRESSION, 47, false),
-            (CLAP_EVENT_NOTE_CHOKE, 47, true)
-        ]
+        d.sink.attempts.iter().map(|a| (a.kind, a.time)).collect::<Vec<_>>(),
+        [(CLAP_EVENT_NOTE_ON, 5), (CLAP_EVENT_NOTE_EXPRESSION, 5), (CLAP_EVENT_MIDI, 47)]
     );
     assert_eq!(d.sink.attempts[0].value, Some(note(CLAP_EVENT_NOTE_ON)));
     assert_eq!(d.sink.attempts[1].value, Some(tuning()));
+    assert_eq!(d.sink.attempts[2].value, Some(midi));
 }
 
 #[test]
-fn fences_before_claim_and_between_host_calls_preserve_permit_truth() {
+fn host_refusal_reaches_the_caller_and_does_not_inhibit_the_callback() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let mut d = Device::new(
-        Control { script: instructions([pair(1, 0)]), ..Default::default() },
+        Control {
+            script: instructions([
+                (5, note(CLAP_EVENT_NOTE_ON)),
+                (5, tuning()),
+                (6, note(CLAP_EVENT_NOTE_OFF)),
+            ]),
+            ..Default::default()
+        },
         c"fixture.performance",
     );
-    d.control.closed.store(true, Ordering::Release);
+    d.sink.script = vec![true, false];
     d.run(0, 64, vec![], true);
-    assert!(d.sink.attempts.is_empty());
-    assert_eq!(
-        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).completions[0].disposition,
-        perf::Disposition::Ineligible
-    );
-    let mut d = Device::new(
-        Control { script: instructions([pair(1, 0), pair(2, 1)]), ..Default::default() },
-        c"fixture.performance",
-    );
-    d.control.fence_on_push.store(true, Ordering::Release);
-    d.run(0, 64, vec![], true);
-    assert_eq!(d.sink.attempts.len(), 2);
-    assert_eq!(
-        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).completions[0].accepted,
-        3
-    );
-    assert_eq!(
-        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).completions[1].disposition,
-        perf::Disposition::Ineligible
-    );
-}
-
-#[test]
-fn rejected_expression_and_release_remain_exact_retry_values() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let expression = single(1, perf::Lane::Normal, 5, tuning());
-    let release = single(2, perf::Lane::Emergency, 5, note(CLAP_EVENT_NOTE_OFF));
-    let mut script = instructions([expression, release]);
-    script.push(Instruction {
-        callback: 2,
-        block: 0,
-        group: single(3, perf::Lane::Emergency, 0, note(CLAP_EVENT_NOTE_OFF)),
-    });
-    let mut d = Device::new(Control { script, ..Default::default() }, c"fixture.performance");
-    d.sink.script = vec![false, false, true];
-    d.run(0, 64, vec![], true);
-    d.run(64, 7, vec![], true);
     let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    assert_eq!(o.completions[0].accepted, 0);
-    assert_eq!(o.completions[0].group, expression);
-    assert_eq!(o.completions[1].accepted, 0);
-    assert_eq!(o.completions[1].group, release);
-    assert_eq!(o.completions[2].accepted, 1);
-    assert_eq!(o.completions[2].group.event(0), release.event(0));
+    // The refusal is the caller's to act on. Nothing behind it is suppressed:
+    // the wrapper keeps no inhibition state of its own any more.
+    assert_eq!(o.pushes, [true, false, true]);
+    assert_eq!(d.sink.attempts.len(), 3);
+    assert!(!d.sink.attempts[1].accepted);
 }
 
 #[test]
-fn all_exits_finalize_missing_output_invalid_input_and_process_error() {
+fn missing_output_and_error_exits_finalize_with_a_blind_writer() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     for (missing, invalid, error) in
-        [(true, false, false), (false, true, false), (false, false, true)]
+        [(true, false, false), (false, true, false), (false, false, true), (false, false, false)]
     {
         let mut d = Device::new(
-            Control {
-                script: instructions([pair(1, 0)]),
-                final_emergency: true,
-                process_error: error,
-                ..Default::default()
-            },
+            Control { final_flush: true, process_error: error, ..Default::default() },
             c"fixture.performance",
         );
         d.run(0, 64, if invalid { vec![on(64)] } else { vec![] }, !missing);
         let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(o.finals, 1);
         assert_eq!(o.summaries.len(), 1);
-        assert!(!d.control.busy.load(Ordering::Acquire));
-        if missing {
-            assert_eq!(o.completions.len(), 2);
-            assert!(
-                o.completions.iter().all(|c| c.disposition == perf::Disposition::MissingOutput)
-            );
+        if missing || invalid || error {
+            // A callback the host has already lost gets a writer that refuses
+            // everything, so the plugin retains its flush instead of spending it.
+            assert_eq!(o.pushes, [false]);
+            assert!(d.sink.attempts.is_empty());
         } else {
-            assert_eq!(d.sink.attempts.last().unwrap().kind, CLAP_EVENT_NOTE_CHOKE);
+            assert_eq!(o.pushes, [true]);
+            assert_eq!(
+                (d.sink.attempts.last().unwrap().kind, d.sink.attempts.last().unwrap().time),
+                (CLAP_EVENT_NOTE_CHOKE, 63)
+            );
         }
     }
 }
 
 #[test]
-fn notifications_merge_in_time_and_retain_partial_gestures_at_shared_budget() {
+fn parameter_output_follows_its_subblock_notes_at_the_subblock_end() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut script =
-        instructions((0..511).map(|n| single(n, perf::Lane::Normal, 0, note(CLAP_EVENT_NOTE_OFF))));
-    script.extend((0..128).map(|n| Instruction {
+    let mut script = instructions([(0, note(CLAP_EVENT_NOTE_OFF)), (31, note(CLAP_EVENT_NOTE_OFF))]);
+    script.push(Instruction {
         callback: 1,
-        block: 0,
-        group: single(n + 1000, perf::Lane::Emergency, 31, note(CLAP_EVENT_NOTE_CHOKE)),
-    }));
+        block: 32,
+        time: 40,
+        value: note(CLAP_EVENT_NOTE_OFF),
+    });
     let mut d = Device::new(Control { script, ..Default::default() }, c"fixture.combined");
     let mut edit = ConfigurationEdit::default();
     edit.values[0] = Some(0.75);
     d.mailbox().submit(edit).unwrap();
-    d.run(0, 64, vec![], true);
-    assert_eq!(d.sink.attempts.len(), 640);
-    assert_eq!(d.sink.attempts[0].kind, CLAP_EVENT_PARAM_GESTURE_BEGIN);
-    d.run(64, 7, vec![], true);
-    assert_eq!(d.sink.attempts[640].kind, CLAP_EVENT_PARAM_VALUE);
-    assert_eq!(d.sink.attempts[641].kind, CLAP_EVENT_PARAM_GESTURE_END);
+    // A transport event at 32 splits the callback into [0,32) and [32,64).
+    d.run(0, 64, vec![transport(32, false, 0)], true);
+    // Every parameter event lands on its sub-block's last sample, after the
+    // notes of that sub-block and before the notes of the next one, so the
+    // whole list is sorted without either half knowing the other's times.
+    let wire: Vec<_> = d.sink.attempts.iter().map(|a| (a.kind, a.time)).collect();
+    assert_eq!(
+        wire,
+        [
+            (CLAP_EVENT_NOTE_OFF, 0),
+            (CLAP_EVENT_NOTE_OFF, 31),
+            (CLAP_EVENT_PARAM_GESTURE_BEGIN, 31),
+            (CLAP_EVENT_PARAM_VALUE, 31),
+            (CLAP_EVENT_PARAM_GESTURE_END, 31),
+            (CLAP_EVENT_NOTE_OFF, 40),
+        ]
+    );
+    assert!(wire.windows(2).all(|pair| pair[0].1 <= pair[1].1));
 }
 
 #[test]
@@ -1415,14 +1269,14 @@ fn unsupported_input_and_legacy_send_misuse_are_explicit() {
 fn allocated_boundary_layouts_fit_declared_budgets() {
     assert!(std::mem::size_of::<Option<OwnedInput>>() <= 192);
     assert_eq!(std::mem::align_of::<Option<OwnedInput>>(), 8);
-    assert!(std::mem::size_of::<Option<perf::Group>>() <= 256);
+    // The output side allocates nothing now: `Output` is two borrows -- the
+    // host's list and the callback's high-water mark -- so the input pool is
+    // the whole of the boundary's storage.
+    assert!(std::mem::size_of::<perf::Output<'_>>() <= 16);
     println!(
-        "input={} output={} completion={} input_pool={} output_pool={}",
+        "input={} input_pool={}",
         std::mem::size_of::<Option<OwnedInput>>(),
-        std::mem::size_of::<Option<perf::Group>>(),
-        std::mem::size_of::<perf::Completion>(),
         INPUT_SCAN * std::mem::size_of::<Option<OwnedInput>>(),
-        perf::OUTPUT_CELLS * std::mem::size_of::<Option<perf::Group>>()
     );
 }
 
@@ -1454,23 +1308,33 @@ fn gesture_closing_debt_survives_rejection_before_new_begin() {
 #[test]
 fn reused_notification_cells_do_not_overtake_an_open_older_gesture() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let script =
-        instructions((0..505).map(|n| single(n, perf::Lane::Normal, 0, note(CLAP_EVENT_NOTE_OFF))));
-    let mut d = Device::new(Control { script, ..Default::default() }, c"fixture.combined");
+    let mut d = Device::new(Control::default(), c"fixture.combined");
     for value in [0.1, 0.2, 0.3, 0.4] {
         let mut edit = ConfigurationEdit::default();
         edit.values[0] = Some(value);
         d.mailbox().submit(edit).unwrap();
     }
+    // Refuse the value inside the third gesture. There is no output budget left
+    // to cut the drain short, so a host refusal is what leaves a gesture open
+    // across the callback boundary the reused cell has to wait behind.
+    d.sink.script = vec![true, true, true, true, true, true, true, true, false];
     d.control.apply_limit.store(3, Ordering::Release);
     d.run(0, 64, vec![], true);
-    assert_eq!(d.sink.attempts.len(), 512);
+    assert_eq!(d.sink.attempts.len(), 9);
     assert_eq!(d.sink.attempts[6].kind, CLAP_EVENT_PARAM_GESTURE_BEGIN);
     d.control.apply_limit.store(10, Ordering::Release);
     d.run(64, 8, vec![], true);
-    assert_eq!(d.sink.attempts[512].kind, CLAP_EVENT_PARAM_VALUE);
-    assert_eq!(d.sink.attempts[513].kind, CLAP_EVENT_PARAM_GESTURE_END);
-    assert_eq!(d.sink.attempts[514].kind, CLAP_EVENT_PARAM_GESTURE_BEGIN);
+    // The fourth edit reuses a cell an earlier gesture released. Its Begin
+    // waits behind the End the third gesture still owes.
+    assert_eq!(
+        d.sink.attempts[9..].iter().map(|a| a.kind).collect::<Vec<_>>(),
+        [
+            CLAP_EVENT_PARAM_GESTURE_END,
+            CLAP_EVENT_PARAM_GESTURE_BEGIN,
+            CLAP_EVENT_PARAM_VALUE,
+            CLAP_EVENT_PARAM_GESTURE_END
+        ]
+    );
 }
 
 #[test]
@@ -1587,23 +1451,16 @@ fn deferred_gui_producer_finishing_after_audio_still_wakes_host() {
 fn final_error_drain_requests_rescan_after_racing_restore() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     for invalid in [false, true] {
-        let script = if invalid {
-            instructions(
-                (0..512).map(|n| single(n, perf::Lane::Normal, 0, note(CLAP_EVENT_NOTE_OFF))),
-            )
-        } else {
-            vec![]
-        };
         let mut d = Device::new(
-            Control { process_error: !invalid, script, ..Default::default() },
+            Control { process_error: !invalid, ..Default::default() },
             c"fixture.combined",
         );
         let mut edit = ConfigurationEdit::default();
         edit.values[0] = Some(0.1);
+        // The edit is applied inside the racing callback itself, so its value
+        // attempt is the one the restore below overtakes. It used to be carried
+        // there by an exhausted output budget instead.
         d.mailbox().submit(edit).unwrap();
-        if invalid {
-            d.run(0, 64, vec![], true);
-        }
         d.control.pause_value.store(true, Ordering::Release);
         let control = d.control.clone();
         let plugin_address = d.plugin as usize;

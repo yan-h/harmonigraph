@@ -89,7 +89,7 @@ use std::mem;
 use std::num::NonZeroU32;
 use std::os::raw::c_char;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::thread::{self, ThreadId};
 use std::time::Duration;
@@ -104,6 +104,9 @@ use crate::wrapper::clap::{ClapPlugin, ProcessTrace};
 
 // Lives on the enclosing process stack. Only the host's original output list
 // receives events; the hook observes the actual result of its try_push call.
+// It takes the plugin lock, so it is only ever reached from wrapper code that
+// holds none: the owned performance boundary hands the plugin the host's
+// original list instead, and reads acceptance back through `Output::push`.
 struct TracedOutput<'a, P: ClapPlugin> {
     wrapper: &'a Wrapper<P>,
     original: *const clap_output_events,
@@ -138,8 +141,12 @@ pub struct Wrapper<P: ClapPlugin> {
     setup_pending: AtomicBool,
     configuration: Mutex<Option<configuration_adapter::Runtime>>,
     owned_input: Mutex<Option<input_adapter::Runtime>>,
-    performance: Mutex<Option<performance::Scheduler>>,
     pub(super) legacy_send_misuse: AtomicBool,
+    /// Audio-thread only, spanning every sub-block drain of one callback.
+    pub(super) parameter_attempts: AtomicUsize,
+    /// The latest offset this enclosing callback has put on the host's output
+    /// list, from either half of the boundary. Audio-thread only.
+    pub(super) output_high_water: AtomicU32,
     performance_audio: AtomicBool,
     deferred_host_callback: AtomicBool,
     #[cfg(feature = "clap-boundary-tests")]
@@ -698,8 +705,9 @@ impl<P: ClapPlugin> Wrapper<P> {
             setup_pending: AtomicBool::new(false),
             configuration: Mutex::new(None),
             owned_input: Mutex::new((P::CLAP_CONFIGURATION || P::CLAP_PERFORMANCE).then(input_adapter::Runtime::default)),
-            performance: Mutex::new(P::CLAP_PERFORMANCE.then(performance::Scheduler::default)),
             legacy_send_misuse: AtomicBool::new(false),
+            parameter_attempts: AtomicUsize::new(0),
+            output_high_water: AtomicU32::new(0),
             performance_audio: AtomicBool::new(false),
             deferred_host_callback: AtomicBool::new(false),
             #[cfg(feature = "clap-boundary-tests")]
@@ -2302,8 +2310,8 @@ impl<P: ClapPlugin> Wrapper<P> {
             } else { performance::InputStatus::Complete };
             let callback = performance::Callback { steady_time: process.steady_time, frames: process.frames_count,
                 transport: unsafe { process.transport.as_ref().copied() }, input_status,
-                output_available: unsafe { process.out_events.as_ref() }.is_some_and(|o| o.try_push.is_some()) };
-            if P::CLAP_PERFORMANCE { wrapper.begin_performance(callback); }
+                output_available: unsafe { host_process.out_events.as_ref() }.is_some_and(|o| o.try_push.is_some()) };
+            if P::CLAP_PERFORMANCE { unsafe { wrapper.begin_performance(callback, host_process.out_events); } }
             if P::CLAP_CONFIGURATION && boundary_valid {
                 let transport = unsafe { process.transport.as_ref() };
                 wrapper.process_configuration(super::configuration::ConfigurationBoundary {
@@ -2326,7 +2334,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                 if P::CLAP_CONFIGURATION { wrapper.plugin.lock().clap_configuration_fault(); }
                 if P::CLAP_PERFORMANCE {
                     if boundary_valid { wrapper.finish_owned_walk(); }
-                    unsafe { wrapper.finish_performance(callback, process.out_events, CLAP_PROCESS_ERROR); }
+                    unsafe { wrapper.finish_performance(callback, process.out_events, host_process.out_events, CLAP_PROCESS_ERROR); }
                 }
                 return CLAP_PROCESS_ERROR;
             }
@@ -2573,11 +2581,11 @@ impl<P: ClapPlugin> Wrapper<P> {
                         });
                     }
                     let result = if P::CLAP_PERFORMANCE {
-                        let mut scheduler = wrapper.performance.lock();
+                        let mut output = unsafe { performance::Output::new(host_process.out_events, &wrapper.output_high_water, true) };
                         plugin.clap_performance_process(buffers.main_buffer, &mut aux, &mut context,
                             performance::Block { callback, start: block_start as u32, frames: block_len as u32,
                                 transport: unsafe { transport_info.as_ref().copied() } },
-                            &mut scheduler.as_mut().unwrap().writer())
+                            &mut output)
                     } else { plugin.process(buffers.main_buffer, &mut aux, &mut context) };
                     if P::CLAP_PROCESS_TRACE {
                         plugin.clap_process_trace(ProcessTrace::SubBlockExit {
@@ -2604,7 +2612,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                 // events.
                 drop(buffer_manager);
                 if P::CLAP_PERFORMANCE {
-                    unsafe { wrapper.drain_performance(process.out_events, block_end.saturating_sub(1) as u32, false); }
+                    unsafe { wrapper.drain_performance(process.out_events, block_end.saturating_sub(1) as u32); }
                 } else if !process.out_events.is_null() {
                     unsafe {
                         wrapper.handle_out_events(
@@ -2628,7 +2636,7 @@ impl<P: ClapPlugin> Wrapper<P> {
 
             if P::CLAP_PERFORMANCE {
                 wrapper.finish_owned_walk();
-                unsafe { wrapper.finish_performance(callback, process.out_events, result); }
+                unsafe { wrapper.finish_performance(callback, process.out_events, host_process.out_events, result); }
             }
 
             // After processing audio, we'll check if the editor has sent us updated plugin state.
@@ -3491,8 +3499,9 @@ impl<P: ClapPlugin> Wrapper<P> {
                     // Flush has no musical clock. Only parameter notifications may
                     // attempt offset zero; owned input waits for a process boundary.
                     wrapper.begin_configuration_notifications();
-                    wrapper.performance.lock().as_mut().unwrap().begin(0, true);
-                    unsafe { wrapper.drain_performance(out, 0, false); }
+                    wrapper.parameter_attempts.store(0, Ordering::Release);
+                    wrapper.output_high_water.store(0, Ordering::Release);
+                    unsafe { wrapper.drain_performance(out, 0); }
                 } else if status == performance::InputStatus::Complete {
                     if !in_.is_null() { unsafe { wrapper.handle_in_events(&*in_, 0, 0); } }
                     if !out.is_null() { unsafe { wrapper.handle_out_events(&*out, 0, 0); } }

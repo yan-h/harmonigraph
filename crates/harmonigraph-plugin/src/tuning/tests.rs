@@ -175,6 +175,12 @@ struct Sink {
     reject_kind: Option<u16>,
     reject_attempt: Option<usize>,
     callback_nanos: u128,
+    /// Every kind of event the host took, note or parameter. The chronological
+    /// floor is the plugin's contract now, and this is what holds it to that:
+    /// both `time` expressions in `Tune::schedule` clamp differently, so a
+    /// future edit to either could otherwise ship an unsorted CLAP output list
+    /// with the suite green.
+    accepted_time: u32,
 }
 unsafe extern "C" fn push(
     output: *const clap_output_events,
@@ -186,6 +192,15 @@ unsafe extern "C" fn push(
     let reject = sink.reject_kind == Some(header.type_)
         || sink.reject_kind == Some(u16::MAX)
         || sink.reject_attempt == Some(sink.attempts);
+    if !reject {
+        assert!(
+            header.time >= sink.accepted_time,
+            "CLAP output must be sorted by time: {} after {}",
+            header.time,
+            sink.accepted_time
+        );
+        sink.accepted_time = header.time;
+    }
     let value = match header.type_ {
         CLAP_EVENT_NOTE_ON | CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_CHOKE | CLAP_EVENT_NOTE_END => {
             let e = unsafe { &*(header as *const clap_event_header).cast::<clap_event_note>() };
@@ -415,12 +430,16 @@ impl Device {
             get: Some(get),
         };
         let mut sink = Sink {
+            // Comfortably past EMIT_PER_CALLBACK, which is what bounds one
+            // callback's note output; a sink too small to hold it aborts under
+            // the allocation guard rather than reporting what overflowed.
             values: Vec::with_capacity(640),
             rejected: Vec::with_capacity(640),
             attempts: 0,
             reject_kind,
             reject_attempt,
             callback_nanos: 0,
+            accepted_time: 0,
         };
         let output =
             clap_output_events { ctx: (&mut sink as *mut Sink).cast(), try_push: Some(push) };

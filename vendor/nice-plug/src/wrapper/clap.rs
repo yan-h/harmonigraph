@@ -40,6 +40,12 @@ pub enum ProcessTrace<'a> {
         start: u32,
         length: u32,
     },
+    /// What the WRAPPER put on the wire: legacy `send_event` output, parameter
+    /// values and configuration notifications. Output an opted-in performance
+    /// plugin pushes for itself is not observed here, and does not need to be —
+    /// `performance::Output::push` returns the host's answer to the caller that
+    /// chose the event. Observing it would mean re-entering the plugin lock the
+    /// caller is already holding.
     Output {
         event: &'a clap_sys::events::clap_event_header,
         accepted: bool,
@@ -162,21 +168,9 @@ pub trait ClapPlugin: Plugin {
     ) -> nice_plug_core::plugin::ProcessStatus {
         self.process(buffer, aux, context)
     }
-    /// Claim the caller's permit here. No host call occurs with this borrow held.
-    /// A false return has an unconditional unattempted completion too.
-    fn clap_performance_prepare(&mut self, group: performance::Group) -> bool {
-        false
-    }
-    /// Durably record exact accepted prefixes BEFORE releasing the caller's
-    /// permit/BUSY. Emergency output may be staged at output.cursor() or later.
-    fn clap_performance_complete(
-        &mut self,
-        completion: performance::Completion,
-        output: &mut performance::Output<'_>,
-    ) {
-    }
-    /// Called once before final emergency draining, including invalid input,
-    /// missing output and process error. Then end observes all settled groups.
+    /// The last chance to emit in this callback, including invalid input,
+    /// missing output and process error — but on those three the output is
+    /// blind, so every push fails and the plugin retains what it offered.
     fn clap_performance_finalize(
         &mut self,
         callback: performance::Callback,
