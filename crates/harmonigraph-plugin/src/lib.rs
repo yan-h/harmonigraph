@@ -243,6 +243,16 @@ pub(crate) struct PluginParamBackend<'a> {
 }
 
 impl ParamBackend for PluginParamBackend<'_> {
+    fn tuning_instances(&self) -> Vec<harmonigraph_ui::params::TuningInstance> {
+        if self.params.configuration.get().is_some() {
+            tuning::instances::snapshots()
+        } else {
+            Vec::new()
+        }
+    }
+    fn edit_tuning_instance(&self, id: u64, edit: harmonigraph_ui::params::InstanceEdit) {
+        tuning::instances::edit(id, edit);
+    }
     fn configuration(&self) -> Option<harmonigraph_ui::params::ConfigurationView> {
         self.configuration.map(|(snapshot, pending)| configuration::view(snapshot, pending))
     }

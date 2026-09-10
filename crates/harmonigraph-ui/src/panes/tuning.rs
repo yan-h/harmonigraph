@@ -17,6 +17,10 @@ use crate::{theme, PictureState};
 use harmonigraph_core::configuration::ConfigEdit;
 use harmonigraph_core::tuning;
 
+#[cfg(test)]
+#[path = "tuning_instances_tests.rs"]
+mod instance_tests;
+
 /// The param bar for the axis a comma derives — the one whose tuning is not
 /// its own while that comma is tempered out.
 ///
@@ -400,6 +404,7 @@ pub(super) fn tuning_pane(
 
 fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
     section(ui, "Adaptive tuning");
+    instance_controls(ui, params);
     let mut p = state.runtime.adaptive_policy;
     let before = p;
     p.harmonic =
@@ -460,6 +465,200 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             ConfigEdit { policy: Some(p.sanitize()), ..Default::default() },
         );
     }
+}
+
+fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
+    use crate::params::InstanceEdit;
+    let instances = params.tuning_instances();
+    if instances.is_empty() {
+        return;
+    }
+    ui.horizontal(|ui| {
+        for (label, retune) in [("Retune all", true), ("Show all", false)] {
+            let enabled =
+                instances.iter().filter(|row| if retune { row.retune } else { row.show }).count();
+            let mut all = enabled == instances.len();
+            let mixed = enabled != 0 && !all;
+            if ui.add(egui::Checkbox::new(&mut all, label).indeterminate(mixed)).clicked() {
+                let value = enabled != instances.len();
+                for row in &instances {
+                    params.edit_tuning_instance(
+                        row.id,
+                        if retune {
+                            InstanceEdit::Retune(value)
+                        } else {
+                            InstanceEdit::Show(value)
+                        },
+                    );
+                }
+            }
+        }
+    });
+    let selection = ui.id().with("tuning-instance-selection");
+    let mut selected = ui.data(|data| data.get_temp::<u64>(selection)).unwrap_or(instances[0].id);
+    if !instances.iter().any(|row| row.id == selected) {
+        selected = instances[0].id;
+    }
+    let name_width = (ui.available_width() - 120.0).max(45.0);
+    egui::Grid::new("tuning-instances").num_columns(3).spacing([8.0, 6.0]).show(ui, |ui| {
+        ui.weak("Instance");
+        ui.weak("Retune");
+        ui.weak("Show");
+        ui.end_row();
+        for row in &instances {
+            ui.push_id(row.id, |ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(name_width);
+                    let name = if row.name.is_empty() {
+                        if row.is_hub {
+                            "Harmonigraph input".to_owned()
+                        } else {
+                            format!("Tune {}", row.id)
+                        }
+                    } else {
+                        row.name.clone()
+                    };
+                    if ui
+                        .add(egui::Button::selectable(selected == row.id, name).truncate())
+                        .clicked()
+                    {
+                        selected = row.id;
+                    }
+                    let status = if row.misses != 0 {
+                        format!("{} held · {} missed", row.held, row.misses)
+                    } else {
+                        format!("{} held · {} out", row.held, row.notes_out)
+                    };
+                    ui.small(status).on_hover_text(&row.status);
+                    if row.status != "No faults" {
+                        ui.colored_label(
+                            theme::armed(),
+                            egui::RichText::new("Check status").small(),
+                        )
+                        .on_hover_text(&row.status);
+                    }
+                });
+            });
+            let mut retune = row.retune;
+            if ui
+                .checkbox(&mut retune, "")
+                .on_hover_text("Retune notes and contribute to adaptive tuning")
+                .changed()
+            {
+                params.edit_tuning_instance(row.id, InstanceEdit::Retune(retune));
+            }
+            let mut show = row.show;
+            if ui
+                .checkbox(&mut show, "")
+                .on_hover_text("Show this instance's output notes")
+                .changed()
+            {
+                params.edit_tuning_instance(row.id, InstanceEdit::Show(show));
+            }
+            ui.end_row();
+        }
+    });
+    ui.data_mut(|data| data.insert_temp(selection, selected));
+    if let Some(row) = instances.iter().find(|row| row.id == selected) {
+        ui.push_id(row.id, |ui| {
+            ui.collapsing("Instance details", |ui| {
+                let mut name = row.name.clone();
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut name)
+                            .hint_text("Instance name")
+                            .desired_width(ui.available_width()),
+                    )
+                    .changed()
+                {
+                    params.edit_tuning_instance(row.id, InstanceEdit::Name(name));
+                }
+                ui.label(&row.status);
+                ui.small(format!(
+                    "{} notes in · {} out · {} missed corrections",
+                    row.notes_in, row.notes_out, row.misses
+                ));
+                if let Some((input, output)) = row.last_pitch {
+                    ui.small(format!(
+                        "Last attack: {} → {}",
+                        monitor_pitch(input),
+                        monitor_pitch(output)
+                    ))
+                    .on_hover_text("Note pitch and per-note expression, before channel pitch bend");
+                    ui.small(format!("Correction: {:+.1}¢", output - input));
+                }
+                ui.label(&row.delay_text);
+                if row.max_delay > 1 {
+                    let id = ui.id().with("delay-draft");
+                    let mut delay = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(row.delay);
+                    ui.horizontal(|ui| {
+                        ui.label("Buffers of delay");
+                        let response =
+                            ui.add(egui::DragValue::new(&mut delay).range(1..=row.max_delay));
+                        // Commit one completed drag, preserving the draft between frames.
+                        let draft = ui.data(|data| data.get_temp::<u32>(id));
+                        if response.changed() {
+                            ui.data_mut(|data| data.insert_temp(id, delay));
+                        }
+                        if response.drag_stopped() || response.changed() && !response.dragged() {
+                            params.edit_tuning_instance(
+                                row.id,
+                                InstanceEdit::Delay(if response.changed() {
+                                    delay
+                                } else {
+                                    draft.unwrap_or(delay)
+                                }),
+                            );
+                            ui.data_mut(|data| data.remove::<u32>(id));
+                        }
+                    });
+                } else {
+                    ui.weak("Harmonigraph's own input needs one buffer.");
+                }
+            });
+        });
+    }
+    if let Some(tuner) = instances.iter().find(|row| !row.is_hub) {
+        ui.collapsing("Tuning delay", |ui| {
+            let id = ui.id().with("all-delay-draft");
+            let mut delay = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(tuner.delay);
+            ui.horizontal(|ui| {
+                ui.label("Buffers");
+                ui.add(egui::DragValue::new(&mut delay).range(1..=tuner.max_delay));
+                if ui.button("Apply to all tuners").clicked() {
+                    for row in &instances {
+                        if !row.is_hub {
+                            params.edit_tuning_instance(row.id, InstanceEdit::Delay(delay));
+                        }
+                    }
+                }
+            });
+            ui.data_mut(|data| data.insert_temp(id, delay));
+            ui.weak(
+                "Each tuner reports its own latency. Individual overrides are in Instance details.",
+            );
+            ui.weak("Harmonigraph's own input stays at one buffer.");
+        });
+    }
+    if ui
+        .button("Reset all voices")
+        .on_hover_text("Release held notes and clear adaptive tuning context on every instance")
+        .clicked()
+    {
+        params.edit_tuning_instance(instances[0].id, InstanceEdit::Reset);
+    }
+    ui.weak(
+        "Retune off: pass notes through without influencing tuning. Show only affects the picture.",
+    );
+    ui.separator();
+}
+
+fn monitor_pitch(cents: f64) -> String {
+    let midi = (cents / 100.0).round() as i64;
+    let name = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"]
+        [midi.rem_euclid(12) as usize];
+    let offset = cents - midi as f64 * 100.0;
+    format!("{name}{} {offset:+.1}¢", midi.div_euclid(12) - 1)
 }
 
 /// Use the dock's width-aware value bars so long labels elide rather than widening the pane.
