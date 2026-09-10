@@ -238,19 +238,32 @@ fn lead_alpha(note: &RollNote, now: f64, release: f32) -> f32 {
 /// vertices, 4-5 ms of pure upload, the dominant cost of the frame. Four
 /// vertices a note and a distance field for the bands costs neither. See
 /// `harmonigraph_render::roll` for the measurement and the shape of the fix.
+#[derive(Clone, Copy)]
+pub(super) struct RollDrawOptions {
+    pub(super) split: f32,
+    pub(super) now: f64,
+    pub(super) surface: usize,
+    pub(super) ribbon_floor_scale: f32,
+}
+
 pub(super) fn draw_roll(
     painter: &egui::Painter,
     axes: &Axes,
     scale: &PitchScale,
     state: &PictureState,
-    split: f32,
-    now: f64,
-    surface: usize,
-    ribbon_floor_scale: f32,
+    options: RollDrawOptions,
 ) {
     let ppp = painter.ctx().pixels_per_point().max(1.0);
-    let notes = note_instances_with_floor(axes, scale, state, split, now, ppp, ribbon_floor_scale);
-    if surface == crate::panes::DOCKED_SURFACE {
+    let notes = note_instances_with_floor(
+        axes,
+        scale,
+        state,
+        options.split,
+        options.now,
+        ppp,
+        options.ribbon_floor_scale,
+    );
+    if options.surface == crate::panes::DOCKED_SURFACE {
         // What the roll costs, for the performance overlay: this geometry
         // does not pass through egui's vertex buffer, so the `verts` row
         // cannot see it. The overlay reads one number, so only the copy a
@@ -283,8 +296,8 @@ pub(super) fn draw_roll(
     // oldest edge and slide out under the scissor (see `note_instances`), and
     // this is the same edge in the same place.
     let (lead_px, _) =
-        lead(&state.appearance.spectrum, axes, state.runtime.whole_song.is_some(), split);
-    let near = (split - lead_px / axes.depth_len().max(1.0)).max(0.0);
+        lead(&state.appearance.spectrum, axes, state.runtime.whole_song.is_some(), options.split);
+    let near = (options.split - lead_px / axes.depth_len().max(1.0)).max(0.0);
     let region = egui::Rect::from_two_pos(axes.at(0.0, near), axes.at(1.0, 1.0));
     let painter = painter.with_clip_rect(painter.clip_rect().intersect(region));
     let dir = |v: egui::Vec2| [v.x, v.y];
@@ -302,8 +315,8 @@ pub(super) fn draw_roll(
         harmonigraph_render::bloom_strength(state.appearance.view.bloom_strength),
         state.appearance.view.shadow.spectral_geometry,
         state.surfaces.target_format,
-        crate::panes::lattice::pane_id(surface),
-        crate::text::spectral_shadow_surface(surface),
+        crate::panes::lattice::pane_id(options.surface),
+        crate::text::spectral_shadow_surface(options.surface),
         painter.ctx().cumulative_pass_nr(),
     ));
 }

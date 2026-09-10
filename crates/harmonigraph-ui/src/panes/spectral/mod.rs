@@ -494,7 +494,13 @@ pub(crate) fn spectral_pane(
     // lead a little way past, into the spectrum peak it is making (see
     // `roll::lead`, and the divider below for what still draws over it).
     if split < 1.0 && cfg.show_roll {
-        roll::draw_roll(&painter, &axes, &scale, state, split, now, surface, ribbon_floor_scale);
+        roll::draw_roll(
+            &painter,
+            &axes,
+            &scale,
+            state,
+            roll::RollDrawOptions { split, now, surface, ribbon_floor_scale },
+        );
     }
 
     // The now-line, where the roll hands over to the spectrum — drawn after
