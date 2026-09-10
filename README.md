@@ -65,6 +65,12 @@ it does not claim to identify or correct them automatically.
 
 ## How I use it
 
+I play on [Latticeboard](https://github.com/yan-h/lattice-board),
+an isomorphic MIDI keyboard I designed around the Wicki–Hayden layout.
+Its fingering patterns stay consistent when transposed,
+complementing the way Harmonigraph makes harmonic relationships recognizable by shape.
+Harmonigraph also works with other MIDI controllers.
+
 I usually start by improvising in a tuning close to [31-tone equal temperament](https://en.wikipedia.org/wiki/31_equal_temperament) or [quarter-comma meantone](https://en.wikipedia.org/wiki/Quarter-comma_meantone).
 In 31-tone equal temperament,
 the octave is divided into 31 equal steps.
