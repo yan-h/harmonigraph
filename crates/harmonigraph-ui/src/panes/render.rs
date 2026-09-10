@@ -271,21 +271,22 @@ fn preview_shadows(
     width: f32,
     config: &crate::RenderConfig,
 ) -> harmonigraph_scene::ShadowSettings {
-    let scale = preview_scale(width, config);
+    // Shadows are user-sized styles. A preview larger than the export keeps
+    // the dial's maximum rather than manufacturing a wider shadow than the
+    // configured render will draw.
+    let scale = preview_scale(width, config).min(1.0);
     shadow.spectral_geometry.width *= scale;
     shadow.spectral_text.width *= scale;
     shadow
 }
 
 /// The preview's logical frame size relative to the one the export uses.
-/// Point-sized effects use this so a smaller live preview remains the same
-/// composition rather than making fixed-width ink look heavier.
+/// Point-sized geometry uses this so a live preview remains the same
+/// composition at either side of the export's logical size.
 fn preview_scale(width: f32, config: &crate::RenderConfig) -> f32 {
     let pixels = config.frame.pixels(config.short_edge);
     let export_width = pixels[0] as f32 / crate::layout::export_pixels_per_point(pixels);
-    // The live preview normally shrinks the shot. At larger-than-export sizes
-    // keep the dial's maximum rather than manufacture an out-of-range style.
-    (width / export_width).clamp(0.0, 1.0)
+    (width / export_width).max(0.0)
 }
 
 /// Aspect ratio and resolution — editing the persisted
@@ -806,6 +807,10 @@ mod tests {
                             assert_eq!(preview.kernel, export.kernel);
                         }
                     }
+                    let enlarged =
+                        preview_shadows(saved, export_width * 2.0, &state.appearance.render);
+                    assert_eq!(enlarged.spectral_geometry, saved.spectral_geometry);
+                    assert_eq!(enlarged.spectral_text, saved.spectral_text);
                     // Exercise the actual scoped draw too: it must restore the
                     // settings that the dock and a subsequent export will read.
                     assert!(!state.appearance.render.playhead, "the spectral preview must draw");
@@ -848,13 +853,63 @@ mod tests {
     }
 
     #[test]
-    fn preview_scale_tracks_the_logical_frame_and_caps_at_export_size() {
+    fn preview_scale_tracks_the_logical_frame_below_and_above_export_size() {
         let state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
         let pixels = state.appearance.render.frame.pixels(state.appearance.render.short_edge);
         let export_width = pixels[0] as f32 / crate::layout::export_pixels_per_point(pixels);
 
         assert!((preview_scale(export_width, &state.appearance.render) - 1.0).abs() < 1e-6);
         assert!((preview_scale(export_width * 0.25, &state.appearance.render) - 0.25).abs() < 1e-6);
-        assert_eq!(preview_scale(export_width * 2.0, &state.appearance.render), 1.0);
+        assert_eq!(preview_scale(export_width * 2.0, &state.appearance.render), 2.0);
+    }
+
+    #[test]
+    fn video_preview_routes_its_frame_scale_into_hairline_roll_geometry() {
+        let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        state.appearance.render.frame.aspect_w = 16;
+        state.appearance.render.frame.aspect_h = 9;
+        state.appearance.render.frame.lattice = LatticeSide::Top;
+        state.appearance.render.frame.split = 0.05;
+        state.appearance.spectrum.orientation = crate::SpectralOrientation::Top;
+        state.appearance.spectrum.low_midi = -240.0;
+        state.appearance.spectrum.high_midi = 360.0;
+        state.appearance.spectrum.roll_thickness = 0.0;
+        state.appearance.spectrum.show_roll = true;
+        state.appearance.spectrum.show_spectrogram = false;
+        state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+            0.0,
+            harmonigraph_core::SourceId::DIRECT,
+            0,
+            60,
+            1.0,
+        ));
+
+        let mut samples = Vec::new();
+        for width in [480.0, 1_800.0] {
+            let _ = crate::panes::spectral::roll::take_roll_draw_probe();
+            let ctx = crate::tests::probe::themed();
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 2_000.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| render_pane(ui, &mut state, &mut crate::Interaction::default(), 0.05),
+            );
+            let probe = crate::panes::spectral::roll::take_roll_draw_probe()
+                .expect("the preview did not reach the roll draw boundary");
+            assert_eq!(probe.surface, PREVIEW_SURFACE);
+            let expected = preview_scale(probe.pitch_len, &state.appearance.render);
+            assert!((probe.ribbon_floor_scale - expected).abs() < 1e-6);
+            assert_eq!(probe.note_count, 1, "the fixture did not draw exactly one roll note");
+            let half_pitch = probe.first_half_pitch.expect("the hairline fixture drew no note");
+            samples.push((expected, half_pitch));
+        }
+        assert!(samples[0].0 < 1.0, "the small preview did not exercise downscaling");
+        assert!(samples[1].0 > 1.0, "the large preview did not exercise enlargement");
+        assert!(samples[0].1 < samples[1].1, "the enlarged preview kept the smaller floor");
+        assert!((samples[0].1 / samples[1].1 - samples[0].0 / samples[1].0).abs() < 1e-3);
     }
 }
