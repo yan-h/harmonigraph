@@ -379,20 +379,34 @@ pub(super) fn tuning_pane(
     // rather than three numbers, so it gets its own heading.
     section(ui, "Temperaments");
     comma_controls(ui, state, params);
-    if state.runtime.configuration_status & 3 != 0 {
+    let configuration_notice = if state.runtime.configuration_status & 3 != 0 {
         ui.colored_label(
             theme::armed(),
             "Learning unavailable: configuration or held state is incomplete. Reset to recover.",
         );
+        true
     } else if state.runtime.configuration_status & 4 != 0 {
         ui.weak("Tuning applied; host notification was rejected");
+        true
     } else if state.runtime.configuration_status & 8 != 0 {
         ui.weak("Tuning change refused: pending command storage is full");
-    } else if state.runtime.configuration_pending {
-        ui.weak("Tuning change pending audio adoption");
-    }
+        true
+    } else {
+        false
+    };
 
     adaptive_controls(ui, state, params);
+
+    // After every control: `configuration_pending` can come and go between
+    // consecutive frames while a drag submits policy edits and the audio
+    // thread adopts them. A conditional row above Adaptive tuning moves the
+    // bar still held under the pointer, making the gesture feed back into its
+    // own value and the whole section alternate between two positions. The
+    // persistent fault notices stay prominent above the controls; unlike this
+    // ordinary pending transition, they do not alternate within the gesture.
+    if !configuration_notice && state.runtime.configuration_pending {
+        ui.weak("Tuning change pending audio adoption");
+    }
 
     // Hovering a lattice node deliberately reports NOTHING here. Growing a
     // "Hovered: (t, f, s) = pitch" line whenever the pointer is over a node
