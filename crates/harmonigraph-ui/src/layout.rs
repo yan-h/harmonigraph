@@ -142,7 +142,7 @@ impl Layout {
     /// identical frame.
     ///
     /// `fraction` is the LATTICE's share on all four sides — the spectral pane
-    /// gets the complement — so the split bar keeps meaning one thing when the
+    /// gets the complement — so the preview divider keeps meaning one thing when the
     /// side changes under it.
     pub fn split(side: LatticeSide, fraction: f32) -> Layout {
         let f = fraction.clamp(0.05, 0.95);

@@ -400,7 +400,7 @@ impl RenderFrame {
     /// [`pixels`](Self::pixels)'s own `.max(1)`), so a hand-edited 0 costs
     /// nothing here that isn't already caught where it is used.
     ///
-    /// `split` is different: the Video pane's own bar holds it to
+    /// `split` is different: the Video pane's preview divider holds it to
     /// `0.05..=0.95`, and `Layout::split` clamps into that same literal
     /// range — which cannot itself panic (the bounds are constants, not a
     /// second field), but does not repair a NaN either, `clamp` losing every

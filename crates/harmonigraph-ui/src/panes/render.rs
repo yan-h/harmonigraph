@@ -212,8 +212,7 @@ fn preview_layout_controls(ui: &mut egui::Ui, rect: egui::Rect, frame: &mut crat
     }
     if moving.dragged() || moving.drag_stopped() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-        if let Some(pointer) = moving.interact_pointer_pos().filter(|p| rect.contains(*p)) {
-            let side = preview_drop_side(rect, pointer);
+        if let Some(side) = moving.interact_pointer_pos().and_then(|p| preview_drop_side(rect, p)) {
             let target = preview_lattice_rect(rect, side, frame.split);
             ui.painter().rect_stroke(
                 target.shrink(2.0),
@@ -241,10 +240,15 @@ fn preview_lattice_rect(rect: egui::Rect, side: LatticeSide, split: f32) -> egui
 }
 
 /// Normalized edge distances give every side an equal target on portrait and landscape frames.
-fn preview_drop_side(rect: egui::Rect, pointer: egui::Pos2) -> LatticeSide {
+/// The middle half of each axis is a cancel region, so a small drag inside a
+/// wide lattice cannot silently dock it to the opposite side.
+fn preview_drop_side(rect: egui::Rect, pointer: egui::Pos2) -> Option<LatticeSide> {
+    if !rect.contains(pointer) {
+        return None;
+    }
     let x = (pointer.x - rect.left()) / rect.width();
     let y = (pointer.y - rect.top()) / rect.height();
-    [
+    let (distance, side) = [
         (x, LatticeSide::Left),
         (1.0 - x, LatticeSide::Right),
         (y, LatticeSide::Top),
@@ -252,8 +256,8 @@ fn preview_drop_side(rect: egui::Rect, pointer: egui::Pos2) -> LatticeSide {
     ]
     .into_iter()
     .min_by(|a, b| a.0.total_cmp(&b.0))
-    .unwrap()
-    .1
+    .unwrap();
+    (distance <= 0.25).then_some(side)
 }
 
 fn preview_shadows(
@@ -729,6 +733,27 @@ mod tests {
                     assert_eq!(frame.lattice, from);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn dragging_inside_a_wide_lattice_does_not_redock_it() {
+        let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(400.0, 300.0));
+        for side in LatticeSide::ALL {
+            let mut frame = crate::RenderFrame { lattice: side, split: 0.95, ..Default::default() };
+            let direction = match side {
+                LatticeSide::Left => egui::vec2(1.0, 0.0),
+                LatticeSide::Right => egui::vec2(-1.0, 0.0),
+                LatticeSide::Top => egui::vec2(0.0, 1.0),
+                LatticeSide::Bottom => egui::vec2(0.0, -1.0),
+            };
+            // Both points are past the midline, toward the opposite side,
+            // and the movement exceeds the drag threshold without reaching an edge band.
+            let start = rect.center() + rect.size() * direction * 0.1;
+            let end = rect.center() + rect.size() * direction * 0.2;
+            drag_preview(&mut frame, rect, start, end);
+            assert_eq!(frame.lattice, side);
+            assert_eq!(frame.split, 0.95);
         }
     }
 
