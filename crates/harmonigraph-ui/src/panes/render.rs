@@ -997,6 +997,35 @@ mod tests {
     }
 
     #[test]
+    fn clicking_near_an_analyzer_edge_does_not_reorient_it() {
+        let ctx = crate::tests::probe::themed();
+        let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        state.appearance.render.frame.lattice = LatticeSide::Right;
+        state.appearance.render.frame.split = 0.4;
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
+        let spectral = preview_pane_rect(
+            rect,
+            state.appearance.render.frame.lattice,
+            state.appearance.render.frame.split,
+            Pane::Spectral,
+        );
+        let near_right = egui::pos2(spectral.right() - spectral.width() * 0.1, spectral.center().y);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: near_right,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in
+            [vec![egui::Event::PointerMoved(near_right)], vec![button(true)], vec![button(false)]]
+        {
+            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events, false);
+        }
+        assert_eq!(state.appearance.spectrum.orientation, SpectralOrientation::Left);
+    }
+
+    #[test]
     fn playhead_placeholder_keeps_analyzer_orientation_and_pitch_zoom_live() {
         let ctx = crate::tests::probe::themed();
         let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);

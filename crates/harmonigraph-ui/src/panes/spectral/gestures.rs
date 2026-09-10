@@ -379,7 +379,12 @@ pub(super) fn drag_orientation(
             .on_hover_cursor(egui::CursorIcon::Grab)
             .on_hover_text("Drag to an edge to turn the analyzer · Hold Shift and drag to navigate")
     };
-    let active = !navigating && (response.dragged() || response.drag_stopped());
+    // A drag-only egui widget claims the pointer immediately on press, before
+    // it knows whether the gesture will move. Keep the target and the persisted
+    // edit dark until the pointer has crossed egui's own click threshold.
+    let active = !navigating
+        && (response.dragged() || response.drag_stopped())
+        && !ui.input(|i| i.pointer.could_any_button_be_click());
     if active {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     }
