@@ -18,6 +18,47 @@ mod configuration;
 mod editor;
 #[cfg(all(feature = "startup-probe", target_os = "macos"))]
 pub use editor::startup_probe::run as editor_startup_probe;
+// The allocator that makes `configuration::tests`' `assert_no_alloc` blocks
+// mean anything, in the one profile nice-plug does not cover.
+//
+// `assert_no_alloc` only raises a thread-local forbid count; the abort lives in
+// the global allocator that reads it. nice-plug installs one
+// (`MeasuredAllocator` over `AllocDisabler`), but both of its declarations are
+// `#[cfg(debug_assertions)]` — see `vendor/nice-plug/src/wrapper/util.rs`. A
+// `--release` test binary therefore runs on the system allocator and the guard
+// passes without guarding: measured, a deliberate 64-byte `Vec` inside
+// `canonical_publication_slots_and_loss_are_allocation_free` was reported `ok`.
+//
+// The two declarations are complements only while the profiles they read agree
+// about `debug_assertions`, and that is an agreement BETWEEN two profiles
+// rather than a property of one: a `cargo test` lib-test unit compiles under
+// `test` while nice-plug compiles under `dev`. They agree by default, and this
+// workspace already customises `dev`, `dev.package."*"` and
+// `release.package.*`, so both ways of breaking it are reachable from
+// `Cargo.toml`:
+//
+//   * `[profile.test] debug-assertions = false` leaves nice-plug's on and turns
+//     this one on too — two `#[global_allocator]`s in one binary, which is a
+//     hard "cannot define multiple global allocators" and therefore audible.
+//   * `[profile.dev.package."*"] debug-assertions = false`, the usual
+//     build-speed trick, reaches nice-plug (not a workspace member) and not
+//     this crate, so NEITHER is installed and the guard silently goes back to
+//     passing without guarding. That is the direction to check for whenever
+//     either profile's assertions move.
+//
+// If a guarded block here ever needs an escape hatch, it must call
+// `nice_assert_no_alloc::permit_alloc` and NOT `nice_plug::util::permit_alloc`,
+// which is what the rest of the tree and all of `vendor/nice-plug` reach for.
+// nice-plug-core gates its helper on
+// `all(debug_assertions, feature = "assert_process_allocs")`, so under
+// `--release` it is an identity function and the allocation it was supposed to
+// permit aborts the WHOLE test binary, taking every other test's result with
+// it. The `nice_assert_no_alloc` one is live in both profiles, because the
+// workspace `Cargo.toml` compiles that package with debug assertions on.
+#[cfg(all(test, not(debug_assertions)))]
+#[global_allocator]
+static ALLOCATOR: nice_assert_no_alloc::AllocDisabler = nice_assert_no_alloc::AllocDisabler;
+
 #[cfg(test)]
 mod test_scope;
 mod tuning;

@@ -105,6 +105,34 @@ run cargo check -p harmonigraph-plugin
 # The default CLAP configuration owner is exercised without enabling the probe.
 run cargo test -p harmonigraph-plugin --features nice-plug/assert_process_allocs configuration::tests::
 
+# Every other gate here runs the dev profile, and the profile hides a class of
+# break by itself. `nice-assert-no-alloc` compiles its allocation guard out when
+# debug assertions are off, so #805 was a test target that could not compile
+# under `--release` while everything above stayed green — the same shape as a
+# guard that passes without guarding, one level up. `check` rather than `test`
+# because the compile break is the half that regresses silently; that the guard
+# still ABORTS under release is a runtime property no cheap gate asserts, and it
+# is measured in PR #810 instead.
+#
+# Cold on an 8-core M-series with sccache bypassed this is 1m54s, against 51s
+# for the same check narrowed to `-p harmonigraph-record --features
+# test-support` — and that feature is not optional in the narrow form, because
+# `mod audio_tests` is gated on it and only harmonigraph-plugin's
+# dev-dependency turns it on, so `cargo test --release -p harmonigraph-record`
+# compiles and runs ZERO allocation tests and passes for the wrong reason.
+#
+# The fixed half of that cost is release-profile proc-macro and build-script
+# codegen that ANY `--release` invocation pays, so narrowing the gate buys 45%
+# of the cost for a fraction of the coverage. It sits in `isolated` because that
+# group finished ~47s ahead of `workspace` on the run this landed against, which
+# absorbs part of it.
+#
+# The second cost is not wall clock. Release metadata is a new artifact class in
+# an sccache budget already past GitHub's 10 GB cap and evicting by LRU (see the
+# rust-cache comments in ci.yml), so it taxes every other run a little. If CI
+# slows across the board, weigh removing this before anything above it.
+run cargo check --release --workspace --all-targets
+
 # ...and RUN harmonigraph-render's own tests in that same configuration, which
 # is the half a check cannot do. The unification above does not merely compile
 # the plugin with hot-reload on, it also deletes every
