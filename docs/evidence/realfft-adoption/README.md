@@ -70,8 +70,11 @@ A full workspace `--release` test command is not a substitute for the normal pro
 `results/` contains raw analyzer rows, integrated runtime rows, numerical comparisons, actual-node summaries, selected ring diagnostics, baseline gains, small process snapshots, feature coverage and validation/build logs.
 Large node dumps and RGBA streams are reproducible rather than committed;
 `generated-SHA256SUMS` identifies those measured files and binaries.
-`images/` holds baseline/candidate/amplified contact sheets, with no golden blessing.
-The report states which differences still need acceptance.
+`images/` preserves the original baseline/candidate/amplified contact sheets from before acceptance.
+After reviewing that evidence, Yan accepted the documented picture and gate behavior and requested merge.
+Only the three reviewed spectral goldens were then updated with the repository blessing command;
+`accepted-golden-deltas.csv` records their exact one/one/four channel changes, all by 1/255.
+Subsequent unblessed golden and full-workspace checks verify the accepted state.
 
 `measured-artifacts.csv` records sizes and SHA-256 values for the binaries actually used in the timing runs.
 The baseline application artifacts were built from clean `d34d66c`;

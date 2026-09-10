@@ -1,0 +1,4 @@
+file,changed_pixels,changed_channels,maximum_delta
+crates/harmonigraph-offline/golden/spectrogram-short-pane.png,1,1,1
+crates/harmonigraph-offline/golden/spectrogram-tall-pane.png,1,1,1
+crates/harmonigraph-offline/golden/spectrogram-whole-song.png,4,4,1

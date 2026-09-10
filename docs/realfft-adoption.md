@@ -1,10 +1,10 @@
 # RealFFT adoption (#743)
 
-This draft adopts the backend evaluated in [PR #803's report](fft-backend-evaluation.md).
+This adopts the backend evaluated in [PR #803's report](fft-backend-evaluation.md).
 Baseline: freshly fetched `origin/main` at `d34d66cfd5e739fbe2528e084ddab001bb4e8b4b`.
-The implementation and evidence are complete enough for review;
-visual acceptance of the numerical boundary changes remains required before merge.
-No golden was blessed and no shared DAW slot was changed.
+Yan accepted the documented numerical, picture and gate behavior after reviewing the comparisons and requested the merge.
+The three reviewed spectral goldens now record that accepted output.
+No shared DAW slot was changed.
 
 ## Boundary and behavior
 
@@ -61,7 +61,7 @@ These are repeated instances of one class, not 5,084 independent notes.
 Maximum node opacity difference is 1.0 in the 16384/1 and 16384/5 Spectrum cases:
 missing a strict opening can keep the node closed throughout a following held-band history while the other backend fades fully in.
 Differences survive into silence: up to phase 8 at 8192 samples, and phase 7 at 16384 samples.
-This is expected threshold sensitivity to finite precision, but it is a visible behavior change requiring acceptance, not an error hidden by a tolerance.
+This is expected threshold sensitivity to finite precision, but it is a visible behavior change explicitly accepted by Yan, not an error hidden by a tolerance.
 
 The maintained `analyzed_audio_crosses_the_gate_and_carries_its_hysteresis_fade` regression drives the real analyzer and scene for default/largest settings in both readings, using a 2% margin around those measured boundaries.
 It asserts an idle actual node's strict opening, rising held-band fade, partial closing fade and eventual silence.
@@ -149,26 +149,30 @@ Scalar full frames were not captured;
 x86 SSE/AVX, other CPUs and other sample rates were not executed here.
 The shipped manifest retains default SIMD features.
 
-## Validation and remaining acceptance
+## Validation and acceptance
 
 The [reproduction instructions and raw results](evidence/realfft-adoption/README.md) identify the temporary probes and captured artifacts.
 No temporary module include, extra example executable, scalar feature override or copied original FFT remains in production.
 The core dependency guard remains intact.
 Workspace all-target clippy with warnings denied, strict private rustdoc checks, Markdown local links, formatting, and the isolated plugin package check pass.
-The canonical `cargo test --workspace` run reaches three unblessed spectral golden failures:
+The initial canonical `cargo test --workspace` run detected three unblessed spectral golden differences:
 `a_short_pane_zoomed_out_draws_the_frame_on_record`, `a_tall_pane_zoomed_out_draws_the_frame_on_record`, and `the_whole_song_layout_draws_the_frame_on_record`.
 The short and tall frames each change one channel of one pixel, and whole-song changes one channel at each of four pixels, all by 1/255;
 [short](evidence/realfft-adoption/images/golden-spectrogram-short-pane.png), [tall](evidence/realfft-adoption/images/golden-spectrogram-tall-pane.png) and [whole-song](evidence/realfft-adoption/images/golden-spectrogram-whole-song.png) contact sheets retain the exact comparisons.
 The zoomed-in and mixed-shadow spectral goldens pass.
 A separate `cargo test --workspace -- --skip golden` passes 1,537 tests (29 ignored), and `cargo test -p harmonigraph-render golden` passes all 14 lattice checks.
 The baseline passed all five spectral and 14 lattice golden checks.
-These expected picture failures remain acceptance gates;
-Full CI is not claimed green, and an accepted picture change still needs a reviewed golden update.
+After Yan accepted those comparisons, the repository-wide blessing command updated only these three PNGs.
+A direct decoded-pixel comparison verified the exact expected one/one/four channel changes, each by 1/255;
+all other goldens stayed byte-identical.
+The subsequent unblessed `cargo test --workspace golden` passes all 20 checks (2 ignored).
+The full `cargo test --workspace` passes 1,557 tests (31 ignored), including all five spectral and 14 lattice golden checks.
 
 A `--release --workspace` test attempt hit a pre-existing `harmonigraph-record` test compile failure:
 its global allocator references `nice_assert_no_alloc::AllocDisabler`, which that dependency's default `disable_release` feature removes in release builds.
 The recording tests, manifest and dependency version are unchanged.
 Required workspace validation uses the repository's normal dev profile instead.
 
-The remaining decision is acceptance of sparse representative pixel differences and potentially persistent ring differences at exact numerical thresholds, on the measured CPU paths.
-The draft must stay unmerged until that is resolved.
+Yan accepted the sparse representative pixel differences and potentially persistent ring differences at exact numerical thresholds on the measured CPU paths.
+The platform limits and original comparison evidence remain unchanged;
+final CI and merge coordination are recorded on the adoption PR.
