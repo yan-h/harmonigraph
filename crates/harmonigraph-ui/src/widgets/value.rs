@@ -4,7 +4,7 @@ use std::ops::RangeInclusive;
 
 use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
-use super::bar::{anchored_fill, bar_radius, bar_width, elided_name, track_fill, BAR_TEXT_PAD};
+use super::bar::{bar_radius, bar_width, elided_name, track_fill, BAR_TEXT_PAD};
 use crate::theme;
 
 /// How many segments a [`ValueBar::curve`] preview is drawn in.
@@ -347,10 +347,9 @@ impl<'a> ValueBar<'a> {
 
         let t = self.to_t(*self.value);
         let fill_color = track_fill(&response);
-        if let Some((painter, fill)) =
-            anchored_fill(painter, rect, rect.left() + rect.width() * t, bar_radius(scale))
-        {
-            painter.rect_filled(fill, radius, fill_color);
+        let fill = filled_part(rect, rect.left() + rect.width() * t, bar_radius(scale));
+        if !fill.is_empty() {
+            painter.add(egui::Shape::convex_polygon(fill, fill_color, egui::Stroke::NONE));
         }
 
         // Over the fill and under the text: the fill is what the curve is
@@ -508,16 +507,14 @@ const STRIPE_MIN_AREA: f32 = 0.1;
 /// [chrome scale](theme::ui_scale) on offer.
 const OUTLINE_STEPS: usize = 4;
 
-/// The outline of a rounded rect, clockwise, as a convex polygon a stripe can
-/// be cut against.
+/// The outline of a rounded rect, clockwise, as a convex polygon a stripe or a
+/// fill can be cut against.
 ///
-/// The radius is clamped the way epaint clamps a rect shape's — to half the
-/// shorter side — so the cutter and the fill it is cutting to agree wherever
-/// that clamp bites. A nearly-empty bar is no longer where it does:
-/// [`anchored_fill`] hands over a fill already widened past two corners, for
-/// the sake of the corner the clamp would otherwise take off it. What is left
-/// is a TRACK too narrow for its own corner, which is a pane dragged to a few
-/// points wide — and there the well is clamped as well, so the two still agree.
+/// Only ever asked for the TRACK's own shape, which is what makes the clamp
+/// below a formality rather than a case: it is clamped the way epaint clamps a
+/// rect shape's — to half the shorter side — so the outline and the `well()`
+/// rect drawn from the same numbers agree even where a pane is dragged
+/// narrower than two corners and epaint takes the well's radius down.
 fn rounded_outline(rect: egui::Rect, radius: f32) -> Vec<egui::Pos2> {
     let radius = radius.clamp(0.0, rect.width().min(rect.height()) * 0.5);
     // Each corner as the centre it turns about and the direction it starts
@@ -585,6 +582,58 @@ fn area(poly: &[egui::Pos2]) -> f32 {
     shoelace * 0.5
 }
 
+/// The part of `track` lying left of `reach`, clockwise, as the convex polygon
+/// a bar's fill IS.
+///
+/// **A fill is a reveal of the track, not a shape of its own.** Drawn as its
+/// own rounded rect it has to be kept agreeing with the track's shape, and it
+/// cannot be: epaint holds a rect's corner radius to half its SHORTEST side
+/// (`clamp_corner_radius`), so a fill narrower than two corners rounds tighter
+/// than the well it sits in. The two share their left corner, so tighter means
+/// the fill's edge standing OUTSIDE the arc it is meant to be sitting in —
+/// accent on the panel, growing as the value drops, which is a bar visibly
+/// coming away from its own track at the bottom of its travel.
+///
+/// Cutting the track's outline instead answers that at every value with no case
+/// to get wrong. Both ends come out right for the same reason rather than for
+/// two: a fill up against the far end wears the track's right corners, and one
+/// under a corner's width is bounded by the arc, which is a shape no rect can
+/// express in the first place.
+///
+/// **So the frontier is a flat vertical edge at every value**, which is what a
+/// fill being part of the track means. The alternative is a rounded cap, and it
+/// was the shape here until the cap turned out to be what the widths below two
+/// corners cannot keep: the fill goes from cap to flat face over about a point
+/// of travel, since a cut through the end of an arc grows as its own square
+/// root. There is no width at which a cap and the track's own corner can both
+/// be had, and this is which of the two the bar keeps. (egui's `ProgressBar`
+/// keeps the cap and floors the fill at two corners instead, which is a bar
+/// that stops reading its value below a few percent and shows a stub at zero —
+/// fine for something you watch, wrong for something you tune.)
+///
+/// A polygon rather than a rect shape because a rect cannot say any of it: not
+/// the arc-bounded sliver, not the partial corners at the far end, and not a
+/// left corner its own width will not allow. Feathered like any convex path, so
+/// the frontier keeps the subpixel edge it moves on — which a clip rect, being
+/// a scissor on a whole physical pixel, would not.
+fn filled_part(track: egui::Rect, reach: f32, corner: u8) -> Vec<egui::Pos2> {
+    let reach = reach.min(track.right());
+    if reach <= track.left() {
+        return Vec::new();
+    }
+    // Clockwise once y points down, matching the outline it cuts. Held to the
+    // track top and bottom rather than run to infinity so the cut stays a
+    // convex region of finite size; the track's own outline is inside it either
+    // way, so only the right edge ever takes anything off.
+    let band = [
+        egui::pos2(track.left(), track.top()),
+        egui::pos2(reach, track.top()),
+        egui::pos2(reach, track.bottom()),
+        egui::pos2(track.left(), track.bottom()),
+    ];
+    clipped(&rounded_outline(track, f32::from(corner)), &band)
+}
+
 /// Paint the travelling stripes over `region` in `colour`.
 ///
 /// The pattern is laid out across `bar` and only shown inside `region`, which
@@ -592,23 +641,27 @@ fn area(poly: &[egui::Pos2]) -> f32 {
 /// twice, cut to the whole track and then to the fill, with the fill's own
 /// opaque rect between the two passes.
 ///
-/// `travel` is how far along the bar the pattern stands this frame, in points,
-/// and `corner` the radius `region` is drawn with — the cut follows it, so a
-/// band that runs off an end wears that end's curve instead of poking a square
-/// corner out of it.
+/// `travel` is how far along the bar the pattern stands this frame, in points.
+///
+/// `region` is the outline itself rather than a rect and a radius to rebuild
+/// one from, because the fill is [`filled_part`]'s polygon and not a rounded
+/// rect at all. Handing over the shape the fill was PAINTED as is what keeps
+/// the two saying the same thing about where it stops — a cutter built from
+/// its own numbers is a second answer to that question.
 fn stripes(
     painter: &egui::Painter,
     bar: egui::Rect,
-    region: egui::Rect,
-    corner: u8,
+    region: &[egui::Pos2],
     pitch: f32,
     travel: f32,
     colour: Color32,
 ) {
-    if region.width() <= 0.0 || region.height() <= 0.0 || pitch <= 0.0 {
+    let (left, right) = region
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(l, r), p| (l.min(p.x), r.max(p.x)));
+    if right <= left || pitch <= 0.0 {
         return;
     }
-    let outline = rounded_outline(region, f32::from(corner));
     // How far a band shifts between the top of the bar and the bottom, and so
     // how much further along the bar the pattern reaches at the bottom edge
     // than the top one.
@@ -624,10 +677,10 @@ fn stripes(
     // Every band whose reach touches the region: the pattern is anchored to the
     // bar's left end, and the lean is what carries the last one further along at
     // the bottom edge than at the top.
-    let first = ((region.left() - travel) / pitch).floor();
-    let bands = ((region.width() + lean) / pitch).ceil().max(0.0) as usize;
+    let first = ((left - travel) / pitch).floor();
+    let bands = ((right - left + lean) / pitch).ceil().max(0.0) as usize;
     for step in 0..=bands {
-        let poly = clipped(&band(travel + (first + step as f32) * pitch), &outline);
+        let poly = clipped(&band(travel + (first + step as f32) * pitch), region);
         if area(&poly) > STRIPE_MIN_AREA {
             painter.add(egui::Shape::convex_polygon(poly, colour, egui::Stroke::NONE));
         }
@@ -691,27 +744,28 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
     painter.rect_filled(rect, radius, theme::well());
     // The rung a raised surface sits at, which is what the skin keeps this grey
     // for. On the dark side of the frontier it is the only thing in the well.
-    stripes(painter, rect, rect, corner, pitch, travel, theme::surface_faint());
-    if let Some((painter, fill)) =
-        reach.and_then(|reach| anchored_fill(painter, rect, reach, corner))
-    {
+    let track = rounded_outline(rect, f32::from(corner));
+    stripes(painter, rect, &track, pitch, travel, theme::surface_faint());
+    let fill = reach.map_or_else(Vec::new, |reach| filled_part(rect, reach, corner));
+    if !fill.is_empty() {
         // Opaque over the pass above, so the pattern CHANGES colour at the
         // frontier rather than showing two of itself through one. The stripes
         // under the fill are painted and covered rather than skipped: what
-        // covers them is a rounded rect, and cutting them to it would mean
-        // cutting to the outside of a curve, which is not one half-plane.
-        painter.rect_filled(fill, radius, theme::accent_fill());
+        // covers them is a curve at one end, and cutting them to it would mean
+        // cutting to the outside of that curve, which is not one half-plane.
+        painter.add(egui::Shape::convex_polygon(
+            fill.clone(),
+            theme::accent_fill(),
+            egui::Stroke::NONE,
+        ));
         // The fill a shade up: a colour the pane already wears rather than a
         // new one, so a stripe cannot read as a state the bar has entered.
         // Opaque, like every accent mix in the skin — an alpha over the fill
         // would be a third colour that exists nowhere else in the panel.
         //
-        // Cut to the fill AS DRAWN and painted through its clip, which is the
-        // pair [`anchored_fill`] hands back for exactly this: on a barely
-        // started render the fill is widened to keep its corner, and a cutter
-        // reading the reach instead would trim the stripes to a shape the fill
-        // no longer has.
-        stripes(&painter, rect, fill, corner, pitch, travel, theme::accent_fill_hover());
+        // Cut to the very polygon the fill was painted as, so the two cannot
+        // disagree about where it stops. See [`stripes`].
+        stripes(painter, rect, &fill, pitch, travel, theme::accent_fill_hover());
     }
 
     // Value laid out first and the name elided into what is left, the order
@@ -882,12 +936,13 @@ mod tests {
                 _ => false,
             })
             .expect("the bar painted no preview");
-        // The fill and not the well: they are both rects and only one of them
-        // is the one the line has to clear.
+        // The fill and not the well: the accent is what tells them apart, the
+        // fill being the polygon [`filled_part`] cuts and the well the rect
+        // under it.
         let fill = shapes
             .iter()
             .position(|shape| match shape {
-                egui::Shape::Rect(rect) => rect.fill == theme::accent_fill(),
+                egui::Shape::Path(path) => path.fill == theme::accent_fill(),
                 _ => false,
             })
             .expect("the bar painted no fill");
@@ -948,102 +1003,104 @@ mod tests {
         assert!(curve_points(&shapes).is_empty(), "a plain bar painted a preview line",);
     }
 
-    /// The fill and the clip it was painted through, and the track under it.
+    /// The polygon a bar filled, whichever bar it is.
     ///
-    /// Reads CLIPPED shapes because the clip is half the mechanism: a fill too
-    /// narrow for its own corner is drawn wider than the value asks for, and
-    /// what says it stops where the value does is the clip alone.
-    fn fill_and_track(
-        shapes: &[egui::epaint::ClippedShape],
-    ) -> ((egui::Rect, egui::Rect), egui::Rect) {
-        let rect_of = |want| {
-            shapes.iter().find_map(move |s| match &s.shape {
-                egui::Shape::Rect(r) if r.fill == want => Some((r.rect, s.clip_rect)),
+    /// The accent identifies it: the well beside it is a rect, and the two
+    /// shades a progress bar's stripes wear are neither of them this one.
+    fn painted_fill(shapes: &[egui::Shape]) -> Vec<egui::Pos2> {
+        shapes
+            .iter()
+            .find_map(|s| match s {
+                egui::Shape::Path(p) if p.fill == theme::accent_fill() => Some(p.points.clone()),
                 _ => None,
             })
-        };
-        (
-            rect_of(theme::accent_fill()).expect("the bar painted no fill"),
-            rect_of(theme::well()).expect("the bar painted no track").0,
-        )
+            .expect("the bar painted no fill")
     }
 
-    /// A bar filled to a SLIVER keeps the track's corner, and still stops where
-    /// its value says.
+    /// A fill is the part of the track left of the frontier — at every value,
+    /// including the ones too narrow to hold a corner.
     ///
-    /// epaint holds a rect's corner radius to half its shortest side, so a fill
-    /// under two corners wide rounds tighter than the well it sits in — and the
-    /// two share their left corner, so tighter means the fill's edge standing
-    /// OUTSIDE the well's arc, in accent, on the panel. That is the bar visibly
-    /// coming away from its track at the bottom of its travel.
+    /// Three readings, and it is the first that the fill drawn as its own
+    /// rounded rect could not pass. epaint holds a rect's corner radius to half
+    /// its shortest side, so a fill under two corners wide rounds tighter than
+    /// the well it sits in; the two share their left corner, so tighter puts
+    /// the fill's edge OUTSIDE the arc it is meant to be sitting in, in accent,
+    /// on the panel. That is a bar coming away from its own track at the bottom
+    /// of its travel, and `inside_rounded` is what says it does not.
     ///
-    /// Invisible in the shapes themselves, the way it is for the same clamp at
-    /// the other end of a [`RangeBar`]
-    /// (`a_fully_soft_edge_keeps_the_fills_corner_round`): the radius handed to
-    /// `rect_filled` is the same either way and only the tessellator clamps it.
-    /// So the WIDTH is what this asks about, and the clip is what keeps the
-    /// widening honest — a fill drawn past its value would read as a bar that
-    /// cannot go below a few percent.
+    /// The other two are what stop a fill being kept inside the track by simply
+    /// being too small: it has to reach the frontier exactly, and at mid-height
+    /// — clear of both curves — it has to span the whole way to it.
     ///
-    /// Both bars that anchor a fill to the track's own end, since the widening
-    /// lives under the two of them. The last fraction is over two corners at
-    /// this width and so is the case that must come through untouched, clip
-    /// included: a frontier the clip decides lands on a whole pixel, and an
-    /// ordinary bar's has no business leaving the feathered edge it moves on.
-    ///
-    /// [`RangeBar`]: super::super::range::RangeBar
+    /// The fractions run from under a tenth of a point of fill to the whole
+    /// bar. The two ends are where a rect shape can express the shape at all:
+    /// under one corner's width the fill is bounded by the arc rather than by
+    /// any edge, and at the far end it wears the track's own right corners.
     #[test]
-    fn a_bar_filled_to_a_sliver_keeps_the_tracks_corner() {
+    fn a_fill_is_the_part_of_the_track_left_of_the_frontier() {
         const WIDTH: f32 = 300.0;
         let radius = f32::from(bar_radius(1.0));
-        for t in [0.0005f32, 0.005, 0.015, 0.03, 0.2] {
+        for t in [0.0003f32, 0.005, 0.015, 0.03, 0.2, 0.99, 1.0] {
             let mut value = t;
-            let bar = painted(WIDTH, |ui| {
+            let bar = shapes(WIDTH, |ui| {
                 ValueBar::new(&mut value, 0.0..=1.0, "Amount").show(ui);
             });
-            let progress = painted(WIDTH, |ui| {
+            let progress = shapes(WIDTH, |ui| {
                 progress_bar(ui, Some(t), "Rendering", "12/5400");
             });
             for (what, shapes) in [("a value bar", bar), ("a progress bar", progress)] {
-                let ((fill, clip), track) = fill_and_track(&shapes);
+                let track = filled_rects(&shapes)
+                    .into_iter()
+                    .find(|(_, c)| *c == theme::well())
+                    .map(|(r, _)| r)
+                    .expect("the bar painted no track");
+                let fill = painted_fill(&shapes);
+                let frontier = track.left() + track.width() * t;
+
+                for p in &fill {
+                    assert!(
+                        inside_rounded(track, radius, *p),
+                        "{what} at {t} fills {p:?}, outside its {track:?} track",
+                    );
+                }
+                let reaches = fill.iter().fold(f32::NEG_INFINITY, |right, p| right.max(p.x));
                 assert!(
-                    (fill.left() - track.left()).abs() < 0.01,
-                    "{what} at {t} starts its fill at {}, not on the track's own end ({})",
-                    fill.left(),
+                    (reaches - frontier).abs() < 0.01,
+                    "{what} at {t} fills out to {reaches}, not to the {frontier} it is worth",
+                );
+                let (from, to) = span_at(&fill, track.center().y)
+                    .expect("a fill does not reach the middle of its own track");
+                assert!(
+                    (from - track.left()).abs() < 0.01 && (to - frontier).abs() < 0.01,
+                    "{what} at {t} spans {from}..{to} at mid-height, not the \
+                     {}..{frontier} of track behind the frontier",
                     track.left(),
                 );
-                assert!(
-                    fill.width() >= 2.0 * radius - 0.01,
-                    "{what} at {t} drew a {:.1}pt fill, under the {:.1}pt its own corner needs",
-                    fill.width(),
-                    2.0 * radius,
-                );
-                let reach = track.left() + track.width() * t;
-                let stops_at = fill.right().min(clip.right());
-                assert!(
-                    (stops_at - reach).abs() < 0.01,
-                    "{what} at {t} shows fill out to {stops_at}, not to the {reach} it is worth",
-                );
-                // And nothing cut to the fill outruns it either. A progress
-                // bar's lit stripes are cut to the fill AS DRAWN, so past the
-                // widening they reach further than the value does and it is
-                // the shared clip that has to hold them — the one thing
-                // `a_stripe_takes_the_shade_of_the_side_it_stands_on` cannot
-                // see, reading bare shapes.
-                for s in &shapes {
-                    let egui::Shape::Path(p) = &s.shape else { continue };
-                    if p.fill != theme::accent_fill_hover() {
-                        continue;
-                    }
-                    let lit = p
-                        .points
-                        .iter()
-                        .fold(f32::NEG_INFINITY, |right, at| right.max(at.x))
-                        .min(s.clip_rect.right());
-                    assert!(
-                        lit <= reach + 0.01,
-                        "{what} at {t} lights a stripe out to {lit}, past the {reach} it is worth",
-                    );
+
+                // And the frontier is FLAT rather than capped, which is the
+                // fourth reading because the three above cannot tell the two
+                // apart: a cap is inside the track, reaches the frontier and
+                // spans the middle, all as this asks. Taken a point down from
+                // the track's top edge, where a cap would have pulled back by
+                // most of a corner. Held to the TRACK's own reach at that
+                // height, since the end of the travel is where a fill wears
+                // the track's right corners and has to stop where they do.
+                let near_top = track.top() + 1.0;
+                let arc = span_at(&rounded_outline(track, radius), near_top)
+                    .expect("the track does not reach its own top edge");
+                match span_at(&fill, near_top) {
+                    Some((_, to)) => assert!(
+                        (to - frontier.min(arc.1)).abs() < 0.01,
+                        "{what} at {t} reaches {to} a point down from the top, not the {} \
+                         its frontier and the track's own arc leave it",
+                        frontier.min(arc.1),
+                    ),
+                    None => assert!(
+                        frontier <= arc.0 + 0.01,
+                        "{what} at {t} drew no fill a point down from the top, though its \
+                         {frontier} frontier is past the {} the track starts at there",
+                        arc.0,
+                    ),
                 }
             }
         }
@@ -1234,22 +1291,33 @@ mod tests {
     type Stripe = (Vec<egui::Pos2>, Color32);
 
     /// Paint a progress bar at `time` and answer its track, its fill, and every
-    /// polygon on it in paint order.
+    /// stripe on it in paint order.
     ///
-    /// A polygon is a stripe and nothing else here: the rest of the bar is
-    /// rects and text, so anything that came through as a path leans.
-    fn striped(time: f64, fraction: Option<f32>) -> (egui::Rect, Option<egui::Rect>, Vec<Stripe>) {
+    /// The track is the one rect; everything else that carries a fill colour is
+    /// a polygon, the FILL included since [`filled_part`] made it one. So the
+    /// two are told apart by colour, and the count is asserted here rather than
+    /// left to the readers: with only one accent_fill polygon on the bar, a
+    /// stripe that turned up wearing that colour would be caught by the tests
+    /// that check the shades rather than quietly filtered out of them.
+    fn striped(
+        time: f64,
+        fraction: Option<f32>,
+    ) -> (egui::Rect, Option<Vec<egui::Pos2>>, Vec<Stripe>) {
         let shapes = shapes_at(STRIPED_WIDTH, time, |ui| {
             progress_bar(ui, fraction, "Rendering", "1200/5400");
         });
-        let rect = |want: Color32| {
-            filled_rects(&shapes).into_iter().find(|(_, fill)| *fill == want).map(|(r, _)| r)
-        };
-        (
-            rect(theme::well()).expect("the bar draws a track"),
-            rect(theme::accent_fill()),
-            filled_polys(&shapes),
-        )
+        let track = filled_rects(&shapes)
+            .into_iter()
+            .find(|(_, fill)| *fill == theme::well())
+            .map(|(r, _)| r)
+            .expect("the bar draws a track");
+        let polys = filled_polys(&shapes);
+        let mut fills = polys.iter().filter(|(_, c)| *c == theme::accent_fill());
+        let fill = fills.next().map(|(points, _)| points.clone());
+        assert!(fills.next().is_none(), "the bar drew more than one fill");
+        let stripes =
+            polys.into_iter().filter(|(_, c)| *c != theme::accent_fill()).collect::<Vec<_>>();
+        (track, fill, stripes)
     }
 
     /// Where `poly` reaches at height `y`, or `None` where it does not reach
@@ -1341,7 +1409,7 @@ mod tests {
             !shapes.iter().any(|s| matches!(s, egui::Shape::Mesh(_))),
             "the bar drew a mesh, which in a settings pane is a gradient",
         );
-        let polys = filled_polys(&shapes);
+        let polys = striped(0.3, Some(0.5)).2;
         assert!(!polys.is_empty(), "the bar drew no stripes to check");
         for (_, colour) in &polys {
             assert!(
@@ -1385,30 +1453,32 @@ mod tests {
     /// out past the frontier would put the fill's own colour on the part of the
     /// bar whose whole meaning is that nothing has happened there yet.
     ///
-    /// Cut to the fill's own rounded shape rather than to the track's, which is
-    /// what the nearly-empty bar is here to catch: a few percent in, the fill
-    /// is a tenth of the track and a stripe cut to the track would carry the
-    /// lit shade the whole way across it.
-    ///
-    /// To the fill AS DRAWN, which past the first two corners is not the same
-    /// thing as the reach — [`anchored_fill`] widens a fill that narrow to keep
-    /// its corner, and the clip is what takes the excess back. So this measures
-    /// the cut and `a_bar_filled_to_a_sliver_keeps_the_tracks_corner` measures
-    /// the clip, where the same reading is taken of the stripes as well.
+    /// Measured against the frontier and the track rather than against the fill
+    /// polygon the cut was made with, which would only be asking the cut to
+    /// agree with itself. Two readings, and the nearly-empty bar is why the
+    /// second is not enough on its own: a few percent in, the fill is a tenth
+    /// of the track, so a stripe cut to the track instead would still land
+    /// inside it and only the frontier says otherwise.
     #[test]
     fn a_stripe_takes_the_shade_of_the_side_it_stands_on() {
         for step in 0..6 {
             let time = STRIPE_TURN * f64::from(step) / 6.0;
             for fraction in [0.03f32, 0.5, 1.0] {
-                let (_, fill, polys) = striped(time, Some(fraction));
-                let fill = fill.expect("a bar with a fraction fills part of its track");
+                let (track, fill, polys) = striped(time, Some(fraction));
+                fill.expect("a bar with a fraction fills part of its track");
                 let radius = f32::from(bar_radius(1.0));
+                let frontier = track.left() + track.width() * fraction;
                 for (poly, _) in polys.iter().filter(|(_, c)| *c == theme::accent_fill_hover()) {
                     for p in poly {
                         assert!(
-                            inside_rounded(fill, radius, *p),
-                            "at {time}s a bar {fraction} full lights {p:?}, outside its \
-                             {fill:?} fill",
+                            p.x <= frontier + 0.01,
+                            "at {time}s a bar {fraction} full lights {p:?}, past its \
+                             {frontier} frontier",
+                        );
+                        assert!(
+                            inside_rounded(track, radius, *p),
+                            "at {time}s a bar {fraction} full lights {p:?}, off its \
+                             {track:?} track",
                         );
                     }
                 }
@@ -1462,7 +1532,7 @@ mod tests {
     fn a_bar_with_no_fill_still_stripes() {
         for fraction in [None, Some(0.0)] {
             let (track, fill, polys) = striped(0.0, fraction);
-            assert!(fill.is_none() || fill.is_some_and(|f| f.width() == 0.0));
+            assert!(fill.is_none(), "a bar at {fraction:?} drew a fill");
             assert!(polys.len() > 4, "a bar at {fraction:?} drew {} stripes", polys.len());
             let moved = striped(STRIPE_TURN / 3.0, fraction).2;
             assert_ne!(

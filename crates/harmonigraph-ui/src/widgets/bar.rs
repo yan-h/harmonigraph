@@ -148,64 +148,6 @@ pub(super) fn track_fill(response: &Response) -> Color32 {
     }
 }
 
-/// Where a fill anchored to the track's left end actually gets drawn, and the
-/// painter to draw it through: the reach it was asked for, widened to where its
-/// own corner survives, with the clip taking the excess back. `None` where
-/// there is no reach to draw at all.
-///
-/// **epaint holds a rect's corner radius to half its SHORTEST side**
-/// (`clamp_corner_radius`), so a fill under two corners wide rounds at half its
-/// width where the well it sits in rounds at [`bar_radius`]. On a fill anchored
-/// to the track's own end that is not merely a tighter curve, because the two
-/// left corners are the same corner: the fill's arc turns inside the well's, so
-/// its edge stands OUTSIDE the arc it is meant to be sitting in. At five points
-/// of radius on a twenty-point row the fill reaches a point clear of the well
-/// at the widest — a bright ear on the panel, growing as the value drops, which
-/// is the "the bar stops matching the track" a sliver of fill reads as.
-///
-/// Ten points is under a twentieth of a settings column, so this is the bottom
-/// few percent of every bar in the tree and nothing above it.
-///
-/// Widening and clipping is [`RangeBar::fade_span`]'s answer to the same clamp
-/// at the other end of the same bar. Only the RIGHT edge is constrained, so
-/// nothing shaves the fill's own feathered edges — but the frontier itself
-/// becomes a scissor cut, which lands on a whole physical pixel, and that is
-/// what keeps the widening to the widths that need it: a fill already wide
-/// enough for its corner comes back untouched, and its frontier goes on moving
-/// subpixel under a drag.
-///
-/// Never widened past the TRACK either, which is what a pane squeezed narrower
-/// than two corners needs: there the well's own radius is clamped as well, and
-/// a fill held to the same width is clamped to the same radius, so the two
-/// agree by construction and there is nothing to widen for.
-///
-/// The painter comes back because the fill is not always the only thing cut to
-/// the reach: [`progress_bar`]'s lit stripes are cut to the fill AS DRAWN, and
-/// drawing them through this same clip is what keeps the two saying the same
-/// thing about where the fill stops.
-///
-/// [`progress_bar`]: super::value::progress_bar
-/// [`RangeBar::fade_span`]: super::range::RangeBar::fade_span
-pub(super) fn anchored_fill(
-    painter: &egui::Painter,
-    track: egui::Rect,
-    reach: f32,
-    corner: u8,
-) -> Option<(egui::Painter, egui::Rect)> {
-    let reach = reach.min(track.right());
-    if reach <= track.left() {
-        return None;
-    }
-    let mut fill = track;
-    fill.max.x = reach.max(track.left() + 2.0 * f32::from(corner)).min(track.right());
-    let painter = if fill.max.x > reach {
-        painter.with_clip_rect(egui::Rect::everything_left_of(reach))
-    } else {
-        painter.clone()
-    };
-    Some((painter, fill))
-}
-
 /// Draw one handle, and any text run standing under it a second time INSIDE
 /// it — the same galley at the same origin, clipped to the grip and overridden
 /// to the panel colour, so the letters cross the thumb in reverse instead of
