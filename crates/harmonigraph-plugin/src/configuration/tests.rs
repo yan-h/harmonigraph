@@ -1093,6 +1093,46 @@ fn a_rewind_splits_the_take_and_an_edit_lands_in_the_pass_that_adopts_it() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Armed with the transport stopped, then sent back to the start before
+/// anything played — Bitwig's stop-returns-to-start, or a jump to bar 1 for an
+/// AtBar take. That move owed a split, and paying it from a pass that never
+/// rolled left the writer holding the empty first pass open for a close
+/// nothing sends: Stop waited on it forever and every later Start was refused.
+#[test]
+fn a_playhead_moved_back_before_the_take_rolls_lets_stop_finish_one_file() {
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    capture.arm();
+    let dir = std::env::temp_dir()
+        .join(format!("harmonigraph-config-unrolled-rewind-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let parked = |seconds| {
+        let mut parked = transport(seconds, 0);
+        parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        parked
+    };
+    device.run_transport(0, vec![], false, None, Some(parked(40.0)));
+    device.run_transport(64, vec![], false, None, Some(parked(0.0)));
+    writer.drain(&mut capture);
+    let play = vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)];
+    device.run_transport(128, play, false, None, Some(transport(0.0, 0)));
+    writer.drain(&mut capture);
+    capture.stop();
+    writer.stop();
+    device.run_transport(192, vec![], false, None, Some(transport(64.0 / 48000.0, 0)));
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    assert!(writer.finished.is_some(), "Stop must not wait on a pass that never rolled");
+    assert!(!dir.join("record-2.take").exists(), "an empty pass has nothing to split from");
+    drop(writer);
+    device.finish_notes(256, &[(10, 60)]);
+    drop(device);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn configuration_observed_disarmed_does_not_become_later_armed_automation() {
     let _scope = crate::test_scope::enter();
