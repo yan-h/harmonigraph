@@ -36,6 +36,8 @@ pub struct PolicyConfig {
     pub silence_ms: u32,
     pub reset_stop: bool,
     pub reset_loop: bool,
+    /// A pitch class plays at its first tuning until the context resets.
+    pub keep_tuning: bool,
 }
 impl Default for PolicyConfig {
     fn default() -> Self {
@@ -66,7 +68,8 @@ impl PolicyConfig {
                 | i32::from(self.axes) << 8
                 | i32::from(self.memory) << 16
                 | i32::from(self.reset_stop) << 24
-                | i32::from(self.reset_loop) << 25,
+                | i32::from(self.reset_loop) << 25
+                | i32::from(self.keep_tuning) << 26,
             i32::from(self.harmonic) | i32::from(self.pitch_scale) << 16,
             i32::from(self.released) | i32::from(self.recency) << 16,
             i32::from(self.register_floor) | i32::from(self.register_falloff) << 16,
@@ -83,6 +86,7 @@ impl PolicyConfig {
             memory: (w[1] >> 16) as u8,
             reset_stop: w[1] & (1 << 24) != 0,
             reset_loop: w[1] & (1 << 25) != 0,
+            keep_tuning: w[1] & (1 << 26) != 0,
             harmonic: w[2] as u16,
             pitch_scale: (w[2] >> 16) as u16,
             released: w[3] as u16,

@@ -446,6 +446,11 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                 ui.selectable_value(&mut p.axes, 3, "Fifths + thirds + sevenths");
             });
     });
+    ui.checkbox(&mut p.keep_tuning, "Keep first tuning").on_hover_text(
+        "Once a pitch class has been tuned, it plays at that tuning again, in every octave, \
+         until the context resets. Only pitch classes not heard since then are chosen from the \
+         context.",
+    );
     ui.collapsing("Context", |ui| {
         p.memory = adaptive_value(ui, p.memory.into(), 0..=24, 1.0, "Released pitches", "") as u8;
         for (value, label, max) in [

@@ -715,34 +715,27 @@ impl Hub {
         let selected = policy::assign_new_note(
             config.into(),
             &self.sequencer.working[..count],
-            self.sequencer.memory.reference,
+            &self.sequencer.memory,
             onset,
             &mut self.sequencer.scratch,
         );
-        let (correction, node, decision) = match selected {
+        let (assignment, decision) = match selected {
             Ok(selection) => {
                 self.sequencer.decision += 1;
                 self.decisions += 1;
-                (
-                    selection.assignment.correction_microcents(),
-                    selection.assignment.node(),
-                    self.sequencer.decision,
-                )
+                (selection.assignment, self.sequencer.decision)
             }
             Err(_) => {
                 // The one thing the policy can refuse. That onset sounds at raw
                 // pitch, the status says so, and nothing is silenced for it.
                 self.status |= session::POLICY;
-                (0, None, 0)
+                (policy::Assignment::NoCandidate, 0)
             }
         };
+        let (correction, node) = (assignment.correction_microcents(), assignment.node());
         self.reply(record, correction);
         if decision != 0 {
-            self.sequencer.memory.attack(
-                onset.pitch + correction,
-                correction,
-                self.sequencer.config.policy,
-            );
+            self.sequencer.memory.attack(onset.pitch, assignment, self.sequencer.config.policy);
             self.sequencer.reference_source = Some(record.source);
         }
         let voice = Voice {
