@@ -67,7 +67,9 @@ OPTIONS:
         --end <SEC>        Stop here.  [default: the take plus its tail]
         --tail <SEC>       Extra time after the last event, for fades and
                            the roll to clear.  [default: 4]
-        --crf <N>          x264 quality, lower is better.  [default: 16]
+        --crf <N>          x264 quality, lower is better and bigger. The
+                           default meets YouTube's recommended bitrate at
+                           720p; at 4K, lower it to get there.  [default: 10]
         --appearance <FILE>  Override the look recorded in the take with a
                            versioned appearance RON (read-plugin-state.py --appearance).
         --ffmpeg <PATH>    ffmpeg to run. Normally found automatically, on
@@ -156,7 +158,13 @@ impl Default for Args {
             lead: None,
             end: None,
             tail: 4.0,
-            crf: 16,
+            // Sized against YouTube's recommended bitrates: 7.4 Mbps on a
+            // 720p60 take, where YouTube asks for 7.5. It re-encodes whatever
+            // it is given, so a leaner source is a second generation of loss.
+            // A fixed CRF spends less per pixel as the detail spreads over
+            // more of them, so the larger sizes land below YouTube's figures
+            // — roughly on it at 1440p, 29 Mbps against 53 on a 4K segment.
+            crf: 10,
             appearance: None,
             ffmpeg: None,
             align: Align::Auto,
