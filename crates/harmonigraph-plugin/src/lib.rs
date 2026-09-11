@@ -670,7 +670,7 @@ impl Plugin for Harmonigraph {
         let block_samples = buffer.samples();
         let transport = context.transport();
         // EVERY block, armed or not. `is_armed` is an edge detector, not a
-        // getter: it latches `was_armed` and clears the recorder's per-take
+        // getter: it advances the lifecycle and clears the recorder's per-take
         // state on the arming edge. Skipping it on a disarmed block means the
         // next arm edge never fires and recording silently never resumes.
         let armed = match self.configuration.as_ref() {
@@ -694,7 +694,7 @@ impl Plugin for Harmonigraph {
                     // (`ends_at_rewind` is false for it). Asking afterwards
                     // would let a block that both pays the debt and crosses the
                     // bar open a fresh pass and finish it empty — and the
-                    // newest file is the one that renders. Latching `finished`
+                    // newest file is the one that renders. Latching completion
                     // here instead makes `observe_transport` return on its own
                     // guard, so no pass is opened at all.
                     let stopped = self.take.observe_bar(bar_position(transport));
