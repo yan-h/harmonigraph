@@ -1,270 +1,86 @@
 # Harmonigraph
 
-![The pitch lattice on the left, the spectrum analyzer and its MIDI-overlaid spectrogram in the middle, the Display settings on the right, mid-passage](docs/images/plugin-window-lattice-analyzer-display.png)
+Harmonigraph is the harmony visualizer I use while composing microtonal music,
+and to turn my pieces into videos.
+It runs as a CLAP or VST3 audio plugin.
 
-A harmony visualizer that runs as an audio plugin (CLAP + VST3).
-I use it for checking my tuning when composing in my DAW, and for generating visualizations of my pieces.
+This is an LLM-written project I direct and review for my personal needs.
+Expect rough edges and breaking changes.
+I have tested it only on macOS with Bitwig Studio.
 
-The plugin draws incoming MIDI on a 3-dimensional [Tonnetz](https://en.wikipedia.org/wiki/Tonnetz).
+![The spectrum analyzer and its MIDI-overlaid spectrogram on the left, with the pitch lattice on the right, mid-passage](docs/images/plugin-window-lattice-analyzer.webp)
 
-- That is, a lattice with three directions: a perfect fifth, a major third, and a harmonic seventh.
-- Each lattice node represents a pitch class. Pitch height of individual voices is represented by circular "slices".
-- Each axis has its own tuning, so the lattice can be just, equal-tempered, or anywhere between.
+[Video example.](https://www.youtube.com/watch?v=h66tTufp8bw)
 
-It also includes a spectrum analyzer for incoming audio, which feeds a spectrogram overlayed with incoming MIDI.
-The Analyzer page can read either the main input or a host-routed sidechain;
-Main is the default, and an unrouted Sidechain is silence rather than an automatic fallback.
-The same choice drives the spectrum, spectrogram, Spiral, lattice audio rings, and the audio recorded with a video take.
+## Features
 
-See the [settings guide](docs/settings.md) for the control layout and units.
+- **Lattice.** Incoming MIDI notes are organized by pitch class and register on a tunable [Tonnetz](https://en.wikipedia.org/wiki/Tonnetz), making interval shapes and harmonic distance visible while I compose.
+- **Spectrogram.** A live spectrum analyzer and scrolling spectrogram with overlaid piano roll.
+- **Configuration.** Camera, lattice detail, frequency range, colors, lighting, pane visibility and layout.
+- **Video.** Records performance data and audio for [offline rendering](docs/offline-rendering.md) at any resolution, frame rate or layout.
+- **Adaptive tuning (experimental, CLAP only).** A separate [Tune note effect](docs/adaptive-tuning.md) adjusts new notes from harmonic context shared by a Harmonigraph Hub.
 
-Demonstration:
-[slipstream (5-limit just intonation)](https://www.youtube.com/watch?v=VuD9JOmi6_o).
+See the [settings guide](docs/settings.md) for controls and units.
 
-Successor to [midi_lattice](https://github.com/yan-h/midi_lattice).
+## Try it from source
 
-## Adaptive tuning in CLAP
-
-The CLAP bundle includes a lightweight Harmonigraph Tune note effect, placed before each instrument path that should be tuned;
-one full Harmonigraph — the Hub, normally on Master — sequences new attacks across tracks and returns their tuning assignments for output after a chosen delay.
-Each assignment takes the preceding ones into account, and its adaptive correction stays fixed through release while composing with later player pitch expression.
-A note whose correction has not arrived by its emission time sounds at its raw pitch and counts as a miss, rather than waiting or being dropped;
-the counter is on screen, and a larger delay is the remedy unless the status names a missing Hub or no free row.
-The delay is a per-Tune **Tuning delay** parameter, 1 to 16 multiples of the host's advertised maximum callback size, adopted at activation and reported to the host as latency.
-A missing correction never makes a note late:
-the note emits raw at its deadline, and a reply that arrives afterward is discarded where it is found.
-Host output refusal or the per-callback output budget can still carry an event into a later callback.
-Explicit Reset, transport Stop, a Tune attaching or detaching and a host-format change are all one cut, and it falls on every track at once:
-Note-Off every held voice, neutralize the pedals, clear the delay line, adopt the new epoch.
-A fault is a status bit rather than a latched emission gate, so a missing Hub or a full copy ring costs a note its correction and not its attack;
-a full delay line or held set is the hard boundary, refusing the incoming event before either scheduling path sees it and counting it as dropped.
-Start with the [setup and musical verification checklist](docs/adaptive-tuning.md#setting-it-up-in-bitwig) and the [measured process and hosting requirements](docs/adaptive-tuning.md#session-pairing-and-process-boundary).
-Use one Master Hub, Tune before each instrument, and Bitwig **by Vendor** hosting with individual overrides off;
-there is nothing to pair, because each Tune finds the one Harmonigraph in its process at activation.
-Sample rate and maximum buffer size come from the host automatically, and there is nothing else to configure —
-a host that does not supply valid steady sample time is unsupported, and the CLAP wrapper refuses its callback rather than running on a guessed clock.
-The default locked 12-TET configuration produces zero adaptive correction;
-choose **Just** with **Auto** and **Learn** off to verify independent Just tuning.
-VST3 still exports full Harmonigraph only.
-See [`docs/adaptive-tuning.md`](docs/adaptive-tuning.md) for the behavior, protocol and deliberately deferred alternatives.
-
-Every tracked note carries a [source identity](docs/adaptive-tuning.md#voice-identity), so tracking and replay have independent source keys and explicit source/session resets.
-Takes use format v5, including source/reset scope, resolved configurations, canonical baselines and accepted pitch provenance;
-v1–v4 takes are refused with a version error and must be recorded again.
-The current musical integration adds optional assignment metadata within the current format.
-
-Almost every line here was written by Claude Code sessions, directed and reviewed by one human.
-[`CLAUDE.md`](CLAUDE.md) is the house style they work under;
-GitHub Actions runs `./ci.sh` as the canonical full gate, split across two parallel jobs and reported as one `Full CI` check.
-
-Stack:
-Rust, [nice-plug](https://codeberg.org/RustAudio/nice-plug) (the community continuation of nih-plug), egui 0.35, wgpu 29 (egui-baseview's wgpu backend in the plugin, eframe's in the standalone harness).
-
-**Tested only on macOS, in Bitwig Studio.** No other OS or host has been tried.
-Several [`vendor/`](vendor) patches are macOS-only too —
-`cfg`-gated, so elsewhere it still builds, just without those fixes ([`PATCHES.md`](PATCHES.md)).
-
-## Setup
-
-The Rust toolchain is pinned by `rust-toolchain.toml` (1.92).
-rustup installs it on the first build.
-
-**`sccache` has to be on `PATH`, or nothing builds.** `.cargo/config.toml` sets `rustc-wrapper = "sccache"` for the whole workspace.
-Without it, every cargo command here dies with `could not execute process sccache`.
+Install Rust with [rustup](https://rustup.rs/) and clone the repository,
+then install `sccache`,
+which the workspace requires as its compiler wrapper:
 
 ```sh
+git clone https://github.com/yan-h/harmonigraph.git
+cd harmonigraph
 brew install sccache
 ```
 
-Why it is there:
-every worktree keeps its own `target/`, so parallel branches never wait on a shared build lock.
-The cost is that each one would otherwise recompile all ~465 dependencies from scratch.
-sccache serves those from a single store, so only this repo's own crates recompile.
-To rule it out while debugging a build failure, run `RUSTC_WRAPPER="" cargo build ...`.
-
-`ffmpeg` is only for video export, and only if you want a playable file rather than a frame sequence (`brew install ffmpeg`).
-
-## Everyday commands
+The quickest way to see the full interface is the standalone harness.
+It needs no DAW and starts with a mock progression;
+it can also listen to a connected MIDI port:
 
 ```sh
-# The dev loop: the full UI + renderer in a plain window, with a mock chord
-# progression or any connected MIDI port. No DAW needed.
 cargo run -p harmonigraph-standalone
-
-# The whole test suite; every crate carries tests.
-cargo test
-
-# The canonical full gate used by GitHub Actions: formatting, workspace
-# clippy and tests, the plugin package check, harmonigraph-render's own tests,
-# the three vendored GUI/framework crates, doc links, the harmonigraph-core dependency guard,
-# the worktree-reclaim lock cases and the bundle swap.
-./ci.sh
-
-# Build the CLAP/VST3 bundles into target/bundled/.
-cargo xtask bundle harmonigraph-plugin --release
-
-# Read the plugin's live settings back out of a saved Bitwig project
-# (--rust prints them as an impl Default body). CLOSE the plugin window
-# and save the project first — the UI state is only written on window
-# close. See the script header.
-./read-plugin-state.py
 ```
 
-Enable the tracked pre-push formatting check once per clone with `git config core.hooksPath .githooks`.
-The hook stays cheap locally;
-GitHub Actions runs the full `./ci.sh` gate for pull requests and pushes to `main`, one job per gate group so the wall clock is the longest group rather than the sum of every gate.
-A bare `./ci.sh` still runs all of them, which is what it does locally.
-CI sets `HARMONIGRAPH_REQUIRE_GPU=1` so unavailable GPU adapters fail the renderer, UI and offline pixel tests instead of silently skipping their assertions.
-Local GPU tests may still skip without an adapter;
-set the same variable to require them locally.
-GPU test setup honors `WGPU_BACKEND`;
-an empty value disables all backends for checking the missing-adapter failure path.
-
-## Getting a build into the DAW
-
-The DAW scans exactly one place:
-the **main checkout's** `target/bundled/`.
-Two things hide a branch build from it.
-
-- Each worktree has its own `target/`. The DAW never looks there.
-- `cargo xtask bundle` run from a worktree bundles the *main* sources, not the branch's. It walks up to the topmost `Cargo.toml`, which for a nested worktree is the main repo. The bundle looks fresh and holds none of your changes.
-
-Two scripts sidestep both.
-Each copies the binary into the bundles the DAW loads, then re-signs it ad-hoc —
-Apple Silicon requires that.
-Deactivate and reactivate the plugin afterwards:
-the copy writes through the bundle's own inode, which is the only swap a running host can see, and a rescan does not reload a plugin that is already loaded.
+For Bitwig,
+create the bundle structure once from the main checkout:
 
 ```sh
-# Build the current checkout — branch or main — and load it. One shot.
-./update-plugin.sh
-
-# Load a build that already exists, without building anything.
-./load-plugin.sh              # menu of every worktree's build
-./load-plugin.sh --list       # print the table, load nothing
-./load-plugin.sh <branch>     # load that branch's build (substring ok)
+cargo xtask bundle harmonigraph-plugin --release
 ```
 
-The two differ in one way:
-`update-plugin.sh` builds, `load-plugin.sh` only copies.
-That split exists because the bundle slot is shared.
-With several branches in flight, each build stays in its own worktree.
-You then pick which one goes live, rather than having them overwrite each other.
+Add `<checkout>/target/bundled/` under **Settings → Locations → Plug-in Locations** in Bitwig.
+After that,
+`./update-plugin.sh` builds the current checkout and loads its CLAP/VST3 plugin plus matching offline renderer.
+After installing,
+deactivate and reactivate Bitwig's audio engine.
 
-Both also install `harmonigraph-offline`, which is a second slot and the one that goes quietly out of date.
-Video export runs in that binary, and it draws through the same UI crates the editor does —
-so a change to any pane changes an mp4 too, even though nothing under `crates/harmonigraph-offline/` was touched.
-`update-plugin.sh` rebuilds it every time;
-`load-plugin.sh` copies whatever the worktree holds and warns when that predates the branch's HEAD.
-A build made with `cargo build --release -p harmonigraph-plugin` alone leaves it behind, and the symptom is an export drawn the old way while the plugin window shows the new one.
+Install `ffmpeg` with `brew install ffmpeg` when you want encoded video rather than a frame sequence.
+See [developing Harmonigraph](docs/development.md) for test commands,
+worktree-safe build loading,
+architecture and dependency notes.
 
-## Architecture
+## Guides
 
-Dependencies point strictly downward;
-the fun layers never touch plugin plumbing.
-
-```
-harmonigraph-core        pure logic, no dependencies at all. PitchClass
-                         (integer microcents) and Tuning; lattice coordinates;
-                         NoteTracker (what sounds now); NoteHistory/NoteRoll
-                         (what was played, by pitch and by time); the pitch axis
-                         and spectrogram history.
-                         Unit-tested. One module per concern.
-harmonigraph-analysis    rolling audio analysis, planned real-input FFT and
-                         channel power combination. Depends only on core
-                         and RealFFT; shared by live and offline UI.
-harmonigraph-scene       per-frame view model: derive_scene() turns
-                         tracker+tuning into NodeInstances; orbit Camera;
-                         envelopes; CPU picking. Split style/view/camera/
-                         color/derive; see its crate doc.
-harmonigraph-render      wgpu renderer as an egui paint callback: instanced
-                         billboard nodes, WGSL in src/shaders/lattice.wgsl.
-                         *** Skins/effects/shaders iterate here. ***
-harmonigraph-perf        the performance overlay's instrumentation, with no
-                         egui in it: what a frame cost, the stage table that
-                         says what contains what, the window means and peaks
-                         the HUD prints, the process's resident memory, and
-                         the build tag its build.rs stamps. Also ShellTimings,
-                         which a windowed shell fills in and this averages.
-                         The overlay that DRAWS it is harmonigraph-ui.
-harmonigraph-ui          egui_dock pane shell: Lattice / Tuning / Display /
-                         Console / Spectral / Spiral / Notes / Video tabs
-                         under src/panes/, where Display carries the Lattice, Analyzer,
-                         Colors, Lighting and System settings as five pages
-                         behind a picker row rather than as tabs of their own.
-                         SharedState (the lattice's hovered node),
-                         ParamBackend trait abstracting "where params live".
-harmonigraph-take        the recorded input to a visualization: note events and
-                         parameter automation on the audio clock, plus the
-                         settings a render is composed from. Linked into the
-                         plugin, so no GUI stack: serde+ron and
-                         harmonigraph-core. See docs/offline-rendering.md.
-harmonigraph-record      writes a take while the transport rolls (lock-free
-                         rings, transport-jump detection) and drives
-                         harmonigraph-offline as a subprocess when one
-                         finishes, following its stderr for the progress bar.
-                         No plugin API, so it is testable on its own.
-harmonigraph-offline     offline video renderer: replays a take headless at an
-                         exact frame rate, any resolution, own pane layout,
-                         frames piped to ffmpeg. Also the minimal WAV reader
-                         and the audio<->MIDI onset alignment, which read a
-                         bounce at render time. No window, no DAW, no realtime.
-harmonigraph-standalone  eframe dev harness: mock chord progression OR hardware
-                         MIDI in (midir, with MPE bend decoding), plus a mock
-                         synth feeding the spectrum analyzer.
-harmonigraph-plugin      nice-plug shell: params, MIDI + audio → two rtrb ring
-                         buffers, custom wgpu egui editor (editor.rs) with
-                         host-native window resizing, CLAP/VST3 exports.
-```
-
-Data flow in the plugin:
-the audio thread converts host MIDI to `NoteEvent`s and pushes them into a lock-free ring buffer;
-the GUI thread drains it into the `NoteTracker`, derives a `Scene`, and paints it.
-Parameters flow the other way through `ParamBackend` (a `ParamSetter` in the plugin, plain values in the harness), so every pane runs unmodified in both shells.
-
-## Working on visuals
-
-- `harmonigraph-render/src/shaders/lattice.wgsl` — node look, glow, animation.
-- `harmonigraph-scene` — colors, envelopes, layout, camera behavior.
-- Run the standalone harness; it uses the identical render path. No DAW needed until you're testing host integration.
-
-## Version coupling
-
-`egui-baseview 0.3` pins egui 0.35 / egui-wgpu 0.35 / wgpu 29 / baseview 0.1;
-`eframe` and `egui_dock` must match the egui version.
-All of this is centralized in the workspace `Cargo.toml` —
-bump the whole cluster together.
-All four patched dependencies under `vendor/` are recorded in PATCHES.md.
+- [Settings](docs/settings.md)
+- [Making a video without recording the screen](docs/offline-rendering.md)
+- [Adaptive tuning](docs/adaptive-tuning.md)
+- [Development and architecture](docs/development.md)
+- [README philosophy and media placement](docs/readme-philosophy.md)
 
 ## License
 
 Copyright (C) 2026 Yan Han.
 
-Harmonigraph is free software:
-you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
-See [`LICENSE`](LICENSE) for the full text.
+Harmonigraph is licensed under the [GNU General Public License v3.0 or later](LICENSE).
+It comes without warranty;
+see the license for the full terms.
 
-This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
-without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-See the GNU General Public License for more details.
-
-### Exceptions
-
-[`crates/harmonigraph-core`](crates/harmonigraph-core) is **`MIT OR Apache-2.0`**, not GPL.
-It is a general-purpose library —
-dependency-free just-intonation math, Tonnetz coordinates, and note spelling —
-and much of that math descends from the permissively licensed [midi_lattice v1](https://github.com/yan-h/midi_lattice), so it stays permissive too.
-`ci.sh` enforces the property that justifies the split:
-the crate must remain dependency-free.
-See [its README](crates/harmonigraph-core/README.md).
-
-[`crates/harmonigraph-analysis`](crates/harmonigraph-analysis) also retains **`MIT OR Apache-2.0`** for the audio analysis extracted from core.
-Its RealFFT dependency leaves the pitch-math library dependency-free.
-
-The four patched dependencies under [`vendor/`](vendor) are likewise **not** covered by the GPL.
-`baseview`, `egui-baseview`, and `wgpu-hal` retain their upstream `MIT OR Apache-2.0` terms;
-`nice-plug` retains ISC.
-Each keeps its own license file.
-See [`PATCHES.md`](PATCHES.md) for what was changed and why.
+The reusable [`harmonigraph-core`](crates/harmonigraph-core) and [`harmonigraph-analysis`](crates/harmonigraph-analysis) crates are instead licensed under `MIT OR Apache-2.0`.
+The vendored forks under [`vendor/`](vendor) retain their upstream terms:
+`baseview`, `egui-baseview` and `wgpu-hal` are `MIT OR Apache-2.0`,
+while `nice-plug` is ISC.
+Each keeps its own license files;
+[`PATCHES.md`](PATCHES.md) records the local changes.
 
 VST is a trademark of Steinberg Media Technologies GmbH.

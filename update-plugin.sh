@@ -4,8 +4,8 @@
 # load the result into the ONE bundle slot Bitwig scans. Build-and-load in a
 # single shot; `load-plugin.sh` is the same swap without the build.
 #
-# Run this after ANY change you want to see in the DAW, then fully quit and
-# reopen Bitwig. Works from the main checkout or any worktree.
+# Run this after ANY change you want to see in the DAW, then deactivate and
+# reactivate Bitwig's audio engine. Works from the main checkout or any worktree.
 #
 # Why this script exists (two footguns it sidesteps):
 #   1. `cargo xtask bundle` picks the *topmost* Cargo.toml ancestor, so run
