@@ -164,19 +164,43 @@ fn a_schismatic_keyboards_two_a_keys_are_two_as() {
     assert_eq!(play(&mut h, &[("a", -1, 1, 2)]), Some(LatticePos::new(-1, 1, 0)));
 }
 #[test]
-fn an_attack_bent_off_every_key_is_scored_against_every_node() {
+fn a_slightly_mislearned_fifth_still_keeps_the_b_sharp_key() {
+    // A fifth learned 0.2¢ sharp, as pitch-bend steps can leave it, renders
+    // B♯ twelve fifths out 2.4¢ from the pitch the key sends. The held C pulls
+    // that key to C unless the filter still recognises it.
     let mut h = Harness::new();
-    play(&mut h, &[("c", 0, 0, 0), ("e", 0, 1, 0), ("g", 1, 0, 0)]);
-    let context: Vec<_> = h.held.iter().rev().map(|(_, v)| *v).collect();
-    let bent = OrderedOnset { pitch: sent(&h, 0, 0, 1) + 15_000_000 };
-    let decide =
-        |config| assign_new_note(config, &context, &h.memory, bent, &mut PolicyScratch::default());
-    // Widening the tolerance alone admits only the nearest key's nodes; a
-    // keyboard that renders every node at C admits all of them.
-    let mut every = h.config;
-    every.policy.tolerance = 20_000_000;
-    every.policy.keyboard = [0; 3];
-    assert_eq!(decide(h.config), decide(every));
+    h.config.policy.keyboard = crate::tuning::fifth_generated(crate::tuning::microcents(696.778));
+    play(&mut h, &[("c", 0, 0, 0)]);
+    let b_sharp = LatticePos::new(0, 3, 0);
+    let pitch = 4_800_000_000 + keyboard_class(meantone(), b_sharp);
+    assert_eq!(h.on("b#", pitch).node, Some(b_sharp));
+}
+#[test]
+fn an_attack_bent_off_every_key_is_scored_against_every_node() {
+    // The phrase whose in-tune C key the meantone keyboard keeps off B♯. Bent
+    // 15¢ flat it is off every key, so B♯ competes again and wins.
+    let mut h = Harness::new();
+    h.config.policy.keyboard = meantone();
+    play(&mut h, &[("e", 0, 1, 0), ("g#", 0, 2, 0)]);
+    h.off("e");
+    let bent = sent(&h, 0, 0, 0) - 15_000_000;
+    assert_eq!(h.on("c", bent).node, Some(LatticePos::new(0, 3, 0)));
+}
+#[test]
+fn reachability_plays_the_keys_the_unfiltered_sweep_never_reaches() {
+    // With F and C held, the Pythagorean A costs 12 more than the 5-limit one
+    // and never wins by pitch alone; a schismatic keyboard's key three fifths
+    // up admits it and nothing else.
+    let mut h = Harness::new();
+    h.config.policy.keyboard = crate::tuning::fifth_generated(crate::tuning::microcents(701.711));
+    play(&mut h, &[("f", -1, 0, 0), ("c", 0, 0, 1)]);
+    let snapshot = reach::Snapshot {
+        config: h.config,
+        reference: h.memory.reference,
+        context: h.held.iter().map(|(_, v)| *v).collect(),
+    };
+    let reachable = reach::reachable(&snapshot, 3600.0, 9600.0, || false).unwrap();
+    assert!(reachable.contains(&LatticePos::new(3, 0, 0)), "{reachable:?}");
 }
 #[test]
 fn memory_refreshes_actual_register_pitch_and_new_release_order() {

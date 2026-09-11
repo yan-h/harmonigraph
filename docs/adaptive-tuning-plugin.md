@@ -70,12 +70,18 @@ The keyboard tuning is three sizes, for primes 3, 5 and 7, describing how the pl
 It shares the lattice's C offset rather than having one of its own.
 Scoring obeys one rule with it:
 a key may only become a node that the keyboard's own tuning would render at the pitch the key sent.
-A candidate is admissible when its keyboard rendering, reduced to one octave, lies within the same-note tolerance of the input pitch class,
+A candidate is admissible when its keyboard rendering, reduced to one octave, lies within 5¢ of the input pitch class,
 and the ordinary pitch and harmonic terms choose among the admissible candidates.
 If none is admissible, the attack was bent off every key, and every candidate competes exactly as it would with no keyboard at all.
+The window is a fixed 5¢ rather than the same-note tolerance.
+A learned fifth multiplied out to twelve or fourteen fifths can miss by a few cents, and a controller that sends its tuning as pitch bend quantizes it;
+the window only has to stay well under the smallest distinction a meantone or schismatic keyboard makes, about 20¢.
+A deliberate attack bend the size of the 21.5¢ intentional Pythagorean E still falls back.
 
 The rendering is taken from the candidate as it was respelled for the lattice's tempered set, so a tempered lattice needs no special case.
-The default is 12-TET (700, 400, 1000¢), which cannot tell apart any two nodes in one semitone class, so the default scorer and its drift are unchanged.
+The default is 12-TET (700, 400, 1000¢), which cannot tell apart any two nodes in one semitone class, so the default scorer's drift is unchanged.
+What it does remove is a key played in another semitone class:
+on the default tempered 12-TET lattice, a key whose nearest same-class node was five steps away used to sound a semitone off, because 100¢ of pitch error cost less than the distance.
 A meantone keyboard has a separate B♯ key, so its C key never becomes the B♯ a diesis below;
 it cannot tell the 5-limit A from the Pythagorean one, so context chooses between them.
 A schismatic keyboard has two A keys, and each becomes its own A.
@@ -101,10 +107,10 @@ Cases written down rather than handled:
 1. The outlines are approximate inside a key's tolerance window.
 They play each key at its exact rendering, so a node that wins only between that pitch and the window's edge is missed;
 and the analytic envelope still lists an unfiltered winner whose whole winning range lies inside key windows, where the filter always overrides it.
-At the default half-cent tolerance the windows are a cent wide and the difference is negligible;
-it grows toward the 20¢ maximum.
+The windows are 10¢ wide, so this matters only where two admissible nodes nearly tie.
 2. A policy edit from the pane sends the whole policy the editor last saw, keyboard included.
 One that lands just after Learn has changed the keyboard puts the old keyboard back until the held chord next changes and Learn fires again.
+3. When no node of the key's class is within the neighbourhood, as with a small radius on a tempered lattice, the fallback still plays the key at the nearest node's pitch, up to a semitone off, as it always has.
 
 An accepted consequence, not a bug:
 the syntonic comma pump still drifts on a meantone keyboard, because that keyboard cannot tell `(1,0)` from `(-3,1)`.

@@ -7,7 +7,13 @@ use crate::{LatticePos, Tempered};
 pub const MAX_CONTEXT: usize = 256;
 pub const MAX_MEMORY: usize = 24;
 pub const MAX_COHORT_ONSETS: usize = 256;
-const OCTAVE: i64 = 1_200_000_000;
+const OCTAVE: i64 = crate::tuning::OCTAVE_MICROCENTS as i64;
+/// How far a key may sit from the keyboard tuning's rendering of a node and
+/// still be that node's key. Not the same-note tolerance: a learned fifth
+/// multiplied out to fourteen fifths can miss by a few cents, while this only
+/// has to stay well under the smallest distinction a meantone or schismatic
+/// keyboard makes, about 20¢. A deliberate 21.5¢ attack bend still falls back.
+const KEYBOARD_TOLERANCE: i64 = 5_000_000;
 /// Explicit resource ceiling, not a musical truncation. The owner must report
 /// exhaustion instead of scoring an incomplete neighbourhood.
 pub const MAX_CANDIDATES: usize = 4096;
@@ -320,9 +326,9 @@ pub fn keyboard_class(keyboard: [i32; 3], node: LatticePos) -> i64 {
         + i64::from(node.sevens) * i64::from(keyboard[2]))
     .rem_euclid(OCTAVE)
 }
-/// A key may only become a node the keyboard tuning renders within the
-/// same-note tolerance of the pitch it sent. When none is, the attack was bent
-/// off every key and every candidate competes.
+/// A key may only become a node the keyboard tuning renders within
+/// [`KEYBOARD_TOLERANCE`] of the pitch it sent. When none is, the attack was
+/// bent off every key and every candidate competes.
 pub fn select_prepared(
     config: MusicalConfig,
     reference: i64,
@@ -332,7 +338,6 @@ pub fn select_prepared(
     let input = onset.pitch as f64 / 1_000_000.0;
     let target = input + reference as f64 / 1_000_000.0;
     let pressed = onset.pitch.wrapping_sub(i64::from(config.c_offset)).rem_euclid(OCTAVE);
-    let tolerance = i64::from(config.policy.tolerance);
     let mut best = (f64::INFINITY, LatticePos::ORIGIN, 0.0);
     let mut admissible = None::<(f64, LatticePos, f64)>;
     for &node in &scratch.candidates {
@@ -346,7 +351,7 @@ pub fn select_prepared(
             best = (score, node, output);
         }
         let off = (keyboard_class(config.policy.keyboard, node) - pressed).rem_euclid(OCTAVE);
-        if off.min(OCTAVE - off) <= tolerance && admissible.is_none_or(beats) {
+        if off.min(OCTAVE - off) <= KEYBOARD_TOLERANCE && admissible.is_none_or(beats) {
             admissible = Some((score, node, output));
         }
     }

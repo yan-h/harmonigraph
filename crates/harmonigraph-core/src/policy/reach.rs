@@ -126,8 +126,8 @@ pub fn reachable(
             result.push(node);
         }
     }
-    // The keyboard filter admits a node only within the same-note tolerance of
-    // a key, which continuous boundary samples almost never land on. Every
+    // The keyboard filter admits a node only within a few cents of a key,
+    // which continuous boundary samples almost never land on. Every
     // rendering the candidates have is a key, so play each one in every octave.
     let mut keys: Vec<_> =
         scratch.candidates.iter().map(|&n| keyboard_class(c.policy.keyboard, n)).collect();
