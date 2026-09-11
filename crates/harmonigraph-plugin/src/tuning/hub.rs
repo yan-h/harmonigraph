@@ -359,6 +359,12 @@ impl Hub {
         // into the epoch bump this callback then adopts.
         self.tune.begin(callback);
         self.adopt();
+        // A cut or a departed Tune clears a row with no delta to carry that to
+        // Learn, so every row is republished here rather than flagged at each
+        // place that clears one.
+        for (source, row) in self.rows.iter().enumerate() {
+            Self::confirm(row, identity(source as u8), &mut owner.confirmed);
+        }
         self.detect_loop(callback);
         self.sequencer.publish_neighbourhood(&self.shared, owner.reducer.resolved().into());
         // Silence expires released memory against the completed input

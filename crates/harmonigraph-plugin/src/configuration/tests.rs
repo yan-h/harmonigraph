@@ -588,7 +588,18 @@ fn learn_the_played_third(retune: bool) {
     assert!((learned.raw[2] - harmonigraph_core::tuning::FIVE_JUST).abs() < 0.001);
     device.run(128, vec![], false);
     assert_eq!(mailbox.visible().0.revision, learned.revision);
-    device.finish_notes(192, &[(60, 60), (64, 64), (67, 67)]);
+    // A cut ends the chord with no delta on any row. Learn must stop hearing
+    // it on the next callback, not whenever that source next plays.
+    let heard = |device: &Device| {
+        device.wrapper().test_inspect_plugin(|plugin| {
+            plugin.configuration.as_ref().unwrap().confirmed.rows().count()
+        })
+    };
+    assert_eq!(heard(&device), 3);
+    crate::tuning::session::session().reset();
+    device.run(192, vec![], false);
+    assert_eq!(heard(&device), 0);
+    device.finish_notes(256, &[(60, 60), (64, 64), (67, 67)]);
 }
 
 #[test]
