@@ -3,7 +3,7 @@
 //! crate only adapts them to the plugin world.
 
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind, SourceId};
@@ -114,9 +114,6 @@ pub struct Harmonigraph {
     /// Take recording (see `harmonigraph_record`). The recorder is always
     /// present; it only writes while the user has armed it from the Video pane.
     take: RecorderSlot,
-    /// Count of events recorded in the current take, for the UI's status
-    /// line. Reset when recording starts.
-    take_events: Arc<AtomicU64>,
 }
 
 impl Drop for Harmonigraph {
@@ -539,7 +536,6 @@ impl Default for Harmonigraph {
         let consumer = take_control.take_display().expect("one display consumer");
         #[cfg(test)]
         let take = configuration::injected_recorder().unwrap_or(take);
-        let take_events = Arc::new(AtomicU64::new(0));
         let params = Arc::new(HarmonigraphParams::default());
         let aggregation = tuning::hub::Hub::new();
         params.session.set(aggregation.shared.clone()).unwrap_or_else(|_| unreachable!());
@@ -548,7 +544,6 @@ impl Default for Harmonigraph {
             audio_consumer,
             sample_rate_bits.clone(),
             take_control,
-            take_events.clone(),
         )));
         // From HERE, not from `initialize` or the editor: the point of the
         // thread is to cover the stretches nothing else does, and both of those
@@ -575,7 +570,6 @@ impl Default for Harmonigraph {
             samples_processed: 0,
             presentation_seconds: 0.0,
             take: RecorderSlot(Some(take)),
-            take_events,
             _background,
         }
     }
@@ -733,7 +727,6 @@ impl Plugin for Harmonigraph {
                         note,
                         kind,
                     );
-                    self.take_events.fetch_add(1, Ordering::Relaxed);
                 }
             }
             // Behave as a transparent MIDI effect.

@@ -425,8 +425,10 @@ An onset that got no correction emits with no tuning expression at all;
 stating a zero over whatever bend the player is holding would be centering it by another name.
 
 Emitted pitch and the tuned onset used by the policy are separate facts.
-Channel-bend changes update the scheduled voices and request display/take baselines without pretending that the original MIDI message was a separately accepted per-note event.
-The live output and final scheduled pitch are correct, but [#783](https://github.com/yan-h/harmonigraph/issues/783) records that multiple bends within one callback do not yet produce a separate sample-timed per-voice trajectory for every intermediate value in the display or take.
+Channel-bend changes update the scheduled voices, but they never reach the display or the take.
+`State::apply` sets `pitch_changed` for a bend (`tuning/state.rs:252`) and returns no note delta (`:262`), so `Hub::schedule_delta` returns from the `let … else` at `tuning/hub.rs:833`, before its only `pitch_changed` check at `:852` asks for the baseline repair.
+The live output is correct, but not even the final bent pitch is repaired into the display or take, let alone the intermediate values.
+[#783](https://github.com/yan-h/harmonigraph/issues/783) was closed not-planned on 2026-09-10, because pitch bend on tuned tracks is not part of how the plugin is played.
 
 CLAP note expression fits because it is sample-accurate and addresses a distinct voice by note id, port, channel and key.
 Bitwig converts a note effect's per-note pitch into MPE or VST3 note expression for whatever instrument sits downstream, so CLAP-only output does not restrict the instrument's format.
@@ -549,8 +551,8 @@ Every row is tuned now, the Hub's own included, so feeding Learn what was emitte
 The old design avoided that only because the Hub's own track was the one thing it did not retune.
 Learn also reads one callback later than it used to, because the Hub's own input is delayed by D like everyone else's;
 the configuration walk that runs it happens before the performance input for that callback is delivered.
-[#783](https://github.com/yan-h/harmonigraph/issues/783) is the narrower exception:
-a baseline preserves the final channel-bent pitch but not every intermediate per-voice trajectory within one callback.
+[#783](https://github.com/yan-h/harmonigraph/issues/783) is the exception, closed not-planned:
+a channel bend never reaches the take, not even its final pitch (see [Pitch output](#pitch-output)).
 
 Publication is two independent lanes, one for the display and one for the take, and the rule that keeps them independent is stated as a type:
 **no capacity, outcome or cursor on the publication path is a value derived from both lanes.** A full display ring must not hold back a snapshot the take needs, and a take-lane gap must not blank the display.
@@ -722,7 +724,7 @@ The instrument's own voices end with the device, which is what deleting a note e
 11. Learn reads one callback later than the input it learns from, and reads the player's pitch rather than the emitted one.
 Both follow from the Hub tuning its own notes;
 the second is what keeps Learn from becoming a fixed point.
-12. [#783](https://github.com/yan-h/harmonigraph/issues/783), intermediate bend trajectories, is unchanged by this pass.
+12. [#783](https://github.com/yan-h/harmonigraph/issues/783), channel bend not reaching the display or take, is unchanged by this pass and was closed not-planned rather than fixed.
 
 ## Open, deferred and not built
 
@@ -733,11 +735,16 @@ The shipped policy-v2 controls do not imply those choices were made.
 
 | Issue | What it is |
 |---|---|
-| [#632](https://github.com/yan-h/harmonigraph/issues/632) | Final Bitwig acceptance for Stop, covering pending and sounded notes, pedal state and new stopped-live input. The mechanism it tested is gone; the host scenario is not |
-| [#696](https://github.com/yan-h/harmonigraph/issues/696) | Final Bitwig acceptance for a fresh late second phrase on one channel without seeded neutral CC64/66/69 |
-| [#738](https://github.com/yan-h/harmonigraph/issues/738) | **Reset context on stop** is user-selectable and defaults off. Yan's choice of the desired behavior and default remains open |
-| [#783](https://github.com/yan-h/harmonigraph/issues/783) | Live MIDI channel bend is forwarded correctly and the schedule reaches the final pitch, but display/take baselines do not preserve a separate sample-timed per-voice trajectory for every intermediate bend inside one callback |
 | [#790](https://github.com/yan-h/harmonigraph/issues/790) | Large atomic onset cohorts can exceed the audio-callback budget well below the candidate ceiling; Tune's output delay does not give the Hub more processing time |
+
+**Closed or decided on 2026-09-10.** [#696](https://github.com/yan-h/harmonigraph/issues/696), a fresh late second phrase without seeded neutral CC64/66/69, was closed not-planned:
+the `Wave.shift` / accepted-neutral-pedal mechanism it tested was deleted in #788.
+[#738](https://github.com/yan-h/harmonigraph/issues/738) is decided:
+**Reset context on stop** stays off by default.
+[#783](https://github.com/yan-h/harmonigraph/issues/783) was closed not-planned, and the gap is wider than its title;
+see [Pitch output](#pitch-output).
+[#632](https://github.com/yan-h/harmonigraph/issues/632), Bitwig acceptance for Stop, was closed not-planned:
+the Stop cut is on main, and a failure there is a stuck or late note that ordinary playing surfaces at once.
 
 **Closed, recorded here because the record was wrong about them more than once.** [#672](https://github.com/yan-h/harmonigraph/issues/672) was fixed through #669 → #709 and closed on 2026-09-07;
 it was twice described as waiting on later work.

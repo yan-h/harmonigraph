@@ -328,6 +328,9 @@ mod tests {
     /// host restores a project's settings into.
     struct Harness {
         shared: Arc<Mutex<EditorShared>>,
+        /// The audio thread's half of `shared.take`, for a test that needs a
+        /// take to have captured something.
+        recorder: harmonigraph_record::Recorder,
         notes: harmonigraph_record::publication::Publisher,
         audio: crate::audio_ingress::Producer,
         audio_frames: u64,
@@ -342,17 +345,17 @@ mod tests {
     fn harness() -> Harness {
         let (notes, note_consumer) = harmonigraph_record::publication::channel();
         let (audio, audio_consumer) = crate::audio_ingress::channel(crate::AUDIO_RING_CAPACITY);
-        let (_recorder, take_control) = harmonigraph_record::channel();
+        let (recorder, take_control) = harmonigraph_record::channel();
         let shared = EditorShared::new(
             note_consumer,
             audio_consumer,
             Arc::new(AtomicU32::new(48_000.0f32.to_bits())),
             take_control,
-            Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
         let ui_state = Arc::new(RwLock::new(String::new()));
         Harness {
             shared: Arc::new(Mutex::new(shared)),
+            recorder,
             notes,
             audio,
             audio_frames: 0,
@@ -575,10 +578,13 @@ mod tests {
             let appearance = shared.ui.picture.appearance.serialize();
             shared.take.start(48_000.0, appearance, false);
             assert!(shared.take.is_recording(), "armed");
-            // Something captured, and the transport since stopped: the two
-            // conditions the debounce needs before it will end a take.
-            shared.take_events.store(1, std::sync::atomic::Ordering::Relaxed);
         }
+        // Something captured — one note, as `process` would record it — and
+        // the transport since stopped: the two conditions the debounce needs
+        // before it will end a take.
+        h.recorder.is_armed();
+        h.recorder.note(0.0, SourceId::DIRECT, 0, 60, NoteEventKind::On { velocity: 1.0 });
+        h.recorder.finish_callback();
 
         h.editor_state.set_open(false);
         for round in 0..EditorShared::STOP_FRAMES - 1 {

@@ -1133,6 +1133,74 @@ fn a_playhead_moved_back_before_the_take_rolls_lets_stop_finish_one_file() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A CLAP host always installs the configuration owner, and with it installed
+/// a note reaches the take through the Hub's publication rather than the
+/// plain-MIDI arm — so "has this take captured anything" has to be answered by
+/// what the recorder took in, not by a count only that arm kept (#818).
+///
+/// The plugin's own recorder and the editor state wired to it, not an injected
+/// one: the claim is that the editor's frame-counted stop sees a note that
+/// only the Hub carried. Nothing rewinds, so the debounce is the only thing
+/// here that can end the take.
+#[test]
+fn a_note_through_the_configuration_owner_lets_a_stopped_transport_end_the_take() {
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    // Retune back at its shipped default: what is claimed is the take path
+    // every CLAP session has, not the correction pipeline `new` enables it for.
+    device.wrapper().test_inspect_plugin(|plugin| {
+        plugin.aggregation.as_ref().unwrap().shared.set_retune(false)
+    });
+    device.activate();
+    let dir = std::env::temp_dir()
+        .join(format!("harmonigraph-config-transport-stop-{}", std::process::id()));
+    let shared = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_shared.clone());
+    let probe = {
+        let mut shared = shared.lock();
+        let probe = harmonigraph_record::testing::worker_probe(&shared.take, dir.clone());
+        let render = &mut shared.ui.picture.appearance.render;
+        render.trigger = harmonigraph_ui::RenderTrigger::OnTransportStop;
+        render.renderer_path = dir.join("absent-renderer").to_string_lossy().into_owned();
+        let appearance = shared.ui.picture.appearance.serialize();
+        shared.take.start(48_000.0, appearance, false);
+        assert!(shared.take.is_recording(), "armed");
+        probe
+    };
+    // Played: one note on and off, with blocks after each for the Hub's delay
+    // line to publish it into the take.
+    let mut raw = 0;
+    for block in 0..16 {
+        let events = match block {
+            0 => vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)],
+            8 => vec![note(10, 60, 0, CLAP_EVENT_NOTE_OFF)],
+            _ => vec![],
+        };
+        device.run_transport(raw, events, false, None, Some(transport(raw as f64 / 48000.0, 0)));
+        raw += 64;
+    }
+    // Then stopped where it was, without the playhead going back.
+    let mut parked = transport(raw as f64 / 48000.0, 0);
+    parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+    device.run_transport(raw, vec![], false, None, Some(parked));
+    device.run_transport(raw + 64, vec![], false, None, Some(parked));
+
+    for _ in 0..crate::editor::EditorShared::STOP_FRAMES {
+        shared.lock().poll_take_end();
+    }
+    assert!(
+        !shared.lock().take.is_recording(),
+        "a take that captured a note ends once the transport has stopped"
+    );
+    device.finish_notes(raw + 128, &[]);
+    drop(shared);
+    drop(device);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !probe.finished() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn configuration_observed_disarmed_does_not_become_later_armed_automation() {
     let _scope = crate::test_scope::enter();

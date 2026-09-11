@@ -68,8 +68,10 @@ impl Phrase {
             source
         });
         let mut phrase = Self { hub, sources, raw: 0 };
-        // Explicit accepted neutral initialization, not a claim about Bitwig's
-        // unmeasured initial CC64/66/69 state (#696).
+        // Neutral CC64/66/69 first, which is harmless rather than needed:
+        // nothing reads pedal state before emitting a note — `Tune::pedals`
+        // is read only by the cut — so an unseen pedal counts as up and these
+        // only pin where the fixture starts.
         phrase.step(
             std::array::from_fn(|_| {
                 (0..2)
