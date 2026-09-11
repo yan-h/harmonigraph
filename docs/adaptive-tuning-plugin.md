@@ -17,7 +17,11 @@ Harmonically remote nodes are excluded before pitch matching, even if their acou
 The nearest octave realization of each eligible node is scored with pitch error and register-weighted harmonic distance.
 Ties use coordinate order.
 
-Held references have weight one.
+A held reference weighs one when struck with the newest held note,
+and halves for every held half-life, one second by default, between its attack and that one.
+The gap is measured between attacks rather than to the present,
+so holding a chord never changes its weights and waiting never lets released memory outgrow it;
+a chord's notes, milliseconds apart, weigh alike, which a rank per attack would not give.
 Released references use the configured released weight multiplied by the release carry-over factor to the power of their recency rank.
 Repetitions refresh one contribution within the configured absolute-pitch tolerance; they retain separate voice lifetimes for release and expression.
 Octaves and comma-shifted returns remain distinct when outside that tolerance.
@@ -119,7 +123,7 @@ see [issue #852](https://github.com/yan-h/harmonigraph/issues/852).
 
 ## Controls and live neighborhood
 
-The Tuning pane exposes the keyboard tuning, harmonic weight, pitch scale, neighborhood radius, allowed axes, recent-memory capacity, released-note weighting, register weighting, same-note tolerance, silence timeout and transport reset choices.
+The Tuning pane exposes the keyboard tuning, harmonic weight, pitch scale, neighborhood radius, allowed axes, held half-life, recent-memory capacity, released-note weighting, register weighting, same-note tolerance, silence timeout and transport reset choices.
 Defaults match the simulator's baseline profile.
 The precision profile used by the paired intentional-E examples is obtained by setting harmonic weight to two.
 

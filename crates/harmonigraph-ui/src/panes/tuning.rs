@@ -487,6 +487,11 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             });
     });
     ui.collapsing("Context", |ui| {
+        p.held_half_life_ms =
+            adaptive_value(ui, p.held_half_life_ms, 0..=20_000, 1000.0, "Held half-life", "s");
+        ui.weak(
+            "A held note struck this long before the newest one counts half. Zero weighs all alike.",
+        );
         p.memory = adaptive_value(ui, p.memory.into(), 0..=24, 1.0, "Released pitches", "") as u8;
         for (value, label, max) in [
             (&mut p.released, "Released weight", 1000),

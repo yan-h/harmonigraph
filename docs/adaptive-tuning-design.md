@@ -180,6 +180,9 @@ Express that influence through the shared heuristics rather than assume an absol
 The formal weighting and interaction with harmonic and register distance remain open.
 A sustained bass may keep the neighbourhood nearby or be left behind by the newer harmony, depending on the sequence of notes and harmonic heuristics.
 Yan accepts either outcome; do not impose a universal pedal anchor or universal escape rule.
+Yan later asked that more recently struck held notes weigh much more than older ones.
+The implemented rule halves a held note's weight once per configurable half-life it was struck before the newest held note;
+it is measured between attacks, so waiting does not weaken a held chord, and it leans the sustained bass toward being left behind without making that a rule.
 Forgetting individual old notes must not itself erase the accumulated tuning displacement.
 Ordinary releases between chords must not destroy continuity.
 

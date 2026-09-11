@@ -272,7 +272,7 @@ Effective tuning is resolved independently of the editor.
 The `ConfigReducer` owns the semantics and ordering of combined edits, presets, explicit unlocks and mode changes —
 a preset must not become a mixture of old locks and new axes —
 and it publishes one resolved configuration containing the effective tuning, tempered commas and policy-v2 controls.
-Those controls cover neighborhood radius and axes, harmonic, pitch and register weighting, released memory and recency, repetition tolerance, silence timeout and transport resets;
+Those controls cover neighborhood radius and axes, harmonic, pitch and register weighting, held half-life, released memory and recency, repetition tolerance, silence timeout and transport resets;
 their exact ranges and defaults live in the [implementation record](adaptive-tuning-plugin.md#controls-and-live-neighborhood).
 The UI mirrors that resolved configuration rather than running a competing authority, and restoring state or automating tuning works with the editor never opened.
 
@@ -489,7 +489,7 @@ The previous onset's full output-minus-input correction is the moving reference 
 
 Candidates are the union of bounded local Manhattan neighborhoods around the contributing context, restricted by the selected axes.
 The scorer chooses the nearest octave realization by pitch error plus register-weighted harmonic distance, with coordinate order as the final tie-break.
-Held references have full weight;
+Held references weigh one at the newest attack and halve per configurable half-life struck before it;
 recently released onset pitches contribute through configurable weight, recency and absolute-pitch repetition tolerance.
 New activity replaces the bounded released memory;
 elapsed wall time alone does not decay it.

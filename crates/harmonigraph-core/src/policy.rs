@@ -30,10 +30,23 @@ pub const CONFIG: PolicyConfig = PolicyConfig {
     register_falloff: 800,
     tolerance: 500_000,
     silence_ms: 0,
+    held_half_life_ms: 1000,
     reset_stop: false,
     reset_loop: false,
     keyboard: [700_000_000, 400_000_000, 1_000_000_000],
 };
+
+/// A held note's weight, from how many seconds before the newest held note it
+/// was struck: it halves once per configured half-life. Measured against that
+/// attack rather than against now, so holding a chord never changes its
+/// weights — which is the rule released memory keeps too. A chord's notes land
+/// milliseconds apart and so weigh alike, where a rank per attack would not.
+pub fn held_weight(config: PolicyConfig, gap_seconds: f64) -> f64 {
+    if config.held_half_life_ms == 0 {
+        return 1.0;
+    }
+    0.5f64.powf(gap_seconds * 1000.0 / f64::from(config.held_half_life_ms))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MusicalConfig {

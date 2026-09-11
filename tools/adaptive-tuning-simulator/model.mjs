@@ -3,7 +3,7 @@ export const AXES = [1200 * Math.log2(3 / 2), 1200 * Math.log2(5 / 4), 1200 * Ma
 export const DEFAULTS = Object.freeze({
   radius: 3, axes: 2, memory: 6, harmonic: 6, pitchScale: 20,
   released: 0.1, recency: 0.7, registerFloor: 0.4, registerFalloff: 0.8,
-  tolerance: 0.5, silence: 0, resetStop: false, resetLoop: false,
+  tolerance: 0.5, silence: 0, resetStop: false, resetLoop: false, heldHalfLife: 1,
 });
 export const keyOf = n => n.join(',');
 export const latticeCents = n => 4800 + n.reduce((sum, x, i) => sum + x * AXES[i], 0);
@@ -34,7 +34,7 @@ export function parsePitch(text) {
 function validateSettings(raw) {
   const s = { ...DEFAULTS, ...raw };
   const bounds = { radius: [1, 5], axes: [1, 3], memory: [0, 24], harmonic: [0, 20], pitchScale: [1, 100],
-    released: [0, 1], recency: [0, 1], registerFloor: [0.01, 1], registerFalloff: [0, 4], tolerance: [0, 20], silence: [0, 120] };
+    released: [0, 1], recency: [0, 1], registerFloor: [0.01, 1], registerFalloff: [0, 4], tolerance: [0, 20], silence: [0, 120], heldHalfLife: [0, 20] };
   for (const [name, [lo, hi]] of Object.entries(bounds)) {
     if (!Number.isFinite(s[name]) || s[name] < lo || s[name] > hi) throw new Error(`Invalid ${name}: expected ${lo}–${hi}.`);
   }
@@ -65,9 +65,14 @@ export class Simulator {
     // Same-register repetitions refresh one contribution; voices remain separate
     // for release and expression. Octave duplicates retain their own registers.
     const held = [...this.held.values()].sort((a, b) => b.stamp - a.stamp);
+    // A held note halves in weight once per half-life it was struck before the
+    // newest held note. Measured against that attack, never against now, so
+    // holding a chord does not change its weights.
+    const newest = Math.max(...held.map(v => v.time)), { heldHalfLife } = this.settings;
     for (const voice of held) {
       if (!entries.some(e => Math.abs(e.output - voice.output) <= this.settings.tolerance)) {
-        entries.push({ ...voice, weight: 1, status: 'held' });
+        const weight = heldHalfLife > 0 ? 0.5 ** ((newest - voice.time) / heldHalfLife) : 1;
+        entries.push({ ...voice, weight, status: 'held' });
       }
     }
     let rank = 0;
@@ -126,7 +131,7 @@ export class Simulator {
     if (this.held.has(id)) this.off(id);
     const result = this.evaluate(input);
     const voice = { id, node: [...result.winner.node], input, output: result.winner.output,
-      correction: result.winner.output - input, bend: 0, stamp: ++this.serial };
+      correction: result.winner.output - input, bend: 0, stamp: ++this.serial, time: this.time };
     this.recent = this.recent.filter(e => Math.abs(e.output - voice.output) > this.settings.tolerance);
     this.held.set(id, voice);
     // The simplest moving reference: last onset's full output-minus-input
@@ -143,7 +148,7 @@ export class Simulator {
       const base = latticeCents(entry.node);
       const output = entry.output ?? base + 1200 * Math.floor((input - base) / 1200 + 0.5);
       if (!Number.isFinite(input) || !Number.isFinite(output) || entry.node.length !== 3 || !entry.node.every(Number.isInteger)) throw new Error('Invalid fixture seed.');
-      this.held.set(entry.id, { ...entry, input, output, correction: output - input, bend: 0, stamp: ++this.serial });
+      this.held.set(entry.id, { ...entry, input, output, correction: output - input, bend: 0, stamp: ++this.serial, time: this.time });
     }
   }
   off(id) {

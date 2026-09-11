@@ -54,6 +54,21 @@ test('release recency does not weaken on time alone, while configured silence re
   timed.wait(0.1); assert.equal(timed.recent.length, 0); assert.equal(timed.reference, 0);
 });
 
+test('a held note struck long before the newest weighs less, and waiting changes no held weight', () => {
+  const program = 'on E3 low\nwait 3\non C3 c\non G3 g\non D4 d\non A4 a\non E5 high';
+  const high = heldHalfLife => {
+    const sim = new Simulator({ heldHalfLife });
+    for (const event of parseProgram(program)) sim.event(event);
+    return keyOf(sim.history.at(-1).node);
+  };
+  assert.equal(high(0), '0,1,0', 'weighed alike, the sounding just E decides');
+  assert.equal(high(1), '4,0,0', 'three half-lives older, it no longer outvotes the chain');
+  const sim = new Simulator(); sim.on(4800, 'c'); sim.on(5200, 'e');
+  const before = sim.context();
+  sim.wait(60);
+  assert.deepEqual(sim.context(), before);
+});
+
 test('player bends and later decisions never modify onset context or frozen correction', () => {
   const sim = new Simulator(); sim.on(4800, 'c'); sim.on(5200, 'e');
   const before = { ...sim.held.get('e') }, rank = sim.evaluate(5500);

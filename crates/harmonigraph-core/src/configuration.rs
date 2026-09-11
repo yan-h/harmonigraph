@@ -19,7 +19,8 @@ impl Default for TuningModes {
 }
 
 /// Musical controls, stored as integers so configuration equality is exact.
-/// Weights are thousandths; silence is milliseconds (zero means never).
+/// Weights are thousandths; silence and the held half-life are milliseconds
+/// (zero means never, and every held note alike, respectively).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyConfig {
     pub version: u32,
@@ -34,6 +35,8 @@ pub struct PolicyConfig {
     pub register_falloff: u16,
     pub tolerance: u32,
     pub silence_ms: u32,
+    /// A held note struck this long before the newest held note counts half.
+    pub held_half_life_ms: u32,
     pub reset_stop: bool,
     pub reset_loop: bool,
     /// How the player's controller renders primes 3, 5 and 7, in microcents,
@@ -60,11 +63,12 @@ impl PolicyConfig {
         self.register_falloff = self.register_falloff.min(4000);
         self.tolerance = self.tolerance.min(20_000_000);
         self.silence_ms = self.silence_ms.min(120_000);
+        self.held_half_life_ms = self.held_half_life_ms.min(20_000);
         self.keyboard = self.keyboard.map(|v| v.clamp(0, 1_200_000_000));
         self
     }
     /// Fixed configuration mailbox representation, shared by edits and snapshots.
-    pub fn words(self) -> [i32; 10] {
+    pub fn words(self) -> [i32; 11] {
         [
             2,
             i32::from(self.radius)
@@ -80,9 +84,10 @@ impl PolicyConfig {
             self.keyboard[0],
             self.keyboard[1],
             self.keyboard[2],
+            self.held_half_life_ms as i32,
         ]
     }
-    pub fn from_words(w: [i32; 10]) -> Self {
+    pub fn from_words(w: [i32; 11]) -> Self {
         Self {
             version: 2,
             radius: w[1] as u8,
@@ -98,6 +103,7 @@ impl PolicyConfig {
             register_falloff: (w[4] >> 16) as u16,
             tolerance: w[5].max(0) as u32,
             silence_ms: w[6].max(0) as u32,
+            held_half_life_ms: w[10].max(0) as u32,
             keyboard: [w[7], w[8], w[9]],
         }
         .sanitize()
