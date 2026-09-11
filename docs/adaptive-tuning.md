@@ -305,6 +305,8 @@ A successful claim and a return both bump the session epoch.
 
 **Retune** and **Show** are independent saved controls for every instance, including Harmonigraph's own input.
 Retune off passes arriving notes and player expression through without adaptive correction and excludes them from all adaptive context and memory.
+Learn still hears them:
+an uncorrected note is exactly the player's pitch Learn reads, so a tuner in front of Harmonigraph with Retune off everywhere is what Learn learns from.
 Switching it off removes that source's held context, released memory and owned moving reference on the Hub's next callback.
 Already sounding notes keep their correction through release, including subsequent player expression;
 turning Retune back on admits new attacks only.
@@ -318,7 +320,8 @@ This does not select individual instruments out of the mixed audio spectrum.
 
 The central instance list in **Tuning → Adaptive tuning** shows held notes, output counts and status.
 Its **Instance details** include an editable name, input/output counts, last attack and correction, missed corrections and delay.
-Names and switches are stored in each plugin's own project state, and absent fields default to an empty name with both switches on.
+Names and switches are stored in each plugin's own project state, and absent fields default to an empty name with Show on;
+Retune defaults on for a Tune and off for Harmonigraph's own input.
 **Retune all** and **Show all** independently control all currently loaded instances, including the Hub input.
 A mixed checkbox enables everyone on its next click;
 an enabled checkbox disables everyone, and individual rows remain adjustable afterward.

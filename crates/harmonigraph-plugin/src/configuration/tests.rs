@@ -538,8 +538,22 @@ fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flus
 
 #[test]
 fn real_same_sample_initial_tuning_is_in_learning_before_any_gui_drain() {
+    learn_the_played_third(true);
+}
+
+/// Retune decides what the Hub corrects, not what Learn hears: a tuner in
+/// front of Harmonigraph states the tuning Learn is armed to find.
+#[test]
+fn learning_reads_the_hub_input_with_retune_off() {
+    learn_the_played_third(false);
+}
+
+fn learn_the_played_third(retune: bool) {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
+    device.wrapper().test_inspect_plugin(|plugin| {
+        plugin.aggregation.as_ref().unwrap().shared.set_retune(retune)
+    });
     device.activate();
     let mailbox = device.mailbox();
     mailbox.submit(packet(ConfigEdit { learning: Some(true), ..Default::default() })).unwrap();
