@@ -751,6 +751,10 @@ fn two_placements_of_one_pane_fold_a_grid_each() {
 
     let seeded = || {
         let mut state = fresh();
+        // Time across the screen, which is the axis the two rects differ on:
+        // turned upright, both would be the frame's full height deep and fold
+        // one run between them.
+        state.picture.appearance.spectrum.orientation = crate::SpectralOrientation::Left;
         state.picture.appearance.spectrum.show_spectrogram = true;
         state.picture.appearance.spectrum.roll_seconds = 10.0;
         let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];

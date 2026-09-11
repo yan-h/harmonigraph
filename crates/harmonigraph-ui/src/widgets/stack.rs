@@ -670,19 +670,28 @@ mod tests {
     use super::*;
     use crate::widgets::probe::{filled_rects, handles, press, shapes, text_boxes};
 
-    /// A fresh view, which is the stack every claim here is measured against
-    /// unless it says otherwise.
-    fn fresh() -> ViewConfig {
-        ViewConfig::default()
+    /// The stack every claim here is measured against unless it says
+    /// otherwise: the five numbers a node's layers are laid out from, written
+    /// out rather than taken from the fresh view. That view is a look, retuned
+    /// whenever one is captured from the DAW, and a bar test that inherited it
+    /// would be re-measured at every capture for a picture it is not about.
+    /// The audio ring is off, as a fresh node's is.
+    fn pinned() -> ViewConfig {
+        ViewConfig {
+            ring_inner: 0.6,
+            spectral_ring_width: 0.0,
+            band_width: 0.2,
+            ring_gap: 0.05,
+            mark_thickness: 0.065,
+            ..ViewConfig::default()
+        }
     }
 
-    /// The fresh view with all four layers on it: the audio ring switched on,
-    /// and the middle held where the band still fits outside it. The fresh
-    /// middle is a look and free to grow past that, and a band refused for room
+    /// The pinned stack with all four layers on it. A band refused for room
     /// would turn every claim made here about a fully layered node into one
-    /// about a node missing a layer — so the premise is asserted, not assumed.
+    /// about a node missing a layer, so the premise is asserted, not assumed.
     fn layered() -> ViewConfig {
-        let view = ViewConfig { spectral_ring_width: 0.1, ring_inner: 0.6, ..fresh() };
+        let view = ViewConfig { spectral_ring_width: 0.1, ..pinned() };
         let rings = view.rings();
         assert!(
             rings.audio.1 > rings.audio.0 && rings.band.1 > rings.band.0,
@@ -711,7 +720,7 @@ mod tests {
     /// the layer was keeping for when the room came back.
     #[test]
     fn a_refused_layer_keeps_its_width_when_its_handle_is_dragged() {
-        let mut view = fresh();
+        let mut view = pinned();
         // The stack pushed to the edge of the quad with a ring too wide to seat
         // there, so the audio ring no longer fits and takes the band with it:
         // the stack drops from the outside in and stays dropped.
@@ -741,7 +750,7 @@ mod tests {
     /// that four width bars could not make.
     #[test]
     fn a_handle_lands_where_it_is_dragged() {
-        let view = fresh();
+        let view = pinned();
         // Each inside what the wall past it allows: a ring's boundary is its
         // own outer edge plus a gap, so the band's cannot pass the quad edge by
         // more than that.
@@ -759,7 +768,7 @@ mod tests {
     /// being eaten by the one being dragged.
     #[test]
     fn the_layers_outside_a_dragged_one_keep_their_widths() {
-        let view = fresh();
+        let view = pinned();
         // As far out as the middle can go with every layer outside it still
         // fitting; past that the stack starts refusing them, which is the next
         // test.
@@ -785,7 +794,7 @@ mod tests {
     /// it rather than a padding out from it.
     #[test]
     fn dragging_a_handle_home_switches_its_layer_off() {
-        let view = fresh();
+        let view = pinned();
         for (k, layer) in LAYERS.iter().enumerate() {
             let inside = if k == 0 { 0.0 } else { view.rings().edges()[k - 1] };
             let off = dragged(&view, k, inside);
@@ -803,7 +812,7 @@ mod tests {
     /// its own layer over.
     #[test]
     fn a_ring_dragged_past_the_quad_edge_stops_at_it() {
-        let view = fresh();
+        let view = pinned();
         for k in [1, 2] {
             let out = dragged(&view, k, AXIS_TOP);
             let (lo, hi) = if k == 1 { out.rings().audio } else { out.rings().band };
@@ -824,7 +833,7 @@ mod tests {
     /// does not stand in front of this one.
     #[test]
     fn a_slot_starting_past_the_quad_edge_leaves_no_room() {
-        let mut view = fresh();
+        let mut view = pinned();
         view.ring_inner = RING_INNER_MAX;
         view.spectral_ring_width = 1.0 - RING_INNER_MAX;
         view.ring_gap = harmonigraph_scene::GAP_MAX;
@@ -867,7 +876,7 @@ mod tests {
     /// is the whole of what its length is for.
     #[test]
     fn the_marks_reach_their_full_depth_past_the_quad_edge() {
-        let view = fresh();
+        let view = pinned();
         let out = dragged(&view, 3, AXIS_TOP);
         let rings = out.rings();
         assert!(
@@ -893,7 +902,7 @@ mod tests {
     /// about whether a node can reach that state or what its thumbs do there.
     #[test]
     fn a_pile_of_thumbs_still_answers_four_presses() {
-        let mut view = fresh();
+        let mut view = pinned();
         for layer in LAYERS {
             layer.set(&mut view, 0.0);
         }
@@ -918,7 +927,7 @@ mod tests {
     /// pair of checkboxes two sections down that say nothing about them.
     #[test]
     fn an_unmarked_strip_draws_in_the_plain_widget_fill() {
-        let mut view = fresh();
+        let mut view = pinned();
         view.mark_melody = false;
         view.mark_bass = false;
         let rings = view.rings();
@@ -1023,7 +1032,7 @@ mod tests {
     /// center, so a cell starting at 0 starts at the end of the bar.
     #[test]
     fn the_cell_at_the_nodes_center_reaches_the_end_of_the_bar() {
-        let mut view = fresh();
+        let mut view = pinned();
         let shapes = shapes(W, |ui| {
             StackBar::new(&mut view).show(ui);
         });
@@ -1032,7 +1041,7 @@ mod tests {
         let middle = fills
             .iter()
             .skip(1)
-            .find(|(r, _)| (r.right() - x_of(fresh().ring_inner)).abs() < 0.5)
+            .find(|(r, _)| (r.right() - x_of(pinned().ring_inner)).abs() < 0.5)
             .expect("no cell was drawn for the node's middle")
             .0;
         assert!(
@@ -1077,7 +1086,7 @@ mod tests {
     /// exists to split.
     #[test]
     fn an_off_layer_keeps_its_thumb_on_its_boundary() {
-        let mut view = fresh();
+        let mut view = pinned();
         Layer::Audio.set(&mut view, 0.0);
         let rings = view.rings();
         assert_eq!(
@@ -1092,7 +1101,7 @@ mod tests {
     /// neighbours lead rather than a few points along from them.
     #[test]
     fn the_innermost_name_leads_where_every_other_row_leads() {
-        let mut view = fresh();
+        let mut view = pinned();
         let shapes = shapes(W, |ui| {
             StackBar::new(&mut view).show(ui);
         });
@@ -1173,11 +1182,11 @@ mod tests {
         }
     }
 
-    /// At a fresh view, at every width a settings column can be dragged to.
+    /// At the pinned stack, at every width a settings column can be dragged to.
     #[test]
     fn a_name_never_covers_another_layers_cell_more_than_its_own() {
         for w in every_column_width() {
-            let mut view = fresh();
+            let mut view = pinned();
             let shapes = shapes(w, |ui| {
                 StackBar::new(&mut view).show(ui);
             });
@@ -1198,13 +1207,13 @@ mod tests {
     #[test]
     fn a_name_is_laid_against_the_layer_it_names() {
         for w in every_column_width() {
-            let mut view = fresh();
+            let mut view = pinned();
             let shapes = shapes(w, |ui| {
                 StackBar::new(&mut view).show(ui);
             });
             let (bar, x_of) = axis_on(&shapes);
             let thumbs = spread(
-                thumb_axis(&fresh().rings()).map(&x_of),
+                thumb_axis(&pinned().rings()).map(&x_of),
                 (x_of(0.0), x_of(AXIS_TOP)),
                 THUMB_SEP,
             );
@@ -1237,7 +1246,7 @@ mod tests {
     #[test]
     fn the_names_read_out_in_the_stacks_own_order() {
         for w in every_column_width() {
-            let mut view = fresh();
+            let mut view = pinned();
             let shapes = shapes(w, |ui| {
                 StackBar::new(&mut view).show(ui);
             });
@@ -1269,7 +1278,7 @@ mod tests {
     /// loop's `continue` and the `cursor` it deliberately does not advance.
     #[test]
     fn an_off_layer_leaves_its_room_to_the_names_outside_it() {
-        let mut view = fresh();
+        let mut view = pinned();
         view.spectral_ring_width = 0.0;
         for w in every_column_width() {
             let mut view = view.clone();
@@ -1335,7 +1344,7 @@ mod tests {
     /// And one thumb per layer, four of them, on the boundaries.
     #[test]
     fn the_bar_draws_a_thumb_for_every_layer() {
-        let mut view = fresh();
+        let mut view = pinned();
         let shapes = shapes(W, |ui| {
             StackBar::new(&mut view).show(ui);
         });
@@ -1404,7 +1413,7 @@ mod tests {
     /// `aimed` alone.
     #[test]
     fn a_drag_moves_only_the_layer_it_was_aimed_at() {
-        let before = fresh();
+        let before = pinned();
         // Aimed at the octave band's own body: the stretch of bar between the
         // audio ring's boundary and the strip's.
         let rings = before.rings();
@@ -1427,7 +1436,7 @@ mod tests {
     /// behind on one of their own.
     #[test]
     fn the_outermost_handle_sizes_the_mark_strip() {
-        let before = fresh();
+        let before = pinned();
         let rings = before.rings();
         let end = axis(rings.mark_inner + rings.mark_thickness);
         let mut after = before.clone();
@@ -1447,10 +1456,10 @@ mod tests {
     /// layer, from wherever on the bar it was aimed.
     #[test]
     fn a_second_gesture_on_the_bar_chooses_for_itself() {
-        let rings = fresh().rings();
+        let rings = pinned().rings();
         let band = axis((rings.band.0 + rings.band.1) * 0.5);
         let middle = axis(rings.inner * 0.5);
-        let mut view = fresh();
+        let mut view = pinned();
         gesture(&mut view, |bar| {
             let at = |x: f32| egui::pos2(bar.left() + bar.width() * x, bar.center().y);
             let step = 12.0 / bar.width();
@@ -1470,12 +1479,12 @@ mod tests {
             ]
         });
         assert!(
-            view.band_width > fresh().band_width,
+            view.band_width > pinned().band_width,
             "the first gesture did not widen the band: {}",
             view.band_width,
         );
         assert!(
-            view.ring_inner < fresh().ring_inner,
+            view.ring_inner < pinned().ring_inner,
             "the second gesture did not reach the middle, so the first one's grab outlived it: {}",
             view.ring_inner,
         );
@@ -1488,7 +1497,7 @@ mod tests {
     /// [`ValueBar`]: super::super::value::ValueBar
     #[test]
     fn double_click_restores_the_fresh_stack() {
-        let mut view = fresh();
+        let mut view = pinned();
         for layer in LAYERS {
             layer.set(&mut view, 0.0);
         }
@@ -1505,7 +1514,7 @@ mod tests {
         for layer in LAYERS {
             assert_eq!(
                 layer.width(&view),
-                layer.width(&fresh()),
+                layer.width(&ViewConfig::default()),
                 "{layer:?} did not come home on a double-click",
             );
         }

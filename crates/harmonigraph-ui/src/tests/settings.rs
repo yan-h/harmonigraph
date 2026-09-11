@@ -1447,6 +1447,10 @@ fn audio_section_shapes(
     let mut state = fresh();
     state.picture.appearance.view.spectral_reading = reading;
     state.picture.appearance.view.spectral_ring_width = width;
+    // A middle with room for the ring switched on above. The fresh middle is a
+    // look and free to grow, and a ring refused for room greys every bar that
+    // sizes it, which reads here as a gate that never opens.
+    state.picture.appearance.view.ring_inner = 0.3;
     let tab = SettingsPane::Page(DisplayPage::Lattice).install(&mut state);
     tab_body(&mut state, tab, 320.0, PANE_HEIGHT).shapes
 }

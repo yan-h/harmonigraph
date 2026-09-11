@@ -1112,7 +1112,11 @@ mod tests {
         let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
         state.appearance.render.frame.lattice = LatticeSide::Left;
         state.appearance.render.frame.split = 0.3;
+        // The analyzer's own layout, pinned like the frame's: which region a
+        // press lands in is the roll share's, and a Span zoom needs room below.
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.roll_fraction = 0.5;
+        state.appearance.spectrum.roll_seconds = 30.0;
         let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
         let spectral = preview_pane_rect(
             rect,
@@ -1155,7 +1159,11 @@ mod tests {
         let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
         state.appearance.render.frame.lattice = LatticeSide::Left;
         state.appearance.render.frame.split = 0.3;
+        // The analyzer's own layout, pinned like the frame's: which region a
+        // press lands in is the roll share's, and a Span zoom needs room below.
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.roll_fraction = 0.5;
+        state.appearance.spectrum.roll_seconds = 30.0;
         let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
         let spectral = preview_pane_rect(
             rect,

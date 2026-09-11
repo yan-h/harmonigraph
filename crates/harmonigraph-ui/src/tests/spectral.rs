@@ -3,13 +3,20 @@
 
 use super::harness::*;
 
-/// A fresh state with the analyzer turned to Left, the orientation every
-/// screen direction below is written against. Pinned rather than read off the
-/// default, which is a look and free to turn: these tests are about which
-/// gesture the dock hands a drag to, not which side the analyzer opens on.
-fn fresh_left() -> crate::SharedState {
+/// A fresh state with the analyzer these tests drag on pinned: turned to
+/// Left, the orientation every screen direction below is written against, with
+/// the depth axis shared evenly and the Span and the Level started clear of
+/// their clamps. Pinned rather than read off the default, which is a look and
+/// is retuned whenever one is captured: these tests are about which gesture
+/// the dock hands a drag to, not about how the analyzer opens.
+fn for_drags() -> crate::SharedState {
     let mut state = fresh();
-    state.picture.appearance.spectrum.orientation = crate::SpectralOrientation::Left;
+    let spectrum = &mut state.picture.appearance.spectrum;
+    spectrum.orientation = crate::SpectralOrientation::Left;
+    spectrum.roll_fraction = 0.5;
+    spectrum.roll_seconds = 30.0;
+    spectrum.floor_db = -80.0;
+    spectrum.ceiling_db = -20.0;
     state
 }
 
@@ -24,7 +31,7 @@ fn fresh_left() -> crate::SharedState {
 /// hover. So the assertion is that the split actually MOVED.
 #[test]
 fn the_spectral_divider_drags_through_the_dock() {
-    let mut state = fresh_left();
+    let mut state = for_drags();
     let mut h = DockHarness::new();
     h.settle(&mut state);
 
@@ -35,7 +42,7 @@ fn the_spectral_divider_drags_through_the_dock() {
     let grab = band.center();
     let before = state.picture.appearance.spectrum.roll_fraction;
 
-    // Left (pinned by `fresh_left`) puts the divider upright, so the drag
+    // Left (pinned by `for_drags`) puts the divider upright, so the drag
     // that moves it runs along x — pushing it away from the spectrum.
     h.frame(&mut state, vec![egui::Event::PointerMoved(grab)]);
     assert!(
@@ -63,7 +70,7 @@ fn the_spectral_divider_drags_through_the_dock() {
 /// lower pitches into view, the way grabbing any picture does.
 #[test]
 fn dragging_the_spectral_picture_pans_the_pitch_range() {
-    let mut state = fresh_left();
+    let mut state = for_drags();
     // Start zoomed in, so there is room to pan in both directions.
     state.picture.appearance.spectrum.low_midi = 48.0;
     state.picture.appearance.spectrum.high_midi = 84.0;
@@ -72,7 +79,7 @@ fn dragging_the_spectral_picture_pans_the_pitch_range() {
 
     let grab = h.spectral_grab(&state);
     let before = state.picture.appearance.spectrum;
-    // Left (pinned by `fresh_left`) climbs in pitch UP the screen, so a
+    // Left (pinned by `for_drags`) climbs in pitch UP the screen, so a
     // drag toward higher pitch is a drag toward smaller y.
     h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
     let target = grab + egui::vec2(0.0, -60.0);
@@ -102,7 +109,7 @@ fn dragging_the_spectral_picture_pans_the_pitch_range() {
 /// moves one axis.
 #[test]
 fn dragging_the_spectral_picture_along_time_zooms_the_span() {
-    let mut state = fresh_left();
+    let mut state = for_drags();
     let mut h = DockHarness::new();
     h.settle(&mut state);
 
@@ -151,19 +158,16 @@ fn dragging_the_spectral_picture_along_time_zooms_the_span() {
 /// as pulling away from the now-line shortens the Span.
 #[test]
 fn a_drag_over_the_spectrum_zooms_the_level_and_not_the_span() {
-    let mut state = fresh_left();
+    let mut state = for_drags();
     // Zoomed in, so a stray pan would show up rather than sitting against the
     // clamp at the ends of the axis.
     state.picture.appearance.spectrum.low_midi = 48.0;
     state.picture.appearance.spectrum.high_midi = 84.0;
-    // Give the spectrum enough depth for the outward drag to stay inside the
-    // pane. The captured default gives three quarters to the roll; this test
-    // is about which side owns the drag, not about the divider's default.
-    state.picture.appearance.spectrum.roll_fraction = 0.55;
     let mut h = DockHarness::new();
     h.settle(&mut state);
 
-    // The spectrum owns 0..0.45 of the depth axis in this fixture. Left runs depth
+    // The spectrum owns 0..0.5 of the depth axis in this fixture, which is
+    // depth enough for the outward drag to stay inside the pane. Left runs depth
     // rightward with the baseline at the divider, so the curve grows LEFTWARD
     // and that is the way out of it.
     let grab = h.spectral_grab_at(&state, 0.2);
@@ -199,7 +203,7 @@ fn a_drag_over_the_spectrum_zooms_the_level_and_not_the_span() {
 /// could plausibly have meant.
 #[test]
 fn the_wheel_zooms_the_pitch_range_and_leaves_the_time_span_alone() {
-    let mut state = fresh_left();
+    let mut state = for_drags();
     state.picture.appearance.spectrum.low_midi = 36.0;
     state.picture.appearance.spectrum.high_midi = 96.0;
     let mut h = DockHarness::new();
@@ -246,7 +250,7 @@ fn the_wheel_zooms_the_pitch_range_and_leaves_the_time_span_alone() {
 /// handle still resizes the split and does NOT pan the pitch.
 #[test]
 fn the_divider_still_wins_the_drag_over_the_pane_behind_it() {
-    let mut state = fresh_left();
+    let mut state = for_drags();
     let mut h = DockHarness::new();
     h.settle(&mut state);
 
@@ -300,7 +304,7 @@ fn the_divider_still_wins_the_drag_over_the_pane_behind_it() {
 /// hold from a pane drawing the dial.
 #[test]
 fn resizing_the_analyzer_resizes_the_spectrogram_and_not_the_spectrum() {
-    let mut state = fresh_left();
+    let mut state = for_drags();
     let mut h = DockHarness::new();
     h.settle(&mut state);
     // Left is the pinned orientation, so the analyzer's depth axis — the one
@@ -318,6 +322,7 @@ fn resizing_the_analyzer_resizes_the_spectrogram_and_not_the_spectrum() {
         band.center().x - pane(state).left()
     };
     let (was, dialled) = (pane(&state).width(), spectrum(&h, &state));
+    let split = state.picture.appearance.spectrum.roll_fraction;
 
     h.screen.max.x += 400.0;
     h.settle(&mut state);
@@ -333,8 +338,7 @@ fn resizing_the_analyzer_resizes_the_spectrogram_and_not_the_spectrum() {
     );
     // And the dial the render composes from never moved.
     assert_eq!(
-        state.picture.appearance.spectrum.roll_fraction,
-        crate::SpectrumConfig::default().roll_fraction,
+        state.picture.appearance.spectrum.roll_fraction, split,
         "resizing the editor moved the split a take would export with",
     );
 
@@ -367,7 +371,7 @@ fn resizing_the_analyzer_resizes_the_spectrogram_and_not_the_spectrum() {
 #[test]
 fn a_curving_zoom_drag_does_not_turn_into_a_pan() {
     use harmonigraph_core::spectrum::SPECTRUM_BINS;
-    let mut state = fresh_left();
+    let mut state = for_drags();
     let mut h = DockHarness::at(egui::vec2(1600.0, 900.0));
     h.settle(&mut state);
     let mut n = 0usize;

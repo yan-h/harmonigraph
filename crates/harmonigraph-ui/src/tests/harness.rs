@@ -208,7 +208,8 @@ impl DockHarness {
 
     /// The same, at a chosen fraction along the depth (time) axis — which side
     /// of the divider a drag starts on decides whether it is the Span's.
-    /// Left, the default orientation, runs depth rightward.
+    /// Written for Left, which runs depth rightward — the orientation the
+    /// tests that aim with it pin rather than inherit.
     pub(super) fn spectral_grab_at(&self, state: &SharedState, depth: f32) -> egui::Pos2 {
         // Asked of the Spectral pane BY NAME, so a dock that has taken it off
         // screen trips this rather than aiming the drag somewhere else — at
