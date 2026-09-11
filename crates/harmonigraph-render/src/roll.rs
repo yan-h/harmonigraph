@@ -2136,6 +2136,10 @@ mod tests {
     /// preparing, and the sweep runs from whichever one that is.
     #[test]
     fn a_pane_that_stops_drawing_gives_its_chain_back() {
+        // Held across every prepare: under `hot-reload` a shader published by
+        // another test between two of them makes `is_stale` rebuild the
+        // resources, pane map included, which reads here as an eviction (#675).
+        let _guard = crate::reload::test_lock();
         let Some((device, queue)) = headless_device() else {
             return;
         };
@@ -2165,6 +2169,8 @@ mod tests {
     /// so the cache lifetime must not advance as each live pane prepares.
     #[test]
     fn every_pane_prepared_in_one_frame_survives_until_paint() {
+        // Held across every prepare, for the reason given in the test above.
+        let _guard = crate::reload::test_lock();
         let Some((device, queue)) = headless_device() else {
             return;
         };
