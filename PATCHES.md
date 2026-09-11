@@ -35,7 +35,7 @@ the vendored `clap_boundary` fixture and the wrapper's own tracing sites keep it
 The context publishes the initial latency while activation is still in progress, as the CLAP latency contract requires, instead of requesting a redundant restart from an already-active wrapper.
 This fixes the Bitwig offline-export stall measured by #615;
 the exported-factory fixture checks one initial latency notification and no restart for a nonzero delay.
-- **Production CLAP ownership** (`src/wrapper/clap/{configuration,configuration_adapter,input_adapter,performance,performance_adapter,setup,wrapper}.rs` and `src/wrapper/clap.rs`): the effective-configuration and performance opt-ins share one host-input pool.
+- **Production CLAP ownership** (`src/wrapper/clap/{configuration,configuration_adapter,context,input_adapter,performance,performance_adapter,setup,wrapper}.rs`, `src/wrapper/clap.rs`, `src/wrapper/{state,util}.rs` and `src/wrapper.rs`): the effective-configuration and performance opt-ins share one host-input pool.
 The ordinary processing walker, configuration owner and performance owner each keep a progress cursor over it, and an owned cell is reused only once all three have passed.
 The retain-and-acknowledge contract that used to sit on top of that pool is gone;
 a plugin that cannot take an input reports a bounded failure instead of holding it.
@@ -50,6 +50,7 @@ Joined wrapper destruction takes the configuration runtime and calls `clap_confi
 The hook disposes unfinished input, command and learning ownership without claiming successful application or advancing a sample prefix;
 the plugin retains original recording routes until joined actual output has a publication disposition.
 Tune's performance-only opt-in creates no configuration mailbox.
+Together these seams expose the parameter hash, reject legacy sends from a performance owner, serialize the overlaid configuration state, and select the measured allocator used by the fixtures.
 `allocation_probe.rs` instruments the actual debug allocation guard on the calling thread, including deallocation, for exported-factory ownership fixtures;
 it does not measure RSS or other threads.
 See [the adaptive tuning design](docs/adaptive-tuning.md#the-framework-boundary) for what the plugin asks of this boundary.
@@ -64,7 +65,7 @@ it is necessary for #638's silent-input fallback to remain safe across variable 
 - **VST3 bus arrangements** (`src/wrapper/vst3/wrapper.rs`): auxiliary arrangements begin after the main bus when it exists, and at zero otherwise (#741).
 Only read a main output arrangement when the layout declares one.
 `tests/vst3_auxiliary.rs` checks matching and incompatible auxiliary channel counts and auxiliary-only layouts through the COM negotiation interface, with valid canary storage beyond declared counts.
-- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics, activation notification ordering, auxiliary descriptor bounds and storage sizing, VST3 arrangement matching, and production configuration/performance/setup seams.
+- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics, activation notification ordering, auxiliary descriptor bounds and storage sizing, VST3 arrangement matching, production configuration/performance/setup seams, root wrapper and state glue, manifest features, and all three boundary fixtures.
 No tuning or sequencing policy belongs in this framework patch.
 
 ## baseview — vendored at `vendor/baseview/`
@@ -142,9 +143,10 @@ through one the button reads down.
 ci.sh runs them.
 macOS only.
 - **Upgrade**: download the new crates.io tarball into `vendor/baseview`,
-re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch, the configurable frame timer, the withheld pointer exit, the synthesised release for a stuck button, and the `[workspace]` table that lets the tests run.
-- **Upstreaming**: good candidate; uncontroversial fix, helps every
-baseview-based plugin.
+re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch, the configurable frame timer, the withheld pointer exit, the synthesized release for a stuck button, and the `[workspace]` table that lets the tests run.
+- **Upstreaming**: Patch 1 is a good candidate;
+it is an uncontroversial fix that helps every baseview-based plugin.
+The later patches each need their own upstream decision.
 baseview and nice-plug are both RustAudio projects, so the fix would land in exactly the stack this plugin uses.
 
 ## egui-baseview — vendored at `vendor/egui-baseview/`
@@ -203,7 +205,7 @@ so a cap built on it evaporates exactly when the UI is busy.
 `WgpuSetup` alongside `GraphicsConfig`.
 `WgpuConfiguration` was already public, but its `wgpu_setup` field cannot be matched without the enum, so there was no way to reach the `device_descriptor` hook and request an extra device feature (we ask for timestamp queries, for the overlay's GPU-time row).
 Pure re-export;
-no behaviour change.
+no behavior change.
 - **Patch 8** (`src/renderer/wgpu/renderer.rs`, `src/window.rs`): measure the
 frame's other two halves and hand them back through `Queue` —
 `tess_ms` (time in `egui::Context::tessellate`) and `egui_gpu_ms` (GPU time for egui's own render pass, via a timestamp query pair).
@@ -289,9 +291,9 @@ The first open of a newly loaded instance still compiles, and hot-reload builds 
 `vendor/egui-baseview`, re-apply the two conversions, the texture-delta forced render, the occlusion/skipped-present patch, the staged-upload flush, the repaint-deadline fix, the frame-timer plumbing, the `WgpuSetup` re-export, the tessellation/egui-GPU timers, the upload split with its per-frame-reconfigure fix, the `layer_present` module with its hooks and objc2 deps —
 both the resize half and the occlusion hide/unhide —
 the kept pointer position, and the font-texture publication into `CallbackResources`, then the font-atlas limit and shared GPU context.
-- **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
-helper on any HiDPI display.
-PR to the RustAudio repo.
+- **Upstreaming**: Patch 1 is a clear-cut bug fix affecting their own `ResizableWindow` helper on any HiDPI display.
+The remaining patches each need separate review.
+Review any upstream work in the RustAudio repo.
 
 ## Historical: nih-plug fork (retired)
 

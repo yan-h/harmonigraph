@@ -31,10 +31,11 @@ Each assignment takes the preceding ones into account, and its adaptive correcti
 A note whose correction has not arrived by its emission time sounds at its raw pitch and counts as a miss, rather than waiting or being dropped;
 the counter is on screen, and a larger delay is the remedy unless the status names a missing Hub or no free row.
 The delay is a per-Tune **Tuning delay** parameter, 1 to 16 multiples of the host's advertised maximum callback size, adopted at activation and reported to the host as latency.
-Nothing waits on a correction, so nothing is ever late;
-a reply that arrives after its note has emitted is discarded where it is found.
+A missing correction never makes a note late:
+the note emits raw at its deadline, and a reply that arrives afterward is discarded where it is found.
+Host output refusal or the per-callback output budget can still carry an event into a later callback.
 Explicit Reset, transport Stop, a Tune attaching or detaching and a host-format change are all one cut, and it falls on every track at once:
-Note-Off every held voice, neutralise the pedals, clear the delay line, adopt the new epoch.
+Note-Off every held voice, neutralize the pedals, clear the delay line, adopt the new epoch.
 A fault is a status bit rather than a latched emission gate, so a missing Hub or a full copy ring costs a note its correction and not its attack;
 a full delay line or held set is the hard boundary, refusing the incoming event before either scheduling path sees it and counting it as dropped.
 Start with the [setup and musical verification checklist](docs/adaptive-tuning.md#setting-it-up-in-bitwig) and the [measured process and hosting requirements](docs/adaptive-tuning.md#session-pairing-and-process-boundary).
@@ -95,7 +96,7 @@ cargo test
 
 # The canonical full gate used by GitHub Actions: formatting, workspace
 # clippy and tests, the plugin package check, harmonigraph-render's own tests,
-# both vendored crates, doc links, the harmonigraph-core dependency guard,
+# the three vendored GUI/framework crates, doc links, the harmonigraph-core dependency guard,
 # the worktree-reclaim lock cases and the bundle swap.
 ./ci.sh
 
@@ -233,7 +234,7 @@ Parameters flow the other way through `ParamBackend` (a `ParamSetter` in the plu
 `eframe` and `egui_dock` must match the egui version.
 All of this is centralized in the workspace `Cargo.toml` —
 bump the whole cluster together.
-`vendor/baseview` and `vendor/egui-baseview` both carry local patches (see PATCHES.md).
+All four patched dependencies under `vendor/` are recorded in PATCHES.md.
 
 ## License
 
@@ -260,8 +261,10 @@ See [its README](crates/harmonigraph-core/README.md).
 [`crates/harmonigraph-analysis`](crates/harmonigraph-analysis) also retains **`MIT OR Apache-2.0`** for the audio analysis extracted from core.
 Its RealFFT dependency leaves the pitch-math library dependency-free.
 
-The vendored forks under [`vendor/`](vendor) (`baseview`, `egui-baseview`) are likewise **not** covered by the GPL —
-they remain under their upstream `MIT OR Apache-2.0` terms, with their own license files in each directory.
+The four patched dependencies under [`vendor/`](vendor) are likewise **not** covered by the GPL.
+`baseview`, `egui-baseview`, and `wgpu-hal` retain their upstream `MIT OR Apache-2.0` terms;
+`nice-plug` retains ISC.
+Each keeps its own license file.
 See [`PATCHES.md`](PATCHES.md) for what was changed and why.
 
 VST is a trademark of Steinberg Media Technologies GmbH.
