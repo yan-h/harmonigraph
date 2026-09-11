@@ -833,19 +833,19 @@ impl Default for ShadowSettings {
     /// a group PRESENT with one field missing fills that field from
     /// [`ShadowStyle::default`] instead, which is written out there.
     ///
-    /// Four styles rather than one, last captured from the DAW on 2026-09-08: the
+    /// Four styles rather than one, last captured from the DAW on 2026-09-10: the
     /// picture as dialled, group by group. Every group is a distance shadow
     /// (see [`ShadowStyle::default`]); what differs is how far each kind of
     /// ink casts, how dark, and how the decay is bent.
     fn default() -> ShadowSettings {
         ShadowSettings {
-            // As wide as the bar goes at about a quarter of the depth, with a
+            // As wide as the bar goes at under a fifth of the depth, with a
             // long falloff: a node's rings and marks stand in a broad, shallow
             // shadow without a hard edge.
             lattice_geometry: ShadowStyle {
                 kernel: ShadowKernel::Distance,
                 width: 1.0,
-                depth: 0.248_531_57,
+                depth: 0.184_287_82,
                 falloff: 1.361_747_5,
             },
             // Tight and shallower than the geometry beside it, with a slightly
@@ -858,20 +858,20 @@ impl Default for ShadowSettings {
                 depth: 0.297_857_14,
                 falloff: 1.083_516_8,
             },
-            // Full depth under the roll's ribbons and the spiral's dots, wide
-            // enough to lift them off the heatmap.
+            // Nine tenths deep under the roll's ribbons and the spiral's dots,
+            // and wide enough to lift them off the heatmap.
             spectral_geometry: ShadowStyle {
                 kernel: ShadowKernel::Distance,
-                width: 0.739_761_9,
-                depth: 1.0,
-                falloff: 0.693_238_14,
+                width: 0.917_033_8,
+                depth: 0.912_995_6,
+                falloff: 1.016_391_3,
             },
-            // Full depth under the spectral pane's names and axis labels too.
+            // Nearly full depth under the spectral pane's names and axis labels.
             spectral_text: ShadowStyle {
                 kernel: ShadowKernel::Distance,
                 width: 0.642_857_13,
-                depth: 1.0,
-                falloff: 0.797_345_2,
+                depth: 0.962_187_95,
+                falloff: 0.966_290_35,
             },
         }
     }

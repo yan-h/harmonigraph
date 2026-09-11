@@ -830,7 +830,7 @@ pub(crate) const LEVEL_MAX_DB: f32 = 0.0;
 pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;
 
 /// Where the live analyzer's curve window ends, captured from the DAW on
-/// 2026-09-08.
+/// 2026-09-10.
 ///
 /// This is deliberately independent of the heatmap's volume ceiling below:
 /// one maps the current profile's height, while the other maps stored history
@@ -838,12 +838,12 @@ pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;
 /// silently regrade the spectrogram beside it.
 ///
 /// The bar still offers [`LEVEL_MAX_DB`], so 0 is one drag away.
-const DEFAULT_ANALYZER_CEILING_DB: f32 = -26.344_88;
+const DEFAULT_ANALYZER_CEILING_DB: f32 = -18.606_335;
 
 /// The top of the heatmap's own colour window.
 /// Kept separate from the analyzer ceiling because both were dialled to their
 /// own values in the live capture.
-const DEFAULT_VOLUME_CEILING_DB: f32 = -23.533_836;
+const DEFAULT_VOLUME_CEILING_DB: f32 = -4.780_288_7;
 
 /// The tilt settings offered, per analyzer convention (-1.5 dB/oct
 /// increments; see [`SpectrumConfig::tilt`]).
@@ -855,7 +855,7 @@ pub(crate) const ROLL_THICKNESS_RANGE: std::ops::RangeInclusive<f32> = 0.2..=2.0
 impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
-            orientation: SpectralOrientation::Left,
+            orientation: SpectralOrientation::Right,
             window: SpectrumWindow::Balanced,
             // One taper — the picture with no averaging in it. The steadier
             // counts cost contrast as well as CPU (see `SpectrumTapers`), so
@@ -863,9 +863,9 @@ impl Default for SpectrumConfig {
             // fresh look is the one that presumes nothing.
             tapers: SpectrumTapers::One,
             // The analyzer's level window as captured from the DAW on
-            // 2026-09-08. Its floor and ceiling are independent of the
+            // 2026-09-10. Its floor and ceiling are independent of the
             // heatmap's colour window below.
-            floor_db: -84.436_09,
+            floor_db: -80.187_97,
             ceiling_db: DEFAULT_ANALYZER_CEILING_DB,
             // Meter ballistics: quick enough up that a note's arrival is not
             // behind the ear, slow enough down that the estimator's own noise
@@ -879,7 +879,7 @@ impl Default for SpectrumConfig {
             // where it starts. Raw power (0) buries everything above a
             // couple of kHz.
             tilt: -4.5,
-            marking_scale: 1.0,
+            marking_scale: 1.184_416_5,
             // Enough of an edge to hold the profile against a bright
             // spectrogram cell, little enough that it doesn't read as a second
             // curve of its own.
@@ -889,15 +889,15 @@ impl Default for SpectrumConfig {
             low_midi: harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI,
             high_midi: harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
             show_roll: true,
-            // Three quarters of the pane to the roll, as captured from the
-            // DAW on 2026-09-08; the analyzer's own display keeps the rest.
-            roll_fraction: 0.751_650_15,
-            // About seventy-two seconds, as captured from the DAW on
-            // 2026-09-08: enough history to read the recent section while the
-            // notes still have useful separation along the roll. The bar's
-            // logarithmic scale keeps both a phrase and a whole piece within
-            // easy reach from here.
-            roll_seconds: 71.899_99,
+            // Over three quarters of the pane to the roll, as captured from
+            // the DAW on 2026-09-10; the analyzer's own display keeps the rest.
+            roll_fraction: 0.776_992_8,
+            // About forty seconds, as captured from the DAW on 2026-09-10:
+            // enough history to read the recent section while the notes still
+            // have useful separation along the roll. The bar's logarithmic
+            // scale keeps both a phrase and a whole piece within easy reach
+            // from here.
+            roll_seconds: 41.245_564,
             // Thin: a note is a line through the spectrogram at its own
             // pitch, not a slab over it. At 0.3 semitones a semitone of pitch
             // axis still separates two neighbouring keys, which is what makes
@@ -920,7 +920,7 @@ impl Default for SpectrumConfig {
             // The leading edge: a held note's name waits where you can read it
             // while you play, which is what the naming was dialled in against.
             note_names_travel: false,
-            note_name_scale: 1.276_662_3,
+            note_name_scale: 1.415_327_1,
             show_spectrogram: true,
             // Aurora retuned in the DAW on 2026-09-08: a shorter violet-to-
             // green arc, the full lightness axis, and more colour at both ends
@@ -933,7 +933,7 @@ impl Default for SpectrumConfig {
                 chroma: 0.794_999_96,
                 chroma_ramp: 0.410_000_03,
             },
-            volume_floor_db: -81.221_8,
+            volume_floor_db: -70.808_27,
             volume_ceiling_db: DEFAULT_VOLUME_CEILING_DB,
         }
     }

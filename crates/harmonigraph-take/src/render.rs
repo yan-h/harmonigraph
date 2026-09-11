@@ -252,12 +252,11 @@ impl Default for RenderConfig {
             renderer_path: String::new(),
             audio_path: String::new(),
             audio_offset: String::new(),
-            spectrogram: SpectrogramRender::Scrolling,
+            spectrogram: SpectrogramRender::WholeVideo,
             frame: RenderFrame::default(),
-            // 1080 on the short edge — 1920x1080 at the default 16:9 frame,
-            // and the resolution every host and site takes without
-            // transcoding.
-            short_edge: 1080,
+            // 1440 on the short edge — 2560x1440 at the default 16:9 frame,
+            // as captured from the DAW on 2026-09-10.
+            short_edge: 1440,
         }
     }
 }
@@ -440,13 +439,14 @@ impl Default for RenderFrame {
         RenderFrame {
             aspect_w: 16,
             aspect_h: 9,
-            // A fifth of the frame to the lattice, the rest to the spectral
-            // pane. The two are not competing for the same job: the lattice
-            // reads at whatever size it is given (it is a handful of nodes,
-            // and the camera frames them), while the spectrogram's width IS
-            // its time axis, so width buys it seconds on screen.
-            split: 0.20,
-            lattice: LatticeSide::Left,
+            // Over a quarter of the frame to the lattice, on the right, the
+            // rest to the spectral pane — as captured from the DAW on
+            // 2026-09-10. The two are not competing for the same job: the
+            // lattice reads at whatever size it is given (it is a handful of
+            // nodes, and the camera frames them), while the spectrogram's width
+            // IS its time axis, so width buys it seconds on screen.
+            split: 0.277_261_67,
+            lattice: LatticeSide::Right,
         }
     }
 }

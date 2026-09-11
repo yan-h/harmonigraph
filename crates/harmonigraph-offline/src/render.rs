@@ -519,8 +519,9 @@ mod tests {
     }
 
     /// "Spectrogram: Whole video" draws exactly what the History duration dialled to
-    /// the render's own length draws — and the default span draws something
-    /// else, or the equality would hold for a render that ignored the setting.
+    /// the render's own length draws — and Scrolling at the default span draws
+    /// something else, or the equality would hold for a render that ignored the
+    /// setting.
     #[test]
     fn a_whole_video_spectrogram_draws_the_render_window_as_its_span() {
         let mut audio = transient_audio();
@@ -557,9 +558,16 @@ mod tests {
         let Some(spanned) = run(|a, _| a.render.spectrogram = SpectrogramRender::WholeVideo) else {
             return;
         };
-        let dialled = run(|a, window| a.spectrum.roll_seconds = window).unwrap();
+        // Scrolling named on both of these, Whole video being the default: left
+        // to it, the dialled run would be Whole video too and equal by itself.
+        let dialled = run(|a, window| {
+            a.render.spectrogram = SpectrogramRender::Scrolling;
+            a.spectrum.roll_seconds = window;
+        })
+        .unwrap();
         assert_eq!(spanned, dialled, "Whole video must span exactly the render's window");
-        assert_ne!(spanned, run(|_, _| {}).unwrap(), "the default span drew the same picture");
+        let scrolling = run(|a, _| a.render.spectrogram = SpectrogramRender::Scrolling).unwrap();
+        assert_ne!(spanned, scrolling, "the default span drew the same picture");
     }
 
     #[test]

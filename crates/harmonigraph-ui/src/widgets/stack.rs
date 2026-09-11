@@ -676,6 +676,21 @@ mod tests {
         ViewConfig::default()
     }
 
+    /// The fresh view with all four layers on it: the audio ring switched on,
+    /// and the middle held where the band still fits outside it. The fresh
+    /// middle is a look and free to grow past that, and a band refused for room
+    /// would turn every claim made here about a fully layered node into one
+    /// about a node missing a layer — so the premise is asserted, not assumed.
+    fn layered() -> ViewConfig {
+        let view = ViewConfig { spectral_ring_width: 0.1, ring_inner: 0.6, ..fresh() };
+        let rings = view.rings();
+        assert!(
+            rings.audio.1 > rings.audio.0 && rings.band.1 > rings.band.0,
+            "the layered fixture has no room for its rings: {rings:?}",
+        );
+        view
+    }
+
     /// `view` with layer `k`'s handle dragged to `v` up the axis.
     fn dragged(view: &ViewConfig, k: usize, v: f32) -> ViewConfig {
         let mut out = view.clone();
@@ -832,7 +847,7 @@ mod tests {
     /// the room running out from the inside is a different thing.
     #[test]
     fn a_layer_widened_past_the_room_left_drops_the_ones_outside_it() {
-        let view = ViewConfig { spectral_ring_width: 0.1, ..fresh() };
+        let view = layered();
         // Far enough out that the band no longer fits, and not so far that the
         // audio ring inside it goes too — the stack drops from the OUTSIDE in,
         // one layer at a time.
@@ -982,7 +997,7 @@ mod tests {
     /// showing through, which is what the empty run past the last layer is too.
     #[test]
     fn the_cells_are_the_stack_the_node_draws() {
-        let mut view = ViewConfig { spectral_ring_width: 0.1, ..fresh() };
+        let mut view = layered();
         let rings = view.rings();
         let shapes = shapes(W, |ui| {
             StackBar::new(&mut view).show(ui);
@@ -1034,7 +1049,7 @@ mod tests {
     /// size.
     #[test]
     fn a_thumb_stands_in_the_gap_its_layer_holds_open() {
-        let rings = ViewConfig { spectral_ring_width: 0.1, ..fresh() }.rings();
+        let rings = layered().rings();
         assert!(rings.gap > 0.0, "a node with no padding has no gap to stand a thumb in");
         let spans = layer_spans(&rings);
         let thumbs = thumb_axis(&rings);
@@ -1294,7 +1309,7 @@ mod tests {
     #[test]
     fn every_layer_on_the_node_is_named() {
         let named = |w: f32| {
-            let mut view = ViewConfig { spectral_ring_width: 0.1, ..fresh() };
+            let mut view = layered();
             let shapes = shapes(w, |ui| {
                 StackBar::new(&mut view).show(ui);
             });

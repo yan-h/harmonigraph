@@ -754,7 +754,7 @@ pub struct ViewConfig {
     /// envelope, and which stays deliberately linear (see
     /// [`trail`](mod@crate::trail)).
     ///
-    /// 0.35 fresh, which is a gentle power rather than the straight line 0
+    /// About 0.31 fresh, which is a gentle power rather than the straight line 0
     /// draws — a note that leaves quickly at first and then lingers reads as
     /// decaying rather than as being wound down. A blob with no `fade_shape`
     /// key gets that, like every other missing key: the container-level
@@ -2243,13 +2243,13 @@ impl Default for ViewConfig {
             // marks rather than a solid annulus, and every layer keeps clear
             // space around it. (The backdrop that holds the whole ring's shape
             // behind them is fixed on.)
-            band_width: 0.192_277_49,
-            // The stack sits three fifths of the way out, leaving a broad
+            band_width: 0.208_835_9,
+            // The stack sits about seven tenths of the way out, leaving a broad
             // middle for the glow's field while the octave band reads as the
             // node's perimeter. Dialled to 0 the stack seats on the center and
             // its wedges close into pie slices, which is the same node read as
             // one solid measurement.
-            ring_inner: 0.600_738_5,
+            ring_inner: 0.689_362_76,
             // The two gaps are one number here: the radial padding is what puts
             // the band at its outer edge, and the same width cut angularly is
             // the slicing that reads as distinct marks. They are two bars
@@ -2315,12 +2315,12 @@ impl Default for ViewConfig {
             // haze between partials stops twinkling.
             spectral_ring_attack: 0.030,
             spectral_ring_release: 0.250,
-            // Near enough a square law (the exponent lands at 2.05): enough
+            // Near enough a square law (the exponent lands at 1.94): enough
             // that a release leaves promptly and settles instead of sliding
             // out at one rate, and not so much that the tail is over before
             // the ear has finished the note. The straight line is still one
             // drag away.
-            fade_shape: 0.35,
+            fade_shape: 0.313_509_55,
             // Both ends marked: the marks are subtle enough to live with
             // always on, and a chord's outer voices are worth seeing without
             // having to go turn something on first.
@@ -2329,13 +2329,13 @@ impl Default for ViewConfig {
             // A shallow step past the band — about a third of the band's own
             // width, so a mark reads as its slice carrying on rather than as a
             // second ring around everything.
-            mark_thickness: 0.062_530_935,
-            // Short of a passing sixteenth (125ms at 120bpm), but still well
-            // off the bar's 0 floor: a mark outlives its key (see
+            mark_thickness: 0.067_234_814,
+            // Just past a passing sixteenth (125ms at 120bpm), and well off
+            // the bar's 0 floor: a mark outlives its key (see
             // `mark_delay`), and at 0 every momentary crowning fades its way
             // OUT over the whole Fade, so lifting a chord one key at a time
             // leaves a fading mark on nearly every note of it.
-            mark_delay: 0.102_448_754,
+            mark_delay: 0.129_772_4,
             // Arms reaching about half way from the crossing to the ring stack
             // (`ring_inner`, in the same UV): the resting lattice reads as
             // separate crosses with ground between them rather than as a
@@ -2359,28 +2359,28 @@ impl Default for ViewConfig {
             show_perf: false,
             show_perf_detail: false,
             render_scale: 1.0,
-            // A halo at about half strength, down from the four fifths the
-            // view opened on: a node's rings are quiet shapes and the bloom is
-            // what gives them presence, but the glow beside it now carries
-            // more of that job — see `glow_blend` and `glow_wash` below.
-            bloom_strength: 0.482_142_87,
+            // A halo at not quite two thirds strength, down from the four
+            // fifths the view opened on: a node's rings are quiet shapes and
+            // the bloom is what gives them presence, while the glow beside it
+            // shares that job — see `glow_blend` and `glow_wash` below.
+            bloom_strength: 0.635_427_53,
             // A reach spanning several lattice steps turns each node's light
-            // into a shared field, laid down at about two fifths strength —
-            // where the DAW look was captured on 2026-09-08.
+            // into a shared field, laid down at about a fifth strength —
+            // where the DAW look was captured on 2026-09-10.
             glow_reach: 4.546_375,
-            glow_strength: 0.408_223_2,
+            glow_strength: 0.218_918_92,
             glow_curve: GlowCurve::default(),
             // Four groups at four styles, which is the picture as captured
             // from the DAW: the numbers themselves live in `impl Default for
             // ShadowSettings`, that being the one source of a persisted
             // group's fallback.
             shadow: ShadowSettings::default(),
-            // About a third of the field, where the picture opened on the
+            // About two fifths of the field, where the picture opened on the
             // whole of it: a sounding slice is pulled back out of its own halo
             // and reads as ink rather than as light, while the resting grey
             // around it still wears what it stands in. That is exactly what
             // the bar is for, and the fresh view now uses it.
-            glow_wash: 0.365_952_37,
+            glow_wash: 0.395_398_86,
             // Two thirds of the way round: an octave's arc is softened well
             // into its neighbours rather than cut against them, which is what
             // turns the overlapping fields of a chord into one light instead

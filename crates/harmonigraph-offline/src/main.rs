@@ -792,16 +792,16 @@ mod tests {
     }
 
     #[test]
-    fn the_default_size_puts_the_short_edge_at_1080_with_even_dimensions() {
+    fn the_default_size_puts_the_short_edge_at_1440_with_even_dimensions() {
         let default_short_edge = harmonigraph_ui::RenderConfig::default().short_edge;
-        assert_eq!(default_short_edge, 1080, "the Resolution control's own default");
+        assert_eq!(default_short_edge, 1440, "the Resolution control's own default");
         let sz = |w, h| frame(w, h).pixels(default_short_edge);
-        assert_eq!(sz(16, 9), [1920, 1080]);
-        assert_eq!(sz(9, 16), [1080, 1920]);
-        assert_eq!(sz(1, 1), [1080, 1080]);
+        assert_eq!(sz(16, 9), [2560, 1440]);
+        assert_eq!(sz(9, 16), [1440, 2560]);
+        assert_eq!(sz(1, 1), [1440, 1440]);
         // A non-integer ratio still comes out even (ffmpeg requires it).
         let [w, h] = sz(21, 9);
-        assert_eq!(h, 1080);
+        assert_eq!(h, 1440);
         assert!(w % 2 == 0 && h % 2 == 0, "{w}x{h} not even");
     }
 
@@ -828,7 +828,7 @@ mod tests {
         // A take with no blob at all falls back to the config's own defaults,
         // both halves together.
         let bare = harmonigraph_ui::RenderConfig::default();
-        assert_eq!(output_size(None, &bare), [1920, 1080]);
+        assert_eq!(output_size(None, &bare), [2560, 1440]);
     }
 
     /// A repeated flag keeps the last, the way every CLI a person types at

@@ -1646,6 +1646,10 @@ mod tests {
             state.appearance.spectrum.attack = 0.0;
             state.appearance.spectrum.release = 0.0;
             state.appearance.spectrum.tilt = 0.0;
+            // The Level window the gains above were measured in. The gate is a
+            // share of it, so a retuned default window moves every threshold.
+            state.appearance.spectrum.floor_db = -84.436_09;
+            state.appearance.spectrum.ceiling_db = -26.344_88;
             state.appearance.view.spectral_reading = reading;
             state.appearance.view.spectral_ring_attack = 0.0;
             state.appearance.view.spectral_ring_release = 0.0;
