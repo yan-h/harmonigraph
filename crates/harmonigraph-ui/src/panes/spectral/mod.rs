@@ -198,7 +198,7 @@ pub(crate) fn spectral_pane(
         return;
     }
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, theme::well());
+    painter.rect_filled(rect, 0.0, theme::picture());
 
     let axes = Axes::new(rect, &cfg);
     // The pane-wide response means two things in the preview: plain drag turns
@@ -596,7 +596,7 @@ pub(crate) fn spectral_pane(
             label,
             marking_font.clone(),
             theme::text_dim(),
-            theme::well(),
+            theme::picture(),
         );
     }
     // The level numbers, up the high-pitch end of the analyzer — the one end
@@ -631,7 +631,7 @@ pub(crate) fn spectral_pane(
             label,
             marking_font.clone(),
             theme::text_dim(),
-            theme::well(),
+            theme::picture(),
         );
     }
     // Each note's own name, over the ribbon it belongs to. In the same batch

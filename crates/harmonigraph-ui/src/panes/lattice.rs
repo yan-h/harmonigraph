@@ -67,9 +67,9 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
     // The ground the picture stands on, painted here rather than left to
     // whatever is behind the pane. A picture pane is recessed below the chrome
     // around it — `spectral_pane`, `spiral_pane` and the render preview all
-    // open by filling their rect with the well — and the lattice showing the
-    // dock's own tab body through instead put it a rung up, reading as a
-    // lighter card beside the analyzer.
+    // open by filling their rect with the skin's picture ground — and the
+    // lattice showing the dock's own tab body through instead put it a rung
+    // up, reading as a lighter card beside the analyzer.
     //
     // Painted from the SAME value handed to the scene, which is the whole
     // reason to take it off `state` rather than off the theme: offline the
@@ -329,7 +329,7 @@ fn learn_badge(ui: &egui::Ui, rect: egui::Rect, now: f64) -> crate::text::TextBa
         "LEARN".to_string(),
         egui::FontId::monospace(12.0),
         theme::armed().gamma_multiply(learn_pulse(now)),
-        theme::well().gamma_multiply(learn_pulse(now)),
+        theme::picture().gamma_multiply(learn_pulse(now)),
     );
     badge
 }

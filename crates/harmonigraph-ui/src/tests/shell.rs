@@ -125,7 +125,7 @@ fn a_separator_reads_against_both_grounds_a_pane_can_paint() {
         ("dragged", style.separator.color_dragged),
     ] {
         for (ground, fill) in [
-            ("the picture panes' well", theme::well()),
+            ("the picture panes' ground", theme::picture()),
             ("a settings pane's panel", theme::panel()),
         ] {
             let ratio = contrast(color, fill);

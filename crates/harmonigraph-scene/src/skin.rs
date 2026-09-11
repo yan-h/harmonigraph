@@ -1,7 +1,7 @@
 //! The skin: one struct owning every color the CHROME draws, so a look is
 //! defined in exactly one place. `harmonigraph-ui::theme` converts the bytes
 //! into egui colors for the panel chrome; the scene reaches them through
-//! [`well_color`], the ground it is composited over.
+//! [`picture_color`], the ground it is composited over.
 //!
 //! Only one built-in skin exists so far (the original dark look). Adding a
 //! skin = another `Skin` value plus a way to select it (a `set_skin`
@@ -24,6 +24,8 @@ pub struct Skin {
     pub panel: [u8; 3],
     /// Recessed areas: console scrollback, tab bar, meters.
     pub well: [u8; 3],
+    /// The ground every PICTURE pane is bedded on (see [`picture_color`]).
+    pub picture: [u8; 3],
     /// Subtly raised surface between panel and widget: hovered tabs,
     /// faint striping.
     pub surface_faint: [u8; 3],
@@ -72,6 +74,7 @@ impl Default for Skin {
         Skin {
             panel: [24, 25, 29],
             well: [15, 16, 19],
+            picture: [0, 0, 0],
             surface_faint: [46, 48, 57],
             hairline: [64, 67, 77],
             widget: [62, 66, 77],
@@ -109,22 +112,25 @@ pub fn ground_color(rgb: (u8, u8, u8)) -> Vec4 {
     Vec4::new(f32::from(rgb.0) / 255.0, f32::from(rgb.1) / 255.0, f32::from(rgb.2) / 255.0, 1.0)
 }
 
-/// The active skin's `well`: the recessed ground every PICTURE pane paints
-/// its own rect with — the spectral pane, the spiral, the render preview, and
-/// the lattice — and so the default ground a lattice pass is composited over.
+/// The active skin's `picture`: the ground every PICTURE pane paints its own
+/// rect with — the spectral pane, the spiral, the render preview, and the
+/// lattice — and so the default ground a lattice pass is composited over.
 ///
-/// Not the `panel` the dock fills a tab body with, which is what a lattice
-/// pane that paints no ground of its own shows through: a picture is recessed
-/// below the chrome around it rather than flush with it, and the lattice being
-/// the one picture at panel level made it read as a lighter card beside the
-/// analyzer. The renderer's own default frame background is a shade BELOW this
-/// one — `Layout`'s `background`, the window colour, at (14, 14, 18) against
-/// this (15, 16, 19) — and an export stands the lattice on that, because a
-/// pane paints the ground its shell hands it rather than the skin's
-/// (`the_pane_paints_the_shells_ground_rather_than_the_skins`). The two are a
-/// step apart on purpose: one is the colour a picture is recessed into, the
-/// other the colour a frame is matted with.
-pub fn well_color() -> Vec4 {
-    let [r, g, b] = active_skin().well;
+/// BLACK, because the spectrogram's plane is black and has to be (a cell at
+/// silence that is not black shows the plane's edge), and every other picture
+/// stands beside it. On any other ground the analyzer's curve and the lattice
+/// read as a grey card with the spectrogram cut out of it as a hole — faint in
+/// the editor, where grey chrome surrounds it, and plain in a video, where the
+/// player around the frame is black too. A picture is still recessed below
+/// the chrome, only further: this is not the `well` the chrome's own tracks
+/// and meters sit in.
+///
+/// `Layout`'s default `background` is this same colour, so a margin or a gap
+/// in an export reads as the panes' own ground; an export stands the lattice
+/// on the layout's colour rather than on this one, because a pane paints the
+/// ground its shell hands it rather than the skin's
+/// (`the_pane_paints_the_shells_ground_rather_than_the_skins`).
+pub fn picture_color() -> Vec4 {
+    let [r, g, b] = active_skin().picture;
     ground_color((r, g, b))
 }

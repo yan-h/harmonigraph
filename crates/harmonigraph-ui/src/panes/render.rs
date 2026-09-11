@@ -81,7 +81,7 @@ pub(crate) fn render_pane(
     // the shot; the aspect box takes the render's OWN frame background — the
     // color the offline renderer shows in its margins and inter-pane gaps — so
     // the box is exactly the pixels the video will contain. Painting the
-    // padding and the pane fills both `well()` leaves no way to tell where
+    // padding and the pane fills both `picture()` leaves no way to tell where
     // the frame ends.
     let bg = layout.background;
     ui.painter().rect_filled(outer, 0.0, theme::panel());
@@ -569,7 +569,7 @@ fn playhead_placeholder(ui: &egui::Ui, rect: egui::Rect) {
     let p = ui.painter_at(rect);
     // The pane's own background, so the region still reads as the spectral
     // pane sitting there empty rather than as a hole in the frame.
-    p.rect_filled(rect, 0.0, theme::well());
+    p.rect_filled(rect, 0.0, theme::picture());
     if rect.width() < 90.0 || rect.height() < 30.0 {
         return;
     }
