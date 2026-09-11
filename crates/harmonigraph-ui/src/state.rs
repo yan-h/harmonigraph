@@ -809,7 +809,7 @@ impl SurfaceState {
             drawn_this_frame: None,
             target_format,
             lattice_pipelines: Default::default(),
-            background: harmonigraph_scene::skin::well_color(),
+            background: harmonigraph_scene::skin::picture_color(),
             glow_fade: std::collections::HashMap::new(),
             spectrum_hold: panes::spectral::SpectrumHold::default(),
         }

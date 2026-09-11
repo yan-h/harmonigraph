@@ -132,7 +132,7 @@ pub(super) fn parity_scene() -> Scene {
         nodes,
         camera: harmonigraph_scene::Camera::default(),
         // The ground the lattice stands on, as the app hands it in.
-        background: harmonigraph_scene::skin::well_color(),
+        background: harmonigraph_scene::skin::picture_color(),
         // The grey the octave band's unsounding slices draw, at the fresh
         // view's own Ground — most of every node's band in this fixture.
         lattice_ground: harmonigraph_scene::grey_of_lightness(

@@ -824,9 +824,9 @@ fn the_lattice_pane_paints_the_ground_it_hands_the_scene() {
     let ground = state.picture.background_ink();
     assert_eq!(
         ground,
-        crate::theme::well(),
-        "a fresh state stands the lattice somewhere other than the recessed \
-         grey every other picture pane paints",
+        crate::theme::picture(),
+        "a fresh state stands the lattice somewhere other than the ground \
+         every other picture pane paints",
     );
     // Shrunk by a point before asking who covers it: the claim is "the whole
     // pane", and a rect that matches the pane exactly is a float comparison
@@ -846,10 +846,11 @@ fn the_lattice_pane_paints_the_ground_it_hands_the_scene() {
 /// And it paints the SHELL's ground, not the skin's.
 ///
 /// The offline renderer clears its frame to the render layout's background and
-/// hands the same color to the state, which is a different grey from the
-/// skin's well — so a fill that reached for the theme instead of the field
-/// would paint a plate of chrome grey over every exported frame, in the one
-/// place it is hardest to notice. This is the test that fails for that.
+/// hands the same color to the state, which a hand-written layout may set to
+/// something other than the skin's picture ground — so a fill that reached for
+/// the theme instead of the field would paint the skin's colour over every
+/// such frame, in the one place it is hardest to notice. This is the test that
+/// fails for that.
 #[test]
 fn the_pane_paints_the_shells_ground_rather_than_the_skins() {
     let mut state = fresh();
@@ -874,7 +875,7 @@ fn the_pane_paints_the_shells_ground_rather_than_the_skins() {
         "the pane did not paint the ground the shell set",
     );
     assert!(
-        !covering(crate::theme::well()),
-        "the pane painted the skin's well over the shell's own ground",
+        !covering(crate::theme::picture()),
+        "the pane painted the skin's ground over the shell's own",
     );
 }

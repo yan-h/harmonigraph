@@ -433,9 +433,10 @@ impl TextBatch {
         out
     }
 
-    /// Add one piece of text, shadowed. `outline` should be the skin's
-    /// recessed surface (`theme::well`), which contrasts with any text color
-    /// by construction; a transparent one draws the glyphs bare.
+    /// Add one piece of text, shadowed. `outline` should be the ground the
+    /// text stands on (`theme::picture` over a picture pane), which contrasts
+    /// with any text color by construction; a transparent one draws the
+    /// glyphs bare.
     ///
     /// Both colors' ALPHA is the label's strength, and each is worth it in
     /// full: a shadow at half covers half, exactly as the fill does, so fading

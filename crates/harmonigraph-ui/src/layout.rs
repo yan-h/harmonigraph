@@ -13,7 +13,7 @@
 //!
 //! ```ron
 //! (
-//!     background: (14, 14, 18),
+//!     background: (0, 0, 0),
 //!     margin: 0.0,
 //!     gap: 0.0,
 //!     panes: [
@@ -80,9 +80,10 @@ pub struct Layout {
 }
 
 fn default_background() -> (u8, u8, u8) {
-    // The theme's own window color, so margins and gaps read as part of
-    // the UI rather than as letterboxing.
-    (14, 14, 18)
+    // The panes' own ground, so a margin or a gap reads as more of the
+    // picture's black rather than as a mat of another colour around it.
+    let [r, g, b] = harmonigraph_scene::skin::active_skin().picture;
+    (r, g, b)
 }
 
 /// The layouts you get by name. Deliberately few: these are the two

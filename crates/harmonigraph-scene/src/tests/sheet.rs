@@ -613,11 +613,10 @@ fn the_comma_takes_the_short_way_round_the_octave() {
 }
 
 #[test]
-fn the_scene_carries_the_ground_the_pane_stands_on_not_black() {
-    // The ground the lattice pane paints is the well, which is lighter than
-    // black; the scene carries the same colour so that a shell composing its
-    // panes differently has one number saying what the picture is composited
-    // over. Zero would be a picture standing on a ground nothing paints.
+fn the_scene_carries_the_ground_the_pane_stands_on() {
+    // The ground the lattice pane paints is the skin's picture ground; the
+    // scene carries the same colour so that a shell composing its panes
+    // differently has one number saying what the picture is composited over.
     let scene = scene_of(
         &NoteTracker::new(),
         &Tuning::default(),
@@ -625,9 +624,8 @@ fn the_scene_carries_the_ground_the_pane_stands_on_not_black() {
         &plain_frame(),
         0.0,
     );
-    let well = crate::skin::active_skin().well;
-    assert_eq!(scene.background, crate::skin::ground_color((well[0], well[1], well[2])));
-    assert!(scene.background.truncate().length() > 0.0, "not black");
+    let [r, g, b] = crate::skin::active_skin().picture;
+    assert_eq!(scene.background, crate::skin::ground_color((r, g, b)));
     assert_eq!(scene.background.w, 1.0, "opaque, or it would not cover");
 }
 
