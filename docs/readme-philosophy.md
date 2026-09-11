@@ -75,8 +75,6 @@ use visible editorial placeholders with meaningful captions rather than fake URL
 - `docs/images/plugin-window-lattice-analyzer.webp`:
   optional wide screenshot beside the demonstration,
   showing the lattice and spectral view together without obscuring the music with settings panels.
-- `docs/images/lattice-c-major-shape.png`:
-  place after the C-E-G explanation only if it makes the repeated chord shape clearer than prose alone.
 - `docs/images/video-export-or-customization.png`:
   optional later image;
   use it only if it demonstrates either a materially different export layout or the range of visual customization.
@@ -85,7 +83,6 @@ For repository-hosted images,
 use the existing `docs/images/` directory and paths relative to the README such as `docs/images/plugin-window-lattice-analyzer.webp`.
 Do not commit the main video binary to Git;
 use a hosted player or linked thumbnail.
-The minimum useful set is one main demonstration and one transposition/chord-shape illustration.
 The hero and export/customization images are optional.
 
 ## Maintenance rule

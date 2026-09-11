@@ -58,9 +58,6 @@ they can be problems to avoid or musical effects to use.
 Harmonigraph makes the relationships visible;
 it does not claim to identify or correct them automatically.
 
-> **Chord illustration placeholder:** after choosing an image,
-> place `docs/images/lattice-c-major-shape.png` here to compare C-E-G with the transposed D-F♯-A shape.
-
 ## How I use it
 
 I play on [Latticeboard](https://github.com/yan-h/lattice-board),
