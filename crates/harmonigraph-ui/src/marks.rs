@@ -540,13 +540,8 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
     // a mark lurching a pixel around its own motion, against one that glides.
     // `a_sliding_marks_ink_advances_with_the_quad_that_carries_it` is that
     // reading.
-    let (bw, bh) = (
-        w.ceil().max(1.0) + 2.0 * MARK_BITMAP_PAD as f32,
-        h.ceil().max(1.0) + 2.0 * MARK_BITMAP_PAD as f32,
-    );
-    let c = egui::pos2(bw / 2.0, bh / 2.0);
     let (hw, hh) = (w / 2.0, h / 2.0);
-    let pieces = match key.kind {
+    let pieces_about = |c: egui::Pos2| match key.kind {
         MarkKind::Minus => {
             vec![MarkPiece::Bar(egui::Rect::from_center_size(c, egui::vec2(w, thick)))]
         }
@@ -628,7 +623,23 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
             pieces
         }
     };
-    (pieces, [bw as usize, bh as usize])
+    // The bitmap holds the INK, which is not always the design box. An arm's
+    // flat caps overshoot the corner it is drawn to -- a chevron's tip by two
+    // thirds of a stroke, its base corners by nearly half of one -- and a
+    // stroke floored at a pixel overshoots a mark only a few pixels across.
+    // Sized off the design box, that overshoot landed in the clear margin,
+    // where the mark packed beside it read it as a speck on its own edge, or
+    // past the margin, where it was cut off. Every piece's bounds decide it,
+    // still about the design's centre, so a mark sits where the layout put
+    // it and one that stays inside its box keeps the bitmap it always had.
+    let ink = pieces_about(egui::Pos2::ZERO)
+        .iter()
+        .map(MarkPiece::bounds)
+        .fold(egui::Rect::from_center_size(egui::Pos2::ZERO, egui::vec2(w, h)), |a, b| a.union(b));
+    let side =
+        |lo: f32, hi: f32| (2.0 * lo.abs().max(hi)).ceil().max(1.0) + 2.0 * MARK_BITMAP_PAD as f32;
+    let (bw, bh) = (side(ink.min.x, ink.max.x), side(ink.min.y, ink.max.y));
+    (pieces_about(egui::pos2(bw / 2.0, bh / 2.0)), [bw as usize, bh as usize])
 }
 
 /// How far a flattened curve may sit from the curve it stands in for, in
@@ -1360,6 +1371,35 @@ mod tests {
                             "{kind:?} covers {p:?} outside its bounds {bounds:?}"
                         );
                     }
+                }
+            }
+        }
+    }
+
+    /// No mark's ink reaches the clear margin its bitmap carries, at any size
+    /// a label can ask for.
+    ///
+    /// That margin is what the NEIGHBOUR's half-texel tap reads: the sheet
+    /// packs marks touching (`MarkAtlas::claim`), so ink out there is drawn as
+    /// a speck on the edge of whatever mark sits beside it, and it moves as a
+    /// zoom repacks the shelf. A chevron's caps overshot its design box at
+    /// every size, and a stroke floored at a pixel overshot a `♭` or `♯` only a
+    /// few pixels across, so the sweep runs from the smallest bitmap to the
+    /// ladder's ceiling rather than sampling sizes that happen to be clean.
+    #[test]
+    fn no_marks_ink_reaches_the_margin_its_neighbour_reads() {
+        let (raster, _) = crate::text::ladder(1e6, NAME_SIZE, 1.0);
+        for kind in MarkKind::ALL {
+            let ceiling = mark_key(kind, MARK_SIZE * raster, MARK_WEIGHT, 1.0).size_px;
+            for px in 2..=ceiling {
+                let img = rasterize_mark(mark_key(kind, px as f32, MARK_WEIGHT, 1.0));
+                let [w, h] = img.size;
+                let ring = (0..w)
+                    .flat_map(|x| [(x, 0), (x, h - 1)])
+                    .chain((0..h).flat_map(|y| [(0, y), (w - 1, y)]));
+                for (x, y) in ring {
+                    let a = coverage(&img, x, y);
+                    assert_eq!(a, 0, "{kind:?} at {px}px has ink {a} in its margin at {x},{y}");
                 }
             }
         }
