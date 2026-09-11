@@ -68,9 +68,6 @@ architecture and dependency notes.
 - [Development and architecture](docs/development.md)
 - [README philosophy and media placement](docs/readme-philosophy.md)
 
-Harmonigraph succeeds [midi_lattice](https://github.com/yan-h/midi_lattice),
-the earlier project from which much of its pitch math descends.
-
 ## License
 
 Copyright (C) 2026 Yan Han.
