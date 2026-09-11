@@ -99,13 +99,13 @@ fn tile_candidates_keep_the_untiled_picture_through_resize_and_reuse() {
             None,
         );
         let nodes = cb.glow_nodes(size);
-        let tiles = crate::glow_tiles::pack(&nodes, size);
+        let tiles = crate::lattice_node_glow::tiles::pack(&nodes, size);
         if size == [512, 512] {
             let global_count = tiles[2] - tiles[1];
             assert!(global_count > 0 && global_count < nodes.len() as u32);
         }
-        let tile_count =
-            size[0].div_ceil(crate::glow_tiles::TILE) * size[1].div_ceil(crate::glow_tiles::TILE);
+        let tile_count = size[0].div_ceil(crate::lattice_node_glow::tiles::TILE)
+            * size[1].div_ceil(crate::lattice_node_glow::tiles::TILE);
         let start = tile_count + 4;
         let mut reference = vec![start; start as usize];
         reference[0] = tiles[0];

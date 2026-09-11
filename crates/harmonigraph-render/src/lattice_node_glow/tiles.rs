@@ -3,15 +3,15 @@
 //! Large halos live in one shared list so index storage is bounded by the
 //! tile count plus 64 indices per node, even when every halo fills the pane.
 
-use crate::GpuGlowNode;
+use super::GpuGlowNode;
 
-pub(super) const TILE: u32 = 32;
+pub(crate) const TILE: u32 = 32;
 const MAX_LOCAL_TILES: u32 = 64;
 
 /// Packed u32s: [columns, global_start, global_end], then tile_count + 1
 /// absolute offsets, local indices, and global indices. Each list preserves
 /// node order; the shader merges the two sorted lists to keep rounding stable.
-pub(super) fn pack(nodes: &[GpuGlowNode], size: [u32; 2]) -> Vec<u32> {
+pub(crate) fn pack(nodes: &[GpuGlowNode], size: [u32; 2]) -> Vec<u32> {
     if nodes.is_empty() {
         return Vec::new();
     }

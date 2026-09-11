@@ -109,6 +109,15 @@ fn a_marker_stands_at_every_home_position_and_nowhere_else() {
     let home: Vec<&NodeInstance> = scene.nodes.iter().filter(|n| n.on_home).collect();
     assert!(!home.is_empty() && home.len() < scene.nodes.len(), "want both kinds in the window");
     assert_eq!(scene.pluses.len(), home.len(), "one marker per home position, and no others");
+    let expected: Vec<_> =
+        scene.nodes.iter().enumerate().filter(|(_, n)| n.on_home).map(|(i, _)| Some(i)).collect();
+    assert_eq!(scene.pluses.iter().map(|p| p.node).collect::<Vec<_>>(), expected);
+    for marker in &scene.pluses {
+        let node = &scene.nodes[marker.node.expect("derived markers name their nodes")];
+        assert!(node.on_home);
+        assert_eq!(marker.lattice_pos, node.lattice_pos);
+        assert_eq!(marker.pos, node.world_pos);
+    }
     for node in &home {
         assert!(
             scene.pluses.iter().any(|d| d.pos == node.world_pos),
@@ -130,6 +139,10 @@ fn a_marker_stands_at_every_home_position_and_nowhere_else() {
     let panned = ViewConfig { center_threes: 3, ..view };
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &panned, &plain_frame(), 0.0);
     for marker in &scene.pluses {
+        let node = &scene.nodes[marker.node.expect("panned markers name their nodes")];
+        assert!(node.on_home);
+        assert_eq!(marker.lattice_pos, node.lattice_pos);
+        assert_eq!(marker.pos, node.world_pos);
         assert!(
             scene.nodes.iter().any(|n| n.world_pos == marker.pos),
             "a panned marker at {:?} stands at no node",

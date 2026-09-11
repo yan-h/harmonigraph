@@ -709,6 +709,15 @@ impl NodeInstance {
 /// nodes, and the whole of what an unplayed lattice draws.
 #[derive(Clone, Copy, Debug)]
 pub struct PlusInstance {
+    /// Index into this frame's [`Scene::nodes`], supplied by scene derivation.
+    /// The renderer accepts it only when it names a home node at `lattice_pos`.
+    /// `None`, an out-of-range index, or a stale association uses the positional
+    /// lookup instead: the last home node at that position, or loose placement
+    /// at the home-sheet seam if none exists. This preserves hand-built scenes.
+    /// A valid index names that exact node, even if a hand-built scene contains
+    /// duplicate home positions. Reordering nodes must update these indices or
+    /// clear them; they are frame-local hints, never persisted identities.
+    pub node: Option<usize>,
     /// Which lattice position this marker stands at. Never uploaded —
     /// [`pos`](Self::pos) is what the GPU is given.
     pub lattice_pos: LatticePos,

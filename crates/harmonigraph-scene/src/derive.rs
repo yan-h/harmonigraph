@@ -724,12 +724,14 @@ pub(crate) fn derive_pluses(
     // explains.
     nodes
         .iter()
-        .filter(|n| n.on_home)
-        .filter_map(|n| {
+        .enumerate()
+        .filter(|(_, n)| n.on_home)
+        .filter_map(|(node, n)| {
             let clear = 1.0 - n.name_level(view);
             (clear > 0.0).then(|| {
                 let strength = ink.w * clear;
                 PlusInstance {
+                    node: Some(node),
                     lattice_pos: n.lattice_pos,
                     pos: n.world_pos,
                     radius,

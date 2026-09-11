@@ -715,7 +715,9 @@ fn a_marker_nearer_the_eye_than_a_node_draws_after_it() {
     scene.pluses = [far, near]
         .into_iter()
         .zip([-3.0f32, 3.0])
-        .map(|(lattice_pos, y)| harmonigraph_scene::PlusInstance {
+        .enumerate()
+        .map(|(node, (lattice_pos, y))| harmonigraph_scene::PlusInstance {
+            node: Some(node),
             lattice_pos,
             ..one_marker(glam::Vec3::new(0.0, y, 0.0), 0.2, scene.lattice_ground, 1.0)
         })
@@ -770,7 +772,9 @@ fn a_resting_lattice_ships_one_marker_draw() {
     scene.pluses = scene
         .nodes
         .iter()
-        .map(|n| harmonigraph_scene::PlusInstance {
+        .enumerate()
+        .map(|(node, n)| harmonigraph_scene::PlusInstance {
+            node: Some(node),
             lattice_pos: n.lattice_pos,
             ..one_marker(n.world_pos, 0.2, scene.lattice_ground, 1.0)
         })
@@ -982,5 +986,106 @@ fn a_lit_node_whose_halo_misses_the_pane_is_not_shipped() {
     assert!(
         differing_pixels(&near, &far) > 0,
         "the near placement lights no pixel either; it is not the branch it claims",
+    );
+}
+
+/// Invalid hints take the positional path; unclaimed markers retain their input
+/// order at the home-sheet seam. Duplicate markers are displaced, never lost.
+#[test]
+fn marker_association_validates_indices_and_preserves_loose_order() {
+    use harmonigraph_core::LatticePos;
+    let mut scene = idle_scene();
+    scene.nodes.truncate(4);
+    assert_eq!(scene.nodes.len(), 4);
+    scene.camera = harmonigraph_scene::Camera {
+        projection: harmonigraph_scene::Projection::Perspective,
+        yaw: 0.0,
+        pitch: 1.4,
+        ..Default::default()
+    };
+    let far = LatticePos::new(0, -1, 0);
+    let near = LatticePos::new(0, 1, 0);
+    let behind = LatticePos::new(0, 0, -1);
+    let unknown = LatticePos::new(99, 99, 0);
+    for (node, (pos, world, home)) in scene.nodes.iter_mut().zip([
+        (far, glam::vec3(0.0, -3.0, 0.0), true),
+        (near, glam::vec3(0.0, 3.0, 0.0), true),
+        (far, glam::vec3(0.0, -2.0, 0.0), true),
+        (behind, glam::vec3(0.0, 0.0, -1.0), false),
+    ]) {
+        node.lattice_pos = pos;
+        node.world_pos = world;
+        node.on_home = home;
+        node.activation = 1.0;
+    }
+    // No later claim may hide the fallback being tested. With one marker,
+    // only the last-home lookup places it between the two far-position nodes;
+    // loose placement or the first duplicate would put it before both.
+    for hint in [None, Some(usize::MAX), Some(3)] {
+        scene.pluses = vec![harmonigraph_scene::PlusInstance {
+            node: hint,
+            lattice_pos: far,
+            ..one_marker(glam::Vec3::ZERO, 0.1, scene.lattice_ground, 1.0)
+        }];
+        let call = LatticeCallback::from_scene(
+            &scene,
+            LatticeLabels::default(),
+            egui::vec2(256.0, 256.0),
+            wgpu::TextureFormat::Rgba8Unorm,
+            43,
+            None,
+        );
+        assert_eq!(call.instances.len(), 4);
+        assert_eq!(call.pluses.len(), 1);
+        assert_eq!(
+            call.draws,
+            vec![Draw::Nodes(0, 2), Draw::Pluses(0, 1), Draw::Nodes(2, 4),],
+            "{hint:?} must fall back to the last matching home node"
+        );
+    }
+    scene.pluses = [
+        (None, far),                 // last home node at far: node 2
+        (Some(usize::MAX), far),     // invalid index: same fallback
+        (Some(3), far),              // off-home node: same fallback
+        (Some(0), near),             // wrong position: fallback to node 1
+        (Some(0), far),              // valid index selects node 0 exactly
+        (None, unknown),             // no node: loose
+        (Some(usize::MAX), unknown), // invalid index and no position: loose
+        (Some(2), far),              // displaces earlier claims on node 2
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(p, (node, lattice_pos))| harmonigraph_scene::PlusInstance {
+        node,
+        lattice_pos,
+        ..one_marker(glam::Vec3::ZERO, (p + 1) as f32 * 0.01, scene.lattice_ground, 1.0)
+    })
+    .collect();
+    let call = LatticeCallback::from_scene(
+        &scene,
+        LatticeLabels::default(),
+        egui::vec2(256.0, 256.0),
+        wgpu::TextureFormat::Rgba8Unorm,
+        43,
+        None,
+    );
+    assert_eq!(call.instances.len(), 4, "every depth boundary must ship");
+    assert_eq!(call.pluses.len(), 8, "invalid and displaced markers must survive");
+    assert_eq!(
+        call.pluses.iter().map(|p| p.pos_radius[3]).collect::<Vec<_>>(),
+        [1, 2, 3, 6, 7, 5, 8, 4].map(|p| p as f32 * 0.01),
+        "loose markers retain input order; associated markers follow node depth",
+    );
+    assert_eq!(
+        call.draws,
+        vec![
+            Draw::Nodes(0, 1),  // sheet behind home
+            Draw::Pluses(0, 6), // five loose markers, then node 0's marker
+            Draw::Nodes(1, 2),
+            Draw::Pluses(6, 7), // node 2's last claimant
+            Draw::Nodes(2, 3),
+            Draw::Pluses(7, 8), // node 1's marker after the far nodes
+            Draw::Nodes(3, 4),
+        ]
     );
 }
