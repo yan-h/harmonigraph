@@ -64,37 +64,46 @@ An explicit session reset clears musical context through the existing reset boun
 Pedal-aware harmonic holding remains deferred: harmonic held/released status follows the existing note-lifetime release semantics.
 Instrument release tails and pedal sustain do not turn released context back into a held contribution.
 
-## Keep first tuning
+## Keyboard tuning
 
-An opt-in control, off by default, for controllers where one key should always sound one pitch once established, such as a Wicki-Hayden keyboard.
-It deliberately gives up the travel the rest of this record exists for:
-with it on, the first assignment each input pitch class receives is replayed for every later onset of that class, in every octave, until the context resets.
-Only classes not heard since the reset are scored.
+The keyboard tuning is three sizes, for primes 3, 5 and 7, describing how the player's controller renders a lattice node.
+It shares the lattice's C offset rather than having one of its own.
+Scoring obeys one rule with it:
+a key may only become a node that the keyboard's own tuning would render at the pitch the key sent.
+A candidate is admissible when its keyboard rendering, reduced to one octave, lies within the same-note tolerance of the input pitch class,
+and the ordinary pitch and harmonic terms choose among the admissible candidates.
+If none is admissible, the attack was bent off every key, and every candidate competes exactly as it would with no keyboard at all.
 
-The pins live in `Memory`, so every reset that clears musical context clears them too —
-Reset, silence, and the Stop and loop/seek controls —
-and no reset trigger of their own exists.
-Identity is the input pitch class within the same-note tolerance, and the stored correction is added to the new input unchanged, so an octave is exact.
-A replayed onset is otherwise an ordinary decision:
-it sets the moving reference and joins held and released context like any other.
-Pins are made and read only while the control is on, and an onset scored with it off forgets them, since that decision is the only thing that can move the context away from them;
-switching back on with no onset in between resumes them, because nothing has moved.
+The rendering is taken from the candidate as it was respelled for the lattice's tempered set, so a tempered lattice needs no special case.
+The default is 12-TET (700, 400, 1000¢), which cannot tell apart any two nodes in one semitone class, so the default scorer and its drift are unchanged.
+A meantone keyboard has a separate B♯ key, so its C key never becomes the B♯ a diesis below;
+it cannot tell the 5-limit A from the Pythagorean one, so context chooses between them.
+A schismatic keyboard has two A keys, and each becomes its own A.
 
-Cases written down rather than handled:
+Learn fills it.
+Whenever Learn hears a fifth, the keyboard tuning becomes the one that fifth generates:
+5 and 7 sit at the positions on the chain of fifths, within fourteen either way of C, nearest a just 5/4 and a just 7/4, with ties going to the shorter chain.
+The learned third and seventh are not used, because on a Pythagorean-side keyboard Learn's third is whichever pressed key sits nearest a just third, which spells prime 5 wrong until the other key has been pressed.
+The Tuning pane shows the three sizes, still editable, in a collapsed group under the Learn toggle,
+with a **Derive from fifth** button that does from the fifth shown what Learn does from the fifth it hears.
 
-1. A tuning edit does not retune existing pins;
-they keep the old tuning until the context resets.
-2. The live neighborhood outlines ignore pins, and so does the simulator.
-3. Two keys that send the same pitch share a pin.
-4. Past 128 distinct pitch classes, which only finely divided or attack-bent input can reach, a new class is scored and left unpinned.
-5. Pins are shared by every track, and Retune exclusion does not remove the ones a source made.
-6. A pin holds even where the context asks for a pure fifth with what is sounding, so a fifths chain cannot retune an earlier 5-limit A.
-It is the mirror of the comma-pump drift the pins exist to stop, and measurement found no pin strength that separates the two;
+The lattice axes belong to Learn only while no source has Retune on.
+With retuning off, the lattice is a picture of the input and should equal the keyboard;
+with it on, the lattice is the target, and Learn moves only the shared C offset and the keyboard tuning.
+Toggling Retune copies nothing in either direction.
+
+The live neighborhood outlines apply the same filter.
+Besides the analytic boundaries, the worker plays every key the candidates render, in each octave of the C2–C7 range.
+The simulator has no keyboard tuning, so with any keyboard but 12-TET the outline is Rust-only.
+
+An accepted consequence, not a bug:
+the syntonic comma pump still drifts on a meantone keyboard, because that keyboard cannot tell `(1,0)` from `(-3,1)`.
+It is the same comma as the one between the fifths-chain A and the 5-limit A, which is why no pin strength could separate the two;
 see [issue #852](https://github.com/yan-h/harmonigraph/issues/852).
 
 ## Controls and live neighborhood
 
-The Tuning pane exposes keep first tuning, harmonic weight, pitch scale, neighborhood radius, allowed axes, recent-memory capacity, released-note weighting, register weighting, same-note tolerance, silence timeout and transport reset choices.
+The Tuning pane exposes the keyboard tuning, harmonic weight, pitch scale, neighborhood radius, allowed axes, recent-memory capacity, released-note weighting, register weighting, same-note tolerance, silence timeout and transport reset choices.
 Defaults match the simulator's baseline profile.
 The precision profile used by the paired intentional-E examples is obtained by setting harmonic weight to two.
 

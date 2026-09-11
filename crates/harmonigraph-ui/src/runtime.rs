@@ -257,22 +257,46 @@ impl VisualRuntime {
         }
         if !classes.is_empty() {
             let learned = harmonigraph_core::learn_tuning(&classes);
+            // The audio owner's rule (`ConfigMutation::Learn`): with a source
+            // retuning, the lattice is the target and only the C offset moves.
+            let retuning = params.tuning_instances().iter().any(|row| row.retune);
             for (value, key) in [
                 (learned.c_offset, params::ParamKey::COffset),
                 (learned.three, params::ParamKey::Three),
                 (learned.five, params::ParamKey::Five),
                 (learned.seven, params::ParamKey::Seven),
-            ] {
+            ]
+            .into_iter()
+            .take(if retuning { 1 } else { 4 })
+            {
                 if let Some(value) = value {
                     params.set(key, value);
                 }
             }
-            let modes = harmonigraph_core::configuration::learned_modes(
-                learned,
-                self.tuning_modes(appearance),
-            );
-            appearance.view.meantone = modes.tempered.syntonic;
-            appearance.view.marvel = modes.tempered.septimal_kleisma;
+            if let Some(three) = learned.three {
+                let mut policy = self.adaptive_policy;
+                policy.keyboard = harmonigraph_core::tuning::fifth_generated(
+                    harmonigraph_core::tuning::microcents(three),
+                );
+                if policy != self.adaptive_policy {
+                    self.edit_tuning(
+                        appearance,
+                        params,
+                        harmonigraph_core::configuration::ConfigEdit {
+                            policy: Some(policy),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            if !retuning {
+                let modes = harmonigraph_core::configuration::learned_modes(
+                    learned,
+                    self.tuning_modes(appearance),
+                );
+                appearance.view.meantone = modes.tempered.syntonic;
+                appearance.view.marvel = modes.tempered.septimal_kleisma;
+            }
             self.console.log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
         }
         self.last_learned_classes = Some(classes);

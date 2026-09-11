@@ -126,6 +126,29 @@ pub fn reachable(
             result.push(node);
         }
     }
+    // The keyboard filter admits a node only within the same-note tolerance of
+    // a key, which continuous boundary samples almost never land on. Every
+    // rendering the candidates have is a key, so play each one in every octave.
+    let mut keys: Vec<_> =
+        scratch.candidates.iter().map(|&n| keyboard_class(c.policy.keyboard, n)).collect();
+    keys.sort_unstable();
+    keys.dedup();
+    for class in keys {
+        if cancelled() {
+            return Ok(Vec::new());
+        }
+        let pitch = i64::from(c.c_offset) + class;
+        let first = ((low * 1_000_000.0 - pitch as f64) / OCTAVE as f64).ceil() as i64;
+        let last = ((high * 1_000_000.0 - pitch as f64) / OCTAVE as f64).floor() as i64;
+        for octave in first..=last {
+            let onset = OrderedOnset { pitch: pitch + octave * OCTAVE };
+            if let Some(node) =
+                select_prepared(c, snapshot.reference, onset, &scratch)?.assignment.node()
+            {
+                result.push(node);
+            }
+        }
+    }
     result.sort_by_key(|n| key(*n));
     result.dedup();
     Ok(result)

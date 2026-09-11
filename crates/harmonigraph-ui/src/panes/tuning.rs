@@ -373,6 +373,7 @@ pub(super) fn tuning_pane(
             );
         }
     });
+    keyboard_controls(ui, state, params);
 
     // Which commas the lattice tempers out: the same question as the bars
     // above (what IS this tuning), but the answer is a set of identities
@@ -416,6 +417,43 @@ pub(super) fn tuning_pane(
     // hover belongs.
 }
 
+/// How the player's controller renders each prime. Learn fills it from the
+/// fifth it hears; it is an adaptive policy setting, so edits travel as one.
+fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
+    let mut p = state.runtime.adaptive_policy;
+    let before = p;
+    ui.collapsing("Keyboard", |ui| {
+        for (value, label) in p.keyboard.iter_mut().zip(["Fifth", "Third", "Seventh"]) {
+            *value = adaptive_value(ui, *value as u32, 0..=1_200_000_000, 1_000_000.0, label, "¢")
+                as i32;
+        }
+        if ui.button("Derive from fifth").clicked() {
+            p.keyboard = tuning::fifth_generated(p.keyboard[0]);
+        }
+        let [third, seventh] = tuning::fifth_generated_steps(p.keyboard[0]).map(fifths);
+        ui.weak(format!("From the fifth: third is {third}, seventh is {seventh}."));
+    })
+    .header_response
+    .on_hover_text(
+        "A key may only become a lattice node this keyboard would play at the pitch the key \
+         sent; an attack bent off every key is chosen from every node. Learn sets it from the \
+         fifth it hears.",
+    );
+    if p != before {
+        state.runtime.edit_tuning(
+            &mut state.appearance,
+            params,
+            ConfigEdit { policy: Some(p.sanitize()), ..Default::default() },
+        );
+    }
+}
+
+fn fifths(steps: i32) -> String {
+    let n = steps.unsigned_abs();
+    let plural = if n == 1 { "" } else { "s" };
+    format!("{n} fifth{plural} {}", if steps < 0 { "down" } else { "up" })
+}
+
 fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
     section(ui, "Adaptive tuning");
     instance_controls(ui, params);
@@ -446,11 +484,6 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                 ui.selectable_value(&mut p.axes, 3, "Fifths + thirds + sevenths");
             });
     });
-    ui.checkbox(&mut p.keep_tuning, "Keep first tuning").on_hover_text(
-        "Once a pitch class has been tuned, it plays at that tuning again, in every octave, \
-         until the context resets. Only pitch classes not heard since then are chosen from the \
-         context.",
-    );
     ui.collapsing("Context", |ui| {
         p.memory = adaptive_value(ui, p.memory.into(), 0..=24, 1.0, "Released pitches", "") as u8;
         for (value, label, max) in [

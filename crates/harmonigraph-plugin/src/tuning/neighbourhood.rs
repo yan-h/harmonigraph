@@ -5,7 +5,7 @@ use harmonigraph_core::{
     policy::{self, reach::Snapshot, ContextPitch, MusicalConfig},
     LatticePos, Tempered,
 };
-const HEADER: usize = 16;
+const HEADER: usize = 18;
 const WORDS: usize = HEADER + (policy::MAX_CONTEXT + policy::MAX_MEMORY) * 6;
 #[derive(Default)]
 pub(super) struct Published(super::diagnostics::Snapshot<WORDS>);
@@ -18,7 +18,7 @@ impl Published {
         words[3..6].copy_from_slice(&config.axes.map(i64::from));
         words[6] =
             i64::from(config.tempered.syntonic) | i64::from(config.tempered.septimal_kleisma) << 1;
-        words[7..15].copy_from_slice(&config.policy.words().map(i64::from));
+        words[7..17].copy_from_slice(&config.policy.words().map(i64::from));
         for (v, w) in context.iter().zip(words[HEADER..].chunks_exact_mut(6)) {
             w[0] = v.pitch;
             w[1] = v.weight.to_bits() as i64;

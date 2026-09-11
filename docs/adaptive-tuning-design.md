@@ -49,8 +49,9 @@ MIDI alone cannot distinguish an ordinary return to C from continuing enharmonic
 the desired musical convention favours continuity along the lattice.
 
 Yan later asked for the opposite as an option, for a Wicki-Hayden keyboard where a key should keep its pitch once established.
-It is the off-by-default Keep first tuning control in the [policy record](adaptive-tuning-plugin.md#keep-first-tuning);
-the travel above stays the default and is untouched when the control is off.
+It is the [keyboard tuning](adaptive-tuning-plugin.md#keyboard-tuning):
+a key only becomes a node the keyboard itself renders at that key, so the travel above continues only among nodes the keyboard cannot tell apart.
+The default 12-TET keyboard tells none of them apart, so the travel stays the default.
 
 ## Structural requirements and musical targets
 

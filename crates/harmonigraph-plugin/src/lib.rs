@@ -974,8 +974,9 @@ impl ClapPlugin for Harmonigraph {
         &mut self,
         _sample: i64,
     ) -> Option<nice_plug::wrapper::clap::configuration::ConfigurationEdit> {
+        let retuning = self.aggregation.as_ref().unwrap().retuning();
         let owner = self.configuration.as_mut().unwrap();
-        let result = owner.group_end();
+        let result = owner.group_end(retuning);
         self.params.configuration.get().unwrap().published.publish(owner.snapshot);
         result
     }

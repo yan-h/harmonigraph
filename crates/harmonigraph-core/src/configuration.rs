@@ -36,8 +36,10 @@ pub struct PolicyConfig {
     pub silence_ms: u32,
     pub reset_stop: bool,
     pub reset_loop: bool,
-    /// A pitch class plays at its first tuning until the context resets.
-    pub keep_tuning: bool,
+    /// How the player's controller renders primes 3, 5 and 7, in microcents,
+    /// from the lattice's own C offset. A key may only become a node this
+    /// tuning would render at the pitch the key sent.
+    pub keyboard: [i32; 3],
 }
 impl Default for PolicyConfig {
     fn default() -> Self {
@@ -58,27 +60,29 @@ impl PolicyConfig {
         self.register_falloff = self.register_falloff.min(4000);
         self.tolerance = self.tolerance.min(20_000_000);
         self.silence_ms = self.silence_ms.min(120_000);
+        self.keyboard = self.keyboard.map(|v| v.clamp(0, 1_200_000_000));
         self
     }
     /// Fixed configuration mailbox representation, shared by edits and snapshots.
-    pub fn words(self) -> [i32; 8] {
+    pub fn words(self) -> [i32; 10] {
         [
             2,
             i32::from(self.radius)
                 | i32::from(self.axes) << 8
                 | i32::from(self.memory) << 16
                 | i32::from(self.reset_stop) << 24
-                | i32::from(self.reset_loop) << 25
-                | i32::from(self.keep_tuning) << 26,
+                | i32::from(self.reset_loop) << 25,
             i32::from(self.harmonic) | i32::from(self.pitch_scale) << 16,
             i32::from(self.released) | i32::from(self.recency) << 16,
             i32::from(self.register_floor) | i32::from(self.register_falloff) << 16,
             self.tolerance as i32,
             self.silence_ms as i32,
-            0,
+            self.keyboard[0],
+            self.keyboard[1],
+            self.keyboard[2],
         ]
     }
-    pub fn from_words(w: [i32; 8]) -> Self {
+    pub fn from_words(w: [i32; 10]) -> Self {
         Self {
             version: 2,
             radius: w[1] as u8,
@@ -86,7 +90,6 @@ impl PolicyConfig {
             memory: (w[1] >> 16) as u8,
             reset_stop: w[1] & (1 << 24) != 0,
             reset_loop: w[1] & (1 << 25) != 0,
-            keep_tuning: w[1] & (1 << 26) != 0,
             harmonic: w[2] as u16,
             pitch_scale: (w[2] >> 16) as u16,
             released: w[3] as u16,
@@ -95,6 +98,7 @@ impl PolicyConfig {
             register_falloff: (w[4] >> 16) as u16,
             tolerance: w[5].max(0) as u32,
             silence_ms: w[6].max(0) as u32,
+            keyboard: [w[7], w[8], w[9]],
         }
         .sanitize()
     }
@@ -141,11 +145,19 @@ pub enum ConfigMutation {
         modes: TuningModes,
         policy: PolicyConfig,
     },
-    Learn(LearnedTuning),
+    /// The keyboard tuning follows the learned fifth and the shared C offset
+    /// the learned C either way. The lattice axes and their comma judgement
+    /// follow only while no source is `retuning`: with retuning off the lattice
+    /// is a picture of the input, with it on it is the target.
+    Learn {
+        learned: LearnedTuning,
+        retuning: bool,
+    },
     /// Host modulation can change the committed raw axes while learning's
     /// complete-evidence judgement still describes the chord that was heard.
     LearnResolved {
         learned: LearnedTuning,
+        retuning: bool,
         raw: Tuning,
     },
 }
@@ -260,7 +272,13 @@ impl ConfigReducer {
                     self.modes.learning = on;
                 }
             }
-            ConfigMutation::Learn(learned) | ConfigMutation::LearnResolved { learned, .. } => {
+            ConfigMutation::Learn { learned, retuning }
+            | ConfigMutation::LearnResolved { learned, retuning, .. } => {
+                if let Some(three) = learned.three {
+                    self.resolved.policy.keyboard =
+                        crate::tuning::fifth_generated(crate::tuning::microcents(three));
+                }
+                let written = if retuning { 1 } else { 4 };
                 for (axis, value) in [
                     &mut self.raw.c_offset,
                     &mut self.raw.three,
@@ -268,17 +286,16 @@ impl ConfigReducer {
                     &mut self.raw.seven,
                 ]
                 .into_iter()
-                .zip([
-                    learned.c_offset,
-                    learned.three,
-                    learned.five,
-                    learned.seven,
-                ]) {
+                .zip([learned.c_offset, learned.three, learned.five, learned.seven])
+                .take(written)
+                {
                     if let Some(value) = value {
                         *axis = crate::tuning::microcents(value);
                     }
                 }
-                self.modes = learned_modes(learned, self.modes);
+                if !retuning {
+                    self.modes = learned_modes(learned, self.modes);
+                }
                 if let ConfigMutation::LearnResolved { raw, .. } = mutation {
                     self.raw = raw;
                 }
@@ -399,16 +416,19 @@ mod tests {
     #[test]
     fn learning_can_release_with_complete_evidence_but_not_a_bare_fifth() {
         let mut reducer = ConfigReducer::default();
-        reducer.apply(ConfigMutation::Learn(LearnedTuning {
-            three: Some(700.0),
-            ..Default::default()
-        }));
+        reducer.apply(ConfigMutation::Learn {
+            learned: LearnedTuning { three: Some(700.0), ..Default::default() },
+            retuning: false,
+        });
         assert!(reducer.resolved().modes.tempered.has(Comma::Syntonic));
-        reducer.apply(ConfigMutation::Learn(LearnedTuning {
-            three: Some(700.0),
-            five: Some(crate::tuning::FIVE_JUST),
-            ..Default::default()
-        }));
+        reducer.apply(ConfigMutation::Learn {
+            learned: LearnedTuning {
+                three: Some(700.0),
+                five: Some(crate::tuning::FIVE_JUST),
+                ..Default::default()
+            },
+            retuning: false,
+        });
         assert!(!reducer.resolved().modes.tempered.has(Comma::Syntonic));
         let mut modes = TuningModes {
             tempered: Tempered { syntonic: true, septimal_kleisma: false },
@@ -425,5 +445,31 @@ mod tests {
             !learned_modes(learned, modes).tempered.has(Comma::SeptimalKleisma),
             "septimal sees derived 400, not played 386"
         );
+    }
+
+    #[test]
+    fn learning_moves_the_lattice_only_while_no_source_retunes() {
+        let fifth = crate::tuning::THREE_JUST - crate::tuning::SYNTONIC_COMMA / 4.0;
+        let learned = LearnedTuning {
+            c_offset: Some(10.0),
+            three: Some(fifth),
+            five: Some(crate::tuning::FIVE_JUST),
+            ..Default::default()
+        };
+        let before = ConfigReducer::default().resolved().tuning;
+        for retuning in [false, true] {
+            let mut reducer = ConfigReducer::default();
+            reducer.apply(ConfigMutation::Learn { learned, retuning });
+            let resolved = reducer.resolved();
+            assert_eq!(resolved.policy.keyboard, crate::tuning::fifth_generated(microcents(fifth)));
+            assert_eq!(resolved.tuning.c_offset, microcents(10.0));
+            let axes = |t: Tuning| (t.three, t.five, t.seven);
+            if retuning {
+                assert_eq!(axes(resolved.tuning), axes(before));
+            } else {
+                assert_eq!(axes(reducer.raw()).0, microcents(fifth));
+                assert_eq!(axes(reducer.raw()).1, microcents(crate::tuning::FIVE_JUST));
+            }
+        }
     }
 }

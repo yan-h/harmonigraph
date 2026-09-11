@@ -93,7 +93,7 @@ pub fn packet(edit: ConfigEdit) -> ConfigurationEdit {
     payload[4] = encode_option(edit.auto[1]);
     payload[5] = encode_option(edit.learning);
     if let Some(policy) = edit.policy {
-        payload[7..15].copy_from_slice(&policy.sanitize().words());
+        payload[7..17].copy_from_slice(&policy.sanitize().words());
     }
     ConfigurationEdit {
         values: edit.axes.map(|value| value.map(|v| v as f32 / 1_000_000.0)),
@@ -111,7 +111,7 @@ fn payload(resolved: ResolvedConfig) -> [i32; PAYLOAD_WORDS] {
     payload[0] = RESOLVED;
     payload[1] = bits(resolved.modes);
     payload[2..7].copy_from_slice(&axes(resolved.tuning));
-    payload[7..15].copy_from_slice(&resolved.policy.words());
+    payload[7..17].copy_from_slice(&resolved.policy.words());
     payload
 }
 
@@ -129,7 +129,7 @@ pub fn view(snapshot: ConfigurationSnapshot, pending: bool) -> ConfigurationView
         resolved.modes = modes(snapshot.payload[1]);
     }
     if snapshot.payload[7] == 2 {
-        resolved.policy = PolicyConfig::from_words(snapshot.payload[7..15].try_into().unwrap());
+        resolved.policy = PolicyConfig::from_words(snapshot.payload[7..17].try_into().unwrap());
     }
     resolved.revision = snapshot.revision;
     ConfigurationView { resolved, status: snapshot.status, pending }
@@ -150,7 +150,7 @@ pub fn prepare(state: &PluginState) -> Result<ConfigurationEdit, SubmitError> {
     let mut payload = [0; PAYLOAD_WORDS];
     payload[0] = RESTORE;
     payload[1] = bits(settings.modes());
-    payload[7..15].copy_from_slice(&PolicyConfig::from(settings.adaptive).words());
+    payload[7..17].copy_from_slice(&PolicyConfig::from(settings.adaptive).words());
     let mut values = [None; CONFIG_PARAMETERS];
     for (i, key) in ParamKey::TUNING.into_iter().enumerate() {
         let value = match state.params.get(key.id()) {
@@ -280,9 +280,13 @@ impl Owner {
             RESTORE => ConfigMutation::Restore {
                 raw,
                 modes: modes(command.edit.payload[1]),
-                policy: PolicyConfig::from_words(command.edit.payload[7..15].try_into().unwrap()),
+                policy: PolicyConfig::from_words(command.edit.payload[7..17].try_into().unwrap()),
             },
-            LEARN => ConfigMutation::LearnResolved { learned: self.learned?, raw },
+            LEARN => ConfigMutation::LearnResolved {
+                learned: self.learned?,
+                retuning: command.edit.payload[1] != 0,
+                raw,
+            },
             _ => ConfigMutation::Edit(ConfigEdit {
                 // Full normalized/modulated raw input is coherent here. Unchanged
                 // axes carry no musical revision or fresh comma judgement.
@@ -297,7 +301,7 @@ impl Owner {
                 ],
                 learning: decode_option(command.edit.payload[5]),
                 policy: (command.edit.payload[7] == 2).then(|| {
-                    PolicyConfig::from_words(command.edit.payload[7..15].try_into().unwrap())
+                    PolicyConfig::from_words(command.edit.payload[7..17].try_into().unwrap())
                 }),
             }),
         };
@@ -361,7 +365,9 @@ impl Owner {
         self.recording.segment(recorder, origin, f64::from(self.boundary.sample_rate), self.block);
     }
 
-    pub fn group_end(&mut self) -> Option<ConfigurationEdit> {
+    /// `retuning`: some source has Retune on, so the lattice is the target
+    /// and Learn moves only the C offset there, besides the keyboard tuning.
+    pub fn group_end(&mut self, retuning: bool) -> Option<ConfigurationEdit> {
         if self.snapshot.status != 0 {
             return None;
         }
@@ -370,10 +376,13 @@ impl Owner {
                 self.learned = Some(learned);
                 let mut payload = [0; PAYLOAD_WORDS];
                 payload[0] = LEARN;
-                Some(ConfigurationEdit {
-                    values: [learned.c_offset, learned.three, learned.five, learned.seven, None],
-                    payload,
-                })
+                payload[1] = i32::from(retuning);
+                let mut values =
+                    [learned.c_offset, learned.three, learned.five, learned.seven, None];
+                if retuning {
+                    values[1..4].fill(None);
+                }
+                Some(ConfigurationEdit { values, payload })
             }
             Err(_) => {
                 self.snapshot.status |= 1;

@@ -51,7 +51,11 @@ impl Harness {
             node: d.assignment.node(),
             weight: 1.0,
         };
-        self.memory.attack(pitch, d.assignment, self.config.policy);
+        self.memory.attack(
+            pitch,
+            d.assignment.correction_microcents(),
+            self.config.policy.tolerance,
+        );
         self.held.push((id.into(), v));
         v
     }
@@ -113,39 +117,66 @@ fn repeated_controller_chords_cross_one_hundred_dieses_without_wrapping() {
     }
     assert!(h.memory.reference < -4_000_000_000);
 }
+/// The pitch the keyboard sends for the key it spells `threes`, `fives`,
+/// `octave` octaves above the one starting at C 4800¢.
+fn sent(h: &Harness, threes: i32, fives: i32, octave: i64) -> i64 {
+    4_800_000_000
+        + octave * OCTAVE
+        + keyboard_class(h.config.policy.keyboard, LatticePos::new(threes, fives, 0))
+}
+fn play(h: &mut Harness, keys: &[(&str, i32, i32, i64)]) -> Option<LatticePos> {
+    let mut node = None;
+    for &(id, threes, fives, octave) in keys {
+        let pitch = sent(h, threes, fives, octave);
+        node = h.on(id, pitch).node;
+    }
+    node
+}
+fn meantone() -> [i32; 3] {
+    crate::tuning::fifth_generated(crate::tuning::microcents(696.578))
+}
 #[test]
-fn keep_tuning_holds_each_pitch_class_until_the_context_resets() {
-    fn chord(h: &mut Harness, root: i64) -> [ContextPitch; 3] {
-        h.off("*");
-        [h.on("root", root), h.on("third", root + 400_000_000), h.on("fifth", root + 700_000_000)]
+fn a_meantone_keyboards_c_key_cannot_become_b_sharp() {
+    // E spells the G♯ as a third above it; with E released, the held G♯
+    // pulls the next C key a third above itself harder than the diesis
+    // between B♯ and the key's pitch pulls back.
+    fn phrase(h: &mut Harness) -> Option<LatticePos> {
+        play(h, &[("e", 0, 1, 0), ("g#", 0, 2, 0)]);
+        h.off("e");
+        play(h, &[("c", 0, 0, 0)])
     }
-    // The travelling cycle above, run both ways so the fixture is shown to
-    // drift before the control is shown to stop it.
-    for keep in [false, true] {
-        let mut h = Harness::new();
-        h.config.policy.keep_tuning = keep;
-        let home = chord(&mut h, 4_800_000_000);
-        for _ in 0..3 {
-            chord(&mut h, 5_200_000_000);
-            // A♭ major's third is C an octave up: B♯ a diesis low while the
-            // context travels, the pinned C an exact octave up while it keeps.
-            let third = chord(&mut h, 5_600_000_000)[1];
-            assert_eq!(third.pitch == home[0].pitch + 1_200_000_000, keep);
-            assert_eq!(chord(&mut h, 4_800_000_000) == home, keep);
-        }
-    }
+    let b_sharp = Some(LatticePos::new(0, 3, 0));
     let mut h = Harness::new();
-    h.config.policy.keep_tuning = true;
-    chord(&mut h, 4_800_000_000);
-    assert!(h.memory.pinned(6_000_000_000, h.config.policy).is_some());
-    h.memory.clear();
-    assert_eq!(h.memory.pinned(6_000_000_000, h.config.policy), None);
-    // An attack with the control off forgets the pins too.
-    chord(&mut h, 4_800_000_000);
-    h.config.policy.keep_tuning = false;
-    h.on("d", 5_000_000_000);
-    h.config.policy.keep_tuning = true;
-    assert_eq!(h.memory.pinned(6_000_000_000, h.config.policy), None);
+    assert_eq!(phrase(&mut h), b_sharp, "a 12-TET keyboard cannot tell C from B♯");
+    let mut h = Harness::new();
+    h.config.policy.keyboard = meantone();
+    assert_eq!(phrase(&mut h), Some(LatticePos::ORIGIN));
+    h.off("c");
+    assert_eq!(play(&mut h, &[("b#", 0, 3, 0)]), b_sharp);
+}
+#[test]
+fn a_schismatic_keyboards_two_a_keys_are_two_as() {
+    let mut h = Harness::new();
+    h.config.policy.keyboard = crate::tuning::fifth_generated(crate::tuning::microcents(701.711));
+    play(&mut h, &[("f", -1, 0, 0), ("c", 0, 0, 1), ("g", 1, 0, 1), ("d", 2, 0, 2)]);
+    assert_eq!(play(&mut h, &[("a", 3, 0, 2)]), Some(LatticePos::new(3, 0, 0)));
+    h.off("a");
+    assert_eq!(play(&mut h, &[("a", -1, 1, 2)]), Some(LatticePos::new(-1, 1, 0)));
+}
+#[test]
+fn an_attack_bent_off_every_key_is_scored_against_every_node() {
+    let mut h = Harness::new();
+    play(&mut h, &[("c", 0, 0, 0), ("e", 0, 1, 0), ("g", 1, 0, 0)]);
+    let context: Vec<_> = h.held.iter().rev().map(|(_, v)| *v).collect();
+    let bent = OrderedOnset { pitch: sent(&h, 0, 0, 1) + 15_000_000 };
+    let decide =
+        |config| assign_new_note(config, &context, &h.memory, bent, &mut PolicyScratch::default());
+    // Widening the tolerance alone admits only the nearest key's nodes; a
+    // keyboard that renders every node at C admits all of them.
+    let mut every = h.config;
+    every.policy.tolerance = 20_000_000;
+    every.policy.keyboard = [0; 3];
+    assert_eq!(decide(h.config), decide(every));
 }
 #[test]
 fn memory_refreshes_actual_register_pitch_and_new_release_order() {

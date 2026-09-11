@@ -567,25 +567,40 @@ fn learn_the_played_third(retune: bool) {
             key,
             velocity: 0.8,
         }));
-        if key == 64 {
-            events.push(Input::Tuning(clap_event_note_expression {
-                header: header::<clap_event_note_expression>(CLAP_EVENT_NOTE_EXPRESSION, 0),
-                expression_id: CLAP_NOTE_EXPRESSION_TUNING,
-                note_id: 64,
-                port_index: 0,
-                channel: 0,
-                key: 64,
-                value: f64::from(harmonigraph_core::tuning::FIVE_JUST - 400.0) / 100.0,
-            }));
-        }
+        // A just triad, so the keyboard tuning Learn derives is not 12-TET's.
+        let bend = match key {
+            64 => harmonigraph_core::tuning::FIVE_JUST - 400.0,
+            67 => harmonigraph_core::tuning::THREE_JUST - 700.0,
+            _ => continue,
+        };
+        events.push(Input::Tuning(clap_event_note_expression {
+            header: header::<clap_event_note_expression>(CLAP_EVENT_NOTE_EXPRESSION, 0),
+            expression_id: CLAP_NOTE_EXPRESSION_TUNING,
+            note_id: i32::from(key),
+            port_index: 0,
+            channel: 0,
+            key,
+            value: f64::from(bend) / 100.0,
+        }));
     }
     device.run(0, events, false);
     // The Hub tunes its own notes, so its input reaches learning at the
     // boundary after the one it arrived on rather than the same one.
     device.run(64, vec![], false);
     let learned = mailbox.visible().0;
-    assert!(!view(learned, false).resolved.modes.tempered.syntonic);
-    assert!((learned.raw[2] - harmonigraph_core::tuning::FIVE_JUST).abs() < 0.001);
+    let resolved = view(learned, false).resolved;
+    let keyboard = resolved.policy.keyboard;
+    assert_eq!(keyboard, harmonigraph_core::tuning::fifth_generated(keyboard[0]));
+    let fifth = harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST);
+    assert!((keyboard[0] - fifth).abs() < 1_000);
+    // Retune on anywhere makes the lattice the target, so Learn leaves it.
+    if retune {
+        assert!(resolved.modes.tempered.syntonic);
+        assert_eq!(learned.raw[1..4], [700.0, 400.0, 1000.0]);
+    } else {
+        assert!(!resolved.modes.tempered.syntonic);
+        assert!((learned.raw[2] - harmonigraph_core::tuning::FIVE_JUST).abs() < 0.001);
+    }
     device.run(128, vec![], false);
     assert_eq!(mailbox.visible().0.revision, learned.revision);
     // A cut ends the chord with no delta on any row. Learn must stop hearing
@@ -952,6 +967,11 @@ fn id_tuning(id: i32, value: f64) -> Input {
 fn learning_notifications_land_at_the_boundary_and_merge_with_performance() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
+    // Retune back at its shipped default: with a source retuning, Learn
+    // leaves the lattice axes alone, and the axis write is what is timed here.
+    device.wrapper().test_inspect_plugin(|plugin| {
+        plugin.aggregation.as_ref().unwrap().shared.set_retune(false)
+    });
     device.activate();
     let mailbox = device.mailbox();
     mailbox.submit(packet(ConfigEdit { learning: Some(true), ..Default::default() })).unwrap();
@@ -984,6 +1004,11 @@ fn learning_notifications_land_at_the_boundary_and_merge_with_performance() {
 fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
+    // Retune back at its shipped default: with a source retuning, Learn
+    // leaves the lattice axes alone, and the axes are what this reads.
+    device.wrapper().test_inspect_plugin(|plugin| {
+        plugin.aggregation.as_ref().unwrap().shared.set_retune(false)
+    });
     device.activate();
     let mailbox = device.mailbox();
     mailbox.submit(packet(ConfigEdit { learning: Some(true), ..Default::default() })).unwrap();
