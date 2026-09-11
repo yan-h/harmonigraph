@@ -359,10 +359,11 @@ impl Hub {
         // into the epoch bump this callback then adopts.
         self.tune.begin(callback);
         self.adopt();
+        // A cut or a departed Tune clears a row with no delta to carry that to
+        // Learn, so every row is republished here rather than flagged at each
+        // place that clears one.
         for (source, row) in self.rows.iter().enumerate() {
-            if row.retune & 1 == 0 {
-                Self::confirm(row, identity(source as u8), &mut owner.confirmed);
-            }
+            Self::confirm(row, identity(source as u8), &mut owner.confirmed);
         }
         self.detect_loop(callback);
         self.sequencer.publish_neighbourhood(&self.shared, owner.reducer.resolved().into());
@@ -907,16 +908,14 @@ impl Hub {
         self.pending.truncate(self.pending.len() - published);
     }
 
+    /// Learn hears every row, Retune off included: Retune decides what the Hub
+    /// corrects, and an uncorrected note is the player's pitch Learn reads.
     fn confirm(
         row: &Row,
         source: SourceId,
         confirmed: &mut harmonigraph_core::confirmed::ConfirmedPitches,
     ) {
-        let _ = row.state.publish_confirmed(
-            source,
-            row.state.complete && row.retune & 1 != 0,
-            confirmed,
-        );
+        let _ = row.state.publish_confirmed(source, row.state.complete, confirmed);
     }
 
     fn presentation(&self, sample: i64) -> f64 {
