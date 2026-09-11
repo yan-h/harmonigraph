@@ -96,6 +96,16 @@ The live neighborhood outlines apply the same filter.
 Besides the analytic boundaries, the worker plays every key the candidates render, in each octave of the C2–C7 range.
 The simulator has no keyboard tuning, so with any keyboard but 12-TET the outline is Rust-only.
 
+Cases written down rather than handled:
+
+1. The outlines are approximate inside a key's tolerance window.
+They play each key at its exact rendering, so a node that wins only between that pitch and the window's edge is missed;
+and the analytic envelope still lists an unfiltered winner whose whole winning range lies inside key windows, where the filter always overrides it.
+At the default half-cent tolerance the windows are a cent wide and the difference is negligible;
+it grows toward the 20¢ maximum.
+2. A policy edit from the pane sends the whole policy the editor last saw, keyboard included.
+One that lands just after Learn has changed the keyboard puts the old keyboard back until the held chord next changes and Learn fires again.
+
 An accepted consequence, not a bug:
 the syntonic comma pump still drifts on a meantone keyboard, because that keyboard cannot tell `(1,0)` from `(-3,1)`.
 It is the same comma as the one between the fifths-chain A and the 5-limit A, which is why no pin strength could separate the two;
