@@ -405,7 +405,7 @@ fn clear_everything(ui: &mut egui::Ui, state: &mut PictureState) {
 /// itself "Spectrogram" beside the Analyzer settings' heading of that name; what it
 /// decides is what this render bakes.
 ///
-/// The Spectrogram row draws whatever the shell is, since a standalone with no
+/// The Spectrogram and History rows draw whatever the shell is, since a standalone with no
 /// transport still renders; the rows that need a take to exist follow the same
 /// `supported` gate Record does.
 ///
@@ -435,6 +435,23 @@ fn render_controls(
             ),
         ],
     );
+    // Only under Scrolling: Playhead lays the whole window out already, so the
+    // row would be a choice that changes nothing there.
+    if !state.appearance.render.playhead {
+        choice_row(
+            ui,
+            "History",
+            &mut state.appearance.render.history_spans_take,
+            &[
+                (false, "As set", "Scroll back as far as the Analyzer's History duration"),
+                (
+                    true,
+                    "Whole take",
+                    "Stretch the spectrogram history over the whole render, so the last frame reaches back to the first (up to 10 minutes). The live preview keeps the Analyzer's History duration.",
+                ),
+            ],
+        );
+    }
     if !interaction.take.supported {
         return;
     }

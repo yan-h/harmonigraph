@@ -152,6 +152,12 @@ pub fn render(
     for comma in harmonigraph_core::Comma::ALL {
         *state.appearance.view.temper_auto_mut(comma) = false;
     }
+    // "History: Whole take" — the one setting only a render can answer, since
+    // the render window is its length. Set once before the first frame, so no
+    // cache keyed on the analyzer config sees it move.
+    if state.appearance.render.history_spans_take {
+        state.appearance.spectrum.span_history(settings.end - settings.start);
+    }
 
     // Playhead mode: precompute the render window's spectrogram from the full
     // audio source, once, up front. It's a pure function of the audio, window
@@ -507,6 +513,48 @@ mod tests {
         let Some(first) = run(Some(&mut audio)) else { return };
         assert_eq!(first, run(Some(&mut audio)).unwrap());
         assert_ne!(first, run(None).unwrap(), "the audio must change the rendered picture");
+    }
+
+    /// "History: Whole take" draws exactly what the History duration dialled to
+    /// the render's own length draws — and the default span draws something
+    /// else, or the equality would hold for a render that ignored the setting.
+    #[test]
+    fn a_take_spanning_history_draws_the_render_window_as_its_span() {
+        let mut audio = transient_audio();
+        let settings = Settings {
+            layout: Layout::preset("spectral").unwrap(),
+            start: 7.125,
+            end: 7.125 + 1.4,
+            audio_start: 7.125,
+            ..settings()
+        };
+        let mut run = |configure: fn(&mut AppearanceDocument, f32)| {
+            let mut appearance = AppearanceDocument::default();
+            configure(&mut appearance, (settings.end - settings.start) as f32);
+            let mut frames = Vec::new();
+            let result = render(
+                &mut Replay::new(transient_take(7.125)),
+                Some(&mut audio),
+                &settings,
+                appearance,
+                |bytes| {
+                    frames.push(bytes.to_vec());
+                    Ok(true)
+                },
+            );
+            match result {
+                Ok(_) => Some(frames),
+                Err(e) if e.contains("no usable GPU adapter") => {
+                    eprintln!("skipping: {e}");
+                    None
+                }
+                Err(e) => panic!("{e}"),
+            }
+        };
+        let Some(spanned) = run(|a, _| a.render.history_spans_take = true) else { return };
+        let dialled = run(|a, window| a.spectrum.roll_seconds = window).unwrap();
+        assert_eq!(spanned, dialled, "Whole take must span exactly the render's window");
+        assert_ne!(spanned, run(|_, _| {}).unwrap(), "the default span drew the same picture");
     }
 
     #[test]
