@@ -34,6 +34,55 @@ fn push_loose(draws: &mut Vec<Draw>, pluses: &mut Vec<GpuPlus>, loose: &[GpuPlus
     }
 }
 
+/// One marker per node, and which input markers that assignment claimed.
+/// This is rebuilt per frame; no association survives a node or marker edit.
+struct MarkerAssociation {
+    plus_of: Vec<Option<usize>>,
+    claimed: Vec<bool>,
+}
+
+impl MarkerAssociation {
+    fn new(scene: &Scene) -> Self {
+        let mut plus_of = vec![None; scene.nodes.len()];
+        // Normal derived scenes supply valid indices and never build this map.
+        // Hand-built or edited scenes retain the old position-based behavior:
+        // the last home node at a position owns its marker's depth.
+        let mut node_at = None;
+        for (p, plus) in scene.pluses.iter().enumerate() {
+            let node = plus
+                .node
+                .filter(|&i| {
+                    scene
+                        .nodes
+                        .get(i)
+                        .is_some_and(|n| n.on_home && n.lattice_pos == plus.lattice_pos)
+                })
+                .or_else(|| {
+                    let positions = node_at.get_or_insert_with(|| {
+                        scene
+                            .nodes
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, n)| n.on_home)
+                            .map(|(i, n)| (n.lattice_pos, i))
+                            .collect::<HashMap<_, _>>()
+                    });
+                    positions.get(&plus.lattice_pos).copied()
+                });
+            if let Some(i) = node {
+                plus_of[i] = Some(p);
+            }
+        }
+        // Last marker wins at one node. Read claims back from the final map:
+        // displaced duplicates must remain loose, in input order, not vanish.
+        let mut claimed = vec![false; scene.pluses.len()];
+        for &p in plus_of.iter().flatten() {
+            claimed[p] = true;
+        }
+        Self { plus_of, claimed }
+    }
+}
+
 impl LatticeCallback {
     pub(super) fn from_scene(
         scene: &Scene,
@@ -146,42 +195,7 @@ impl LatticeCallback {
                 || g.params[2] > 0.0
                 || (g.octaves[0] | g.octaves[1] | g.octaves[2]) != 0
         };
-        // Which marker stands at each node's position, by index into
-        // `scene.pluses`. The crosses are derived off the home nodes
-        // (`derive_pluses`), so in the plugin every one of them has a node here
-        // and the lattice position is what ties the two lists together. That
-        // link is what gives a marker its DEPTH: it stands exactly where its
-        // node stands, so the sorted order the nodes are walked in is the
-        // order the markers want too.
-        //
-        // A marker at a position no home node holds is LOOSE, having no node to
-        // take a depth from. It keeps the place the whole field used to have —
-        // over the sheets behind home, under the home sheet — which is the one
-        // place a marker of unknown depth cannot be wrong by more than a sheet.
-        // Two home nodes claiming one lattice position is the other way in
-        // here, the map keeping the last of them.
-        let mut plus_of = vec![u32::MAX; scene.nodes.len()];
-        let node_at: std::collections::HashMap<_, usize> = scene
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| n.on_home)
-            .map(|(i, n)| (n.lattice_pos, i))
-            .collect();
-        for (p, plus) in scene.pluses.iter().enumerate() {
-            if let Some(&i) = node_at.get(&plus.lattice_pos) {
-                plus_of[i] = p as u32;
-            }
-        }
-        // Read back off `plus_of` rather than written beside it: a position two
-        // markers name has only the last of them in the map, and the first is
-        // then claimed by nobody and has to stay loose or it is never drawn.
-        let mut claimed = vec![false; scene.pluses.len()];
-        for &p in &plus_of {
-            if p != u32::MAX {
-                claimed[p as usize] = true;
-            }
-        }
+        let MarkerAssociation { plus_of, claimed } = MarkerAssociation::new(scene);
         let to_plus = |d: &harmonigraph_scene::PlusInstance| GpuPlus {
             pos_radius: [d.pos.x, d.pos.y, d.pos.z, d.radius],
             color: [d.color.x, d.color.y, d.color.z, d.strength],
@@ -356,9 +370,9 @@ impl LatticeCallback {
             // The cross, whether or not the node it stands on draws anything:
             // an idle position is exactly where a marker does its work, and the
             // node it belongs to is still what says how far off it is.
-            if plus_of[i] != u32::MAX {
+            if let Some(p) = plus_of[i] {
                 push_plus(&mut draws, pluses.len() as u32);
-                pluses.push(to_plus(&scene.pluses[plus_of[i] as usize]));
+                pluses.push(to_plus(&scene.pluses[p]));
             }
             if ships {
                 push_node(&mut draws, instances.len() as u32);

@@ -27,8 +27,9 @@ pub(super) fn one_shadow(
 ///
 /// `strength` is the whole marker — its ink, its pool and the shadow its cross
 /// writes into the light are one number — so a fixture that names it has named
-/// all three. `lattice_pos` is not read anywhere in the render path, so the
-/// position these markers say is `pos`.
+/// all three. The GPU draws `pos`; without a node index, painter association
+/// uses `lattice_pos` (the origin here), falling back to loose placement when
+/// the scene has no home node there.
 pub(super) fn one_marker(
     pos: glam::Vec3,
     radius: f32,
@@ -36,6 +37,7 @@ pub(super) fn one_marker(
     strength: f32,
 ) -> harmonigraph_scene::PlusInstance {
     harmonigraph_scene::PlusInstance {
+        node: None,
         lattice_pos: harmonigraph_core::LatticePos::ORIGIN,
         pos,
         radius,
