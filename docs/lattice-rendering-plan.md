@@ -40,9 +40,6 @@ The depth and optional-bloom slices share pipeline variants, so reuse their work
 CPU buffer reuse can proceed early after a file-overlap check, without waiting for aggregation semantics to settle.
 Keep the A/B/C slices independently reviewable within their existing component issues.
 
-[Frame/pass extraction #647](https://github.com/yan-h/harmonigraph/issues/647) is a discipline within these changes, not a standalone file-restructuring project.
-Extract responsibilities as implementation reaches them;
-the benefit is ownership of inputs, resources and invariants rather than file movement.
 Caching and GPU experiments are recorded options with measurement gates, not a requirement to ship every experiment.
 A measured rejection is a useful completed experiment and should remain in its issue.
 
