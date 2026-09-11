@@ -934,6 +934,9 @@ fn an_onset_past_the_held_ceiling_is_refused_before_copy_and_output() {
     let _scope = crate::test_scope::enter();
     let (mut hub, mut capture) = Device::recorded_hub();
     hub.activate();
+    // A Just lattice, so the frozen correction below is a real one: on the
+    // default 12-TET lattice the 12-TET keyboard keeps every key at its pitch.
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
     let mut tune = Device::new(true);
     tune.activate();
     let mut pair = Pair { hub, tune, raw: 0 };

@@ -9,7 +9,10 @@ use std::sync::Arc;
 pub const CONFIG_COMMANDS: usize = 128;
 pub const INPUT_SCAN: usize = 2048;
 pub const CONFIG_PARAMETERS: usize = 5;
-pub const PAYLOAD_WORDS: usize = 16;
+pub const PAYLOAD_WORDS: usize = 18;
+/// Header, the four parameter arrays, the payload, then the status word.
+const PUBLISHED_WORDS: usize = 23 + PAYLOAD_WORDS + 1;
+const STATUS_WORD: usize = PUBLISHED_WORDS - 1;
 
 /// Plugin-defined fixed semantic payload plus one atomic parameter-write batch.
 /// Values are ordinary unmodulated plugin units, not CLAP's normalized units.
@@ -73,7 +76,7 @@ pub struct ConfigurationCommit {
 // serialized audio owner publishes. Non-RT readers may retry; audio never does.
 pub struct PublishedConfiguration {
     sequence: AtomicU64,
-    words: [AtomicU64; 40],
+    words: [AtomicU64; PUBLISHED_WORDS],
 }
 impl Default for PublishedConfiguration {
     fn default() -> Self {
@@ -86,11 +89,11 @@ impl PublishedConfiguration {
         // Counter exhaustion is a visible protocol failure; never wrap a reader's
         // validation sequence. This requires reinitialization after ~2^63 writes.
         if sequence > u64::MAX - 2 {
-            self.words[39].fetch_or(2, Ordering::SeqCst);
+            self.words[STATUS_WORD].fetch_or(2, Ordering::SeqCst);
             return;
         }
         self.sequence.store(sequence + 1, Ordering::SeqCst);
-        let mut words = [0; 40];
+        let mut words = [0; PUBLISHED_WORDS];
         words[0] = value.applied_id;
         words[1] = value.revision;
         words[2] = value.effective_sample as u64;
@@ -107,7 +110,7 @@ impl PublishedConfiguration {
         for (i, v) in value.payload.into_iter().enumerate() {
             words[23 + i] = v as u32 as u64;
         }
-        words[39] = u64::from(value.status);
+        words[STATUS_WORD] = u64::from(value.status);
         for (cell, word) in self.words.iter().zip(words) {
             cell.store(word, Ordering::SeqCst);
         }
@@ -135,7 +138,7 @@ impl PublishedConfiguration {
                 normalized: std::array::from_fn(|i| f32::from_bits(words[13 + i] as u32)),
                 modulation: std::array::from_fn(|i| f32::from_bits(words[18 + i] as u32)),
                 payload: std::array::from_fn(|i| words[23 + i] as u32 as i32),
-                status: words[39] as u32,
+                status: words[STATUS_WORD] as u32,
             };
         }
     }

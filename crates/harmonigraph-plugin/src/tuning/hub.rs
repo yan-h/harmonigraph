@@ -735,7 +735,11 @@ impl Hub {
         let (correction, node) = (assignment.correction_microcents(), assignment.node());
         self.reply(record, correction);
         if decision != 0 {
-            self.sequencer.memory.attack(onset.pitch, assignment, self.sequencer.config.policy);
+            self.sequencer.memory.attack(
+                onset.pitch,
+                correction,
+                self.sequencer.config.policy.tolerance,
+            );
             self.sequencer.reference_source = Some(record.source);
         }
         let voice = Voice {
@@ -983,6 +987,12 @@ impl Hub {
         }
     }
 
+    /// Whether any source this Hub sequences, its own included, has Retune on,
+    /// as of this callback's `begin`. Learn leaves the lattice alone while one
+    /// does, since the lattice is then what they are retuned to.
+    pub fn retuning(&self) -> bool {
+        self.rows.iter().any(|row| row.live && row.retune & 1 != 0)
+    }
     /// The configuration owner refused an evaluation. Like every other fault
     /// here it is a status bit: nothing is silenced and nothing latches.
     pub fn configuration_exhausted(&mut self) {
