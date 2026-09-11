@@ -631,7 +631,9 @@ fn export(args: Args) -> Result<(), String> {
     // ffmpeg are not that (see `sink::Encoded`), and written for the sinks
     // with no encoder behind them. Those change every frame, hence the period.
     let mut shown = (0u64, std::time::Instant::now());
+    let mut written = 0u64;
     let mut report = |done: u64| {
+        written = done;
         if done != shown.0 && (done == total || shown.1.elapsed() >= PROGRESS_PERIOD) {
             eprint!("\r  {done}/{total} frames ({}%)", done * 100 / total);
             shown = (done, std::time::Instant::now());
@@ -639,7 +641,7 @@ fn export(args: Args) -> Result<(), String> {
     };
     let mut replay = Replay::new(take);
     let mut pushed = 0u64;
-    let rendered = render::render(&mut replay, audio.as_mut(), &settings, appearance, |frame| {
+    render::render(&mut replay, audio.as_mut(), &settings, appearance, |frame| {
         if !sink.push(frame)? {
             // ffmpeg closed the pipe (e.g. -shortest, the soundtrack ending
             // before the visuals). Stop feeding; finish() below reads whether
@@ -662,7 +664,11 @@ fn export(args: Args) -> Result<(), String> {
              raise --end (or drop it to render the whole take)"
         );
     }
-    eprintln!("done: {rendered} frames -> {}", out.display());
+    // The frames the file holds: the encoder's last count, not the frames
+    // drawn. Under `-shortest` it stops at the soundtrack's end, short of the
+    // `total` planned, and the plugin reads this count as the render's total —
+    // so the bar ends full against what was written, not stalled at the cut.
+    eprintln!("done: {written} frames -> {}", out.display());
     if matches!(out.extension().and_then(|e| e.to_str()), Some("rgba") | Some("raw")) {
         eprintln!(
             "  encode with: ffmpeg -f rawvideo -pix_fmt rgba -s {w}x{h} -r {} -i {} out.mp4",

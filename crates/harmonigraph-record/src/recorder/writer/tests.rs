@@ -316,7 +316,7 @@ fn at_loop_end_ends_the_take_on_the_first_wrap_without_splitting() {
     let (mut rec, ctrl) = channel();
     ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
     ctrl.set_end_at_rewind(true);
-    assert!(rec.is_armed(), "arming clears last_position and the done latch");
+    assert!(rec.is_armed(), "arming clears the position history and the done latch");
 
     // One loop's worth of forward motion.
     assert!(rec.observe_transport(0.0, true, 64.0 / 48_000.0));
@@ -483,8 +483,8 @@ fn only_a_parked_transport_stops_a_block_being_recorded() {
 /// AtLoopEnd has to survive the playhead being parked for MORE THAN ONE
 /// block before playback starts.
 ///
-/// `advanced` is what separates the transport snapping back to the loop
-/// start from a loop actually wrapping, and only real forward motion may
+/// `Motion::Forward` is what separates the transport snapping back to the
+/// loop start from a loop actually wrapping, and only real forward motion may
 /// set it. A transport standing still republishes the same position every
 /// block — which is what a parked playhead does for as long as it is parked
 /// — and counting that as motion would arm the latch before anything was
@@ -624,7 +624,7 @@ fn re_arming_clears_the_stop_bar_latch() {
     assert!(!b.rec.is_armed(), "disarmed");
     b.arm();
     assert!(!b.hit_stop_bar(), "the latch cleared on re-arm");
-    // Bar 5 again, and with `last_bar` cleared it is a level rather than a
+    // Bar 5 again, and with the bar history cleared it is a level rather than a
     // crossing — so the new take runs on, exactly as one armed past the bar
     // does.
     assert!(!b.rec.observe_bar(Some(5.0)), "no remembered bar to have crossed from");
@@ -1248,7 +1248,7 @@ fn reserved_audio_is_actually_written() {
 ///
 /// `process` calls `is_armed` every block, so a reset keyed off "armed"
 /// rather than "newly armed" would fire on every block of the take:
-/// `last_position` would forget the previous block, so no wrap could ever
+/// the position history would forget the previous block, so no wrap could ever
 /// be detected, and the loop-end latch would clear as fast as it was set.
 #[test]
 fn re_checking_armed_mid_take_does_not_reset_the_take() {

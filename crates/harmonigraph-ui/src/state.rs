@@ -562,9 +562,9 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
     // default is the worse trade.
     surface[log].set_collapsed(true);
     // Spectral as a column just right of the lattice: what sounds is directly
-    // beside what lights up. Paired with the "Left" default orientation
-    // (SpectrumConfig::default), which is the one that reads under the lattice
-    // and beside it alike. Drag it wherever from here — egui_dock docks it
+    // beside what lights up. Paired with the "Right" default orientation
+    // (SpectrumConfig::default), captured with the rest of the DAW look. Drag it
+    // wherever from here — egui_dock docks it
     // freely, and the orientation stays where it was set rather than following
     // the shape the pane lands in.
     //

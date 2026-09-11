@@ -5,7 +5,7 @@ description: Recover the plugin's live settings out of a Bitwig project — came
 
 # Reading the plugin's live settings back out of Bitwig
 
-When Yan has dialed in a look in the DAW and wants it captured (new `ViewConfig::default()`, a bug reproduced against real state), don't guess and don't read numbers off a screenshot —
+When Yan has dialed in a look in the DAW and wants it captured (new fresh-look defaults, a bug reproduced against real state), don't guess and don't read numbers off a screenshot —
 the settings are spread across three tabs (Tuning, Display, Video), one of which folds four more pages inside it (Colors, Lattice, Analyzer, System, behind a picker row), and bar positions don't give you floats.
 The analyzer's own knobs are the Display tab's Analyzer page, not the Analyzer tab, which is a picture.
 The exact values are recoverable:
@@ -35,17 +35,22 @@ Not `~/Documents/Bitwig Studio/Projects` (that's empty) —
 they're under `~/Library/CloudStorage/GoogleDrive-*/My Drive/music/`, which Spotlight does not index, so the script globs that folder as well as asking `mdfind`.
 Auto-backups count as saves.
 
-Since adaptive tuning a project holds TWO Harmonigraph instances:
-the editor's, and a tune-pairing participant whose whole state is one `participating` param and no `ui-state`.
-The script prints both as numbered instances;
-the one with the `view` block is the editor's.
-An output showing only `participating` means the scan stopped short, not that the window was never closed.
+A project using adaptive tuning holds more instances than the editor's:
+each **Harmonigraph Tune** (its own plugin, `com.yan-h.harmonigraph-tune`) has one `tuning_delay` param and no `ui-state`, by design.
+The script prints every instance numbered, and labels a Tune as one;
+the one with the `appearance` block is the editor's.
+An output showing only Tune instances means the scan stopped short, not that the window was never closed.
 
 ## Scope check before you edit any default
 
-- `ViewConfig::default()` is the fresh-view look, and since PR #251 it is the
-ONLY place to change:
-the struct carries a container-level `#[serde(default)]`, so `impl Default` is also every field's serde fallback.
+- The fresh look is the `Default` of every group in `AppearanceDocument` (`crates/harmonigraph-ui/src/appearance.rs`):
+`ViewConfig` (`crates/harmonigraph-scene/src/view.rs`),
+`SpectrumConfig` (`crates/harmonigraph-ui/src/config.rs`),
+`SpiralView`,
+and the video block's `RenderConfig` and `RenderFrame` (`crates/harmonigraph-take/src/render.rs`).
+A capture edits each group's `impl Default`, not only `ViewConfig`'s —
+`--rust` prints the view fields alone, so read the other groups off `--appearance`.
+Each group carries a container-level `#[serde(default)]`, so its `impl Default` is also every field's serde fallback.
 There is no second set of values to keep in step, and no `default_*` block to leave alone —
 retuning the look here is free.
 - What that costs is worth knowing before you retune: a saved blob MISSING a

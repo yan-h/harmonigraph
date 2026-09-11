@@ -230,8 +230,9 @@ pub struct Recorder {
     /// The bar the GUI wants the take to end at, and the latch saying it did.
     /// See [`StopAtBar`] and [`Recorder::observe_bar`].
     stop_at_bar: Arc<StopAtBar>,
-    /// Whether this take has recorded a block yet, without which an owed split
-    /// has nothing to split from. See [`Recorder::observe_transport`].
+    /// Whether this take has recorded a block yet, published for the GUI's
+    /// Transport-stop countdown (`Control::has_rolled`). Whether an owed split
+    /// has a pass to split from is the lifecycle's own `Waiting` state.
     rolled: Arc<AtomicBool>,
 }
 

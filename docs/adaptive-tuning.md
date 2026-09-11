@@ -431,7 +431,7 @@ stating a zero over whatever bend the player is holding would be centering it by
 
 Emitted pitch and the tuned onset used by the policy are separate facts.
 Channel-bend changes update the scheduled voices, but they never reach the display or the take.
-`State::apply` sets `pitch_changed` for a bend (`tuning/state.rs:252`) and returns no note delta (`:262`), so `Hub::schedule_delta` returns from the `let … else` at `tuning/hub.rs:833`, before its only `pitch_changed` check at `:852` asks for the baseline repair.
+`State::apply` sets `pitch_changed` for a bend (`tuning/state.rs:252`) and returns no note delta (`:262`), so `Hub::schedule_delta` returns from the `let … else` at `tuning/hub.rs:831`, before its only `pitch_changed` check at `:850` asks for the baseline repair.
 The live output is correct, but not even the final bent pitch is repaired into the display or take, let alone the intermediate values.
 [#783](https://github.com/yan-h/harmonigraph/issues/783) was closed not-planned on 2026-09-10, because pitch bend on tuned tracks is not part of how the plugin is played.
 

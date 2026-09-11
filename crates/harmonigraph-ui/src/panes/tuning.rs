@@ -355,7 +355,9 @@ pub(super) fn tuning_pane(
         // instantly whenever the set of held notes changes (see root_ui).
         let mut learn_active = state.runtime.learn_active;
         let learn = crate::widgets::toggle_switch(ui, &mut learn_active, "Learn")
-            .on_hover_text("While active, continuously set the tuning from the held notes");
+            .on_hover_text(
+                "While active, set the tuning from the held notes whenever they change. While a source has Retune on, only the C offset and the keyboard are learned: the lattice axes are what it is retuned to.",
+            );
         if learn.changed() {
             state.runtime.edit_tuning(
                 &mut state.appearance,

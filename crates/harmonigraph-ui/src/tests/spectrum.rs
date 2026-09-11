@@ -133,11 +133,11 @@ fn a_bucket_rises_on_the_attack_and_falls_on_the_release() {
 ///
 /// Nothing else in the workspace constructs `Three` or `Five` — the button row
 /// names them and `count()` maps them, and every taper claim in
-/// `harmonigraph-core` is made against a bare `SpectrumAnalyzer`. So without
-/// this, deleting the `set_tapers` line in `push_samples` leaves the control
-/// inert with the whole suite green.
+/// `harmonigraph-analysis` is made against a bare `SpectrumAnalyzer`. So
+/// without this, deleting the `set_tapers` line in `feed_sample_chunks` leaves
+/// the control inert with the whole suite green.
 ///
-/// WHAT the difference is stays in core, where it is measured
+/// WHAT the difference is stays in harmonigraph-analysis, where it is measured
 /// (`more_tapers_steady_a_bucket_against_noise` and
 /// `the_noise_floor_reads_higher_as_tapers_are_added`). This holds only that
 /// the setting is connected to something.

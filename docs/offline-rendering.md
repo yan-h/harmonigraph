@@ -178,17 +178,20 @@ a 9:16 frame previewed tall and rendered wide.
 The flags it could reach are all reachable by running the renderer on the take by hand, which has completion, `--help`, and real error messages.
 
 The Video preview scales spectral shadows with the output frame and follows audio time during a faster-than-realtime bounce,
-so shadow width and spectrogram duration stay representative of the export.
+so shadow width stays representative of the export.
+So does spectrogram duration under **Scrolling**;
+under **Whole video**, the fresh choice, the export spans the render's own length while the preview keeps the Analyzer's history span.
 The display can skip ahead between updates during a fast bounce;
 it does not need to draw every video frame to preserve those proportions.
 
-**Render when** has three settings:
+**Render when** has four settings:
 
 | setting | what ends the take |
 |---|---|
 | Record off | you switch Record take off — predictable, and it works however the transport behaves |
 | Transport stop | the transport stops after something was recorded, or goes backwards — whichever is first; recording disarms at the same moment |
 | Loop end | one arranger-loop pass, ending the moment the loop wraps. Needs looping ON; with looping off it waits for a disarm |
+| Bar | the transport plays through the bar set beside it, ending there. A rewind splits rather than ends, so the pass that renders is the last run through the range |
 
 *Transport stop* is what makes **exporting audio produce a video with nothing further to click**:
 arm Record take, export, and both files land together.
@@ -268,8 +271,8 @@ A take played from song zero is unaffected either way —
 the recording already begins at the start, so there is nothing to trim.
 
 `--size` is a *size*, not a shape.
-Left off, it takes the aspect the take was framed at and puts the short edge at 1080 —
-16:9 renders 1920x1080, 9:16 renders 1080x1920. Given a different aspect it does not letterbox or crop:
+Left off, it takes the aspect and short edge the take was framed at —
+fresh 1440, so 16:9 renders 2560x1440 and 9:16 renders 1440x2560. Given a different aspect it does not letterbox or crop:
 the layout recomposes at whatever pixels it is handed, so the split falls elsewhere and the lattice camera exposes a different amount of the board.
 That is a legitimate thing to ask for, so it is allowed, but it renders a different picture from the preview and the renderer says so.
 
@@ -279,7 +282,9 @@ The default keeps the same apparent size at any output resolution;
 raise it for chunkier text, lower it to fit more lattice in.
 
 `--playhead` changes how time reads.
-Normally the spectrogram and roll scroll past a fixed now-line, showing the last few seconds.
+Otherwise the spectrogram and roll scroll past a fixed now-line.
+Under **Scrolling** they span the Analyzer's history;
+under **Whole video**, the fresh choice, that span is the render's own length.
 With `--playhead` the render window is laid out at once —
 its whole spectrogram across the frame —
 and a playhead sweeps through it, so the finished shape is visible the whole way rather than arriving and scrolling off.
