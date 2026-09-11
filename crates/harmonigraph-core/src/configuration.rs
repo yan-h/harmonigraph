@@ -19,8 +19,8 @@ impl Default for TuningModes {
 }
 
 /// Musical controls, stored as integers so configuration equality is exact.
-/// Weights are thousandths; silence and the held half-life are milliseconds
-/// (zero means never, and every held note alike, respectively).
+/// Weights are thousandths; silence and the half-life are milliseconds (zero
+/// means never, and no decay, respectively).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyConfig {
     pub version: u32,
@@ -29,14 +29,15 @@ pub struct PolicyConfig {
     pub memory: u8,
     pub harmonic: u16,
     pub pitch_scale: u16,
+    /// A note just released weighs this much against a note just struck.
     pub released: u16,
-    pub recency: u16,
+    /// Held and released contributions alike halve in weight once per this
+    /// long before the newest event in context.
+    pub half_life_ms: u16,
     pub register_floor: u16,
     pub register_falloff: u16,
     pub tolerance: u32,
     pub silence_ms: u32,
-    /// A held note struck this long before the newest held note counts half.
-    pub held_half_life_ms: u32,
     pub reset_stop: bool,
     pub reset_loop: bool,
     /// How the player's controller renders primes 3, 5 and 7, in microcents,
@@ -58,17 +59,16 @@ impl PolicyConfig {
         self.harmonic = self.harmonic.min(20_000);
         self.pitch_scale = self.pitch_scale.clamp(1, 100);
         self.released = self.released.min(1000);
-        self.recency = self.recency.min(1000);
+        self.half_life_ms = self.half_life_ms.min(20_000);
         self.register_floor = self.register_floor.clamp(10, 1000);
         self.register_falloff = self.register_falloff.min(4000);
         self.tolerance = self.tolerance.min(20_000_000);
         self.silence_ms = self.silence_ms.min(120_000);
-        self.held_half_life_ms = self.held_half_life_ms.min(20_000);
         self.keyboard = self.keyboard.map(|v| v.clamp(0, 1_200_000_000));
         self
     }
     /// Fixed configuration mailbox representation, shared by edits and snapshots.
-    pub fn words(self) -> [i32; 11] {
+    pub fn words(self) -> [i32; 10] {
         [
             2,
             i32::from(self.radius)
@@ -77,17 +77,16 @@ impl PolicyConfig {
                 | i32::from(self.reset_stop) << 24
                 | i32::from(self.reset_loop) << 25,
             i32::from(self.harmonic) | i32::from(self.pitch_scale) << 16,
-            i32::from(self.released) | i32::from(self.recency) << 16,
+            i32::from(self.released) | i32::from(self.half_life_ms) << 16,
             i32::from(self.register_floor) | i32::from(self.register_falloff) << 16,
             self.tolerance as i32,
             self.silence_ms as i32,
             self.keyboard[0],
             self.keyboard[1],
             self.keyboard[2],
-            self.held_half_life_ms as i32,
         ]
     }
-    pub fn from_words(w: [i32; 11]) -> Self {
+    pub fn from_words(w: [i32; 10]) -> Self {
         Self {
             version: 2,
             radius: w[1] as u8,
@@ -98,12 +97,11 @@ impl PolicyConfig {
             harmonic: w[2] as u16,
             pitch_scale: (w[2] >> 16) as u16,
             released: w[3] as u16,
-            recency: (w[3] >> 16) as u16,
+            half_life_ms: (w[3] >> 16) as u16,
             register_floor: w[4] as u16,
             register_falloff: (w[4] >> 16) as u16,
             tolerance: w[5].max(0) as u32,
             silence_ms: w[6].max(0) as u32,
-            held_half_life_ms: w[10].max(0) as u32,
             keyboard: [w[7], w[8], w[9]],
         }
         .sanitize()

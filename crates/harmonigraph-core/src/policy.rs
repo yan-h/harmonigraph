@@ -25,27 +25,30 @@ pub const CONFIG: PolicyConfig = PolicyConfig {
     harmonic: 6000,
     pitch_scale: 20,
     released: 100,
-    recency: 700,
+    half_life_ms: 1000,
     register_floor: 400,
     register_falloff: 800,
     tolerance: 500_000,
     silence_ms: 0,
-    held_half_life_ms: 1000,
     reset_stop: false,
     reset_loop: false,
     keyboard: [700_000_000, 400_000_000, 1_000_000_000],
 };
 
-/// A held note's weight, from how many seconds before the newest held note it
-/// was struck: it halves once per configured half-life. Measured against that
-/// attack rather than against now, so holding a chord never changes its
-/// weights — which is the rule released memory keeps too. A chord's notes land
-/// milliseconds apart and so weigh alike, where a rank per attack would not.
-pub fn held_weight(config: PolicyConfig, gap_seconds: f64) -> f64 {
-    if config.held_half_life_ms == 0 {
+/// The share of its weight a contribution keeps `ticks` before the newest
+/// event in context, on a clock of `per_second` ticks a second: it halves once
+/// per half-life. A held note's age counts from its attack and a released
+/// note's from its release. Every contribution shares this one clock and the
+/// score normalizes weights, so a delay common to all cancels — waiting changes
+/// no decision — and measuring from the newest event rather than from now
+/// keeps the newest weight at one instead of letting a long hold underflow it.
+/// A chord's notes land milliseconds apart and so weigh alike, where a rank
+/// per attack would not.
+pub fn decay(config: PolicyConfig, ticks: i64, per_second: f64) -> f64 {
+    if config.half_life_ms == 0 || per_second <= 0.0 {
         return 1.0;
     }
-    0.5f64.powf(gap_seconds * 1000.0 / f64::from(config.held_half_life_ms))
+    0.5f64.powf(ticks as f64 / per_second * 1000.0 / f64::from(config.half_life_ms))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,9 +125,11 @@ pub enum InputError {
 struct Released {
     pitch: ContextPitch,
     source: u8,
+    /// When it was released, on the caller's clock; its decay counts from here.
+    at: i64,
 }
-/// New activity replaces released entries. Repetition refreshes the same actual
-/// onset pitch, never a keyboard key or octave-folded class.
+/// Newest release first, bounded by the memory capacity. Repetition refreshes
+/// the same actual onset pitch, never a keyboard key or octave-folded class.
 #[derive(Clone, Debug)]
 pub struct Memory {
     recent: [Released; MAX_MEMORY],
@@ -165,7 +170,7 @@ impl Memory {
         self.remove_match(input + correction, tolerance);
         self.reference = correction;
     }
-    pub fn release(&mut self, pitch: ContextPitch, source: u8, config: PolicyConfig) {
+    pub fn release(&mut self, pitch: ContextPitch, source: u8, config: PolicyConfig, at: i64) {
         self.remove_match(pitch.pitch, config.tolerance);
         let capacity = usize::from(config.memory).min(MAX_MEMORY);
         if capacity == 0 {
@@ -174,10 +179,21 @@ impl Memory {
         }
         self.len = (self.len + 1).min(capacity);
         self.recent.copy_within(0..self.len - 1, 1);
-        self.recent[0] = Released { pitch, source };
+        self.recent[0] = Released { pitch, source, at };
     }
-    pub fn append(&self, held: &mut Vec<ContextPitch>, config: PolicyConfig) {
-        let mut rank = 0;
+    /// The latest release still remembered, on the caller's clock.
+    pub fn newest(&self) -> Option<i64> {
+        (self.len > 0).then(|| self.recent[0].at)
+    }
+    /// Released memory after the held context, each entry at the released
+    /// weight decayed by its age at `newest`.
+    pub fn append(
+        &self,
+        held: &mut Vec<ContextPitch>,
+        config: PolicyConfig,
+        newest: i64,
+        per_second: f64,
+    ) {
         for entry in self.recent.iter().take(self.len.min(usize::from(config.memory))) {
             if held
                 .iter()
@@ -186,8 +202,7 @@ impl Memory {
                 continue;
             }
             let weight = f64::from(config.released) / 1000.0
-                * (f64::from(config.recency) / 1000.0).powi(rank);
-            rank += 1;
+                * decay(config, newest.saturating_sub(entry.at), per_second);
             if weight > 0.0 {
                 held.push(ContextPitch { weight, ..entry.pitch });
             }

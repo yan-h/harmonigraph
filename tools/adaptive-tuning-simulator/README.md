@@ -46,16 +46,18 @@ Absolute output register is stored separately from lattice coordinates.
 
 ### Context and eligibility
 
-A held contribution struck `g` seconds before the newest held onset has base weight `0.5^(g / heldHalfLife)`, or 1 when the half-life is zero.
-The newest held onset rather than the current time is the reference, so waiting never changes held weights and a chord's simultaneous onsets weigh alike.
-A released contribution of release-recency rank `j` has weight `released × recency^j`.
-Rank zero is the most recently released entry, even when its original attack was old.
+Every contribution decays on one clock.
+Let `newest` be the latest attack or release in context and `t` a contribution's own event:
+its attack while held, its release once released.
+Its base weight is `0.5^((newest - t) / halfLife)` for a held note and `released × 0.5^((newest - t) / halfLife)` for a released one, with no decay when the half-life is zero.
+Every weight shares that clock and the score normalizes them, so waiting changes no decision and a chord's simultaneous onsets weigh alike.
+A released entry's age counts from its release, even when its original attack was old.
 The temporary memory budget counts released entries separately from held voices.
 The default keeps six released entries and never evicts held voices to satisfy that budget.
 
 The same-note tolerance compares actual absolute onset pitches, including register.
 A repetition refreshes a contribution rather than multiplying its weight; different octaves and diesis-shifted returns remain distinct under the default 0.5-cent tolerance.
-An attack supersedes a matching released entry, and release refreshes its released-recency position.
+An attack supersedes a matching released entry, and release restarts its age.
 Multiple sounding voices are retained for independent release and bends even when they contribute one shared pitch reference.
 
 Candidate generation takes the union of Manhattan-radius balls around every contributing context node.
@@ -92,7 +94,7 @@ Order dependence is expected, and changing the last note of a phrase can affect 
 The “intentional Pythagorean E” example works through ordinary pitch error and a different declared harmonic weight, not a separate hard match or chord exception.
 There is no automatic retuning and no special-case branch for any musical fixture.
 
-The baseline uses harmonic weight 6, pitch scale 20 cents, held half-life 1 second, released weight 0.1, release carry-over 0.7, register floor 0.4 and falloff 0.8 per octave.
+The baseline uses harmonic weight 6, pitch scale 20 cents, half-life 1 second, released weight 0.1, register floor 0.4 and falloff 0.8 per octave.
 The paired precision examples use harmonic weight 2 with the same explicit seeded context and zero initial displacement.
 All other fixtures use the baseline.
 

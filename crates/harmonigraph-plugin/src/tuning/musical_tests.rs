@@ -266,11 +266,9 @@ fn production_musical_ii_v_i_keeps_each_common_tone_through_the_change() {
 #[test]
 fn production_a_held_note_struck_long_before_the_rest_weighs_less() {
     let _scope = crate::test_scope::enter();
-    for (held_half_life_ms, high) in
-        [(0, LatticePos::new(0, 1, 0)), (1000, LatticePos::new(4, 0, 0))]
-    {
+    for (half_life_ms, high) in [(0, LatticePos::new(0, 1, 0)), (1000, LatticePos::new(4, 0, 0))] {
         let mut phrase = Phrase::new();
-        configure_policy(&phrase.hub, PolicyConfig { held_half_life_ms, ..Default::default() });
+        configure_policy(&phrase.hub, PolicyConfig { half_life_ms, ..Default::default() });
         phrase.idle();
         phrase.step([vec![note(1, 0, 52, 0, true)], vec![], vec![]], [0, 1, 2]);
         // Three seconds of 512-sample callbacks at 44.1 kHz.
@@ -284,7 +282,33 @@ fn production_a_held_note_struck_long_before_the_rest_weighs_less() {
         phrase.idle();
         assert_eq!(phrase.voice(0, 52, 0).attack_node, Some(LatticePos::new(0, 1, 0)));
         assert_eq!(phrase.voice(1, 69, 0).attack_node, Some(LatticePos::new(3, 0, 0)));
-        assert_eq!(phrase.voice(2, 76, 0).attack_node, Some(high), "{held_half_life_ms} ms");
+        assert_eq!(phrase.voice(2, 76, 0).attack_node, Some(high), "{half_life_ms} ms");
+        phrase.release_all();
+    }
+}
+
+/// Released memory decays on the same clock, from each release. With nothing
+/// held, a just low E released three seconds before a chain of fifths is
+/// struck and released no longer outvotes the chain; weighed alike, it does.
+#[test]
+fn production_a_note_released_long_before_the_rest_weighs_less() {
+    let _scope = crate::test_scope::enter();
+    for (half_life_ms, high) in [(0, LatticePos::new(0, 1, 0)), (1000, LatticePos::new(4, 0, 0))] {
+        let mut phrase = Phrase::new();
+        configure_policy(&phrase.hub, PolicyConfig { half_life_ms, ..Default::default() });
+        phrase.idle();
+        phrase.step([vec![note(1, 0, 52, 0, true)], vec![], vec![]], [0, 1, 2]);
+        phrase.step([vec![note(1, 0, 52, 0, false)], vec![], vec![]], [0, 1, 2]);
+        for _ in 0..259 {
+            phrase.idle();
+        }
+        for (id, key) in [(2, 48), (3, 55), (4, 62), (5, 69)] {
+            phrase.step([vec![], vec![note(id, 0, key, 0, true)], vec![]], [0, 1, 2]);
+            phrase.step([vec![], vec![note(id, 0, key, 0, false)], vec![]], [0, 1, 2]);
+        }
+        phrase.step([vec![], vec![], vec![note(6, 0, 76, 0, true)]], [0, 1, 2]);
+        phrase.idle();
+        assert_eq!(phrase.voice(2, 76, 0).attack_node, Some(high), "{half_life_ms} ms");
         phrase.release_all();
     }
 }

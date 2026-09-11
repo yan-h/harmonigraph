@@ -102,7 +102,7 @@ struct Voice {
     onset_pitch: i64,
     node: Option<LatticePos>,
     decision: u64,
-    /// The input sample it was struck on, which sets its held weight.
+    /// The input sample it was struck on, which its decay counts from.
     onset: i64,
 }
 impl Voice {
@@ -165,8 +165,8 @@ impl Sequencer {
         }
     }
     /// The context one assignment sees: every held voice newest first,
-    /// deduplicated within the repetition tolerance and weighted by how long
-    /// before the newest of them it was struck, then released memory.
+    /// deduplicated within the repetition tolerance, then released memory,
+    /// each decayed by its age at the newest attack or release among them.
     fn fill(&mut self, rate: f64) {
         self.working.clear();
         let mut voices = [None; HELD_SESSION];
@@ -176,20 +176,24 @@ impl Sequencer {
             count += 1;
         }
         voices[..count].sort_unstable_by_key(|v| std::cmp::Reverse(v.unwrap().decision));
-        let newest = voices[..count].iter().flatten().map(|v| v.onset).max().unwrap_or(0);
+        let newest = voices[..count]
+            .iter()
+            .flatten()
+            .map(|v| v.onset)
+            .chain(self.memory.newest())
+            .max()
+            .unwrap_or(0);
         for voice in voices[..count].iter().flatten() {
             if !self.working.iter().any(|v| {
                 v.pitch.abs_diff(voice.onset_pitch) <= u64::from(self.config.policy.tolerance)
             }) {
-                let gap =
-                    if rate > 0.0 { newest.saturating_sub(voice.onset) as f64 / rate } else { 0.0 };
                 self.working.push(policy::ContextPitch {
-                    weight: policy::held_weight(self.config.policy, gap),
+                    weight: policy::decay(self.config.policy, newest - voice.onset, rate),
                     ..voice.context_pitch()
                 });
             }
         }
-        self.memory.append(&mut self.working, self.config.policy);
+        self.memory.append(&mut self.working, self.config.policy, newest, rate);
     }
     /// Drop a context voice without contributing it to released memory. Two
     /// callers, and neither is a note ending: an onset the scheduled state
@@ -213,7 +217,7 @@ impl Sequencer {
             .find(|cell| cell.is_some_and(|v| v.source == source && v.lifetime == lifetime))
         {
             let voice = cell.take().unwrap();
-            self.memory.release(voice.context_pitch(), source, self.config.policy);
+            self.memory.release(voice.context_pitch(), source, self.config.policy, sample);
             self.last_release = Some(sample);
         }
     }
@@ -222,7 +226,7 @@ impl Sequencer {
         for cell in self.context.iter_mut() {
             if cell.is_some_and(|v| v.source == source) {
                 let voice = cell.take().unwrap();
-                self.memory.release(voice.context_pitch(), source, self.config.policy);
+                self.memory.release(voice.context_pitch(), source, self.config.policy, sample);
                 self.last_release = Some(sample);
             }
         }

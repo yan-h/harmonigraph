@@ -24,9 +24,8 @@ const CONTROLS = [
   ['pitchScale', 'Pitch flexibility', 1, 60, 1, 'Cents of pitch error that cost one point. Lower = more precise control.', 'main-controls'],
   ['registerFloor', 'Distant-note influence', 0.05, 1, 0.05, 'Minimum retained register weight. 1 makes scoring register-blind.', 'main-controls'],
   ['registerFalloff', 'Register sensitivity', 0, 3, 0.1, 'How quickly additional influence falls with octave separation.', 'main-controls'],
-  ['heldHalfLife', 'Held half-life', 0, 10, 0.1, 'Seconds. A held note struck this long before the newest held note counts half. 0 weighs every held note alike.', 'main-controls'],
-  ['released', 'Released-note influence', 0, 1, 0.05, 'The newest held note weighs 1. Released notes begin at this weight.', 'main-controls'],
-  ['recency', 'Memory carry-over', 0, 1, 0.05, 'Each older released contribution retains this fraction.', 'main-controls'],
+  ['halfLife', 'Half-life', 0, 10, 0.1, 'Seconds. A note struck or released this long before the newest one counts half. 0 means no decay.', 'main-controls'],
+  ['released', 'Released : held weight', 0, 1, 0.05, 'A note just released weighs this much against a note just struck.', 'main-controls'],
   ['radius', 'Neighbourhood radius', 1, 5, 1, 'Maximum lattice steps from any contributing context note.', 'extra-controls'],
   ['memory', 'Released memory capacity', 0, 24, 1, 'Temporary limit on released entries. Held notes are retained.', 'extra-controls'],
   ['tolerance', 'Same-note tolerance', 0, 20, 0.1, 'Cents of absolute onset-pitch difference that refresh one memory entry.', 'extra-controls'],
@@ -40,7 +39,7 @@ for (const [name, label, min, max, step, help, container] of CONTROLS) {
   input.addEventListener('input', () => { output.textContent = formatControl(name, Number(input.value)); });
   input.addEventListener('change', () => guard(() => changeSettings({ [name]: Number(input.value) })));
 }
-function formatControl(name, value) { return `${Number.isInteger(value) ? value : value.toFixed(2)}${['pitchScale', 'tolerance'].includes(name) ? ' ¢' : name === 'heldHalfLife' ? ' s' : ''}`; }
+function formatControl(name, value) { return `${Number.isInteger(value) ? value : value.toFixed(2)}${['pitchScale', 'tolerance'].includes(name) ? ' ¢' : name === 'halfLife' ? ' s' : ''}`; }
 function syncControls() {
   for (const [name] of CONTROLS) { $(`param-${name}`).value = settings[name]; $(`value-${name}`).textContent = formatControl(name, settings[name]); }
   $('axes').value = settings.axes; $('silence').value = settings.silence;
