@@ -356,7 +356,7 @@ load_build() {  # $1 = worktree index
   } > "$LOADED"
 
   echo
-  echo "Installed: $branch. Fully quit and reopen Bitwig to load this build."
+  echo "Installed: $branch. Deactivate and reactivate Bitwig's audio engine to load this build."
   if [[ -n "$loaded_tag" ]]; then
     echo "The performance overlay will read:  build  $loaded_tag"
     local head_short loaded_sha
@@ -372,9 +372,10 @@ load_build() {  # $1 = worktree index
     echo "         which build is live. Expect it to read 'unknown'." >&2
   fi
   # Atomic replacement deliberately leaves surviving host mappings alone.
-  # The measured by-Vendor topology can keep them alive across device toggles.
+  # The measured by-Vendor topology can keep them alive across individual
+  # device toggles; cycling the audio engine is the supported reload gesture.
   echo "(Existing plugin-host processes keep the previous build until they exit;"
-  echo " a device deactivate/reactivate or rescan alone may not restart them.)"
+  echo " an individual device toggle or rescan alone may not restart them.)"
   diagnose_hosts || echo "NOTE: Bitwig process diagnostic unavailable; installation succeeded." >&2
 }
 
