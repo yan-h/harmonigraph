@@ -41,7 +41,7 @@ impl Harness {
         let d = assign_new_note(
             self.config,
             &context,
-            self.memory.reference,
+            &self.memory,
             OrderedOnset { pitch },
             &mut self.scratch,
         )
@@ -51,7 +51,7 @@ impl Harness {
             node: d.assignment.node(),
             weight: 1.0,
         };
-        self.memory.attack(v.pitch, d.assignment.correction_microcents(), self.config.policy);
+        self.memory.attack(pitch, d.assignment, self.config.policy);
         self.held.push((id.into(), v));
         v
     }
@@ -114,6 +114,40 @@ fn repeated_controller_chords_cross_one_hundred_dieses_without_wrapping() {
     assert!(h.memory.reference < -4_000_000_000);
 }
 #[test]
+fn keep_tuning_holds_each_pitch_class_until_the_context_resets() {
+    fn chord(h: &mut Harness, root: i64) -> [ContextPitch; 3] {
+        h.off("*");
+        [h.on("root", root), h.on("third", root + 400_000_000), h.on("fifth", root + 700_000_000)]
+    }
+    // The travelling cycle above, run both ways so the fixture is shown to
+    // drift before the control is shown to stop it.
+    for keep in [false, true] {
+        let mut h = Harness::new();
+        h.config.policy.keep_tuning = keep;
+        let home = chord(&mut h, 4_800_000_000);
+        for _ in 0..3 {
+            chord(&mut h, 5_200_000_000);
+            // A♭ major's third is C an octave up: B♯ a diesis low while the
+            // context travels, the pinned C an exact octave up while it keeps.
+            let third = chord(&mut h, 5_600_000_000)[1];
+            assert_eq!(third.pitch == home[0].pitch + 1_200_000_000, keep);
+            assert_eq!(chord(&mut h, 4_800_000_000) == home, keep);
+        }
+    }
+    let mut h = Harness::new();
+    h.config.policy.keep_tuning = true;
+    chord(&mut h, 4_800_000_000);
+    assert!(h.memory.pinned(6_000_000_000, h.config.policy).is_some());
+    h.memory.clear();
+    assert_eq!(h.memory.pinned(6_000_000_000, h.config.policy), None);
+    // An attack with the control off forgets the pins too.
+    chord(&mut h, 4_800_000_000);
+    h.config.policy.keep_tuning = false;
+    h.on("d", 5_000_000_000);
+    h.config.policy.keep_tuning = true;
+    assert_eq!(h.memory.pinned(6_000_000_000, h.config.policy), None);
+}
+#[test]
 fn memory_refreshes_actual_register_pitch_and_new_release_order() {
     let mut h = Harness::new();
     let c = h.on("c", 4_800_000_000);
@@ -137,9 +171,14 @@ fn hard_boundary_and_configured_axes_ignore_exact_remote_pitch() {
     c.policy.axes = 1;
     let mut s = PolicyScratch::default();
     let remote = LatticePos::new(10, 0, 0);
-    let d =
-        assign_new_note(c, &[], 0, OrderedOnset { pitch: (c.cents(remote) * 1e6) as i64 }, &mut s)
-            .unwrap();
+    let d = assign_new_note(
+        c,
+        &[],
+        &Memory::default(),
+        OrderedOnset { pitch: (c.cents(remote) * 1e6) as i64 },
+        &mut s,
+    )
+    .unwrap();
     assert!(s.candidates.iter().all(|n| n.fives == 0 && n.sevens == 0 && n.threes.abs() <= 3));
     assert_ne!(d.assignment.node(), Some(remote));
 }
@@ -159,7 +198,7 @@ fn resource_exhaustion_is_explicit_and_never_truncates_to_a_winner() {
         assign_new_note(
             c,
             &voices,
-            0,
+            &Memory::default(),
             OrderedOnset { pitch: 4_800_000_000 },
             &mut PolicyScratch::default()
         ),
@@ -184,7 +223,7 @@ fn analytic_reachability_covers_direct_selection_across_registers() {
         let selected = assign_new_note(
             h.config,
             &context,
-            h.memory.reference,
+            &h.memory,
             OrderedOnset { pitch: i64::from(cents) * 1_000_000 },
             &mut h.scratch,
         )

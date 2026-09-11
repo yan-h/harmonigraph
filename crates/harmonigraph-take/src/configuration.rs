@@ -21,6 +21,7 @@ pub struct PolicyRecord {
     pub silence_ms: u32,
     pub reset_stop: bool,
     pub reset_loop: bool,
+    pub keep_tuning: bool,
 }
 impl Default for PolicyRecord {
     fn default() -> Self {
@@ -44,6 +45,7 @@ impl From<PolicyConfig> for PolicyRecord {
             silence_ms: p.silence_ms,
             reset_stop: p.reset_stop,
             reset_loop: p.reset_loop,
+            keep_tuning: p.keep_tuning,
         }
     }
 }
@@ -64,6 +66,7 @@ impl From<PolicyRecord> for PolicyConfig {
             silence_ms: p.silence_ms,
             reset_stop: p.reset_stop,
             reset_loop: p.reset_loop,
+            keep_tuning: p.keep_tuning,
         }
         .sanitize()
     }
