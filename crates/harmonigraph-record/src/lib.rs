@@ -3322,7 +3322,7 @@ mod tests {
         let request = RenderRequest::from_config(&config).unwrap();
         assert_eq!(request.program, default_renderer_path());
         assert_eq!(request.audio, None);
-        assert_eq!(request.size, [2560, 1440]);
+        assert_eq!(request.size, config.frame.pixels(config.short_edge));
     }
 
     /// The pane's Aspect and Resolution are the whole of what sizes the video.

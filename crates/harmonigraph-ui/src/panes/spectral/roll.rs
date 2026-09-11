@@ -1829,7 +1829,10 @@ mod tests {
     /// than of the arithmetic.
     #[test]
     fn a_note_long_released_keeps_its_ribbons_own_end() {
-        let ribbon = |release: Option<f64>, now: f64| {
+        // One pane for the ribbon and for the reach it is held to: measured on
+        // two, the expectation follows the default orientation while the
+        // ribbon stays on Left, and the two agree only while those match.
+        let pinned = || {
             let mut state = fresh();
             state.appearance.spectrum.orientation = SpectralOrientation::Left;
             state.appearance.spectrum.roll_seconds = 10.0;
@@ -1837,6 +1840,10 @@ mod tests {
             state.appearance.spectrum.high_midi = 84.0;
             state.appearance.spectrum.roll_lead = 0.05;
             state.appearance.spectrum.roll_lead_release = 0.25;
+            state
+        };
+        let ribbon = |release: Option<f64>, now: f64| {
+            let mut state = pinned();
             state.runtime.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
             if let Some(at) = release {
                 state.runtime.tracker.handle_event(NoteEvent::off(at, SourceId::DIRECT, 0, 60));
@@ -1848,8 +1855,8 @@ mod tests {
             (past_the_line(&note, &axes, split), note.lead, note.lead_alpha)
         };
 
-        let axes = Axes::new(PANE, &fresh().appearance.spectrum);
-        let split = super::super::axes::spectrum_share(&fresh().appearance.spectrum);
+        let axes = Axes::new(PANE, &pinned().appearance.spectrum);
+        let split = super::super::axes::spectrum_share(&pinned().appearance.spectrum);
         let want = 0.05 * split * axes.depth_len();
         let (held, lead, alpha) = ribbon(None, 5.0);
         assert!(

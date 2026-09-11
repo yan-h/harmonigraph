@@ -507,7 +507,7 @@ fn drag_divider(
     roll_fraction: f32,
     delta: egui::Vec2,
 ) -> f32 {
-    let cfg = SpectrumConfig { orientation, roll_fraction, show_roll: true, ..Default::default() };
+    let cfg = SpectrumConfig { orientation, roll_fraction, show_roll: true, ..pinned() };
     drag_pane(rect, cfg, 1.0 - roll_fraction, delta).roll_fraction
 }
 
@@ -544,7 +544,7 @@ const DOCKED: usize = 0;
 /// resize below is measured against.
 fn dialled_at(orientation: SpectralOrientation, depth: f32) -> PictureState {
     let mut state = fresh();
-    state.appearance.spectrum.orientation = orientation;
+    state.appearance.spectrum = SpectrumConfig { orientation, ..pinned() };
     hold_spectrum(&mut state, pane_of(orientation, depth));
     state
 }
@@ -780,13 +780,37 @@ fn along_depth(orientation: SpectralOrientation) -> egui::Rect {
     }
 }
 
+/// The analyzer the layout and drag tests here measure on. What a picture's
+/// layout and a drag's outcome turn on — the orientation, how the depth axis is
+/// shared, and where the Span and the Level start — is pinned rather than read
+/// off the fresh look, which is retuned whenever one is captured from the DAW:
+/// a roll share that grows puts a press on the divider's grab band, and a
+/// window dialled near its limit starts a zoom against its own clamp and rules
+/// too few levels to be a grid. A test about the orientations overrides that
+/// one field; the rest is the default.
+fn pinned() -> SpectrumConfig {
+    SpectrumConfig {
+        orientation: SpectralOrientation::Left,
+        roll_fraction: 0.5,
+        roll_seconds: 30.0,
+        floor_db: -80.0,
+        ceiling_db: -20.0,
+        marking_scale: 1.0,
+        ..SpectrumConfig::default()
+    }
+}
+
 /// A depth half way into the spectrum's own region, which is where a press
-/// has to land to reach the Level. Derived rather than written as a number,
-/// because the region is whatever the roll leaves: at the fresh share a
-/// constant near its edge sits inside the divider's grab band on a pane this
-/// small, and the press drags the divider instead.
+/// has to land to reach the Level — derived, so the press follows the region
+/// wherever the share puts it rather than a number that was once inside it.
 fn in_spectrum(cfg: &SpectrumConfig) -> f32 {
     spectrum_share(cfg) / 2.0
+}
+
+/// And half way into the far region, where a press zooms the Span.
+fn in_far(cfg: &SpectrumConfig) -> f32 {
+    let share = spectrum_share(cfg);
+    share + (1.0 - share) / 2.0
 }
 
 /// Press at depth `grab` on the pane's own depth axis, drag by `delta`, and
@@ -854,10 +878,15 @@ fn drag_pane_with_navigation(
 
 #[test]
 fn preview_navigation_reaches_both_depth_zoom_options() {
-    let (rect, cfg) = (WIDE, SpectrumConfig::default());
+    let (rect, cfg) = (WIDE, pinned());
     let axes = Axes::new(rect, &cfg);
-    let span =
-        drag_pane_with_navigation(rect, cfg, 0.8, axes.dir_depth() * 40.0, Navigation::Preview);
+    let span = drag_pane_with_navigation(
+        rect,
+        cfg,
+        in_far(&cfg),
+        axes.dir_depth() * 40.0,
+        Navigation::Preview,
+    );
     assert!(span.roll_seconds < cfg.roll_seconds - 0.5, "the preview did not zoom Span");
     assert_eq!(span.ceiling_db, cfg.ceiling_db, "the Span gesture moved Level too");
 
@@ -954,7 +983,7 @@ fn curve_grows(a: &Axes, joined: bool) -> egui::Vec2 {
 fn dragging_the_spectrum_outward_closes_the_level_window() {
     for orientation in EVERY_ORIENTATION {
         let rect = along_depth(orientation);
-        let cfg = SpectrumConfig { orientation, ..Default::default() };
+        let cfg = SpectrumConfig { orientation, ..pinned() };
         let out = curve_grows(&Axes::new(rect, &cfg), true) * 40.0;
         let after = drag_pane(rect, cfg, in_spectrum(&cfg), out);
         assert!(
@@ -975,7 +1004,7 @@ fn dragging_the_spectrum_outward_closes_the_level_window() {
 fn dragging_the_spectrum_inward_opens_the_level_window() {
     for orientation in EVERY_ORIENTATION {
         let rect = along_depth(orientation);
-        let cfg = SpectrumConfig { orientation, ..Default::default() };
+        let cfg = SpectrumConfig { orientation, ..pinned() };
         let inward = curve_grows(&Axes::new(rect, &cfg), true) * -40.0;
         let after = drag_pane(rect, cfg, in_spectrum(&cfg), inward);
         assert!(
@@ -997,12 +1026,8 @@ fn dragging_the_spectrum_inward_opens_the_level_window() {
 fn the_level_zoom_turns_with_the_curve_when_the_spectrum_owns_the_pane() {
     for orientation in EVERY_ORIENTATION {
         let rect = along_depth(orientation);
-        let cfg = SpectrumConfig {
-            orientation,
-            show_roll: false,
-            show_spectrogram: false,
-            ..Default::default()
-        };
+        let cfg =
+            SpectrumConfig { orientation, show_roll: false, show_spectrogram: false, ..pinned() };
         assert_eq!(spectrum_share(&cfg), 1.0, "the spectrum should own the whole pane here");
         let out = curve_grows(&Axes::new(rect, &cfg), false) * 40.0;
         // Both EDGES as well as the middle: the spectrum's region runs to the
@@ -1028,12 +1053,12 @@ fn the_level_zoom_turns_with_the_curve_when_the_spectrum_owns_the_pane() {
 /// drag on the picture rather than a mode.
 #[test]
 fn a_depth_drag_moves_only_the_value_its_region_measures() {
-    let (rect, cfg) = (WIDE, SpectrumConfig::default());
+    let (rect, cfg) = (WIDE, pinned());
     let a = Axes::new(rect, &cfg);
     // Toward the past and outward along the curve are the same screen
     // direction here (the curve grows back out of the divider), so the two
     // drags below differ only in where they start.
-    let far = drag_pane(rect, cfg, 0.8, a.dir_depth() * 40.0);
+    let far = drag_pane(rect, cfg, in_far(&cfg), a.dir_depth() * 40.0);
     assert!(far.roll_seconds < cfg.roll_seconds - 0.5, "far region: Span should have zoomed");
     assert_eq!(far.ceiling_db, cfg.ceiling_db, "far region: the level moved too");
 
@@ -1050,7 +1075,7 @@ fn a_drag_across_the_spectrum_still_pans_the_pitch_range() {
     let rect = WIDE;
     // Off both ends of the axis, so the pan has room to move rather than
     // sitting against a clamp.
-    let cfg = SpectrumConfig { low_midi: 48.0, high_midi: 84.0, ..Default::default() };
+    let cfg = SpectrumConfig { low_midi: 48.0, high_midi: 84.0, ..pinned() };
     let after = drag_pane(rect, cfg, in_spectrum(&cfg), Axes::new(rect, &cfg).dir_pitch() * 30.0);
     assert!(after.low_midi < cfg.low_midi - 1.0, "the range should have panned down");
     assert_eq!(after.ceiling_db, cfg.ceiling_db, "a pan must not move the level");
@@ -1067,7 +1092,7 @@ fn a_drag_across_the_spectrum_still_pans_the_pitch_range() {
 #[test]
 fn a_pan_that_leans_slightly_along_depth_is_still_a_pan() {
     let rect = WIDE;
-    let cfg = SpectrumConfig { low_midi: 48.0, high_midi: 84.0, ..Default::default() };
+    let cfg = SpectrumConfig { low_midi: 48.0, high_midi: 84.0, ..pinned() };
     let a = Axes::new(rect, &cfg);
     // Depth ahead of pitch by three points — written out rather than derived
     // from the margin, because a lean computed off `DEPTH_ZOOM_LEAN` shrinks
@@ -1087,7 +1112,7 @@ fn a_pan_that_leans_slightly_along_depth_is_still_a_pan() {
 /// same pair.
 #[test]
 fn the_level_zoom_stops_at_the_minimum_span() {
-    let (rect, cfg) = (WIDE, SpectrumConfig::default());
+    let (rect, cfg) = (WIDE, pinned());
     let out = curve_grows(&Axes::new(rect, &cfg), true) * 4_000.0;
     let after = drag_pane(rect, cfg, in_spectrum(&cfg), out);
     assert!(
@@ -2264,7 +2289,7 @@ fn the_rulings_go_under_the_spectrum_and_stop_at_the_now_line() {
 #[test]
 fn the_volume_rulings_cross_the_pitch_axis_under_the_spectrum() {
     for orientation in EVERY_ORIENTATION {
-        let cfg = SpectrumConfig { orientation, ..Default::default() };
+        let cfg = SpectrumConfig { orientation, ..pinned() };
         let rect = reference_pane();
         let axes = Axes::new(rect, &cfg);
         let split = spectrum_share(&cfg);
@@ -2274,10 +2299,7 @@ fn the_volume_rulings_cross_the_pitch_axis_under_the_spectrum() {
         // is the reference the painted one is compared against below, so a
         // second answer here is a reference to a different picture.
         let want = level_grid(&cfg, budget * axes.depth_len(), pane_label_room(rect, &cfg));
-        assert!(
-            want.len() >= 3,
-            "the default window drew too few rulings to test a grid: {want:?}",
-        );
+        assert!(want.len() >= 3, "the pinned window drew too few rulings to test a grid: {want:?}",);
 
         let (levels, slabs) = painted_levels(rect, cfg);
         assert_eq!(levels.len(), want.len(), "{orientation:?} ruled a different ladder");
