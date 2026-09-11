@@ -93,7 +93,7 @@ pub(crate) fn render_pane(
     // than show the live scrolling spectrogram and quietly mislead, leave the
     // spectral region empty and say so.
     let placements = layout.resolve(box_rect.size());
-    let placeholder = state.appearance.render.playhead;
+    let placeholder = state.appearance.render.spectrogram == crate::SpectrogramRender::Playhead;
     for (pane, rect) in &placements {
         let rect = rect.translate(box_rect.min.to_vec2());
         match pane {
@@ -409,7 +409,7 @@ fn clear_everything(ui: &mut egui::Ui, state: &mut PictureState) {
 /// transport still renders; the rows that need a take to exist follow the same
 /// `supported` gate Record does.
 ///
-/// `RenderConfig.playhead` is the ONLY thing deciding live-vs-playhead. The
+/// `RenderConfig.spectrogram` is the ONLY thing deciding live-vs-playhead. The
 /// renderer turns the playhead on for `--playhead` or this setting, whichever
 /// says yes, so a plugin that also passed the flag would be answering a
 /// question the row is supposed to own — and passing it unconditionally would
@@ -421,15 +421,32 @@ fn render_controls(
     state: &mut PictureState,
     interaction: &mut crate::Interaction,
 ) {
+    use crate::SpectrogramRender;
+
     section(ui, "Render");
+    // Scrolling names the span it scrolls, so the choice beside it reads as the
+    // alternative to that number without the Analyzer page open.
+    let scrolling = format!(
+        "Scrolling ({})",
+        super::spectral::settings::span_readout(state.appearance.spectrum.roll_seconds)
+    );
     choice_row(
         ui,
         "Spectrogram",
-        &mut state.appearance.render.playhead,
+        &mut state.appearance.render.spectrogram,
         &[
-            (false, "Scrolling", "Bake the live scrolling spectrogram, exactly as previewed here"),
             (
-                true,
+                SpectrogramRender::Scrolling,
+                &scrolling,
+                "Bake the live scrolling spectrogram, exactly as previewed here. It shows the History duration set on the Analyzer page.",
+            ),
+            (
+                SpectrogramRender::WholeVideo,
+                "Whole video",
+                "Scroll slowly enough that the whole video fits: by its last frame, the MIDI ribbons and spectrogram reach back to its first. Up to 10 minutes. The preview here keeps showing the History duration.",
+            ),
+            (
+                SpectrogramRender::Playhead,
                 "Playhead",
                 "Show the entire recorded spectrogram with a moving playhead. Requires recorded audio; this region stays blank in the live preview.",
             ),
@@ -1030,7 +1047,7 @@ mod tests {
     fn playhead_placeholder_keeps_analyzer_orientation_and_pitch_zoom_live() {
         let ctx = crate::tests::probe::themed();
         let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
-        state.appearance.render.playhead = true;
+        state.appearance.render.spectrogram = crate::SpectrogramRender::Playhead;
         state.appearance.render.frame.lattice = LatticeSide::Left;
         state.appearance.render.frame.split = 0.3;
         state.appearance.spectrum.low_midi = 36.0;
@@ -1291,7 +1308,11 @@ mod tests {
                     assert_eq!(enlarged.spectral_text, saved.spectral_text);
                     // Exercise the actual scoped draw too: it must restore the
                     // settings that the dock and a subsequent export will read.
-                    assert!(!state.appearance.render.playhead, "the spectral preview must draw");
+                    assert_ne!(
+                        state.appearance.render.spectrogram,
+                        crate::SpectrogramRender::Playhead,
+                        "the spectral preview must draw"
+                    );
                     let ctx = egui::Context::default();
                     crate::theme::apply_theme(&ctx);
                     let output = ctx.run_ui(

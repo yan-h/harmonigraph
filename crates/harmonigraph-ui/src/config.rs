@@ -583,6 +583,14 @@ pub struct SpectrumConfig {
 }
 
 impl SpectrumConfig {
+    /// Span the history over `seconds` — a render's own length, for
+    /// [`SpectrogramRender::WholeVideo`](crate::SpectrogramRender::WholeVideo)
+    /// — held to the History duration bar's ends, so the span a render draws
+    /// is one the bar could have dialled and the history store reaches.
+    pub fn span_history(&mut self, seconds: f64) {
+        self.roll_seconds = (seconds as f32).clamp(ROLL_SECONDS_MIN, ROLL_SECONDS_MAX);
+    }
+
     /// Fit a deserialized config to the axes and ranges its controls can
     /// actually produce.
     ///

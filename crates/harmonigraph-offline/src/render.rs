@@ -7,7 +7,9 @@
 //! also carries.
 
 use harmonigraph_render::wgpu::TextureFormat;
-use harmonigraph_ui::{begin_frame, draw_pane, AppearanceDocument, Layout, PictureState};
+use harmonigraph_ui::{
+    begin_frame, draw_pane, AppearanceDocument, Layout, PictureState, SpectrogramRender,
+};
 
 use crate::wav::Audio;
 
@@ -152,15 +154,22 @@ pub fn render(
     for comma in harmonigraph_core::Comma::ALL {
         *state.appearance.view.temper_auto_mut(comma) = false;
     }
+    // "Spectrogram: Whole video" — the one setting only a render can answer,
+    // since the render window is its length. Set once before the first frame,
+    // so no cache keyed on the analyzer config sees it move.
+    let spectrogram = state.appearance.render.spectrogram;
+    if spectrogram == SpectrogramRender::WholeVideo {
+        state.appearance.spectrum.span_history(settings.end - settings.start);
+    }
 
     // Playhead mode: precompute the render window's spectrogram from the full
     // audio source, once, up front. It's a pure function of the audio, window
     // and analyzer config, so the per-frame draw just reads it and the render
     // stays byte-identical between runs. The live ring scrolls with `now`, hence
     // the separate precomputed set.
-    // `--playhead` on the command line, or the take's own "Whole-song
-    // playhead" render setting — either turns it on.
-    if settings.whole_song_spectrogram || state.appearance.render.playhead {
+    // `--playhead` on the command line, or the take's own "Playhead"
+    // spectrogram — either turns it on.
+    if settings.whole_song_spectrogram || spectrogram == SpectrogramRender::Playhead {
         if let Some(audio) = audio.as_deref_mut() {
             let span = (settings.end - settings.start).max(0.0);
             if span > 0.0 {
@@ -507,6 +516,50 @@ mod tests {
         let Some(first) = run(Some(&mut audio)) else { return };
         assert_eq!(first, run(Some(&mut audio)).unwrap());
         assert_ne!(first, run(None).unwrap(), "the audio must change the rendered picture");
+    }
+
+    /// "Spectrogram: Whole video" draws exactly what the History duration dialled to
+    /// the render's own length draws — and the default span draws something
+    /// else, or the equality would hold for a render that ignored the setting.
+    #[test]
+    fn a_whole_video_spectrogram_draws_the_render_window_as_its_span() {
+        let mut audio = transient_audio();
+        let settings = Settings {
+            layout: Layout::preset("spectral").unwrap(),
+            start: 7.125,
+            end: 7.125 + 1.4,
+            audio_start: 7.125,
+            ..settings()
+        };
+        let mut run = |configure: fn(&mut AppearanceDocument, f32)| {
+            let mut appearance = AppearanceDocument::default();
+            configure(&mut appearance, (settings.end - settings.start) as f32);
+            let mut frames = Vec::new();
+            let result = render(
+                &mut Replay::new(transient_take(7.125)),
+                Some(&mut audio),
+                &settings,
+                appearance,
+                |bytes| {
+                    frames.push(bytes.to_vec());
+                    Ok(true)
+                },
+            );
+            match result {
+                Ok(_) => Some(frames),
+                Err(e) if e.contains("no usable GPU adapter") => {
+                    eprintln!("skipping: {e}");
+                    None
+                }
+                Err(e) => panic!("{e}"),
+            }
+        };
+        let Some(spanned) = run(|a, _| a.render.spectrogram = SpectrogramRender::WholeVideo) else {
+            return;
+        };
+        let dialled = run(|a, window| a.spectrum.roll_seconds = window).unwrap();
+        assert_eq!(spanned, dialled, "Whole video must span exactly the render's window");
+        assert_ne!(spanned, run(|_, _| {}).unwrap(), "the default span drew the same picture");
     }
 
     #[test]

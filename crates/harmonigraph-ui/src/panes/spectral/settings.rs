@@ -31,7 +31,7 @@ fn db_readout(db: f32) -> String {
 }
 
 /// History is displayed and entered in seconds across the whole range.
-pub(super) fn span_readout(seconds: f32) -> String {
+pub(crate) fn span_readout(seconds: f32) -> String {
     format!("{:.1} s", seconds.max(0.0))
 }
 
