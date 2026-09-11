@@ -11,29 +11,20 @@ helping me explore and understand microtonal harmony while I compose,
 and making beautiful, musically informative videos of my pieces.
 The writing should give beauty and understanding equal weight.
 
-Assume the reader knows familiar chord names and intervals,
-but not microtonal terminology.
-Introduce pitch class, temperament, just intonation and Tonnetz only where the musical example needs them.
-A reader should understand the main explanation without following a reference link.
+Assume the reader knows familiar chord names and intervals.
+Keep the introduction and feature descriptions concise,
+and link the guides rather than teaching microtonal terminology in the README.
 
 This is the musical motivation in my own words:
 
 > The lattice lets me identify intervals and chord types by shape, in a transposition invariant way, which lets me understand my harmony much faster on the fly. It also gives me a good sense of harmonic distance, so when composing in just intonation I can see instantly which wolf intervals are created and whether we have comma pumps.
 
-Start from a familiar example such as C-E-G before introducing technical vocabulary.
-Explain that transposition moves a chord without changing its shape,
-so the eye can recognize its interval structure without reading every note.
-Also explain that harmonic distance is not simply distance from low to high pitch:
-two almost equal pitches can represent different harmonic paths through a just-intonation lattice.
-
-Define wolf intervals and comma pumps briefly in the README.
-Treat them as phenomena a composer may want to see and use,
-not automatically as mistakes or unwanted dissonance.
-Do not imply that Harmonigraph automatically detects or corrects either one.
+This motivation informs the product and its feature descriptions;
+the README does not need to explain it in full.
 
 ## Project voice and boundaries
 
-Write in focused, plain, warm first-person prose without marketing language.
+Write in focused, plain, concise first-person prose without marketing language.
 Near the opening, say clearly that this is a personal, fast-moving project,
 written primarily through LLM coding sessions under my direction and review,
 and driven first by my own musical needs.
@@ -46,34 +37,27 @@ The established core is the MIDI lattice,
 the incoming-audio spectrum and spectrogram with MIDI comparison,
 appearance and layout control,
 and deterministic video export from recorded musical data rather than screen capture.
-Adaptive tuning belongs in a short, separately labelled experimental section after those features.
-Describe its current CLAP-only Tune-and-Hub shape,
-link to the setup guide,
-and do not present it as finished or as the recommended first experience.
+Adaptive tuning belongs in the same compact feature list,
+clearly labelled experimental and CLAP-only,
+with a link to its guide.
 
 Prefer this narrative progression without freezing exact headings:
 
 1. Musical purpose and project identity.
-2. A demonstration and what to notice.
-3. The lattice explanation through a concrete chord.
-4. Established user-facing visualization and export features.
-5. Experimental adaptive tuning.
-6. The shortest verified way to try the project.
-7. Further user guides, development documentation and licence scope.
+2. A screenshot and video example.
+3. A compact feature list.
+4. The shortest verified way to try the project.
+5. Further user guides, development documentation and licence scope.
 
 ## Media plan
 
 Keep media sparse and purposeful.
-Until final assets are chosen,
-use visible editorial placeholders with meaningful captions rather than fake URLs or broken image links.
+Omit unchosen assets rather than leaving editorial placeholders in the README.
 
-- A YouTube or other hosted video URL,
-  optionally presented through a linked thumbnail at `docs/images/harmonigraph-demo-thumbnail.png`:
-  place the primary demonstration immediately after the opening.
-  Its caption should ask the viewer to notice how chord shapes remain recognizable as the harmony moves,
-  and how the audio and MIDI views relate.
+- A YouTube or other hosted video URL:
+  place a short text link directly below the hero screenshot.
 - `docs/images/plugin-window-lattice-analyzer.webp`:
-  optional wide screenshot beside the demonstration,
+  a wide screenshot beside the demonstration,
   showing the lattice and spectral view together without obscuring the music with settings panels.
 - `docs/images/video-export-or-customization.png`:
   optional later image;
@@ -83,7 +67,7 @@ For repository-hosted images,
 use the existing `docs/images/` directory and paths relative to the README such as `docs/images/plugin-window-lattice-analyzer.webp`.
 Do not commit the main video binary to Git;
 use a hosted player or linked thumbnail.
-The hero and export/customization images are optional.
+The export/customization image is optional.
 
 ## Maintenance rule
 
