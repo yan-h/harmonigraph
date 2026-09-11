@@ -36,14 +36,16 @@ pub const CONFIG: PolicyConfig = PolicyConfig {
 };
 
 /// The share of its weight a contribution keeps `ticks` before the newest
-/// event in context, on a clock of `per_second` ticks a second: it halves once
-/// per half-life. A held note's age counts from its attack and a released
-/// note's from its release. Every contribution shares this one clock and the
-/// score normalizes weights, so a delay common to all cancels — waiting changes
-/// no decision — and measuring from the newest event rather than from now
-/// keeps the newest weight at one instead of letting a long hold underflow it.
-/// A chord's notes land milliseconds apart and so weigh alike, where a rank
-/// per attack would not.
+/// attack in context, on a clock of `per_second` ticks a second: it halves once
+/// per half-life. Every note's age counts from its attack, held or released:
+/// a release only scales it by the released weight, so letting go of a note
+/// never raises its weight, and a sustained chord keeps its vote over a note
+/// struck before it that has just stopped. Every contribution shares this one
+/// clock and the score normalizes weights, so a delay common to all cancels —
+/// waiting changes no decision — and measuring from the newest attack rather
+/// than from now keeps the newest weight at one instead of letting a long hold
+/// underflow it. A chord's notes land milliseconds apart and so weigh alike,
+/// where a rank per attack would not.
 pub fn decay(config: PolicyConfig, ticks: i64, per_second: f64) -> f64 {
     if config.half_life_ms == 0 || per_second <= 0.0 {
         return 1.0;
@@ -125,10 +127,11 @@ pub enum InputError {
 struct Released {
     pitch: ContextPitch,
     source: u8,
-    /// When it was released, on the caller's clock; its decay counts from here.
+    /// When it was struck, on the caller's clock. Its decay counts from its
+    /// attack, not its release.
     at: i64,
 }
-/// Newest release first, bounded by the memory capacity. Repetition refreshes
+/// Latest attack first, bounded by the memory capacity. Repetition refreshes
 /// the same actual onset pitch, never a keyboard key or octave-folded class.
 #[derive(Clone, Debug)]
 pub struct Memory {
@@ -170,23 +173,27 @@ impl Memory {
         self.remove_match(input + correction, tolerance);
         self.reference = correction;
     }
-    pub fn release(&mut self, pitch: ContextPitch, source: u8, config: PolicyConfig, at: i64) {
+    /// Remember a note let go, at the age of its attack `struck`. A full
+    /// memory keeps its latest-struck entries, which are its heaviest, so a
+    /// note struck before every one of them is not remembered at all.
+    pub fn release(&mut self, pitch: ContextPitch, source: u8, config: PolicyConfig, struck: i64) {
         self.remove_match(pitch.pitch, config.tolerance);
         let capacity = usize::from(config.memory).min(MAX_MEMORY);
-        if capacity == 0 {
-            self.len = 0;
+        let i = self.recent[..self.len].iter().position(|r| r.at <= struck).unwrap_or(self.len);
+        if i >= capacity {
+            self.len = self.len.min(capacity);
             return;
         }
         self.len = (self.len + 1).min(capacity);
-        self.recent.copy_within(0..self.len - 1, 1);
-        self.recent[0] = Released { pitch, source, at };
+        self.recent.copy_within(i..self.len - 1, i + 1);
+        self.recent[i] = Released { pitch, source, at: struck };
     }
-    /// The latest release still remembered, on the caller's clock.
+    /// The latest attack still remembered, on the caller's clock.
     pub fn newest(&self) -> Option<i64> {
         (self.len > 0).then(|| self.recent[0].at)
     }
     /// Released memory after the held context, each entry at the released
-    /// weight decayed by its age at `newest`.
+    /// weight decayed by its attack's age at `newest`.
     pub fn append(
         &self,
         held: &mut Vec<ContextPitch>,

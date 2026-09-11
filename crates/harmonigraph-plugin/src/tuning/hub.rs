@@ -166,7 +166,7 @@ impl Sequencer {
     }
     /// The context one assignment sees: every held voice newest first,
     /// deduplicated within the repetition tolerance, then released memory,
-    /// each decayed by its age at the newest attack or release among them.
+    /// each decayed by the age of its attack at the newest attack among them.
     fn fill(&mut self, rate: f64) {
         self.working.clear();
         let mut voices = [None; HELD_SESSION];
@@ -217,7 +217,7 @@ impl Sequencer {
             .find(|cell| cell.is_some_and(|v| v.source == source && v.lifetime == lifetime))
         {
             let voice = cell.take().unwrap();
-            self.memory.release(voice.context_pitch(), source, self.config.policy, sample);
+            self.memory.release(voice.context_pitch(), source, self.config.policy, voice.onset);
             self.last_release = Some(sample);
         }
     }
@@ -226,7 +226,7 @@ impl Sequencer {
         for cell in self.context.iter_mut() {
             if cell.is_some_and(|v| v.source == source) {
                 let voice = cell.take().unwrap();
-                self.memory.release(voice.context_pitch(), source, self.config.policy, sample);
+                self.memory.release(voice.context_pitch(), source, self.config.policy, voice.onset);
                 self.last_release = Some(sample);
             }
         }

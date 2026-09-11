@@ -489,7 +489,7 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     ui.collapsing("Context", |ui| {
         p.half_life_ms =
             adaptive_value(ui, p.half_life_ms.into(), 0..=20_000, 1000.0, "Half-life", "s") as u16;
-        ui.weak("A note struck or released this long before the newest one counts half. Zero means no decay.");
+        ui.weak("A note struck this long before the newest one counts half, held or released. Zero means no decay.");
         p.memory = adaptive_value(ui, p.memory.into(), 0..=24, 1.0, "Released pitches", "") as u8;
         for (value, label, max) in [
             (&mut p.released, "Released : held weight", 1000),

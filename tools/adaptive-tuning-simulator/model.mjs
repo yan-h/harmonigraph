@@ -65,9 +65,9 @@ export class Simulator {
     // Same-register repetitions refresh one contribution; voices remain separate
     // for release and expression. Octave duplicates retain their own registers.
     const held = [...this.held.values()].sort((a, b) => b.stamp - a.stamp);
-    // Every contribution halves in weight once per half-life before the newest
-    // event in context: a held note's age counts from its attack, a released
-    // note's from its release. One clock for all, so waiting scales every
+    // Every contribution halves in weight once per half-life between its
+    // attack and the newest attack in context, held or released: a release
+    // does not restart the age. One clock for all, so waiting scales every
     // weight alike and changes no decision.
     const { halfLife, released } = this.settings;
     const newest = Math.max(...held.map(v => v.time), ...this.recent.map(e => e.time));
@@ -156,8 +156,11 @@ export class Simulator {
     const voice = this.held.get(id);
     if (!voice) throw new Error(`No sounding note named “${id}”.`);
     this.held.delete(id);
-    const entry = { ...voice, stamp: ++this.serial, time: this.time };
-    this.recent = [entry, ...this.recent.filter(e => Math.abs(e.output - voice.output) > this.settings.tolerance)].slice(0, this.settings.memory);
+    // A release keeps the age of its attack, so memory is ordered by attack,
+    // latest first, and among equal attacks the newest release leads.
+    const entry = { ...voice, stamp: ++this.serial };
+    this.recent = [entry, ...this.recent.filter(e => Math.abs(e.output - voice.output) > this.settings.tolerance)]
+      .sort((a, b) => b.time - a.time).slice(0, this.settings.memory);
     if (!this.held.size) this.lastRelease = this.time;
   }
   allOff() { for (const id of [...this.held.keys()]) this.off(id); }

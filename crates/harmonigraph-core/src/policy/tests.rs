@@ -75,8 +75,8 @@ impl Harness {
     }
     fn off(&mut self, id: &str) {
         while let Some(i) = self.held.iter().position(|(name, _, _)| id == "*" || name == id) {
-            let (_, v, _) = self.held.remove(i);
-            self.memory.release(v, 1, self.config.policy, self.now);
+            let (_, v, struck) = self.held.remove(i);
+            self.memory.release(v, 1, self.config.policy, struck);
         }
     }
 }
@@ -221,13 +221,20 @@ fn reachability_plays_the_keys_the_unfiltered_sweep_never_reaches() {
     assert!(reachable.contains(&LatticePos::new(3, 0, 0)), "{reachable:?}");
 }
 #[test]
-fn memory_refreshes_actual_register_pitch_and_new_release_order() {
+fn memory_refreshes_actual_register_pitch_and_orders_by_attack() {
     let mut h = Harness::new();
     let c = h.on("c", 4_800_000_000);
-    h.on("e", 5_200_000_000);
+    h.now += 1000;
+    let e = h.on("e", 5_200_000_000);
     h.off("e");
     h.off("c");
-    assert_eq!(h.memory.recent[0].pitch, c);
+    // Struck first and let go last, C is still the older of the two, and a
+    // full memory has no room for a note struck before both.
+    assert_eq!([h.memory.recent[0].pitch, h.memory.recent[1].pitch], [e, c]);
+    let mut full = h.memory.clone();
+    let octave = ContextPitch { pitch: c.pitch + 1_200_000_000, ..c };
+    full.release(octave, 1, PolicyConfig { memory: 2, ..h.config.policy }, -1);
+    assert_eq!(full.recent[..full.len].iter().map(|r| r.pitch).collect::<Vec<_>>(), [e, c]);
     h.on("c", 4_800_000_000);
     h.off("c");
     assert_eq!(h.memory.len, 2);

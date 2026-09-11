@@ -490,8 +490,8 @@ The previous onset's full output-minus-input correction is the moving reference 
 Candidates are the union of bounded local Manhattan neighborhoods around the contributing context, restricted by the selected axes.
 The scorer chooses the nearest octave realization by pitch error plus register-weighted harmonic distance, with coordinate order as the final tie-break.
 Held references start at weight one and recently released onset pitches at a configurable fraction of it;
-both halve per configurable half-life between their attack or release and the newest event in context, and repetitions match by absolute-pitch tolerance.
-The bounded released memory evicts its oldest release;
+both halve per configurable half-life between their attack and the newest attack in context — a release does not restart the age — and repetitions match by absolute-pitch tolerance.
+The bounded released memory evicts the entry struck longest ago;
 because every weight shares one clock, waiting alone changes no decision.
 
 The adaptive correction and tuned-onset harmonic reference remain frozen for the voice lifetime.

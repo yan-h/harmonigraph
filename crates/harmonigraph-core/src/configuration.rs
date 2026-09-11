@@ -29,10 +29,12 @@ pub struct PolicyConfig {
     pub memory: u8,
     pub harmonic: u16,
     pub pitch_scale: u16,
-    /// A note just released weighs this much against a note just struck.
+    /// A released note weighs this much against a held note struck at the
+    /// same moment.
     pub released: u16,
     /// Held and released contributions alike halve in weight once per this
-    /// long before the newest event in context.
+    /// long between their attack and the newest attack in context. A release
+    /// does not restart it.
     pub half_life_ms: u16,
     pub register_floor: u16,
     pub register_falloff: u16,
