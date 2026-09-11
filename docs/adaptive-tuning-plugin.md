@@ -88,6 +88,9 @@ they keep the old tuning until the context resets.
 3. Two keys that send the same pitch share a pin.
 4. Past 128 distinct pitch classes, which only finely divided or attack-bent input can reach, a new class is scored and left unpinned.
 5. Pins are shared by every track, and Retune exclusion does not remove the ones a source made.
+6. A pin holds even where the context asks for a pure fifth with what is sounding, so a fifths chain cannot retune an earlier 5-limit A.
+It is the mirror of the comma-pump drift the pins exist to stop, and measurement found no pin strength that separates the two;
+see [issue #852](https://github.com/yan-h/harmonigraph/issues/852).
 
 ## Controls and live neighborhood
 
