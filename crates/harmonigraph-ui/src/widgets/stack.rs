@@ -9,8 +9,8 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, grabbed, grip_over_text, release_grab, track_fill,
-    BAR_TEXT_PAD, HANDLE_INSET, HANDLE_W,
+    aimed_at, bar_radius, bar_width, grabbed, grip_color, grip_over_text, poised, release_grab,
+    track_fill, BAR_TEXT_PAD, HANDLE_INSET, HANDLE_W,
 };
 use crate::theme;
 
@@ -453,6 +453,7 @@ impl<'a> StackBar<'a> {
 
         // ---- Interaction ----------------------------------------------------
         let grab_id = response.id.with("grab");
+        let mut holding = None;
         if response.double_clicked() {
             let fresh = ViewConfig::default();
             for layer in LAYERS {
@@ -477,6 +478,7 @@ impl<'a> StackBar<'a> {
                     // the layer out by it.
                     Grab { layer, offset: value_at(aim) - rings.edges()[layer.index()] }
                 });
+                holding = Some(grab.layer);
                 let to = value_at(p.x) - grab.offset;
                 let current = grab.layer.width(self.view);
                 let want = resized(grab.layer.index(), to, &rings, current);
@@ -648,8 +650,17 @@ impl<'a> StackBar<'a> {
         // one row — a name is pinned to its own cell, and the thumb that sizes
         // that cell crosses it whenever the layer is dialled down to about the
         // width of its name.
+        //
+        // Lit by what is in hand (see [`grip_color`]), which on this bar is
+        // worth more than on any other: a press takes a layer by REGION, so the
+        // thumb it takes can stand the whole of a cell away from the pointer —
+        // a press in the middle of the empty centre takes the thumb at its far
+        // edge. No two thumbs here ever coincide ([`spread`]), so the order they
+        // are painted in does not matter.
+        let in_hand =
+            holding.or_else(|| poised(ui, &response).map(|p| aimed(p.x, thumbs, half_thumb)));
         let grip_radius = CornerRadius::same(theme::scaled_points(2, scale));
-        for x in thumbs {
+        for (layer, x) in LAYERS.into_iter().zip(thumbs) {
             grip_over_text(
                 painter,
                 egui::Rect::from_center_size(
@@ -657,6 +668,7 @@ impl<'a> StackBar<'a> {
                     Vec2::new(HANDLE_W * scale, rect.height() - 3.0 * scale),
                 ),
                 grip_radius,
+                grip_color(in_hand.is_none_or(|held| held == layer)),
                 &runs,
             );
         }
@@ -668,7 +680,9 @@ impl<'a> StackBar<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::widgets::probe::{filled_rects, handles, press, shapes, text_boxes};
+    use crate::widgets::probe::{
+        after_passes, filled_rects, grips, handles, press, shapes, text_boxes,
+    };
 
     /// The stack every claim here is measured against unless it says
     /// otherwise: the five numbers a node's layers are laid out from, written
@@ -1429,6 +1443,42 @@ mod tests {
         assert_eq!(after.ring_inner, before.ring_inner, "the node's middle moved");
         assert_eq!(after.spectral_ring_width, before.spectral_ring_width, "the audio ring moved");
         assert_eq!(after.mark_thickness, before.mark_thickness, "the mark strip moved");
+    }
+
+    /// A pointer resting on a layer's stretch lights that layer's thumb and
+    /// dims the other three, and a press from the same spot then moves that
+    /// layer and no other — so what the bar shows before a press is what the
+    /// press does.
+    ///
+    /// All four layers are on, so there are four stretches to rest on. The
+    /// middle is the one the cue is for: a pointer in the empty centre takes
+    /// the thumb at the centre's far edge, the whole of a cell away.
+    #[test]
+    fn a_resting_pointer_lights_the_thumb_a_press_there_takes() {
+        let view = layered();
+        for (k, (lo, hi)) in layer_spans(&view.rings()).into_iter().enumerate() {
+            let x = axis((lo + hi) * 0.5);
+            let shapes = after_passes(
+                W,
+                |bar| {
+                    let at = egui::pos2(bar.left() + bar.width() * x, bar.center().y);
+                    vec![vec![egui::Event::PointerMoved(at)]; 2]
+                },
+                |ui| StackBar::new(&mut view.clone()).show(ui),
+            );
+            let mut thumbs = grips(&shapes);
+            thumbs.sort_by(|a, b| a.0.left().total_cmp(&b.0.left()));
+            let lit: Vec<bool> = thumbs.iter().map(|&(_, lit)| lit).collect();
+            let want: Vec<bool> = (0..4).map(|i| i == k).collect();
+            assert_eq!(lit, want, "resting on {:?}'s stretch", LAYERS[k]);
+
+            let mut after = view.clone();
+            drag(&mut after, (x, x + 0.03));
+            for layer in LAYERS {
+                let moved = layer.width(&after) != layer.width(&view);
+                assert_eq!(moved, layer == LAYERS[k], "a press on {:?} moved {layer:?}", LAYERS[k]);
+            }
+        }
     }
 
     /// The strip's outer edge is a handle of its own, out past the three the

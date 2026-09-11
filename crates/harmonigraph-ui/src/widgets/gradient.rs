@@ -12,9 +12,9 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_over_text, release_grab,
-    track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W,
-    TEXT_GAP,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, poised,
+    release_grab, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET,
+    HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::panes::scene_color;
@@ -501,7 +501,20 @@ impl<'a> SpectrumBar<'a> {
         let offset_at = |x: f32| {
             ((x - travel.left()) / travel.width().max(1.0)).clamp(0.0, 1.0) * FULL_TURN * winding
         };
+        // What a press landing at `origin` takes hold of, with the handle
+        // standing at `handle_x`: the press's own rule, and the one the handle
+        // is lit by under a pointer that has not pressed yet.
+        let grab_at = |origin: egui::Pos2, handle_x: f32| {
+            if !on_track(&origin) {
+                SpectrumGrab::Outside
+            } else if (origin.x - handle_x).abs() <= GRAB_PX {
+                SpectrumGrab::Span
+            } else {
+                SpectrumGrab::Rotate { held: aimed.hue_start + offset_at(origin.x) }
+            }
+        };
         let grab_id = response.id.with("spectrum_grab");
+        let mut holding = None;
         let clicked_track = response.interact_pointer_pos().is_some_and(|p| on_track(&p));
         if response.double_clicked() && clicked_track {
             let home = self.home.sanitized();
@@ -523,15 +536,9 @@ impl<'a> SpectrumBar<'a> {
                     // it down and turning the circle by less than the
                     // pointer has travelled is a gesture that starts behind
                     // and stays there.
-                    let origin = aimed_at(ui, p);
-                    if !on_track(&origin) {
-                        SpectrumGrab::Outside
-                    } else if (origin.x - handle_x).abs() <= GRAB_PX {
-                        SpectrumGrab::Span
-                    } else {
-                        SpectrumGrab::Rotate { held: aimed.hue_start + offset_at(origin.x) }
-                    }
+                    grab_at(aimed_at(ui, p), handle_x)
                 });
+                holding = Some(grab);
                 let next = match grab {
                     // The magnitude only. Its SIGN is the flip button's, and
                     // leaving it there is what lets the handle reach zero
@@ -625,13 +632,19 @@ impl<'a> SpectrumBar<'a> {
         // The handle on top of everything, readout included: it is the part
         // you operate, and a digit sliding under it beats it disappearing
         // behind one.
+        //
+        // Lit by what is in hand (see [`grip_color`]), and on a bar with one
+        // handle that still says something: unlit is a press that would TURN
+        // the circle under the handle rather than take it.
+        let in_hand = holding.or_else(|| poised(ui, &response).map(|p| grab_at(p, handle_x)));
+        let turning = matches!(in_hand, Some(SpectrumGrab::Rotate { .. }));
         painter.rect_filled(
             egui::Rect::from_center_size(
                 egui::pos2(handle_x, track_rect.center().y),
                 Vec2::new(HANDLE_W * scale, track_rect.height() - 3.0 * scale),
             ),
             CornerRadius::same(theme::scaled_points(2, scale)),
-            theme::text(),
+            grip_color(!turning),
         );
 
         // ---- The flip button ------------------------------------------------
@@ -667,12 +680,13 @@ impl<'a> SpectrumBar<'a> {
         // to a drag, as a RangeBar's does: the handle resizes the arc, the
         // track turns the circle under it. Off the track it says neither,
         // because a press there starts nothing — see [`SpectrumGrab::Outside`].
-        match pointing {
-            Some(p) if (p.x - handle_x).abs() <= GRAB_PX => {
+        // Read off the same grab the handle is lit by.
+        match in_hand {
+            Some(SpectrumGrab::Span) => {
                 response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
             }
-            Some(_) => response.on_hover_cursor(egui::CursorIcon::Grab),
-            None => response,
+            Some(SpectrumGrab::Rotate { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
+            Some(SpectrumGrab::Outside) | None => response,
         }
     }
 }
@@ -1133,6 +1147,7 @@ impl<'a> SpreadBar<'a> {
         // ---- Interaction ----------------------------------------------------
         let grab_id = response.id.with("spread_grab");
         let near = GRAB_PX / track.width().max(1.0) * (max - min);
+        let mut holding = None;
         // Reset rather than text entry, the bargain a [`RangeBar`] makes: a bar
         // holding two numbers has no single value to type into it.
         if response.double_clicked() {
@@ -1147,6 +1162,7 @@ impl<'a> SpreadBar<'a> {
                     // From where the press LANDED; see [`aimed_at`].
                     SpreadGrab::at(value_at(aimed_at(ui, p).x), aimed, near)
                 });
+                holding = Some(grab);
                 let next = self.spread.legal(self.spread.snapped(grab.apply(v, aimed, axis)));
                 if next != pair(*self.gradient) {
                     self.spread.set(self.gradient, next);
@@ -1226,8 +1242,25 @@ impl<'a> SpreadBar<'a> {
         // handle taken past about four fifths of the axis arrives. Which end of
         // the axis that is depends on the pair — see the type's docs for where
         // the four bars the panes build actually rest.
+        //
+        // Lit by what is in hand (see [`grip_color`]). The ends are named for
+        // the PITCH they carry, so which thumb is the low end is the ramp's
+        // sign: the left one at a rising ramp, the right one at a falling. A
+        // flat ramp stands both on one point, so the unlit one is painted first
+        // and the lit one shows.
+        let in_hand = holding.or_else(|| {
+            poised(ui, &response).map(|p| SpreadGrab::at(value_at(p.x), (centre, spread), near))
+        });
+        let rising = spread >= 0.0;
+        let (left_lit, right_lit) = match in_hand {
+            Some(SpreadGrab::Low) => (rising, !rising),
+            Some(SpreadGrab::High) => (!rising, rising),
+            Some(SpreadGrab::Middle { .. }) | None => (true, true),
+        };
+        let mut thumbs = [(lx, left_lit), (hx, right_lit)];
+        thumbs.sort_by_key(|&(_, lit)| lit);
         let handle_w = HANDLE_W * scale;
-        for x in [lx, hx] {
+        for (x, lit) in thumbs {
             grip_over_text(
                 painter,
                 egui::Rect::from_center_size(
@@ -1235,13 +1268,15 @@ impl<'a> SpreadBar<'a> {
                     Vec2::new(handle_w, rect.height() - 3.0 * scale),
                 ),
                 CornerRadius::same(theme::scaled_points(2, scale)),
+                grip_color(lit),
                 &[(label_pos, label.clone()), (value_pos, value.clone())],
             );
         }
 
         // The cursor says which gesture a press would start before committing
         // to it: a handle opens the ramp, the middle picks the whole thing up.
-        match response.hover_pos().map(|p| SpreadGrab::at(value_at(p.x), (centre, spread), near)) {
+        // Read off the same grab the thumbs are lit by.
+        match in_hand {
             Some(SpreadGrab::Middle { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
             Some(_) => response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal),
             None => response,
@@ -1256,7 +1291,8 @@ mod tests {
         band_bounds, band_colors, band_columns, bands, fades_out_at_its_edges,
     };
     use crate::widgets::probe::{
-        filled_rects, handles, knockouts, painted, painted_in, painted_text, press, text_boxes,
+        after_passes, filled_rects, grips, handles, knockouts, painted, painted_in, painted_text,
+        press, text_boxes,
     };
 
     /// A [`SpectrumBar`] under a [`GradientPreview`] in a 300pt context,
@@ -2817,6 +2853,31 @@ mod tests {
             Spread::Brightness => SpreadBar::brightness(g).show(ui),
             Spread::Chroma => SpreadBar::chroma(g).show(ui),
         }
+    }
+
+    /// At a flat ramp both thumbs stand on one point, and a pointer resting
+    /// beside it lights the end on its own side ([`SpreadGrab::at`]) — so the
+    /// lit one has to be painted last, or the unlit one standing on it says
+    /// neither is in hand. The chroma bar opens flat, so this is where a fresh
+    /// pane meets it.
+    #[test]
+    fn at_a_flat_ramp_the_lit_thumb_is_the_one_on_top() {
+        let mut g = holding(Spread::Chroma, (0.5, 0.0));
+        let shapes = after_passes(
+            300.0,
+            |bar| {
+                // Clear of the point's own reach, which at a flat ramp is the
+                // middle's and would light both.
+                let at = egui::pos2(bar.center().x - 3.0 * GRAB_PX, bar.center().y);
+                vec![vec![egui::Event::PointerMoved(at)]; 2]
+            },
+            |ui| spread_bar(Spread::Chroma, &mut g, ui),
+        );
+        let thumbs = grips(&shapes);
+        assert_eq!(thumbs.len(), 2, "{thumbs:?}");
+        assert_eq!(thumbs[0].0, thumbs[1].0, "the flat ramp's thumbs do not stand on one point");
+        let lit: Vec<bool> = thumbs.iter().map(|&(_, lit)| lit).collect();
+        assert_eq!(lit, [false, true], "the unlit thumb is painted over the lit one");
     }
 
     /// Paint one bar across a 300pt row and return what it emitted, each shape
