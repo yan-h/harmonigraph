@@ -43,8 +43,8 @@ pub struct RenderRequest {
 
 impl RenderRequest {
     /// The render that runs when a take finishes. A finished take always renders
-    /// now — its own recorded audio as the spectrogram, playhead on — so this is
-    /// unconditional; the `Option` is kept only for `Control::stop`'s signature.
+    /// now — its own recorded audio as the spectrogram, laid out as the take's
+    /// own spectrogram choice says — so this is unconditional; the `Option` is kept only for `Control::stop`'s signature.
     /// Uses the take's own recorded look.
     pub fn from_config(config: &harmonigraph_take::RenderConfig) -> Option<RenderRequest> {
         Some(Self::build(config, None))

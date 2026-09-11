@@ -215,7 +215,7 @@ struct GlowNode {
 // Tile offsets and two sorted node lists: one local to the tile and one for
 // large halos. The latter avoids copying a full-screen glow into every tile.
 // Group 3 shares its slot with shadow_casters in other entry points.
-// Layout and tile width must agree with glow_tiles.rs.
+// Layout and tile width must agree with lattice_node_glow/tiles.rs.
 @group(3) @binding(0) var<storage, read> glow_tiles: array<u32>;
 const GLOW_TILE_SIZE: u32 = 32u;
 

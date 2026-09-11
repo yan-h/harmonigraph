@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Canonical full CI gate: formatting, markdown clause breaks and local links, workspace clippy with warnings denied,
-# workspace tests, the plugin package check, harmonigraph-render's own tests,
+# workspace tests, the plugin package check, the release all-targets check, harmonigraph-render's own tests,
 # vendored GUI crates' tests, the optional CLAP probe fixture, doc links, the harmonigraph-core dependency
 # guard, the security-audit trigger split, the CI group split, worktree reclaim
 # safety, and the registered-worktree bundle swap.
@@ -246,7 +246,7 @@ run .claude/tests/plugin-swap.sh
 
 echo
 if [ "$CI_GROUP" = all ]; then
-  echo "✅ full CI passed (fmt + markdown breaks + markdown links + workspace clippy + workspace tests + plugin check + render tests + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + reclaim safety + plugin swap)"
+  echo "✅ full CI passed (fmt + markdown breaks + markdown links + workspace clippy + workspace tests + plugin check + release check + render tests + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + reclaim safety + plugin swap)"
 else
   echo "✅ CI group '$CI_GROUP' passed — one of: ${CI_GROUPS[*]}"
 fi

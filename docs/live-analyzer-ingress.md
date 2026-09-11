@@ -38,16 +38,16 @@ and every column retains the existing half-window center offset and channel powe
 The current note `ClockMapper` offset converts the source origin to GUI seconds once per drain.
 The analyzer does not estimate another offset from arrival time or smooth at callback boundaries.
 Consequently complete columns are identical across callback/drain partitions and consumer delays when the shared heartbeat mapping is held equal.
-Different heartbeat observations can still correct GUI timestamps:
-the existing mapper includes initial delivery latency and follows callback pauses and later observations.
-Audio does not pin a separate permanent offset that could drift away from notes.
-A backward clock correction can temporarily place new columns at or before the retained history tail.
-Those overlapping columns are deliberately omitted from live history until mapped time passes the tail,
-while every FFT hop and the current spectrum curve continue advancing.
+The mapper fixes its offset at the first heartbeat, which includes initial delivery latency,
+and afterwards moves it only forward, by the length of any callback pause over a second.
+Its shown time never rewinds,
+so mapped dates only advance and audio does not pin a separate permanent offset that could drift away from notes.
+A clock that corrected backwards could place new columns at or before the retained history tail.
+`AudioSpectrum` still omits such overlapping columns from live history until mapped time passes the tail,
+while every FFT hop and the current spectrum curve continue advancing;
+with the current mapper that rule is defensive, and no plugin path reaches it.
 Existing history stays sorted for incremental heatmap aggregation;
 timestamps are neither clamped nor rewritten.
-This is history suppression until mapped dates pass the retained tail after a clock correction,
-not lossless recovery.
 Offline arrival-dated analysis is unchanged.
 Factual note timestamps and take/export clocks are unchanged.
 
@@ -72,9 +72,13 @@ reset window refilling,
 actual process transport loops/stops/unavailable positions,
 and the existing open/closed scheduler handover.
 
-The shared-clock test starts with 250 ms of calibration bias and applies 60 timely observations.
-The real incremental spectrogram aggregation regression failed at the first corrected hop before the overlap policy was added.
-It now follows the correction through a full newly silent FFT window and recovery,
+`fast_bounce_preserves_the_realtime_picture_timeline` holds the mapper to audio time through a faster-than-realtime bounce,
+comparing the real analyzer and note publication paths.
+The overlap rule's regression,
+`corrected_source_clock_keeps_history_and_incremental_aggregation_ordered`,
+drives `AudioSpectrum` directly with a backward correction no plugin path now produces.
+It failed at the first corrected hop before the overlap policy was added.
+It follows the correction through a full newly silent FFT window and recovery,
 checks strict timestamp order,
 compares every incremental aggregate with a fresh complete-history fold,
 and covers exact equality with the old tail.

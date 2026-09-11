@@ -59,7 +59,7 @@
 use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS};
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_take::{Header, NoteKind, NoteRecord, Take};
-use harmonigraph_ui::{Layout, PictureState};
+use harmonigraph_ui::{Layout, PictureState, SpectrogramRender};
 
 use crate::render::{render, Settings};
 use crate::replay::Replay;
@@ -77,6 +77,11 @@ const SECONDS: f64 = 2.0;
 /// dial's own 180 s the whole take would be one column against the now-line and
 /// the rest of the frame the bed, which is a picture of the fixture being too
 /// short rather than of the heatmap.
+///
+/// Every fixture that dials it in also pins the render's spectrogram to
+/// Scrolling. The fresh choice is "Whole video", which replaces the span with
+/// the render's own length — [`SECONDS`] — so this would be dead and the
+/// window's oldest part the bed.
 const WINDOW: f32 = 1.5;
 
 /// Frames per second the shot renders at.
@@ -264,6 +269,7 @@ impl Shot {
         cfg.roll_fraction = 1.0;
         cfg.roll_seconds = WINDOW;
         (cfg.low_midi, cfg.high_midi) = self.range;
+        state.appearance.render.spectrogram = SpectrogramRender::Scrolling;
         Take {
             header: Header { appearance: Some(state.appearance.serialize()), ..Default::default() },
             events: Vec::new(),
@@ -368,6 +374,7 @@ fn mixed_spectral_shadows_draw_the_frame_on_record() {
     state.appearance.spectrum.show_roll = true;
     state.appearance.spectrum.roll_fraction = 0.65;
     state.appearance.spectrum.roll_seconds = WINDOW;
+    state.appearance.render.spectrogram = SpectrogramRender::Scrolling;
     (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi) = shot.range;
     state.appearance.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
         kernel: harmonigraph_scene::ShadowKernel::Gaussian,
@@ -456,6 +463,7 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
     cfg.roll_fraction = if drawn == Drawn::Heatmap { 1.0 } else { 0.0 };
     cfg.roll_seconds = WINDOW;
     (cfg.low_midi, cfg.high_midi) = whole_axis();
+    state.appearance.render.spectrogram = SpectrogramRender::Scrolling;
     let take = Take {
         header: Header { appearance: Some(state.appearance.serialize()), ..Default::default() },
         events: Vec::new(),
@@ -537,6 +545,7 @@ fn spectral_shadow_frame_ms(
     state.appearance.spectrum.show_roll = true;
     state.appearance.spectrum.roll_fraction = 0.65;
     state.appearance.spectrum.roll_seconds = WINDOW;
+    state.appearance.render.spectrogram = SpectrogramRender::Scrolling;
     (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi) = (48.0, 84.0);
     state.appearance.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
         kernel: geometry,

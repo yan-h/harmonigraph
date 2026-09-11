@@ -116,10 +116,10 @@ def find_states(path: pathlib.Path):
     """Every plugin instance's state in the project.
 
     The whole file, not the first section that yields one: adaptive tuning
-    puts a second Harmonigraph in a project (the tune-pairing participant,
-    whose state is one `participating` param and no `ui-state`), and the two
-    sit in separate compressed sections. Stopping at the first productive one
-    reported that instance alone and read as "the editor was never closed".
+    puts Harmonigraph Tune instances in a project (each one `tuning_delay`
+    param and no `ui-state`), and they sit in separate compressed sections
+    from the editor's. Stopping at the first productive one reported a Tune
+    alone and read as "the editor was never closed".
     A full scan is about 13 s on a 600 KB project."""
     data = path.read_bytes()
     states, seen = [], set()
@@ -214,8 +214,8 @@ def main() -> None:
         return
 
     if args.rust:
-        # Only the editor's instance carries a view; the tune-pairing
-        # participant beside it has no ui-state at all, and is not a failure.
+        # Only the editor's instance carries a view; a Harmonigraph Tune beside
+        # it has no ui-state at all, and is not a failure.
         bodies = [
             (n, body)
             for n, st in enumerate(states, 1)
@@ -242,7 +242,11 @@ def main() -> None:
         for k, v in sorted(st.get("params", {}).items()):
             print(f"  {k}: {list(v.values())[0]}")
         if not ui:
-            print("\n(no ui-state field — editor never closed before the save)")
+            # A Tune has no editor, so its missing ui-state is not the trap.
+            if set(st.get("params", {})) == {"tuning_delay"}:
+                print("\n(a Harmonigraph Tune — no editor, so no ui-state)")
+            else:
+                print("\n(no ui-state field — editor never closed before the save)")
             continue
         # The spiral's framing is persisted beside the camera and for the same
         # reason — a take renders from the blob, so a disc dialled in on its
