@@ -258,14 +258,10 @@ impl EditorShared {
         // events arriving: music has gaps, and a gap is not a stop.
         self.take_rolling = self.take.is_rolling();
 
-        // Whether a backward jump ends the take on the audio thread, and
-        // whether under this trigger it waits for a note first — the same
-        // "under way" the frame-counted stop below asks for (#569).
+        // One-file triggers finish on a rewind after accepted forward motion.
         let trigger = self.ui.picture.appearance.render.trigger;
         let ends_at_rewind = trigger.ends_at_rewind();
         self.take.set_end_at_rewind(ends_at_rewind);
-        self.take
-            .set_rewind_needs_capture(trigger == harmonigraph_ui::RenderTrigger::OnTransportStop);
         // And the bar it ends at, which is `None` under every other trigger —
         // so a stop bar saved in a project cannot end a take recorded under one
         // of them.
@@ -296,7 +292,7 @@ impl EditorShared {
         {
             // Only after something was actually captured: arming ahead of
             // the downbeat must not immediately end the take.
-            if self.take_rolling || count == 0 {
+            if self.take_rolling || (!self.take.has_rolled() && count == 0) {
                 self.take_still_frames = 0;
             } else {
                 self.take_still_frames += 1;

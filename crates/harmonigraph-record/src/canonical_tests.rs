@@ -29,6 +29,42 @@ fn accepted(event: NoteEvent, sequence: u64) -> NoteDelta {
     }
 }
 
+/// A source may publish the last block's note after the transport restore.
+/// Its retained address must survive that end, which must not wait for MIDI.
+#[test]
+fn stopped_export_restore_keeps_the_unpublished_notes_original_route() {
+    let (mut recorder, mut capture) = testing::channel();
+    let (publisher, mut publications) = publication::channel();
+    recorder.publication = publisher;
+    capture.arm_audio();
+    assert!(recorder.is_armed());
+    recorder.end_at_rewind.store(true, Ordering::Relaxed);
+    let duration = 64.0 / 48_000.0;
+    assert!(!recorder.observe_transport(5.0, false, duration));
+    let origin = 5.0 + duration;
+    assert!(recorder.observe_transport(origin, false, duration));
+    let address = recorder.configuration_address().unwrap();
+    recorder.mark_audio_start(origin);
+    recorder.audio(&mut std::iter::repeat_n(0.25, 128), 128);
+    assert_eq!(recorder.captured.load(Ordering::Relaxed), 0);
+    assert!(!recorder.observe_transport(5.0, false, duration));
+    assert!(recorder.hit_rewind.load(Ordering::Relaxed));
+    let note = accepted(NoteEvent::on(origin, SourceId(1), 0, 60, 0.8), 1);
+    let route = publication::Route { address: Some(address), time_offset: 0.0 };
+    assert!(recorder.publish_note(note, route).take.is_ok());
+    let mut notes = 0;
+    publications.drain(|delivery, emitted_route| {
+        if let publication::Delivery::Event(CanonicalEvent::Note(delta)) = delivery {
+            assert_eq!(emitted_route.address, Some(address));
+            assert_eq!(delta.event, note.event);
+            notes += 1;
+        }
+        true
+    });
+    assert_eq!(notes, 1, "the delayed publication retains its pre-restore pass and timestamp");
+    assert_eq!(capture.drain_audio(), vec![0.25; 128]);
+}
+
 #[test]
 fn delayed_history_and_baseline_keep_original_pass_and_both_wav_tails() {
     let (mut recorder, mut capture) = testing::channel();
@@ -45,11 +81,11 @@ fn delayed_history_and_baseline_keep_original_pass_and_both_wav_tails() {
     let first = RecordAddress { epoch: 1, pass: 1 };
     let second = RecordAddress { epoch: 1, pass: 2 };
     let config = harmonigraph_core::configuration::ConfigReducer::default().resolved();
-    assert!(recorder.observe_transport(20.0, true));
+    assert!(recorder.observe_transport(20.0, true, 64.0 / 48_000.0));
     recorder.configuration_at(first, 20.0, config);
     recorder.mark_audio_start(20.0);
     recorder.audio(&mut std::iter::repeat_n(0.125, 96 * 2), 96 * 2);
-    assert!(recorder.observe_transport(0.0, true));
+    assert!(recorder.observe_transport(0.0, true, 64.0 / 48_000.0));
     recorder.configuration_at(second, 0.0, config);
     recorder.mark_audio_start(0.0);
     recorder.audio(&mut std::iter::repeat_n(0.25, 32 * 2), 32 * 2);
@@ -194,10 +230,10 @@ fn all_128_passes_need_source_closure_before_the_129th_file() {
         recorder.is_armed();
         let file = path(if close_source { "pass-reuse" } else { "pass-full" });
         let mut writer = testing::FileWriter::new(&capture, file.clone(), None);
-        recorder.observe_transport(10.0, true);
+        recorder.observe_transport(10.0, true, 64.0 / 48_000.0);
         for _ in 1..RECORD_PASSES {
-            recorder.observe_transport(0.0, true);
-            recorder.observe_transport(10.0, true);
+            recorder.observe_transport(0.0, true, 64.0 / 48_000.0);
+            recorder.observe_transport(10.0, true, 64.0 / 48_000.0);
         }
         for pass in 1..=RECORD_PASSES as u32 {
             recorder.configuration_pass_complete(RecordAddress { epoch: 1, pass });
@@ -210,7 +246,7 @@ fn all_128_passes_need_source_closure_before_the_129th_file() {
         }
         // Both lanes are queued before the worker runs. It must consume the
         // available source closure before judging a 129th required file.
-        recorder.observe_transport(0.0, true);
+        recorder.observe_transport(0.0, true, 64.0 / 48_000.0);
         writer.drain(&mut capture);
         assert_eq!(writer.failed(), !close_source);
         if close_source {

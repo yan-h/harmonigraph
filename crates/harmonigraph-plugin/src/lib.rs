@@ -698,7 +698,11 @@ impl Plugin for Harmonigraph {
                     // here instead makes `observe_transport` return on its own
                     // guard, so no pass is opened at all.
                     let stopped = self.take.observe_bar(bar_position(transport));
-                    let rolling = self.take.observe_transport(seconds, transport.playing);
+                    let rolling = self.take.observe_transport(
+                        seconds,
+                        transport.playing,
+                        block_samples as f64 / self.sample_rate,
+                    );
                     (rolling && !stopped).then_some(seconds)
                 }
                 OriginSource::LocalClock(seconds) => Some(seconds),

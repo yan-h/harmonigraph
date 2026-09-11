@@ -302,7 +302,7 @@ mod tests {
         recorder.enable_canonical();
         capture.arm();
         recorder.is_armed();
-        recorder.observe_transport(20.0, true);
+        recorder.observe_transport(20.0, true, 64.0 / 48_000.0);
         let clock = ClockId { runtime_session: 7, epoch: 3 };
         let mut recording = Recording {
             clock,

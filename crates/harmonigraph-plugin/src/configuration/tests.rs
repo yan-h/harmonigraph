@@ -1133,6 +1133,148 @@ fn a_playhead_moved_back_before_the_take_rolls_lets_stop_finish_one_file() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// #839/#828: no rejected scrub segment may acquire a route, consume the
+/// unchanged configuration's sole snapshot, or contribute samples to the WAV.
+#[test]
+fn pre_play_scrubs_emit_no_records_before_the_real_configuration_and_audio_origin() {
+    use harmonigraph_record::Entry;
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    capture.arm_audio();
+    for (block, seconds) in [10.0, 30.0, 5.0].into_iter().enumerate() {
+        let mut stopped = transport(seconds, 0);
+        stopped.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        device.run_transport(block as i64 * 64, vec![], false, None, Some(stopped));
+        assert!(capture.drain_entries().is_empty(), "a scrub contributes no record");
+        assert!(capture.drain_audio().is_empty(), "a scrub contributes no samples");
+    }
+    for block in 0..3 {
+        device.run_transport(
+            (block + 3) * 64,
+            vec![],
+            false,
+            None,
+            Some(transport(5.0 + block as f64 * 64.0 / 48_000.0, 0)),
+        );
+    }
+    let entries = capture.drain_entries();
+    let mut parameters = 0;
+    let mut origins = Vec::new();
+    let mut configurations = Vec::new();
+    let mut samples = 0;
+    for entry in entries {
+        match entry {
+            Entry::Param { t, .. } => {
+                assert_eq!(t, 5.0);
+                parameters += 1;
+            }
+            Entry::AudioStart(t) => origins.push(t),
+            Entry::ConfigurationAt { config, .. } => configurations.push(config.t),
+            Entry::AudioSamples(n) => samples += n,
+            Entry::NewPass => panic!("scrubbing before play has nothing to split from"),
+            _ => {}
+        }
+    }
+    assert_eq!(parameters, ParamKey::ALL.len());
+    assert_eq!(origins, [5.0]);
+    assert_eq!(configurations, [5.0], "one unchanged configuration at the accepted origin");
+    assert_eq!(samples, 3 * 64 * 2);
+    assert_eq!(capture.drain_audio().len(), samples);
+    capture.stop();
+    device.finish_notes(6 * 64, &[]);
+}
+
+/// One accepted stopped callback is enough to finish at a restore, with or
+/// without MIDI. The real CLAP path must finalize exactly that audio prefix.
+#[test]
+fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
+    let _scope = crate::test_scope::enter();
+    for with_note in [false, true] {
+        let mut device = Device::new();
+        device.activate();
+        let dir = std::env::temp_dir()
+            .join(format!("harmonigraph-short-export-{}-{with_note}", std::process::id()));
+        let shared = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_shared.clone());
+        let probe = {
+            let mut shared = shared.lock();
+            let probe = harmonigraph_record::testing::worker_probe(&shared.take, dir.clone());
+            let render = &mut shared.ui.picture.appearance.render;
+            render.trigger = harmonigraph_ui::RenderTrigger::OnTransportStop;
+            render.renderer_path = dir.join("absent-renderer").to_string_lossy().into_owned();
+            let appearance = shared.ui.picture.appearance.serialize();
+            shared.take.start(48_000.0, appearance, true);
+            shared.poll_take_end();
+            probe
+        };
+        let stopped = |seconds| {
+            let mut t = transport(seconds, 0);
+            t.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+            t
+        };
+        for (block, seconds) in [10.0, 30.0, 5.0, 5.0].into_iter().enumerate() {
+            device.run_transport(block as i64 * 64, vec![], false, None, Some(stopped(seconds)));
+            for _ in 0..crate::editor::EditorShared::STOP_FRAMES {
+                shared.lock().poll_take_end();
+            }
+            assert!(shared.lock().take.is_recording(), "parked/scrubbed takes stay armed");
+        }
+        let events = if with_note { vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)] } else { vec![] };
+        let origin = 5.0 + 64.0 / 48_000.0;
+        device.run_transport(256, events, false, None, Some(stopped(origin)));
+        assert!(shared.lock().take.has_rolled());
+        assert_eq!(shared.lock().take.captured() > 0, with_note);
+        device.run_transport(320, vec![], false, None, Some(stopped(5.0)));
+        assert!(shared.lock().take.hit_rewind(), "even one callback's restore ends the take");
+        shared.lock().poll_take_end();
+        assert!(!shared.lock().take.is_recording());
+        device.finish_notes(384, if with_note { &[(10, 60)] } else { &[] });
+        drop(shared);
+        drop(device);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !probe.finished() && !probe.failed() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!probe.failed());
+        assert!(probe.finished(), "the accepted recording prefix must close");
+        let paths: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|p| p.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "take"))
+            .collect();
+        assert_eq!(paths.len(), 1);
+        let take = harmonigraph_take::Take::read(&paths[0]).unwrap();
+        let actual_origin = take.header.audio_start.unwrap();
+        assert!((actual_origin - origin).abs() < 1e-8);
+        assert_eq!(take.configurations.len(), 1);
+        assert_eq!(take.configurations[0].t, actual_origin);
+        assert_eq!(take.params.len(), ParamKey::ALL.len());
+        assert!(take.params.iter().all(|p| p.t == actual_origin));
+        let encoded = std::fs::read_to_string(&paths[0]).unwrap();
+        assert_eq!(
+            encoded.matches("audio_start:Some(").count(),
+            1,
+            "only one AudioStart rewrites the WAV alignment"
+        );
+        let wav = std::fs::read(paths[0].with_extension("wav")).unwrap();
+        assert_eq!(wav.len(), 44 + 64 * 2 * 4, "exactly one callback, no scrub or restore audio");
+        if with_note {
+            assert!(
+                take.events.iter().any(|event| matches!(event,
+                    harmonigraph_take::CanonicalRecord::Delta(delta)
+                        if delta.event.note == 60
+                            && matches!(delta.event.kind, harmonigraph_take::NoteKind::On { .. })
+                            && delta.timing.is_some_and(|timing| timing.input == 256
+                            && (delta.event.t - actual_origin
+                                - (timing.sample - timing.input) as f64 / 48_000.0).abs() < 1e-8)
+                )),
+                "the note-on reaches its original time and pass"
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 /// A CLAP host always installs the configuration owner, and with it installed
 /// a note reaches the take through the Hub's publication rather than the
 /// plain-MIDI arm — so "has this take captured anything" has to be answered by
@@ -1145,60 +1287,69 @@ fn a_playhead_moved_back_before_the_take_rolls_lets_stop_finish_one_file() {
 #[test]
 fn a_note_through_the_configuration_owner_lets_a_stopped_transport_end_the_take() {
     let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    // Retune back at its shipped default: what is claimed is the take path
-    // every CLAP session has, not the correction pipeline `new` enables it for.
-    device.wrapper().test_inspect_plugin(|plugin| {
-        plugin.aggregation.as_ref().unwrap().shared.set_retune(false)
-    });
-    device.activate();
-    let dir = std::env::temp_dir()
-        .join(format!("harmonigraph-config-transport-stop-{}", std::process::id()));
-    let shared = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_shared.clone());
-    let probe = {
-        let mut shared = shared.lock();
-        let probe = harmonigraph_record::testing::worker_probe(&shared.take, dir.clone());
-        let render = &mut shared.ui.picture.appearance.render;
-        render.trigger = harmonigraph_ui::RenderTrigger::OnTransportStop;
-        render.renderer_path = dir.join("absent-renderer").to_string_lossy().into_owned();
-        let appearance = shared.ui.picture.appearance.serialize();
-        shared.take.start(48_000.0, appearance, false);
-        assert!(shared.take.is_recording(), "armed");
-        probe
-    };
-    // Played: one note on and off, with blocks after each for the Hub's delay
-    // line to publish it into the take.
-    let mut raw = 0;
-    for block in 0..16 {
-        let events = match block {
-            0 => vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)],
-            8 => vec![note(10, 60, 0, CLAP_EVENT_NOTE_OFF)],
-            _ => vec![],
+    for with_notes in [true, false] {
+        let mut device = Device::new();
+        // Retune back at its shipped default: what is claimed is the take path
+        // every CLAP session has, not the correction pipeline `new` enables it for.
+        device.wrapper().test_inspect_plugin(|plugin| {
+            plugin.aggregation.as_ref().unwrap().shared.set_retune(false)
+        });
+        device.activate();
+        let dir = std::env::temp_dir()
+            .join(format!("harmonigraph-config-transport-stop-{}", std::process::id()));
+        let shared = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_shared.clone());
+        let probe = {
+            let mut shared = shared.lock();
+            let probe = harmonigraph_record::testing::worker_probe(&shared.take, dir.clone());
+            let render = &mut shared.ui.picture.appearance.render;
+            render.trigger = harmonigraph_ui::RenderTrigger::OnTransportStop;
+            render.renderer_path = dir.join("absent-renderer").to_string_lossy().into_owned();
+            let appearance = shared.ui.picture.appearance.serialize();
+            shared.take.start(48_000.0, appearance, true);
+            assert!(shared.take.is_recording(), "armed");
+            probe
         };
-        device.run_transport(raw, events, false, None, Some(transport(raw as f64 / 48000.0, 0)));
-        raw += 64;
-    }
-    // Then stopped where it was, without the playhead going back.
-    let mut parked = transport(raw as f64 / 48000.0, 0);
-    parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
-    device.run_transport(raw, vec![], false, None, Some(parked));
-    device.run_transport(raw + 64, vec![], false, None, Some(parked));
+        // Played: one note on and off, with blocks after each for the Hub's delay
+        // line to publish it into the take.
+        let mut raw = 0;
+        for block in 0..16 {
+            let events = match block {
+                0 if with_notes => vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)],
+                8 if with_notes => vec![note(10, 60, 0, CLAP_EVENT_NOTE_OFF)],
+                _ => vec![],
+            };
+            device.run_transport(
+                raw,
+                events,
+                false,
+                None,
+                Some(transport(raw as f64 / 48000.0, 0)),
+            );
+            raw += 64;
+        }
+        assert_eq!(shared.lock().take.captured() > 0, with_notes);
+        // Then stopped where it was, without the playhead going back.
+        let mut parked = transport(raw as f64 / 48000.0, 0);
+        parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        device.run_transport(raw, vec![], false, None, Some(parked));
+        device.run_transport(raw + 64, vec![], false, None, Some(parked));
 
-    for _ in 0..crate::editor::EditorShared::STOP_FRAMES {
-        shared.lock().poll_take_end();
+        for _ in 0..crate::editor::EditorShared::STOP_FRAMES {
+            shared.lock().poll_take_end();
+        }
+        assert!(
+            !shared.lock().take.is_recording(),
+            "a played take ends once transport stops, with or without MIDI"
+        );
+        device.finish_notes(raw + 128, &[]);
+        drop(shared);
+        drop(device);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !probe.finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
-    assert!(
-        !shared.lock().take.is_recording(),
-        "a take that captured a note ends once the transport has stopped"
-    );
-    device.finish_notes(raw + 128, &[]);
-    drop(shared);
-    drop(device);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !probe.finished() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]

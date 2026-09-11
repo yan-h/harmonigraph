@@ -138,16 +138,30 @@ Set **When** to *Transport stops* and the video renders itself when the export f
 
 Two subtleties are what make it land on the right file.
 
-Whether the transport counts as rolling is the **union** of "the position advanced" and the host's `playing` flag, not the flag alone.
-Some hosts report `playing = false` throughout an offline render —
-nothing is being *played*, after all —
-and trusting the flag would silently record nothing for the whole export.
+A host reporting `playing` records immediately.
+A stopped host records when its position advances by the previous callback's duration,
+with an inclusive tolerance of 50% either way for timing and position-reporting variation.
+At 48 kHz with 64-frame callbacks,
+that means a forward step from 0.667 to 2 ms.
+The first stopped observation only seeds the comparison;
+a discontinuous jump updates that history without writing parameters, configuration or audio.
+Some hosts report `playing = false` throughout an offline render,
+so continuous stopped progress still records.
+
+A manual scrub inside that same interval is indistinguishable from one export callback:
+it records one block and qualifies a later rewind as the take's end.
+Repeated accepted tiny scrubs each add one block.
+A larger forward/back scrub before playback contributes nothing and leaves the take armed.
 
 And the take ends where the host puts the playhead BACK, not merely where the transport goes quiet.
 Bitwig restores it the moment an export finishes, which lands in the plugin as one backward block;
 a take still armed at that point goes on to record whatever plays next into a fresh pass, and it is the last pass that renders.
 That is how an 82-second export came out as a 63 KB video of a 0.1-second fragment.
-Under *Transport stop* and *Loop end* the backward block ends the take instead, so the pass holding the piece is the one that renders.
+Under *Transport stop* and *Loop end* a stopped backward step after accepted forward progress ends the take instead,
+including a restore after just one accepted callback.
+Audio-only takes and takes whose notes are still waiting for publication finish there too.
+The frame-counted *Transport stop* also accepts recorded transport progress without waiting for a note.
+Playing hosts retain a 50 ms backward jitter allowance for loop detection.
 
 #### Rendering automatically when the take ends
 
