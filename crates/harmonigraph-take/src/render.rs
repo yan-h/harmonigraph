@@ -453,12 +453,14 @@ impl Default for RenderFrame {
 
 /// How far a video render running in the background has got.
 ///
-/// Frames rather than a fraction, because frames are what the renderer counts
-/// and "3400/5400" says something a filled bar cannot: how long is left, at
-/// whatever rate you have been watching it go.
+/// Frames rather than a fraction, because frames are what the renderer counts;
+/// the Video pane divides them for its percentage and keeps both counts in its
+/// hover text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderProgress {
-    /// Frames written so far.
+    /// Frames finished so far: encoded, for a video, which trails the frames
+    /// drawn by the encoder's backlog and reaches `total` only once the video
+    /// is written.
     pub done: u64,
     /// Frames the render is aiming for — 0 until the renderer has said, which
     /// is a moment into the run (it has a take to read and an encoder to
