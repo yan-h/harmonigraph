@@ -862,9 +862,9 @@ pub struct Scene {
     /// zero-width `smoothstep`.
     pub plus_taper_start: f32,
     /// The ground the lattice is drawn onto: the pane fill this pass gets
-    /// composited over, which is the skin's `well` — the recessed grey the
-    /// lattice pane paints its own rect with, as every other picture pane
-    /// does (see [`skin::well_color`]).
+    /// composited over, which is the skin's `picture` — the black the lattice
+    /// pane paints its own rect with, as every other picture pane does (see
+    /// [`skin::picture_color`]).
     ///
     /// Nothing in the lattice reads it: a shadow is a multiply on what the
     /// frame already holds rather than a hole cut through to the pane. It is

@@ -81,7 +81,7 @@ pub(crate) fn render_pane(
     // the shot; the aspect box takes the render's OWN frame background — the
     // color the offline renderer shows in its margins and inter-pane gaps — so
     // the box is exactly the pixels the video will contain. Painting the
-    // padding and the pane fills both `well()` leaves no way to tell where
+    // padding and the pane fills both `picture()` leaves no way to tell where
     // the frame ends.
     let bg = layout.background;
     ui.painter().rect_filled(outer, 0.0, theme::panel());
@@ -93,7 +93,7 @@ pub(crate) fn render_pane(
     // than show the live scrolling spectrogram and quietly mislead, leave the
     // spectral region empty and say so.
     let placements = layout.resolve(box_rect.size());
-    let placeholder = state.appearance.render.playhead;
+    let placeholder = state.appearance.render.spectrogram == crate::SpectrogramRender::Playhead;
     for (pane, rect) in &placements {
         let rect = rect.translate(box_rect.min.to_vec2());
         match pane {
@@ -409,7 +409,7 @@ fn clear_everything(ui: &mut egui::Ui, state: &mut PictureState) {
 /// transport still renders; the rows that need a take to exist follow the same
 /// `supported` gate Record does.
 ///
-/// `RenderConfig.playhead` is the ONLY thing deciding live-vs-playhead. The
+/// `RenderConfig.spectrogram` is the ONLY thing deciding live-vs-playhead. The
 /// renderer turns the playhead on for `--playhead` or this setting, whichever
 /// says yes, so a plugin that also passed the flag would be answering a
 /// question the row is supposed to own — and passing it unconditionally would
@@ -421,15 +421,32 @@ fn render_controls(
     state: &mut PictureState,
     interaction: &mut crate::Interaction,
 ) {
+    use crate::SpectrogramRender;
+
     section(ui, "Render");
+    // Scrolling names the span it scrolls, so the choice beside it reads as the
+    // alternative to that number without the Analyzer page open.
+    let scrolling = format!(
+        "Scrolling ({})",
+        super::spectral::settings::span_readout(state.appearance.spectrum.roll_seconds)
+    );
     choice_row(
         ui,
         "Spectrogram",
-        &mut state.appearance.render.playhead,
+        &mut state.appearance.render.spectrogram,
         &[
-            (false, "Scrolling", "Bake the live scrolling spectrogram, exactly as previewed here"),
             (
-                true,
+                SpectrogramRender::Scrolling,
+                &scrolling,
+                "Bake the live scrolling spectrogram, exactly as previewed here. It shows the History duration set on the Analyzer page.",
+            ),
+            (
+                SpectrogramRender::WholeVideo,
+                "Whole video",
+                "Scroll slowly enough that the whole video fits: by its last frame, the MIDI ribbons and spectrogram reach back to its first. Up to 10 minutes. The preview here keeps showing the History duration.",
+            ),
+            (
+                SpectrogramRender::Playhead,
                 "Playhead",
                 "Show the entire recorded spectrogram with a moving playhead. Requires recorded audio; this region stays blank in the live preview.",
             ),
@@ -552,7 +569,7 @@ fn playhead_placeholder(ui: &egui::Ui, rect: egui::Rect) {
     let p = ui.painter_at(rect);
     // The pane's own background, so the region still reads as the spectral
     // pane sitting there empty rather than as a hole in the frame.
-    p.rect_filled(rect, 0.0, theme::well());
+    p.rect_filled(rect, 0.0, theme::picture());
     if rect.width() < 90.0 || rect.height() < 30.0 {
         return;
     }
@@ -660,9 +677,12 @@ fn record_controls(
 /// A render is minutes of work started by a button that then looks like
 /// nothing happened: the status line names the file and never changes again
 /// until it is finished, so a long render and a hung one read identically. The
-/// bar is the difference between them, and the frame counts are what say how
-/// much longer — the renderer counts frames, and a rate you have watched for
-/// ten seconds turns "3400/5400" into a time.
+/// bar is the difference between them.
+///
+/// The readout is a percentage: "3400/5400" is two numbers to divide before
+/// they say anything. The frames stay in the hover text. They are ENCODED
+/// frames, so the bar keeps moving through the encoder's backlog after the
+/// last frame is drawn, and it fills only when the video is written.
 ///
 /// Absent, not greyed, when nothing is rendering: the take controls are the
 /// pane's steady state and a permanent empty bar under them would read as a
@@ -675,16 +695,22 @@ fn record_controls(
 /// run in flight has anything half-written to throw away.
 fn render_progress(ui: &mut egui::Ui, interaction: &mut crate::Interaction) {
     let Some(progress) = interaction.take.render_progress else { return };
-    let value = match progress.total {
-        // Pad `done` to the width of `total` so the readout keeps one width as
-        // it counts up: monospace, so that holds the name still beside it —
-        // `progress_bar` has no range to reserve from, unlike `ValueBar`.
-        0 => "starting".to_owned(),
-        total => format!("{:>width$}/{total}", progress.done, width = total.to_string().len()),
+    let (value, frames) = match progress.total {
+        0 => ("starting".to_owned(), String::new()),
+        // Floored, so 100% means written rather than nearly. Padded to the
+        // width of "100%" so the readout keeps one width as it counts up:
+        // monospace, so that holds the name still beside it — `progress_bar`
+        // has no range to reserve from, unlike `ValueBar`.
+        total => (
+            format!("{:>3}%", progress.done.min(total) * 100 / total),
+            format!("{} of {total} frames encoded. ", progress.done),
+        ),
     };
     ui.add_space(2.0);
     crate::widgets::progress_bar(ui, progress.fraction(), "Rendering", &value).on_hover_text(
-        "Completed frames out of the total. Rendering runs in the background while the DAW and editor remain available.",
+        format!(
+            "{frames}Rendering runs in the background while the DAW and editor remain available."
+        ),
     );
     button_row(ui, |ui| {
         if ui
@@ -1030,7 +1056,7 @@ mod tests {
     fn playhead_placeholder_keeps_analyzer_orientation_and_pitch_zoom_live() {
         let ctx = crate::tests::probe::themed();
         let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
-        state.appearance.render.playhead = true;
+        state.appearance.render.spectrogram = crate::SpectrogramRender::Playhead;
         state.appearance.render.frame.lattice = LatticeSide::Left;
         state.appearance.render.frame.split = 0.3;
         state.appearance.spectrum.low_midi = 36.0;
@@ -1291,7 +1317,11 @@ mod tests {
                     assert_eq!(enlarged.spectral_text, saved.spectral_text);
                     // Exercise the actual scoped draw too: it must restore the
                     // settings that the dock and a subsequent export will read.
-                    assert!(!state.appearance.render.playhead, "the spectral preview must draw");
+                    assert_ne!(
+                        state.appearance.render.spectrogram,
+                        crate::SpectrogramRender::Playhead,
+                        "the spectral preview must draw"
+                    );
                     let ctx = egui::Context::default();
                     crate::theme::apply_theme(&ctx);
                     let output = ctx.run_ui(

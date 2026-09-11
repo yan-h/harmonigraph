@@ -5,7 +5,7 @@
 //! are take PAYLOAD. `RenderFrame` is the composition a take was framed at,
 //! and the offline renderer reads it out of the take so a re-render reproduces
 //! the framing it was dialed in at rather than whatever the editor happens to
-//! be set to now. `playhead` is read the same way.
+//! be set to now. `spectrogram` is read the same way.
 //!
 //! Resolution is the deliberate exception and stays outside `RenderFrame` —
 //! see [`RenderConfig::short_edge`].
@@ -144,6 +144,27 @@ mod trigger_tests {
     }
 }
 
+/// Which spectrogram a render bakes: the Video pane's Spectrogram row.
+///
+/// One choice of three rather than two switches, because the two scrolling
+/// spans and the playhead exclude each other, and a pair of flags would admit a
+/// fourth state that one of them silently overrides.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpectrogramRender {
+    /// The live scrolling window, spanning the Analyzer's History duration —
+    /// exactly what the preview shows.
+    #[default]
+    Scrolling,
+    /// The live scrolling window spanning the whole render instead, so the last
+    /// frame reaches back to the first. Only a render knows its own length, so
+    /// the preview keeps the dialled span; the offline renderer applies this,
+    /// held to the History duration bar's ends.
+    WholeVideo,
+    /// The render window laid out at once with a playhead sweeping through it.
+    /// `--playhead` on the command line also turns it on. Needs audio.
+    Playhead,
+}
+
 /// How a finished take gets turned into a video, edited in the Video
 /// pane's Record section and persisted with the UI state.
 ///
@@ -199,11 +220,9 @@ pub struct RenderConfig {
     /// the MIDI onsets, a number passes `--align`. A string so "empty = auto"
     /// reads naturally and it matches the other free-text fields.
     pub audio_offset: String,
-    /// Whole-song playhead spectrogram: lay the take out at once and sweep a
-    /// playhead through it, instead of the live scrolling window. Read by the
-    /// offline renderer from the take; `--playhead` on the command line also
-    /// turns it on. Needs audio.
-    pub playhead: bool,
+    /// Which spectrogram the render bakes; see [`SpectrogramRender`]. Read by
+    /// the offline renderer from the take.
+    pub spectrogram: SpectrogramRender,
     /// The composed video frame — aspect ratio and the lattice/spectral split.
     /// Edited and previewed in the Video pane; the offline renderer reads it
     /// to compose the same picture.
@@ -233,7 +252,7 @@ impl Default for RenderConfig {
             renderer_path: String::new(),
             audio_path: String::new(),
             audio_offset: String::new(),
-            playhead: false,
+            spectrogram: SpectrogramRender::Scrolling,
             frame: RenderFrame::default(),
             // 1080 on the short edge — 1920x1080 at the default 16:9 frame,
             // and the resolution every host and site takes without
@@ -434,12 +453,14 @@ impl Default for RenderFrame {
 
 /// How far a video render running in the background has got.
 ///
-/// Frames rather than a fraction, because frames are what the renderer counts
-/// and "3400/5400" says something a filled bar cannot: how long is left, at
-/// whatever rate you have been watching it go.
+/// Frames rather than a fraction, because frames are what the renderer counts;
+/// the Video pane divides them for its percentage and keeps both counts in its
+/// hover text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderProgress {
-    /// Frames written so far.
+    /// Frames finished so far: encoded, for a video, which trails the frames
+    /// drawn by the encoder's backlog and reaches `total` only once the video
+    /// is written.
     pub done: u64,
     /// Frames the render is aiming for — 0 until the renderer has said, which
     /// is a moment into the run (it has a take to read and an encoder to

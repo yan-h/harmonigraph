@@ -1533,7 +1533,7 @@ pub(super) fn draw(
             label.lead,
             label.name,
             theme::text(),
-            theme::well(),
+            theme::picture(),
             scale,
             magnify,
             // Against the LETTER's ink, not the box's centre — which is the

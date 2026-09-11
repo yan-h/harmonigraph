@@ -22,6 +22,11 @@ pub fn panel() -> Color32 {
 pub fn well() -> Color32 {
     c(active_skin().well)
 }
+/// The ground a picture pane is bedded on (see
+/// `harmonigraph_scene::skin::picture_color`).
+pub fn picture() -> Color32 {
+    c(active_skin().picture)
+}
 /// Subtly raised surface between panel and widget (hovered tabs, faint
 /// striping).
 pub fn surface_faint() -> Color32 {

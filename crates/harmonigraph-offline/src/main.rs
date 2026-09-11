@@ -31,6 +31,11 @@ use sink::{Sink, VideoOptions};
 /// [`PRESETS`] so there is only ever one list.
 const PRESET_TOKEN: &str = "PRESET_LIST";
 
+/// How often the progress line may be rewritten. The Video pane's bar moves
+/// at this rate, and ffmpeg's own report, which drives it for a video, comes
+/// half as often.
+const PROGRESS_PERIOD: std::time::Duration = std::time::Duration::from_millis(250);
+
 const USAGE: &str = "\
 harmonigraph-offline — render a recorded take to video
 
@@ -613,8 +618,27 @@ fn export(args: Args) -> Result<(), String> {
         out.display(),
     );
 
+    // Progress on one rewritten line; renders are long enough that silence
+    // reads as a hang.
+    //
+    // This line and the `-> {total} frames` one above it are also READ, by
+    // the plugin's Video pane, which follows this stderr to drive its
+    // progress bar (`harmonigraph_record::parse_report`): the count before ` frames` is
+    // the part it matches, so keep that shape. Reformatting the rest is
+    // free; losing the count leaves the bar empty.
+    //
+    // `done` is frames FINISHED: encoded, for a video, where frames handed to
+    // ffmpeg are not that (see `sink::Encoded`), and written for the sinks
+    // with no encoder behind them. Those change every frame, hence the period.
+    let mut shown = (0u64, std::time::Instant::now());
+    let mut report = |done: u64| {
+        if done != shown.0 && (done == total || shown.1.elapsed() >= PROGRESS_PERIOD) {
+            eprint!("\r  {done}/{total} frames ({}%)", done * 100 / total);
+            shown = (done, std::time::Instant::now());
+        }
+    };
     let mut replay = Replay::new(take);
-    let mut done = 0u64;
+    let mut pushed = 0u64;
     let rendered = render::render(&mut replay, audio.as_mut(), &settings, appearance, |frame| {
         if !sink.push(frame)? {
             // ffmpeg closed the pipe (e.g. -shortest, the soundtrack ending
@@ -622,22 +646,13 @@ fn export(args: Args) -> Result<(), String> {
             // that was a clean finish or a crash from ffmpeg's exit status.
             return Ok(false);
         }
-        done += 1;
-        // Progress on one rewritten line; renders are long enough that
-        // silence reads as a hang.
-        //
-        // This line and the `-> {total} frames` one above it are also READ, by
-        // the plugin's Video pane, which follows this stderr to drive its
-        // progress bar (`harmonigraph_record::parse_report`): the count before ` frames` is
-        // the part it matches, so keep that shape. Reformatting the rest is
-        // free; losing the count leaves the bar empty.
-        if done.is_multiple_of(30) || done == total {
-            eprint!("\r  {done}/{total} frames ({:.0}%)", 100.0 * done as f64 / total as f64);
-        }
+        pushed += 1;
+        report(sink.encoded().unwrap_or(pushed));
         Ok(true)
     })?;
+    // Still reporting: the encoder is working through its backlog.
+    sink.finish(&mut report)?;
     eprintln!();
-    sink.finish()?;
 
     // Cutting a take short is a legitimate thing to ask for, and also
     // exactly what a mistyped --end looks like. Say which happened.

@@ -336,7 +336,7 @@ fn the_video_pane_does_not_start_with_a_rule() {
 /// line of ordering doing the work of a policy, and nothing else in the suite
 /// looks at it — hoisting that return two lines leaves all 439 tests green while
 /// the standalone silently loses its only say over what an offline render bakes,
-/// `RenderConfig::playhead` becoming unreachable from that shell entirely.
+/// `RenderConfig::spectrogram` becoming unreachable from that shell entirely.
 ///
 /// Both directions, because a gate is two claims: the Spectrogram row survives
 /// with no take support, and the rows that need a take to mean anything do not
@@ -348,7 +348,7 @@ fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
     // Shared by both shells: the section, the row, and the choice on it. The
     // standalone has no transport to record with and still renders, so this is
     // the one thing in Render it can act on.
-    for row in ["Render", "Spectrogram", "Scrolling", "Playhead"] {
+    for row in ["Render", "Spectrogram", "Whole video", "Playhead"] {
         for supported in [true, false] {
             let (shapes, _) = video_pane_shapes(supported);
             assert!(
@@ -367,6 +367,18 @@ fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
         text_y(&without, row).is_none(),
         "the standalone drew {row:?}, which needs a take to mean anything",
     );
+}
+
+/// Scrolling names the span it scrolls, read live off the Analyzer's History
+/// duration, so it reads as the alternative to Whole video without the Analyzer
+/// page open. Dialled off the default so a label frozen at the fresh value fails.
+#[test]
+fn the_scrolling_spectrogram_choice_names_its_span() {
+    let mut state = fresh();
+    state.picture.appearance.spectrum.roll_seconds = 42.0;
+    state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Video]);
+    let shapes = DockHarness::at(egui::vec2(420.0, 1200.0)).frame(&mut state, vec![]).shapes;
+    assert!(text_y(&shapes, "Scrolling (42.0 s)").is_some(), "Scrolling did not name its span");
 }
 
 /// The bar tracks a pane drew, by width.

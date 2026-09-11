@@ -2259,8 +2259,8 @@ impl Default for ViewConfig {
             ring_gap: 0.05,
             octave_gap: 0.05,
             // Where the DAW look was captured on 2026-09-08, just below the
-            // chrome's panel (8.8) and clear of the well grey (4.7) the lattice
-            // pane stands on. Nothing ties this to the skin — the chrome's
+            // chrome's panel (8.8), when the lattice pane stood on the well grey
+            // (4.7) rather than on today's black. Nothing ties this to the skin — the chrome's
             // ladder and the ground are dialled apart.
             lattice_ground: DEFAULT_RING_GROUND,
             // Well above the ring ground — 29 `L*` clear of it — so the

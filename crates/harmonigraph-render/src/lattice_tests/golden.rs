@@ -180,7 +180,7 @@ fn lattice(view: &harmonigraph_scene::ViewConfig, camera: Camera) -> Scene {
     // restated because [`on_the_ground_it_clears_to`] reads it back, and a frame
     // whose pane and whose scene disagree is the one thing that helper exists to
     // stop.
-    scene.background = harmonigraph_scene::skin::well_color();
+    scene.background = harmonigraph_scene::skin::picture_color();
     scene
 }
 

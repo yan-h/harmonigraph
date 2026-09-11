@@ -3346,13 +3346,18 @@ mod tests {
     /// It ORs `--playhead` with the take's own recorded setting, so a flag
     /// passed here can only add. Passing it unconditionally would make the
     /// Video pane's "Scrolling" choice unreachable: the pane writes
-    /// `playhead: false` into the take and the flag would turn it straight
-    /// back on. Leaving it unset is what lets the row decide both
-    /// ways, so this holds the request to saying nothing.
+    /// `spectrogram: Scrolling` into the take and the flag would turn the
+    /// playhead straight back on. Leaving it unset is what lets the row decide
+    /// every way, so this holds the request to saying nothing.
     #[test]
     fn the_take_decides_the_spectrogram_not_a_forced_flag() {
-        for playhead in [false, true] {
-            let config = RenderConfig { playhead, ..Default::default() };
+        use harmonigraph_take::SpectrogramRender;
+        for spectrogram in [
+            SpectrogramRender::Scrolling,
+            SpectrogramRender::WholeVideo,
+            SpectrogramRender::Playhead,
+        ] {
+            let config = RenderConfig { spectrogram, ..Default::default() };
             assert_eq!(RenderRequest::from_config(&config).unwrap().playhead, None);
             let now = RenderRequest::render_now(&config, "(dummy)".into());
             assert_eq!(now.playhead, None, "Re-render take must not force it either");

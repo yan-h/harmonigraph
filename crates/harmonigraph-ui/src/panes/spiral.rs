@@ -224,7 +224,7 @@ const ZOOM: (f32, f32) = (1.0, 8.0);
 /// A bound on where a reader may LOOK rather than on where the disc may go, and
 /// stated in the disc's own radius so that it means the same thing at every zoom
 /// and on every pane. What it buys is that the middle of the pane always has
-/// spiral under it: outside the rim there is only the names' band and the well,
+/// spiral under it: outside the rim there is only the names' band and the ground,
 /// so a pan that could bring those to the middle is a pan onto nothing, with
 /// the whole picture off the pane and the double-click the only way to find it
 /// again.
@@ -536,7 +536,7 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64,
         return;
     }
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, crate::theme::well());
+    painter.rect_filled(rect, 0.0, crate::theme::picture());
 
     let fit = Spiral::new(rect, &cfg);
     navigate(ui, &response, &fit, &mut state.appearance.spiral);
@@ -960,7 +960,7 @@ fn names(
             spiral.rim(voice.pitch),
             name,
             crate::theme::text().gamma_multiply(voice.strength),
-            crate::theme::well().gamma_multiply(voice.strength),
+            crate::theme::picture().gamma_multiply(voice.strength),
             scale,
             magnify,
             // Led by the LETTER's ink, growing out along the ray: the gap a

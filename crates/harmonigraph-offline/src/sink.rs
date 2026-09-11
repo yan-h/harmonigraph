@@ -15,7 +15,7 @@ use std::io::Write;
 use std::process::{Child, Command, Stdio};
 
 pub enum Sink {
-    Video { child: Child, writer: Writer },
+    Video { child: Child, writer: Writer, encoded: Encoded },
     Pngs { dir: std::path::PathBuf, stem: String, index: u32, size: [u32; 2] },
     Raw { file: std::fs::File },
 }
@@ -147,6 +147,46 @@ impl Writer {
 /// aac`; another encoder primes by its own amount (Apple's by 2112).
 const AAC_PRIMING_SECONDS: f64 = 1024.0 / 48_000.0;
 
+/// ffmpeg's own count of the frames it has encoded, read off its `-progress`
+/// report.
+///
+/// Not the count handed over, which is all [`Writer`] knows. Between the two
+/// sits ffmpeg's backlog — its queues and x264's lookahead — and it is not
+/// small: on a 2560x1440 render of 5320 frames the last frame was handed over
+/// 26 s before ffmpeg exited, with 15% of the file still to be written. A
+/// progress bar driven by frames handed over sat full through all of it.
+pub struct Encoded {
+    /// Each count ffmpeg reports, in order. Closed when ffmpeg closes its
+    /// stdout, which it does on exit.
+    counts: std::sync::mpsc::Receiver<u64>,
+    latest: u64,
+}
+
+impl Encoded {
+    fn spawn(stdout: std::process::ChildStdout) -> Encoded {
+        let (report, counts) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            // Read to the end whether or not anyone is still listening: a
+            // report nobody drains is a pipe that fills and stalls the encoder.
+            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+                if let Some(frames) =
+                    line.strip_prefix("frame=").and_then(|n| n.trim().parse().ok())
+                {
+                    let _ = report.send(frames);
+                }
+            }
+        });
+        Encoded { counts, latest: 0 }
+    }
+
+    /// The newest count, without waiting for one.
+    fn latest(&mut self) -> u64 {
+        self.latest = self.counts.try_iter().last().unwrap_or(self.latest);
+        self.latest
+    }
+}
+
 /// How a video sink should be set up.
 pub struct VideoOptions<'a> {
     pub size: [u32; 2],
@@ -195,6 +235,8 @@ impl Sink {
         let mut command = Command::new(&ffmpeg);
         command
             .args(["-hide_banner", "-loglevel", "warning", "-y"])
+            // `key=value` lines on stdout, twice a second: see [`Encoded`].
+            .args(["-progress", "pipe:1"])
             .args(["-f", "rawvideo", "-pix_fmt", "rgba"])
             .args(["-s", &format!("{w}x{h}")])
             .args(["-r", &format!("{}", options.fps)])
@@ -259,7 +301,7 @@ impl Sink {
         // without one: the first frame is presented at 0 rather than an edit
         // later, which would put the audio ahead by two frames' worth.
         command.args(["-movflags", "+faststart+negative_cts_offsets", "-use_editlist", "0"]);
-        command.arg(path).stdin(Stdio::piped());
+        command.arg(path).stdin(Stdio::piped()).stdout(Stdio::piped());
 
         let mut child =
             command.spawn().map_err(|e| format!("could not start {}: {e}", ffmpeg.display()))?;
@@ -268,7 +310,18 @@ impl Sink {
         // second copy left in `child` would keep the encoder waiting for
         // frames through `finish`.
         let stdin = child.stdin.take().ok_or("ffmpeg stdin closed")?;
-        Ok(Sink::Video { child, writer: Writer::spawn(stdin) })
+        let stdout = child.stdout.take().ok_or("ffmpeg stdout closed")?;
+        Ok(Sink::Video { child, writer: Writer::spawn(stdin), encoded: Encoded::spawn(stdout) })
+    }
+
+    /// Frames the encoder has finished, for the sink that has one. `None` for
+    /// the other two, which write a frame as it is pushed: there a frame handed
+    /// over is a frame done.
+    pub fn encoded(&mut self) -> Option<u64> {
+        match self {
+            Sink::Video { encoded, .. } => Some(encoded.latest()),
+            Sink::Pngs { .. } | Sink::Raw { .. } => None,
+        }
     }
 
     /// Feed one frame. `Ok(true)` means keep going; `Ok(false)` means the
@@ -297,13 +350,19 @@ impl Sink {
         }
     }
 
-    /// Close the sink and wait for the encoder. Consumes self so a
+    /// Close the sink and wait for the encoder, handing `progress` each count
+    /// of encoded frames on the way — the encoder's backlog is the part of a
+    /// render that goes on after the last frame is drawn. Consumes self so a
     /// half-written video can't be mistaken for a finished one.
-    pub fn finish(self) -> Result<(), String> {
+    pub fn finish(self, progress: impl FnMut(u64)) -> Result<(), String> {
         match self {
-            Sink::Video { mut child, mut writer } => {
-                // Drain first: the queued frames are part of the video, and
-                // the thread holds the pipe ffmpeg is waiting for EOF on.
+            Sink::Video { mut child, mut writer, encoded } => {
+                // Close the queue without waiting on it: the writer drains
+                // what is queued — part of the video — and then drops the pipe,
+                // which is ffmpeg's EOF. ffmpeg closing its stdout on exit is
+                // what ends the reports.
+                writer.frames = None;
+                encoded.counts.iter().for_each(progress);
                 let written = writer.collect();
                 let status = child.wait().map_err(|e| format!("waiting for ffmpeg: {e}"))?;
                 // The exit status first, when it says something went wrong.
@@ -440,7 +499,7 @@ mod tests {
         for frame in &frames {
             assert_eq!(sink.push(frame), Ok(true), "the fake encoder is reading");
         }
-        sink.finish().expect("a clean finish");
+        sink.finish(|_| {}).expect("a clean finish");
 
         let written = std::fs::read(dir.join("frames.rgba")).expect("the encoder's input");
         assert_eq!(
@@ -471,7 +530,33 @@ mod tests {
             fed += 1;
             assert!(fed < 4096, "the encoder is gone and the sink went on accepting frames");
         }
-        sink.finish().expect("an encoder that exited cleanly is a clean finish");
+        sink.finish(|_| {}).expect("an encoder that exited cleanly is a clean finish");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The encoder's backlog is reported, not waited out in silence: counts
+    /// ffmpeg gives after the last frame is handed over reach `finish`'s
+    /// caller, up to the last one.
+    ///
+    /// The stand-in reports only once its input has ended, so every count
+    /// here arrives during `finish` — which is where a real encoder spends
+    /// the tail of a render, with the last frame drawn and the video not yet
+    /// written.
+    #[test]
+    #[cfg(unix)]
+    fn finish_reports_the_encoders_count_until_it_is_done() {
+        let dir = fake_ffmpeg(
+            "backlog",
+            "cat > /dev/null\nprintf 'frame=40\\nfps=12.0\\nprogress=continue\\nframe=64\\nprogress=end\\n'",
+        );
+        let mut sink = video_to(&dir);
+        let frame = vec![0u8; 4 * 2 * 4];
+        for _ in 0..64 {
+            assert_eq!(sink.push(&frame), Ok(true), "the fake encoder is reading");
+        }
+        let mut reported = Vec::new();
+        sink.finish(|frames| reported.push(frames)).expect("a clean finish");
+        assert_eq!(reported, [40, 64]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

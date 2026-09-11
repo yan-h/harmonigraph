@@ -523,7 +523,7 @@ pub fn derive_scene(
         plus_half_width: derive_plus_half_width(view),
         plus_taper_start: derive_plus_taper_start(view),
         mark_thickness: rings.mark_thickness,
-        background: crate::skin::well_color(),
+        background: crate::skin::picture_color(),
         pitch_lut: pitch_ramp_lut(view.pitch_gradient),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
