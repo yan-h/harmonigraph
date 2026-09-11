@@ -13,6 +13,7 @@ use parking_lot::Mutex;
 use crate::{configuration, publication};
 use render_job::{spawn_render, Progress, RenderControl};
 
+mod lifecycle;
 mod render_job;
 mod writer;
 
@@ -23,6 +24,7 @@ pub use writer::channel;
 pub use writer::testing;
 
 use configuration::{RecordAddress, RecordFence, CALLBACK_ACTIVE};
+use lifecycle::{Action, End, History, Observation, Policy, State};
 
 /// Ring capacity. Sized for a fast offline render rather than for a
 /// frame: even at 20x realtime a dense piece is only a few thousand
@@ -204,9 +206,9 @@ pub struct Recorder {
     /// full set — a take that inherited "no change since last time" would
     /// replay with default tuning.
     last_params: [f32; ParamKey::ALL.len()],
-    was_armed: bool,
-    /// Previous block start and duration in seconds, for continuity detection.
-    last_position: Option<(f64, f64)>,
+    lifecycle: State,
+    /// Independent position/duration and bar observations, including rejected scrubs.
+    history: History,
     /// Published for the GUI: is the transport actually moving?
     rolling: Arc<AtomicBool>,
     /// Whether this pass has already declared its audio start.
@@ -228,25 +230,6 @@ pub struct Recorder {
     /// The bar the GUI wants the take to end at, and the latch saying it did.
     /// See [`StopAtBar`] and [`Recorder::observe_bar`].
     stop_at_bar: Arc<StopAtBar>,
-    /// Bar position of the previous block, for the crossing test in
-    /// [`observe_bar`](Recorder::observe_bar). Separate from `last_position`
-    /// because the two are different clocks and either can be absent: a host
-    /// can report seconds with no beats timeline, and a stop bar must not fire
-    /// off a stale bar the way a missing one would.
-    last_bar: Option<f64>,
-    /// Local latch: once the rewind has ended the take, record nothing more
-    /// until re-armed, so nothing after it reaches the file.
-    finished: bool,
-    /// Whether the transport has actually rolled FORWARD since arming. Under
-    /// `end_at_rewind` a backward jump only ends the take once this is set —
-    /// otherwise the very first backward jump (the transport snapping to the
-    /// loop/play start when you hit play) would end the take before it recorded
-    /// a single block.
-    advanced: bool,
-    /// A backward jump arrived while the transport was stopped, so the take owes
-    /// a split — applied at the next block that actually records, not here. See
-    /// [`Recorder::observe_transport`].
-    pending_split: bool,
     /// Whether this take has recorded a block yet, without which an owed split
     /// has nothing to split from. See [`Recorder::observe_transport`].
     rolled: Arc<AtomicBool>,
@@ -418,21 +401,16 @@ impl Recorder {
     }
 
     fn update_armed(&mut self, armed: bool) -> bool {
-        if armed && !self.was_armed {
+        let action = self.advance(Observation::Armed(armed));
+        if action == Action::Arm {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.last_configuration = None;
-            self.last_position = None;
             self.audio_started = false;
-            self.finished = false;
-            self.advanced = false;
             self.captured.store(0, Ordering::Relaxed);
-            self.pending_split = false;
             self.rolled.store(false, Ordering::Relaxed);
             self.hit_rewind.store(false, Ordering::Relaxed);
-            self.last_bar = None;
             self.stop_at_bar.hit.store(false, Ordering::Relaxed);
         }
-        self.was_armed = armed;
         armed
     }
 
@@ -453,7 +431,7 @@ impl Recorder {
     }
 
     pub fn wants_audio(&self) -> bool {
-        self.was_armed
+        self.lifecycle.armed()
             && self.with_audio.load(Ordering::Relaxed)
             && !self.fence.failed.load(Ordering::Acquire)
     }
@@ -536,102 +514,8 @@ impl Recorder {
     /// no pass at all, and one played away from opens its pass with the block
     /// that fills it.
     pub fn observe_transport(&mut self, position: f64, playing: bool, duration: f64) -> bool {
-        // Once a rewind has ended the take, record nothing more until a fresh
-        // arm clears the latch.
-        if self.finished {
-            return false;
-        }
-        const BACKWARD_JUMP: f64 = 0.05;
-        let rolling = match self.last_position {
-            Some((last, _)) if position < last - if playing { BACKWARD_JUMP } else { 0.0 } => {
-                // A backward jump means the transport looped back, snapped to
-                // the loop/play start as playback began, or the playhead was
-                // dragged.
-                //
-                // Under `end_at_rewind` a jump that comes AFTER the take has
-                // rolled forward (`advanced`) IS the end of the take, so latch
-                // done and tell the GUI to stop + render — WITHOUT splitting,
-                // because these triggers want exactly one file and the jump is
-                // its end. Keyed off the jump itself, not the host's loop range:
-                // hosts (Bitwig included) don't flag the loop as active to the
-                // plugin, so nih-plug's loop_range stays None. It is also what a
-                // host does when an audio export finishes and it puts the
-                // playhead back; everything the transport does after that
-                // belongs to no take. The cost is that a manual rewind mid-take
-                // also ends it, which is the bargain both triggers are.
-                //
-                // But a backward jump BEFORE any forward motion is just the
-                // transport arriving at the loop/play start (the playhead was
-                // parked past it). Ending there would finish the take with
-                // nothing recorded — an empty file and a broken render. So
-                // instead begin the pass here: no NewPass (these triggers only
-                // ever want one file), no end.
-                //
-                if self.end_at_rewind.load(Ordering::Relaxed) {
-                    if self.advanced {
-                        self.finished = true;
-                        self.hit_rewind.store(true, Ordering::Relaxed);
-                        self.last_position = Some((position, duration));
-                        self.rolling.store(false, Ordering::Relaxed);
-                        return false;
-                    }
-                    // Still the same pass: never redeclare an audio origin or
-                    // parameter baseline over samples already in this file.
-                    // One file, so an owed split is dropped rather than
-                    // carried into the pass beginning here.
-                    self.pending_split = false;
-                    playing
-                } else if !playing {
-                    // OnDisarm, and the playhead moved while the transport was
-                    // stopped: note where it went and owe a split, but record
-                    // nothing here.
-                    self.pending_split = true;
-                    self.last_position = Some((position, duration));
-                    self.rolling.store(false, Ordering::Relaxed);
-                    return false;
-                } else {
-                    self.pending_split = true;
-                    true
-                }
-            }
-            Some((last, previous_duration)) => {
-                let step = position - last;
-                let continuous = previous_duration.is_finite()
-                    && previous_duration > 0.0
-                    && position >= last + previous_duration * 0.5
-                    && position <= last + previous_duration * 1.5;
-                let rolling = playing || continuous;
-                self.advanced |= rolling && step > 0.0;
-                rolling
-            }
-            // Nothing to compare on the first block; the flag is all
-            // there is.
-            None => playing,
-        };
-        self.last_position = Some((position, duration));
-        // An owed split lands on the first block that records again, ahead of
-        // that block's own events — which belong to the new pass. A new file
-        // starts empty, so every parameter must be written again or the new pass
-        // replays with whatever the previous one happened to end on, and the
-        // next pass's audio starts somewhere new.
-        //
-        // A trigger that wants one file drops the debt instead of paying it: the
-        // split can only have been owed under OnDisarm, so a trigger chosen
-        // since must not be handed a second pass — the take's notes would sit in
-        // it while the first file is the one that renders. Clearing it here as
-        // well as at a backward jump is what makes "one file" hold whichever way
-        // the debt comes due.
-        //
-        // So does a take that has not recorded a block yet: its only pass is
-        // empty, and the configuration side learns of a pass only from a block
-        // routed to it. Paid here, the split left that empty pass waiting for a
-        // close nothing would ever send, and Stop never finished — from the
-        // ordinary way to begin a take: arm stopped, return to the start, play.
-        if rolling
-            && std::mem::take(&mut self.pending_split)
-            && !self.end_at_rewind.load(Ordering::Relaxed)
-            && self.rolled.load(Ordering::Relaxed)
-        {
+        let action = self.advance(Observation::Transport { position, playing, duration });
+        if action == Action::SplitAndRecord {
             if let Some(pass) = self.record_pass.checked_add(1) {
                 self.record_pass = pass;
             } else {
@@ -642,6 +526,7 @@ impl Recorder {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.audio_started = false;
         }
+        let rolling = matches!(action, Action::Record | Action::SplitAndRecord);
         if rolling {
             self.rolled.store(true, Ordering::Relaxed);
         }
@@ -654,7 +539,7 @@ impl Recorder {
     /// BEFORE [`observe_transport`](Self::observe_transport): a block that ends
     /// the take here contributes nothing, so the cut lands on a block boundary
     /// at or before the bar rather than a block after it, and latching
-    /// `finished` first is also what stops `observe_transport` paying an owed
+    /// the completed state first is also what stops `observe_transport` paying an owed
     /// split into a pass that this same block immediately finishes empty.
     ///
     /// The bar is counted from ZERO at the song's start, which is the base the
@@ -674,36 +559,32 @@ impl Recorder {
     /// `playing = false` throughout while its position climbs, so the host's
     /// own flag cannot separate them (#569 eliminated that). What does separate
     /// them is size — playback advances by a block, a drag by seconds — so a
-    /// crossing wider than `STEP_BARS` below is read as a drag and only moves
-    /// `last_bar`. The residual case is a drag that lands within a bar of where
+    /// crossing wider than one bar is read as a drag and only moves
+    /// bar history. The residual case is a drag that lands within a bar of where
     /// it started and straddles the stop bar; it ends the take early, visibly
     /// (Record take switches off), and re-arming is the whole of the repair.
     pub fn observe_bar(&mut self, bar: Option<f64>) -> bool {
-        if self.finished {
-            return false;
-        }
-        /// The widest forward step in bars that still counts as playing rather
-        /// than dragging. A block is milliseconds — a hundredth of a bar at any
-        /// tempo a DAW offers — so this is three orders of magnitude of slack
-        /// against the one thing it must not misread, an offline export whose
-        /// blocks are large and whose transport reports itself stopped.
-        const STEP_BARS: f64 = 1.0;
-        let (Some(bar), Some(stop)) = (bar, self.stop_at_bar.get()) else {
-            // Remember the bar even with the trigger off, so switching it on
-            // mid-take compares against a real previous position rather than
-            // against wherever the take started.
-            self.last_bar = bar;
-            return false;
+        self.advance(Observation::Bar(bar)) == Action::Complete(End::Bar)
+    }
+
+    /// Snapshot shared policy and publish decisions outside the pure transition.
+    /// Callback and configuration ownership are deliberately unaffected here.
+    fn advance(&mut self, observation: Observation) -> Action {
+        let policy = Policy {
+            end_at_rewind: self.end_at_rewind.load(Ordering::Relaxed),
+            stop_bar: self.stop_at_bar.get(),
         };
-        let crossed =
-            self.last_bar.is_some_and(|last| last < stop && stop <= bar && bar - last <= STEP_BARS);
-        self.last_bar = Some(bar);
-        if crossed {
-            self.finished = true;
-            self.stop_at_bar.hit.store(true, Ordering::Relaxed);
+        let next = lifecycle::transition(self.lifecycle, self.history, observation, policy);
+        self.lifecycle = next.state;
+        self.history = next.history;
+        if let Action::Complete(end) = next.action {
+            match end {
+                End::Rewind => self.hit_rewind.store(true, Ordering::Relaxed),
+                End::Bar => self.stop_at_bar.hit.store(true, Ordering::Relaxed),
+            }
             self.rolling.store(false, Ordering::Relaxed);
         }
-        crossed
+        next.action
     }
 
     pub fn enable_configuration(&self) {
@@ -727,7 +608,7 @@ impl Recorder {
         self.fence.epoch()
     }
     pub fn configuration_address(&self) -> Option<RecordAddress> {
-        (self.was_armed && !self.finished && self.record_epoch != 0)
+        (self.lifecycle.armed() && self.lifecycle != State::Complete && self.record_epoch != 0)
             .then_some(RecordAddress { epoch: self.record_epoch, pass: self.record_pass })
     }
     pub fn fail_configuration(&self) {

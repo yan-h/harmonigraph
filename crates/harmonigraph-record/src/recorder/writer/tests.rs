@@ -1,8 +1,12 @@
 //! Recorder-output integration tests: the producer rings, GUI observations,
-//! and private writer state share the unchanged transport fixtures here.
+//! and private writer state share the transport fixtures here.
 
 use super::*;
 use harmonigraph_take::RenderConfig;
+
+// 64 frames at 48 kHz; 120 BPM in 4/4 gives two seconds per bar.
+const BLOCK_SECONDS: f64 = 64.0 / 48_000.0;
+const BLOCK_BARS: f64 = BLOCK_SECONDS / 2.0;
 
 /// The three fields [`header_for`] sets, each asserted against a value the
 /// header could not have arrived at on its own.
@@ -122,18 +126,14 @@ impl Bench {
                 with_audio: Arc::new(AtomicBool::new(false)),
                 dropped: dropped.clone(),
                 last_params: [f32::NAN; ParamKey::ALL.len()],
-                was_armed: false,
-                last_position: None,
+                lifecycle: State::Disarmed,
+                history: History::default(),
                 rolling: Arc::new(AtomicBool::new(false)),
                 audio_started: false,
                 end_at_rewind: end_at_rewind.clone(),
                 captured: Arc::new(AtomicU64::new(0)),
                 hit_rewind: hit_rewind.clone(),
                 stop_at_bar: stop_at_bar.clone(),
-                last_bar: None,
-                finished: false,
-                advanced: false,
-                pending_split: false,
                 rolled: Arc::new(AtomicBool::new(false)),
             },
             entries,
@@ -524,10 +524,8 @@ fn a_playhead_parked_for_several_blocks_has_not_advanced() {
 /// ends the take and is itself excluded, so nothing at or past the bar
 /// lands in the file.
 ///
-/// Blocks of 0.05 bar rather than a couple of big steps: the crossing test
-/// is bounded by step SIZE as well as by direction, and a fixture that
-/// arrived in one leap would pass the direction half while proving nothing
-/// about the half that separates playback from a drag.
+/// Callback-sized bar increments at 120 BPM: both the bar crossing and
+/// stopped-export continuity must accept the same realistic blocks.
 #[test]
 fn playing_through_the_stop_bar_ends_the_take_there() {
     let mut b = Bench::new();
@@ -535,13 +533,13 @@ fn playing_through_the_stop_bar_ends_the_take_there() {
     // Bar 5 as `observe_bar` counts, which is the arranger's bar 6.
     b.stop_at_bar(5.0);
 
-    let mut bar = 4.8;
-    while bar < 4.99 {
+    for block in 0..4 {
+        let bar = 5.0 - f64::from(4 - block) * BLOCK_BARS;
         assert!(!b.rec.observe_bar(Some(bar)), "still short of the bar");
+        assert_eq!(b.rec.observe_transport(bar * 2.0, false, BLOCK_SECONDS), block > 0);
         assert!(!b.hit_stop_bar());
-        bar += 0.05;
     }
-    assert!(b.rec.observe_bar(Some(bar + 0.05)), "this block reaches the bar");
+    assert!(b.rec.observe_bar(Some(5.0)), "this block reaches the bar");
     assert!(b.hit_stop_bar(), "the GUI is told to stop and render");
     assert!(
         !b.rec.observe_transport(99.0, true, 64.0 / 48_000.0),
@@ -563,7 +561,7 @@ fn arming_past_the_stop_bar_never_ends_the_take() {
     b.stop_at_bar(5.0);
 
     for step in 0..40 {
-        let bar = 12.0 + f64::from(step) * 0.05;
+        let bar = 12.0 + f64::from(step) * BLOCK_BARS;
         assert!(!b.rec.observe_bar(Some(bar)), "never below the bar, so never through it");
     }
     assert!(!b.hit_stop_bar());
@@ -587,7 +585,7 @@ fn a_playhead_dragged_across_the_stop_bar_does_not_end_the_take() {
 
     // And the take is still live: dragging back and playing through the bar
     // ends it the way it should have all along.
-    assert!(!b.rec.observe_bar(Some(32.9)), "dragged back");
+    assert!(!b.rec.observe_bar(Some(33.0 - BLOCK_BARS)), "dragged back");
     assert!(b.rec.observe_bar(Some(33.0)), "played through");
     assert!(b.hit_stop_bar());
 }
@@ -604,10 +602,10 @@ fn a_host_that_reports_no_bar_never_ends_the_take() {
     b.arm();
     b.stop_at_bar(5.0);
 
-    assert!(!b.rec.observe_bar(Some(4.9)));
+    assert!(!b.rec.observe_bar(Some(5.0 - BLOCK_BARS)));
     assert!(!b.rec.observe_bar(None), "no beats timeline");
     assert!(!b.rec.observe_bar(None));
-    assert!(!b.rec.observe_bar(Some(5.1)), "the crossing was never observed");
+    assert!(!b.rec.observe_bar(Some(5.0 + BLOCK_BARS)), "the crossing was never observed");
     assert!(!b.hit_stop_bar());
 }
 
@@ -618,7 +616,7 @@ fn re_arming_clears_the_stop_bar_latch() {
     let mut b = Bench::new();
     b.arm();
     b.stop_at_bar(5.0);
-    assert!(!b.rec.observe_bar(Some(4.9)));
+    assert!(!b.rec.observe_bar(Some(5.0 - BLOCK_BARS)));
     assert!(b.rec.observe_bar(Some(5.0)));
     assert!(b.hit_stop_bar());
 
@@ -656,8 +654,8 @@ fn a_rewind_restarts_an_at_bar_take_rather_than_ending_it() {
     );
     assert!(!b.hit_rewind(), "and does not end the take");
     assert!(!b.rec.observe_bar(Some(0.0)));
-    assert!(!b.rec.observe_bar(Some(4.98)));
-    assert!(b.rec.observe_bar(Some(5.02)), "the second pass reaches the bar");
+    assert!(!b.rec.observe_bar(Some(5.0 - BLOCK_BARS)));
+    assert!(b.rec.observe_bar(Some(5.0)), "the second pass reaches the bar");
     assert!(b.hit_stop_bar());
 }
 
@@ -670,7 +668,7 @@ fn a_rewind_restarts_an_at_bar_take_rather_than_ending_it() {
 /// and that is the same block: pay the debt first and the take rolls over
 /// into a fresh file which this block immediately finishes with nothing in
 /// it, and the newest file is the one that renders. Asking the bar first is
-/// what stops it, by latching `finished` before `observe_transport` reaches
+/// what stops it, by latching completion before `observe_transport` reaches
 /// its debt.
 ///
 /// The fixture has to park WITHIN a block of the bar, or the crossing is
@@ -691,13 +689,16 @@ fn a_block_that_both_owes_a_split_and_crosses_the_bar_opens_no_pass() {
 
     // Dragged back to a hair before the bar with the transport stopped: a
     // split is owed, not paid.
-    assert!(!b.rec.observe_bar(Some(4.99)));
-    assert!(!b.rec.observe_transport(9.98, false, 64.0 / 48_000.0), "parked after the drag");
+    assert!(!b.rec.observe_bar(Some(5.0 - BLOCK_BARS)));
+    assert!(
+        !b.rec.observe_transport(10.0 - BLOCK_SECONDS, false, BLOCK_SECONDS),
+        "parked after the drag"
+    );
 
     // Hit play, and the first block that would record is also the one that
     // crosses the bar.
-    assert!(b.rec.observe_bar(Some(5.02)), "the crossing");
-    assert!(!b.rec.observe_transport(10.04, true, 64.0 / 48_000.0), "the take is already over");
+    assert!(b.rec.observe_bar(Some(5.0)), "the crossing");
+    assert!(!b.rec.observe_transport(10.0, true, BLOCK_SECONDS), "the take is already over");
     let after = b.pushed();
     assert!(after.is_empty(), "no pass may be opened for a block that ends the take: {after:?}");
 }
