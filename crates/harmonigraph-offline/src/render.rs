@@ -152,10 +152,10 @@ pub fn render(
     for comma in harmonigraph_core::Comma::ALL {
         *state.appearance.view.temper_auto_mut(comma) = false;
     }
-    // "History: Whole take" — the one setting only a render can answer, since
+    // "Time shown: Whole video" — the one setting only a render can answer, since
     // the render window is its length. Set once before the first frame, so no
     // cache keyed on the analyzer config sees it move.
-    if state.appearance.render.history_spans_take {
+    if state.appearance.render.history_spans_video {
         state.appearance.spectrum.span_history(settings.end - settings.start);
     }
 
@@ -515,7 +515,7 @@ mod tests {
         assert_ne!(first, run(None).unwrap(), "the audio must change the rendered picture");
     }
 
-    /// "History: Whole take" draws exactly what the History duration dialled to
+    /// "Time shown: Whole video" draws exactly what the History duration dialled to
     /// the render's own length draws — and the default span draws something
     /// else, or the equality would hold for a render that ignored the setting.
     #[test]
@@ -551,9 +551,9 @@ mod tests {
                 Err(e) => panic!("{e}"),
             }
         };
-        let Some(spanned) = run(|a, _| a.render.history_spans_take = true) else { return };
+        let Some(spanned) = run(|a, _| a.render.history_spans_video = true) else { return };
         let dialled = run(|a, window| a.spectrum.roll_seconds = window).unwrap();
-        assert_eq!(spanned, dialled, "Whole take must span exactly the render's window");
+        assert_eq!(spanned, dialled, "Whole video must span exactly the render's window");
         assert_ne!(spanned, run(|_, _| {}).unwrap(), "the default span drew the same picture");
     }
 

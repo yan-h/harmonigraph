@@ -405,7 +405,7 @@ fn clear_everything(ui: &mut egui::Ui, state: &mut PictureState) {
 /// itself "Spectrogram" beside the Analyzer settings' heading of that name; what it
 /// decides is what this render bakes.
 ///
-/// The Spectrogram and History rows draw whatever the shell is, since a standalone with no
+/// The Spectrogram and Time shown rows draw whatever the shell is, since a standalone with no
 /// transport still renders; the rows that need a take to exist follow the same
 /// `supported` gate Record does.
 ///
@@ -436,18 +436,27 @@ fn render_controls(
         ],
     );
     // Only under Scrolling: Playhead lays the whole window out already, so the
-    // row would be a choice that changes nothing there.
+    // row would be a choice that changes nothing there. The first option names
+    // its span in seconds, so neither choice needs the Analyzer page to decode.
     if !state.appearance.render.playhead {
+        let last = format!(
+            "Last {}",
+            super::spectral::settings::span_readout(state.appearance.spectrum.roll_seconds)
+        );
         choice_row(
             ui,
-            "History",
-            &mut state.appearance.render.history_spans_take,
+            "Time shown",
+            &mut state.appearance.render.history_spans_video,
             &[
-                (false, "As set", "Scroll back as far as the Analyzer's History duration"),
+                (
+                    false,
+                    &last,
+                    "Show the same stretch of time as the preview: the History duration on the Analyzer page.",
+                ),
                 (
                     true,
-                    "Whole take",
-                    "Stretch the spectrogram history over the whole render, so the last frame reaches back to the first (up to 10 minutes). The live preview keeps the Analyzer's History duration.",
+                    "Whole video",
+                    "Scroll slowly enough that the whole video fits: by its last frame, the MIDI ribbons and spectrogram reach back to its first. Up to 10 minutes. The preview here keeps showing the History duration.",
                 ),
             ],
         );

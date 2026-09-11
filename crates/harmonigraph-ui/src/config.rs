@@ -584,7 +584,7 @@ pub struct SpectrumConfig {
 
 impl SpectrumConfig {
     /// Span the history over `seconds` — a render's own length, for
-    /// [`RenderConfig::history_spans_take`](crate::RenderConfig::history_spans_take)
+    /// [`RenderConfig::history_spans_video`](crate::RenderConfig::history_spans_video)
     /// — held to the History duration bar's ends, so the span a render draws
     /// is one the bar could have dialled and the history store reaches.
     pub fn span_history(&mut self, seconds: f64) {

@@ -204,13 +204,13 @@ pub struct RenderConfig {
     /// offline renderer from the take; `--playhead` on the command line also
     /// turns it on. Needs audio.
     pub playhead: bool,
-    /// Span the scrolling spectrogram's history over the whole render instead
-    /// of the Analyzer's History duration, so the last frame reaches back to
-    /// the first. Only a render knows its own length, so the live preview
+    /// The Video pane's "Time shown: Whole video": span the scrolling
+    /// spectrogram's history over the whole render instead of the Analyzer's
+    /// History duration, so the last frame reaches back to the first. Only a render knows its own length, so the live preview
     /// keeps the dialled span; the offline renderer applies this, held to the
     /// History duration bar's ends. Moot under [`playhead`](Self::playhead),
     /// which lays the whole window out already.
-    pub history_spans_take: bool,
+    pub history_spans_video: bool,
     /// The composed video frame — aspect ratio and the lattice/spectral split.
     /// Edited and previewed in the Video pane; the offline renderer reads it
     /// to compose the same picture.
@@ -241,7 +241,7 @@ impl Default for RenderConfig {
             audio_path: String::new(),
             audio_offset: String::new(),
             playhead: false,
-            history_spans_take: false,
+            history_spans_video: false,
             frame: RenderFrame::default(),
             // 1080 on the short edge — 1920x1080 at the default 16:9 frame,
             // and the resolution every host and site takes without
