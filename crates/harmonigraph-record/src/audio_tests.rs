@@ -201,12 +201,12 @@ fn ordinary_queued_rollover_keeps_each_pass_audio() {
     let recorder = worker.recorder.as_mut().unwrap();
     assert_no_alloc(|| {
         assert!(recorder.is_armed());
-        assert!(recorder.observe_transport(1.0, true));
+        assert!(recorder.observe_transport(1.0, true, 64.0 / 48_000.0));
         recorder.mark_audio_start(1.0);
         recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
         recorder.finish_callback();
         assert!(recorder.is_armed());
-        assert!(recorder.observe_transport(0.0, true));
+        assert!(recorder.observe_transport(0.0, true, 64.0 / 48_000.0));
         recorder.mark_audio_start(0.0);
         recorder.audio(&mut [0.75, -0.75].into_iter(), 2);
         recorder.finish_callback();

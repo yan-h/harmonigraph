@@ -357,8 +357,8 @@ pub struct Recorder {
     /// replay with default tuning.
     last_params: [f32; ParamKey::ALL.len()],
     was_armed: bool,
-    /// Transport position of the previous block, for jump detection.
-    last_position: Option<f64>,
+    /// Previous block start and duration in seconds, for continuity detection.
+    last_position: Option<(f64, f64)>,
     /// Published for the GUI: is the transport actually moving?
     rolling: Arc<AtomicBool>,
     /// Whether this pass has already declared its audio start.
@@ -370,17 +370,9 @@ pub struct Recorder {
     /// [`OnTransportStop`](harmonigraph_take::RenderTrigger::OnTransportStop).
     /// The take ends there rather than splitting into another pass.
     end_at_rewind: Arc<AtomicBool>,
-    /// Set by the GUI under
-    /// [`OnTransportStop`](harmonigraph_take::RenderTrigger::OnTransportStop):
-    /// a backward jump ends the take only once [`captured`](Self::captured)
-    /// says it is under way. See [`Recorder::observe_transport`].
-    rewind_needs_capture: Arc<AtomicBool>,
-    /// Notes that entered the current take, whichever path carried them — the
-    /// plain-MIDI arm's [`note`](Recorder::note) or the configuration owner's
-    /// addressed [`publish_note`](Recorder::publish_note). Zeroed on the arming
-    /// edge. Nonzero is what "the take is under way" means, to the rewind end
-    /// here and to the GUI's frame-counted stop alike; the count itself is the
-    /// status line's.
+    /// Notes that entered the current take, through either the plain-MIDI arm
+    /// or addressed publication. The status line reads this independently of
+    /// transport progress: audio-only takes and delayed notes also roll.
     captured: Arc<AtomicU64>,
     /// Published for the GUI: the transport went backwards and the take is done
     /// — the GUI reads this, stops, and renders the one pass.
@@ -409,7 +401,7 @@ pub struct Recorder {
     pending_split: bool,
     /// Whether this take has recorded a block yet, without which an owed split
     /// has nothing to split from. See [`Recorder::observe_transport`].
-    rolled: bool,
+    rolled: Arc<AtomicBool>,
 }
 
 impl Recorder {
@@ -587,7 +579,7 @@ impl Recorder {
             self.advanced = false;
             self.captured.store(0, Ordering::Relaxed);
             self.pending_split = false;
-            self.rolled = false;
+            self.rolled.store(false, Ordering::Relaxed);
             self.hit_rewind.store(false, Ordering::Relaxed);
             self.last_bar = None;
             self.stop_at_bar.hit.store(false, Ordering::Relaxed);
@@ -668,21 +660,22 @@ impl Recorder {
 
     /// Note where the transport is, and answer whether it is rolling —
     /// i.e. whether this block's events belong in the take. Called once
-    /// per block with the block's song position and the host's own
-    /// `playing` flag.
+    /// per block with the block's song position, the host's own `playing`
+    /// flag, and this block's frame count divided by its sample rate.
     ///
-    /// **Rolling is the union of "the position advanced" and "the host
-    /// says playing", not the flag alone.** During an offline render some
-    /// hosts report `playing = false` — nothing is being played, after
-    /// all — and trusting the flag would silently record nothing for the
-    /// whole export. Conversely a host that reports `playing` before its
-    /// position starts moving still gets its first block captured. Only
-    /// when both say no does a block get skipped, which is exactly a
-    /// parked transport.
+    /// A playing host records immediately. A stopped host records only when
+    /// its position advances by the PREVIOUS callback's duration, within 50%
+    /// either way (inclusive). This allows host timing/reporting variation and
+    /// variable callback sizes without accepting arbitrary forward scrubs as
+    /// offline export progress. The first stopped observation only seeds history;
+    /// rejected jumps also update it, so an export can start at a new position.
+    /// A tiny manual scrub in that interval is indistinguishable from export:
+    /// it records one block and can qualify a subsequent rewind as the take's
+    /// end. Repeated accepted tiny scrubs record one block each.
     ///
-    /// A backward jump means a loop wrapped or the playhead was dragged,
-    /// so the take splits. The threshold ignores a host's own jitter
-    /// around a loop point; a real wrap is far larger.
+    /// Any stopped backward movement is a rewind, including the restore of a
+    /// single accepted export block. Playing hosts retain the
+    /// 50 ms backward jitter allowance used for loop detection.
     ///
     /// **What a backward jump costs is what the host does when an audio export
     /// finishes: it puts the playhead back, and that lands here as one backward
@@ -694,7 +687,7 @@ impl Recorder {
     /// the next block that records, so a playhead put back and left alone opens
     /// no pass at all, and one played away from opens its pass with the block
     /// that fills it.
-    pub fn observe_transport(&mut self, position: f64, playing: bool) -> bool {
+    pub fn observe_transport(&mut self, position: f64, playing: bool, duration: f64) -> bool {
         // Once a rewind has ended the take, record nothing more until a fresh
         // arm clears the latch.
         if self.finished {
@@ -702,7 +695,7 @@ impl Recorder {
         }
         const BACKWARD_JUMP: f64 = 0.05;
         let rolling = match self.last_position {
-            Some(last) if position < last - BACKWARD_JUMP => {
+            Some((last, _)) if position < last - if playing { BACKWARD_JUMP } else { 0.0 } => {
                 // A backward jump means the transport looped back, snapped to
                 // the loop/play start as playback began, or the playhead was
                 // dragged.
@@ -726,36 +719,26 @@ impl Recorder {
                 // instead begin the pass here: no NewPass (these triggers only
                 // ever want one file), no end.
                 //
-                // Under OnTransportStop forward motion is not enough either
-                // (#569): a playhead dragged ahead to look and back to start
-                // moves exactly as an export does, `playing = false` included.
-                // What an export has and a drag does not is notes, so that
-                // trigger also waits for the take to have captured one — the
-                // same "under way" its frame-counted stop in the GUI asks.
-                // AtLoopEnd keeps the bargain it was chosen for: a rewind after
-                // any forward motion ends it, notes or not.
                 if self.end_at_rewind.load(Ordering::Relaxed) {
-                    let under_way = !self.rewind_needs_capture.load(Ordering::Relaxed)
-                        || self.captured.load(Ordering::Relaxed) > 0;
-                    if self.advanced && under_way {
+                    if self.advanced {
                         self.finished = true;
                         self.hit_rewind.store(true, Ordering::Relaxed);
-                        self.last_position = Some(position);
+                        self.last_position = Some((position, duration));
                         self.rolling.store(false, Ordering::Relaxed);
                         return false;
                     }
-                    self.last_params = [f32::NAN; ParamKey::ALL.len()];
-                    self.audio_started = false;
+                    // Still the same pass: never redeclare an audio origin or
+                    // parameter baseline over samples already in this file.
                     // One file, so an owed split is dropped rather than
                     // carried into the pass beginning here.
                     self.pending_split = false;
-                    true
+                    playing
                 } else if !playing {
                     // OnDisarm, and the playhead moved while the transport was
                     // stopped: note where it went and owe a split, but record
                     // nothing here.
                     self.pending_split = true;
-                    self.last_position = Some(position);
+                    self.last_position = Some((position, duration));
                     self.rolling.store(false, Ordering::Relaxed);
                     return false;
                 } else {
@@ -763,17 +746,21 @@ impl Recorder {
                     true
                 }
             }
-            Some(last) => {
-                if position > last {
-                    self.advanced = true;
-                }
-                playing || position > last
+            Some((last, previous_duration)) => {
+                let step = position - last;
+                let continuous = previous_duration.is_finite()
+                    && previous_duration > 0.0
+                    && position >= last + previous_duration * 0.5
+                    && position <= last + previous_duration * 1.5;
+                let rolling = playing || continuous;
+                self.advanced |= rolling && step > 0.0;
+                rolling
             }
             // Nothing to compare on the first block; the flag is all
             // there is.
             None => playing,
         };
-        self.last_position = Some(position);
+        self.last_position = Some((position, duration));
         // An owed split lands on the first block that records again, ahead of
         // that block's own events — which belong to the new pass. A new file
         // starts empty, so every parameter must be written again or the new pass
@@ -795,7 +782,7 @@ impl Recorder {
         if rolling
             && std::mem::take(&mut self.pending_split)
             && !self.end_at_rewind.load(Ordering::Relaxed)
-            && self.rolled
+            && self.rolled.load(Ordering::Relaxed)
         {
             if let Some(pass) = self.record_pass.checked_add(1) {
                 self.record_pass = pass;
@@ -807,7 +794,9 @@ impl Recorder {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.audio_started = false;
         }
-        self.rolled |= rolling;
+        if rolling {
+            self.rolled.store(true, Ordering::Relaxed);
+        }
         self.rolling.store(rolling, Ordering::Relaxed);
         rolling
     }
@@ -990,8 +979,8 @@ pub struct Control {
     with_audio: Arc<AtomicBool>,
     /// Mirror for the audio thread of whether a backward jump ends the take.
     end_at_rewind: Arc<AtomicBool>,
-    /// And whether it waits for the take to have captured a note first.
-    rewind_needs_capture: Arc<AtomicBool>,
+    /// Whether any transport block has been accepted in this take.
+    rolled: Arc<AtomicBool>,
     /// The audio thread's count of notes in the current take.
     captured: Arc<AtomicU64>,
     /// Set by the audio thread when the transport went backwards: the take is
@@ -1023,17 +1012,13 @@ impl Control {
         self.end_at_rewind.store(on, Ordering::Relaxed);
     }
 
-    /// Tell the audio thread whether that backward jump waits for the take to
-    /// have captured a note — true under
-    /// [`OnTransportStop`](harmonigraph_take::RenderTrigger::OnTransportStop)
-    /// alone, whose rewind cannot otherwise tell an export from a scrub
-    /// (#569). Called every GUI frame, with the setter above.
-    pub fn set_rewind_needs_capture(&self, on: bool) {
-        self.rewind_needs_capture.store(on, Ordering::Relaxed);
+    /// Whether this take accepted a transport block, including audio-only
+    /// exports and blocks whose notes are still awaiting publication.
+    pub fn has_rolled(&self) -> bool {
+        self.rolled.load(Ordering::Relaxed)
     }
 
-    /// Notes the current take has captured, by either path into it. Nonzero
-    /// is what makes a take "under way"; see `Recorder::captured`.
+    /// Notes the current take has captured, by either path into it.
     pub fn captured(&self) -> u64 {
         self.captured.load(Ordering::Relaxed)
     }
@@ -1166,6 +1151,7 @@ impl Control {
         self.hit_rewind.store(false, Ordering::Relaxed);
         self.stop_at_bar.hit.store(false, Ordering::Relaxed);
         self.captured.store(0, Ordering::Relaxed);
+        self.rolled.store(false, Ordering::Relaxed);
         // Finishing barred Start until every old armed callback retired.
         // An overlapping idle callback captured disarmed and owns no audio,
         // so its activity bit cannot carry ownership into this new epoch.
@@ -1315,7 +1301,7 @@ pub fn channel() -> (Recorder, Control) {
     let rolling = Arc::new(AtomicBool::new(false));
     let with_audio = Arc::new(AtomicBool::new(false));
     let end_at_rewind = Arc::new(AtomicBool::new(false));
-    let rewind_needs_capture = Arc::new(AtomicBool::new(false));
+    let rolled = Arc::new(AtomicBool::new(false));
     let captured = Arc::new(AtomicU64::new(0));
     let hit_rewind = Arc::new(AtomicBool::new(false));
     let stop_at_bar = Arc::new(StopAtBar::default());
@@ -1518,7 +1504,6 @@ pub fn channel() -> (Recorder, Control) {
             audio: audio_producer,
             with_audio: with_audio.clone(),
             end_at_rewind: end_at_rewind.clone(),
-            rewind_needs_capture: rewind_needs_capture.clone(),
             captured: captured.clone(),
             hit_rewind: hit_rewind.clone(),
             stop_at_bar: stop_at_bar.clone(),
@@ -1526,7 +1511,7 @@ pub fn channel() -> (Recorder, Control) {
             finished: false,
             advanced: false,
             pending_split: false,
-            rolled: false,
+            rolled: rolled.clone(),
         },
         Control {
             display: Arc::new(Mutex::new(Some(display_consumer))),
@@ -1539,7 +1524,7 @@ pub fn channel() -> (Recorder, Control) {
             rolling,
             with_audio,
             end_at_rewind,
-            rewind_needs_capture,
+            rolled,
             captured,
             hit_rewind,
             stop_at_bar,
@@ -1797,7 +1782,6 @@ pub mod testing {
             rolling,
             audio_started: false,
             end_at_rewind,
-            rewind_needs_capture: Arc::new(AtomicBool::new(false)),
             captured: Arc::new(AtomicU64::new(0)),
             hit_rewind,
             stop_at_bar: Arc::new(StopAtBar::default()),
@@ -1805,7 +1789,7 @@ pub mod testing {
             finished: false,
             advanced: false,
             pending_split: false,
-            rolled: false,
+            rolled: Arc::new(AtomicBool::new(false)),
         };
         let capture = Capture {
             fence,
@@ -3191,7 +3175,6 @@ mod tests {
                     rolling: Arc::new(AtomicBool::new(false)),
                     audio_started: false,
                     end_at_rewind: end_at_rewind.clone(),
-                    rewind_needs_capture: Arc::new(AtomicBool::new(false)),
                     captured: Arc::new(AtomicU64::new(0)),
                     hit_rewind: hit_rewind.clone(),
                     stop_at_bar: stop_at_bar.clone(),
@@ -3199,7 +3182,7 @@ mod tests {
                     finished: false,
                     advanced: false,
                     pending_split: false,
-                    rolled: false,
+                    rolled: Arc::new(AtomicBool::new(false)),
                 },
                 entries,
                 samples,
@@ -3220,11 +3203,9 @@ mod tests {
             self.end_at_rewind.store(true, Ordering::Relaxed);
         }
 
-        /// What the GUI publishes for OnTransportStop: a rewind ends the take,
-        /// but only one that has captured a note.
+        /// What the GUI publishes for OnTransportStop: a rewind ends the take.
         fn on_transport_stop(&self) {
             self.end_at_rewind();
-            self.rec.rewind_needs_capture.store(true, Ordering::Relaxed);
         }
 
         fn hit_rewind(&self) -> bool {
@@ -3883,18 +3864,18 @@ mod tests {
         assert!(rec.is_armed(), "arming clears last_position and the done latch");
 
         // One loop's worth of forward motion.
-        assert!(rec.observe_transport(0.0, true));
-        assert!(rec.observe_transport(1.0, true));
-        assert!(rec.observe_transport(2.0, true));
+        assert!(rec.observe_transport(0.0, true, 64.0 / 48_000.0));
+        assert!(rec.observe_transport(1.0, true, 64.0 / 48_000.0));
+        assert!(rec.observe_transport(2.0, true, 64.0 / 48_000.0));
         assert!(!ctrl.hit_rewind(), "still mid-loop");
 
         // The transport wraps back to the loop start: end the take here, and
         // signal the GUI — do NOT keep rolling into a second pass.
-        assert!(!rec.observe_transport(0.0, true), "the wrap ends the take");
+        assert!(!rec.observe_transport(0.0, true, 64.0 / 48_000.0), "the wrap ends the take");
         assert!(ctrl.hit_rewind(), "GUI is told to stop and render the pass");
 
         // Latched: nothing rolls again until a fresh arm.
-        assert!(!rec.observe_transport(1.0, true));
+        assert!(!rec.observe_transport(1.0, true, 64.0 / 48_000.0));
     }
 
     #[test]
@@ -3903,10 +3884,10 @@ mod tests {
         ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
         // end_at_rewind stays off — the default OnDisarm/looping behavior.
         assert!(rec.is_armed());
-        assert!(rec.observe_transport(0.0, true));
-        assert!(rec.observe_transport(2.0, true));
+        assert!(rec.observe_transport(0.0, true, 64.0 / 48_000.0));
+        assert!(rec.observe_transport(2.0, true, 64.0 / 48_000.0));
         // The wrap starts a new pass but keeps recording, as before.
-        assert!(rec.observe_transport(0.0, true), "a normal loop keeps going");
+        assert!(rec.observe_transport(0.0, true, 64.0 / 48_000.0), "a normal loop keeps going");
         assert!(!ctrl.hit_rewind());
     }
 
@@ -3916,9 +3897,9 @@ mod tests {
         ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
         ctrl.set_end_at_rewind(true);
         assert!(rec.is_armed());
-        assert!(rec.observe_transport(0.0, true));
-        assert!(rec.observe_transport(2.0, true));
-        assert!(!rec.observe_transport(0.0, true), "the wrap ends the first take");
+        assert!(rec.observe_transport(0.0, true, 64.0 / 48_000.0));
+        assert!(rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+        assert!(!rec.observe_transport(0.0, true, 64.0 / 48_000.0), "the wrap ends the first take");
         assert!(ctrl.hit_rewind());
 
         // Disarm, then re-arm: the done latch and the loop-end flag clear, so
@@ -3928,7 +3909,7 @@ mod tests {
         ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
         assert!(rec.is_armed(), "re-arm");
         assert!(!ctrl.hit_rewind(), "the latch cleared on re-arm");
-        assert!(rec.observe_transport(0.0, true), "records again");
+        assert!(rec.observe_transport(0.0, true, 64.0 / 48_000.0), "records again");
     }
 
     #[test]
@@ -3939,24 +3920,27 @@ mod tests {
         assert!(rec.is_armed());
 
         // Playhead parked PAST the loop start, transport stopped.
-        assert!(!rec.observe_transport(5.0, false), "parked, not rolling");
+        assert!(!rec.observe_transport(5.0, false, 64.0 / 48_000.0), "parked, not rolling");
 
         // Hit play: the transport snaps back to the loop start. This is the bug
         // that produced empty takes — it must NOT end the take, because nothing
         // has been recorded yet. It begins the pass instead.
-        assert!(rec.observe_transport(0.0, true), "the jump-to-start begins the pass");
+        assert!(
+            rec.observe_transport(0.0, true, 64.0 / 48_000.0),
+            "the jump-to-start begins the pass"
+        );
         assert!(!ctrl.hit_rewind(), "the initial jump is not a loop end");
 
         // Now it rolls forward through the loop...
-        assert!(rec.observe_transport(1.0, true));
-        assert!(rec.observe_transport(2.0, true));
+        assert!(rec.observe_transport(1.0, true, 64.0 / 48_000.0));
+        assert!(rec.observe_transport(2.0, true, 64.0 / 48_000.0));
 
         // ...and THIS wrap, after real forward motion, is the loop end.
-        assert!(!rec.observe_transport(0.0, true), "the real wrap ends the take");
+        assert!(!rec.observe_transport(0.0, true, 64.0 / 48_000.0), "the real wrap ends the take");
         assert!(ctrl.hit_rewind());
     }
 
-    /// Rolling is the UNION of "the position advanced" and "the host says
+    /// Rolling is the union of "the position advanced continuously" and "the host says
     /// playing", so a position that moves records the block whatever the flag
     /// says.
     ///
@@ -3970,12 +3954,66 @@ mod tests {
         b.arm();
         // Nothing to compare against on the first block, so the flag IS all
         // there is, and it says no.
-        assert!(!b.rec.observe_transport(0.0, false));
+        assert!(!b.rec.observe_transport(0.0, false, 64.0 / 48_000.0));
         assert!(
-            b.rec.observe_transport(1.0, false),
+            b.rec.observe_transport(64.0 / 48_000.0, false, 64.0 / 48_000.0),
             "the position advanced, so the block belongs in the take"
         );
-        assert!(b.rec.observe_transport(2.0, false));
+        assert!(b.rec.observe_transport(128.0 / 48_000.0, false, 64.0 / 48_000.0));
+    }
+
+    /// The tolerance includes its endpoints, excludes the next sample outside
+    /// them, and follows the previous callback even if the next one changes size.
+    /// A tiny scrub in the same interval has exactly the accepted block's cost.
+    #[test]
+    fn stopped_continuity_edges_emit_only_the_accepted_blocks() {
+        for (frames, rate) in [(64, 48_000.0), (256, 44_100.0)] {
+            let duration = frames as f64 / rate;
+            for (step, accepted) in [
+                (0.0, false),
+                (duration * 0.5 - 1.0 / rate, false),
+                (duration * 0.5, true),
+                (duration, true),
+                (duration * 1.5, true),
+                (duration * 1.5 + 1.0 / rate, false),
+                (20.0, false),
+            ] {
+                let mut b = Bench::new();
+                b.arm();
+                b.on_transport_stop();
+                assert!(!b.rec.observe_transport(5.0, false, duration));
+                // The NEXT block is twice as long. Using its duration to judge
+                // this step would wrongly reject the lower tolerance edge.
+                let t = 5.0 + step;
+                assert_eq!(b.rec.observe_transport(t, false, duration * 2.0), accepted);
+                if accepted {
+                    b.rec.params(t, [0.5; ParamKey::ALL.len()]);
+                    b.rec.configuration(
+                        t,
+                        harmonigraph_core::configuration::ConfigReducer::default().resolved(),
+                    );
+                    b.rec.mark_audio_start(t);
+                    b.rec.audio(&mut std::iter::repeat_n(0.25, frames * 4), frames * 4);
+                }
+                let entries: Vec<_> = std::iter::from_fn(|| b.entries.pop().ok()).collect();
+                assert_eq!(entries.len(), if accepted { ParamKey::ALL.len() + 3 } else { 0 });
+                if accepted {
+                    assert!(entries.iter().all(|entry| match entry {
+                        Entry::Param { t: time, .. } | Entry::AudioStart(time) => *time == t,
+                        Entry::Configuration(config) => config.t == t,
+                        Entry::AudioSamples(n) => *n == frames * 4,
+                        _ => false,
+                    }));
+                }
+                assert_eq!(b.written(), vec![0.25; if accepted { frames * 4 } else { 0 }]);
+                assert!(!b.rec.observe_transport(5.0, false, duration));
+                assert_eq!(
+                    b.hit_rewind(),
+                    accepted,
+                    "tiny accepted scrubs also qualify the rewind"
+                );
+            }
+        }
     }
 
     /// The other half of the union, and its floor: a host that reports
@@ -3986,12 +4024,12 @@ mod tests {
     fn only_a_parked_transport_stops_a_block_being_recorded() {
         let mut b = Bench::new();
         b.arm();
-        assert!(!b.rec.observe_transport(4.0, false));
+        assert!(!b.rec.observe_transport(4.0, false, 64.0 / 48_000.0));
         assert!(
-            !b.rec.observe_transport(4.0, false),
+            !b.rec.observe_transport(4.0, false, 64.0 / 48_000.0),
             "neither the position nor the flag: this is a parked transport"
         );
-        assert!(b.rec.observe_transport(4.0, true), "the flag alone still counts");
+        assert!(b.rec.observe_transport(4.0, true, 64.0 / 48_000.0), "the flag alone still counts");
     }
 
     /// AtLoopEnd has to survive the playhead being parked for MORE THAN ONE
@@ -4012,12 +4050,15 @@ mod tests {
 
         // Parked past the loop start, transport stopped, for several blocks.
         for _ in 0..4 {
-            assert!(!b.rec.observe_transport(5.0, false), "parked");
+            assert!(!b.rec.observe_transport(5.0, false, 64.0 / 48_000.0), "parked");
         }
 
         // Hit play: the transport snaps back to the loop start. Nothing has
         // been recorded yet, so this begins the pass rather than ending it.
-        assert!(b.rec.observe_transport(0.0, true), "the jump-to-start begins the pass");
+        assert!(
+            b.rec.observe_transport(0.0, true, 64.0 / 48_000.0),
+            "the jump-to-start begins the pass"
+        );
         assert!(!b.hit_rewind(), "a parked playhead has not advanced");
         // Beginning the pass is not splitting it: AtLoopEnd only ever wants one
         // file, and a `NewPass` here would leave the take's notes in the second
@@ -4026,8 +4067,11 @@ mod tests {
         assert!(begun.is_empty(), "the jump-to-start must not split the take: {begun:?}");
 
         // Real forward motion, and only then does a wrap mean the loop end.
-        assert!(b.rec.observe_transport(1.0, true));
-        assert!(!b.rec.observe_transport(0.0, true), "the real wrap ends the take");
+        assert!(b.rec.observe_transport(1.0, true, 64.0 / 48_000.0));
+        assert!(
+            !b.rec.observe_transport(0.0, true, 64.0 / 48_000.0),
+            "the real wrap ends the take"
+        );
         assert!(b.hit_rewind());
     }
 
@@ -4055,7 +4099,7 @@ mod tests {
         assert!(b.rec.observe_bar(Some(bar + 0.05)), "this block reaches the bar");
         assert!(b.hit_stop_bar(), "the GUI is told to stop and render");
         assert!(
-            !b.rec.observe_transport(99.0, true),
+            !b.rec.observe_transport(99.0, true, 64.0 / 48_000.0),
             "and nothing after it is recorded, whatever the transport does"
         );
     }
@@ -4158,10 +4202,13 @@ mod tests {
         // `end_at_rewind` deliberately NOT set: that is `ends_at_rewind()`'s
         // answer for AtBar.
 
-        assert!(b.rec.observe_transport(1.0, true));
+        assert!(b.rec.observe_transport(1.0, true, 64.0 / 48_000.0));
         assert!(!b.rec.observe_bar(Some(2.0)));
         // Back to the top, and forward again through the bar.
-        assert!(b.rec.observe_transport(0.0, true), "a rewind splits, as under OnDisarm");
+        assert!(
+            b.rec.observe_transport(0.0, true, 64.0 / 48_000.0),
+            "a rewind splits, as under OnDisarm"
+        );
         assert!(!b.hit_rewind(), "and does not end the take");
         assert!(!b.rec.observe_bar(Some(0.0)));
         assert!(!b.rec.observe_bar(Some(4.98)));
@@ -4192,20 +4239,20 @@ mod tests {
 
         // Rolling, well short of the bar, then on past it to somewhere else.
         assert!(!b.rec.observe_bar(Some(4.0)));
-        assert!(b.rec.observe_transport(8.0, true));
+        assert!(b.rec.observe_transport(8.0, true, 64.0 / 48_000.0));
         assert!(!b.rec.observe_bar(Some(20.0)), "a leap, not playback");
-        assert!(b.rec.observe_transport(40.0, true));
+        assert!(b.rec.observe_transport(40.0, true, 64.0 / 48_000.0));
         let _ = b.pushed();
 
         // Dragged back to a hair before the bar with the transport stopped: a
         // split is owed, not paid.
         assert!(!b.rec.observe_bar(Some(4.99)));
-        assert!(!b.rec.observe_transport(9.98, false), "parked after the drag");
+        assert!(!b.rec.observe_transport(9.98, false, 64.0 / 48_000.0), "parked after the drag");
 
         // Hit play, and the first block that would record is also the one that
         // crosses the bar.
         assert!(b.rec.observe_bar(Some(5.02)), "the crossing");
-        assert!(!b.rec.observe_transport(10.04, true), "the take is already over");
+        assert!(!b.rec.observe_transport(10.04, true, 64.0 / 48_000.0), "the take is already over");
         let after = b.pushed();
         assert!(
             after.is_empty(),
@@ -4224,15 +4271,15 @@ mod tests {
     fn a_step_back_smaller_than_the_threshold_is_jitter_rather_than_a_wrap() {
         let mut b = Bench::new();
         b.arm();
-        assert!(b.rec.observe_transport(1.00, true));
-        assert!(b.rec.observe_transport(1.04, true));
+        assert!(b.rec.observe_transport(1.00, true, 64.0 / 48_000.0));
+        assert!(b.rec.observe_transport(1.04, true, 64.0 / 48_000.0));
         // 0.02 back, under BACKWARD_JUMP: the host is jittering, not looping.
-        assert!(b.rec.observe_transport(1.02, true));
+        assert!(b.rec.observe_transport(1.02, true, 64.0 / 48_000.0));
         let jitter = b.pushed();
         assert!(jitter.is_empty(), "jitter must not split the take, but pushed {jitter:?}");
 
         // A real wrap is far larger, and does split it.
-        assert!(b.rec.observe_transport(0.0, true));
+        assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
         assert_eq!(b.pushed(), ["new-pass"]);
     }
 
@@ -4248,17 +4295,20 @@ mod tests {
     fn a_plain_wrap_splits_the_file_and_a_loop_end_wrap_does_not() {
         let mut b = Bench::new();
         b.arm();
-        assert!(b.rec.observe_transport(0.0, true));
-        assert!(b.rec.observe_transport(2.0, true));
-        assert!(b.rec.observe_transport(0.0, true), "a plain wrap keeps recording");
+        assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
+        assert!(b.rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+        assert!(
+            b.rec.observe_transport(0.0, true, 64.0 / 48_000.0),
+            "a plain wrap keeps recording"
+        );
         assert_eq!(b.pushed(), ["new-pass"], "the plain wrap opens the next pass");
 
         let mut b = Bench::new();
         b.arm();
         b.end_at_rewind();
-        assert!(b.rec.observe_transport(0.0, true));
-        assert!(b.rec.observe_transport(2.0, true));
-        assert!(!b.rec.observe_transport(0.0, true), "the loop end ends the take");
+        assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
+        assert!(b.rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+        assert!(!b.rec.observe_transport(0.0, true, 64.0 / 48_000.0), "the loop end ends the take");
         let split = b.pushed();
         assert!(
             split.is_empty(),
@@ -4279,17 +4329,26 @@ mod tests {
     fn a_playhead_restored_after_an_export_neither_records_nor_splits() {
         let mut b = Bench::new();
         b.arm();
-        assert!(!b.rec.observe_transport(0.0, false), "nothing to compare on the first block");
-        assert!(b.rec.observe_transport(40.0, false), "the position advancing IS the export");
-        assert!(b.rec.observe_transport(180.0, false));
+        assert!(
+            !b.rec.observe_transport(40.0, false, 64.0 / 48_000.0),
+            "nothing to compare on the first block"
+        );
+        assert!(
+            b.rec.observe_transport(40.0 + 64.0 / 48_000.0, false, 64.0 / 48_000.0),
+            "the position advancing IS the export"
+        );
+        assert!(b.rec.observe_transport(40.0 + 128.0 / 48_000.0, false, 64.0 / 48_000.0));
         b.pushed();
 
-        assert!(!b.rec.observe_transport(5.0, false), "the restore is not the take rolling");
+        assert!(
+            !b.rec.observe_transport(5.0, false, 64.0 / 48_000.0),
+            "the restore is not the take rolling"
+        );
         let restore = b.pushed();
         assert!(restore.is_empty(), "the restore must not split the take, but pushed {restore:?}");
 
         // Parked, which is what lets the GUI's stop debounce run out.
-        assert!(!b.rec.observe_transport(5.0, false));
+        assert!(!b.rec.observe_transport(5.0, false, 64.0 / 48_000.0));
         assert!(b.pushed().is_empty());
     }
 
@@ -4301,74 +4360,64 @@ mod tests {
     fn a_rewind_while_stopped_splits_at_the_block_that_records_again() {
         let mut b = Bench::new();
         b.arm();
-        assert!(b.rec.observe_transport(60.0, true));
-        assert!(b.rec.observe_transport(90.0, true));
+        assert!(b.rec.observe_transport(60.0, true, 64.0 / 48_000.0));
+        assert!(b.rec.observe_transport(90.0, true, 64.0 / 48_000.0));
         b.pushed();
 
-        assert!(!b.rec.observe_transport(0.0, false), "dragged back with the transport stopped");
+        assert!(
+            !b.rec.observe_transport(0.0, false, 64.0 / 48_000.0),
+            "dragged back with the transport stopped"
+        );
         assert!(b.pushed().is_empty(), "no file is owed one yet");
 
-        assert!(b.rec.observe_transport(0.5, true), "playing again");
+        assert!(b.rec.observe_transport(0.5, true, 64.0 / 48_000.0), "playing again");
         assert_eq!(b.pushed(), ["new-pass"]);
-        assert!(b.rec.observe_transport(1.0, true));
+        assert!(b.rec.observe_transport(1.0, true, 64.0 / 48_000.0));
         assert!(b.pushed().is_empty(), "the split is owed once, not every block after");
     }
 
-    /// The take ends where the host took the playhead back, which is the block a
-    /// finished audio export produces. Positions are from a real Bitwig export
-    /// that rendered the wrong file: 82 seconds captured, then the restore.
-    ///
-    /// Ending on the audio thread is what the frame-counted stop in the editor
-    /// cannot do. The restore arrives well inside the debounce, so the take is
-    /// still armed for whatever the transport does next — and under the old rule
-    /// that opened a pass which, being the last, was the one rendered.
-    ///
-    /// The export plays notes into the take, as a real one does: under
-    /// OnTransportStop they are what tells it from a playhead dragged ahead
-    /// and back, which moves the same way and holds nothing (#569).
+    /// #523: even an audio-only stopped export ends at its restore, before
+    /// the background debounce can run. Unlike the original fixture's 82-second
+    /// leaps, every export step here is one 64-frame callback at 48 kHz.
     #[test]
     fn a_playhead_restored_after_an_export_ends_the_take_there() {
         let mut b = Bench::new();
         b.arm();
         b.on_transport_stop();
-        assert!(!b.rec.observe_transport(0.0, false), "nothing to compare on the first block");
-        assert!(b.rec.observe_transport(4.254, false), "the position advancing IS the export");
-        b.rec.note(4.254, SourceId::DIRECT, 0, 60, NoteEventKind::On { velocity: 0.8 });
-        assert!(b.rec.observe_transport(86.372, false));
-        b.rec.note(86.372, SourceId::DIRECT, 0, 60, NoteEventKind::Off);
-        b.pushed();
-
-        assert!(!b.rec.observe_transport(4.254, false), "the restore ends the take");
-        assert!(b.hit_rewind(), "the GUI is told to stop and render this pass");
-        let after = b.pushed();
-        assert!(after.is_empty(), "no pass is opened for what follows, but pushed {after:?}");
-
-        // Whatever rolls after that belongs to no take — the 0.1s fragment the
-        // export was followed by is what got rendered in place of the piece.
-        assert!(!b.rec.observe_transport(4.35, true));
+        let duration = 64.0 / 48_000.0;
+        assert!(!b.rec.observe_transport(4.254, false, duration));
+        for block in 1..=64 {
+            let t = 4.254 + f64::from(block) * duration;
+            assert!(b.rec.observe_transport(t, false, duration));
+            b.rec.mark_audio_start(t);
+            b.rec.audio(&mut [0.25, -0.25].into_iter().cycle().take(128), 128);
+            assert_eq!(b.written(), [0.25, -0.25].repeat(64));
+        }
+        let records = b.pushed();
+        assert_eq!(records.iter().filter(|r| r.starts_with("audio-start")).count(), 1);
+        assert!(!b.rec.observe_transport(4.254, false, duration), "the restore ends the take");
+        assert!(b.hit_rewind());
+        assert!(b.pushed().is_empty(), "restore opens no pass and records nothing");
+        assert!(!b.rec.observe_transport(4.35, true, duration));
         assert!(b.pushed().is_empty());
     }
 
-    /// A playhead dragged ahead to look and back to the top, before a note has
-    /// played, is not the end of an OnTransportStop take (#569).
-    ///
-    /// It moves exactly as the export above does — forward, then back, with
-    /// the host reporting `playing = false` throughout — so only what the take
-    /// holds tells the two apart. Published through the `Control` the GUI uses,
-    /// so a setter wired to an atomic the audio thread never reads fails here.
+    /// #569/#838: a discontinuous pre-play scrub is rejected without ending
+    /// the take. Use the same Control setter as the editor.
     #[test]
     fn a_scrub_forward_and_back_before_playing_does_not_end_the_take() {
         let (mut rec, ctrl) = channel();
         ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
         ctrl.set_end_at_rewind(true);
-        ctrl.set_rewind_needs_capture(true);
         assert!(rec.is_armed());
-
-        assert!(!rec.observe_transport(10.0, false), "parked, not rolling");
-        rec.observe_transport(30.0, false); // dragged ahead to look
-        rec.observe_transport(5.0, false); // dragged back to the top
-        assert!(!ctrl.hit_rewind(), "a scrub before the first note is not a take's end");
-        assert!(rec.observe_transport(5.1, true), "and the take records what plays from there");
+        let duration = 64.0 / 48_000.0;
+        for position in [10.0, 30.0, 5.0] {
+            assert!(!rec.observe_transport(position, false, duration));
+            assert!(!ctrl.has_rolled());
+        }
+        assert!(!ctrl.hit_rewind());
+        assert!(rec.observe_transport(5.0, true, duration));
+        assert!(ctrl.has_rolled());
     }
 
     /// A one-file trigger drops a split the take owed from before it was chosen,
@@ -4382,13 +4431,13 @@ mod tests {
         // stopped, which owes a split and has advanced nothing. The block has to
         // record, or the split is dropped as one owed by an empty take and this
         // passes without reaching the one-file rule at all.
-        assert!(b.rec.observe_transport(10.0, true));
-        assert!(!b.rec.observe_transport(5.0, false));
+        assert!(b.rec.observe_transport(10.0, true, 64.0 / 48_000.0));
+        assert!(!b.rec.observe_transport(5.0, false, 64.0 / 48_000.0));
         assert!(b.pushed().is_empty());
 
         // Finish changes to a trigger that wants one file, and the take resumes.
         b.end_at_rewind();
-        assert!(b.rec.observe_transport(0.0, true));
+        assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
         let split = b.pushed();
         assert!(split.is_empty(), "one file, so the owed split is dropped: {split:?}");
     }
@@ -4402,19 +4451,28 @@ mod tests {
     fn a_one_file_trigger_refuses_an_owed_split_that_comes_due_rolling_forward() {
         let mut b = Bench::new();
         b.arm();
-        assert!(b.rec.observe_transport(10.0, true), "music recorded before the drag");
-        assert!(!b.rec.observe_transport(5.0, false), "dragged back with the transport stopped");
+        assert!(
+            b.rec.observe_transport(10.0, true, 64.0 / 48_000.0),
+            "music recorded before the drag"
+        );
+        assert!(
+            !b.rec.observe_transport(5.0, false, 64.0 / 48_000.0),
+            "dragged back with the transport stopped"
+        );
         b.pushed();
 
         b.end_at_rewind();
-        assert!(b.rec.observe_transport(6.0, true), "playing on from where it was dragged to");
+        assert!(
+            b.rec.observe_transport(6.0, true, 64.0 / 48_000.0),
+            "playing on from where it was dragged to"
+        );
         let split = b.pushed();
         assert!(split.is_empty(), "one file, so the owed split is dropped: {split:?}");
 
         // And the debt is settled rather than merely deferred: switching back to
         // the splitting trigger must not resurrect it.
         b.end_at_rewind.store(false, Ordering::Relaxed);
-        assert!(b.rec.observe_transport(7.0, true));
+        assert!(b.rec.observe_transport(7.0, true, 64.0 / 48_000.0));
         assert!(b.pushed().is_empty(), "a dropped split stays dropped");
     }
 
@@ -4530,10 +4588,10 @@ mod tests {
             );
             open.as_mut().unwrap().epoch = 1;
             open.as_mut().unwrap().configuration_enabled = true;
-            assert!(b.rec.observe_transport(10.0, true));
+            assert!(b.rec.observe_transport(10.0, true, 64.0 / 48_000.0));
             for _ in 1..RECORD_PASSES {
-                assert!(b.rec.observe_transport(0.0, true));
-                assert!(b.rec.observe_transport(10.0, true));
+                assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
+                assert!(b.rec.observe_transport(10.0, true, 64.0 / 48_000.0));
             }
             drain_with_audio(
                 &mut b.entries,
@@ -4547,7 +4605,7 @@ mod tests {
             if retire {
                 b.rec.configuration_pass_complete(RecordAddress { epoch: 1, pass: 1 });
             }
-            assert!(b.rec.observe_transport(0.0, true));
+            assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
             drain_with_audio(
                 &mut b.entries,
                 Some(&mut b.samples),
@@ -4665,9 +4723,9 @@ mod tests {
         assert_eq!(b.pushed(), ["audio-start @0.25"], "the first call is the one that counts");
 
         // The wrap re-arms it, because the next pass's audio starts elsewhere.
-        assert!(b.rec.observe_transport(0.0, true));
-        assert!(b.rec.observe_transport(2.0, true));
-        assert!(b.rec.observe_transport(0.0, true));
+        assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
+        assert!(b.rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+        assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
         b.rec.mark_audio_start(7.5);
         assert_eq!(b.pushed(), ["new-pass", "audio-start @7.5"]);
     }
@@ -4698,9 +4756,9 @@ mod tests {
 
         // The wrap opens an empty file, so every parameter is written again
         // even though none of them changed.
-        assert!(b.rec.observe_transport(0.0, true));
-        assert!(b.rec.observe_transport(2.0, true));
-        assert!(b.rec.observe_transport(0.0, true));
+        assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
+        assert!(b.rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+        assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
         b.rec.params(3.0, values);
         let after = b.pushed();
         assert_eq!(
@@ -4732,9 +4790,9 @@ mod tests {
             assert_eq!(record.resolved(), expected);
         }
         assert!(b.entries.pop().is_err());
-        assert!(b.rec.observe_transport(0.0, true));
-        assert!(b.rec.observe_transport(2.0, true));
-        assert!(b.rec.observe_transport(0.0, true));
+        assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
+        assert!(b.rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+        assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
         assert!(matches!(b.entries.pop().unwrap(), Entry::NewPass));
         b.rec.configuration(0.0, second);
         assert!(
@@ -4774,17 +4832,20 @@ mod tests {
         let mut b = Bench::new();
         b.arm();
         b.end_at_rewind();
-        assert!(b.rec.observe_transport(0.0, true));
+        assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
         assert!(b.rec.is_armed(), "still armed, one block later");
-        assert!(b.rec.observe_transport(2.0, true));
+        assert!(b.rec.observe_transport(2.0, true, 64.0 / 48_000.0));
         assert!(b.rec.is_armed());
 
         // The wrap is still seen as one, and still ends the take.
-        assert!(!b.rec.observe_transport(0.0, true), "the wrap ends the take");
+        assert!(!b.rec.observe_transport(0.0, true, 64.0 / 48_000.0), "the wrap ends the take");
         assert!(b.hit_rewind());
         assert!(b.rec.is_armed());
         assert!(b.hit_rewind(), "the latch survives the next block's arm check");
-        assert!(!b.rec.observe_transport(1.0, true), "and the take stays finished");
+        assert!(
+            !b.rec.observe_transport(1.0, true, 64.0 / 48_000.0),
+            "and the take stays finished"
+        );
     }
 
     /// The status line separates a take that is capturing from one that is
@@ -4888,13 +4949,13 @@ mod tests {
         ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
         assert!(rec.is_armed());
 
-        assert!(!rec.observe_transport(3.0, false));
+        assert!(!rec.observe_transport(3.0, false, 64.0 / 48_000.0));
         assert!(!ctrl.is_rolling(), "parked");
 
-        assert!(rec.observe_transport(4.0, false));
+        assert!(rec.observe_transport(3.0 + 64.0 / 48_000.0, false, 64.0 / 48_000.0));
         assert!(ctrl.is_rolling(), "the position advanced");
 
-        assert!(!rec.observe_transport(4.0, false));
+        assert!(!rec.observe_transport(3.0 + 64.0 / 48_000.0, false, 64.0 / 48_000.0));
         assert!(!ctrl.is_rolling(), "parked again");
     }
 

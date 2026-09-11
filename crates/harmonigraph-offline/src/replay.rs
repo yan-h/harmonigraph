@@ -478,7 +478,7 @@ mod tests {
         let mut encoded = ron::to_string(&Record::Header(Header::default())).unwrap();
         let mut expected = Vec::new();
         for (t, edit) in [
-            (0.0, ConfigEdit { learning: Some(true), ..Default::default() }),
+            (0.005, ConfigEdit { learning: Some(true), ..Default::default() }),
             (0.013, ConfigEdit::unlock(harmonigraph_core::Comma::Syntonic, 390_000_000)),
             (0.031, ConfigEdit::axis(1, 696_000_000)),
         ] {
@@ -510,7 +510,14 @@ mod tests {
                 let now = f64::from(frame) * cadence;
                 replay.advance_to(&mut state.runtime, now);
                 harmonigraph_ui::begin_frame(&mut state, &replay.params, now);
-                let config = expected.iter().rev().find(|(t, _)| *t <= now).unwrap().1;
+                let Some((_, config)) = expected.iter().rev().find(|(t, _)| *t <= now) else {
+                    assert_eq!(
+                        state.runtime.replayed_configuration, None,
+                        "configuration cannot apply before its timestamp"
+                    );
+                    continue;
+                };
+                let config = *config;
                 assert_eq!(state.runtime.tuning, config.tuning);
                 assert_eq!(state.appearance.view.meantone, config.modes.tempered.syntonic);
                 assert_eq!(state.runtime.learn_active, config.modes.learning);
