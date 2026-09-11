@@ -14,9 +14,7 @@ I do not yet make broader host or platform support claims.
 
 ## See it in motion
 
-> **Primary media placeholder:** put the chosen demonstration video here,
-> with an optional wide screenshot showing the lattice and spectral view together.
-> The exact paths and placement notes are in the [README philosophy](docs/readme-philosophy.md#media-plan).
+![The spectrum analyzer and its MIDI-overlaid spectrogram on the left, with the pitch lattice on the right, mid-passage](docs/images/plugin-window-lattice-analyzer.webp)
 
 For a current example,
 watch [*slipstream* (5-limit just intonation)](https://www.youtube.com/watch?v=VuD9JOmi6_o).
