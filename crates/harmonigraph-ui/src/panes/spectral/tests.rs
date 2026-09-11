@@ -164,8 +164,9 @@ fn text_shrinks_with_the_pane() {
     // at two sizes, so a name has to stand off its note by the same fraction of
     // the pane in both.
     assert!((shrunk.names.air / docked.names.air - 0.5).abs() < 0.02);
-    // ...and at the reference pane the bars read what they say.
-    assert!((docked.markings - 1.0).abs() < 0.02, "{}", docked.markings);
+    // ...and at the reference pane the bars read what they say, within the
+    // rung of the size ladder the bar is rounded onto.
+    assert!((docked.markings / cfg.marking_scale - 1.0).abs() <= 0.04, "{}", docked.markings);
 }
 
 /// History uses seconds for both the readout and numeric entry.
@@ -779,6 +780,15 @@ fn along_depth(orientation: SpectralOrientation) -> egui::Rect {
     }
 }
 
+/// A depth half way into the spectrum's own region, which is where a press
+/// has to land to reach the Level. Derived rather than written as a number,
+/// because the region is whatever the roll leaves: at the fresh share a
+/// constant near its edge sits inside the divider's grab band on a pane this
+/// small, and the press drags the divider instead.
+fn in_spectrum(cfg: &SpectrumConfig) -> f32 {
+    spectrum_share(cfg) / 2.0
+}
+
 /// Press at depth `grab` on the pane's own depth axis, drag by `delta`, and
 /// return the config that leaves behind.
 ///
@@ -851,8 +861,13 @@ fn preview_navigation_reaches_both_depth_zoom_options() {
     assert!(span.roll_seconds < cfg.roll_seconds - 0.5, "the preview did not zoom Span");
     assert_eq!(span.ceiling_db, cfg.ceiling_db, "the Span gesture moved Level too");
 
-    let level =
-        drag_pane_with_navigation(rect, cfg, 0.2, -axes.dir_depth() * 40.0, Navigation::Preview);
+    let level = drag_pane_with_navigation(
+        rect,
+        cfg,
+        in_spectrum(&cfg),
+        -axes.dir_depth() * 40.0,
+        Navigation::Preview,
+    );
     assert!(level.ceiling_db < cfg.ceiling_db - 3.0, "the preview did not zoom Level");
     assert_eq!(level.roll_seconds, cfg.roll_seconds, "the Level gesture moved Span too");
 }
@@ -941,7 +956,7 @@ fn dragging_the_spectrum_outward_closes_the_level_window() {
         let rect = along_depth(orientation);
         let cfg = SpectrumConfig { orientation, ..Default::default() };
         let out = curve_grows(&Axes::new(rect, &cfg), true) * 40.0;
-        let after = drag_pane(rect, cfg, 0.2, out);
+        let after = drag_pane(rect, cfg, in_spectrum(&cfg), out);
         assert!(
             after.ceiling_db < cfg.ceiling_db - 3.0,
             "{orientation:?}: ceiling {} -> {}, wanted it down",
@@ -962,7 +977,7 @@ fn dragging_the_spectrum_inward_opens_the_level_window() {
         let rect = along_depth(orientation);
         let cfg = SpectrumConfig { orientation, ..Default::default() };
         let inward = curve_grows(&Axes::new(rect, &cfg), true) * -40.0;
-        let after = drag_pane(rect, cfg, 0.2, inward);
+        let after = drag_pane(rect, cfg, in_spectrum(&cfg), inward);
         assert!(
             after.ceiling_db > cfg.ceiling_db + 3.0,
             "{orientation:?}: ceiling {} -> {}, wanted it up",
@@ -1022,7 +1037,7 @@ fn a_depth_drag_moves_only_the_value_its_region_measures() {
     assert!(far.roll_seconds < cfg.roll_seconds - 0.5, "far region: Span should have zoomed");
     assert_eq!(far.ceiling_db, cfg.ceiling_db, "far region: the level moved too");
 
-    let near = drag_pane(rect, cfg, 0.2, -a.dir_depth() * 40.0);
+    let near = drag_pane(rect, cfg, in_spectrum(&cfg), -a.dir_depth() * 40.0);
     assert!(near.ceiling_db < cfg.ceiling_db - 3.0, "spectrum: level should have zoomed");
     assert_eq!(near.roll_seconds, cfg.roll_seconds, "spectrum: the Span moved too");
 }
@@ -1036,7 +1051,7 @@ fn a_drag_across_the_spectrum_still_pans_the_pitch_range() {
     // Off both ends of the axis, so the pan has room to move rather than
     // sitting against a clamp.
     let cfg = SpectrumConfig { low_midi: 48.0, high_midi: 84.0, ..Default::default() };
-    let after = drag_pane(rect, cfg, 0.2, Axes::new(rect, &cfg).dir_pitch() * 30.0);
+    let after = drag_pane(rect, cfg, in_spectrum(&cfg), Axes::new(rect, &cfg).dir_pitch() * 30.0);
     assert!(after.low_midi < cfg.low_midi - 1.0, "the range should have panned down");
     assert_eq!(after.ceiling_db, cfg.ceiling_db, "a pan must not move the level");
 }
@@ -1062,7 +1077,7 @@ fn a_pan_that_leans_slightly_along_depth_is_still_a_pan() {
     let (across, lean) = (30.0, 3.0);
     assert!(lean < DEPTH_ZOOM_LEAN, "this drag has to sit INSIDE the margin to test it");
     let wobble = a.dir_pitch() * across + curve_grows(&a, true) * (across + lean);
-    let after = drag_pane(rect, cfg, 0.2, wobble);
+    let after = drag_pane(rect, cfg, in_spectrum(&cfg), wobble);
     assert_eq!(after.ceiling_db, cfg.ceiling_db, "a lean inside the margin moved the level");
     assert!(after.low_midi < cfg.low_midi - 0.5, "and the pan it was should still have run");
 }
@@ -1074,7 +1089,7 @@ fn a_pan_that_leans_slightly_along_depth_is_still_a_pan() {
 fn the_level_zoom_stops_at_the_minimum_span() {
     let (rect, cfg) = (WIDE, SpectrumConfig::default());
     let out = curve_grows(&Axes::new(rect, &cfg), true) * 4_000.0;
-    let after = drag_pane(rect, cfg, 0.2, out);
+    let after = drag_pane(rect, cfg, in_spectrum(&cfg), out);
     assert!(
         (after.ceiling_db - (after.floor_db + crate::LEVEL_RANGE_MIN_SPAN)).abs() < 1e-3,
         "closed to {} dB, wanted {}",
@@ -1082,7 +1097,7 @@ fn the_level_zoom_stops_at_the_minimum_span() {
         crate::LEVEL_RANGE_MIN_SPAN,
     );
     // And the other way, where what stops it is the top of the scale.
-    let after = drag_pane(rect, cfg, 0.2, -out);
+    let after = drag_pane(rect, cfg, in_spectrum(&cfg), -out);
     assert_eq!(after.ceiling_db, crate::LEVEL_MAX_DB, "opened past full scale");
 }
 

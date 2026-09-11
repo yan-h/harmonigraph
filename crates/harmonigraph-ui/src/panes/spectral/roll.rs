@@ -1934,6 +1934,11 @@ mod tests {
             // leaves at its first line, so the cap paints nothing anywhere.
             // That is the picture at the note-off itself, when the note's end
             // is ON the line and has no room to be given.
+            //
+            // Within rounding, not exactly: where the note's end is held back
+            // by exactly its outline, the ink ends ON the line, and this reads
+            // the line through the screen while the pane placed the note along
+            // its own axis — the two orders of arithmetic part at the last bit.
             let tip = past_the_line(&note, &axes, split);
             let (drawn, over) = if note.lead > 0.0 {
                 (note.cap_reach > 0.0, tip - note.lead + note.cap_reach + 0.5 / PPP)
@@ -1941,7 +1946,7 @@ mod tests {
                 (true, tip + note.outline_reach + 0.5 / PPP)
             };
             assert!(
-                !drawn || over <= 0.0,
+                !drawn || over <= 1e-3,
                 "{hint}: a note that is not leading reaches {over} points onto \
                  the analyzer",
             );

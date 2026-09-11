@@ -222,7 +222,7 @@ The flags worth knowing (`--help` lists them all):
 | `--audio` | audio to use instead of the take's own: feeds the spectrum **and** is muxed in |
 | `--align` | how `--audio` lines up: `auto` (default), `off`, or a start in seconds |
 | `--layout` | preset name or a `.ron` file (see below) |
-| `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect with its short edge at 1080 |
+| `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect and Resolution, whose fresh short edge is 1440 |
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
 | `--fps` | default 60 |
 | `--lead` | extra empty frame before the recording starts; default 0 |

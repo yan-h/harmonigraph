@@ -94,7 +94,10 @@ fn the_two_gaps_are_independent_at_the_scene() {
         let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0);
         (scene.outer_inner, scene.outer_outer, scene.rings_outer, scene.mark_inner)
     };
+    // The middle is held where the widened gap below still seats the band: a
+    // band refused for room cannot walk out, whatever the gap does.
     let sound = ViewConfig {
+        ring_inner: 0.6,
         spectral_ring_width: 0.1,
         band_width: 0.15,
         ring_gap: 0.05,

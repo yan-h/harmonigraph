@@ -1112,6 +1112,7 @@ mod tests {
         let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
         state.appearance.render.frame.lattice = LatticeSide::Left;
         state.appearance.render.frame.split = 0.3;
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
         let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
         let spectral = preview_pane_rect(
             rect,
@@ -1154,6 +1155,7 @@ mod tests {
         let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
         state.appearance.render.frame.lattice = LatticeSide::Left;
         state.appearance.render.frame.split = 0.3;
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
         let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
         let spectral = preview_pane_rect(
             rect,

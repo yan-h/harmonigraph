@@ -35,7 +35,9 @@ Inside that is nice-plug's plugin state as plain JSON:
 
     {"version":..,"params":{..},"fields":{"editor-state":..,"ui-state":..}}
 
-`fields["ui-state"]` is the editor RON `SharedState::save_persist` wrote.
+`fields["ui-state"]` is the editor RON `SharedState::save_persist` wrote,
+JSON-quoted a second time (a persisted field is stored serialized), so it
+arrives as `"(version:..)"` and is decoded once more before parsing as RON.
 Its `appearance` member holds camera, view, spectrum, spiral and video settings;
 --appearance prints that complete document for the offline renderer.
 nice-plug can also zstd-compress that JSON (see its wrapper/state.rs), so
@@ -123,6 +125,11 @@ def find_states(path: pathlib.Path):
     states, seen = [], set()
     for buf in candidate_bytes(data):
         for st in json_blobs(buf):
+            # The strict RON split below reads a still-quoted blob as having
+            # no top-level members at all, which prints as an unsupported format.
+            ui = st.get("fields", {}).get("ui-state")
+            if isinstance(ui, str) and ui.startswith('"'):
+                st["fields"]["ui-state"] = json.loads(ui)
             key = json.dumps(st, sort_keys=True)
             if key not in seen and "fields" in st:
                 seen.add(key)
