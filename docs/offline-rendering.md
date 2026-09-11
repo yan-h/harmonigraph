@@ -390,7 +390,7 @@ The test is still narrower than the property, so treat it as a tripwire on the p
 What it cannot see is a tie:
 its take is three chords on one channel with no two voices sharing a pitch class, so nothing in it exercises the case where two voices light one node and something has to choose between them.
 That blind spot is what let issue #135 —
-a hash map's per-map iteration order deciding a doubled node's colour, and so its pixels —
+a hash map's per-map iteration order deciding a doubled node's color, and so its pixels —
 live in shipped renders while this stayed green.
 
 #135 is fixed (the tracker's collections are ordered, not hashed), and what guards it now is a set of unit tests on those collections' iteration order rather than this render.

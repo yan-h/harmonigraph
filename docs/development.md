@@ -109,7 +109,9 @@ They copy the executable into the shared bundle slot and re-sign it ad hoc for A
 `load-plugin.sh` only copies.
 The split lets every parallel branch retain its own build while the person at the DAW decides which one occupies the shared slot.
 
-Both scripts install `harmonigraph-offline` with the plugin.
+`update-plugin.sh` builds and installs a matching `harmonigraph-offline` renderer.
+`load-plugin.sh` installs the worktree's renderer when it exists;
+otherwise it leaves the installed renderer alone.
 The offline renderer draws through the same UI and render crates,
 so a change to a pane can change an exported video even when no file under `crates/harmonigraph-offline/` moved.
 Building only `harmonigraph-plugin` can therefore leave export on an old picture.
@@ -130,7 +132,7 @@ the rendering and music layers do not depend on plugin plumbing.
 ```text
 harmonigraph-core        Dependency-free pitch and tuning logic; lattice
                          coordinates; live and historical note state; shared
-                         pitch and spectrogram axes.
+                         pitch axis and spectrogram history.
 
 harmonigraph-analysis    Rolling audio analysis shared by live and offline UI.
 
@@ -175,7 +177,7 @@ See [offline rendering](offline-rendering.md) for the recorded-data path and [ad
   glow and animation.
 - `crates/harmonigraph-scene` owns colors,
   envelopes,
-  layout and camera behaviour.
+  layout and camera behavior.
 - `cargo run -p harmonigraph-standalone` exercises the production render path without a DAW.
 
 ## Dependency coupling

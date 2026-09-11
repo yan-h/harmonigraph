@@ -1,4 +1,4 @@
-# Moving-neighbourhood plugin policy
+# Moving-neighborhood plugin policy
 
 This is the implementation record for policy version 2, based on the [design](adaptive-tuning-design.md) and [simulator](../tools/adaptive-tuning-simulator/README.md).
 It replaces the fixed origin domain, 50-cent input window and per-key history.
@@ -23,7 +23,9 @@ Repetitions refresh one contribution within the configured absolute-pitch tolera
 Octaves and comma-shifted returns remain distinct when outside that tolerance.
 The temporary released-memory budget counts released contributions separately from held ones.
 New activity replaces memory; waiting does not gradually decay it.
-Departing or excluded sources cannot contribute stale released memory.
+Retune exclusion clears that source's held and released context, including a moving reference it owned.
+A departing source ends its held notes through the session cut;
+the resulting released memory follows the ordinary silence, Stop and Reset controls.
 
 Tuning and temperament settings come from the audio owner's resolved configuration.
 Custom axis sizes work through the same score, and locked commas canonicalize equivalent coordinates.
@@ -39,23 +41,23 @@ MIDI channel bend is forwarded and is included separately in attack selection, s
 The MIDI pitch-bend range defaults to two semitones and follows RPN 0 sensitivity changes.
 The participation toggle preserves player pitch while retaining the established note and pedal cleanup.
 
-Actual emitted pitch and onset pitch are separate factual fields.
-Channel-pitch changes update the factual voices and request complete display/take baselines; these updates do not masquerade as separately accepted per-note wire events.
+Scheduled output pitch and onset pitch are separate factual fields.
+Channel-pitch changes update the scheduled voices and request complete display/take baselines;
+these updates do not masquerade as separately accepted per-note wire events.
 Those baselines preserve current pitch, but do not provide a separate sample-timed per-note trajectory for every intermediate channel-controller event within a callback.
 That recording limitation is tracked in [issue #783](https://github.com/yan-h/harmonigraph/issues/783).
 
 Zero silence timeout means never reset for silence.
 A positive timeout is evaluated against the completed input frontier once no held context remains.
-Normal note releases supply their original input sample; emergency releases that reach the owner first supply their accepted sample.
+Note releases supply their original input sample.
 Stop releases voices and, if enabled, clears released memory and displacement.
 With stop reset disabled, the ended notes remain recent context.
 
-Loop/seek detection compares the host's seconds timeline with elapsed sample time while playing.
-A discontinuity greater than two milliseconds tags subsequent attacks with its original sample.
-That boundary identity uses host steady time independently of source calibration, including across healthy epoch changes.
-It also carries its original session and musical clock generation.
-Committed resets and host reactivation advance that generation, so a restarted host clock can produce a new loop at a lower sample number, while retained attacks cannot replay a loop from the previous generation.
-With loop reset enabled, the first attack after that boundary clears released memory and displacement; other sources cannot reset it again for the same boundary.
+Loop/seek detection compares the host's seconds timeline with elapsed steady sample time.
+A discontinuity greater than two milliseconds marks a pending reset.
+With loop reset enabled, the next participating attack clears released memory and displacement;
+that attack consumes the pending flag.
+Reactivation clears the previous timeline observation.
 Held notes retain their frozen assignments.
 The host must supply a seconds timeline for this detection.
 An explicit session reset clears musical context through the existing reset boundary.
@@ -63,13 +65,13 @@ An explicit session reset clears musical context through the existing reset boun
 Pedal-aware harmonic holding remains deferred: harmonic held/released status follows the existing note-lifetime release semantics.
 Instrument release tails and pedal sustain do not turn released context back into a held contribution.
 
-## Controls and live neighbourhood
+## Controls and live neighborhood
 
-The Tuning pane exposes harmonic weight, pitch scale, neighbourhood radius, allowed axes, recent-memory capacity, released-note weighting, register weighting, same-note tolerance, silence timeout and transport reset choices.
+The Tuning pane exposes harmonic weight, pitch scale, neighborhood radius, allowed axes, recent-memory capacity, released-note weighting, register weighting, same-note tolerance, silence timeout and transport reset choices.
 Defaults match the simulator's baseline profile.
 The precision profile used by the paired intentional-E examples is obtained by setting harmonic weight to two.
 
-The live lattice can outline nodes that win for some arbitrary next input in the explicitly labelled C2–C7 register range.
+The live lattice can outline nodes that win for some arbitrary next input in the explicitly labeled C2–C7 register range.
 This is a union across registers and seventh layers, not twelve keyboard mappings or a single-octave sample.
 The count can exceed twenty depending on context and settings.
 Only nodes in the current camera window receive visible outlines; the count includes off-screen winners.
@@ -85,9 +87,13 @@ Camera changes, callback time, performance counters and display fades do not res
 ## Resource and persistence contracts
 
 Selection uses preallocated scratch and an explicit ceiling of 4096 distinct candidates, up to 256 held voices and 24 released contributions.
-Exceeding the candidate ceiling takes the existing resource-exhaustion recovery path; it never silently truncates the neighbourhood or chooses from a partial set.
+Exceeding the candidate ceiling refuses that evaluation;
+the onset receives no adaptive correction and the policy fault is reported.
+It never silently truncates the neighborhood or chooses from a partial set.
 This ceiling bounds individual evaluation work, not the total distance of a musical journey.
-Large contexts can still cost more CPU, so the existing delayed-output diagnostics remain relevant.
+Large onset cohorts can exceed the audio-callback budget well below the ceiling;
+[issue #790](https://github.com/yan-h/harmonigraph/issues/790) tracks that measurement.
+Tune's output delay and missed-correction counter do not bound the Hub's processing time.
 The substantially more expensive winner-range calculation runs outside the audio callback.
 
 Coordinates travel as signed 32-bit lattice coordinates and correction as signed 64-bit microcents.

@@ -38,7 +38,7 @@ the incoming-audio spectrum and spectrogram with MIDI comparison,
 appearance and layout control,
 and deterministic video export from recorded musical data rather than screen capture.
 Adaptive tuning belongs in the same compact feature list,
-clearly labelled experimental and CLAP-only,
+clearly labeled experimental and CLAP-only,
 with a link to its guide.
 
 Prefer this narrative progression without freezing exact headings:
@@ -47,7 +47,7 @@ Prefer this narrative progression without freezing exact headings:
 2. A screenshot and video example.
 3. A compact feature list.
 4. The shortest verified way to try the project.
-5. Further user guides, development documentation and licence scope.
+5. Further user guides, development documentation and license scope.
 
 ## Media plan
 
@@ -72,11 +72,12 @@ The export/customization image is optional.
 ## Maintenance rule
 
 Add material to the README when it helps a new reader understand the project or begin using it.
-Put detailed behaviour,
+Put detailed behavior,
 host-specific edge cases,
 implementation design,
 build mechanics and maintainer workflows in the relevant document under `docs/`,
-then link it once from the README.
-Do not keep the same procedure in both places.
-Update claims when the shipped behaviour changes,
+then link it from the README where a new reader will need it.
+A minimal quick-start may repeat the beginning of a detailed procedure;
+keep host-specific cases and the full workflow in one guide.
+Update claims when the shipped behavior changes,
 but do not turn this philosophy into a feature inventory or a fixed table of contents.

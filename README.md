@@ -4,7 +4,7 @@ Harmonigraph is the harmony visualizer I use while composing microtonal music,
 and to turn my pieces into videos.
 It runs as a CLAP or VST3 audio plugin.
 
-This is an LLM-written project driven by my personal needs.
+This is an LLM-written project I direct and review for my personal needs.
 Expect rough edges and breaking changes.
 I have tested it only on macOS with Bitwig Studio.
 
@@ -14,7 +14,7 @@ I have tested it only on macOS with Bitwig Studio.
 
 ## Features
 
-- **Lattice.** Incoming MIDI notes are organized by pitch class and register on a tunable [Tonnetz](https://en.wikipedia.org/wiki/Tonnetz).
+- **Lattice.** Incoming MIDI notes are organized by pitch class and register on a tunable [Tonnetz](https://en.wikipedia.org/wiki/Tonnetz), making interval shapes and harmonic distance visible while I compose.
 - **Spectrogram.** A live spectrum analyzer and scrolling spectrogram with overlaid piano roll.
 - **Configuration.** Camera, lattice detail, frequency range, colors, lighting, pane visibility and layout.
 - **Video.** Records performance data and audio for [offline rendering](docs/offline-rendering.md) at any resolution, frame rate or layout.
@@ -74,10 +74,13 @@ Copyright (C) 2026 Yan Han.
 
 Harmonigraph is licensed under the [GNU General Public License v3.0 or later](LICENSE).
 It comes without warranty;
-see the licence for the full terms.
+see the license for the full terms.
 
 The reusable [`harmonigraph-core`](crates/harmonigraph-core) and [`harmonigraph-analysis`](crates/harmonigraph-analysis) crates are instead licensed under `MIT OR Apache-2.0`.
-The vendored forks under [`vendor/`](vendor) retain their upstream `MIT OR Apache-2.0` terms and their own licence files;
+The vendored forks under [`vendor/`](vendor) retain their upstream terms:
+`baseview`, `egui-baseview` and `wgpu-hal` are `MIT OR Apache-2.0`,
+while `nice-plug` is ISC.
+Each keeps its own license files;
 [`PATCHES.md`](PATCHES.md) records the local changes.
 
 VST is a trademark of Steinberg Media Technologies GmbH.

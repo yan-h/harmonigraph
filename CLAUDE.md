@@ -58,7 +58,7 @@ a summary of one in this file is a second copy to maintain.
 To rule it out as the cause of a build failure, `RUSTC_WRAPPER="" cargo build ...` bypasses it.
 
 Each worktree still keeps its own `target/` —
-parallel sessions never serialise on a shared target lock, they only share compiled dependencies.
+parallel sessions never serialize on a shared target lock, they only share compiled dependencies.
 That is what the cache is for:
 a release build in a brand-new worktree takes 1m28s instead of 3m36s.
 `sccache --show-stats` reports the hit rate.
@@ -149,7 +149,7 @@ The too-wide key is the one with a record here:
 a spectrogram column keyed on a whole `SpectrumConfig` re-uploaded the heatmap on every frame of a drag (`4a4ae66`), and a mark's key minted fresh per pass held that cache at its eviction limit until a texture was freed mid-pass (`51d337e`).
 
 A too-wide key is also not merely slow.
-It restarts the thing it guards often enough to hide what the carry-forward path gets wrong, so narrowing one is a change of behaviour rather than of speed:
+It restarts the thing it guards often enough to hide what the carry-forward path gets wrong, so narrowing one is a change of behavior rather than of speed:
 `a2e6e01` is a correctness bug that was there all along and only became reachable once the key stopped wiping the evidence every frame.
 A diff that narrows a key owes an answer for what is newly reachable.
 
@@ -160,7 +160,7 @@ four shadow tests, each missing the shape it claims to measure for its own reaso
 
 The count is the other half.
 A committed test is a file the tree maintains from then on, so it earns its place the way a comment does:
-one per behaviour the task states, sized like the tests already beside it.
+one per behavior the task states, sized like the tests already beside it.
 A scratch harness or a one-off probe is verification rather than coverage —
 run it and read it, and commit it only where something reads it again (see the ISSUE rule below).
 
@@ -200,7 +200,7 @@ A bug you tripped over rather than went looking for takes the same exit.
 It is an issue, not a hunk in this diff:
 a fix riding in on a branch whose review is about something else gets the least attention of anything in the PR, and it widens the range `/audit-merges` has to reason about.
 The exception is the one that pays for itself —
-the requested behaviour cannot work until the bug is fixed —
+the requested behavior cannot work until the bug is fixed —
 and the PR body says so.
 
 `BACKLOG.md` is not the alternative:
@@ -228,7 +228,7 @@ The Claude harness locks its worktree when a session enters it and unlocks it wh
 There is nothing for either session to do here.
 Every Claude releaser —
 both harness exit paths, the startup sweep, and `.claude/reclaim-worktrees.sh` —
-recognises a lock only by the shape of its reason string:
+recognizes a lock only by the shape of its reason string:
 
 ```
 claude session <name> (pid <n> start <date>)
