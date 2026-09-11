@@ -9,7 +9,7 @@
 
 use egui::Ui;
 
-use super::bar::HANDLE_W;
+use super::bar::{grip_color, HANDLE_W};
 use crate::theme;
 
 /// Paint `add` into a themed context of `size`, and answer the shapes it
@@ -128,6 +128,59 @@ pub(super) fn knockouts(
                 t.override_text_color,
             )),
             _ => None,
+        })
+        .collect()
+}
+
+/// Drive a bar through `passes` of pointer events, one frame per pass, in a
+/// context of its own, and answer what the LAST frame painted.
+///
+/// A frame with no input goes first, because egui resolves the pointer against
+/// the previous pass's rects: nothing can hover or press a bar that has never
+/// been drawn. That frame is also where `passes` learns where the bar is.
+///
+/// Its own context per call for the reason [`painted_in`] gives: a grab lives
+/// in egui's temp store, which has no expiry.
+pub(super) fn after_passes(
+    width: f32,
+    passes: impl FnOnce(egui::Rect) -> Vec<Vec<egui::Event>>,
+    mut add: impl FnMut(&mut Ui) -> egui::Response,
+) -> Vec<egui::Shape> {
+    let ctx = crate::tests::probe::themed();
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
+    let bar = std::cell::Cell::new(egui::Rect::NOTHING);
+    let mut t = 0.0;
+    let mut frame = |events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(t),
+            events,
+            ..Default::default()
+        };
+        let out = ctx.run_ui(raw, |ui| bar.set(add(ui).rect));
+        out.shapes.into_iter().map(|s| s.shape).collect::<Vec<_>>()
+    };
+    let mut last = frame(vec![]);
+    for events in passes(bar.get()) {
+        last = frame(events);
+    }
+    last
+}
+
+/// Every thumb, in PAINT order, and whether it is drawn lit — see
+/// [`grip_color`], which is what tells the two apart.
+///
+/// Paint order rather than left to right, because where two thumbs stand on
+/// one point the later one is the one on screen.
+///
+/// [`grip_color`]: super::bar::grip_color
+pub(super) fn grips(shapes: &[egui::Shape]) -> Vec<(egui::Rect, bool)> {
+    filled_rects(shapes)
+        .into_iter()
+        .filter(|(r, _)| r.width() <= HANDLE_W + 0.01)
+        .filter_map(|(r, fill)| {
+            [true, false].into_iter().find(|&lit| fill == grip_color(lit)).map(|lit| (r, lit))
         })
         .collect()
 }

@@ -6,9 +6,9 @@ use std::ops::RangeInclusive;
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_over_text, release_grab,
-    track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W,
-    TEXT_GAP,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, poised,
+    release_grab, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET,
+    HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::theme;
@@ -481,10 +481,23 @@ impl<'a> RangeBar<'a> {
         let value_at = |x: f32| {
             min + ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * (max - min)
         };
+        // The value a press at `x` is aimed at, snapped the way the live value
+        // is: the span grab reads its own offset off this, so an unsnapped one
+        // would leave a fraction of a value inside a gesture whose whole point
+        // is whole ones.
+        let aim_at = |x: f32| {
+            let v = value_at(x);
+            if self.integer {
+                v.round()
+            } else {
+                v
+            }
+        };
 
         // ---- Interaction ----------------------------------------------------
         let grab_id = response.id.with("grab");
         let near = GRAB_PX / track.width().max(1.0) * (max - min);
+        let mut holding = None;
         if response.double_clicked() {
             *self.low = min;
             *self.high = max;
@@ -500,15 +513,10 @@ impl<'a> RangeBar<'a> {
                 // HERE rather than under `drag_started` so a gesture whose
                 // start frame was missed still does something.
                 let grab = grabbed(ui, grab_id, |ui| {
-                    // From where the press LANDED (see `aimed_at`), snapped
-                    // the same way the live value is: the span grab reads
-                    // its own offset off this, so an unsnapped one would
-                    // leave a fraction of a value inside a gesture whose
-                    // whole point is whole ones.
-                    let aim = value_at(aimed_at(ui, p).x);
-                    let aim = if self.integer { aim.round() } else { aim };
-                    Grab::at(aim, (*self.low, *self.high), near)
+                    // From where the press LANDED (see `aimed_at`).
+                    Grab::at(aim_at(aimed_at(ui, p).x), (*self.low, *self.high), near)
                 });
+                holding = Some(grab);
                 let (lo, hi) = grab.apply(v, (*self.low, *self.high), (min, max), self.min_span);
                 if lo != *self.low || hi != *self.high {
                     (*self.low, *self.high) = (lo, hi);
@@ -742,9 +750,24 @@ impl<'a> RangeBar<'a> {
         // and cost that check its teeth. The name has no such option: it is
         // pinned to the left of the bar and a thumb comes to rest on it — which
         // for the two `fade_span` bars and a fresh Clearance is where they OPEN.
+        //
+        // Lit by what is in hand (see [`grip_color`]): the end a drag holds or a
+        // press would take, both for the span. A closed span stands both thumbs
+        // on one point with only the low one in reach, so the unlit one is
+        // painted first and the lit one shows.
+        let in_hand = holding.or_else(|| {
+            poised(ui, &response).map(|p| Grab::at(aim_at(p.x), (*self.low, *self.high), near))
+        });
+        let (low_lit, high_lit) = match in_hand {
+            Some(Grab::Low) => (true, false),
+            Some(Grab::High) => (false, true),
+            Some(Grab::Span { .. }) | None => (true, true),
+        };
+        let mut thumbs = [(lgx, low_lit), (hgx, high_lit)];
+        thumbs.sort_by_key(|&(_, lit)| lit);
         let grip_radius =
             CornerRadius::same(if self.fade_span { r } else { theme::scaled_points(2, scale) });
-        for x in [lgx, hgx] {
+        for (x, lit) in thumbs {
             grip_over_text(
                 painter,
                 egui::Rect::from_center_size(
@@ -752,16 +775,16 @@ impl<'a> RangeBar<'a> {
                     Vec2::new(handle_w, rect.height() - 3.0 * scale),
                 ),
                 grip_radius,
+                grip_color(lit),
                 &[(label_pos, label.clone())],
             );
         }
 
         // The cursor says which of the two gestures a press would start, so the
         // difference is visible BEFORE committing to a drag: an end resizes,
-        // the middle picks the whole range up and slides it.
-        let would_start =
-            response.hover_pos().map(|p| Grab::at(value_at(p.x), (*self.low, *self.high), near));
-        match would_start {
+        // the middle picks the whole range up and slides it. Read off the same
+        // grab the thumbs are lit by, so the two never disagree.
+        match in_hand {
             Some(Grab::Span { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
             Some(_) => response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal),
             None => response,
@@ -773,7 +796,9 @@ impl<'a> RangeBar<'a> {
 mod tests {
     use super::*;
     use crate::widgets::mesh::{band_columns, bands, fades_out_at_its_edges};
-    use crate::widgets::probe::{filled_rects, handles, knockouts, painted, shapes, text_boxes};
+    use crate::widgets::probe::{
+        after_passes, filled_rects, grips, handles, knockouts, painted, press, shapes, text_boxes,
+    };
 
     /// The analyzer's axis, the range bar's real caller.
     const AXIS: (f32, f32) = (12.0, 132.0);
@@ -918,6 +943,57 @@ mod tests {
         frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(from + step))]);
         frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(to))]);
         (lo, hi)
+    }
+
+    /// Which of a pitch range bar's two thumbs are lit after `passes`, left
+    /// then right. `passes` places its pointer by VALUE, through the same
+    /// inset track the bar puts its values on.
+    fn lit_after(
+        passes: impl FnOnce(&dyn Fn(f32) -> egui::Pos2) -> Vec<Vec<egui::Event>>,
+    ) -> Vec<bool> {
+        let (mut lo, mut hi) = (48.0f32, 84.0f32);
+        let shapes = after_passes(
+            300.0,
+            |bar| {
+                let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+                let at = |v: f32| {
+                    let across = (v - AXIS.0) / (AXIS.1 - AXIS.0);
+                    egui::pos2(track.left() + track.width() * across, bar.center().y)
+                };
+                passes(&at)
+            },
+            |ui| RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME).min_span(OCTAVE).show(ui),
+        );
+        let mut thumbs = grips(&shapes);
+        thumbs.sort_by(|a, b| a.0.left().total_cmp(&b.0.left()));
+        thumbs.into_iter().map(|(_, lit)| lit).collect()
+    }
+
+    /// A pointer resting on the bar lights the end a press there would take
+    /// and dims the other; over the span it leaves both lit, the span being
+    /// what a press there takes. Once a drag is under way the end it holds
+    /// stays lit wherever the pointer goes — here out past the far end, where
+    /// a pointer at rest lights the OTHER one, which is asserted first so the
+    /// drag half cannot pass by lighting whatever is nearest.
+    #[test]
+    fn the_end_in_hand_is_the_one_lit() {
+        let rest = |v: f32| lit_after(|at| vec![vec![egui::Event::PointerMoved(at(v))]; 2]);
+        assert_eq!(rest(48.0), [true, false], "resting on the low end");
+        assert_eq!(rest(84.0), [false, true], "resting on the high end");
+        assert_eq!(rest(66.0), [true, true], "resting on the span");
+        assert_eq!(rest(120.0), [false, true], "resting past the high end");
+
+        // The low end pulled out past the high one, which stops it a minimum
+        // span short.
+        let dragged = lit_after(|at| {
+            vec![
+                vec![egui::Event::PointerMoved(at(48.0))],
+                vec![egui::Event::PointerMoved(at(48.0)), press(at(48.0), true)],
+                vec![egui::Event::PointerMoved(at(53.0))],
+                vec![egui::Event::PointerMoved(at(120.0))],
+            ]
+        });
+        assert_eq!(dragged, [true, false], "the low end dragged past the high one");
     }
 
     /// An `integer()` bar lands on whole values, and a plain one does not —

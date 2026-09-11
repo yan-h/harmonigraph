@@ -7,7 +7,8 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, release_grab, track_fill, BAR_TEXT_PAD,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, poised, release_grab,
+    track_fill, BAR_TEXT_PAD,
 };
 use crate::theme;
 
@@ -172,6 +173,7 @@ impl<'a> OctaveStrip<'a> {
 
         // ---- Interaction ----------------------------------------------------
         let grab_id = response.id.with("grab");
+        let mut holding = None;
         if response.double_clicked() {
             (*self.count, *self.extras) = reset_wheel();
             response.mark_changed();
@@ -191,6 +193,7 @@ impl<'a> OctaveStrip<'a> {
                     let start = out(aimed_at(ui, p).x);
                     StripGrab::at(start, *self.count, *self.extras)
                 });
+                holding = Some(grab);
                 let (count, extras) = grab.apply(reach);
                 if (count, extras) != (*self.count, *self.extras) {
                     (*self.count, *self.extras) = (count, extras);
@@ -243,6 +246,15 @@ impl<'a> OctaveStrip<'a> {
         // part still on the bar reads as its border rather than as something
         // to grab. There is nothing outside it to drag toward at that width
         // anyway — a full count leaves no room for a fringe.
+        //
+        // Lit by what is in hand (see [`grip_color`]). The two are one count
+        // mirrored, so they light together: both when a press would take the
+        // count, neither when it would take the fringe outside them, which has
+        // no handle of its own.
+        let in_hand = holding.or_else(|| {
+            poised(ui, &response).map(|p| StripGrab::at(out(p.x), *self.count, *self.extras))
+        });
+        let fill = grip_color(!matches!(in_hand, Some(StripGrab::Extras { .. })));
         let inset = 0.5 * handle_w;
         for side in [-1.0f32, 1.0] {
             let x = (middle + side * *self.count as f32 * 0.5 * slot)
@@ -253,7 +265,7 @@ impl<'a> OctaveStrip<'a> {
                     Vec2::new(handle_w, rect.height() - 3.0 * scale),
                 ),
                 cell_radius,
-                theme::text(),
+                fill,
             );
         }
 

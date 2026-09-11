@@ -148,10 +148,62 @@ pub(super) fn track_fill(response: &Response) -> Color32 {
     }
 }
 
+/// The colour a thumb is drawn in: full `text()` when it is `lit` and
+/// `text_dim()` when it is not.
+///
+/// **A thumb is lit when it is what a press has hold of** — the grab a drag
+/// holds, or under a pointer merely resting on the bar ([`poised`]) the grab a
+/// press there WOULD take — and every thumb is lit when the pointer is
+/// elsewhere, which is the look a bar rests in. So hovering a bar with more than
+/// one handle says which one the hand is about to take before it takes it,
+/// which the cursor cannot: `ResizeHorizontal` says a press will size SOMETHING
+/// and never which end. A grab on a whole span lights both its ends, having
+/// hold of both.
+///
+/// The OTHERS step back rather than the one in hand stepping forward, because a
+/// thumb is already the brightest thing on a bar and there is nothing above
+/// `text()` to lift it to. What is left is shape, and a thumb's shape is what
+/// every readout, name placement and knockout on a bar is measured against, so
+/// it stays put and only the colour moves.
+///
+/// `text_dim()` rather than anything darker, since an unlit thumb is still a
+/// handle and still stands on the fill as often as on the well: 2.0:1 against
+/// the hover fill and 1.4:1 against the drag fill, where the well side of the
+/// thumb is what carries it. Between lit and unlit it is 1.7:1 — a white thumb
+/// beside grey ones, the same step a bar's name takes between resting and
+/// hovered.
+pub(super) fn grip_color(lit: bool) -> Color32 {
+    if lit {
+        theme::text()
+    } else {
+        theme::text_dim()
+    }
+}
+
+/// Where a press on this bar would land if it were made now: the pointer over
+/// it, read through [`aimed_at`] so that on the frames between a press and egui
+/// calling it a drag this is still the point the grab will be decided from.
+///
+/// `None` while a drag is under way, when what is in hand is the grab it holds
+/// and not whatever the pointer has since arrived over, and `None` while the
+/// pointer is off the bar. Each bar hands this to the same rule its press is
+/// decided by, so the thumb [`grip_color`] lights and the one a press takes
+/// cannot come to disagree.
+pub(super) fn poised(ui: &Ui, response: &Response) -> Option<egui::Pos2> {
+    if response.dragged() {
+        return None;
+    }
+    response.hover_pos().map(|p| aimed_at(ui, p))
+}
+
 /// Draw one handle, and any text run standing under it a second time INSIDE
 /// it — the same galley at the same origin, clipped to the grip and overridden
 /// to the panel colour, so the letters cross the thumb in reverse instead of
 /// vanishing into it.
+///
+/// The grip is filled in `fill`, which is [`grip_color`]'s answer. On a thumb
+/// that is not in hand the knockout is panel on `text_dim()` at 8.2:1, level
+/// with a resting name on the well; the parity argued below is the lit case.
 ///
 /// A thumb and this tree's text are both near-white, so a crossing swallows
 /// whichever of the two paints first, and "-60 dB" reading "-60 B" is the
@@ -173,7 +225,7 @@ pub(super) fn track_fill(response: &Response) -> Color32 {
 /// legibility floor that the crossing costs nothing either way. The claim is
 /// parity, not improvement.
 ///
-/// **Overlapping thumbs come out right whatever order they are painted in**,
+/// **Overlapping thumbs knock out right whatever order they are painted in**,
 /// and the reason is worth stating because the ordering here looks load-bearing
 /// and is not. A later fill can only cover an earlier knockout inside
 /// `A ∩ B ∩ run`; that region lies in `run`, so `B` intersects `run` too and
@@ -182,6 +234,10 @@ pub(super) fn track_fill(response: &Response) -> Color32 {
 /// grips at exactly the same x — the state the MIDI pitch colors group's chroma bar opens
 /// in, since `chroma_ramp` defaults to 0 — so this is a case that ships, not a
 /// corner.
+///
+/// Their FILLS are another matter once one is lit and the other is not: the
+/// later one is the colour that shows. So a bar whose thumbs can coincide
+/// paints the unlit ones first.
 ///
 /// **The clip is square where the grip is rounded**, so a glyph pixel in a
 /// corner notch lands beside the thumb rather than on it, in the panel colour,
@@ -220,9 +276,10 @@ pub(super) fn grip_over_text(
     painter: &egui::Painter,
     grip: egui::Rect,
     radius: CornerRadius,
+    fill: Color32,
     runs: &[(egui::Pos2, std::sync::Arc<egui::Galley>)],
 ) {
-    painter.rect_filled(grip, radius, theme::text());
+    painter.rect_filled(grip, radius, fill);
     for (pos, galley) in runs {
         if grip.intersects(egui::Rect::from_min_size(*pos, galley.size())) {
             painter.with_clip_rect(grip).galley_with_override_text_color(
