@@ -660,9 +660,12 @@ fn record_controls(
 /// A render is minutes of work started by a button that then looks like
 /// nothing happened: the status line names the file and never changes again
 /// until it is finished, so a long render and a hung one read identically. The
-/// bar is the difference between them, and the frame counts are what say how
-/// much longer — the renderer counts frames, and a rate you have watched for
-/// ten seconds turns "3400/5400" into a time.
+/// bar is the difference between them.
+///
+/// The readout is a percentage: "3400/5400" is two numbers to divide before
+/// they say anything. The frames stay in the hover text. They are ENCODED
+/// frames, so the bar keeps moving through the encoder's backlog after the
+/// last frame is drawn, and it fills only when the video is written.
 ///
 /// Absent, not greyed, when nothing is rendering: the take controls are the
 /// pane's steady state and a permanent empty bar under them would read as a
@@ -675,16 +678,22 @@ fn record_controls(
 /// run in flight has anything half-written to throw away.
 fn render_progress(ui: &mut egui::Ui, interaction: &mut crate::Interaction) {
     let Some(progress) = interaction.take.render_progress else { return };
-    let value = match progress.total {
-        // Pad `done` to the width of `total` so the readout keeps one width as
-        // it counts up: monospace, so that holds the name still beside it —
-        // `progress_bar` has no range to reserve from, unlike `ValueBar`.
-        0 => "starting".to_owned(),
-        total => format!("{:>width$}/{total}", progress.done, width = total.to_string().len()),
+    let (value, frames) = match progress.total {
+        0 => ("starting".to_owned(), String::new()),
+        // Floored, so 100% means written rather than nearly. Padded to the
+        // width of "100%" so the readout keeps one width as it counts up:
+        // monospace, so that holds the name still beside it — `progress_bar`
+        // has no range to reserve from, unlike `ValueBar`.
+        total => (
+            format!("{:>3}%", progress.done.min(total) * 100 / total),
+            format!("{} of {total} frames encoded. ", progress.done),
+        ),
     };
     ui.add_space(2.0);
     crate::widgets::progress_bar(ui, progress.fraction(), "Rendering", &value).on_hover_text(
-        "Completed frames out of the total. Rendering runs in the background while the DAW and editor remain available.",
+        format!(
+            "{frames}Rendering runs in the background while the DAW and editor remain available."
+        ),
     );
     button_row(ui, |ui| {
         if ui
