@@ -77,7 +77,8 @@ and no reset trigger of their own exists.
 Identity is the input pitch class within the same-note tolerance, and the stored correction is added to the new input unchanged, so an octave is exact.
 A replayed onset is otherwise an ordinary decision:
 it sets the moving reference and joins held and released context like any other.
-Pins are made and read only while the control is on, and an onset scored with it off forgets them, so switching it back on starts from the current context rather than a pre-drift one.
+Pins are made and read only while the control is on, and an onset scored with it off forgets them, since that decision is the only thing that can move the context away from them;
+switching back on with no onset in between resumes them, because nothing has moved.
 
 Cases written down rather than handled:
 

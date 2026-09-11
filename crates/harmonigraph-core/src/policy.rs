@@ -169,8 +169,10 @@ impl Memory {
         self.remove_match(input + correction, config.tolerance);
         self.reference = correction;
         if !config.keep_tuning {
-            // Pins exist only while the control is on, so switching it back
-            // on starts from the current context rather than a pre-drift one.
+            // A decision made without the pins is the only thing that can
+            // move the context away from them, so it forgets them: switching
+            // back on starts from the context as it now is. With no onset in
+            // between nothing has moved, and the pins still describe it.
             self.pin_count = 0;
         } else if self.pin_count < MAX_PINS && self.pinned(input, config).is_none() {
             let class = PitchClass::from_microcents(input);
