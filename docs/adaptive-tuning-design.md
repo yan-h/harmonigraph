@@ -48,6 +48,10 @@ This example is a requirement for general harmonic heuristics, not a request to 
 MIDI alone cannot distinguish an ordinary return to C from continuing enharmonically to B♯;
 the desired musical convention favours continuity along the lattice.
 
+Yan later asked for the opposite as an option, for a Wicki-Hayden keyboard where a key should keep its pitch once established.
+It is the off-by-default Keep first tuning control in the [policy record](adaptive-tuning-plugin.md#keep-first-tuning);
+the travel above stays the default and is untouched when the control is off.
+
 ## Structural requirements and musical targets
 
 ### Continuous input pitch

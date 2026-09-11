@@ -2,11 +2,14 @@
 //! this module owns bounded selection and released-pitch memory. No audio call
 //! allocates. Pitch is absolute microcents; displacement is never octave-folded.
 use crate::configuration::{PolicyConfig, ResolvedConfig};
-use crate::{LatticePos, Tempered};
+use crate::{LatticePos, PitchClass, Tempered};
 
 pub const MAX_CONTEXT: usize = 256;
 pub const MAX_MEMORY: usize = 24;
 pub const MAX_COHORT_ONSETS: usize = 256;
+/// Distinct pitch classes Keep tuning can hold. A twelve-note controller uses
+/// twelve; past this, a new class is scored and left unpinned.
+pub const MAX_PINS: usize = 128;
 /// Explicit resource ceiling, not a musical truncation. The owner must report
 /// exhaustion instead of scoring an incomplete neighbourhood.
 pub const MAX_CANDIDATES: usize = 4096;
@@ -25,6 +28,7 @@ pub const CONFIG: PolicyConfig = PolicyConfig {
     silence_ms: 0,
     reset_stop: false,
     reset_loop: false,
+    keep_tuning: false,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,23 +106,43 @@ struct Released {
     pitch: ContextPitch,
     source: u8,
 }
+#[derive(Clone, Copy, Debug)]
+struct Pin {
+    class: PitchClass,
+    assignment: Assignment,
+}
 /// New activity replaces released entries. Repetition refreshes the same actual
 /// onset pitch, never a keyboard key or octave-folded class.
+///
+/// Keep tuning's pins live here too, so every reset that clears the context
+/// clears them with it: they last exactly as long as the rest of memory.
 #[derive(Clone, Debug)]
 pub struct Memory {
     recent: [Released; MAX_MEMORY],
     len: usize,
     pub reference: i64,
+    pins: [Pin; MAX_PINS],
+    pin_count: usize,
 }
 impl Default for Memory {
     fn default() -> Self {
-        Self { recent: [Released::default(); MAX_MEMORY], len: 0, reference: 0 }
+        Self {
+            recent: [Released::default(); MAX_MEMORY],
+            len: 0,
+            reference: 0,
+            pins: [Pin {
+                class: PitchClass::from_microcents(0),
+                assignment: Assignment::NoCandidate,
+            }; MAX_PINS],
+            pin_count: 0,
+        }
     }
 }
 impl Memory {
     pub fn clear(&mut self) {
         self.len = 0;
         self.reference = 0;
+        self.pin_count = 0;
     }
     pub fn forget_source(&mut self, source: u8) {
         let mut n = 0;
@@ -140,9 +164,32 @@ impl Memory {
         }
         self.len = n;
     }
-    pub fn attack(&mut self, pitch: i64, correction: i64, config: PolicyConfig) {
-        self.remove_match(pitch, config.tolerance);
+    pub fn attack(&mut self, input: i64, assignment: Assignment, config: PolicyConfig) {
+        let correction = assignment.correction_microcents();
+        self.remove_match(input + correction, config.tolerance);
         self.reference = correction;
+        if !config.keep_tuning {
+            // Pins exist only while the control is on, so switching it back
+            // on starts from the current context rather than a pre-drift one.
+            self.pin_count = 0;
+        } else if self.pin_count < MAX_PINS && self.pinned(input, config).is_none() {
+            let class = PitchClass::from_microcents(input);
+            self.pins[self.pin_count] = Pin { class, assignment };
+            self.pin_count += 1;
+        }
+    }
+    /// With Keep tuning on, the first assignment this input's pitch class
+    /// received since the context last reset. Octaves share it: the stored
+    /// correction is added to the new input unchanged.
+    pub fn pinned(&self, input: i64, config: PolicyConfig) -> Option<Assignment> {
+        if !config.keep_tuning {
+            return None;
+        }
+        let class = PitchClass::from_microcents(input);
+        self.pins[..self.pin_count]
+            .iter()
+            .find(|pin| class.signed_microcents_from(pin.class).unsigned_abs() <= config.tolerance)
+            .map(|pin| pin.assignment)
     }
     pub fn release(&mut self, pitch: ContextPitch, source: u8, config: PolicyConfig) {
         self.remove_match(pitch.pitch, config.tolerance);
@@ -342,15 +389,20 @@ pub fn select_prepared(
         },
     })
 }
+/// A pitch class Keep tuning has pinned replays its first assignment; anything
+/// else is scored against the context.
 pub fn assign_new_note(
     config: MusicalConfig,
     context: &[ContextPitch],
-    reference: i64,
+    memory: &Memory,
     onset: OrderedOnset,
     scratch: &mut PolicyScratch,
 ) -> Result<Decision, InputError> {
+    if let Some(assignment) = memory.pinned(onset.pitch, config.policy) {
+        return Ok(Decision { assignment });
+    }
     prepare(config, context, scratch)?;
-    select_prepared(config, reference, onset, scratch)
+    select_prepared(config, memory.reference, onset, scratch)
 }
 
 #[cfg(test)]

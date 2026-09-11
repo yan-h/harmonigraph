@@ -64,9 +64,33 @@ An explicit session reset clears musical context through the existing reset boun
 Pedal-aware harmonic holding remains deferred: harmonic held/released status follows the existing note-lifetime release semantics.
 Instrument release tails and pedal sustain do not turn released context back into a held contribution.
 
+## Keep first tuning
+
+An opt-in control, off by default, for controllers where one key should always sound one pitch once established, such as a Wicki-Hayden keyboard.
+It deliberately gives up the travel the rest of this record exists for:
+with it on, the first assignment each input pitch class receives is replayed for every later onset of that class, in every octave, until the context resets.
+Only classes not heard since the reset are scored.
+
+The pins live in `Memory`, so every reset that clears musical context clears them too —
+Reset, silence, and the Stop and loop/seek controls —
+and no reset trigger of their own exists.
+Identity is the input pitch class within the same-note tolerance, and the stored correction is added to the new input unchanged, so an octave is exact.
+A replayed onset is otherwise an ordinary decision:
+it sets the moving reference and joins held and released context like any other.
+Pins are made and read only while the control is on, and an onset scored with it off forgets them, so switching it back on starts from the current context rather than a pre-drift one.
+
+Cases written down rather than handled:
+
+1. A tuning edit does not retune existing pins;
+they keep the old tuning until the context resets.
+2. The live neighborhood outlines ignore pins, and so does the simulator.
+3. Two keys that send the same pitch share a pin.
+4. Past 128 distinct pitch classes, which only finely divided or attack-bent input can reach, a new class is scored and left unpinned.
+5. Pins are shared by every track, and Retune exclusion does not remove the ones a source made.
+
 ## Controls and live neighborhood
 
-The Tuning pane exposes harmonic weight, pitch scale, neighborhood radius, allowed axes, recent-memory capacity, released-note weighting, register weighting, same-note tolerance, silence timeout and transport reset choices.
+The Tuning pane exposes keep first tuning, harmonic weight, pitch scale, neighborhood radius, allowed axes, recent-memory capacity, released-note weighting, register weighting, same-note tolerance, silence timeout and transport reset choices.
 Defaults match the simulator's baseline profile.
 The precision profile used by the paired intentional-E examples is obtained by setting harmonic weight to two.
 
