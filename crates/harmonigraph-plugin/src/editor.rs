@@ -131,13 +131,11 @@ pub struct EditorShared {
     /// analyzer polls the end of a take through this state while the window is
     /// shut, and its tests read back what that round decided.
     pub(crate) take: harmonigraph_record::Control,
-    /// Events the audio thread has recorded into the current take.
-    pub(crate) take_events: Arc<std::sync::atomic::AtomicU64>,
     /// Whether the transport was rolling as of the last recorded event,
     /// for the status line. Derived, not authoritative.
     take_rolling: bool,
-    /// Event count at the previous frame; a rise means the transport is
-    /// rolling and the audio thread is actually capturing.
+    /// The recorder's note count for the current take, as of the last
+    /// [`poll_take_end`](Self::poll_take_end), for the status line.
     take_last_count: u64,
     /// Consecutive frames the transport has been stopped for, while a
     /// take is recording. Debounces the OnTransportStop trigger: a host
@@ -151,7 +149,6 @@ impl EditorShared {
         audio_consumer: crate::audio_ingress::Consumer,
         sample_rate_bits: Arc<AtomicU32>,
         take: harmonigraph_record::Control,
-        take_events: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
         EditorShared {
             input: LiveInput {
@@ -167,7 +164,6 @@ impl EditorShared {
             last_frame: None,
             gesture: std::cell::Cell::new(None),
             take,
-            take_events,
             take_rolling: false,
             take_last_count: 0,
             take_still_frames: 0,
@@ -196,7 +192,6 @@ impl EditorShared {
         if self.ui.workspace.interaction.take.recording && !recording {
             // Start from the CURRENT look, not the last-saved one: what
             // is on screen right now is what the render should reproduce.
-            self.take_events.store(0, std::sync::atomic::Ordering::Relaxed);
             self.take_last_count = 0;
             // `audio: true` unconditionally, rather than from a setting: the
             // render uses the selected analysis input as the spectrogram,
@@ -254,15 +249,23 @@ impl EditorShared {
     /// back into `Interaction`, and the next frame — whenever there is one —
     /// draws what it left.
     pub(crate) fn poll_take_end(&mut self) {
-        let count = self.take_events.load(std::sync::atomic::Ordering::Relaxed);
+        // Counted by the recorder, whichever path a note took into the take:
+        // with a configuration owner installed — every CLAP host — notes never
+        // pass through the plain-MIDI arm of `process` at all (#818).
+        let count = self.take.captured();
         self.take_last_count = count;
         // The audio thread's own view, rather than inferring it from
         // events arriving: music has gaps, and a gap is not a stop.
         self.take_rolling = self.take.is_rolling();
 
-        // Whether a backward jump ends the take on the audio thread.
-        let ends_at_rewind = self.ui.picture.appearance.render.trigger.ends_at_rewind();
+        // Whether a backward jump ends the take on the audio thread, and
+        // whether under this trigger it waits for a note first — the same
+        // "under way" the frame-counted stop below asks for (#569).
+        let trigger = self.ui.picture.appearance.render.trigger;
+        let ends_at_rewind = trigger.ends_at_rewind();
         self.take.set_end_at_rewind(ends_at_rewind);
+        self.take
+            .set_rewind_needs_capture(trigger == harmonigraph_ui::RenderTrigger::OnTransportStop);
         // And the bar it ends at, which is `None` under every other trigger —
         // so a stop bar saved in a project cannot end a take recorded under one
         // of them.
@@ -1101,7 +1104,6 @@ mod tests {
             audio_consumer,
             Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
             control,
-            Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
         shared.input.clock.observe(0.0, 0.0);
         (audio, shared)
@@ -1180,7 +1182,6 @@ mod tests {
                 audio_consumer,
                 Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
                 control,
-                Arc::new(std::sync::atomic::AtomicU64::new(0)),
             );
             notes.observe_clock(0.0);
             drain_audio(&mut shared, 0.0);
@@ -1284,7 +1285,7 @@ mod tests {
     fn recording_stop_debounce_counts_gui_callbacks_not_runtime_ticks() {
         let (_notes, consumer) = harmonigraph_record::publication::channel();
         let (_audio, audio_consumer) = crate::audio_ingress::channel(64);
-        let (recorder, control) = harmonigraph_record::channel();
+        let (mut recorder, control) = harmonigraph_record::channel();
         let directory =
             std::env::temp_dir().join(format!("runtime-recording-cadence-{}", std::process::id()));
         let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
@@ -1293,7 +1294,6 @@ mod tests {
             audio_consumer,
             Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
             control,
-            Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
         shared.ui.picture.appearance.render.trigger =
             harmonigraph_ui::RenderTrigger::OnTransportStop;
@@ -1302,7 +1302,11 @@ mod tests {
         shared.ui.workspace.interaction.take.recording = true;
         shared.sync_take(48_000.0);
         assert!(shared.take.is_recording());
-        shared.take_events.store(1, std::sync::atomic::Ordering::Relaxed);
+        // One note captured, as `process` would on the take's first block.
+        recorder.is_armed();
+        let on = harmonigraph_core::NoteEventKind::On { velocity: 1.0 };
+        recorder.note(0.0, SourceId::DIRECT, 0, 60, on);
+        recorder.finish_callback();
         for tick in 0..100 {
             let now = tick as f64 * 0.02;
             shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
@@ -1344,7 +1348,6 @@ mod tests {
             audio_consumer,
             Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
             control,
-            Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
         shared.ui.picture.appearance.camera.yaw = 1.23;
         shared.ui.picture.appearance.view.extent_sevens = 3;
@@ -1406,7 +1409,6 @@ mod tests {
             audio_consumer,
             std::sync::Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
             take_control,
-            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
         for (source, time) in [(1, 99.950), (2, 99.995)] {
             let event = NoteEvent::on(time, SourceId(source), 0, 60, 1.0);
@@ -1620,7 +1622,6 @@ mod tests {
             audio_consumer,
             std::sync::Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
             take_control,
-            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
 
         // An empty ring is not a repaint.
@@ -1771,7 +1772,6 @@ mod tests {
                 audio_consumer,
                 Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
                 take_control,
-                Arc::new(std::sync::atomic::AtomicU64::new(0)),
             ))),
             Arc::new(HarmonigraphParams::default()),
         )

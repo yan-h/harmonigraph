@@ -370,6 +370,18 @@ pub struct Recorder {
     /// [`OnTransportStop`](harmonigraph_take::RenderTrigger::OnTransportStop).
     /// The take ends there rather than splitting into another pass.
     end_at_rewind: Arc<AtomicBool>,
+    /// Set by the GUI under
+    /// [`OnTransportStop`](harmonigraph_take::RenderTrigger::OnTransportStop):
+    /// a backward jump ends the take only once [`captured`](Self::captured)
+    /// says it is under way. See [`Recorder::observe_transport`].
+    rewind_needs_capture: Arc<AtomicBool>,
+    /// Notes that entered the current take, whichever path carried them — the
+    /// plain-MIDI arm's [`note`](Recorder::note) or the configuration owner's
+    /// addressed [`publish_note`](Recorder::publish_note). Zeroed on the arming
+    /// edge. Nonzero is what "the take is under way" means, to the rewind end
+    /// here and to the GUI's frame-counted stop alike; the count itself is the
+    /// status line's.
+    captured: Arc<AtomicU64>,
     /// Published for the GUI: the transport went backwards and the take is done
     /// — the GUI reads this, stops, and renders the one pass.
     hit_rewind: Arc<AtomicBool>,
@@ -443,6 +455,15 @@ impl Recorder {
         // that overflowed still returns Err on its own half, so the caller
         // arms a snapshot there, but it must not touch the file.
         self.publication_result(take, route);
+        // A route with an address is a note landing in a pass: with a
+        // configuration owner installed, this is the only way one gets there.
+        // A reset is no note of the take's, whatever route it carries.
+        if take.is_ok()
+            && route.address.is_some()
+            && !matches!(note.event.kind, NoteEventKind::SourceReset | NoteEventKind::SessionReset)
+        {
+            self.captured.fetch_add(1, Ordering::Relaxed);
+        }
         let display = self.display.note(note, publication::Route::default());
         self.outage.take |= take == Err(publication::PublishError::Lost);
         self.outage.display |= display == Err(publication::PublishError::Lost);
@@ -564,6 +585,7 @@ impl Recorder {
             self.audio_started = false;
             self.finished = false;
             self.advanced = false;
+            self.captured.store(0, Ordering::Relaxed);
             self.pending_split = false;
             self.rolled = false;
             self.hit_rewind.store(false, Ordering::Relaxed);
@@ -587,6 +609,7 @@ impl Recorder {
 
     pub fn note(&mut self, t: f64, source: SourceId, channel: u8, note: u8, kind: NoteEventKind) {
         self.push(Entry::Note { t, source, channel, note, kind });
+        self.captured.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn wants_audio(&self) -> bool {
@@ -702,8 +725,19 @@ impl Recorder {
                 // nothing recorded — an empty file and a broken render. So
                 // instead begin the pass here: no NewPass (these triggers only
                 // ever want one file), no end.
+                //
+                // Under OnTransportStop forward motion is not enough either
+                // (#569): a playhead dragged ahead to look and back to start
+                // moves exactly as an export does, `playing = false` included.
+                // What an export has and a drag does not is notes, so that
+                // trigger also waits for the take to have captured one — the
+                // same "under way" its frame-counted stop in the GUI asks.
+                // AtLoopEnd keeps the bargain it was chosen for: a rewind after
+                // any forward motion ends it, notes or not.
                 if self.end_at_rewind.load(Ordering::Relaxed) {
-                    if self.advanced {
+                    let under_way = !self.rewind_needs_capture.load(Ordering::Relaxed)
+                        || self.captured.load(Ordering::Relaxed) > 0;
+                    if self.advanced && under_way {
                         self.finished = true;
                         self.hit_rewind.store(true, Ordering::Relaxed);
                         self.last_position = Some(position);
@@ -956,6 +990,10 @@ pub struct Control {
     with_audio: Arc<AtomicBool>,
     /// Mirror for the audio thread of whether a backward jump ends the take.
     end_at_rewind: Arc<AtomicBool>,
+    /// And whether it waits for the take to have captured a note first.
+    rewind_needs_capture: Arc<AtomicBool>,
+    /// The audio thread's count of notes in the current take.
+    captured: Arc<AtomicU64>,
     /// Set by the audio thread when the transport went backwards: the take is
     /// done and the GUI should stop + render it.
     hit_rewind: Arc<AtomicBool>,
@@ -983,6 +1021,21 @@ impl Control {
     /// one that has to survive a looping transport. Called every GUI frame.
     pub fn set_end_at_rewind(&self, on: bool) {
         self.end_at_rewind.store(on, Ordering::Relaxed);
+    }
+
+    /// Tell the audio thread whether that backward jump waits for the take to
+    /// have captured a note — true under
+    /// [`OnTransportStop`](harmonigraph_take::RenderTrigger::OnTransportStop)
+    /// alone, whose rewind cannot otherwise tell an export from a scrub
+    /// (#569). Called every GUI frame, with the setter above.
+    pub fn set_rewind_needs_capture(&self, on: bool) {
+        self.rewind_needs_capture.store(on, Ordering::Relaxed);
+    }
+
+    /// Notes the current take has captured, by either path into it. Nonzero
+    /// is what makes a take "under way"; see `Recorder::captured`.
+    pub fn captured(&self) -> u64 {
+        self.captured.load(Ordering::Relaxed)
     }
 
     /// Whether the audio thread saw the transport go backwards and ended the
@@ -1107,10 +1160,12 @@ impl Control {
         self.recording.store(true, Ordering::Relaxed);
         self.rolling.store(false, Ordering::Relaxed);
         // Clear a previous take's end latches so neither can end this one
-        // before the transport even rolls. The audio thread also clears them
-        // on arm.
+        // before the transport even rolls — nor its note count, which would
+        // read as this take being under way. The audio thread also clears
+        // them on arm.
         self.hit_rewind.store(false, Ordering::Relaxed);
         self.stop_at_bar.hit.store(false, Ordering::Relaxed);
+        self.captured.store(0, Ordering::Relaxed);
         // Finishing barred Start until every old armed callback retired.
         // An overlapping idle callback captured disarmed and owns no audio,
         // so its activity bit cannot carry ownership into this new epoch.
@@ -1260,6 +1315,8 @@ pub fn channel() -> (Recorder, Control) {
     let rolling = Arc::new(AtomicBool::new(false));
     let with_audio = Arc::new(AtomicBool::new(false));
     let end_at_rewind = Arc::new(AtomicBool::new(false));
+    let rewind_needs_capture = Arc::new(AtomicBool::new(false));
+    let captured = Arc::new(AtomicU64::new(0));
     let hit_rewind = Arc::new(AtomicBool::new(false));
     let stop_at_bar = Arc::new(StopAtBar::default());
     let status = Arc::new(Mutex::new(String::new()));
@@ -1461,6 +1518,8 @@ pub fn channel() -> (Recorder, Control) {
             audio: audio_producer,
             with_audio: with_audio.clone(),
             end_at_rewind: end_at_rewind.clone(),
+            rewind_needs_capture: rewind_needs_capture.clone(),
+            captured: captured.clone(),
             hit_rewind: hit_rewind.clone(),
             stop_at_bar: stop_at_bar.clone(),
             last_bar: None,
@@ -1480,6 +1539,8 @@ pub fn channel() -> (Recorder, Control) {
             rolling,
             with_audio,
             end_at_rewind,
+            rewind_needs_capture,
+            captured,
             hit_rewind,
             stop_at_bar,
             progress,
@@ -1736,6 +1797,8 @@ pub mod testing {
             rolling,
             audio_started: false,
             end_at_rewind,
+            rewind_needs_capture: Arc::new(AtomicBool::new(false)),
+            captured: Arc::new(AtomicU64::new(0)),
             hit_rewind,
             stop_at_bar: Arc::new(StopAtBar::default()),
             last_bar: None,
@@ -3128,6 +3191,8 @@ mod tests {
                     rolling: Arc::new(AtomicBool::new(false)),
                     audio_started: false,
                     end_at_rewind: end_at_rewind.clone(),
+                    rewind_needs_capture: Arc::new(AtomicBool::new(false)),
+                    captured: Arc::new(AtomicU64::new(0)),
                     hit_rewind: hit_rewind.clone(),
                     stop_at_bar: stop_at_bar.clone(),
                     last_bar: None,
@@ -3153,6 +3218,13 @@ mod tests {
 
         fn end_at_rewind(&self) {
             self.end_at_rewind.store(true, Ordering::Relaxed);
+        }
+
+        /// What the GUI publishes for OnTransportStop: a rewind ends the take,
+        /// but only one that has captured a note.
+        fn on_transport_stop(&self) {
+            self.end_at_rewind();
+            self.rec.rewind_needs_capture.store(true, Ordering::Relaxed);
         }
 
         fn hit_rewind(&self) -> bool {
@@ -4250,14 +4322,20 @@ mod tests {
     /// cannot do. The restore arrives well inside the debounce, so the take is
     /// still armed for whatever the transport does next — and under the old rule
     /// that opened a pass which, being the last, was the one rendered.
+    ///
+    /// The export plays notes into the take, as a real one does: under
+    /// OnTransportStop they are what tells it from a playhead dragged ahead
+    /// and back, which moves the same way and holds nothing (#569).
     #[test]
     fn a_playhead_restored_after_an_export_ends_the_take_there() {
         let mut b = Bench::new();
         b.arm();
-        b.end_at_rewind();
+        b.on_transport_stop();
         assert!(!b.rec.observe_transport(0.0, false), "nothing to compare on the first block");
         assert!(b.rec.observe_transport(4.254, false), "the position advancing IS the export");
+        b.rec.note(4.254, SourceId::DIRECT, 0, 60, NoteEventKind::On { velocity: 0.8 });
         assert!(b.rec.observe_transport(86.372, false));
+        b.rec.note(86.372, SourceId::DIRECT, 0, 60, NoteEventKind::Off);
         b.pushed();
 
         assert!(!b.rec.observe_transport(4.254, false), "the restore ends the take");
@@ -4269,6 +4347,28 @@ mod tests {
         // export was followed by is what got rendered in place of the piece.
         assert!(!b.rec.observe_transport(4.35, true));
         assert!(b.pushed().is_empty());
+    }
+
+    /// A playhead dragged ahead to look and back to the top, before a note has
+    /// played, is not the end of an OnTransportStop take (#569).
+    ///
+    /// It moves exactly as the export above does — forward, then back, with
+    /// the host reporting `playing = false` throughout — so only what the take
+    /// holds tells the two apart. Published through the `Control` the GUI uses,
+    /// so a setter wired to an atomic the audio thread never reads fails here.
+    #[test]
+    fn a_scrub_forward_and_back_before_playing_does_not_end_the_take() {
+        let (mut rec, ctrl) = channel();
+        ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
+        ctrl.set_end_at_rewind(true);
+        ctrl.set_rewind_needs_capture(true);
+        assert!(rec.is_armed());
+
+        assert!(!rec.observe_transport(10.0, false), "parked, not rolling");
+        rec.observe_transport(30.0, false); // dragged ahead to look
+        rec.observe_transport(5.0, false); // dragged back to the top
+        assert!(!ctrl.hit_rewind(), "a scrub before the first note is not a take's end");
+        assert!(rec.observe_transport(5.1, true), "and the take records what plays from there");
     }
 
     /// A one-file trigger drops a split the take owed from before it was chosen,
