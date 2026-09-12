@@ -19,6 +19,8 @@ mod octave;
 #[cfg(test)]
 mod probe;
 mod range;
+#[cfg(test)]
+pub(crate) mod range_probe;
 mod rows;
 mod stack;
 mod value;
