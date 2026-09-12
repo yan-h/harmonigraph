@@ -1558,7 +1558,7 @@ fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
     let mut device = Device::new();
     device.activate();
     let policy = PolicyConfig {
-        harmonic: 2300,
+        pitch_flexibility: 37,
         axes: 3,
         silence_ms: 4500,
         reset_loop: true,
@@ -1581,4 +1581,11 @@ fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
     assert_eq!(view(mailbox.visible().0, false).resolved.policy, policy);
     let defaults: MusicalSettings = serde_json::from_str("{\"adaptive\":{}}").unwrap();
     assert_eq!(PolicyConfig::from(defaults.adaptive), PolicyConfig::default());
+    let old: MusicalSettings =
+        serde_json::from_str(r#"{"adaptive":{"version":2,"harmonic":20000,"pitch_scale":20}}"#)
+            .unwrap();
+    assert_eq!(PolicyConfig::from(old.adaptive), PolicyConfig::default());
+    let clamped: MusicalSettings =
+        serde_json::from_str(r#"{"adaptive":{"pitch_flexibility":65535}}"#).unwrap();
+    assert_eq!(PolicyConfig::from(clamped.adaptive).pitch_flexibility, 100);
 }

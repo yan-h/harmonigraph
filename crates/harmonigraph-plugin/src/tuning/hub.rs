@@ -747,13 +747,13 @@ impl Hub {
                 // The one thing the policy can refuse. That onset sounds at raw
                 // pitch, the status says so, and nothing is silenced for it.
                 self.status |= session::POLICY;
-                (policy::Assignment::NoCandidate, 0)
+                (policy::Assignment::NoCandidate { correction_microcents: 0 }, 0)
             }
         };
         let (correction, node) = (assignment.correction_microcents(), assignment.node());
         self.reply(record, correction);
         let mut struck = record.sample;
-        if let Some(node) = node {
+        if decision != 0 {
             struck = self.sequencer.memory.attack(
                 onset.pitch,
                 correction,
@@ -761,7 +761,9 @@ impl Hub {
                 node,
                 record.sample,
             );
-            self.sequencer.reference_source = Some(record.source);
+            if node.is_some() {
+                self.sequencer.reference_source = Some(record.source);
+            }
         }
         let voice = Voice {
             source: record.source,

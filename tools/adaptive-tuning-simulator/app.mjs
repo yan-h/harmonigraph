@@ -20,8 +20,7 @@ let reachLow = 3600, reachHigh = 9600, reachRequest = 0, custom = false;
 let audio = null, sounds = new Map();
 
 const CONTROLS = [
-  ['harmonic', 'Harmonic preference', 0, 12, 0.1, 'Higher values favour harmonic proximity over pitch accuracy.', 'main-controls'],
-  ['pitchScale', 'Pitch flexibility', 1, 60, 1, 'Cents of pitch error that cost one point. Lower = more precise control.', 'main-controls'],
+  ['pitchFlexibility', 'Pitch flexibility', 1, 100, 1, 'Cents beyond accumulated drift that cost one point. An exponential pitch penalty competes with harmonic benefit; if no candidate earns a positive benefit, the note stays unsnapped.', 'main-controls'],
   ['register', 'Weight per octave', 0.05, 1, 0.05, 'Each octave between a context note and the note being tuned multiplies that note’s vote by this. 1 makes scoring register-blind.', 'main-controls'],
   ['halfLife', 'Half-life', 0, 10, 0.1, 'Seconds. A note struck this long before the newest one counts half, held or released. 0 means no decay.', 'main-controls'],
   ['radius', 'Neighbourhood radius', 1, 5, 1, 'Maximum lattice steps from any contributing context note.', 'extra-controls'],
@@ -36,7 +35,7 @@ for (const [name, label, min, max, step, help, container] of CONTROLS) {
   input.addEventListener('input', () => { output.textContent = formatControl(name, Number(input.value)); });
   input.addEventListener('change', () => guard(() => changeSettings({ [name]: Number(input.value) })));
 }
-function formatControl(name, value) { return `${Number.isInteger(value) ? value : value.toFixed(2)}${['pitchScale', 'tolerance'].includes(name) ? ' ¢' : name === 'halfLife' ? ' s' : ''}`; }
+function formatControl(name, value) { return `${Number.isInteger(value) ? value : value.toFixed(2)}${['pitchFlexibility', 'tolerance'].includes(name) ? ' ¢' : name === 'halfLife' ? ' s' : ''}`; }
 function syncControls() {
   for (const [name] of CONTROLS) { $(`param-${name}`).value = settings[name]; $(`value-${name}`).textContent = formatControl(name, settings[name]); }
   $('axes').value = settings.axes; $('silence').value = settings.silence;
@@ -103,7 +102,7 @@ function update(recalculateReach = false) {
   $('step').disabled = cursor >= events.length; $('finish').disabled = cursor >= events.length;
   const lastEvent = events[cursor - 1];
   $('event-label').textContent = lastEvent ? `${lastEvent.text} · virtual time ${sim.time.toFixed(2)} s` : 'Starting context · reference 0.00 ¢';
-  $('history-count').textContent = `${sim.history.length} assigned onsets`;
+  $('history-count').textContent = `${sim.history.length} onsets`;
   if (!custom && cursor === events.length && events.length) {
     const matches = example.check ? example.check(sim) : keyOf(sim.history.at(-1)?.node || []) === keyOf(example.expectedNode);
     $('expected').textContent = `${matches ? 'Target reached:' : 'Target not reached at these settings. Expected:'} ${example.expected}`;
@@ -131,12 +130,13 @@ function requestReach() {
 }
 function renderScores(next) {
   const view = $('score-mode').value === 'last' && sim.last ? sim.last : next;
-  $('decision-caption').textContent = `${$('score-mode').value === 'last' && sim.last ? 'Frozen decision for' : 'Preview for'} ${pitchName(view.input)}. Target ${pitchName(view.target)} after reference ${signed(view.reference)} ¢. Lower total wins; first 12 of ${view.candidates.length} candidates.`;
+  $('decision-caption').textContent = `${$('score-mode').value === 'last' && sim.last ? 'Frozen decision for' : 'Preview for'} ${pitchName(view.input)}. Target ${pitchName(view.target)} after reference ${signed(view.reference)} ¢. Negative totals beat leaving the note unsnapped; first 12 of ${view.candidates.length} candidates.`;
   const body = $('scores'); body.replaceChildren();
-  for (const [i, c] of view.candidates.slice(0, 12).entries()) {
-    const row = element('tr'); if (i === 0) row.classList.add('winner');
+  for (const c of view.candidates.slice(0, 12)) {
+    const chosen = c === view.winner;
+    const row = element('tr'); if (chosen) row.classList.add('winner');
     if (selected && keyOf(c.node) === keyOf(selected)) row.classList.add('selected-row');
-    for (const value of [`${nodeName(c.node)} [${c.node.join(', ')}]${i === 0 ? ' · chosen' : ''}`, pitchName(c.output), c.pitchCost.toFixed(3), c.harmonicCost.toFixed(3), c.score.toFixed(3)]) row.append(element('td', value));
+    for (const value of [`${nodeName(c.node)} [${c.node.join(', ')}]${chosen ? ' · chosen' : ''}`, pitchName(c.output), c.pitchCost.toFixed(3), c.harmonicCost.toFixed(3), c.score.toFixed(3)]) row.append(element('td', value));
     body.append(row);
   }
 }
@@ -144,7 +144,7 @@ function renderContext() {
   const body = $('context'); body.replaceChildren();
   const context = sim.context();
   $('context-count').textContent = `${sim.held.size} sounding voices · ${sim.recent.length} remembered entries`;
-  $('seed-note').textContent = seed.length ? `${seed.length} exact starting pitches were supplied by this fixture; all subsequent “on” events use the algorithm. Initial reference: 0 cents.` : 'Every note in this experiment is assigned by the algorithm.';
+  $('seed-note').textContent = seed.length ? `${seed.length} exact starting pitches were supplied by this fixture; all subsequent “on” events use the algorithm. Initial reference: 0 cents.` : 'Every note in this experiment is evaluated by the algorithm.';
   for (const entry of context) {
     const row = element('tr');
     row.append(element('td', `${entry.id} · ${nodeName(entry.node)}`), element('td', pitchName(entry.output)), element('td', `${entry.status} · ${entry.weight.toFixed(3)}`));

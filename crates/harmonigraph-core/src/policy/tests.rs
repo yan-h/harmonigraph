@@ -68,7 +68,7 @@ impl Harness {
             pitch,
             d.assignment.correction_microcents(),
             self.config.policy.tolerance,
-            d.assignment.node().unwrap(),
+            d.assignment.node(),
             self.now,
         );
         self.held.push((id.into(), v, struck));
@@ -92,7 +92,7 @@ fn simulator_fixture_parity_includes_register_memory_and_precision() {
             "case" => {
                 h = Harness::new();
                 case = w[1];
-                h.config.policy.harmonic = num(2) as u16;
+                h.config.policy.pitch_flexibility = num(2) as u16;
             }
             "seed" => h.held.push((
                 w[1].into(),
@@ -105,14 +105,13 @@ fn simulator_fixture_parity_includes_register_memory_and_precision() {
             )),
             "on" => {
                 let v = h.on(w[1], num(2));
-                assert_eq!(
-                    v.node,
-                    Some(LatticePos::new(num(3) as i32, num(4) as i32, num(5) as i32)),
-                    "{case}: {line}"
-                );
+                let node = (w[3] != "none")
+                    .then(|| LatticePos::new(num(3) as i32, num(4) as i32, num(5) as i32));
+                assert_eq!(v.node, node, "{case}: {line}");
+                let output = num(if node.is_some() { 6 } else { 4 });
                 // Production axes are fixed microcents, whereas the simulator
                 // uses log2 doubles. Accumulated axis rounding is below .001c.
-                assert!(v.pitch.abs_diff(num(6)) < 1000, "{case}: {line}: {}", v.pitch);
+                assert!(v.pitch.abs_diff(output) < 1000, "{case}: {line}: {}", v.pitch);
             }
             "off" => h.off(w[1]),
             // Waiting advances the clock context decays on; bending never
@@ -184,6 +183,110 @@ fn a_schismatic_keyboards_two_a_keys_are_two_as() {
     assert_eq!(play(&mut h, &[("a", 3, 0, 2)]), Some(LatticePos::new(3, 0, 0)));
     h.off("a");
     assert_eq!(play(&mut h, &[("a", -1, 1, 2)]), Some(LatticePos::new(-1, 1, 0)));
+}
+#[test]
+fn a_schismatic_third_chooses_just_e_or_pythagorean_e_without_doubling_c() {
+    for (radius, keys, expected) in [
+        (3, [0, 4, 1], LatticePos::new(0, 1, 0)),
+        (3, [0, 1, 4], LatticePos::new(4, 0, 0)),
+        (3, [0, -8, 1], LatticePos::new(0, 1, 0)),
+        (4, [0, 4, 1], LatticePos::new(4, 0, 0)),
+    ] {
+        let mut h = Harness::new();
+        h.config.policy.keyboard = [701_720_000, 386_250_000, 975_950_000];
+        h.config.policy.radius = radius;
+        h.config.policy.pitch_flexibility = 100;
+        for fifths in keys {
+            let pitch = sent(&h, fifths, 0, 0);
+            let voice = h.on(&fifths.to_string(), pitch);
+            if fifths == 4 || fifths == -8 {
+                assert_eq!(voice.node, Some(expected), "radius {radius}, keys {keys:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn exponential_pitch_flexibility_sets_the_tradeoff_without_a_fixed_cutoff() {
+    let mut config = just();
+    let mut scratch = PolicyScratch::default();
+    prepare(config, &[], &mut scratch).unwrap();
+    scratch.candidates.retain(|&n| n == LatticePos::ORIGIN);
+    assert_eq!(pitch_cost(50, 0.0), 0.0);
+    assert_eq!(pitch_cost(50, 50.0), 1.0);
+    assert!(pitch_cost(50, 100.0) > 30.0);
+    for (flexibility, assigned) in [(50, false), (100, true)] {
+        config.policy.pitch_flexibility = flexibility;
+        let assignment = select_prepared(
+            config,
+            2 * OCTAVE + 60_000_000,
+            OrderedOnset { pitch: 4_800_000_000 },
+            &scratch,
+        )
+        .unwrap()
+        .assignment;
+        assert_eq!(assignment.node(), assigned.then_some(LatticePos::ORIGIN));
+        assert_eq!(
+            assignment.correction_microcents(),
+            2 * OCTAVE + if assigned { 0 } else { 60_000_000 }
+        );
+    }
+}
+
+#[test]
+fn an_unprofitable_keyboard_match_keeps_the_note_unsnapped() {
+    let mut config = just();
+    config.policy.axes = 1;
+    config.policy.radius = 1;
+    let reference = i64::from(config.axes[0]);
+    let mut scratch = PolicyScratch::default();
+    prepare(config, &[], &mut scratch).unwrap();
+    for (input, expected) in
+        [(4_800_000_000, None), (4_794_000_000, Some(LatticePos::new(1, 0, 0)))]
+    {
+        let assignment =
+            select_prepared(config, reference, OrderedOnset { pitch: input }, &scratch)
+                .unwrap()
+                .assignment;
+        assert_eq!(assignment.node(), expected);
+    }
+    let snapshot = reach::Snapshot { config, reference, context: vec![] };
+    assert!(reach::reachable(&snapshot, 4799.0, 4801.0, || false).unwrap().is_empty());
+    assert!(reach::reachable(&snapshot, 4793.0, 4794.0, || false)
+        .unwrap()
+        .contains(&LatticePos::new(1, 0, 0)));
+}
+
+#[test]
+fn an_unsnapped_attack_preserves_drift_and_interrupts_a_repeated_node() {
+    let mut h = Harness::new();
+    h.config.policy.axes = 1;
+    h.config.policy.radius = 1;
+    h.memory.reference = 2 * OCTAVE;
+    h.on("c", 4_800_000_000);
+    h.now = 100;
+    let voice = h.on("e", 5_200_000_000);
+    assert_eq!(voice.node, None);
+    assert_eq!(voice.pitch, 5_200_000_000 + 2 * OCTAVE);
+    assert_eq!(h.memory.reference, 2 * OCTAVE);
+    h.now = 200;
+    assert_eq!(h.on("c-again", 4_800_000_000).node, Some(LatticePos::ORIGIN));
+    assert_eq!(h.held.last().unwrap().2, 200, "E interrupted the consecutive C attacks");
+}
+
+#[test]
+fn reachability_leaves_gaps_where_snapping_has_no_net_benefit() {
+    let mut config = just();
+    config.policy.axes = 1;
+    config.policy.radius = 1;
+    let snapshot = reach::Snapshot { config, reference: 2 * OCTAVE, context: vec![] };
+    // C, F and G are the only candidates. This range is entirely outside
+    // their windows even though the old unlimited scorer always chose one.
+    assert!(reach::reachable(&snapshot, 7500.0, 7600.0, || false).unwrap().is_empty());
+    assert_eq!(
+        reach::reachable(&snapshot, 7210.0, 7211.0, || false).unwrap(),
+        vec![LatticePos::ORIGIN]
+    );
 }
 #[test]
 fn a_slightly_mislearned_fifth_still_keeps_the_b_sharp_key() {
@@ -267,7 +370,7 @@ fn octave_copies_of_a_note_add_no_vote() {
     let cost = |context: &[ContextPitch]| {
         let mut scratch = PolicyScratch::default();
         prepare(config, context, &mut scratch).unwrap();
-        harmonic_cost(config, LatticePos::new(1, 0, 0), 5501.955, &scratch.context)
+        harmonic_benefit(config, LatticePos::new(1, 0, 0), 5501.955, &scratch.context)
     };
     let alone = cost(&[voice(4_800_000_000, c), voice(5_186_313_714, e)]);
     let doubled = cost(&[
@@ -341,7 +444,9 @@ fn analytic_reachability_covers_direct_selection_across_registers() {
             &mut h.scratch,
         )
         .unwrap();
-        assert!(reachable.contains(&selected.assignment.node().unwrap()));
+        if let Some(node) = selected.assignment.node() {
+            assert!(reachable.contains(&node));
+        }
     }
     let shifted = reach::Snapshot {
         context: context

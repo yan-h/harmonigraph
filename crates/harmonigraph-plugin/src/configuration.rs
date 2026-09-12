@@ -128,7 +128,7 @@ pub fn view(snapshot: ConfigurationSnapshot, pending: bool) -> ConfigurationView
         };
         resolved.modes = modes(snapshot.payload[1]);
     }
-    if snapshot.payload[7] == 2 {
+    if snapshot.payload[7] == 3 {
         resolved.policy = PolicyConfig::from_words(snapshot.payload[7..17].try_into().unwrap());
     }
     resolved.revision = snapshot.revision;
@@ -300,7 +300,7 @@ impl Owner {
                     decode_option(command.edit.payload[4]),
                 ],
                 learning: decode_option(command.edit.payload[5]),
-                policy: (command.edit.payload[7] == 2).then(|| {
+                policy: (command.edit.payload[7] == 3).then(|| {
                     PolicyConfig::from_words(command.edit.payload[7..17].try_into().unwrap())
                 }),
             }),

@@ -26,8 +26,8 @@ pub struct PolicyConfig {
     pub version: u32,
     pub radius: u8,
     pub axes: u8,
-    pub harmonic: u16,
-    pub pitch_scale: u16,
+    /// Cents at which the exponential pitch penalty reaches one.
+    pub pitch_flexibility: u16,
     /// Held and released contributions alike halve in weight once per this
     /// long between their attack and the newest attack in context. A release
     /// does not restart it.
@@ -51,11 +51,10 @@ impl Default for PolicyConfig {
 }
 impl PolicyConfig {
     pub fn sanitize(mut self) -> Self {
-        self.version = 2;
+        self.version = 3;
         self.radius = self.radius.clamp(1, 5);
         self.axes = self.axes.clamp(1, 3);
-        self.harmonic = self.harmonic.min(20_000);
-        self.pitch_scale = self.pitch_scale.clamp(1, 100);
+        self.pitch_flexibility = self.pitch_flexibility.clamp(1, 100);
         self.half_life_ms = self.half_life_ms.min(20_000);
         // Zero would leave a context note in another register no vote at all,
         // and a context entirely in other registers an empty average.
@@ -69,12 +68,12 @@ impl PolicyConfig {
     /// The reset flags take bits 26 and 27 of the second word.
     pub fn words(self) -> [i32; 10] {
         [
-            2,
+            3,
             i32::from(self.radius)
                 | i32::from(self.axes) << 8
                 | i32::from(self.reset_stop) << 26
                 | i32::from(self.reset_loop) << 27,
-            i32::from(self.harmonic) | i32::from(self.pitch_scale) << 16,
+            i32::from(self.pitch_flexibility),
             i32::from(self.half_life_ms),
             i32::from(self.register),
             self.tolerance as i32,
@@ -86,13 +85,12 @@ impl PolicyConfig {
     }
     pub fn from_words(w: [i32; 10]) -> Self {
         Self {
-            version: 2,
+            version: 3,
             radius: w[1] as u8,
             axes: (w[1] >> 8) as u8,
             reset_stop: w[1] & (1 << 26) != 0,
             reset_loop: w[1] & (1 << 27) != 0,
-            harmonic: w[2] as u16,
-            pitch_scale: (w[2] >> 16) as u16,
+            pitch_flexibility: w[2].clamp(1, 100) as u16,
             half_life_ms: w[3] as u16,
             register: w[4] as u16,
             tolerance: w[5].max(0) as u32,
