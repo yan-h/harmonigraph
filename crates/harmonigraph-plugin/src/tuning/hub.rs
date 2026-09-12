@@ -761,6 +761,7 @@ impl Hub {
                 onset.pitch,
                 correction,
                 self.sequencer.config.policy.tolerance,
+                policy::is_new(node, &self.sequencer.working[..count]),
             );
             self.sequencer.reference_source = Some(record.source);
         }

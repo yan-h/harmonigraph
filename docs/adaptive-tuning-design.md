@@ -171,7 +171,8 @@ Do not choose a default that conflates the motivating diesis-separated pitches o
 For the initial version, Yan accepts remembering the last N distinct contributions, refreshing repeats and evicting the least recently used released contribution when capacity is exceeded.
 That recency counts attacks and repeat refreshes only: a release does not refresh it.
 Held notes remain represented rather than being evicted to meet the remembered-note budget.
-The capacity may be configurable; its value and accounting for held versus released entries remain open.
+The capacity is fixed at 24 released entries with no setting (Yan, 2026-09-11):
+with every entry decaying on the half-life it is a storage bound, and a larger one measured costly on the audio thread.
 **This is explicitly a temporary simplification.** Yan wants to move away from this fixed recent-note scheme eventually, toward a more musically informed replacement policy.
 Do not turn the initial capacity rule into a permanent musical contract or implement the more elaborate successor before it is designed.
 
@@ -189,6 +190,12 @@ It first did, and a measurement showed the cost:
 C major held eight seconds, F–A over the held C for eight more, then C released as D arrives —
 the just-released C outweighed the still-sounding F–A 25 to 1 and tuned D to 9/8, a 680-cent fifth under the sounding A.
 Letting go of a note now never raises its weight.
+Released memory is fixed at 24 entries and also fades by count (Yan, 2026-09-11):
+each note on a lattice node that no held or remembered note occupies multiplies every released note's weight by a configurable new-note factor, 0.7 by default.
+A repeated node fades nothing, so repeating a note cannot erase the rest.
+Without it, 24 remembered notes held a fast major-third cycle in place.
+A stronger released-to-held penalty cannot substitute:
+a chord's first note is scored against released notes alone, where a factor common to all of them cancels.
 An old held note can still weigh less than a note struck well after it and already released,
 which leans the sustained bass toward being left behind without making that a rule.
 Forgetting individual old notes must not itself erase the accumulated tuning displacement.
@@ -290,7 +297,7 @@ Context and balance changes may move those ranges and make nodes enter or leave 
 | Reset on transport events | Choose whether stopping/restarting playback and looping reset context | Requested; event triggers, one versus separate controls, reset scope and defaults open |
 | Allowed lattice axes / interval families | Control which harmonic relationships may supply candidates, including whether seventh-based relationships are allowed | Requested; UI, combinations and default open |
 | Same-note tolerance | Decide when a new pitch refreshes an existing memory contribution | Suggested by Yan; matching semantics, units, range and default open |
-| Remembered-note capacity | Set N for the temporary recent-note replacement scheme | Scheme accepted for initial version; exposing N as a setting remains proposed |
+| Remembered-note capacity | Set N for the temporary recent-note replacement scheme | Fixed at 24 released entries with no setting (Yan, 2026-09-11) |
 
 The initial memory replacement scheme is intentionally temporary; its successor remains to be designed.
 Do not add gradual time decay as the default interpretation of forgetting.

@@ -25,9 +25,9 @@ const CONTROLS = [
   ['registerFloor', 'Distant-note influence', 0.05, 1, 0.05, 'Minimum retained register weight. 1 makes scoring register-blind.', 'main-controls'],
   ['registerFalloff', 'Register sensitivity', 0, 3, 0.1, 'How quickly additional influence falls with octave separation.', 'main-controls'],
   ['halfLife', 'Half-life', 0, 10, 0.1, 'Seconds. A note struck this long before the newest one counts half, held or released. 0 means no decay.', 'main-controls'],
+  ['newNote', 'New-note factor', 0, 1, 0.05, 'Each note on a lattice node not already in context multiplies every released note’s weight by this. 1 means off.', 'main-controls'],
   ['released', 'Released : held weight', 0, 1, 0.05, 'A released note weighs this much against a held note struck at the same moment.', 'main-controls'],
   ['radius', 'Neighbourhood radius', 1, 5, 1, 'Maximum lattice steps from any contributing context note.', 'extra-controls'],
-  ['memory', 'Released memory capacity', 0, 24, 1, 'Temporary limit on released entries. Held notes are retained.', 'extra-controls'],
   ['tolerance', 'Same-note tolerance', 0, 20, 0.1, 'Cents of absolute onset-pitch difference that refresh one memory entry.', 'extra-controls'],
 ];
 for (const [name, label, min, max, step, help, container] of CONTROLS) {

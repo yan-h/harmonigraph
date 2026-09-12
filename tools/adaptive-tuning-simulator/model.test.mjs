@@ -31,7 +31,7 @@ test('transpose complete performances by an octave without changing lattice choi
 });
 
 test('repeated voices refresh memory; octave duplicates and comma shifts remain distinct', () => {
-  const sim = new Simulator({ memory: 2 });
+  const sim = new Simulator();
   sim.seed([{ id: 'a', input: 4800, node: [0, 0, 0] }, { id: 'b', input: 4800, node: [0, 0, 0] },
     { id: 'octave', input: 6000, node: [0, 0, 0] }, { id: 'comma', input: 4800, node: [0, 3, 0] }]);
   assert.equal(sim.context().length, 3);
@@ -39,7 +39,7 @@ test('repeated voices refresh memory; octave duplicates and comma shifts remain 
   assert.equal(sim.recent.length, 1);
   assert.equal(sim.recent[0].id, 'b');
   sim.off('octave'); sim.off('comma');
-  assert.deepEqual(sim.recent.map(v => v.id), ['comma', 'octave']);
+  assert.deepEqual(sim.recent.map(v => v.id), ['comma', 'octave', 'b']);
   assert.equal(sim.recent[0].node[1], 3);
 });
 
@@ -58,7 +58,8 @@ test('a note struck or released long before the newest weighs less, and waiting 
   const held = 'on E3 low\nwait 3\non C3 c\non G3 g\non D4 d\non A4 a\non E5 high';
   const released = 'on E3 low\noff low\nwait 3\non C3 c\noff c\non G3 g\noff g\non D4 d\noff d\non A4 a\noff a\non E5 high';
   const high = (program, halfLife) => {
-    const sim = new Simulator({ halfLife });
+    // The new-note factor is off, so the time is the whole difference.
+    const sim = new Simulator({ halfLife, newNote: 1 });
     for (const event of parseProgram(program)) sim.event(event);
     return keyOf(sim.history.at(-1).node);
   };

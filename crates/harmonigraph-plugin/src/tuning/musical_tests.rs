@@ -289,13 +289,15 @@ fn production_a_held_note_struck_long_before_the_rest_weighs_less() {
 
 /// Released memory decays on the same clock, from each attack. With nothing
 /// held, a just low E struck three seconds before a chain of fifths no longer
-/// outvotes the chain once all are released; weighed alike, it does.
+/// outvotes the chain once all are released; weighed alike, it does. The
+/// new-note factor is off, so the time is the whole difference.
 #[test]
 fn production_a_note_released_long_before_the_rest_weighs_less() {
     let _scope = crate::test_scope::enter();
     for (half_life_ms, high) in [(0, LatticePos::new(0, 1, 0)), (1000, LatticePos::new(4, 0, 0))] {
         let mut phrase = Phrase::new();
-        configure_policy(&phrase.hub, PolicyConfig { half_life_ms, ..Default::default() });
+        let policy = PolicyConfig { half_life_ms, new_note: 1000, ..Default::default() };
+        configure_policy(&phrase.hub, policy);
         phrase.idle();
         phrase.step([vec![note(1, 0, 52, 0, true)], vec![], vec![]], [0, 1, 2]);
         phrase.step([vec![note(1, 0, 52, 0, false)], vec![], vec![]], [0, 1, 2]);

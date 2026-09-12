@@ -26,7 +26,6 @@ pub struct PolicyConfig {
     pub version: u32,
     pub radius: u8,
     pub axes: u8,
-    pub memory: u8,
     pub harmonic: u16,
     pub pitch_scale: u16,
     /// A released note weighs this much against a held note struck at the
@@ -36,6 +35,10 @@ pub struct PolicyConfig {
     /// long between their attack and the newest attack in context. A release
     /// does not restart it.
     pub half_life_ms: u16,
+    /// A released note keeps this much of its weight each time a note lands
+    /// on a lattice node no held or remembered note occupies. Repeating a
+    /// node, in any octave, costs nothing.
+    pub new_note: u16,
     pub register_floor: u16,
     pub register_falloff: u16,
     pub tolerance: u32,
@@ -57,11 +60,11 @@ impl PolicyConfig {
         self.version = 2;
         self.radius = self.radius.clamp(1, 5);
         self.axes = self.axes.clamp(1, 3);
-        self.memory = self.memory.min(24);
         self.harmonic = self.harmonic.min(20_000);
         self.pitch_scale = self.pitch_scale.clamp(1, 100);
         self.released = self.released.min(1000);
         self.half_life_ms = self.half_life_ms.min(20_000);
+        self.new_note = self.new_note.min(1000);
         self.register_floor = self.register_floor.clamp(10, 1000);
         self.register_falloff = self.register_falloff.min(4000);
         self.tolerance = self.tolerance.min(20_000_000);
@@ -70,14 +73,16 @@ impl PolicyConfig {
         self
     }
     /// Fixed configuration mailbox representation, shared by edits and snapshots.
+    /// The new-note factor takes bits 16–25 of the second word, so the reset
+    /// flags sit above it.
     pub fn words(self) -> [i32; 10] {
         [
             2,
             i32::from(self.radius)
                 | i32::from(self.axes) << 8
-                | i32::from(self.memory) << 16
-                | i32::from(self.reset_stop) << 24
-                | i32::from(self.reset_loop) << 25,
+                | i32::from(self.new_note) << 16
+                | i32::from(self.reset_stop) << 26
+                | i32::from(self.reset_loop) << 27,
             i32::from(self.harmonic) | i32::from(self.pitch_scale) << 16,
             i32::from(self.released) | i32::from(self.half_life_ms) << 16,
             i32::from(self.register_floor) | i32::from(self.register_falloff) << 16,
@@ -93,9 +98,9 @@ impl PolicyConfig {
             version: 2,
             radius: w[1] as u8,
             axes: (w[1] >> 8) as u8,
-            memory: (w[1] >> 16) as u8,
-            reset_stop: w[1] & (1 << 24) != 0,
-            reset_loop: w[1] & (1 << 25) != 0,
+            new_note: ((w[1] >> 16) & 0x3ff) as u16,
+            reset_stop: w[1] & (1 << 26) != 0,
+            reset_loop: w[1] & (1 << 27) != 0,
             harmonic: w[2] as u16,
             pitch_scale: (w[2] >> 16) as u16,
             released: w[3] as u16,
