@@ -237,13 +237,8 @@ fn glow_shadow() -> f32 {
     return max(u.geometry_shadow.width, 0.0);
 }
 
-// How dark a shadow lands (`u.geometry_shadow.depth`): the share of the frame a caster's
-// solid middle takes away, 1 leaving `SHADOW_KEEP_FLOOR` of it.
-//
-// A FLOOR rather than a scale, which is what the `min(…, 1)` under the
-// Gaussian's gain in `shadow_kernel` buys: a caster wide against σ saturates
-// here, and the gain only deepens the thin ones. At 0 nothing casts and every
-// draw multiplies by 1, which is the picture with no shadow in it at all.
+// The amplitude of a node's shadow. Width and falloff shape the shared mask;
+// darkness scales it without broadening its tail. At 0 the CPU packs no cell.
 fn glow_shadow_depth() -> f32 {
     return clamp(u.geometry_shadow.depth, 0.0, 1.0);
 }
@@ -304,7 +299,7 @@ struct ShadowThrough {
     bloom: f32,
 }
 
-// A node's or a marker's own shadow, read at this point of the pane and spent
+// A marker's own Gaussian shadow, read at this point of the pane and spent
 // through `shadow_transmittance`: what its ink leaves of the frame under it,
 // 0..=1.
 //
@@ -323,6 +318,18 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32, depth: f32) -> Shadow
         shadow_transmittance(full, depth, level),
         shadow_transmittance(full, 1.0, level),
     );
+}
+
+// Node shadows and partial occlusion interpret the same field as coverage.
+// Their amplitudes differ, but neither remaps that field through an exponent:
+// changing darkness cannot broaden the normalized shadow profile. The bloom
+// copy uses full amplitude on this same profile, not an amplified outer tail.
+fn node_shadow_through(who: f32, points: vec2<f32>, level: f32) -> ShadowThrough {
+    if level <= 0.0 {
+        return ShadowThrough(1.0, 1.0);
+    }
+    let coverage = clamp(level, 0.0, 1.0) * shadow_kernel(u32(max(who, 0.0)), points);
+    return ShadowThrough(1.0 - glow_shadow_depth() * coverage, 1.0 - coverage);
 }
 
 // Prototype: foreground node shapes reduce rear ink's COVERAGE, so its
@@ -2125,11 +2132,10 @@ fn node_paint(in: VsOut) -> Painted {
     let g = node_geom(in, false);
     // The one tap, taken whatever the node paints here — a fragment the ink
     // never reaches is the shadow by itself, and that is most of the quad.
-    let t = shadow_through(
+    let t = node_shadow_through(
         in.shadow_box.x,
         in.shadow_at.xy,
         in.shadow_at.z,
-        glow_shadow_depth(),
     );
     if !g.paints {
         // Discard only an empty composite. Read the deeper alpha because a

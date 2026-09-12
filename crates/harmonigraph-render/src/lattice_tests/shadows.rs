@@ -72,6 +72,52 @@ fn on_ground(shadow: f32, depth: f32) -> Scene {
     scene
 }
 
+/// A single caster's shadow is a fixed coverage profile scaled by darkness.
+/// Probe the real shader with an unchanged atlas and quad, so depth zero is a
+/// photometric baseline rather than a different rasterization of the ink.
+#[test]
+fn node_shadow_darkness_scales_the_entire_profile() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    shooter.clear = over_ground();
+    for kernel in
+        [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
+    {
+        let mut scene = on_ground(1.0, 1.0);
+        scene.shadow.lattice_geometry.kernel = kernel;
+        scene.shadow.lattice_geometry.falloff = 1.0;
+        scene.bloom_strength = 0.0;
+        let mut shot = |depth| {
+            shooter.draw_modified(&scene, LatticeLabels::default(), |cb| {
+                cb.uniforms.geometry_shadow.depth = depth;
+            })
+        };
+        let (clear, quarter, half, full) = (shot(0.0), shot(0.25), shot(0.5), shot(1.0));
+        let (mut body, mut tail) = (0, 0);
+        for (((a, b), c), d) in clear
+            .chunks_exact(4)
+            .zip(quarter.chunks_exact(4))
+            .zip(half.chunks_exact(4))
+            .zip(full.chunks_exact(4))
+        {
+            let removed = i32::from(a[0]) - i32::from(d[0]);
+            let at_quarter = i32::from(a[0]) - i32::from(b[0]);
+            let at_half = i32::from(a[0]) - i32::from(c[0]);
+            // Quantization after compositing permits one code per reading.
+            assert!(
+                (4 * at_quarter - removed).abs() <= 5,
+                "{kernel:?}: quarter depth changed shape"
+            );
+            assert!((2 * at_half - removed).abs() <= 3, "{kernel:?}: half depth changed shape");
+            body += usize::from(removed > 80);
+            tail += usize::from((6..=30).contains(&removed));
+        }
+        assert!(
+            body > 100 && tail > 100,
+            "{kernel:?}: fixture reached only {body} body and {tail} tail pixels"
+        );
+    }
+}
+
 /// A node's distance cell is the exact field of its ring layers, in pane
 /// points. This fixture has constant-width angular gaps and one marked sector,
 /// whose two diagonal sides continue into the outer strip. The CPU reference
@@ -923,8 +969,10 @@ fn a_released_nodes_shadow_fades_with_its_ink_and_ends_with_it() {
         let shot = shooter.shot(&scene);
         taken.push(1.0 - bright_at(&shot, at, row) as f64 / ground as f64);
     }
+    // Linear coverage is lighter here than the old exponential transfer;
+    // twenty percent still spans forty output codes per channel on this ground.
     assert!(
-        taken[0] > 0.4,
+        taken[0] > 0.2,
         "a whole ring took {:.3} of the ground beside it, which is nothing to release from",
         taken[0],
     );
@@ -1975,9 +2023,8 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
 /// — a bar that only rescaled the profile, which is what an exponent on the
 /// finished coverage comes to, would move both.
 ///
-/// At the top of the depth bar so both readings are off the floor: one width
-/// out the decay is a fiftieth, and a fiftieth of half a dozen stops is a
-/// darkening of a few percent rather than of nothing.
+/// At full amplitude, so the roughly two-percent coverage one width out is
+/// still several output codes and the equality cannot pass on empty ground.
 #[test]
 fn the_falloff_moves_the_darkness_inside_the_width_and_not_its_edge() {
     use harmonigraph_scene::{SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN};
@@ -2035,8 +2082,10 @@ fn the_falloff_moves_the_darkness_inside_the_width_and_not_its_edge() {
     // Half a width out: the whole travel of the bar. The plateau end holds the
     // darkness out to here; the sharp end has spent it against the ink.
     let (sharp_half, plateau_half) = (bright_at(&sharp, half, row), bright_at(&plateau, half, row));
+    // Compare removed light: the plateau must cast substantially more shadow,
+    // independently of how the transfer maps the remaining light to a ratio.
     assert!(
-        sharp_half > 3 * plateau_half.max(1),
+        ground - plateau_half > 3 * (ground - sharp_half).max(1),
         "half a width out the whole falloff bar moves the ground from {sharp_half} to \
          {plateau_half}, which is not a bar that redistributes anything",
     );
@@ -2061,8 +2110,11 @@ fn a_zoomed_out_distance_shadow_does_not_break_a_ring_into_spikes() {
     };
     shooter.clear = over_ground();
     let sample = |shot: &[u8], p: glam::Vec2| {
-        let x = p.x.clamp(0.0, SIZE[0] as f32 - 2.0);
-        let y = p.y.clamp(0.0, SIZE[1] as f32 - 2.0);
+        // Raster samples sit at pixel centers. Without this offset the probe
+        // circle is displaced by half a pixel on each axis, enough to mistake
+        // radial falloff for angular spikes at this subpixel shadow width.
+        let x = (p.x - 0.5).clamp(0.0, SIZE[0] as f32 - 2.0);
+        let y = (p.y - 0.5).clamp(0.0, SIZE[1] as f32 - 2.0);
         let (x0, y0) = (x.floor() as u32, y.floor() as u32);
         let (tx, ty) = (f64::from(x - x.floor()), f64::from(y - y.floor()));
         let at = |x, y| bright_at(shot, x, y) as f64;

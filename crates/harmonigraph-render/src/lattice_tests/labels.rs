@@ -1057,11 +1057,17 @@ fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
         radius(far),
     );
     // The near node's own OPAQUE pixels: those it paints the same over black as
-    // over the grey, which is its ink and nothing else.
+    // over grey with its shadow disabled. A full-depth shadow can itself be
+    // opaque, so leaving it on would classify shadow as foreground ink.
     let alone = scene_of(&[scene.nodes[near].world_pos.y]);
-    let over_grey = shooter.shot(&alone);
+    let ink_only = |shooter: &mut Shooter, scene: &Scene| {
+        shooter.draw_modified(scene, LatticeLabels::default(), |cb| {
+            cb.uniforms.geometry_shadow.depth = 0.0;
+        })
+    };
+    let over_grey = ink_only(&mut shooter, &alone);
     shooter.clear = wgpu::Color::BLACK;
-    let over_black = shooter.shot(&alone);
+    let over_black = ink_only(&mut shooter, &alone);
     shooter.clear = over_grey_clear();
     let opaque: std::collections::BTreeSet<usize> = (0..over_grey.len())
         .step_by(4)
@@ -1078,8 +1084,9 @@ fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
     // darker than the ground, which leaves out the faint halo round the band.
     let without = scene_of(&[scene.nodes[far].world_pos.y]);
     let without_bare = shooter.shot(&without);
+    let without_ink = ink_only(&mut shooter, &without);
     let ground = brightness(&[(GREY * 255.0).round() as u8; 3]);
-    let far_ink = |i: usize| (brightness(&without_bare[i..i + 3]) - ground).abs() > 150;
+    let far_ink = |i: usize| (brightness(&without_ink[i..i + 3]) - ground).abs() > 150;
 
     // One stroke, on the far node's band where it comes out from under the
     // near node: the visible pixel of that band nearest to anything the near
@@ -1097,13 +1104,20 @@ fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
     let nearest = |v: glam::Vec2| {
         *solid.iter().min_by(|a, b| a.distance(v).total_cmp(&b.distance(v))).expect("opaque")
     };
-    let (spot, edge) = visible
+    let at = visible
         .iter()
         .map(|&v| (v, nearest(v)))
-        .min_by(|(v, n), (w, m)| v.distance(*n).total_cmp(&w.distance(*m)))
-        .expect("visible");
-    let away = (spot - edge).normalize_or(glam::Vec2::Y);
-    let at = spot + away * (NAME_SIZE / 2.0 + 1.0);
+        .map(|(v, n)| {
+            (v + (v - n).normalize_or(glam::Vec2::Y) * (NAME_SIZE / 2.0 + 1.0), v.distance(n))
+        })
+        .filter(|(at, _)| {
+            at.cmpgt(glam::Vec2::splat(NAME_SIZE)).all()
+                && at.cmplt(glam::Vec2::splat(SIZE[0] as f32 - NAME_SIZE)).all()
+        })
+        .filter(|(at, _)| far_ink(index(*at)) && !opaque.contains(&index(*at)))
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
+        .expect("a visible ink position for the stroke")
+        .0;
     assert!(
         far_ink(index(at)) && !opaque.contains(&index(at)),
         "the stroke at {at:?} does not stand on the far node's visible ink",
