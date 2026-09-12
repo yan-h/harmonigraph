@@ -67,7 +67,7 @@ struct ShadowParams {
     @align(16) width: f32,
     reach_sigmas: f32,
     depth: f32,
-    padding: f32,
+    occlusion: f32,
 };
 
 struct ShadowTargetParams {
@@ -323,6 +323,45 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32, depth: f32) -> Shadow
         shadow_transmittance(full, depth, level),
         shadow_transmittance(full, 1.0, level),
     );
+}
+
+// Prototype: foreground node shapes reduce rear ink's COVERAGE, so its
+// contrast fades into whatever is behind it. The ordinary shadow still
+// multiplies that background later, unchanged. Read only later node casters:
+// a node never hides itself, and labels/crosses keep their existing behavior.
+// The field itself is opacity (not the depth-amplified bloom tail), which
+// keeps faint distant shadows from erasing detail. No extra persisted dial.
+fn node_visibility(who: f32, points: vec2<f32>) -> f32 {
+    let strength = clamp(u.geometry_shadow.occlusion, 0.0, 1.0);
+    if strength == 0.0 {
+        return 1.0;
+    }
+    var at = u32(max(who, 0.0));
+    if at >= arrayLength(&shadow_casters) {
+        return 1.0;
+    }
+    var visibility = 1.0;
+    loop {
+        let next = u32(shadow_casters[at].map.w);
+        if next == 0u {
+            break;
+        }
+        let candidate = next - 1u;
+        if candidate <= at || candidate >= arrayLength(&shadow_casters) {
+            break;
+        }
+        at = candidate;
+        let caster = shadow_casters[at];
+        // Reject before sampling: clamping an out-of-box sample to the cell
+        // edge would otherwise extend its last nonzero texel indefinitely.
+        if all(points >= caster.rect.xy) && all(points <= caster.rect.xy + caster.rect.zw) {
+            visibility *= 1.0 - strength * clamp(caster.shade.x, 0.0, 1.0) * shadow_kernel(at, points);
+        }
+        if visibility == 0.0 {
+            break;
+        }
+    }
+    return visibility;
 }
 
 // Whether this caster's shadow is a DISTANCE. A marker uses the answer to
@@ -2089,10 +2128,10 @@ fn seen_of(paint: Painted) -> vec4<f32> {
 /// whatever the frame holds there — and where it HAS ink the ink term is not
 /// multiplied, so a node is the one thing its own shadow never darkens.
 ///
-/// No receiver carries any shadow code, and there is no hole cut anywhere: the
-/// light is composited at the bottom of the pass and takes every shadow by
-/// being under everything, which is what makes a shadow land on ink at the
-/// depth it lands on ground.
+/// The background multiply is unchanged by partial occlusion: a rear node
+/// reduces its ink coverage before this composite, revealing the layers below
+/// it. Its own shadow remains, so hiding ink never restores light already
+/// blocked by that node. The pooled light keeps every ordinary shadow.
 fn node_paint(in: VsOut) -> Painted {
     let g = node_geom(in, false);
     // The one tap, taken whatever the node paints here — a fragment the ink
@@ -2126,8 +2165,13 @@ fn node_paint(in: VsOut) -> Painted {
     let shadow_exposure = select(1.0 - ink.mask, 1.0, shadow_is_distance(in.shadow_box.x));
     let seen_through = 1.0 - (1.0 - t.seen) * shadow_exposure;
     let bloom_through = 1.0 - (1.0 - t.bloom) * shadow_exposure;
-    let final_alpha = 1.0 - (1.0 - ink.alpha) * seen_through;
-    let bloom_alpha = 1.0 - (1.0 - ink.alpha) * bloom_through;
+    var visibility = 1.0;
+    if ink.alpha > 0.0 {
+        visibility = node_visibility(in.shadow_box.x, in.shadow_at.xy);
+    }
+    let visible_alpha = ink.alpha * visibility;
+    let final_alpha = 1.0 - (1.0 - visible_alpha) * seen_through;
+    let bloom_alpha = 1.0 - (1.0 - visible_alpha) * bloom_through;
     if bloom_alpha <= 0.0 {
         discard;
     }
@@ -2150,7 +2194,7 @@ fn node_paint(in: VsOut) -> Painted {
     let coord = light_coord(in.clip_pos.xy);
     let light = glow_light(coord);
     let washed = wash_over(ink.rgb, ink.alpha, light.rgb, mix(1.0, glow_wash(), ink.lit));
-    return Painted(washed, final_alpha, bloom_alpha);
+    return Painted(washed * visibility, final_alpha, bloom_alpha);
 }
 
 /// A node's shadow source, into its own cell of the atlas (`shadow.rs`). Under

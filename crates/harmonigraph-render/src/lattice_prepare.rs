@@ -594,7 +594,22 @@ impl LatticeCallback {
         // device's times the render scale, which is the term #496 found missing
         // from the field's reach.
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
-        let packed = shadow::pack(&self.casters, ppp * self.render_scale, max_dim);
+        let mut packed = shadow::pack(&self.casters, ppp * self.render_scale, max_dim);
+        // Node cells follow painter order, with names interspersed. Link only
+        // nodes so a receiver can read the shapes in front of it without
+        // treating its own label or the shared marker cell as an occluder.
+        // Index + 1 leaves zero as the end, independent of buffer capacity
+        // (which can still contain rows from a larger previous frame).
+        let mut next = 0;
+        for &node in self.node_cells.iter().rev() {
+            let Some(caster) = packed.casters.get_mut(node as usize) else {
+                continue;
+            };
+            caster.map[3] = next as f32;
+            if caster.shade[0] > 0.0 {
+                next = node + 1;
+            }
+        }
         // A placeholder box preserves the caster index for a distance field
         // evaluated directly by its scene draw. Only a real cell asks for the
         // atlas; a markers-only Distance frame therefore allocates no atlas.

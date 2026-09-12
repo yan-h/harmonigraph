@@ -482,13 +482,13 @@ impl LatticeCallback {
                     width: geometry.width,
                     reach_sigmas: geometry.kernel.reach_sigmas(geometry.falloff),
                     depth: geometry.depth,
-                    padding: 0.0,
+                    occlusion: 1.0,
                 },
                 marker_shadow: ShadowParams {
                     width: text.width,
                     reach_sigmas: text.kernel.reach_sigmas(text.falloff),
                     depth: text.depth,
-                    padding: 0.0,
+                    occlusion: 0.0,
                 },
                 shadow_target: ShadowTargetParams {
                     pane_points: Float2([size_points.x, size_points.y]),

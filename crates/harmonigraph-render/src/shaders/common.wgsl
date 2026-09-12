@@ -117,7 +117,8 @@ struct ShadowCaster {
     // was packed.
     cell: vec4<f32>,
     // The map from a point of the pane to a texel of that cell —
-    // `xy + points * z`. w unused.
+    // `xy + points * z`. For lattice nodes, w links the next node caster in
+    // painter order (index + 1; zero ends the list). Other surfaces leave 0.
     map: vec4<f32>,
     // What this caster SPENDS, none of it a coordinate. x: how much of its
     // shadow lands, 0..=1; y: what its cell HOLDS, 0 blurred ink and

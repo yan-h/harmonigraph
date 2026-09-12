@@ -15,6 +15,7 @@
 //! ```text
 //! cargo test -p harmonigraph-render -- --ignored --nocapture a_frame_of_names
 //! ```
+//! `PROBE_OCCLUSION=0` compares the same shader with receiver fading disabled.
 
 use super::fixtures::*;
 use super::golden::{the_live_view, the_live_view_on_the_distance_row};
@@ -130,6 +131,9 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     if let Ok(value) = std::env::var("PROBE_BLOOM") {
         scene.bloom_strength = value.parse().expect("PROBE_BLOOM is a strength");
     }
+    let occlusion = std::env::var("PROBE_OCCLUSION")
+        .map(|value| value.parse::<f32>().expect("PROBE_OCCLUSION is a strength"))
+        .unwrap_or(1.0);
     let instance = wgpu::Instance::default();
     let Ok(adapter) =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -243,7 +247,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     let mut cpu_samples = Vec::with_capacity(frames);
     for frame in 0..frames + 10 {
         let labels = names(runs.clone());
-        let cb = LatticeCallback::from_scene(
+        let mut cb = LatticeCallback::from_scene(
             &scene,
             labels,
             egui::vec2(pane.x, pane.y),
@@ -251,6 +255,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
             1,
             None,
         );
+        cb.uniforms.geometry_shadow.occlusion = occlusion;
         let mut encoder = device.create_command_encoder(&Default::default());
         stamp(&mut encoder, 0);
         let cpu_start = std::time::Instant::now();
