@@ -259,6 +259,106 @@ fn production_musical_ii_v_i_keeps_each_common_tone_through_the_change() {
     phrase.release_all();
 }
 
+/// A held note's weight falls with how long before the newest held note it
+/// was struck. A just low E held three seconds before a chain of fifths then
+/// no longer outvotes the chain, so high E continues it; with every held note
+/// weighed alike the low E still decides, as the `held-e` fixture does.
+#[test]
+fn production_a_held_note_struck_long_before_the_rest_weighs_less() {
+    let _scope = crate::test_scope::enter();
+    for (half_life_ms, high) in [(0, LatticePos::new(0, 1, 0)), (1000, LatticePos::new(4, 0, 0))] {
+        let mut phrase = Phrase::new();
+        configure_policy(&phrase.hub, PolicyConfig { half_life_ms, ..Default::default() });
+        phrase.idle();
+        phrase.step([vec![note(1, 0, 52, 0, true)], vec![], vec![]], [0, 1, 2]);
+        // Three seconds of 512-sample callbacks at 44.1 kHz.
+        for _ in 0..259 {
+            phrase.idle();
+        }
+        for (id, key) in [(2, 48), (3, 55), (4, 62), (5, 69)] {
+            phrase.step([vec![], vec![note(id, 0, key, 0, true)], vec![]], [0, 1, 2]);
+        }
+        phrase.step([vec![], vec![], vec![note(6, 0, 76, 0, true)]], [0, 1, 2]);
+        phrase.idle();
+        assert_eq!(phrase.voice(0, 52, 0).attack_node, Some(LatticePos::new(0, 1, 0)));
+        assert_eq!(phrase.voice(1, 69, 0).attack_node, Some(LatticePos::new(3, 0, 0)));
+        assert_eq!(phrase.voice(2, 76, 0).attack_node, Some(high), "{half_life_ms} ms");
+        phrase.release_all();
+    }
+}
+
+/// Released memory decays on the same clock, from each attack. With nothing
+/// held, a just low E struck three seconds before a chain of fifths no longer
+/// outvotes the chain once all are released; weighed alike, it does. The
+/// new-note factor is off, so the time is the whole difference.
+#[test]
+fn production_a_note_released_long_before_the_rest_weighs_less() {
+    let _scope = crate::test_scope::enter();
+    for (half_life_ms, high) in [(0, LatticePos::new(0, 1, 0)), (1000, LatticePos::new(4, 0, 0))] {
+        let mut phrase = Phrase::new();
+        let policy = PolicyConfig { half_life_ms, new_note: 1000, ..Default::default() };
+        configure_policy(&phrase.hub, policy);
+        phrase.idle();
+        phrase.step([vec![note(1, 0, 52, 0, true)], vec![], vec![]], [0, 1, 2]);
+        phrase.step([vec![note(1, 0, 52, 0, false)], vec![], vec![]], [0, 1, 2]);
+        for _ in 0..259 {
+            phrase.idle();
+        }
+        for (id, key) in [(2, 48), (3, 55), (4, 62), (5, 69)] {
+            phrase.step([vec![], vec![note(id, 0, key, 0, true)], vec![]], [0, 1, 2]);
+            phrase.step([vec![], vec![note(id, 0, key, 0, false)], vec![]], [0, 1, 2]);
+        }
+        phrase.step([vec![], vec![], vec![note(6, 0, 76, 0, true)]], [0, 1, 2]);
+        phrase.idle();
+        assert_eq!(phrase.voice(2, 76, 0).attack_node, Some(high), "{half_life_ms} ms");
+        phrase.release_all();
+    }
+}
+
+/// A release does not restart a note's age. C, struck a chord before the F
+/// and A still sounding over it, is let go as D arrives. It keeps its old
+/// attack's weight, so D is tuned to the sounding F–A, a just fifth under A.
+/// When a release restarted the age, C came back at the released weight
+/// against an F–A eight half-lives old, and D took 9/8 from it: 680 cents
+/// under the sounding A.
+#[test]
+fn production_a_released_note_keeps_the_age_of_its_attack() {
+    let _scope = crate::test_scope::enter();
+    let mut phrase = Phrase::new();
+    // Eight seconds of 512-sample callbacks at 44.1 kHz.
+    let hold = |phrase: &mut Phrase| {
+        for _ in 0..689 {
+            phrase.idle();
+        }
+    };
+    phrase.step(
+        [
+            vec![note(1, 0, 48, 0, true)],
+            vec![note(2, 0, 52, 0, true)],
+            vec![note(3, 0, 55, 0, true)],
+        ],
+        [0, 1, 2],
+    );
+    hold(&mut phrase);
+    // F major under the held C.
+    phrase.step(
+        [
+            vec![],
+            vec![note(2, 0, 52, 0, false), note(4, 0, 53, 0, true)],
+            vec![note(3, 0, 55, 0, false), note(5, 0, 57, 0, true)],
+        ],
+        [0, 1, 2],
+    );
+    hold(&mut phrase);
+    phrase
+        .step([vec![note(1, 0, 48, 0, false), note(6, 0, 50, 0, true)], vec![], vec![]], [0, 1, 2]);
+    phrase.idle();
+    assert_eq!(phrase.voice(1, 53, 0).attack_node, Some(LatticePos::new(-1, 0, 0)));
+    assert_eq!(phrase.voice(2, 57, 0).attack_node, Some(LatticePos::new(-1, 1, 0)));
+    assert_eq!(phrase.voice(0, 50, 0).attack_node, Some(LatticePos::new(-2, 1, 0)));
+    phrase.release_all();
+}
+
 /// The frozen correction is composed with the player's own expression rather
 /// than replacing it: the emitted tuning value moves with a later per-note
 /// bend while the harmonic reference the next decision reads does not.

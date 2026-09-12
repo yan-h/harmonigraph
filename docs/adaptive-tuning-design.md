@@ -149,7 +149,7 @@ The examples use unbent notes; the separate onset-context simplification for pla
 
 - **Comma-pump progression.** Play C major → F major → D minor → G major → C major, preserving common tones between successive chords. If the original C is no longer sounding on the return, Yan explicitly wants the resulting syntonic-comma drift rather than a return to its original reference. If the original C remains sounding, the outcome may depend on parameters. In the just common-tone construction the final C is `80/81` of the original C at the same nominal register.
 - **A lone reference in widely separated registers.** With only C3 sounding, compare separate incoming E3 and E6 onsets against identical context. Both must select the 5/4 pitch class above C; the high placement alone does not justify a Pythagorean E without the additional fifth-chain context.
-- **An old pedal released last.** Hold C through changing harmony, then release it. Its released contribution takes precedence over notes released before it, but not over still-sounding notes. Release recency matters even when that C's original attack was much older; the formal meaning of precedence remains to be designed.
+- **An old pedal released last.** Hold C through changing harmony, then release it. Yan first asked that its released contribution take precedence over notes released before it, on release recency alone, though not over still-sounding notes. He reversed that on 2026-09-11: a release does not restart a note's age, so the released C keeps the age of its old attack and stays behind the notes struck after it.
 
 ### Context and memory
 
@@ -157,7 +157,7 @@ Released notes must continue to contribute to harmonic context, favouring more r
 Forget old contributions when they cease to be useful, using straightforward bounded memory rather than an elaborate analysis of whether a note could ever affect a future choice.
 **New musical activity replaces old context; elapsed time alone does not gradually weaken it.** If Yan plays and leaves a note, later notes must still use that context for as long as the configured memory/reset setting permits.
 The exact replacement and weighting rules remain open.
-Releases count as activity for ordering released memory: a newly released old pedal precedes previously released notes without outranking notes still sounding.
+Released memory is ordered by attack, not by release: a newly released old pedal stays behind the notes struck after it.
 
 Repeating a note refreshes its existing contribution rather than accumulating copies or increasing its weight merely through repetition.
 If the same keyboard C returns one diesis lower, it is an entirely separate new pitch and must be treated as such.
@@ -169,9 +169,10 @@ Memory matching must preserve the registers needed by harmonic context rather th
 Do not choose a default that conflates the motivating diesis-separated pitches or the desired minor-seventh alternatives.
 
 For the initial version, Yan accepts remembering the last N distinct contributions, refreshing repeats and evicting the least recently used released contribution when capacity is exceeded.
-The later pedal-release answer requires this recency bookkeeping to account for release events as well as attacks and repeat refreshes.
+That recency counts attacks and repeat refreshes only: a release does not refresh it.
 Held notes remain represented rather than being evicted to meet the remembered-note budget.
-The capacity may be configurable; its value and accounting for held versus released entries remain open.
+The capacity is fixed at 24 released entries with no setting (Yan, 2026-09-11):
+with every entry decaying on the half-life it is a storage bound, and a larger one measured costly on the audio thread.
 **This is explicitly a temporary simplification.** Yan wants to move away from this fixed recent-note scheme eventually, toward a more musically informed replacement policy.
 Do not turn the initial capacity rule into a permanent musical contract or implement the more elaborate successor before it is designed.
 
@@ -180,6 +181,26 @@ Express that influence through the shared heuristics rather than assume an absol
 The formal weighting and interaction with harmonic and register distance remain open.
 A sustained bass may keep the neighbourhood nearby or be left behind by the newer harmony, depending on the sequence of notes and harmonic heuristics.
 Yan accepts either outcome; do not impose a universal pedal anchor or universal escape rule.
+Yan later asked that more recently struck held notes weigh much more than older ones, and then that all context decay exponentially by time.
+The implemented rule halves every contribution once per configurable half-life between its attack and the newest attack in context, held or released,
+with a configurable released-to-held weight.
+Every weight shares that clock and the score normalizes them, so waiting still changes no decision.
+**A release does not restart a note's age** (Yan, 2026-09-11).
+It first did, and a measurement showed the cost:
+C major held eight seconds, F–A over the held C for eight more, then C released as D arrives —
+the just-released C outweighed the still-sounding F–A 25 to 1 and tuned D to 9/8, a 680-cent fifth under the sounding A.
+Letting go of a note now never raises its weight.
+Released memory is fixed at 24 entries and also fades by count (Yan, 2026-09-11):
+each note on a lattice node that no held or remembered note occupies multiplies every released note's weight by a configurable new-note factor, 0.7 by default.
+A repeated node fades nothing, so repeating a note cannot erase the rest.
+Without it, 24 remembered notes held a fast major-third cycle in place.
+A stronger released-to-held penalty cannot substitute:
+a chord's first note is scored against released notes alone, where a factor common to all of them cancels.
+Register weighting is one multiplier per octave between a context note and the note being scored, 0.7 by default, with no floor (Yan, 2026-09-11):
+it replaced a floor and an exponential falloff whose falloff number had no direct musical reading.
+At 0.7 every agreed example keeps its outcome; at 0.6 or 0.8 one of the precision examples changes.
+An old held note can still weigh less than a note struck well after it and already released,
+which leans the sustained bass toward being left behind without making that a rule.
 Forgetting individual old notes must not itself erase the accumulated tuning displacement.
 Ordinary releases between chords must not destroy continuity.
 
@@ -279,7 +300,7 @@ Context and balance changes may move those ranges and make nodes enter or leave 
 | Reset on transport events | Choose whether stopping/restarting playback and looping reset context | Requested; event triggers, one versus separate controls, reset scope and defaults open |
 | Allowed lattice axes / interval families | Control which harmonic relationships may supply candidates, including whether seventh-based relationships are allowed | Requested; UI, combinations and default open |
 | Same-note tolerance | Decide when a new pitch refreshes an existing memory contribution | Suggested by Yan; matching semantics, units, range and default open |
-| Remembered-note capacity | Set N for the temporary recent-note replacement scheme | Scheme accepted for initial version; exposing N as a setting remains proposed |
+| Remembered-note capacity | Set N for the temporary recent-note replacement scheme | Fixed at 24 released entries with no setting (Yan, 2026-09-11) |
 
 The initial memory replacement scheme is intentionally temporary; its successor remains to be designed.
 Do not add gradual time decay as the default interpretation of forgetting.
@@ -337,7 +358,7 @@ Record the settings used for each comparison; changing only register in a regist
 - With E3 at `5/4` still sounding after that fifth chain, deliberately precise Pythagorean E5 input may select `81/16`; otherwise matching at `5/1` depends on distance and parameters. If E3 was recently released instead, E5 should continue the chain at `81/16` despite the remembered E3.
 - The just common-tone C major → F major → D minor → G major → C major progression drifts when the original C is no longer sounding; retaining that original sounding C makes the outcome parameter-dependent.
 - With only C3 sounding, separate E3 and E6 inputs both select the 5/4 pitch class above C.
-- Releasing an old pedal moves its contribution ahead of notes released earlier without giving it precedence over still-sounding notes.
+- Releasing an old pedal keeps the age of its attack: it neither moves ahead of notes struck after it nor gains weight over the notes still sounding.
 - Redistributing the just C–E♭–G context across registers, including moving E♭ far above an incoming B♭, must still favour 9/5 over 16/9 because of lattice distance.
 - Transposing the entire input performance and context by an octave preserves relative tuning decisions and lattice travel, and transposes outputs by that octave.
 - An exact pitch match outside the harmonic boundary never wins.

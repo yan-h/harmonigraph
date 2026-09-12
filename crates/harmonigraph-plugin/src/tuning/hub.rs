@@ -102,6 +102,8 @@ struct Voice {
     onset_pitch: i64,
     node: Option<LatticePos>,
     decision: u64,
+    /// The input sample it was struck on, which its decay counts from.
+    onset: i64,
 }
 impl Voice {
     fn context_pitch(self) -> policy::ContextPitch {
@@ -163,8 +165,9 @@ impl Sequencer {
         }
     }
     /// The context one assignment sees: every held voice newest first,
-    /// deduplicated within the repetition tolerance, then released memory.
-    fn fill(&mut self) {
+    /// deduplicated within the repetition tolerance, then released memory,
+    /// each decayed by the age of its attack at the newest attack among them.
+    fn fill(&mut self, rate: f64) {
         self.working.clear();
         let mut voices = [None; HELD_SESSION];
         let mut count = 0;
@@ -173,14 +176,24 @@ impl Sequencer {
             count += 1;
         }
         voices[..count].sort_unstable_by_key(|v| std::cmp::Reverse(v.unwrap().decision));
+        let newest = voices[..count]
+            .iter()
+            .flatten()
+            .map(|v| v.onset)
+            .chain(self.memory.newest())
+            .max()
+            .unwrap_or(0);
         for voice in voices[..count].iter().flatten() {
             if !self.working.iter().any(|v| {
                 v.pitch.abs_diff(voice.onset_pitch) <= u64::from(self.config.policy.tolerance)
             }) {
-                self.working.push(voice.context_pitch());
+                self.working.push(policy::ContextPitch {
+                    weight: policy::decay(self.config.policy, newest - voice.onset, rate),
+                    ..voice.context_pitch()
+                });
             }
         }
-        self.memory.append(&mut self.working, self.config.policy);
+        self.memory.append(&mut self.working, self.config.policy, newest, rate);
     }
     /// Drop a context voice without contributing it to released memory. Two
     /// callers, and neither is a note ending: an onset the scheduled state
@@ -204,7 +217,7 @@ impl Sequencer {
             .find(|cell| cell.is_some_and(|v| v.source == source && v.lifetime == lifetime))
         {
             let voice = cell.take().unwrap();
-            self.memory.release(voice.context_pitch(), source, self.config.policy);
+            self.memory.release(voice.context_pitch(), source, self.config.policy, voice.onset);
             self.last_release = Some(sample);
         }
     }
@@ -213,7 +226,7 @@ impl Sequencer {
         for cell in self.context.iter_mut() {
             if cell.is_some_and(|v| v.source == source) {
                 let voice = cell.take().unwrap();
-                self.memory.release(voice.context_pitch(), source, self.config.policy);
+                self.memory.release(voice.context_pitch(), source, self.config.policy, voice.onset);
                 self.last_release = Some(sample);
             }
         }
@@ -230,9 +243,14 @@ impl Sequencer {
             self.last_release = None;
         }
     }
-    fn publish_neighbourhood(&mut self, shared: &setup::Shared, config: policy::MusicalConfig) {
+    fn publish_neighbourhood(
+        &mut self,
+        shared: &setup::Shared,
+        config: policy::MusicalConfig,
+        rate: f64,
+    ) {
         self.config = config;
-        self.fill();
+        self.fill(rate);
         // Keyed only by values that decide the next assignment. Display
         // tolerance, callback time and camera movement must not restart work.
         if self.published_config != Some(config)
@@ -366,7 +384,11 @@ impl Hub {
             Self::confirm(row, identity(source as u8), &mut owner.confirmed);
         }
         self.detect_loop(callback);
-        self.sequencer.publish_neighbourhood(&self.shared, owner.reducer.resolved().into());
+        self.sequencer.publish_neighbourhood(
+            &self.shared,
+            owner.reducer.resolved().into(),
+            self.rate,
+        );
         // Silence expires released memory against the completed input
         // frontier, which is this callback's start: everything before it has
         // been sequenced, and nothing after it has arrived.
@@ -705,7 +727,7 @@ impl Hub {
             }
             self.sequencer.loop_pending = false;
         }
-        self.sequencer.fill();
+        self.sequencer.fill(self.rate);
         let onset = policy::OrderedOnset {
             pitch: i64::from(key) * 100_000_000
                 + channel_pitch
@@ -739,6 +761,7 @@ impl Hub {
                 onset.pitch,
                 correction,
                 self.sequencer.config.policy.tolerance,
+                policy::is_new(node, &self.sequencer.working[..count]),
             );
             self.sequencer.reference_source = Some(record.source);
         }
@@ -748,6 +771,7 @@ impl Hub {
             onset_pitch: onset.pitch + correction,
             node,
             decision,
+            onset: record.sample,
         };
         if let Some(cell) = self.sequencer.context.iter_mut().find(|cell| cell.is_none()) {
             *cell = Some(voice);

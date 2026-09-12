@@ -1,9 +1,11 @@
 // Experimental policy, deliberately independent of the production plugin.
 export const AXES = [1200 * Math.log2(3 / 2), 1200 * Math.log2(5 / 4), 1200 * Math.log2(7 / 4)];
+// Released entries remembered: a storage bound with no control, as in the plugin.
+export const MEMORY = 24;
 export const DEFAULTS = Object.freeze({
-  radius: 3, axes: 2, memory: 6, harmonic: 6, pitchScale: 20,
-  released: 0.1, recency: 0.7, registerFloor: 0.4, registerFalloff: 0.8,
-  tolerance: 0.5, silence: 0, resetStop: false, resetLoop: false,
+  radius: 3, axes: 2, harmonic: 6, pitchScale: 20,
+  released: 0.1, register: 0.7,
+  tolerance: 0.5, silence: 0, resetStop: false, resetLoop: false, halfLife: 1, newNote: 0.7,
 });
 export const keyOf = n => n.join(',');
 export const latticeCents = n => 4800 + n.reduce((sum, x, i) => sum + x * AXES[i], 0);
@@ -33,12 +35,12 @@ export function parsePitch(text) {
 }
 function validateSettings(raw) {
   const s = { ...DEFAULTS, ...raw };
-  const bounds = { radius: [1, 5], axes: [1, 3], memory: [0, 24], harmonic: [0, 20], pitchScale: [1, 100],
-    released: [0, 1], recency: [0, 1], registerFloor: [0.01, 1], registerFalloff: [0, 4], tolerance: [0, 20], silence: [0, 120] };
+  const bounds = { radius: [1, 5], axes: [1, 3], harmonic: [0, 20], pitchScale: [1, 100],
+    released: [0, 1], newNote: [0, 1], register: [0.01, 1],tolerance: [0, 20], silence: [0, 120], halfLife: [0, 20] };
   for (const [name, [lo, hi]] of Object.entries(bounds)) {
     if (!Number.isFinite(s[name]) || s[name] < lo || s[name] > hi) throw new Error(`Invalid ${name}: expected ${lo}–${hi}.`);
   }
-  for (const name of ['radius', 'axes', 'memory']) if (!Number.isInteger(s[name])) throw new Error(`${name} must be an integer.`);
+  for (const name of ['radius', 'axes']) if (!Number.isInteger(s[name])) throw new Error(`${name} must be an integer.`);
   return s;
 }
 function compareNodes(a, b) {
@@ -53,7 +55,7 @@ export class Simulator {
     this.reset();
   }
   reset() {
-    this.held = new Map(); this.recent = []; this.reference = 0; this.time = 0;
+    this.held = new Map(); this.recent = []; this.reference = 0; this.time = 0; this.newNotes = 0;
     this.serial = 0; this.lastRelease = null; this.history = []; this.last = null;
   }
   clearContext() {
@@ -65,15 +67,22 @@ export class Simulator {
     // Same-register repetitions refresh one contribution; voices remain separate
     // for release and expression. Octave duplicates retain their own registers.
     const held = [...this.held.values()].sort((a, b) => b.stamp - a.stamp);
+    // Every contribution halves in weight once per half-life between its
+    // attack and the newest attack in context, held or released: a release
+    // does not restart the age. One clock for all, so waiting scales every
+    // weight alike and changes no decision.
+    const { halfLife, released, newNote } = this.settings;
+    const newest = Math.max(...held.map(v => v.time), ...this.recent.map(e => e.time));
+    const decay = time => halfLife > 0 ? 0.5 ** ((newest - time) / halfLife) : 1;
     for (const voice of held) {
       if (!entries.some(e => Math.abs(e.output - voice.output) <= this.settings.tolerance)) {
-        entries.push({ ...voice, weight: 1, status: 'held' });
+        entries.push({ ...voice, weight: decay(voice.time), status: 'held' });
       }
     }
-    let rank = 0;
     for (const entry of this.recent) {
       if (entries.some(e => Math.abs(e.output - entry.output) <= this.settings.tolerance)) continue;
-      const weight = this.settings.released * this.settings.recency ** rank++;
+      // Once more for every new note since it was released.
+      const weight = released * decay(entry.time) * newNote ** (this.newNotes - entry.newNotes);
       if (weight > 0) entries.push({ ...entry, weight, status: 'released' });
     }
     // An empty phrase has an explicit origin reference, not a stale per-key map.
@@ -98,9 +107,10 @@ export class Simulator {
   }
   harmonicCost(node, output, context) {
     let total = 0, weightSum = 0;
-    const { registerFloor: floor, registerFalloff: falloff } = this.settings;
+    const { register: perOctave } = this.settings;
     for (const voice of context) {
-      const register = floor + (1 - floor) * Math.exp(-falloff * Math.abs(output - voice.output) / 1200);
+      // Each octave apart multiplies a context note's vote by the register factor.
+      const register = perOctave ** (Math.abs(output - voice.output) / 1200);
       const weight = voice.weight * register;
       total += weight * distance(node, voice.node);
       weightSum += weight;
@@ -125,8 +135,10 @@ export class Simulator {
   on(input, id = `note-${this.serial + 1}`) {
     if (this.held.has(id)) this.off(id);
     const result = this.evaluate(input);
+    // A note on a lattice node no context note occupies fades released memory.
+    if (!result.context.some(e => e.status !== 'origin' && keyOf(e.node) === keyOf(result.winner.node))) this.newNotes += 1;
     const voice = { id, node: [...result.winner.node], input, output: result.winner.output,
-      correction: result.winner.output - input, bend: 0, stamp: ++this.serial };
+      correction: result.winner.output - input, bend: 0, stamp: ++this.serial, time: this.time };
     this.recent = this.recent.filter(e => Math.abs(e.output - voice.output) > this.settings.tolerance);
     this.held.set(id, voice);
     // The simplest moving reference: last onset's full output-minus-input
@@ -143,15 +155,18 @@ export class Simulator {
       const base = latticeCents(entry.node);
       const output = entry.output ?? base + 1200 * Math.floor((input - base) / 1200 + 0.5);
       if (!Number.isFinite(input) || !Number.isFinite(output) || entry.node.length !== 3 || !entry.node.every(Number.isInteger)) throw new Error('Invalid fixture seed.');
-      this.held.set(entry.id, { ...entry, input, output, correction: output - input, bend: 0, stamp: ++this.serial });
+      this.held.set(entry.id, { ...entry, input, output, correction: output - input, bend: 0, stamp: ++this.serial, time: this.time });
     }
   }
   off(id) {
     const voice = this.held.get(id);
     if (!voice) throw new Error(`No sounding note named “${id}”.`);
     this.held.delete(id);
-    const entry = { ...voice, stamp: ++this.serial };
-    this.recent = [entry, ...this.recent.filter(e => Math.abs(e.output - voice.output) > this.settings.tolerance)].slice(0, this.settings.memory);
+    // A release keeps the age of its attack, so memory is ordered by attack,
+    // latest first, and among equal attacks the newest release leads.
+    const entry = { ...voice, stamp: ++this.serial, newNotes: this.newNotes };
+    this.recent = [entry, ...this.recent.filter(e => Math.abs(e.output - voice.output) > this.settings.tolerance)]
+      .sort((a, b) => b.time - a.time).slice(0, MEMORY);
     if (!this.held.size) this.lastRelease = this.time;
   }
   allOff() { for (const id of [...this.held.keys()]) this.off(id); }

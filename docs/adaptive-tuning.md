@@ -272,7 +272,7 @@ Effective tuning is resolved independently of the editor.
 The `ConfigReducer` owns the semantics and ordering of combined edits, presets, explicit unlocks and mode changes —
 a preset must not become a mixture of old locks and new axes —
 and it publishes one resolved configuration containing the effective tuning, tempered commas and policy-v2 controls.
-Those controls cover neighborhood radius and axes, harmonic, pitch and register weighting, released memory and recency, repetition tolerance, silence timeout and transport resets;
+Those controls cover neighborhood radius and axes, harmonic, pitch and register weighting, a shared half-life, released weight and memory, repetition tolerance, silence timeout and transport resets;
 their exact ranges and defaults live in the [implementation record](adaptive-tuning-plugin.md#controls-and-live-neighborhood).
 The UI mirrors that resolved configuration rather than running a competing authority, and restoring state or automating tuning works with the editor never opened.
 
@@ -489,10 +489,10 @@ The previous onset's full output-minus-input correction is the moving reference 
 
 Candidates are the union of bounded local Manhattan neighborhoods around the contributing context, restricted by the selected axes.
 The scorer chooses the nearest octave realization by pitch error plus register-weighted harmonic distance, with coordinate order as the final tie-break.
-Held references have full weight;
-recently released onset pitches contribute through configurable weight, recency and absolute-pitch repetition tolerance.
-New activity replaces the bounded released memory;
-elapsed wall time alone does not decay it.
+Held references start at weight one and recently released onset pitches at a configurable fraction of it;
+both halve per configurable half-life between their attack and the newest attack in context — a release does not restart the age — and repetitions match by absolute-pitch tolerance.
+The released memory, 24 entries, evicts the entry struck longest ago, and each note assigned a lattice node that no context note occupies multiplies every released weight by the new-note factor;
+because every weight shares one clock, waiting alone changes no decision.
 
 The adaptive correction and tuned-onset harmonic reference remain frozen for the voice lifetime.
 Later player expression and channel bend change the emitted and scheduled pitch without rerunning the adaptive choice.

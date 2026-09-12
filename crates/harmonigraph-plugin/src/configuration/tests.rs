@@ -1560,7 +1560,6 @@ fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
     let policy = PolicyConfig {
         harmonic: 2300,
         axes: 3,
-        memory: 11,
         silence_ms: 4500,
         reset_loop: true,
         reset_stop: true,

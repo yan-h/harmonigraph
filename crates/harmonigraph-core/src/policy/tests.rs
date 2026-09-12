@@ -23,8 +23,11 @@ fn just() -> MusicalConfig {
 struct Harness {
     config: MusicalConfig,
     memory: Memory,
-    held: Vec<(String, ContextPitch)>,
+    /// Each held voice with the millisecond it was struck on.
+    held: Vec<(String, ContextPitch, i64)>,
     scratch: PolicyScratch,
+    /// Milliseconds, advanced by fixture waits: the clock context decays on.
+    now: i64,
 }
 impl Harness {
     fn new() -> Self {
@@ -33,11 +36,22 @@ impl Harness {
             memory: Memory::default(),
             held: Vec::new(),
             scratch: PolicyScratch::default(),
+            now: 0,
         }
     }
     fn on(&mut self, id: &str, pitch: i64) -> ContextPitch {
-        let mut context: Vec<_> = self.held.iter().rev().map(|(_, v)| *v).collect();
-        self.memory.append(&mut context, self.config.policy);
+        let newest =
+            self.held.iter().map(|&(_, _, t)| t).chain(self.memory.newest()).max().unwrap_or(0);
+        let mut context: Vec<_> = self
+            .held
+            .iter()
+            .rev()
+            .map(|&(_, v, t)| ContextPitch {
+                weight: decay(self.config.policy, newest - t, 1000.0),
+                ..v
+            })
+            .collect();
+        self.memory.append(&mut context, self.config.policy, newest, 1000.0);
         let d = assign_new_note(
             self.config,
             &context,
@@ -55,14 +69,15 @@ impl Harness {
             pitch,
             d.assignment.correction_microcents(),
             self.config.policy.tolerance,
+            is_new(d.assignment.node(), &context),
         );
-        self.held.push((id.into(), v));
+        self.held.push((id.into(), v, self.now));
         v
     }
     fn off(&mut self, id: &str) {
-        while let Some(i) = self.held.iter().position(|(name, _)| id == "*" || name == id) {
-            let (_, v) = self.held.remove(i);
-            self.memory.release(v, 1, self.config.policy);
+        while let Some(i) = self.held.iter().position(|(name, _, _)| id == "*" || name == id) {
+            let (_, v, struck) = self.held.remove(i);
+            self.memory.release(v, 1, self.config.policy, struck);
         }
     }
 }
@@ -86,6 +101,7 @@ fn simulator_fixture_parity_includes_register_memory_and_precision() {
                     node: Some(LatticePos::new(num(3) as i32, num(4) as i32, num(5) as i32)),
                     weight: 1.0,
                 },
+                h.now,
             )),
             "on" => {
                 let v = h.on(w[1], num(2));
@@ -99,7 +115,10 @@ fn simulator_fixture_parity_includes_register_memory_and_precision() {
                 assert!(v.pitch.abs_diff(num(6)) < 1000, "{case}: {line}: {}", v.pitch);
             }
             "off" => h.off(w[1]),
-            "wait" | "bend" => {} // Neither waiting nor bending changes onset policy context.
+            // Waiting advances the clock context decays on; bending never
+            // changes onset policy context.
+            "wait" => h.now += (w[1].parse::<f64>().unwrap() * 1000.0).round() as i64,
+            "bend" => {}
             other => panic!("unhandled fixture event {other}"),
         }
     }
@@ -197,28 +216,68 @@ fn reachability_plays_the_keys_the_unfiltered_sweep_never_reaches() {
     let snapshot = reach::Snapshot {
         config: h.config,
         reference: h.memory.reference,
-        context: h.held.iter().map(|(_, v)| *v).collect(),
+        context: h.held.iter().map(|(_, v, _)| *v).collect(),
     };
     let reachable = reach::reachable(&snapshot, 3600.0, 9600.0, || false).unwrap();
     assert!(reachable.contains(&LatticePos::new(3, 0, 0)), "{reachable:?}");
 }
 #[test]
-fn memory_refreshes_actual_register_pitch_and_new_release_order() {
+fn memory_refreshes_actual_register_pitch_and_orders_by_attack() {
     let mut h = Harness::new();
     let c = h.on("c", 4_800_000_000);
-    h.on("e", 5_200_000_000);
+    h.now += 1000;
+    let e = h.on("e", 5_200_000_000);
     h.off("e");
     h.off("c");
-    assert_eq!(h.memory.recent[0].pitch, c);
+    // Struck first and let go last, C is still the older of the two.
+    assert_eq!([h.memory.recent[0].pitch, h.memory.recent[1].pitch], [e, c]);
+    // A full memory has no room for a note struck before every entry in it.
+    let mut full = Memory::default();
+    for i in 0..MAX_MEMORY as i64 {
+        full.release(ContextPitch { pitch: c.pitch + i * 100_000_000, ..c }, 1, h.config.policy, i);
+    }
+    full.release(ContextPitch { pitch: c.pitch - 100_000_000, ..c }, 1, h.config.policy, -1);
+    assert_eq!(full.len, MAX_MEMORY);
+    assert!(full.recent.iter().all(|r| r.at >= 0));
     h.on("c", 4_800_000_000);
     h.off("c");
     assert_eq!(h.memory.len, 2);
     let shifted = ContextPitch { pitch: c.pitch - 41_059_000, ..c };
-    h.memory.release(shifted, 1, h.config.policy);
-    h.memory.release(ContextPitch { pitch: c.pitch + 1_200_000_000, ..c }, 1, h.config.policy);
+    h.memory.release(shifted, 1, h.config.policy, h.now);
+    h.memory.release(
+        ContextPitch { pitch: c.pitch + 1_200_000_000, ..c },
+        1,
+        h.config.policy,
+        h.now,
+    );
     assert_eq!(h.memory.len, 4);
     h.memory.forget_source(1);
     assert_eq!(h.memory.len, 0);
+}
+#[test]
+fn only_a_new_lattice_node_fades_released_memory() {
+    let mut h = Harness::new();
+    h.config.policy.half_life_ms = 0;
+    let c = h.on("c", 4_800_000_000);
+    h.off("c");
+    let weight = |h: &Harness| {
+        let mut context = Vec::new();
+        h.memory.append(&mut context, h.config.policy, h.now, 1000.0);
+        context.iter().find(|v| v.pitch == c.pitch).unwrap().weight
+    };
+    h.on("e", 5_200_000_000);
+    h.off("e");
+    let faded = weight(&h);
+    assert!((faded - 0.1 * 0.7).abs() < 1e-12, "E is a new node: {faded}");
+    // E again, and E an octave up: the same node, so nothing fades.
+    for pitch in [5_200_000_000, 6_400_000_000] {
+        h.on("e", pitch);
+        h.off("e");
+    }
+    assert_eq!(weight(&h), faded);
+    h.on("g", 5_500_000_000);
+    h.off("g");
+    assert!((weight(&h) - faded * 0.7).abs() < 1e-12, "G is a new node");
 }
 #[test]
 fn hard_boundary_and_configured_axes_ignore_exact_remote_pitch() {
@@ -267,7 +326,7 @@ fn analytic_reachability_covers_direct_selection_across_registers() {
     h.on("c", 4_800_000_000);
     h.on("g", 5_500_000_000);
     h.on("d", 6_200_000_000);
-    let context: Vec<_> = h.held.iter().map(|(_, v)| *v).collect();
+    let context: Vec<_> = h.held.iter().map(|(_, v, _)| *v).collect();
     let snapshot = reach::Snapshot {
         config: h.config,
         reference: h.memory.reference,

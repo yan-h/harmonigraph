@@ -5,6 +5,11 @@ use crate::configuration::{PolicyConfig, ResolvedConfig};
 use crate::{LatticePos, Tempered};
 
 pub const MAX_CONTEXT: usize = 256;
+/// Released notes remembered. A storage bound with no control rather than a
+/// musical rule: every entry decays on the half-life, so at one second the
+/// entries past the 24th carry under 2% of the weight even at four notes a
+/// second, while each one more costs every decision a pass over the
+/// candidates on the audio thread.
 pub const MAX_MEMORY: usize = 24;
 pub const MAX_COHORT_ONSETS: usize = 256;
 const OCTAVE: i64 = crate::tuning::OCTAVE_MICROCENTS as i64;
@@ -21,19 +26,36 @@ pub const CONFIG: PolicyConfig = PolicyConfig {
     version: 2,
     radius: 3,
     axes: 2,
-    memory: 6,
     harmonic: 6000,
     pitch_scale: 20,
     released: 100,
-    recency: 700,
-    register_floor: 400,
-    register_falloff: 800,
+    half_life_ms: 1000,
+    new_note: 700,
+    register: 700,
     tolerance: 500_000,
     silence_ms: 0,
     reset_stop: false,
     reset_loop: false,
     keyboard: [700_000_000, 400_000_000, 1_000_000_000],
 };
+
+/// The share of its weight a contribution keeps `ticks` before the newest
+/// attack in context, on a clock of `per_second` ticks a second: it halves once
+/// per half-life. Every note's age counts from its attack, held or released:
+/// a release only scales it by the released weight, so letting go of a note
+/// never raises its weight, and a sustained chord keeps its vote over a note
+/// struck before it that has just stopped. Every contribution shares this one
+/// clock and the score normalizes weights, so a delay common to all cancels —
+/// waiting changes no decision — and measuring from the newest attack rather
+/// than from now keeps the newest weight at one instead of letting a long hold
+/// underflow it. A chord's notes land milliseconds apart and so weigh alike,
+/// where a rank per attack would not.
+pub fn decay(config: PolicyConfig, ticks: i64, per_second: f64) -> f64 {
+    if config.half_life_ms == 0 || per_second <= 0.0 {
+        return 1.0;
+    }
+    0.5f64.powf(ticks as f64 / per_second * 1000.0 / f64::from(config.half_life_ms))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MusicalConfig {
@@ -105,22 +127,38 @@ pub enum InputError {
     InvalidPitch,
 }
 
+/// Whether an attack assigned `node` is a new note: one on a lattice node that
+/// no note in `context`, held or remembered, occupies. A node has no octave,
+/// so repeating a note in any register is not new and fades nothing.
+pub fn is_new(node: Option<LatticePos>, context: &[ContextPitch]) -> bool {
+    node.is_some_and(|n| context.iter().all(|v| v.node != Some(n)))
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct Released {
     pitch: ContextPitch,
     source: u8,
+    /// When it was struck, on the caller's clock. Its decay counts from its
+    /// attack, not its release.
+    at: i64,
+    /// The new-note count when it was released. Every new note since
+    /// multiplies its weight by the new-note factor once.
+    new_notes: u64,
 }
-/// New activity replaces released entries. Repetition refreshes the same actual
-/// onset pitch, never a keyboard key or octave-folded class.
+/// Latest attack first, bounded by [`MAX_MEMORY`]. Repetition refreshes
+/// the same actual onset pitch, never a keyboard key or octave-folded class.
 #[derive(Clone, Debug)]
 pub struct Memory {
     recent: [Released; MAX_MEMORY],
     len: usize,
     pub reference: i64,
+    /// Attacks on a lattice node no context note occupied: the clock released
+    /// memory fades on by count, as the half-life is the one it fades on by time.
+    new_notes: u64,
 }
 impl Default for Memory {
     fn default() -> Self {
-        Self { recent: [Released::default(); MAX_MEMORY], len: 0, reference: 0 }
+        Self { recent: [Released::default(); MAX_MEMORY], len: 0, reference: 0, new_notes: 0 }
     }
 }
 impl Memory {
@@ -148,33 +186,50 @@ impl Memory {
         }
         self.len = n;
     }
-    pub fn attack(&mut self, input: i64, correction: i64, tolerance: u32) {
+    /// `new` is [`is_new`] for the node this attack was assigned.
+    pub fn attack(&mut self, input: i64, correction: i64, tolerance: u32, new: bool) {
         self.remove_match(input + correction, tolerance);
         self.reference = correction;
+        self.new_notes += u64::from(new);
     }
-    pub fn release(&mut self, pitch: ContextPitch, source: u8, config: PolicyConfig) {
+    /// Remember a note let go, at the age of its attack `struck`. A full
+    /// memory keeps its latest-struck entries, which are its heaviest, so a
+    /// note struck before every one of them is not remembered at all.
+    pub fn release(&mut self, pitch: ContextPitch, source: u8, config: PolicyConfig, struck: i64) {
         self.remove_match(pitch.pitch, config.tolerance);
-        let capacity = usize::from(config.memory).min(MAX_MEMORY);
-        if capacity == 0 {
-            self.len = 0;
+        let i = self.recent[..self.len].iter().position(|r| r.at <= struck).unwrap_or(self.len);
+        if i == MAX_MEMORY {
             return;
         }
-        self.len = (self.len + 1).min(capacity);
-        self.recent.copy_within(0..self.len - 1, 1);
-        self.recent[0] = Released { pitch, source };
+        self.len = (self.len + 1).min(MAX_MEMORY);
+        self.recent.copy_within(i..self.len - 1, i + 1);
+        self.recent[i] = Released { pitch, source, at: struck, new_notes: self.new_notes };
     }
-    pub fn append(&self, held: &mut Vec<ContextPitch>, config: PolicyConfig) {
-        let mut rank = 0;
-        for entry in self.recent.iter().take(self.len.min(usize::from(config.memory))) {
+    /// The latest attack still remembered, on the caller's clock.
+    pub fn newest(&self) -> Option<i64> {
+        (self.len > 0).then(|| self.recent[0].at)
+    }
+    /// Released memory after the held context, each entry at the released
+    /// weight decayed by its attack's age at `newest` and by the new-note
+    /// factor once for every new note since its release.
+    pub fn append(
+        &self,
+        held: &mut Vec<ContextPitch>,
+        config: PolicyConfig,
+        newest: i64,
+        per_second: f64,
+    ) {
+        for entry in &self.recent[..self.len] {
             if held
                 .iter()
                 .any(|v| v.pitch.abs_diff(entry.pitch.pitch) <= u64::from(config.tolerance))
             {
                 continue;
             }
+            let fades = (self.new_notes - entry.new_notes).min(i32::MAX as u64) as i32;
             let weight = f64::from(config.released) / 1000.0
-                * (f64::from(config.recency) / 1000.0).powi(rank);
-            rank += 1;
+                * decay(config, newest.saturating_sub(entry.at), per_second)
+                * (f64::from(config.new_note) / 1000.0).powi(fades);
             if weight > 0.0 {
                 held.push(ContextPitch { weight, ..entry.pitch });
             }
@@ -304,14 +359,13 @@ pub fn harmonic_cost(
     output: f64,
     context: &[ContextPitch],
 ) -> f64 {
-    let floor = f64::from(config.policy.register_floor) / 1000.0;
-    let falloff = f64::from(config.policy.register_falloff) / 1000.0;
+    // Every octave between the candidate and a context note multiplies that
+    // note's vote by the register factor; one in the same register keeps it all.
+    let per_octave = f64::from(config.policy.register) / 1000.0;
     let mut total = 0.0;
     let mut sum = 0.0;
     for v in context {
-        let register = floor
-            + (1.0 - floor)
-                * (-falloff * (output - v.pitch as f64 / 1_000_000.0).abs() / 1200.0).exp();
+        let register = per_octave.powf((output - v.pitch as f64 / 1_000_000.0).abs() / 1200.0);
         let weight = v.weight * register;
         total += weight * distance(node, v.node.unwrap());
         sum += weight;

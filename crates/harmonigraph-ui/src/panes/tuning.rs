@@ -487,15 +487,18 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             });
     });
     ui.collapsing("Context", |ui| {
-        p.memory = adaptive_value(ui, p.memory.into(), 0..=24, 1.0, "Released pitches", "") as u8;
-        for (value, label, max) in [
-            (&mut p.released, "Released weight", 1000),
-            (&mut p.recency, "Release carry-over", 1000),
-            (&mut p.register_floor, "Register floor", 1000),
-            (&mut p.register_falloff, "Register falloff", 4000),
-        ] {
-            *value = adaptive_value(ui, (*value).into(), 0..=max, 1000.0, label, "") as u16;
-        }
+        p.half_life_ms =
+            adaptive_value(ui, p.half_life_ms.into(), 0..=20_000, 1000.0, "Half-life", "s") as u16;
+        ui.weak("A note struck this long before the newest one counts half, held or released. Zero means no decay.");
+        p.new_note =
+            adaptive_value(ui, p.new_note.into(), 0..=1000, 1000.0, "New-note factor", "") as u16;
+        ui.weak("Each note on a lattice node not already in context multiplies every released note's weight by this. One means off.");
+        p.released =
+            adaptive_value(ui, p.released.into(), 0..=1000, 1000.0, "Released : held weight", "")
+                as u16;
+        p.register =
+            adaptive_value(ui, p.register.into(), 10..=1000, 1000.0, "Weight per octave", "") as u16;
+        ui.weak("Each octave between a context note and the note being tuned multiplies that note's vote by this. One ignores register.");
         p.tolerance = adaptive_value(
             ui,
             p.tolerance,

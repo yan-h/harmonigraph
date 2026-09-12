@@ -31,7 +31,7 @@ test('transpose complete performances by an octave without changing lattice choi
 });
 
 test('repeated voices refresh memory; octave duplicates and comma shifts remain distinct', () => {
-  const sim = new Simulator({ memory: 2 });
+  const sim = new Simulator();
   sim.seed([{ id: 'a', input: 4800, node: [0, 0, 0] }, { id: 'b', input: 4800, node: [0, 0, 0] },
     { id: 'octave', input: 6000, node: [0, 0, 0] }, { id: 'comma', input: 4800, node: [0, 3, 0] }]);
   assert.equal(sim.context().length, 3);
@@ -39,7 +39,7 @@ test('repeated voices refresh memory; octave duplicates and comma shifts remain 
   assert.equal(sim.recent.length, 1);
   assert.equal(sim.recent[0].id, 'b');
   sim.off('octave'); sim.off('comma');
-  assert.deepEqual(sim.recent.map(v => v.id), ['comma', 'octave']);
+  assert.deepEqual(sim.recent.map(v => v.id), ['comma', 'octave', 'b']);
   assert.equal(sim.recent[0].node[1], 3);
 });
 
@@ -52,6 +52,25 @@ test('release recency does not weaken on time alone, while configured silence re
   const timed = new Simulator({ silence: 2 }); timed.on(5200, 'e'); timed.off('e');
   timed.wait(1.9); assert.equal(timed.recent.length, 1);
   timed.wait(0.1); assert.equal(timed.recent.length, 0); assert.equal(timed.reference, 0);
+});
+
+test('a note struck or released long before the newest weighs less, and waiting changes no weight', () => {
+  const held = 'on E3 low\nwait 3\non C3 c\non G3 g\non D4 d\non A4 a\non E5 high';
+  const released = 'on E3 low\noff low\nwait 3\non C3 c\noff c\non G3 g\noff g\non D4 d\noff d\non A4 a\noff a\non E5 high';
+  const high = (program, halfLife) => {
+    // The new-note factor is off, so the time is the whole difference.
+    const sim = new Simulator({ halfLife, newNote: 1 });
+    for (const event of parseProgram(program)) sim.event(event);
+    return keyOf(sim.history.at(-1).node);
+  };
+  for (const program of [held, released]) {
+    assert.equal(high(program, 0), '0,1,0', 'weighed alike, the just low E decides');
+    assert.equal(high(program, 1), '4,0,0', 'three half-lives older, it no longer outvotes the chain');
+  }
+  const sim = new Simulator(); sim.on(4800, 'c'); sim.on(5200, 'e');
+  const before = sim.context();
+  sim.wait(60);
+  assert.deepEqual(sim.context(), before);
 });
 
 test('player bends and later decisions never modify onset context or frozen correction', () => {
