@@ -28,7 +28,6 @@ pub const CONFIG: PolicyConfig = PolicyConfig {
     axes: 2,
     harmonic: 6000,
     pitch_scale: 20,
-    released: 100,
     half_life_ms: 500,
     register: 700,
     tolerance: 500_000,
@@ -40,14 +39,12 @@ pub const CONFIG: PolicyConfig = PolicyConfig {
 
 /// The share of its weight a contribution keeps `ticks` before the newest
 /// attack in context, on a clock of `per_second` ticks a second: it halves once
-/// per half-life. Every note's age counts from its attack, held or released:
-/// a release only scales it by the released weight, so letting go of a note
-/// never raises its weight, and a sustained chord keeps its vote over a note
-/// struck before it that has just stopped. Every contribution shares this one
-/// clock and the score normalizes weights, so a delay common to all cancels —
-/// waiting changes no decision — and measuring from the newest attack rather
-/// than from now keeps the newest weight at one instead of letting a long hold
-/// underflow it. A chord's notes land milliseconds apart and so weigh alike,
+/// per half-life. Every note's age counts from its attack, held or released,
+/// so letting go of a note never makes it younger. Every contribution shares
+/// this one clock and the score normalizes weights, so a delay common to all
+/// cancels — waiting changes no decision — and measuring from the newest attack
+/// rather than from now keeps the newest weight at one instead of letting a
+/// long hold underflow it. A chord's notes land milliseconds apart and so weigh alike,
 /// where a rank per attack would not.
 pub fn decay(config: PolicyConfig, ticks: i64, per_second: f64) -> f64 {
     if config.half_life_ms == 0 || per_second <= 0.0 {
@@ -212,30 +209,20 @@ impl Memory {
         self.recent.copy_within(i..self.len - 1, i + 1);
         self.recent[i] = Released { pitch, source, at: struck };
     }
-    /// The latest attack still remembered, on the caller's clock.
-    pub fn newest(&self) -> Option<i64> {
-        (self.len > 0).then(|| self.recent[0].at)
-    }
-    /// Released memory after the held context, each entry at the released
-    /// weight decayed by its attack's age at `newest`.
-    pub fn append(
-        &self,
-        held: &mut Vec<ContextPitch>,
-        config: PolicyConfig,
-        newest: i64,
-        per_second: f64,
-    ) {
+    /// Released memory, into a context nothing is held in: each entry decayed
+    /// by its attack's age at the latest attack remembered. A context holding
+    /// anything is left as it is, because a held note outranks every released
+    /// one however long it has been held. No released weight is needed: among
+    /// released notes alone, a factor common to all of them cancels.
+    pub fn append(&self, context: &mut Vec<ContextPitch>, config: PolicyConfig, per_second: f64) {
+        if !context.is_empty() || self.len == 0 {
+            return;
+        }
+        let newest = self.recent[0].at;
         for entry in &self.recent[..self.len] {
-            if held
-                .iter()
-                .any(|v| v.pitch.abs_diff(entry.pitch.pitch) <= u64::from(config.tolerance))
-            {
-                continue;
-            }
-            let weight = f64::from(config.released) / 1000.0
-                * decay(config, newest.saturating_sub(entry.at), per_second);
+            let weight = decay(config, newest - entry.at, per_second);
             if weight > 0.0 {
-                held.push(ContextPitch { weight, ..entry.pitch });
+                context.push(ContextPitch { weight, ..entry.pitch });
             }
         }
     }

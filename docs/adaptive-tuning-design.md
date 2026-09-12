@@ -177,13 +177,21 @@ with every entry decaying on the half-life it is a storage bound, and a larger o
 Do not turn the initial capacity rule into a permanent musical contract or implement the more elaborate successor before it is designed.
 
 Sounding notes should have stronger influence than released memory; a sounding counterpart is a preference subject to the revised precision and parameter rules, not an unconditional pitch-class lock.
-Express that influence through the shared heuristics rather than assume an absolute held-versus-released decision hierarchy.
-The formal weighting and interaction with harmonic and register distance remain open.
+**A released note never outranks a held one, however long the held note has been held** (Yan, 2026-09-11).
+That reverses the earlier instruction to express the influence through shared heuristics rather than an absolute held-versus-released hierarchy:
+while anything is held, the context is the held notes alone, and released memory is the context only when nothing is held.
+A weighting could not say it.
+With every weight decaying from its attack, a held C major fell behind a D struck and let go after it once the chord was about 3.3 half-lives old, and tuned the next A to that D —
+27/16, a comma-wide fourth over the held E (the `passing` example).
+Capping each released weight at the oldest held one fixed that but gave every note played over a long pedal the same weight;
+scaling memory under the lightest held note kept their order but still let many released notes together outvote one held note.
+Both were measured and set aside for the plain rule.
+Its accepted cost: over one or two held notes, the melody just played no longer breaks ties between spellings those notes cannot tell apart, and the pitch term decides.
 A sustained bass may keep the neighbourhood nearby or be left behind by the newer harmony, depending on the sequence of notes and harmonic heuristics.
 Yan accepts either outcome; do not impose a universal pedal anchor or universal escape rule.
 Yan later asked that more recently struck held notes weigh much more than older ones, and then that all context decay exponentially by time.
-The implemented rule halves every contribution once per configurable half-life between its attack and the newest attack in context, held or released,
-with a configurable released-to-held weight.
+The implemented rule halves every contribution once per configurable half-life between its attack and the newest attack in context.
+The released-to-held weight that once scaled memory went with the rule above: among released notes alone, a factor common to all of them cancels.
 Every weight shares that clock and the score normalizes them, so waiting still changes no decision.
 **A release does not restart a note's age** (Yan, 2026-09-11).
 It first did, and a measurement showed the cost:
@@ -211,8 +219,8 @@ it votes once, through whichever of its voices votes most for the note being sco
 Register weighting is one multiplier per octave between a context note and the note being scored, 0.7 by default, with no floor (Yan, 2026-09-11):
 it replaced a floor and an exponential falloff whose falloff number had no direct musical reading.
 At 0.7 every agreed example keeps its outcome; at 0.6 or 0.8 one of the precision examples changes.
-An old held note can still weigh less than a note struck well after it and already released,
-which leans the sustained bass toward being left behind without making that a rule.
+An old held note is outweighed only by newer held notes, never by a released one,
+so a sustained bass can be left behind by the harmony still sounding over it but not by what has already stopped.
 Forgetting individual old notes must not itself erase the accumulated tuning displacement.
 Ordinary releases between chords must not destroy continuity.
 

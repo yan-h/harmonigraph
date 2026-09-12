@@ -28,9 +28,6 @@ pub struct PolicyConfig {
     pub axes: u8,
     pub harmonic: u16,
     pub pitch_scale: u16,
-    /// A released note weighs this much against a held note struck at the
-    /// same moment.
-    pub released: u16,
     /// Held and released contributions alike halve in weight once per this
     /// long between their attack and the newest attack in context. A release
     /// does not restart it.
@@ -59,7 +56,6 @@ impl PolicyConfig {
         self.axes = self.axes.clamp(1, 3);
         self.harmonic = self.harmonic.min(20_000);
         self.pitch_scale = self.pitch_scale.clamp(1, 100);
-        self.released = self.released.min(1000);
         self.half_life_ms = self.half_life_ms.min(20_000);
         // Zero would leave a context note in another register no vote at all,
         // and a context entirely in other registers an empty average.
@@ -79,7 +75,7 @@ impl PolicyConfig {
                 | i32::from(self.reset_stop) << 26
                 | i32::from(self.reset_loop) << 27,
             i32::from(self.harmonic) | i32::from(self.pitch_scale) << 16,
-            i32::from(self.released) | i32::from(self.half_life_ms) << 16,
+            i32::from(self.half_life_ms),
             i32::from(self.register),
             self.tolerance as i32,
             self.silence_ms as i32,
@@ -97,8 +93,7 @@ impl PolicyConfig {
             reset_loop: w[1] & (1 << 27) != 0,
             harmonic: w[2] as u16,
             pitch_scale: (w[2] >> 16) as u16,
-            released: w[3] as u16,
-            half_life_ms: (w[3] >> 16) as u16,
+            half_life_ms: w[3] as u16,
             register: w[4] as u16,
             tolerance: w[5].max(0) as u32,
             silence_ms: w[6].max(0) as u32,

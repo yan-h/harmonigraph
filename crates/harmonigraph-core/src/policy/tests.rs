@@ -40,8 +40,7 @@ impl Harness {
         }
     }
     fn on(&mut self, id: &str, pitch: i64) -> ContextPitch {
-        let newest =
-            self.held.iter().map(|&(_, _, t)| t).chain(self.memory.newest()).max().unwrap_or(0);
+        let newest = self.held.iter().map(|&(_, _, t)| t).max().unwrap_or(0);
         let mut context: Vec<_> = self
             .held
             .iter()
@@ -51,7 +50,7 @@ impl Harness {
                 ..v
             })
             .collect();
-        self.memory.append(&mut context, self.config.policy, newest, 1000.0);
+        self.memory.append(&mut context, self.config.policy, 1000.0);
         let d = assign_new_note(
             self.config,
             &context,

@@ -46,15 +46,17 @@ Absolute output register is stored separately from lattice coordinates.
 
 ### Context and eligibility
 
+A released note never outranks a held one, however long that has been held:
+while anything is held, the context is the held notes alone, and released memory is the context only when nothing is held.
 Every contribution decays on one clock.
-Let `newest` be the latest attack in context and `t` a contribution's own attack, held or released.
-Its base weight is `0.5^((newest - t) / halfLife)` for a held note and `released × 0.5^((newest - t) / halfLife)` for a released one, with no time decay when the half-life is zero.
+Let `newest` be the latest attack in context and `t` a contribution's own attack.
+Its base weight is `0.5^((newest - t) / halfLife)`, with no time decay when the half-life is zero.
 A strike on the node struck last, with nothing else struck between, is a hold:
 its `t` stays that earlier strike's, so repeating a note, in any octave, moves no clock and weighs exactly as holding it.
 Released memory fades by time alone, so a progression keeps moving when its chords are at least about one half-life apart;
 closer than that, the chords before pull each new root back.
 Every weight shares that clock and the score normalizes them, so waiting changes no decision and a chord's simultaneous onsets weigh alike.
-A release does not restart a note's age, so letting go of a note never raises its weight.
+A release does not restart a note's age, so memory is ordered by attack, not by release.
 Released memory keeps the 24 released entries struck most recently, counted separately from held voices, which are never evicted to make room.
 The 24 is a fixed storage bound with no control: even at a one-second half-life, entries beyond it carry under 2% of the weight at four notes a second.
 
@@ -98,7 +100,7 @@ Order dependence is expected, and changing the last note of a phrase can affect 
 The “intentional Pythagorean E” example works through ordinary pitch error and a different declared harmonic weight, not a separate hard match or chord exception.
 There is no automatic retuning and no special-case branch for any musical fixture.
 
-The baseline uses harmonic weight 6, pitch scale 20 cents, half-life 0.5 seconds, released weight 0.1 and register weight 0.7 per octave.
+The baseline uses harmonic weight 6, pitch scale 20 cents, half-life 0.5 seconds and register weight 0.7 per octave.
 The paired precision examples use harmonic weight 2 with the same explicit seeded context and zero initial displacement.
 All other fixtures use the baseline.
 

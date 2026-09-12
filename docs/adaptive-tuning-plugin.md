@@ -18,14 +18,14 @@ The nearest octave realization of each eligible node is scored with pitch error 
 A node sounding in several registers votes once, through whichever of its voices votes most for that candidate, so an octave doubling adds nothing.
 Ties use coordinate order.
 
-Every reference decays on one clock:
-it halves for every half-life, half a second by default, between its attack and the newest attack in context.
-A held reference starts at weight one and a released one at the released-to-held weight, 0.1 by default;
-a release does not restart the age, so letting go of a note never raises its weight.
+A released note never outranks a held one, however long that has been held:
+while anything is held the context is the held references alone, and released memory is the context only when nothing is held.
+Before that rule every reference shared one weighting, and a chord held about 1.7 seconds fell behind a note struck and released after it.
+Each reference decays on one clock:
+it halves for every half-life, half a second by default, between its attack and the newest attack in its context;
+a release does not restart the age.
 Because every weight shares that clock and the score normalizes them, waiting changes no decision,
 and a chord's notes, milliseconds apart, weigh alike, which a rank per attack would not give.
-A held reference can still weigh less than a release struck well after it:
-at the defaults, about 1.7 seconds after.
 Repetitions refresh one contribution within the configured absolute-pitch tolerance; they retain separate voice lifetimes for release and expression.
 Octaves and comma-shifted returns remain distinct when outside that tolerance.
 Released memory holds at most 24 contributions, counted separately from held ones, and a release beyond that evicts the one struck longest ago.
@@ -134,7 +134,7 @@ see [issue #852](https://github.com/yan-h/harmonigraph/issues/852).
 
 ## Controls and live neighborhood
 
-The Tuning pane exposes the keyboard tuning, harmonic weight, pitch scale, neighborhood radius, allowed axes, half-life, released-to-held weight, register weight per octave, same-note tolerance, silence timeout and transport reset choices.
+The Tuning pane exposes the keyboard tuning, harmonic weight, pitch scale, neighborhood radius, allowed axes, half-life, register weight per octave, same-note tolerance, silence timeout and transport reset choices.
 Defaults match the simulator's baseline profile.
 The precision profile used by the paired intentional-E examples is obtained by setting harmonic weight to two.
 
