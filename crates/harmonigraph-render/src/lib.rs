@@ -1390,7 +1390,7 @@ struct Offscreen {
     #[cfg(test)]
     format: wgpu::TextureFormat,
     color_view: wgpu::TextureView,
-    /// Node-origin RGB, spared ordinary node shadows and summed at composite.
+    /// Node and label RGB, spared ordinary node shadows and summed at composite.
     ink_view: wgpu::TextureView,
     /// The independent label-free scene pair and its filtered halo.
     /// Present only while bloom is on; toggling it never replaces glow history.
@@ -2173,8 +2173,8 @@ fn create_scene_pipelines(
                 glyph_shader,
                 LATTICE_COLOR_FORMAT,
                 glyph_layout,
-                Some(layouts.glow),
-                ("vs_glyph", "fs_fill_lit"),
+                Some(layouts),
+                ("vs_glyph_lit", "fs_fill_lit"),
                 if bloom { 4 } else { 2 },
                 EGUI_BLEND,
             ),

@@ -79,7 +79,13 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
         return;
     };
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    let scene = one_node_behind_another();
+    let mut scene = one_node_behind_another();
+    // This probe isolates ordinary ink compositing. Soft node occlusion is
+    // tested separately with a live geometry shadow field.
+    for style in scene.shadow.groups_mut() {
+        style.width = 0.0;
+        style.depth = 0.0;
+    }
     let points = egui::vec2(SCENE_SIZE[0] as f32, SCENE_SIZE[1] as f32);
     let projector = scene.projector(glam::Vec2::new(points.x, points.y));
 
@@ -1302,4 +1308,77 @@ fn a_name_casting_no_shadow_paints_its_ink_and_nothing_else() {
         bare + 1,
         "a name is worth exactly one cell over the {bare} the frame casts without it",
     );
+}
+
+/// Labels receive the foreground node field even when they cast no shadow.
+/// Use a broad white glyph crossing the ring and its exposed shadow skirt,
+/// then put the same glyph on the front node to rule out self-occlusion.
+#[test]
+fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow() {
+    let Some(mut shooter) = Shooter::new(SCENE_SIZE) else { return };
+    for kernel in
+        [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
+    {
+        let mut scene = one_node_behind_another();
+        scene.shadow = one_shadow(1.0, 0.18, kernel);
+        scene.shadow.lattice_text.width = 0.0;
+        scene.shadow.lattice_text.depth = 0.0;
+        scene.glow_reach = 0.0;
+        scene.bloom_strength = 0.0;
+        let center = on_screen(&scene, SCENE_SIZE, scene.nodes[0].world_pos);
+        let rect = [center.x - 4.0, center.y - 6.0, 64.0, 12.0];
+        let glyph = GlyphInstance { rect, sdf_rect: rect, ..crate::text::tests::glyph() };
+        let mut shot = |scene: &Scene, owner: Option<u32>, enabled: bool, depth: f32| {
+            let labels =
+                owner.map_or_else(LatticeLabels::default, |node| names(vec![(node, vec![glyph])]));
+            shooter.draw_modified(scene, labels, |cb| {
+                cb.uniforms.geometry_shadow.occlusion = f32::from(enabled);
+                cb.uniforms.geometry_shadow.depth = depth;
+            })
+        };
+        let bare_old = shot(&scene, None, false, 0.18);
+        let rear_old = shot(&scene, Some(1), false, 0.18);
+        let bare = shot(&scene, None, true, 0.18);
+        let rear = shot(&scene, Some(1), true, 0.18);
+        let faded = (0..rear.len())
+            .step_by(4)
+            .filter(|&i| {
+                let old = i32::from(rear_old[i]) - i32::from(bare_old[i]);
+                let new = i32::from(rear[i]) - i32::from(bare[i]);
+                old > 32 && new > 6 && old - new > 6
+            })
+            .count();
+        assert!(faded > 30, "{kernel:?}: only {faded} rear-label pixels partially faded");
+        // A black clear with no glow or text shadows gives the ordinary node
+        // shadow nothing to darken except misplaced ink. This must be exact,
+        // including when the label-free bloom attachment is present.
+        for bloom in [0.0, 1.0] {
+            scene.bloom_strength = bloom;
+            assert_eq!(
+                shot(&scene, Some(1), true, 0.18),
+                shot(&scene, Some(1), true, 0.8),
+                "{kernel:?}, bloom={bloom}: rear text still receives ordinary node shadow"
+            );
+        }
+        scene.bloom_strength = 0.0;
+        let front_old = shot(&scene, Some(0), false, 0.18);
+        let front = shot(&scene, Some(0), true, 0.18);
+        let solid: Vec<_> = (0..front.len())
+            .step_by(4)
+            .filter(|&i| front_old[i] > 250 && bare_old[i] < 200)
+            .collect();
+        assert!(solid.len() > 100, "the foreground label must contain solid white ink");
+        for i in solid {
+            assert_eq!(
+                &front[i..i + 3],
+                &front_old[i..i + 3],
+                "{kernel:?}: a node occluded its own name"
+            );
+        }
+        // Reuse the pane after removing the foreground node. The label row
+        // has no shadow cell, but still must end its receiver link at zero.
+        scene.nodes.remove(0);
+        rows_per_node(&mut scene);
+        assert_eq!(shot(&scene, Some(0), false, 0.18), shot(&scene, Some(0), true, 0.18));
+    }
 }

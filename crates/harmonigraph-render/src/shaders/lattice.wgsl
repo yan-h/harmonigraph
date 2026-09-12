@@ -332,45 +332,6 @@ fn node_shadow_through(who: f32, points: vec2<f32>, level: f32) -> ShadowThrough
     return ShadowThrough(1.0 - glow_shadow_depth() * coverage, 1.0 - coverage);
 }
 
-// Prototype: foreground node shapes reduce rear ink's COVERAGE, so its
-// contrast fades into whatever is behind it. The split scene keeps ordinary
-// shadows on that background alone. Read only later node casters:
-// a node never hides itself, and labels/crosses keep their existing behavior.
-// The field itself is opacity (not the depth-amplified bloom tail), which
-// keeps faint distant shadows from erasing detail. No extra persisted dial.
-fn node_visibility(who: f32, points: vec2<f32>) -> f32 {
-    let strength = clamp(u.geometry_shadow.occlusion, 0.0, 1.0);
-    if strength == 0.0 {
-        return 1.0;
-    }
-    var at = u32(max(who, 0.0));
-    if at >= arrayLength(&shadow_casters) {
-        return 1.0;
-    }
-    var visibility = 1.0;
-    loop {
-        let next = u32(shadow_casters[at].map.w);
-        if next == 0u {
-            break;
-        }
-        let candidate = next - 1u;
-        if candidate <= at || candidate >= arrayLength(&shadow_casters) {
-            break;
-        }
-        at = candidate;
-        let caster = shadow_casters[at];
-        // Reject before sampling: clamping an out-of-box sample to the cell
-        // edge would otherwise extend its last nonzero texel indefinitely.
-        if all(points >= caster.rect.xy) && all(points <= caster.rect.xy + caster.rect.zw) {
-            visibility *= 1.0 - strength * clamp(caster.shade.x, 0.0, 1.0) * shadow_kernel(at, points);
-        }
-        if visibility == 0.0 {
-            break;
-        }
-    }
-    return visibility;
-}
-
 // Whether this caster's shadow is a DISTANCE. A marker uses the answer to
 // choose its exact field instead of a cell; a node uses it to leave that field's
 // existing half-level release alone while masking a Gaussian by its footprint.
@@ -2162,7 +2123,7 @@ fn node_paint(in: VsOut) -> Painted {
     let bloom_through = 1.0 - (1.0 - t.bloom) * shadow_exposure;
     var visibility = 1.0;
     if ink.alpha > 0.0 {
-        visibility = node_visibility(in.shadow_box.x, in.shadow_at.xy);
+        visibility = node_visibility(in.shadow_box.x, in.shadow_at.xy, u.geometry_shadow.occlusion);
     }
     let visible_alpha = ink.alpha * visibility;
     let final_alpha = 1.0 - (1.0 - visible_alpha) * seen_through;

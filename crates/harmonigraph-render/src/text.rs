@@ -51,6 +51,7 @@ pub const GLYPH_SDF_NEAR_BLEND: u32 = 8;
 #[cfg(any(test, feature = "hot-reload"))]
 pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
     "vs_glyph",
+    "vs_glyph_lit",
     "vs_spectral_shadow",
     "fs_spectral_shadow",
     "fs_fill",
@@ -235,7 +236,9 @@ pub(crate) struct TextUniforms {
     /// to eight bytes and the scalar before it is the pair that reaches it: the
     /// depth and this size sit together so the struct needs no pad of its own.
     pub(crate) shadow_atlas_size: [f32; 2],
-    pub(crate) _pad: [f32; 4],
+    /// Foreground lattice nodes fade label coverage by this strength.
+    pub(crate) node_occlusion: f32,
+    pub(crate) _pad: [f32; 3],
 }
 
 /// Which screen axes a surface's labels TRAVEL along, for the taps `coverage`
@@ -1172,19 +1175,19 @@ pub(crate) fn blank_sdf_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgp
 /// grow the quad by, and a fragment reaching past its own quad is a shape cut
 /// off in a screen-aligned line rather than a compile error.
 ///
-/// `glow` is the lattice's light, at group 1, and only `fs_fill_lit` reads it:
+/// `scene` supplies the lattice light and foreground-node occlusion field:
 /// a name there is ink standing in the light and takes the wash a marker's
 /// cross takes. Every other surface passes `None` — its text has no light to
-/// stand in, and the entry points it draws through name no group 1 for a layout
-/// to have to carry. The shadow a name casts is the other half of the same
-/// picture and is a draw of its own; see [`create_shadow_box_pipeline`].
+/// stand in, and its fill entry points need none of those scene bindings.
+/// The shadow a name casts is the other half of the same picture and a draw
+/// of its own; see [`create_shadow_box_pipeline`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn create_text_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
     layout: &wgpu::BindGroupLayout,
-    glow: Option<&wgpu::BindGroupLayout>,
+    scene: Option<crate::SceneLayouts<'_>>,
     entries: (&str, &str),
     attachments: usize,
     blend: wgpu::BlendState,
@@ -1214,9 +1217,13 @@ pub(crate) fn create_text_pipeline(
         device,
         shader,
         entries.1,
-        &[Some(layout), glow],
+        &[Some(layout), scene.map(|s| s.glow), scene.map(|s| s.shadow), scene.map(|s| s.casters)],
         entries,
-        &[GlyphInstance::LAYOUT],
+        &if scene.is_some() {
+            vec![GlyphInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_GLYPHS]
+        } else {
+            vec![GlyphInstance::LAYOUT]
+        },
         &targets,
     )
 }
@@ -1303,7 +1310,8 @@ impl CallbackTrait for TextCallback {
             pixels_per_point: ppp,
             shadow_depth: style.map_or(0.0, |s| s.depth),
             shadow_atlas_size: [1.0; 2],
-            _pad: [0.0; 4],
+            node_occlusion: 0.0,
+            _pad: [0.0; 3],
         };
 
         let view = resources.atlas.view().expect("checked above");

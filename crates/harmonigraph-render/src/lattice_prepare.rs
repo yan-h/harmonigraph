@@ -491,11 +491,8 @@ impl LatticeCallback {
                         // The atlas the cells are drawn into, which may be
                         // larger than this frame's layout (`ensure_shadow`).
                         shadow_atlas_size: atlas_size,
-                        // A lattice name paints no rim, so there is no ring for
-                        // the two passes that draw one to walk. Zero samples is
-                        // what says so (`ring`), and it is what keeps the fill's
-                        // quad down to the reconstruction filter's own margin.
-                        _pad: [0.0; 4],
+                        node_occlusion: self.uniforms.geometry_shadow.occlusion,
+                        _pad: [0.0; 3],
                     }),
                 );
             }
@@ -595,19 +592,19 @@ impl LatticeCallback {
         // from the field's reach.
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let mut packed = shadow::pack(&self.casters, ppp * self.render_scale, max_dim);
-        // Node cells follow painter order, with names interspersed. Link only
-        // nodes so a receiver can read the shapes in front of it without
-        // treating its own label or the shared marker cell as an occluder.
-        // Index + 1 leaves zero as the end, independent of buffer capacity
-        // (which can still contain rows from a larger previous frame).
+        // Every receiver, including a label with its own shadow disabled,
+        // starts at the next node caster in painter order. Names immediately
+        // follow their owner, so that owner can never occlude its own text.
+        // Index + 1 leaves zero as the end, independent of buffer capacity.
         let mut next = 0;
-        for &node in self.node_cells.iter().rev() {
-            let Some(caster) = packed.casters.get_mut(node as usize) else {
-                continue;
-            };
+        let mut nodes = self.node_cells.iter().rev().peekable();
+        for (i, caster) in packed.casters.iter_mut().enumerate().rev() {
             caster.map[3] = next as f32;
-            if caster.shade[0] > 0.0 {
-                next = node + 1;
+            if nodes.peek().is_some_and(|&&node| node as usize == i) {
+                nodes.next();
+                if caster.shade[0] > 0.0 {
+                    next = i as u32 + 1;
+                }
             }
         }
         // A placeholder box preserves the caster index for a distance field
@@ -955,7 +952,10 @@ impl LatticeCallback {
                         pass.set_pipeline(&scene.shadow_box);
                         pass.draw(0..4, l..l + 1);
                     }
+                    pass.set_bind_group(2, cells, &[]);
+                    pass.set_bind_group(3, &pane.caster_bind_group, &[]);
                     pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
+                    pass.set_vertex_buffer(1, pane.cell_buffer.slice(..));
                     pass.set_pipeline(&scene.glyph_fill);
                     pass.draw(0..4, a..b);
                 }

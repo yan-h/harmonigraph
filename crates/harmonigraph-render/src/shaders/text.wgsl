@@ -41,7 +41,9 @@ struct Locals {
     /// Beside the depth above so the pair fills a `vec2`'s 8-byte alignment
     /// with no pad of its own.
     shadow_atlas_size: vec2<f32>,
-    _pad: vec4<f32>,
+    node_occlusion: f32,
+    _pad0: f32,
+    _pad1: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> locals: Locals;
@@ -70,6 +72,8 @@ struct VertexOut {
     /// itself has to choose.
     @location(5) @interpolate(flat) sheet: u32,
     @location(6) @interpolate(flat) sheet_size: vec2<f32>,
+    @location(7) points: vec2<f32>,
+    @location(8) @interpolate(flat) who: f32,
 };
 
 /// A point of the pane, in points, as clip space.
@@ -98,6 +102,23 @@ fn vs_glyph(
     @location(7) sheet: u32,
 ) -> VertexOut {
     var out = glyph_vertex(vertex, rect, uv, fill, sheet);
+    out.position = on_screen(out.position.xy);
+    return out;
+}
+
+// The name's existing shadow box also identifies its receiver position in
+// painter order, even when the text shadow itself is disabled.
+@vertex
+fn vs_glyph_lit(
+    @builtin(vertex_index) vertex: u32,
+    @location(0) rect: vec4<f32>,
+    @location(1) uv: vec4<f32>,
+    @location(5) fill: vec4<f32>,
+    @location(7) sheet: u32,
+    @location(11) box_who: vec4<f32>,
+) -> VertexOut {
+    var out = glyph_vertex(vertex, rect, uv, fill, sheet);
+    out.who = box_who.x;
     out.position = on_screen(out.position.xy);
     return out;
 }
@@ -282,6 +303,8 @@ fn glyph_vertex(
         + corner * ((uv.zw - uv.xy) + 2.0 * texel_reach);
     out.uv_min = uv.xy;
     out.uv_max = uv.zw;
+    out.points = out.position.xy;
+    out.who = 0.0;
     out.fill = fill;
     out.sheet = sheet;
     out.sheet_size = select(locals.atlas_size, locals.mark_atlas_size, sheet == SHEET_MARK);
@@ -513,12 +536,16 @@ fn fs_fill_lit(in: VertexOut) -> SplitOut {
     }
     // Premultiplied, as everything this pass draws is: the ink is the colour
     // the Marker ink bar names, and only its coverage varies across a glyph.
+    // Fade both color and coverage, revealing the shadowed background.
+    // Keep the result with node ink so later nodes do not shadow it again.
+    let visibility = node_visibility(in.who, in.points, locals.node_occlusion);
     let ink = in.fill * cov;
+    let alpha = ink.a * visibility;
     let coord = vec2<i32>(in.position.xy);
     let light = glyph_light(coord);
     return SplitOut(
-        vec4<f32>(wash_over(ink.rgb, ink.a, light.rgb, 1.0), ink.a),
-        vec4<f32>(0.0, 0.0, 0.0, ink.a),
+        vec4<f32>(0.0, 0.0, 0.0, alpha),
+        vec4<f32>(wash_over(ink.rgb, ink.a, light.rgb, 1.0) * visibility, alpha),
     );
 }
 

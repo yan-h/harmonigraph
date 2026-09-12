@@ -117,7 +117,7 @@ struct ShadowCaster {
     // was packed.
     cell: vec4<f32>,
     // The map from a point of the pane to a texel of that cell —
-    // `xy + points * z`. For lattice nodes, w links the next node caster in
+    // `xy + points * z`. For lattice nodes and labels, w links the next node caster in
     // painter order (index + 1; zero ends the list). Other surfaces leave 0.
     map: vec4<f32>,
     // What this caster SPENDS, none of it a coordinate. x: how much of its
@@ -371,8 +371,8 @@ fn cell_clip(texel: vec2<f32>, size: vec2<f32>, w: f32) -> vec4<f32> {
     );
 }
 
-// Each picture keeps node ink separate from everything ordinary shadows
-// multiply. Summing the RGB components restores the picture; only `other.a`
+// Each picture keeps node and label ink separate from the background that
+// ordinary node shadows multiply. Summing the RGB components restores the picture; only `other.a`
 // carries its coverage over the pane. Labels write the visible pair only.
 struct SplitOut {
     @location(0) other: vec4<f32>,
@@ -385,3 +385,39 @@ struct SceneOut {
     @location(2) bloom_other: vec4<f32>,
     @location(3) bloom_ink: vec4<f32>,
 };
+
+// Lattice ink, including names, fades through the same foreground-node field.
+// Links contain only later node casters, excluding the receiver and its name.
+// Box rejection keeps clamped atlas edges from occluding distant ink.
+fn node_visibility(who: f32, points: vec2<f32>, occlusion: f32) -> f32 {
+    let strength = clamp(occlusion, 0.0, 1.0);
+    if strength == 0.0 {
+        return 1.0;
+    }
+    var at = u32(max(who, 0.0));
+    if at >= arrayLength(&shadow_casters) {
+        return 1.0;
+    }
+    var visibility = 1.0;
+    loop {
+        let next = u32(shadow_casters[at].map.w);
+        if next == 0u {
+            break;
+        }
+        let candidate = next - 1u;
+        if candidate <= at || candidate >= arrayLength(&shadow_casters) {
+            break;
+        }
+        at = candidate;
+        let caster = shadow_casters[at];
+        // Reject before sampling: clamping an out-of-box sample to the cell
+        // edge would otherwise extend its last nonzero texel indefinitely.
+        if all(points >= caster.rect.xy) && all(points <= caster.rect.xy + caster.rect.zw) {
+            visibility *= 1.0 - strength * clamp(caster.shade.x, 0.0, 1.0) * shadow_kernel(at, points);
+        }
+        if visibility == 0.0 {
+            break;
+        }
+    }
+    return visibility;
+}
