@@ -745,10 +745,22 @@ fn create_spectral_shadow_pipeline(
 /// NO VERTEX BUFFER. The draw is one instance at the caster's own index, and
 /// every number the quad and the mix need is in the array at group 3
 /// (`vs_shadow_box`).
+///
+/// Group 1 is the light's layout although nothing here reads it. The fill of
+/// the name before is drawn just ahead of this box whenever no node or cross
+/// stands between the two, and it declares the light there. wgpu rebinds
+/// nothing when a pipeline switch only DROPS a group, while on Metal a group's
+/// slots count every group ahead of it: a box that left group 1 out read its
+/// atlas from the slot the fill had put the light in, and the light is near
+/// zero off every halo — a standoff of nothing over the whole box. Declaring it
+/// keeps the two pipelines on one layout; the pass binds the light there
+/// already.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_shadow_box_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::BindGroupLayout,
+    glow: &wgpu::BindGroupLayout,
     atlas: &wgpu::BindGroupLayout,
     casters: &wgpu::BindGroupLayout,
     target_format: wgpu::TextureFormat,
@@ -764,7 +776,7 @@ pub(crate) fn create_shadow_box_pipeline(
         device,
         shader,
         "fs_shadow_box",
-        &[Some(layout), None, Some(atlas), Some(casters)],
+        &[Some(layout), Some(glow), Some(atlas), Some(casters)],
         ("vs_shadow_box", if bloom { "fs_shadow_box" } else { "fs_shadow_box_plain" }),
         &[],
         &targets,
