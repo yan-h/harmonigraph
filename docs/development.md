@@ -60,7 +60,10 @@ Enable the tracked pre-push formatting check once per clone:
 git config core.hooksPath .githooks
 ```
 
-The hook checks formatting only.
+Claude's checked-in `SessionStart` does this automatically.
+The same hook path also initialises the pinned shared-skills submodule when Git creates a worktree;
+other clients should run the command once after cloning.
+The pre-push hook checks formatting only.
 GitHub Actions runs the full `./ci.sh` gate for pull requests and pushes to `main`,
 split across parallel groups and reported as one `Full CI` check.
 A bare local `./ci.sh` runs every group.

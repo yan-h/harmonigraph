@@ -9,6 +9,10 @@ the rest of the repo explains itself by being read.
 `AGENTS.md` and `GEMINI.md` are symlinks to this file, and `.agents/skills` is a symlink to `.claude/skills`.
 Cross-project skills are pinned in the `.shared-skills` submodule and exposed from `.claude/skills` through relative project-internal symlinks;
 project-specific skills stay directly under `.claude/skills`.
+Claude's `SessionStart` prepares an uninitialised checkout and reloads its skill list,
+while the tracked `post-checkout` hook prepares each later `git worktree add` before its owner hands the worktree to an agent.
+Both paths validate the exact gitlink commit and the shared audit brief;
+an unavailable pin is a visible setup failure rather than permission to read another checkout's copy.
 Keep each skill's guidance at that single source rather than copying it per agent;
 copies drift while symlinks make every session read the same contract.
 Tool-specific hooks, permissions and commands stay in each tool's native configuration —
