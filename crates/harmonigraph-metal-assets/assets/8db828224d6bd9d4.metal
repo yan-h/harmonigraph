@@ -144,8 +144,8 @@ struct fs_shadow_box_plainOutput {
 fragment fs_shadow_box_plainOutput fs_shadow_box_plain(
   fs_shadow_box_plainInput varyings [[stage_in]]
 , metal::float4 position [[position]]
-, metal::texture2d<float, metal::access::sample> shadow_atlas [[texture(3)]]
-, metal::sampler shadow_sampler [[sampler(1)]]
+, metal::texture2d<float, metal::access::sample> shadow_atlas [[texture(4)]]
+, metal::sampler shadow_sampler [[sampler(2)]]
 , device type_4 const& shadow_casters [[buffer(1)]]
 , constant Locals& locals [[buffer(0)]]
 , constant _mslBufferSizes& _buffer_sizes [[buffer(2)]]
