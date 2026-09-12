@@ -1902,7 +1902,10 @@ impl ViewConfig {
         self.extent_sevens = self.extent_sevens.clamp(0, 4);
         self.extent_threes = self.extent_threes.clamp(fresh.extent_threes, MAX_DRAWN_EXTENT);
         self.extent_fives = self.extent_fives.clamp(fresh.extent_fives, MAX_DRAWN_EXTENT);
-        self.center_sevens = self.center_sevens.clamp(-MAX_CENTER, MAX_CENTER);
+        // The seventh center is the one center exposed as a setting. Keep a
+        // restored value on the same twenty-step axis its bar can produce;
+        // the camera-owned fifths/thirds centers retain the arithmetic guard.
+        self.center_sevens = self.center_sevens.clamp(-20, 20);
         self.center_threes = self.center_threes.clamp(-MAX_CENTER, MAX_CENTER);
         self.center_fives = self.center_fives.clamp(-MAX_CENTER, MAX_CENTER);
 
@@ -1945,6 +1948,11 @@ impl ViewConfig {
             fresh.octave_extra_blend
         };
 
+        // Each off-sheet step multiplies geometry by this value. The draw path
+        // stays defensive, while load owns making the stored reading fit the
+        // bar that edits it.
+        self.sevens_size = finite_or(self.sevens_size, fresh.sevens_size).clamp(0.15, 1.0);
+
         // The mark delay, against that same hole: it is added to a timestamp
         // and the sum divided by the attack, so a non-finite one poisons the
         // ease of every ring. The symptom is the rings VANISHING, not drawing
@@ -1952,9 +1960,9 @@ impl ViewConfig {
         // every comparison), so the level stays at 0 while the slot bit is
         // still set, and the shader multiplies the ring's coverage away to
         // nothing. Silent, and it takes the whole layer wherever the marks
-        // are on. `derive_scene` clamps the RANGE (the bar cannot leave it; a
-        // file can), which is again no guard against a NaN.
-        self.mark_delay = finite_or(self.mark_delay, 0.0);
+        // are on. `derive_scene` retains the RANGE clamp for callers that do
+        // not pass through this load boundary; this door also catches NaN.
+        self.mark_delay = finite_or(self.mark_delay, 0.0).clamp(0.0, crate::MARK_DELAY_MAX);
 
         // The envelope's shape, against the same hole. `Envelope::approach`
         // guards its own arithmetic against a non-finite duration or shape —
@@ -1965,7 +1973,7 @@ impl ViewConfig {
         // the bar reads out, which is exactly what this door is for. The
         // duration beside it is the Fade param rather than a blob field, and
         // has no door here to need.
-        self.fade_shape = finite_or(self.fade_shape, 0.0);
+        self.fade_shape = finite_or(self.fade_shape, 0.0).clamp(0.0, 1.0);
 
         // The spectral kernel's width, against that same hole and one more: it
         // is a DIVISOR in the fold's Gaussian, so a 0 from a hand-edited blob
@@ -2096,6 +2104,12 @@ impl ViewConfig {
             finite_or(self.glow_attack, fresh.glow_attack).clamp(0.0, GLOW_BALLISTICS_MAX);
         self.glow_release =
             finite_or(self.glow_release, fresh.glow_release).clamp(0.0, GLOW_BALLISTICS_MAX);
+
+        // These post-process controls are stored beside the view. Renderer
+        // clamps remain wider defensive boundaries for callers that do not
+        // load an AppearanceDocument through this sanitizer.
+        self.render_scale = finite_or(self.render_scale, fresh.render_scale).clamp(0.5, 2.0);
+        self.bloom_strength = finite_or(self.bloom_strength, fresh.bloom_strength).clamp(0.0, 1.5);
 
         // The resting marker's three lengths. The arm and its taper are a
         // reach-and-fade PAIR, held the way every such pair here is — the fade

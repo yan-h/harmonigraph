@@ -117,13 +117,9 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 pub const MAX_DRAWN_NODES: usize = 20480;
 
 /// The longest wait the Delay bar offers before a melody/bass mark starts
-/// easing in ([`ViewConfig::mark_delay`]), and the clamp `derive_scene` holds
-/// a hand-edited view to. ONE constant for the two so the bar's end and the
-/// picture's cannot drift apart — which is not the same as saying a view out
-/// of range reads correctly: the bar fills to its end and reads out the value
-/// it actually holds, so a blob carrying five seconds says "5.00 s" over a
-/// full bar while the marks behave as one. Dragging it writes a value in
-/// range and the two agree again.
+/// easing in ([`ViewConfig::mark_delay`]), and the clamps both load sanitation
+/// and `derive_scene` use. ONE constant for the bar, the stored value and the
+/// picture so those three boundaries cannot drift apart.
 ///
 /// A second, because that is where the setting stops being about flicker and
 /// starts being about tempo: at 120bpm it marks only what is held for a whole

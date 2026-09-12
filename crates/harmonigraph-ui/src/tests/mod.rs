@@ -23,6 +23,7 @@ pub(crate) mod probe;
 mod profile;
 mod scale;
 mod settings;
+mod settings_ranges;
 mod shell;
 mod spectral;
 mod spectrum;

@@ -454,6 +454,8 @@ impl<'a> RangeBar<'a> {
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
+        #[cfg(test)]
+        super::range_probe::record(self.label, &[*self.low, *self.high], &self.range);
         let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
         let (rect, mut response) = ui.allocate_exact_size(
