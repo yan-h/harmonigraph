@@ -58,8 +58,7 @@ test('a note struck or released long before the newest weighs less, and waiting 
   const held = 'on E3 low\nwait 3\non C3 c\non G3 g\non D4 d\non A4 a\non E5 high';
   const released = 'on E3 low\noff low\nwait 3\non C3 c\noff c\non G3 g\noff g\non D4 d\noff d\non A4 a\noff a\non E5 high';
   const high = (program, halfLife) => {
-    // The new-note factor is off, so the time is the whole difference.
-    const sim = new Simulator({ halfLife, newNote: 1 });
+    const sim = new Simulator({ halfLife });
     for (const event of parseProgram(program)) sim.event(event);
     return keyOf(sim.history.at(-1).node);
   };
@@ -71,6 +70,22 @@ test('a note struck or released long before the newest weighs less, and waiting 
   const before = sim.context();
   sim.wait(60);
   assert.deepEqual(sim.context(), before);
+});
+
+test('octave copies of a note add no vote', () => {
+  const cost = seeds => { const sim = new Simulator(); sim.seed(seeds); return sim.harmonicCost([1, 0, 0], 5501.955, sim.context()); };
+  const c3 = { id: 'c3', input: 4800, node: [0, 0, 0] }, e = { id: 'e', input: 5186.3137, node: [0, 1, 0] };
+  assert.equal(cost([{ ...c3, id: 'c1', input: 2400 }, c3, e, { ...c3, id: 'c2', input: 3600 }]), cost([c3, e]));
+});
+
+test('striking the note struck last again is holding it', () => {
+  const context = repeat => {
+    const sim = new Simulator(); sim.on(4800, 'c'); sim.on(5200, 'e'); sim.on(5500, 'g');
+    sim.wait(1); sim.on(6900, 'a');
+    for (let i = 0; i < 4; i++) { sim.wait(0.5); if (repeat) { sim.off('a'); sim.on(6900, 'a'); } }
+    return sim.context().map(e => [e.id, e.weight]);
+  };
+  assert.deepEqual(context(true), context(false));
 });
 
 test('player bends and later decisions never modify onset context or frozen correction', () => {

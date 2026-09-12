@@ -48,12 +48,15 @@ Absolute output register is stored separately from lattice coordinates.
 
 Every contribution decays on one clock.
 Let `newest` be the latest attack in context and `t` a contribution's own attack, held or released.
-Its base weight is `0.5^((newest - t) / halfLife)` for a held note and `released × 0.5^((newest - t) / halfLife) × newNote^n` for a released one, with no time decay when the half-life is zero.
-`n` counts the notes assigned a lattice node that no held or remembered note occupied since that entry was released; repeating a node, in any octave, does not count.
+Its base weight is `0.5^((newest - t) / halfLife)` for a held note and `released × 0.5^((newest - t) / halfLife)` for a released one, with no time decay when the half-life is zero.
+A strike on the node struck last, with nothing else struck between, is a hold:
+its `t` stays that earlier strike's, so repeating a note, in any octave, moves no clock and weighs exactly as holding it.
+Released memory fades by time alone, so a progression keeps moving when its chords are at least about one half-life apart;
+closer than that, the chords before pull each new root back.
 Every weight shares that clock and the score normalizes them, so waiting changes no decision and a chord's simultaneous onsets weigh alike.
 A release does not restart a note's age, so letting go of a note never raises its weight.
 Released memory keeps the 24 released entries struck most recently, counted separately from held voices, which are never evicted to make room.
-The 24 is a fixed storage bound with no control: at the default one-second half-life, entries beyond it carry under 2% of the weight even at four notes a second.
+The 24 is a fixed storage bound with no control: even at a one-second half-life, entries beyond it carry under 2% of the weight at four notes a second.
 
 The same-note tolerance compares actual absolute onset pitches, including register.
 A repetition refreshes a contribution rather than multiplying its weight; different octaves and diesis-shifted returns remain distinct under the default 0.5-cent tolerance.
@@ -78,14 +81,15 @@ Its score is:
 ```text
 pitch cost   = ((q - p - d) / pitchScale)^2
 register_i   = perOctave ^ (abs(q - onset_i) / 1200)
-weight_i     = contextBaseWeight_i × register_i
-harmony cost = harmonic × sum(weight_i × latticeDistance(node, node_i)) / sum(weight_i)
+vote_n       = max over the voices i on node n of contextBaseWeight_i × register_i
+harmony cost = harmonic × sum(vote_n × latticeDistance(node, n)) / sum(vote_n)
 total        = pitch cost + harmony cost
 ```
 
 Lowest total wins, with deterministic coordinate-order ties.
 The finite octave realization and the nonzero pitch term preserve input register relative to the moving frame.
 Each octave apart multiplies a context note's vote by the same factor, so a distant note's influence fades smoothly and never reaches zero.
+A node sounding in several registers votes once, through its strongest voice, so an octave doubling adds nothing.
 Whole-performance octave transposition preserves the score and relative outcomes.
 
 After each onset, set `d = q - p`, carrying the full correction without octave wrapping.
@@ -94,7 +98,7 @@ Order dependence is expected, and changing the last note of a phrase can affect 
 The “intentional Pythagorean E” example works through ordinary pitch error and a different declared harmonic weight, not a separate hard match or chord exception.
 There is no automatic retuning and no special-case branch for any musical fixture.
 
-The baseline uses harmonic weight 6, pitch scale 20 cents, half-life 1 second, new-note factor 0.7, released weight 0.1 and register weight 0.7 per octave.
+The baseline uses harmonic weight 6, pitch scale 20 cents, half-life 0.5 seconds, released weight 0.1 and register weight 0.7 per octave.
 The paired precision examples use harmonic weight 2 with the same explicit seeded context and zero initial displacement.
 All other fixtures use the baseline.
 

@@ -6,15 +6,38 @@ const minor = [seed('c', 'C3', [0, 0, 0]), seed('eb', 'Eb3', [1, -1, 0]), seed('
 export function thirdCycleProgram(chords = 19) {
   return Array.from({ length: chords }, (_, i) => {
     const root = 4800 + (i % 3) * 400;
-    return `${i ? 'off *\nwait 0.15\n' : ''}on ${root}c root-${i}\non ${root + 400}c third-${i}\non ${root + 700}c fifth-${i}`;
+    return `${i ? 'off *\nwait 0.5\n' : ''}on ${root}c root-${i}\non ${root + 400}c third-${i}\non ${root + 700}c fifth-${i}`;
   }).join('\n');
 }
+// C major held throughout; F, D and A over it half a second apart, then E, C
+// and G. Each three sound until the next three begin, and A is struck twice.
+export function shuttleProgram(cycles = 3) {
+  const lines = ['on C3 lc', 'on E3 le', 'on G3 lg', 'wait 1'];
+  let held = [];
+  for (let i = 0; i < cycles; i++) {
+    for (const group of [['F4', 'D4', 'A4'], ['E4', 'C4', 'G4']]) {
+      lines.push(...held.map(id => `off ${id}`));
+      held = group.map(p => `${p[0].toLowerCase()}${i}`);
+      for (const [k, p] of group.entries()) {
+        lines.push(`on ${p} ${held[k]}`, 'wait 0.5');
+        if (p === 'A4') lines.push(`off ${held[k]}`, `on ${p} ${held[k]}`, 'wait 0.5');
+      }
+    }
+  }
+  return lines.join('\n');
+}
+const SHUTTLE = { f: '-1,0,0', d: '-2,1,0', a: '-1,1,0', e: '0,1,0', c: '0,0,0', g: '1,0,0' };
 export const EXAMPLES = [
   { id: 'thirds', name: 'Keep moving right', category: 'Journey',
-    description: 'C → E → A♭ major, repeated. Each chord releases before the next. The roots should advance one major-third step each time.',
+    description: 'C → E → A♭ major, repeated. Each chord releases half a second, one half-life, before the next. The roots should advance one major-third step each time.',
     program: thirdCycleProgram(),
     check: sim => sim.history.filter(v => v.id.startsWith('root-')).every((v, i) => keyOf(v.node) === `0,${i},0`),
     expected: '19 roots at [0, 0, 0] through [0, 18, 0]; returned C descends six dieses.' },
+  { id: 'shuttle', name: 'A new note leads a held chord', category: 'Journey',
+    description: 'C major stays held. F, D and A arrive over it one at a time and make a just D minor; E, C and G bring C major back. Repeated, it never drifts.',
+    program: shuttleProgram(),
+    check: sim => sim.history.filter(v => !v.id.startsWith('l')).every(v => keyOf(v.node) === SHUTTLE[v.id[0]]),
+    expected: 'F [-1, 0, 0], D [-2, 1, 0], A [-1, 1, 0], then E [0, 1, 0], C [0, 0, 0], G [1, 0, 0], every pass.' },
   { id: 'fifths-high', name: 'Fifth chain · high E', category: 'Register',
     description: 'The first four onsets establish C3–G3–D4–A4. High E5 should continue that chain.',
     program: 'on C3 c\non G3 g\non D4 d\non A4 a\non E5 e', expectedNode: [4, 0, 0], expected: 'E at four fifth steps: 81/16 above C3.' },
