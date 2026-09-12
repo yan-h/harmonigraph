@@ -190,12 +190,22 @@ It first did, and a measurement showed the cost:
 C major held eight seconds, F–A over the held C for eight more, then C released as D arrives —
 the just-released C outweighed the still-sounding F–A 25 to 1 and tuned D to 9/8, a 680-cent fifth under the sounding A.
 Letting go of a note now never raises its weight.
-Released memory is fixed at 24 entries and also fades by count (Yan, 2026-09-11):
-each note on a lattice node that no held or remembered note occupies multiplies every released note's weight by a configurable new-note factor, 0.7 by default.
-A repeated node fades nothing, so repeating a note cannot erase the rest.
-Without it, 24 remembered notes held a fast major-third cycle in place.
-A stronger released-to-held penalty cannot substitute:
+Released memory is fixed at 24 entries (Yan, 2026-09-11) and fades by time alone.
+For a day it also faded by count, through a new-note factor that multiplied every released weight each time a note landed on a lattice node no context note occupied,
+because without it 24 remembered notes held a fast major-third cycle in place.
+Yan removed it (2026-09-11):
+on a 12-TET keyboard that stall means only that the cycle's returning C lands on the original C instead of a diesis lower.
+A progression now keeps moving when its chords are at least about one half-life apart.
+A stronger released-to-held penalty cannot stand in for the factor:
 a chord's first note is scored against released notes alone, where a factor common to all of them cancels.
+What Yan asked for instead is that a single new note over a held chord decides what follows —
+C major held, then F, D and A make a just D minor over it, then E, C and G bring C major back, indefinitely (the `shuttle` example).
+The time falloff alone does that once the chord is about two half-lives older than the new note, so the default half-life is half a second.
+It also keeps a rolled chord one chord: notes within about a tenth of a half-life weigh alike.
+A recency queue that faded notes by their place in it was measured and dropped, because a place count cannot see time and so weighs a rolled chord by roll order.
+Repeating a note must not do much more than holding it (Yan, 2026-09-11).
+Striking the note struck last again, with nothing else struck between, is therefore a hold that keeps that strike's age:
+before it, spamming a note moved the clock, and four seconds of repeats took its share of the weight from 52% to 99%.
 Register weighting is one multiplier per octave between a context note and the note being scored, 0.7 by default, with no floor (Yan, 2026-09-11):
 it replaced a floor and an exponential falloff whose falloff number had no direct musical reading.
 At 0.7 every agreed example keeps its outcome; at 0.6 or 0.8 one of the precision examples changes.

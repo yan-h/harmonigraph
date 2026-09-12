@@ -490,9 +490,6 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
         p.half_life_ms =
             adaptive_value(ui, p.half_life_ms.into(), 0..=20_000, 1000.0, "Half-life", "s") as u16;
         ui.weak("A note struck this long before the newest one counts half, held or released. Zero means no decay.");
-        p.new_note =
-            adaptive_value(ui, p.new_note.into(), 0..=1000, 1000.0, "New-note factor", "") as u16;
-        ui.weak("Each note on a lattice node not already in context multiplies every released note's weight by this. One means off.");
         p.released =
             adaptive_value(ui, p.released.into(), 0..=1000, 1000.0, "Released : held weight", "")
                 as u16;

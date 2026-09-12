@@ -491,7 +491,7 @@ Candidates are the union of bounded local Manhattan neighborhoods around the con
 The scorer chooses the nearest octave realization by pitch error plus register-weighted harmonic distance, with coordinate order as the final tie-break.
 Held references start at weight one and recently released onset pitches at a configurable fraction of it;
 both halve per configurable half-life between their attack and the newest attack in context — a release does not restart the age — and repetitions match by absolute-pitch tolerance.
-The released memory, 24 entries, evicts the entry struck longest ago, and each note assigned a lattice node that no context note occupies multiplies every released weight by the new-note factor;
+The released memory, 24 entries, evicts the entry struck longest ago, and a strike on the note struck last, with nothing else struck between, keeps that strike's age;
 because every weight shares one clock, waiting alone changes no decision.
 
 The adaptive correction and tuned-onset harmonic reference remain frozen for the voice lifetime.

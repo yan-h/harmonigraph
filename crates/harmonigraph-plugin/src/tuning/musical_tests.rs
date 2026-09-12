@@ -289,15 +289,13 @@ fn production_a_held_note_struck_long_before_the_rest_weighs_less() {
 
 /// Released memory decays on the same clock, from each attack. With nothing
 /// held, a just low E struck three seconds before a chain of fifths no longer
-/// outvotes the chain once all are released; weighed alike, it does. The
-/// new-note factor is off, so the time is the whole difference.
+/// outvotes the chain once all are released; weighed alike, it does.
 #[test]
 fn production_a_note_released_long_before_the_rest_weighs_less() {
     let _scope = crate::test_scope::enter();
     for (half_life_ms, high) in [(0, LatticePos::new(0, 1, 0)), (1000, LatticePos::new(4, 0, 0))] {
         let mut phrase = Phrase::new();
-        let policy = PolicyConfig { half_life_ms, new_note: 1000, ..Default::default() };
-        configure_policy(&phrase.hub, policy);
+        configure_policy(&phrase.hub, PolicyConfig { half_life_ms, ..Default::default() });
         phrase.idle();
         phrase.step([vec![note(1, 0, 52, 0, true)], vec![], vec![]], [0, 1, 2]);
         phrase.step([vec![note(1, 0, 52, 0, false)], vec![], vec![]], [0, 1, 2]);
@@ -436,6 +434,46 @@ fn production_silence_and_stop_reset_settings_clear_only_the_musical_memory() {
     }
 }
 
+/// Striking the note struck last again, with nothing else struck between, is
+/// holding it: the Hub's next context is the same whether A was held or struck
+/// four more times over the same stretch.
+#[test]
+fn production_repeating_the_note_struck_last_weighs_as_holding_it() {
+    let _scope = crate::test_scope::enter();
+    let context = |repeat: bool| {
+        let mut phrase = Phrase::new();
+        phrase.step(
+            [
+                vec![note(1, 0, 48, 0, true), note(2, 0, 52, 0, true), note(3, 0, 55, 0, true)],
+                vec![],
+                vec![],
+            ],
+            [0, 1, 2],
+        );
+        for _ in 0..20 {
+            phrase.idle();
+        }
+        phrase.step([vec![], vec![note(4, 0, 69, 0, true)], vec![]], [0, 1, 2]);
+        for _ in 0..4 {
+            for _ in 0..10 {
+                phrase.idle();
+            }
+            if repeat {
+                phrase.step([vec![], vec![note(4, 0, 69, 0, false)], vec![]], [0, 1, 2]);
+                phrase.step([vec![], vec![note(4, 0, 69, 0, true)], vec![]], [0, 1, 2]);
+            } else {
+                phrase.idle();
+                phrase.idle();
+            }
+        }
+        phrase.idle();
+        let snapshot = inspect_hub(&phrase.hub, |hub| hub.test_next_context());
+        phrase.release_all();
+        snapshot.context
+    };
+    assert_eq!(context(true), context(false));
+}
+
 /// The journey the old eight-bit coordinate and 2,147-cent correction limits
 /// used to stop. Nothing here is about the transport; it is the one musical
 /// case that proves the representation is still wide enough.
@@ -443,6 +481,11 @@ fn production_silence_and_stop_reset_settings_clear_only_the_musical_memory() {
 fn production_moving_major_thirds_cross_old_coordinate_and_correction_limits() {
     let _scope = crate::test_scope::enter();
     let mut phrase = Phrase::new();
+    // A chord every ten callbacks, 116 ms. Released memory fades by time
+    // alone, so a journey keeps moving only when its chords are at least
+    // about a half-life apart; closer, the chords before pull each root back.
+    configure_policy(&phrase.hub, PolicyConfig { half_life_ms: 50, ..Default::default() });
+    phrase.idle();
     for chord in 0..304 {
         if chord != 0 {
             phrase.release_all();
@@ -485,10 +528,12 @@ fn production_a_loop_clears_released_memory_once_before_the_next_attack() {
     let _scope = crate::test_scope::enter();
     for reset_loop in [false, true] {
         let mut phrase = Phrase::new();
-        configure_policy(&phrase.hub, PolicyConfig { reset_loop, ..Default::default() });
+        let policy = PolicyConfig { reset_loop, half_life_ms: 50, ..Default::default() };
+        configure_policy(&phrase.hub, policy);
         phrase.idle();
         // Three chords of moving thirds, so the reference has travelled and a
-        // cleared memory is distinguishable from a kept one.
+        // cleared memory is distinguishable from a kept one. A chord every
+        // eight callbacks, 93 ms, so a half-life under that keeps them moving.
         let mut node = None;
         for root in [48, 52, 56] {
             phrase.step(

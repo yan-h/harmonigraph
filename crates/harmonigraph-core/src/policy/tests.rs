@@ -65,13 +65,14 @@ impl Harness {
             node: d.assignment.node(),
             weight: 1.0,
         };
-        self.memory.attack(
+        let struck = self.memory.attack(
             pitch,
             d.assignment.correction_microcents(),
             self.config.policy.tolerance,
-            is_new(d.assignment.node(), &context),
+            d.assignment.node().unwrap(),
+            self.now,
         );
-        self.held.push((id.into(), v, self.now));
+        self.held.push((id.into(), v, struck));
         v
     }
     fn off(&mut self, id: &str) {
@@ -127,6 +128,9 @@ fn simulator_fixture_parity_includes_register_memory_and_precision() {
 fn repeated_controller_chords_cross_one_hundred_dieses_without_wrapping() {
     let mut h = Harness::new();
     for i in 0..304 {
+        // Half a second apart, one default half-life: released memory fades
+        // by time alone, and chords closer than that pull each root back.
+        h.now += 500;
         h.off("*");
         let p = 4_800_000_000 + (i % 3) * 400_000_000;
         let v = h.on("root", p);
@@ -253,31 +257,6 @@ fn memory_refreshes_actual_register_pitch_and_orders_by_attack() {
     assert_eq!(h.memory.len, 4);
     h.memory.forget_source(1);
     assert_eq!(h.memory.len, 0);
-}
-#[test]
-fn only_a_new_lattice_node_fades_released_memory() {
-    let mut h = Harness::new();
-    h.config.policy.half_life_ms = 0;
-    let c = h.on("c", 4_800_000_000);
-    h.off("c");
-    let weight = |h: &Harness| {
-        let mut context = Vec::new();
-        h.memory.append(&mut context, h.config.policy, h.now, 1000.0);
-        context.iter().find(|v| v.pitch == c.pitch).unwrap().weight
-    };
-    h.on("e", 5_200_000_000);
-    h.off("e");
-    let faded = weight(&h);
-    assert!((faded - 0.1 * 0.7).abs() < 1e-12, "E is a new node: {faded}");
-    // E again, and E an octave up: the same node, so nothing fades.
-    for pitch in [5_200_000_000, 6_400_000_000] {
-        h.on("e", pitch);
-        h.off("e");
-    }
-    assert_eq!(weight(&h), faded);
-    h.on("g", 5_500_000_000);
-    h.off("g");
-    assert!((weight(&h) - faded * 0.7).abs() < 1e-12, "G is a new node");
 }
 #[test]
 fn hard_boundary_and_configured_axes_ignore_exact_remote_pitch() {

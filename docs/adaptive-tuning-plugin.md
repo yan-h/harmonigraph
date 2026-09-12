@@ -18,24 +18,25 @@ The nearest octave realization of each eligible node is scored with pitch error 
 Ties use coordinate order.
 
 Every reference decays on one clock:
-it halves for every half-life, one second by default, between its attack and the newest attack in context.
+it halves for every half-life, half a second by default, between its attack and the newest attack in context.
 A held reference starts at weight one and a released one at the released-to-held weight, 0.1 by default;
 a release does not restart the age, so letting go of a note never raises its weight.
 Because every weight shares that clock and the score normalizes them, waiting changes no decision,
 and a chord's notes, milliseconds apart, weigh alike, which a rank per attack would not give.
 A held reference can still weigh less than a release struck well after it:
-at the defaults, about 3.3 seconds after.
+at the defaults, about 1.7 seconds after.
 Repetitions refresh one contribution within the configured absolute-pitch tolerance; they retain separate voice lifetimes for release and expression.
 Octaves and comma-shifted returns remain distinct when outside that tolerance.
 Released memory holds at most 24 contributions, counted separately from held ones, and a release beyond that evicts the one struck longest ago.
 The 24 is a storage bound with no control rather than a musical rule:
-every entry decays on the half-life, and at one second the entries beyond the 24th carry under 2% of the weight even at four notes a second.
+every entry decays on the half-life, and even at a one-second half-life the entries beyond the 24th carry under 2% of the weight at four notes a second.
 A larger bound measured costly on the audio thread, since every decision scores each candidate against every entry.
-Released memory also fades by count:
-each note assigned a lattice node that no held or remembered note occupies multiplies every released contribution's weight by the new-note factor, 0.7 by default.
-Repeating a node, in any octave, fades nothing, so a repeated note cannot erase the rest.
-This is what lets a fast progression move on:
-a major-third cycle played a chord every 0.15 s stalls with 24 remembered notes and no factor, keeps moving at 0.7 and below, and already stalls at 0.75 with no gap between chords.
+Released memory fades by time alone, so a progression keeps moving when its chords are at least about one half-life apart.
+Closer than that, the chords before pull each new root back:
+a major-third cycle's returning C lands on the original C rather than a diesis lower, which a 12-TET keyboard cannot tell apart.
+Striking the note struck last again, with nothing else struck between, is a hold:
+it keeps that strike's age, so a repeated note moves no clock and weighs exactly as holding it.
+A node has no octave, so a repeat in another register is a hold too.
 Retune exclusion clears that source's held and released context, including a moving reference it owned.
 A departing source ends its held notes through the session cut;
 the resulting released memory follows the ordinary silence, Stop and Reset controls.
@@ -132,7 +133,7 @@ see [issue #852](https://github.com/yan-h/harmonigraph/issues/852).
 
 ## Controls and live neighborhood
 
-The Tuning pane exposes the keyboard tuning, harmonic weight, pitch scale, neighborhood radius, allowed axes, half-life, new-note factor, released-to-held weight, register weight per octave, same-note tolerance, silence timeout and transport reset choices.
+The Tuning pane exposes the keyboard tuning, harmonic weight, pitch scale, neighborhood radius, allowed axes, half-life, released-to-held weight, register weight per octave, same-note tolerance, silence timeout and transport reset choices.
 Defaults match the simulator's baseline profile.
 The precision profile used by the paired intentional-E examples is obtained by setting harmonic weight to two.
 

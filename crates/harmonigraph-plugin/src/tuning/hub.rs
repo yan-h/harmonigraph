@@ -102,7 +102,8 @@ struct Voice {
     onset_pitch: i64,
     node: Option<LatticePos>,
     decision: u64,
-    /// The input sample it was struck on, which its decay counts from.
+    /// The input sample its decay counts from: the one it was struck on, or for
+    /// a repeat of the node struck last, that strike's (`Memory::attack`).
     onset: i64,
 }
 impl Voice {
@@ -756,12 +757,14 @@ impl Hub {
         };
         let (correction, node) = (assignment.correction_microcents(), assignment.node());
         self.reply(record, correction);
-        if decision != 0 {
-            self.sequencer.memory.attack(
+        let mut struck = record.sample;
+        if let Some(node) = node {
+            struck = self.sequencer.memory.attack(
                 onset.pitch,
                 correction,
                 self.sequencer.config.policy.tolerance,
-                policy::is_new(node, &self.sequencer.working[..count]),
+                node,
+                record.sample,
             );
             self.sequencer.reference_source = Some(record.source);
         }
@@ -771,7 +774,7 @@ impl Hub {
             onset_pitch: onset.pitch + correction,
             node,
             decision,
-            onset: record.sample,
+            onset: struck,
         };
         if let Some(cell) = self.sequencer.context.iter_mut().find(|cell| cell.is_none()) {
             *cell = Some(voice);

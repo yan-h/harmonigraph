@@ -29,8 +29,7 @@ pub const CONFIG: PolicyConfig = PolicyConfig {
     harmonic: 6000,
     pitch_scale: 20,
     released: 100,
-    half_life_ms: 1000,
-    new_note: 700,
+    half_life_ms: 500,
     register: 700,
     tolerance: 500_000,
     silence_ms: 0,
@@ -127,13 +126,6 @@ pub enum InputError {
     InvalidPitch,
 }
 
-/// Whether an attack assigned `node` is a new note: one on a lattice node that
-/// no note in `context`, held or remembered, occupies. A node has no octave,
-/// so repeating a note in any register is not new and fades nothing.
-pub fn is_new(node: Option<LatticePos>, context: &[ContextPitch]) -> bool {
-    node.is_some_and(|n| context.iter().all(|v| v.node != Some(n)))
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 struct Released {
     pitch: ContextPitch,
@@ -141,9 +133,6 @@ struct Released {
     /// When it was struck, on the caller's clock. Its decay counts from its
     /// attack, not its release.
     at: i64,
-    /// The new-note count when it was released. Every new note since
-    /// multiplies its weight by the new-note factor once.
-    new_notes: u64,
 }
 /// Latest attack first, bounded by [`MAX_MEMORY`]. Repetition refreshes
 /// the same actual onset pitch, never a keyboard key or octave-folded class.
@@ -152,19 +141,19 @@ pub struct Memory {
     recent: [Released; MAX_MEMORY],
     len: usize,
     pub reference: i64,
-    /// Attacks on a lattice node no context note occupied: the clock released
-    /// memory fades on by count, as the half-life is the one it fades on by time.
-    new_notes: u64,
+    /// The node struck last and the moment that strike counts from.
+    front: Option<(LatticePos, i64)>,
 }
 impl Default for Memory {
     fn default() -> Self {
-        Self { recent: [Released::default(); MAX_MEMORY], len: 0, reference: 0, new_notes: 0 }
+        Self { recent: [Released::default(); MAX_MEMORY], len: 0, reference: 0, front: None }
     }
 }
 impl Memory {
     pub fn clear(&mut self) {
         self.len = 0;
         self.reference = 0;
+        self.front = None;
     }
     pub fn forget_source(&mut self, source: u8) {
         let mut n = 0;
@@ -186,11 +175,29 @@ impl Memory {
         }
         self.len = n;
     }
-    /// `new` is [`is_new`] for the node this attack was assigned.
-    pub fn attack(&mut self, input: i64, correction: i64, tolerance: u32, new: bool) {
+    /// An attack assigned `node` at `at`, on the caller's clock. Returns the
+    /// moment its decay counts from: `at`, unless it strikes the node struck
+    /// last with nothing else struck between. That is a hold, and keeps the
+    /// earlier strike's moment, so repeating a note moves no clock and weighs
+    /// exactly as holding it does. A node has no octave, so a repeat in another
+    /// register is a hold too.
+    pub fn attack(
+        &mut self,
+        input: i64,
+        correction: i64,
+        tolerance: u32,
+        node: LatticePos,
+        at: i64,
+    ) -> i64 {
         self.remove_match(input + correction, tolerance);
         self.reference = correction;
-        self.new_notes += u64::from(new);
+        match self.front {
+            Some((front, struck)) if front == node => struck,
+            _ => {
+                self.front = Some((node, at));
+                at
+            }
+        }
     }
     /// Remember a note let go, at the age of its attack `struck`. A full
     /// memory keeps its latest-struck entries, which are its heaviest, so a
@@ -203,15 +210,14 @@ impl Memory {
         }
         self.len = (self.len + 1).min(MAX_MEMORY);
         self.recent.copy_within(i..self.len - 1, i + 1);
-        self.recent[i] = Released { pitch, source, at: struck, new_notes: self.new_notes };
+        self.recent[i] = Released { pitch, source, at: struck };
     }
     /// The latest attack still remembered, on the caller's clock.
     pub fn newest(&self) -> Option<i64> {
         (self.len > 0).then(|| self.recent[0].at)
     }
     /// Released memory after the held context, each entry at the released
-    /// weight decayed by its attack's age at `newest` and by the new-note
-    /// factor once for every new note since its release.
+    /// weight decayed by its attack's age at `newest`.
     pub fn append(
         &self,
         held: &mut Vec<ContextPitch>,
@@ -226,10 +232,8 @@ impl Memory {
             {
                 continue;
             }
-            let fades = (self.new_notes - entry.new_notes).min(i32::MAX as u64) as i32;
             let weight = f64::from(config.released) / 1000.0
-                * decay(config, newest.saturating_sub(entry.at), per_second)
-                * (f64::from(config.new_note) / 1000.0).powi(fades);
+                * decay(config, newest.saturating_sub(entry.at), per_second);
             if weight > 0.0 {
                 held.push(ContextPitch { weight, ..entry.pitch });
             }
