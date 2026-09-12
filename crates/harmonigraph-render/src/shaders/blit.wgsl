@@ -46,6 +46,8 @@ struct AddUniforms {
     strength: vec4<f32>,
 };
 @group(0) @binding(4) var<uniform> add: AddUniforms;
+// Lattice-only node contribution, summed before thresholding or compositing.
+@group(0) @binding(5) var ink_tex: texture_2d<f32>;
 
 struct BlitOut {
     @builtin(position) pos: vec4<f32>,
@@ -99,9 +101,20 @@ const BLOOM_KNEE: f32 = 0.25;
 @fragment
 fn fs_bright(in: BlitOut) -> @location(0) vec4<f32> {
     let c = textureSample(scene_tex, scene_samp, in.uv);
-    let lum = dot(c.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return bright(c.rgb);
+}
+
+fn bright(rgb: vec3<f32>) -> vec4<f32> {
+    let lum = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     let keep = smoothstep(BLOOM_THRESHOLD - BLOOM_KNEE, BLOOM_THRESHOLD + BLOOM_KNEE, lum);
-    return vec4<f32>(c.rgb * keep, 0.0);
+    return vec4<f32>(rgb * keep, 0.0);
+}
+
+@fragment
+fn fs_bright_split(in: BlitOut) -> @location(0) vec4<f32> {
+    let other = textureSample(scene_tex, scene_samp, in.uv);
+    let ink = textureSample(ink_tex, scene_samp, in.uv);
+    return bright(other.rgb + ink.rgb);
 }
 
 // Separable 9-tap Gaussian (sigma ~1.75 in taps; the quarter-res target
@@ -141,7 +154,8 @@ fn fs_blur_v(in: BlitOut) -> @location(0) vec4<f32> {
 fn fs_composite(in: BlitOut) -> @location(0) vec4<f32> {
     let scene = textureSample(scene_tex, scene_samp, in.uv);
     let bloom = textureSample(bloom_tex, scene_samp, in.uv);
-    let rgb = scene.rgb + bloom.rgb * bu.bloom_strength;
+    let ink = textureSample(ink_tex, scene_samp, in.uv);
+    let rgb = scene.rgb + ink.rgb + bloom.rgb * bu.bloom_strength;
     // The quad covers the pane, including transparent pixels and the pure-alpha
     // masks that cast black shadows. Leave zero source RGB exact: premultiplied
     // blending still ADDS it, so noise there would invent light and stipple the
@@ -168,25 +182,27 @@ fn fs_bloom_add(in: BlitOut) -> @location(0) vec4<f32> {
 // transparent everywhere else, so this is a plain premultiplied-over blit and
 // every decision about the shape was taken in lattice.wgsl.
 //
-// TWO attachments, because the pass it draws into carries two. The second is
-// the picture without the LABELS, which the bloom's bright pass reads — and the
-// glow belongs in it: it is light the nodes emit, so it blooms exactly as the
-// rest of the node does. Once, from here; nothing else writes it, so there is
-// no path by which the same light reaches the threshold twice.
-struct GlowOverOut {
-    @location(0) color: vec4<f32>,
-    @location(1) nodes: vec4<f32>,
+// Glow initializes only the background components. Node contributions start
+// transparent, so ordinary shadows can darken this field independently.
+struct GlowSplitOut {
+    @location(0) other: vec4<f32>,
+    @location(1) ink: vec4<f32>,
 };
+struct GlowOverOut {
+    @location(0) other: vec4<f32>,
+    @location(1) ink: vec4<f32>,
+    @location(2) bloom_other: vec4<f32>,
+    @location(3) bloom_ink: vec4<f32>,
+};
+
+@fragment
+fn fs_glow_split(in: BlitOut) -> GlowSplitOut {
+    let light = textureSample(scene_tex, scene_samp, in.uv);
+    return GlowSplitOut(light, vec4<f32>(0.0));
+}
 
 @fragment
 fn fs_glow_over(in: BlitOut) -> GlowOverOut {
     let light = textureSample(scene_tex, scene_samp, in.uv);
-    // The field WHOLE. What darkens it is every item drawn over it — each one
-    // multiplies the frame under it by its own blurred ink (lattice.wgsl's
-    // `node_paint` and `plus_paint`, text.wgsl's `fs_shadow_box`) — so the
-    // light is laid down first and takes every shadow by being under
-    // everything, on both attachments. A pool round a ring is that multiply
-    // landing on the light, and it stops blooming for the same reason: the
-    // second attachment is what the bright pass reads, and the shadow is in it.
-    return GlowOverOut(light, light);
+    return GlowOverOut(light, vec4<f32>(0.0), light, vec4<f32>(0.0));
 }

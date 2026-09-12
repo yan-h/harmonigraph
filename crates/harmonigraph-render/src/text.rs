@@ -51,6 +51,7 @@ pub const GLYPH_SDF_NEAR_BLEND: u32 = 8;
 #[cfg(any(test, feature = "hot-reload"))]
 pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
     "vs_glyph",
+    "vs_glyph_lit",
     "vs_spectral_shadow",
     "fs_spectral_shadow",
     "fs_fill",
@@ -235,7 +236,9 @@ pub(crate) struct TextUniforms {
     /// to eight bytes and the scalar before it is the pair that reaches it: the
     /// depth and this size sit together so the struct needs no pad of its own.
     pub(crate) shadow_atlas_size: [f32; 2],
-    pub(crate) _pad: [f32; 4],
+    /// Foreground lattice nodes fade label coverage by this strength.
+    pub(crate) node_occlusion: f32,
+    pub(crate) _pad: [f32; 3],
 }
 
 /// Which screen axes a surface's labels TRAVEL along, for the taps `coverage`
@@ -729,9 +732,9 @@ fn create_spectral_shadow_pipeline(
 /// A name's shadow into the scene pass, over the name's own box
 /// (`fs_shadow_box`).
 ///
-/// With bloom on, both attachments under the premultiplied blend the multiply
-/// rides on: the bloom reads the second, and a halo a name darkens has to bloom
-/// as darkened. The glyphs beside it write the first alone
+/// The shadow multiplies both visible components and, with bloom on, both
+/// bloom components: a halo a name darkens has to bloom as darkened.
+/// The glyphs beside it write the visible pair alone
 /// ([`create_text_pipeline`]), which is what keeps the name itself out of the
 /// bloom.
 ///
@@ -756,7 +759,7 @@ pub(crate) fn create_shadow_box_pipeline(
         blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         write_mask: wgpu::ColorWrites::ALL,
     });
-    let targets = [target.clone(), target];
+    let targets = vec![target; if bloom { 4 } else { 2 }];
     glyph_pipeline(
         device,
         shader,
@@ -764,7 +767,7 @@ pub(crate) fn create_shadow_box_pipeline(
         &[Some(layout), None, Some(atlas), Some(casters)],
         ("vs_shadow_box", if bloom { "fs_shadow_box" } else { "fs_shadow_box_plain" }),
         &[],
-        &targets[..if bloom { 2 } else { 1 }],
+        &targets,
     )
 }
 
@@ -892,7 +895,7 @@ impl TextResources {
             layout,
             None,
             ("vs_glyph", "fs_fill"),
-            false,
+            1,
             crate::EGUI_BLEND,
         );
         let (_, distance, pad) = create_glyph_cell_pipelines(device, &shader, layout);
@@ -1156,10 +1159,10 @@ pub(crate) fn blank_sdf_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgp
 /// its own text, so a label composites over the picture identically to the
 /// stamped version it replaces.
 ///
-/// `bloom` declares the scene pass's second colour attachment, with no writes
-/// from the glyph fill. That copy feeds the bright pass, so a name's ink
-/// neither glows nor cuts a hole in the node halo it covers. Both attachment
-/// choices are depthless and take their place in painter order.
+/// `attachments` is one for ordinary text, two for the lattice's visible
+/// components, or four when its label-free bloom pair is present. Glyph fill
+/// covers both visible components and writes nothing to either bloom target,
+/// so a name neither glows nor cuts a hole in the node halo it covers.
 ///
 /// `blend` is [`crate::EGUI_BLEND`]. Its alpha term is egui's own —
 /// `src * (1 - dst.a) + dst`, which is the same arithmetic as premultiplied
@@ -1172,21 +1175,21 @@ pub(crate) fn blank_sdf_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgp
 /// grow the quad by, and a fragment reaching past its own quad is a shape cut
 /// off in a screen-aligned line rather than a compile error.
 ///
-/// `glow` is the lattice's light, at group 1, and only `fs_fill_lit` reads it:
+/// `scene` supplies the lattice light and foreground-node occlusion field:
 /// a name there is ink standing in the light and takes the wash a marker's
 /// cross takes. Every other surface passes `None` — its text has no light to
-/// stand in, and the entry points it draws through name no group 1 for a layout
-/// to have to carry. The shadow a name casts is the other half of the same
-/// picture and is a draw of its own; see [`create_shadow_box_pipeline`].
+/// stand in, and its fill entry points need none of those scene bindings.
+/// The shadow a name casts is the other half of the same picture and a draw
+/// of its own; see [`create_shadow_box_pipeline`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn create_text_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
     layout: &wgpu::BindGroupLayout,
-    glow: Option<&wgpu::BindGroupLayout>,
+    scene: Option<crate::SceneLayouts<'_>>,
     entries: (&str, &str),
-    bloom: bool,
+    attachments: usize,
     blend: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
     let mut targets = vec![Some(wgpu::ColorTargetState {
@@ -1194,24 +1197,33 @@ pub(crate) fn create_text_pipeline(
         blend: Some(blend),
         write_mask: wgpu::ColorWrites::ALL,
     })];
-    // The pass's nodes-only attachment, declared and never written — an empty
-    // write mask rather than a `None` target, which wgpu rejects: a pipeline's
-    // formats have to match the pass's attachment for attachment, so the way
-    // to write nothing is to say so in the mask.
-    if bloom {
-        targets.push(Some(wgpu::ColorTargetState {
-            format: target_format,
-            blend: None,
-            write_mask: wgpu::ColorWrites::empty(),
-        }));
+    // Lattice labels cover both visible components; neither bloom component
+    // receives glyph color OR coverage. Other text surfaces have one target.
+    assert!(matches!(attachments, 1 | 2 | 4));
+    if attachments >= 2 {
+        targets.push(targets[0].clone());
+    }
+    if attachments == 4 {
+        targets.extend(std::iter::repeat_n(
+            Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::empty(),
+            }),
+            2,
+        ));
     }
     glyph_pipeline(
         device,
         shader,
         entries.1,
-        &[Some(layout), glow],
+        &[Some(layout), scene.map(|s| s.glow), scene.map(|s| s.shadow), scene.map(|s| s.casters)],
         entries,
-        &[GlyphInstance::LAYOUT],
+        &if scene.is_some() {
+            vec![GlyphInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_GLYPHS]
+        } else {
+            vec![GlyphInstance::LAYOUT]
+        },
         &targets,
     )
 }
@@ -1298,7 +1310,8 @@ impl CallbackTrait for TextCallback {
             pixels_per_point: ppp,
             shadow_depth: style.map_or(0.0, |s| s.depth),
             shadow_atlas_size: [1.0; 2],
-            _pad: [0.0; 4],
+            node_occlusion: 0.0,
+            _pad: [0.0; 3],
         };
 
         let view = resources.atlas.view().expect("checked above");

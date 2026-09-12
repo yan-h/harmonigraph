@@ -67,7 +67,7 @@ struct ShadowParams {
     @align(16) width: f32,
     reach_sigmas: f32,
     depth: f32,
-    padding: f32,
+    occlusion: f32,
 };
 
 struct ShadowTargetParams {
@@ -237,13 +237,8 @@ fn glow_shadow() -> f32 {
     return max(u.geometry_shadow.width, 0.0);
 }
 
-// How dark a shadow lands (`u.geometry_shadow.depth`): the share of the frame a caster's
-// solid middle takes away, 1 leaving `SHADOW_KEEP_FLOOR` of it.
-//
-// A FLOOR rather than a scale, which is what the `min(…, 1)` under the
-// Gaussian's gain in `shadow_kernel` buys: a caster wide against σ saturates
-// here, and the gain only deepens the thin ones. At 0 nothing casts and every
-// draw multiplies by 1, which is the picture with no shadow in it at all.
+// The amplitude of a node's shadow. Width and falloff shape the shared mask;
+// darkness scales it without broadening its tail. At 0 the CPU packs no cell.
 fn glow_shadow_depth() -> f32 {
     return clamp(u.geometry_shadow.depth, 0.0, 1.0);
 }
@@ -304,7 +299,7 @@ struct ShadowThrough {
     bloom: f32,
 }
 
-// A node's or a marker's own shadow, read at this point of the pane and spent
+// A marker's own Gaussian shadow, read at this point of the pane and spent
 // through `shadow_transmittance`: what its ink leaves of the frame under it,
 // 0..=1.
 //
@@ -323,6 +318,18 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32, depth: f32) -> Shadow
         shadow_transmittance(full, depth, level),
         shadow_transmittance(full, 1.0, level),
     );
+}
+
+// Node shadows and partial occlusion interpret the same field as coverage.
+// Their amplitudes differ, but neither remaps that field through an exponent:
+// changing darkness cannot broaden the normalized shadow profile. The bloom
+// copy uses full amplitude on this same profile, not an amplified outer tail.
+fn node_shadow_through(who: f32, points: vec2<f32>, level: f32) -> ShadowThrough {
+    if level <= 0.0 {
+        return ShadowThrough(1.0, 1.0);
+    }
+    let coverage = clamp(level, 0.0, 1.0) * shadow_kernel(u32(max(who, 0.0)), points);
+    return ShadowThrough(1.0 - glow_shadow_depth() * coverage, 1.0 - coverage);
 }
 
 // Whether this caster's shadow is a DISTANCE. A marker uses the answer to
@@ -2066,6 +2073,8 @@ struct Painted {
     /// The copy the bright pass reads, always at a whole shadow (1). Never the
     /// smaller of the two: a deeper shadow leaves less of the frame.
     bloom: f32,
+    /// Ink coverage alone, with receiver visibility already applied.
+    ink_alpha: f32,
 }
 
 /// The visible composite keeps the whole shadow tail. Node ink has already
@@ -2075,33 +2084,19 @@ fn seen_of(paint: Painted) -> vec4<f32> {
     return vec4<f32>(paint.rgb, paint.seen);
 }
 
-/// What a node paints at this fragment: its own ink, and the multiply its own
-/// SHADOW lays over everything already in the frame under it, twice
-/// (see [`Painted`]). The single-attachment entry point below spends the
-/// visible one alone.
-///
-/// The shadow rides the blend the pass already composites under.
-/// `PREMULTIPLIED_ALPHA_BLENDING` is `out = src + dst * (1 - src.a)`, so a
-/// fragment of `rgb = ink, a = 1 - (1 - alpha) * T` leaves
-/// `ink + (1 - alpha) * T * dst`: the node's ink over the frame, and everything
-/// under it multiplied by `T`. Where the node has no ink that is `dst * T`
-/// alone — the shadow, on ground, on a ring behind, on another node's name,
-/// whatever the frame holds there — and where it HAS ink the ink term is not
-/// multiplied, so a node is the one thing its own shadow never darkens.
-///
-/// No receiver carries any shadow code, and there is no hole cut anywhere: the
-/// light is composited at the bottom of the pass and takes every shadow by
-/// being under everything, which is what makes a shadow land on ink at the
-/// depth it lands on ground.
+/// A node supplies its ink and the composite alphas for the background.
+/// Premultiplied blending with alpha `1-(1-A*V)*T` leaves the background
+/// multiplied by `(1-A*V)*T`, exposing it as receiver visibility V falls.
+/// Its own shadow T remains even when its ink is hidden. `node_split` keeps
+/// that multiply off the separate node-ink contribution.
 fn node_paint(in: VsOut) -> Painted {
     let g = node_geom(in, false);
     // The one tap, taken whatever the node paints here — a fragment the ink
     // never reaches is the shadow by itself, and that is most of the quad.
-    let t = shadow_through(
+    let t = node_shadow_through(
         in.shadow_box.x,
         in.shadow_at.xy,
         in.shadow_at.z,
-        glow_shadow_depth(),
     );
     if !g.paints {
         // Discard only an empty composite. Read the deeper alpha because a
@@ -2112,7 +2107,7 @@ fn node_paint(in: VsOut) -> Painted {
         if bloom <= 0.0 {
             discard;
         }
-        return Painted(vec3<f32>(0.0), shadow, bloom);
+        return Painted(vec3<f32>(0.0), shadow, bloom, 0.0);
     }
     var ink = node_ink(in, g.d, g.aa, g.oct, false);
     if ink.alpha < INK_FLOOR {
@@ -2126,8 +2121,13 @@ fn node_paint(in: VsOut) -> Painted {
     let shadow_exposure = select(1.0 - ink.mask, 1.0, shadow_is_distance(in.shadow_box.x));
     let seen_through = 1.0 - (1.0 - t.seen) * shadow_exposure;
     let bloom_through = 1.0 - (1.0 - t.bloom) * shadow_exposure;
-    let final_alpha = 1.0 - (1.0 - ink.alpha) * seen_through;
-    let bloom_alpha = 1.0 - (1.0 - ink.alpha) * bloom_through;
+    var visibility = 1.0;
+    if ink.alpha > 0.0 {
+        visibility = node_visibility(in.shadow_box.x, in.shadow_at.xy, u.geometry_shadow.occlusion);
+    }
+    let visible_alpha = ink.alpha * visibility;
+    let final_alpha = 1.0 - (1.0 - visible_alpha) * seen_through;
+    let bloom_alpha = 1.0 - (1.0 - visible_alpha) * bloom_through;
     if bloom_alpha <= 0.0 {
         discard;
     }
@@ -2145,12 +2145,12 @@ fn node_paint(in: VsOut) -> Painted {
     //
     // The RAW light, and that is right in this model rather than a
     // compromise: a node's own shadow does not darken the light it is washed
-    // with, and every item drawn in FRONT of it multiplies that wash along with
-    // the rest of the frame under it.
+    // with. Foreground nodes reduce the washed ink's visibility; markers and
+    // labels retain their ordinary shadowing of it.
     let coord = light_coord(in.clip_pos.xy);
     let light = glow_light(coord);
     let washed = wash_over(ink.rgb, ink.alpha, light.rgb, mix(1.0, glow_wash(), ink.lit));
-    return Painted(washed, final_alpha, bloom_alpha);
+    return Painted(washed * visibility, final_alpha, bloom_alpha, visible_alpha);
 }
 
 /// A node's shadow source, into its own cell of the atlas (`shadow.rs`). Under
@@ -2432,17 +2432,34 @@ fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
     return out;
 }
 
-/// The node pipelines. `fs_main` serves bloom-off production and the parity
-/// reference. `fs_main_scene` also writes the independent bloom input.
+// The single-target path remains the reference for ink rasterization tests.
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     return seen_of(node_paint(in));
 }
 
+// Receiver visibility fades both RGB and coverage before either component is
+// blended. The ink component then takes only foreground ink coverage, while
+// the other component still takes every ordinary shadow. This restores the
+// background under fading ink without applying a second darkening to it.
+fn node_split(paint: Painted, shadow_alpha: f32) -> SplitOut {
+    // Zero keeps the pre-prototype reference available to GPU A/B probes.
+    let alpha = mix(shadow_alpha, paint.ink_alpha, clamp(u.geometry_shadow.occlusion, 0.0, 1.0));
+    return SplitOut(vec4<f32>(0.0, 0.0, 0.0, shadow_alpha), vec4<f32>(paint.rgb, alpha));
+}
+
+@fragment
+fn fs_main_split(in: VsOut) -> SplitOut {
+    let paint = node_paint(in);
+    return node_split(paint, paint.seen);
+}
+
 @fragment
 fn fs_main_scene(in: VsOut) -> SceneOut {
     let paint = node_paint(in);
-    return SceneOut(seen_of(paint), vec4<f32>(paint.rgb, paint.bloom));
+    let seen = node_split(paint, paint.seen);
+    let bloom = node_split(paint, paint.bloom);
+    return SceneOut(seen.other, seen.ink, bloom.other, bloom.ink);
 }
 
 // ---- Node glow -------------------------------------------------------------
@@ -3203,7 +3220,7 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     let coord = light_coord(in.clip_pos.xy);
     let light = glow_light(coord);
     let washed = wash_over(ink, alpha, light.rgb, 1.0);
-    return Painted(washed, final_alpha, bloom_alpha);
+    return Painted(washed, final_alpha, bloom_alpha, alpha);
 }
 
 /// One cross's coverage, into the markers' shared BLUR cell of the shadow
@@ -3224,7 +3241,16 @@ fn fs_plus(in: PlusVsOut) -> @location(0) vec4<f32> {
 }
 
 @fragment
+fn fs_plus_split(in: PlusVsOut) -> SplitOut {
+    let paint = plus_paint(in);
+    return SplitOut(seen_of(paint), vec4<f32>(0.0, 0.0, 0.0, paint.seen));
+}
+
+@fragment
 fn fs_plus_scene(in: PlusVsOut) -> SceneOut {
     let paint = plus_paint(in);
-    return SceneOut(seen_of(paint), vec4<f32>(paint.rgb, paint.bloom));
+    return SceneOut(
+        seen_of(paint), vec4<f32>(0.0, 0.0, 0.0, paint.seen),
+        vec4<f32>(paint.rgb, paint.bloom), vec4<f32>(0.0, 0.0, 0.0, paint.bloom),
+    );
 }

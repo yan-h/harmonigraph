@@ -123,7 +123,8 @@ uniform_group! {
         width: f32,
         reach_sigmas: f32,
         depth: f32,
-        padding: f32,
+        /// Prototype receiver coverage loss; lattice nodes only, no saved dial.
+        occlusion: f32,
     }
 }
 uniform_group! {

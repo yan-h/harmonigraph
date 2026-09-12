@@ -491,11 +491,8 @@ impl LatticeCallback {
                         // The atlas the cells are drawn into, which may be
                         // larger than this frame's layout (`ensure_shadow`).
                         shadow_atlas_size: atlas_size,
-                        // A lattice name paints no rim, so there is no ring for
-                        // the two passes that draw one to walk. Zero samples is
-                        // what says so (`ring`), and it is what keeps the fill's
-                        // quad down to the reconstruction filter's own margin.
-                        _pad: [0.0; 4],
+                        node_occlusion: self.uniforms.geometry_shadow.occlusion,
+                        _pad: [0.0; 3],
                     }),
                 );
             }
@@ -594,7 +591,22 @@ impl LatticeCallback {
         // device's times the render scale, which is the term #496 found missing
         // from the field's reach.
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
-        let packed = shadow::pack(&self.casters, ppp * self.render_scale, max_dim);
+        let mut packed = shadow::pack(&self.casters, ppp * self.render_scale, max_dim);
+        // Every receiver, including a label with its own shadow disabled,
+        // starts at the next node caster in painter order. Names immediately
+        // follow their owner, so that owner can never occlude its own text.
+        // Index + 1 leaves zero as the end, independent of buffer capacity.
+        let mut next = 0;
+        let mut nodes = self.node_cells.iter().rev().peekable();
+        for (i, caster) in packed.casters.iter_mut().enumerate().rev() {
+            caster.map[3] = next as f32;
+            if nodes.peek().is_some_and(|&&node| node as usize == i) {
+                nodes.next();
+                if caster.shade[0] > 0.0 {
+                    next = i as u32 + 1;
+                }
+            }
+        }
         // A placeholder box preserves the caster index for a distance field
         // evaluated directly by its scene draw. Only a real cell asks for the
         // atlas; a markers-only Distance frame therefore allocates no atlas.
@@ -839,11 +851,13 @@ impl LatticeCallback {
         };
         let attachments = [
             attachment(&offscreen.color_view),
+            attachment(&offscreen.ink_view),
             offscreen.bloom.as_ref().and_then(|b| attachment(&b.nodes_view)),
+            offscreen.bloom.as_ref().and_then(|b| attachment(&b.ink_view)),
         ];
         let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("lattice_scene_pass"),
-            color_attachments: &attachments[..if offscreen.bloom.is_some() { 2 } else { 1 }],
+            color_attachments: &attachments[..if offscreen.bloom.is_some() { 4 } else { 2 }],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
@@ -938,7 +952,10 @@ impl LatticeCallback {
                         pass.set_pipeline(&scene.shadow_box);
                         pass.draw(0..4, l..l + 1);
                     }
+                    pass.set_bind_group(2, cells, &[]);
+                    pass.set_bind_group(3, &pane.caster_bind_group, &[]);
                     pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
+                    pass.set_vertex_buffer(1, pane.cell_buffer.slice(..));
                     pass.set_pipeline(&scene.glyph_fill);
                     pass.draw(0..4, a..b);
                 }

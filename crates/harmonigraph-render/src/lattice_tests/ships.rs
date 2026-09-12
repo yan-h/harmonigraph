@@ -159,7 +159,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         };
         let build = |src: &str| {
             let shader = lattice_module(&device, &with_common(src));
-            create_pipelines(&device, &shader, format, layouts, false)
+            create_pipelines(&device, &shader, format, layouts, 1)
         };
         let (fast, _) = build(SHADER_SRC);
         let (slow, _) = build(&reference_src);

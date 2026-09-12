@@ -79,7 +79,13 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
         return;
     };
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    let scene = one_node_behind_another();
+    let mut scene = one_node_behind_another();
+    // This probe isolates ordinary ink compositing. Soft node occlusion is
+    // tested separately with a live geometry shadow field.
+    for style in scene.shadow.groups_mut() {
+        style.width = 0.0;
+        style.depth = 0.0;
+    }
     let points = egui::vec2(SCENE_SIZE[0] as f32, SCENE_SIZE[1] as f32);
     let projector = scene.projector(glam::Vec2::new(points.x, points.y));
 
@@ -1057,11 +1063,17 @@ fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
         radius(far),
     );
     // The near node's own OPAQUE pixels: those it paints the same over black as
-    // over the grey, which is its ink and nothing else.
+    // over grey with its shadow disabled. A full-depth shadow can itself be
+    // opaque, so leaving it on would classify shadow as foreground ink.
     let alone = scene_of(&[scene.nodes[near].world_pos.y]);
-    let over_grey = shooter.shot(&alone);
+    let ink_only = |shooter: &mut Shooter, scene: &Scene| {
+        shooter.draw_modified(scene, LatticeLabels::default(), |cb| {
+            cb.uniforms.geometry_shadow.depth = 0.0;
+        })
+    };
+    let over_grey = ink_only(&mut shooter, &alone);
     shooter.clear = wgpu::Color::BLACK;
-    let over_black = shooter.shot(&alone);
+    let over_black = ink_only(&mut shooter, &alone);
     shooter.clear = over_grey_clear();
     let opaque: std::collections::BTreeSet<usize> = (0..over_grey.len())
         .step_by(4)
@@ -1078,8 +1090,9 @@ fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
     // darker than the ground, which leaves out the faint halo round the band.
     let without = scene_of(&[scene.nodes[far].world_pos.y]);
     let without_bare = shooter.shot(&without);
+    let without_ink = ink_only(&mut shooter, &without);
     let ground = brightness(&[(GREY * 255.0).round() as u8; 3]);
-    let far_ink = |i: usize| (brightness(&without_bare[i..i + 3]) - ground).abs() > 150;
+    let far_ink = |i: usize| (brightness(&without_ink[i..i + 3]) - ground).abs() > 150;
 
     // One stroke, on the far node's band where it comes out from under the
     // near node: the visible pixel of that band nearest to anything the near
@@ -1097,13 +1110,20 @@ fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
     let nearest = |v: glam::Vec2| {
         *solid.iter().min_by(|a, b| a.distance(v).total_cmp(&b.distance(v))).expect("opaque")
     };
-    let (spot, edge) = visible
+    let at = visible
         .iter()
         .map(|&v| (v, nearest(v)))
-        .min_by(|(v, n), (w, m)| v.distance(*n).total_cmp(&w.distance(*m)))
-        .expect("visible");
-    let away = (spot - edge).normalize_or(glam::Vec2::Y);
-    let at = spot + away * (NAME_SIZE / 2.0 + 1.0);
+        .map(|(v, n)| {
+            (v + (v - n).normalize_or(glam::Vec2::Y) * (NAME_SIZE / 2.0 + 1.0), v.distance(n))
+        })
+        .filter(|(at, _)| {
+            at.cmpgt(glam::Vec2::splat(NAME_SIZE)).all()
+                && at.cmplt(glam::Vec2::splat(SIZE[0] as f32 - NAME_SIZE)).all()
+        })
+        .filter(|(at, _)| far_ink(index(*at)) && !opaque.contains(&index(*at)))
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
+        .expect("a visible ink position for the stroke")
+        .0;
     assert!(
         far_ink(index(at)) && !opaque.contains(&index(at)),
         "the stroke at {at:?} does not stand on the far node's visible ink",
@@ -1132,17 +1152,38 @@ fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
         .count();
     assert!(onto_far > 20, "the near name darkened {onto_far} visible pixels of the far node");
 
-    // The far name leaves the near node's opaque pixels alone, bar a level of
-    // rounding: `opaque` is the pixels whose ALPHA reaches 255, and a coverage
-    // a thousandth short of 1 lets a thousandth of what is behind through.
-    let onto_near = opaque
+    // Equality after RGBA8 quantization includes almost-opaque AA edges.
+    // Remove their one-pixel boundary before asserting that the near ink
+    // completely covers a far label. The would_have check below still proves
+    // that the surviving interior lies under that label's shadow.
+    let interior: Vec<usize> = opaque
+        .iter()
+        .copied()
+        .filter(|&i| {
+            let x = (i / 4) as u32 % SIZE[0];
+            let y = (i / 4) as u32 / SIZE[0];
+            x > 0
+                && x + 1 < SIZE[0]
+                && y > 0
+                && y + 1 < SIZE[1]
+                && (-1..=1).all(|dy| {
+                    (-1..=1).all(|dx| {
+                        let neighbour =
+                            ((y as i32 + dy) * SIZE[0] as i32 + x as i32 + dx) as usize * 4;
+                        opaque.contains(&neighbour)
+                    })
+                })
+        })
+        .collect();
+    assert!(interior.len() > 500, "the mask must retain substantial opaque ink");
+    let onto_near = interior
         .iter()
         .filter(|&&i| (0..4).any(|c| far_named[i + c].abs_diff(bare[i + c]) > 1))
         .count();
     assert_eq!(onto_near, 0, "the far name's shadow reached {onto_near} pixels of the near node");
     // ...though its shadow does land there with the near node out of the way.
     let without_named = shooter.shot_with(&without, name(&without, 0));
-    let would_have = opaque
+    let would_have = interior
         .iter()
         .filter(|&&i| brightness(&without_named[i..i + 3]) < brightness(&without_bare[i..i + 3]))
         .count();
@@ -1267,4 +1308,77 @@ fn a_name_casting_no_shadow_paints_its_ink_and_nothing_else() {
         bare + 1,
         "a name is worth exactly one cell over the {bare} the frame casts without it",
     );
+}
+
+/// Labels receive the foreground node field even when they cast no shadow.
+/// Use a broad white glyph crossing the ring and its exposed shadow skirt,
+/// then put the same glyph on the front node to rule out self-occlusion.
+#[test]
+fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow() {
+    let Some(mut shooter) = Shooter::new(SCENE_SIZE) else { return };
+    for kernel in
+        [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
+    {
+        let mut scene = one_node_behind_another();
+        scene.shadow = one_shadow(1.0, 0.18, kernel);
+        scene.shadow.lattice_text.width = 0.0;
+        scene.shadow.lattice_text.depth = 0.0;
+        scene.glow_reach = 0.0;
+        scene.bloom_strength = 0.0;
+        let center = on_screen(&scene, SCENE_SIZE, scene.nodes[0].world_pos);
+        let rect = [center.x - 4.0, center.y - 6.0, 64.0, 12.0];
+        let glyph = GlyphInstance { rect, sdf_rect: rect, ..crate::text::tests::glyph() };
+        let mut shot = |scene: &Scene, owner: Option<u32>, enabled: bool, depth: f32| {
+            let labels =
+                owner.map_or_else(LatticeLabels::default, |node| names(vec![(node, vec![glyph])]));
+            shooter.draw_modified(scene, labels, |cb| {
+                cb.uniforms.geometry_shadow.occlusion = f32::from(enabled);
+                cb.uniforms.geometry_shadow.depth = depth;
+            })
+        };
+        let bare_old = shot(&scene, None, false, 0.18);
+        let rear_old = shot(&scene, Some(1), false, 0.18);
+        let bare = shot(&scene, None, true, 0.18);
+        let rear = shot(&scene, Some(1), true, 0.18);
+        let faded = (0..rear.len())
+            .step_by(4)
+            .filter(|&i| {
+                let old = i32::from(rear_old[i]) - i32::from(bare_old[i]);
+                let new = i32::from(rear[i]) - i32::from(bare[i]);
+                old > 32 && new > 6 && old - new > 6
+            })
+            .count();
+        assert!(faded > 30, "{kernel:?}: only {faded} rear-label pixels partially faded");
+        // A black clear with no glow or text shadows gives the ordinary node
+        // shadow nothing to darken except misplaced ink. This must be exact,
+        // including when the label-free bloom attachment is present.
+        for bloom in [0.0, 1.0] {
+            scene.bloom_strength = bloom;
+            assert_eq!(
+                shot(&scene, Some(1), true, 0.18),
+                shot(&scene, Some(1), true, 0.8),
+                "{kernel:?}, bloom={bloom}: rear text still receives ordinary node shadow"
+            );
+        }
+        scene.bloom_strength = 0.0;
+        let front_old = shot(&scene, Some(0), false, 0.18);
+        let front = shot(&scene, Some(0), true, 0.18);
+        let solid: Vec<_> = (0..front.len())
+            .step_by(4)
+            .filter(|&i| front_old[i] > 250 && bare_old[i] < 200)
+            .collect();
+        assert!(solid.len() > 100, "the foreground label must contain solid white ink");
+        for i in solid {
+            assert_eq!(
+                &front[i..i + 3],
+                &front_old[i..i + 3],
+                "{kernel:?}: a node occluded its own name"
+            );
+        }
+        // Reuse the pane after removing the foreground node. The label row
+        // has no shadow cell, but still must end its receiver link at zero.
+        scene.nodes.remove(0);
+        rows_per_node(&mut scene);
+        assert_eq!(shot(&scene, Some(0), false, 0.18), shot(&scene, Some(0), true, 0.18));
+    }
 }

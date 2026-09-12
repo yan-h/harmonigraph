@@ -316,7 +316,9 @@ pub(crate) struct ShadowCaster {
     /// its own scene draw.
     pub cell: [f32; 4],
     /// The map from a point of the pane to a texel of that cell: x/y the
-    /// origin, z the scale, so a texel is `xy + points * z`. w unused.
+    /// origin, z the scale, so a texel is `xy + points * z`.
+    /// Lattice preparation uses w for the next node caster's index + 1 in
+    /// painter order; zero ends the list. Other surfaces leave it zero.
     ///
     /// Pre-composed on the CPU rather than sent as (cell origin, box origin,
     /// scale) for the shader to combine: a fragment would otherwise repeat the
