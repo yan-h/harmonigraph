@@ -4,10 +4,6 @@
 
 using metal::uint;
 
-struct SplitOut {
-    metal::float4 other;
-    metal::float4 ink;
-};
 struct Locals {
     metal::float2 screen_points;
     metal::float2 atlas_size;
@@ -16,7 +12,9 @@ struct Locals {
     float pixels_per_point;
     float shadow_depth;
     metal::float2 shadow_atlas_size;
-    metal::float4 _pad;
+    float node_occlusion;
+    float _pad0_;
+    metal::float2 _pad1_;
 };
 struct VertexOut {
     metal::float4 position;
@@ -28,6 +26,9 @@ struct VertexOut {
     uint sheet;
     char _pad6[4];
     metal::float2 sheet_size;
+    metal::float2 points;
+    float who;
+    char _pad9[4];
 };
 constant float DISTANCE_KIND = 1.0;
 constant float GAUSSIAN_GAIN = 2.5;
@@ -43,25 +44,6 @@ constant float FILTER_TAP = 0.25;
 constant float SDF_NEAR_PAD = 32.0;
 constant float SDF_COARSE_PAD = 48.0;
 constant float SDF_NEAR_BLEND = 8.0;
-
-metal::float4 glow_light(
-    metal::int2 coord,
-    metal::texture2d<float, metal::access::sample> glow_tex
-) {
-    uint clamped_lod_e3 = metal::min(uint(0), glow_tex.get_num_mip_levels() - 1);
-    metal::float4 _e3 = glow_tex.read(metal::min(metal::uint2(coord), metal::uint2(glow_tex.get_width(clamped_lod_e3), glow_tex.get_height(clamped_lod_e3)) - 1), clamped_lod_e3);
-    return _e3;
-}
-
-metal::float3 wash_over(
-    metal::float3 ink,
-    float alpha,
-    metal::float3 light,
-    float share
-) {
-    metal::float3 w = light * share;
-    return (w * alpha) + (ink * (metal::float3(1.0) - w));
-}
 
 float outside_atlas(
     VertexOut in_1,
@@ -150,49 +132,31 @@ float coverage(
     return 0.5 * (_e38 + _e40);
 }
 
-metal::float4 glyph_light(
-    metal::int2 coord_1,
-    metal::texture2d<float, metal::access::sample> glow_tex
-) {
-    metal::int2 edge = as_type<metal::int2>(as_type<metal::uint2>(static_cast<metal::int2>(metal::uint2(glow_tex.get_width(), glow_tex.get_height()))) - as_type<metal::uint2>(metal::int2(1, 1)));
-    metal::float4 _e12 = glow_light(metal::clamp(coord_1, metal::int2(0, 0), edge), glow_tex);
-    return _e12;
-}
-metal::int2 naga_f2i32(metal::float2 value) {
-    return static_cast<metal::int2>(metal::clamp(value, -2147483600.0, 2147483500.0));
-}
-
-
-struct fs_fill_litInput {
+struct fs_fillInput {
     metal::float2 texel [[user(loc0), center_perspective]];
     metal::float2 uv_min [[user(loc1), flat]];
     metal::float2 uv_max [[user(loc2), flat]];
     metal::float4 fill [[user(loc3), flat]];
     uint sheet [[user(loc5), flat]];
     metal::float2 sheet_size [[user(loc6), flat]];
+    metal::float2 points [[user(loc7), center_perspective]];
+    float who [[user(loc8), flat]];
 };
-struct fs_fill_litOutput {
-    metal::float4 other [[color(0)]];
-    metal::float4 ink [[color(1)]];
+struct fs_fillOutput {
+    metal::float4 member [[color(0)]];
 };
-fragment fs_fill_litOutput fs_fill_lit(
-  fs_fill_litInput varyings [[stage_in]]
+fragment fs_fillOutput fs_fill(
+  fs_fillInput varyings [[stage_in]]
 , metal::float4 position [[position]]
-, metal::texture2d<float, metal::access::sample> glow_tex [[texture(3)]]
 , constant Locals& locals [[buffer(0)]]
 , metal::texture2d<float, metal::access::sample> atlas [[texture(0)]]
 , metal::sampler atlas_sampler [[sampler(0)]]
 , metal::texture2d<float, metal::access::sample> mark_atlas [[texture(1)]]
 ) {
-    const VertexOut in = { position, varyings.texel, varyings.uv_min, varyings.uv_max, {}, varyings.fill, varyings.sheet, {}, varyings.sheet_size };
+    const VertexOut in = { position, varyings.texel, varyings.uv_min, varyings.uv_max, {}, varyings.fill, varyings.sheet, {}, varyings.sheet_size, varyings.points, varyings.who };
     float _e2 = coverage(in, in.texel, locals, atlas, atlas_sampler, mark_atlas);
     if (_e2 <= 0.0) {
         metal::discard_fragment();
     }
-    metal::float4 ink_1 = in.fill * _e2;
-    metal::int2 coord_2 = naga_f2i32(in.position.xy);
-    metal::float4 _e10 = glyph_light(coord_2, glow_tex);
-    metal::float3 _e15 = wash_over(ink_1.xyz, ink_1.w, _e10.xyz, 1.0);
-    const auto _tmp = SplitOut {metal::float4(_e15, ink_1.w), metal::float4(0.0, 0.0, 0.0, ink_1.w)};
-    return fs_fill_litOutput { _tmp.other, _tmp.ink };
+    return fs_fillOutput { in.fill * _e2 };
 }

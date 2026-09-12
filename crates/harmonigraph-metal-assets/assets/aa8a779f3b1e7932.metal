@@ -17,16 +17,23 @@ struct Locals {
     float pixels_per_point;
     float shadow_depth;
     metal::float2 shadow_atlas_size;
-    metal::float4 _pad;
+    float node_occlusion;
+    float _pad0_;
+    metal::float2 _pad1_;
 };
-struct SdfOut {
+struct VertexOut {
     metal::float4 position;
-    metal::float2 near_texel;
-    metal::float2 coarse_texel;
-    metal::float4 near_bounds;
-    metal::float4 coarse_bounds;
-    metal::float2 scales;
-    char _pad6[8];
+    metal::float2 texel;
+    metal::float2 uv_min;
+    metal::float2 uv_max;
+    char _pad4[8];
+    metal::float4 fill;
+    uint sheet;
+    char _pad6[4];
+    metal::float2 sheet_size;
+    metal::float2 points;
+    float who;
+    char _pad9[4];
 };
 constant float DISTANCE_KIND = 1.0;
 constant float GAUSSIAN_GAIN = 2.5;
@@ -55,13 +62,13 @@ uint unpackUint32_(uint b0, uint b1, uint b2, uint b3) {
 bool cell_packed(
     metal::float4 cell
 ) {
-    bool local_6 = {};
+    bool local_1 = {};
     if (cell.z > 0.0) {
-        local_6 = cell.w > 0.0;
+        local_1 = cell.w > 0.0;
     } else {
-        local_6 = false;
+        local_1 = false;
     }
-    bool _e10 = local_6;
+    bool _e10 = local_1;
     return _e10;
 }
 
@@ -88,17 +95,51 @@ metal::float4 cell_clip(
     return metal::float4((((2.0 * texel.x) / extent.x) - 1.0) * w, (1.0 - ((2.0 * texel.y) / extent.y)) * w, 0.0, w);
 }
 
-struct vs_glyph_distance_cellOutput {
+VertexOut glyph_vertex(
+    uint vertex_1,
+    metal::float4 rect_2,
+    metal::float4 uv_1,
+    metal::float4 fill_1,
+    uint sheet_1,
+    constant Locals& locals
+) {
+    VertexOut out_1 = {};
+    metal::float2 corner = metal::float2(((vertex_1 & 1u) == 1u) ? 1.0 : 0.0, ((vertex_1 & 2u) == 2u) ? 1.0 : 0.0);
+    float _e23 = locals.pixels_per_point;
+    float reach = 0.75 / _e23;
+    metal::float2 pos = (rect_2.xy - metal::float2(reach)) + (corner * (rect_2.zw + metal::float2(2.0 * reach)));
+    out_1.position = metal::float4(pos, 0.0, 1.0);
+    float _e42 = locals.pixels_per_point;
+    float texel_reach = reach * _e42;
+    out_1.texel = (uv_1.xy - metal::float2(texel_reach)) + (corner * ((uv_1.zw - uv_1.xy) + metal::float2(2.0 * texel_reach)));
+    out_1.uv_min = uv_1.xy;
+    out_1.uv_max = uv_1.zw;
+    metal::float4 _e63 = out_1.position;
+    out_1.points = _e63.xy;
+    out_1.who = 0.0;
+    out_1.fill = fill_1;
+    out_1.sheet = sheet_1;
+    metal::float2 _e72 = locals.atlas_size;
+    metal::float2 _e75 = locals.mark_atlas_size;
+    out_1.sheet_size = (sheet_1 == SHEET_MARK) ? _e75 : _e72;
+    VertexOut _e79 = out_1;
+    return _e79;
+}
+
+struct vs_glyph_cellOutput {
     metal::float4 position [[position]];
-    metal::float2 near_texel [[user(loc0), center_perspective]];
-    metal::float2 coarse_texel [[user(loc1), center_perspective]];
-    metal::float4 near_bounds [[user(loc2), flat]];
-    metal::float4 coarse_bounds [[user(loc3), flat]];
-    metal::float2 scales [[user(loc4), flat]];
+    metal::float2 texel [[user(loc0), center_perspective]];
+    metal::float2 uv_min [[user(loc1), flat]];
+    metal::float2 uv_max [[user(loc2), flat]];
+    metal::float4 fill [[user(loc3), flat]];
+    uint sheet [[user(loc5), flat]];
+    metal::float2 sheet_size [[user(loc6), flat]];
+    metal::float2 points [[user(loc7), center_perspective]];
+    float who [[user(loc8), flat]];
 };
 struct vb_15_type { metal::uchar data[92]; };
 struct vb_14_type { metal::uchar data[64]; };
-vertex vs_glyph_distance_cellOutput vs_glyph_distance_cell(
+vertex vs_glyph_cellOutput vs_glyph_cell(
   uint vertex_ [[vertex_id]]
 , constant Locals& locals [[buffer(0)]]
 , uint i_id [[instance_id]]
@@ -136,66 +177,24 @@ vertex vs_glyph_distance_cellOutput vs_glyph_distance_cell(
         box_meta = unpackFloat32x4_(vb_14_elem.data[32], vb_14_elem.data[33], vb_14_elem.data[34], vb_14_elem.data[35], vb_14_elem.data[36], vb_14_elem.data[37], vb_14_elem.data[38], vb_14_elem.data[39], vb_14_elem.data[40], vb_14_elem.data[41], vb_14_elem.data[42], vb_14_elem.data[43], vb_14_elem.data[44], vb_14_elem.data[45], vb_14_elem.data[46], vb_14_elem.data[47]);
         box_who = unpackFloat32x4_(vb_14_elem.data[48], vb_14_elem.data[49], vb_14_elem.data[50], vb_14_elem.data[51], vb_14_elem.data[52], vb_14_elem.data[53], vb_14_elem.data[54], vb_14_elem.data[55], vb_14_elem.data[56], vb_14_elem.data[57], vb_14_elem.data[58], vb_14_elem.data[59], vb_14_elem.data[60], vb_14_elem.data[61], vb_14_elem.data[62], vb_14_elem.data[63]);
     }
+    VertexOut out = {};
     bool local = {};
-    bool local_1 = {};
-    bool local_2 = {};
-    bool local_3 = {};
-    bool local_4 = {};
-    SdfOut out = {};
-    bool local_5 = {};
-    metal::float2 corner = metal::float2(((vertex_ & 1u) == 1u) ? 1.0 : 0.0, ((vertex_ & 2u) == 2u) ? 1.0 : 0.0);
-    metal::float2 point = box_rect.xy + (corner * box_rect.zw);
-    metal::float2 near_span = sdf_near.zw - sdf_near.xy;
-    metal::float2 coarse_span = sdf_coarse.zw - sdf_coarse.xy;
-    if (near_span.x > 0.0) {
-        local = near_span.y > 0.0;
+    VertexOut _e13 = glyph_vertex(vertex_, rect, uv, fill, sheet, locals);
+    out = _e13;
+    metal::float4 _e16 = out.position;
+    metal::float2 _e19 = cell_texel(_e16.xy, box_rect, box_cell, box_meta.x);
+    metal::float4 _e21 = no_quad();
+    metal::float2 _e24 = locals.shadow_atlas_size;
+    metal::float4 _e26 = cell_clip(_e19, _e24, 1.0);
+    bool _e27 = cell_packed(box_cell);
+    if (_e27) {
+        local = box_who.y < 0.5;
     } else {
         local = false;
     }
-    bool _e47 = local;
-    if (_e47) {
-        local_1 = coarse_span.x > 0.0;
-    } else {
-        local_1 = false;
-    }
-    bool _e54 = local_1;
-    if (_e54) {
-        local_2 = coarse_span.y > 0.0;
-    } else {
-        local_2 = false;
-    }
-    bool _e61 = local_2;
-    if (_e61) {
-        local_3 = sdf_rect.z > 0.0;
-    } else {
-        local_3 = false;
-    }
-    bool _e68 = local_3;
-    if (_e68) {
-        local_4 = sdf_rect.w > 0.0;
-    } else {
-        local_4 = false;
-    }
-    bool valid = local_4;
-    metal::float2 _e78 = cell_texel(point, box_rect, box_cell, box_meta.x);
-    metal::float4 _e80 = no_quad();
-    metal::float2 _e83 = locals.shadow_atlas_size;
-    metal::float4 _e85 = cell_clip(_e78, _e83, 1.0);
-    if (valid) {
-        bool _e88 = cell_packed(box_cell);
-        local_5 = _e88;
-    } else {
-        local_5 = false;
-    }
-    bool _e90 = local_5;
-    out.position = _e90 ? _e85 : _e80;
-    metal::float2 relative = (point - sdf_rect.xy) / metal::max(sdf_rect.zw, metal::float2(0.000001));
-    out.near_texel = sdf_near.xy + (relative * near_span);
-    out.coarse_texel = sdf_coarse.xy + (relative * coarse_span);
-    out.near_bounds = metal::float4(sdf_near.xy - metal::float2(32.0), sdf_near.zw + metal::float2(32.0));
-    out.coarse_bounds = metal::float4(sdf_coarse.xy - metal::float2(48.0), sdf_coarse.zw + metal::float2(48.0));
-    out.scales = metal::float2(0.5 * ((sdf_rect.z / metal::max(near_span.x, 0.000001)) + (sdf_rect.w / metal::max(near_span.y, 0.000001))), 0.5 * ((sdf_rect.z / metal::max(coarse_span.x, 0.000001)) + (sdf_rect.w / metal::max(coarse_span.y, 0.000001))));
-    SdfOut _e155 = out;
-    const auto _tmp = _e155;
-    return vs_glyph_distance_cellOutput { _tmp.position, _tmp.near_texel, _tmp.coarse_texel, _tmp.near_bounds, _tmp.coarse_bounds, _tmp.scales };
+    bool _e34 = local;
+    out.position = _e34 ? _e26 : _e21;
+    VertexOut _e36 = out;
+    const auto _tmp = _e36;
+    return vs_glyph_cellOutput { _tmp.position, _tmp.texel, _tmp.uv_min, _tmp.uv_max, _tmp.fill, _tmp.sheet, _tmp.sheet_size, _tmp.points, _tmp.who };
 }

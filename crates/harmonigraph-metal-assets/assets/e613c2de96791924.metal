@@ -12,7 +12,9 @@ struct Locals {
     float pixels_per_point;
     float shadow_depth;
     metal::float2 shadow_atlas_size;
-    metal::float4 _pad;
+    float node_occlusion;
+    float _pad0_;
+    metal::float2 _pad1_;
 };
 struct VertexOut {
     metal::float4 position;
@@ -24,6 +26,9 @@ struct VertexOut {
     uint sheet;
     char _pad6[4];
     metal::float2 sheet_size;
+    metal::float2 points;
+    float who;
+    char _pad9[4];
 };
 constant float DISTANCE_KIND = 1.0;
 constant float GAUSSIAN_GAIN = 2.5;
@@ -127,29 +132,28 @@ float coverage(
     return 0.5 * (_e38 + _e40);
 }
 
-struct fs_fillInput {
+struct fs_glyph_inkInput {
     metal::float2 texel [[user(loc0), center_perspective]];
     metal::float2 uv_min [[user(loc1), flat]];
     metal::float2 uv_max [[user(loc2), flat]];
     metal::float4 fill [[user(loc3), flat]];
     uint sheet [[user(loc5), flat]];
     metal::float2 sheet_size [[user(loc6), flat]];
+    metal::float2 points [[user(loc7), center_perspective]];
+    float who [[user(loc8), flat]];
 };
-struct fs_fillOutput {
+struct fs_glyph_inkOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_fillOutput fs_fill(
-  fs_fillInput varyings [[stage_in]]
+fragment fs_glyph_inkOutput fs_glyph_ink(
+  fs_glyph_inkInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , constant Locals& locals [[buffer(0)]]
 , metal::texture2d<float, metal::access::sample> atlas [[texture(0)]]
 , metal::sampler atlas_sampler [[sampler(0)]]
 , metal::texture2d<float, metal::access::sample> mark_atlas [[texture(1)]]
 ) {
-    const VertexOut in = { position, varyings.texel, varyings.uv_min, varyings.uv_max, {}, varyings.fill, varyings.sheet, {}, varyings.sheet_size };
+    const VertexOut in = { position, varyings.texel, varyings.uv_min, varyings.uv_max, {}, varyings.fill, varyings.sheet, {}, varyings.sheet_size, varyings.points, varyings.who };
     float _e2 = coverage(in, in.texel, locals, atlas, atlas_sampler, mark_atlas);
-    if (_e2 <= 0.0) {
-        metal::discard_fragment();
-    }
-    return fs_fillOutput { in.fill * _e2 };
+    return fs_glyph_inkOutput { metal::float4(_e2, 0.0, 0.0, 0.0) };
 }

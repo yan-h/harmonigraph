@@ -23,7 +23,9 @@ struct Locals {
     float pixels_per_point;
     float shadow_depth;
     metal::float2 shadow_atlas_size;
-    metal::float4 _pad;
+    float node_occlusion;
+    float _pad0_;
+    metal::float2 _pad1_;
 };
 struct BoxOut {
     metal::float4 position;

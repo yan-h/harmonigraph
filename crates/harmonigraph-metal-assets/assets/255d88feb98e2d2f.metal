@@ -303,6 +303,77 @@ float shadow_kernel(
     return metal::min(GAUSSIAN_GAIN * metal::clamp(held, 0.0, 1.0), 1.0);
 }
 
+uint naga_f2u32(float value) {
+    return static_cast<uint>(metal::clamp(value, 0.0, 4294967000.0));
+}
+
+float node_visibility(
+    float who_1,
+    metal::float2 points_1,
+    float occlusion,
+    metal::texture2d<float, metal::access::sample> shadow_atlas,
+    metal::sampler shadow_sampler,
+    device type_7 const& shadow_casters,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    uint at = {};
+    float visibility = 1.0;
+    bool local_1 = {};
+    bool local_2 = {};
+    float strength = metal::clamp(occlusion, 0.0, 1.0);
+    if (strength == 0.0) {
+        return 1.0;
+    }
+    at = naga_f2u32(metal::max(who_1, 0.0));
+    uint _e13 = at;
+    if (_e13 >= (1 + (_buffer_sizes.size3 - 0 - 64) / 64)) {
+        return 1.0;
+    }
+    uint2 loop_bound = uint2(4294967295u);
+    while(true) {
+        if (metal::all(loop_bound == uint2(0u))) { break; }
+        loop_bound -= uint2(loop_bound.y == 0u, 1u);
+        uint _e21 = at;
+        float _e25 = shadow_casters[metal::min(unsigned(_e21), (_buffer_sizes.size3 - 0 - 64) / 64)].map.w;
+        uint next = naga_f2u32(_e25);
+        if (next == 0u) {
+            break;
+        }
+        uint candidate = next - 1u;
+        uint _e31 = at;
+        if (!((candidate <= _e31))) {
+            local_1 = candidate >= (1 + (_buffer_sizes.size3 - 0 - 64) / 64);
+        } else {
+            local_1 = true;
+        }
+        bool _e40 = local_1;
+        if (_e40) {
+            break;
+        }
+        at = candidate;
+        uint _e42 = at;
+        ShadowCaster caster = shadow_casters[metal::min(unsigned(_e42), (_buffer_sizes.size3 - 0 - 64) / 64)];
+        if (metal::all(points_1 >= caster.rect.xy)) {
+            local_2 = metal::all(points_1 <= (caster.rect.xy + caster.rect.zw));
+        } else {
+            local_2 = false;
+        }
+        bool _e59 = local_2;
+        if (_e59) {
+            float _e60 = visibility;
+            uint _e67 = at;
+            float _e68 = shadow_kernel(_e67, points_1, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+            visibility = _e60 * (1.0 - ((strength * metal::clamp(caster.shade.x, 0.0, 1.0)) * _e68));
+        }
+        float _e73 = visibility;
+        if (_e73 == 0.0) {
+            break;
+        }
+    }
+    float _e76 = visibility;
+    return _e76;
+}
+
 float glow_shadow_depth(
     constant Uniforms& u
 ) {
@@ -310,13 +381,9 @@ float glow_shadow_depth(
     return metal::clamp(_e3, 0.0, 1.0);
 }
 
-uint naga_f2u32(float value) {
-    return static_cast<uint>(metal::clamp(value, 0.0, 4294967000.0));
-}
-
 ShadowThrough node_shadow_through(
-    float who_1,
-    metal::float2 points_1,
+    float who_2,
+    metal::float2 points_2,
     float level,
     metal::texture2d<float, metal::access::sample> shadow_atlas,
     metal::sampler shadow_sampler,
@@ -327,78 +394,10 @@ ShadowThrough node_shadow_through(
     if (level <= 0.0) {
         return ShadowThrough {1.0, 1.0};
     }
-    float _e14 = shadow_kernel(naga_f2u32(metal::max(who_1, 0.0)), points_1, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+    float _e14 = shadow_kernel(naga_f2u32(metal::max(who_2, 0.0)), points_2, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
     float coverage_1 = metal::clamp(level, 0.0, 1.0) * _e14;
     float _e16 = glow_shadow_depth(u);
     return ShadowThrough {1.0 - (_e16 * coverage_1), 1.0 - coverage_1};
-}
-
-float node_visibility(
-    float who_2,
-    metal::float2 points_2,
-    metal::texture2d<float, metal::access::sample> shadow_atlas,
-    metal::sampler shadow_sampler,
-    device type_7 const& shadow_casters,
-    constant Uniforms& u,
-    constant _mslBufferSizes& _buffer_sizes
-) {
-    uint at = {};
-    float visibility = 1.0;
-    bool local_1 = {};
-    bool local_2 = {};
-    float _e5 = u.geometry_shadow.occlusion;
-    float strength = metal::clamp(_e5, 0.0, 1.0);
-    if (strength == 0.0) {
-        return 1.0;
-    }
-    at = naga_f2u32(metal::max(who_2, 0.0));
-    uint _e16 = at;
-    if (_e16 >= (1 + (_buffer_sizes.size3 - 0 - 64) / 64)) {
-        return 1.0;
-    }
-    uint2 loop_bound = uint2(4294967295u);
-    while(true) {
-        if (metal::all(loop_bound == uint2(0u))) { break; }
-        loop_bound -= uint2(loop_bound.y == 0u, 1u);
-        uint _e24 = at;
-        float _e28 = shadow_casters[metal::min(unsigned(_e24), (_buffer_sizes.size3 - 0 - 64) / 64)].map.w;
-        uint next = naga_f2u32(_e28);
-        if (next == 0u) {
-            break;
-        }
-        uint candidate = next - 1u;
-        uint _e34 = at;
-        if (!((candidate <= _e34))) {
-            local_1 = candidate >= (1 + (_buffer_sizes.size3 - 0 - 64) / 64);
-        } else {
-            local_1 = true;
-        }
-        bool _e43 = local_1;
-        if (_e43) {
-            break;
-        }
-        at = candidate;
-        uint _e45 = at;
-        ShadowCaster caster = shadow_casters[metal::min(unsigned(_e45), (_buffer_sizes.size3 - 0 - 64) / 64)];
-        if (metal::all(points_2 >= caster.rect.xy)) {
-            local_2 = metal::all(points_2 <= (caster.rect.xy + caster.rect.zw));
-        } else {
-            local_2 = false;
-        }
-        bool _e62 = local_2;
-        if (_e62) {
-            float _e63 = visibility;
-            uint _e70 = at;
-            float _e71 = shadow_kernel(_e70, points_2, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
-            visibility = _e63 * (1.0 - ((strength * metal::clamp(caster.shade.x, 0.0, 1.0)) * _e71));
-        }
-        float _e76 = visibility;
-        if (_e76 == 0.0) {
-            break;
-        }
-    }
-    float _e79 = visibility;
-    return _e79;
 }
 
 bool shadow_is_distance(
@@ -1393,26 +1392,27 @@ Painted node_paint(
     float bloom_through = 1.0 - ((1.0 - _e9.bloom) * shadow_exposure);
     float _e66 = ink_1.alpha;
     if (_e66 > 0.0) {
-        float _e73 = node_visibility(in_7.shadow_box.x, in_7.shadow_at.xy, shadow_atlas, shadow_sampler, shadow_casters, u, _buffer_sizes);
-        visibility_1 = _e73;
+        float _e76 = u.geometry_shadow.occlusion;
+        float _e77 = node_visibility(in_7.shadow_box.x, in_7.shadow_at.xy, _e76, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+        visibility_1 = _e77;
     }
-    float _e75 = ink_1.alpha;
-    float _e76 = visibility_1;
-    float visible_alpha = _e75 * _e76;
+    float _e79 = ink_1.alpha;
+    float _e80 = visibility_1;
+    float visible_alpha = _e79 * _e80;
     float final_alpha = 1.0 - ((1.0 - visible_alpha) * seen_through);
     float bloom_alpha = 1.0 - ((1.0 - visible_alpha) * bloom_through);
     if (bloom_alpha <= 0.0) {
         metal::discard_fragment();
     }
-    metal::int2 _e92 = light_coord(in_7.clip_pos.xy, glow_tex);
-    metal::float4 _e93 = glow_light(_e92, glow_tex);
-    metal::float3 _e95 = ink_1.rgb;
-    float _e97 = ink_1.alpha;
-    float _e99 = glow_wash(u);
-    float _e101 = ink_1.lit;
-    metal::float3 _e104 = wash_over(_e95, _e97, _e93.xyz, metal::mix(1.0, _e99, _e101));
-    float _e105 = visibility_1;
-    return Painted {_e104 * _e105, final_alpha, bloom_alpha, visible_alpha};
+    metal::int2 _e96 = light_coord(in_7.clip_pos.xy, glow_tex);
+    metal::float4 _e97 = glow_light(_e96, glow_tex);
+    metal::float3 _e99 = ink_1.rgb;
+    float _e101 = ink_1.alpha;
+    float _e103 = glow_wash(u);
+    float _e105 = ink_1.lit;
+    metal::float3 _e108 = wash_over(_e99, _e101, _e97.xyz, metal::mix(1.0, _e103, _e105));
+    float _e109 = visibility_1;
+    return Painted {_e108 * _e109, final_alpha, bloom_alpha, visible_alpha};
 }
 
 SplitOut node_split(

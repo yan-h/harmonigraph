@@ -16,7 +16,9 @@ struct Locals {
     float pixels_per_point;
     float shadow_depth;
     metal::float2 shadow_atlas_size;
-    metal::float4 _pad;
+    float node_occlusion;
+    float _pad0_;
+    metal::float2 _pad1_;
 };
 struct VertexOut {
     metal::float4 position;
@@ -28,6 +30,9 @@ struct VertexOut {
     uint sheet;
     char _pad6[4];
     metal::float2 sheet_size;
+    metal::float2 points;
+    float who;
+    char _pad9[4];
 };
 constant float DISTANCE_KIND = 1.0;
 constant float GAUSSIAN_GAIN = 2.5;
@@ -81,13 +86,16 @@ VertexOut glyph_vertex(
     out_1.texel = (uv_1.xy - metal::float2(texel_reach)) + (corner * ((uv_1.zw - uv_1.xy) + metal::float2(2.0 * texel_reach)));
     out_1.uv_min = uv_1.xy;
     out_1.uv_max = uv_1.zw;
+    metal::float4 _e63 = out_1.position;
+    out_1.points = _e63.xy;
+    out_1.who = 0.0;
     out_1.fill = fill_1;
     out_1.sheet = sheet_1;
-    metal::float2 _e66 = locals.atlas_size;
-    metal::float2 _e69 = locals.mark_atlas_size;
-    out_1.sheet_size = (sheet_1 == SHEET_MARK) ? _e69 : _e66;
-    VertexOut _e73 = out_1;
-    return _e73;
+    metal::float2 _e72 = locals.atlas_size;
+    metal::float2 _e75 = locals.mark_atlas_size;
+    out_1.sheet_size = (sheet_1 == SHEET_MARK) ? _e75 : _e72;
+    VertexOut _e79 = out_1;
+    return _e79;
 }
 
 struct vs_glyphOutput {
@@ -98,6 +106,8 @@ struct vs_glyphOutput {
     metal::float4 fill [[user(loc3), flat]];
     uint sheet [[user(loc5), flat]];
     metal::float2 sheet_size [[user(loc6), flat]];
+    metal::float2 points [[user(loc7), center_perspective]];
+    float who [[user(loc8), flat]];
 };
 struct vb_15_type { metal::uchar data[92]; };
 vertex vs_glyphOutput vs_glyph(
@@ -134,5 +144,5 @@ vertex vs_glyphOutput vs_glyph(
     out.position = _e15;
     VertexOut _e16 = out;
     const auto _tmp = _e16;
-    return vs_glyphOutput { _tmp.position, _tmp.texel, _tmp.uv_min, _tmp.uv_max, _tmp.fill, _tmp.sheet, _tmp.sheet_size };
+    return vs_glyphOutput { _tmp.position, _tmp.texel, _tmp.uv_min, _tmp.uv_max, _tmp.fill, _tmp.sheet, _tmp.sheet_size, _tmp.points, _tmp.who };
 }
