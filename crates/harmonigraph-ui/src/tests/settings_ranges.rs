@@ -104,7 +104,7 @@ fn backend(edge: Edge, meantone: bool, marvel: bool) -> Backend {
     let mut policy = PolicyConfig::default();
     let high = matches!(edge, Edge::High);
     macro_rules! poison { ($($field:ident),+ $(,)?) => { $( policy.$field = if high { std::primitive::u16::MAX as _ } else { 0 }; )+ }; }
-    poison!(harmonic, pitch_scale, half_life_ms, register);
+    poison!(pitch_flexibility, half_life_ms, register);
     policy.radius = if high { u8::MAX } else { 0 };
     policy.tolerance = if high { u32::MAX } else { 0 };
     policy.silence_ms = if high { u32::MAX } else { 0 };
@@ -155,7 +155,7 @@ fn scenarios() -> Vec<Scenario> {
     let mut cases = Vec::new();
     for pane in SETTINGS_PANES {
         let visits = match pane {
-            SettingsPane::Tab(panes::Tab::Tuning) => 8,
+            SettingsPane::Tab(panes::Tab::Tuning) => 7,
             SettingsPane::Page(DisplayPage::Colors) => 2,
             SettingsPane::Page(DisplayPage::Lattice) => 25,
             SettingsPane::Page(DisplayPage::Analyzer) => 11,
@@ -181,7 +181,7 @@ fn scenarios() -> Vec<Scenario> {
     // The collapsed Keyboard and Context groups hide three and four bars.
     // Cover both open for each comma derivation branch, including both modes.
     for (meantone, marvel) in [(false, false), (true, false), (false, true), (true, true)] {
-        cases.push(Scenario { expanded: true, meantone, marvel, visits: 15, ..base });
+        cases.push(Scenario { expanded: true, meantone, marvel, visits: 14, ..base });
     }
     cases
 }
@@ -252,6 +252,7 @@ fn check(edge: Edge) {
             }
         }
         if scenario.pane == SettingsPane::Tab(panes::Tab::Tuning) {
+            assert!(saw("Pitch flexibility"));
             assert_eq!(saw("Fifth") && saw("Half-life"), scenario.expanded);
         }
         for visit in visits {
