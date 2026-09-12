@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# `git worktree add` invokes post-checkout with flag 1 in the new worktree.
+# Prepare its worktree-local submodule before the creating command returns.
+set -uo pipefail
+
+[ "${3:-}" = 1 ] || exit 0
+case "${1:-}" in
+  *[!0]* | '') exit 0 ;;
+esac
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  echo "✗ shared skills: post-checkout could not resolve the new worktree" >&2
+  exit 1
+}
+
+# An absolute hooksPath can be inherited by the clone that `submodule update`
+# performs. That clone runs this hook inside agent-config itself; it is not a
+# Harmonigraph worktree and has no shared-skills gitlink to prepare.
+git rev-parse --verify HEAD:.shared-skills >/dev/null 2>&1 || exit 0
+
+HOOK_ROOT=$(cd "$(dirname "$0")/.." && pwd -P) || exit 1
+
+if ! "$HOOK_ROOT/.claude/ensure-shared-skills.sh" "$ROOT"; then
+  echo "✗ shared skills: Git already created this checkout at $ROOT" >&2
+  echo "  Its owner must retry the initialisation or remove the incomplete worktree." >&2
+  exit 1
+fi

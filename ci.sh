@@ -2,8 +2,8 @@
 # Canonical full CI gate: formatting, markdown clause breaks and local links, workspace clippy with warnings denied,
 # workspace tests, the plugin package check, the release all-targets check, harmonigraph-render's own tests,
 # vendored GUI crates' tests, the optional CLAP probe fixture, doc links, the harmonigraph-core dependency
-# guard, the security-audit trigger split, the CI group split, worktree reclaim
-# safety, and the registered-worktree bundle swap.
+# guard, the security-audit trigger split, the CI group split, pinned shared
+# skills in fresh worktrees, worktree reclaim safety, and the registered-worktree bundle swap.
 #
 # GitHub Actions invokes this script on the toolchain pinned by
 # rust-toolchain.toml, once per GROUP below. It remains available locally when a
@@ -205,6 +205,13 @@ run .claude/tests/audit-workflow.sh
 # introduce.
 run .claude/tests/ci-groups.sh
 
+# Agent guidance is a pinned submodule reached through a project-internal
+# symlink. Git worktrees have independent submodule checkouts, so a directory-
+# only test passes while audit-merges and its auditor brief still dangle. Drive
+# SessionStart and a real worktree add through a local two-commit submodule:
+# both referenced files must come from the older gitlink, not the source tip.
+run .claude/tests/shared-skills-worktrees.sh
+
 # harmonigraph-core is MIT OR Apache-2.0 while the rest of the workspace is GPL.
 # That split is only defensible while the crate stays a self-contained
 # library, so its dependency list must stay empty: a GPL (or otherwise
@@ -246,7 +253,7 @@ run .claude/tests/plugin-swap.sh
 
 echo
 if [ "$CI_GROUP" = all ]; then
-  echo "✅ full CI passed (fmt + markdown breaks + markdown links + workspace clippy + workspace tests + plugin check + release check + render tests + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + reclaim safety + plugin swap)"
+  echo "✅ full CI passed (fmt + markdown breaks + markdown links + workspace clippy + workspace tests + plugin check + release check + render tests + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + shared-skills worktrees + reclaim safety + plugin swap)"
 else
   echo "✅ CI group '$CI_GROUP' passed — one of: ${CI_GROUPS[*]}"
 fi
