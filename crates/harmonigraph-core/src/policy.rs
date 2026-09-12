@@ -31,8 +31,7 @@ pub const CONFIG: PolicyConfig = PolicyConfig {
     released: 100,
     half_life_ms: 1000,
     new_note: 700,
-    register_floor: 400,
-    register_falloff: 800,
+    register: 700,
     tolerance: 500_000,
     silence_ms: 0,
     reset_stop: false,
@@ -360,14 +359,13 @@ pub fn harmonic_cost(
     output: f64,
     context: &[ContextPitch],
 ) -> f64 {
-    let floor = f64::from(config.policy.register_floor) / 1000.0;
-    let falloff = f64::from(config.policy.register_falloff) / 1000.0;
+    // Every octave between the candidate and a context note multiplies that
+    // note's vote by the register factor; one in the same register keeps it all.
+    let per_octave = f64::from(config.policy.register) / 1000.0;
     let mut total = 0.0;
     let mut sum = 0.0;
     for v in context {
-        let register = floor
-            + (1.0 - floor)
-                * (-falloff * (output - v.pitch as f64 / 1_000_000.0).abs() / 1200.0).exp();
+        let register = per_octave.powf((output - v.pitch as f64 / 1_000_000.0).abs() / 1200.0);
         let weight = v.weight * register;
         total += weight * distance(node, v.node.unwrap());
         sum += weight;

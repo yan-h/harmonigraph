@@ -4,7 +4,7 @@ export const AXES = [1200 * Math.log2(3 / 2), 1200 * Math.log2(5 / 4), 1200 * Ma
 export const MEMORY = 24;
 export const DEFAULTS = Object.freeze({
   radius: 3, axes: 2, harmonic: 6, pitchScale: 20,
-  released: 0.1, registerFloor: 0.4, registerFalloff: 0.8,
+  released: 0.1, register: 0.7,
   tolerance: 0.5, silence: 0, resetStop: false, resetLoop: false, halfLife: 1, newNote: 0.7,
 });
 export const keyOf = n => n.join(',');
@@ -36,7 +36,7 @@ export function parsePitch(text) {
 function validateSettings(raw) {
   const s = { ...DEFAULTS, ...raw };
   const bounds = { radius: [1, 5], axes: [1, 3], harmonic: [0, 20], pitchScale: [1, 100],
-    released: [0, 1], newNote: [0, 1], registerFloor: [0.01, 1], registerFalloff: [0, 4], tolerance: [0, 20], silence: [0, 120], halfLife: [0, 20] };
+    released: [0, 1], newNote: [0, 1], register: [0.01, 1],tolerance: [0, 20], silence: [0, 120], halfLife: [0, 20] };
   for (const [name, [lo, hi]] of Object.entries(bounds)) {
     if (!Number.isFinite(s[name]) || s[name] < lo || s[name] > hi) throw new Error(`Invalid ${name}: expected ${lo}–${hi}.`);
   }
@@ -107,9 +107,10 @@ export class Simulator {
   }
   harmonicCost(node, output, context) {
     let total = 0, weightSum = 0;
-    const { registerFloor: floor, registerFalloff: falloff } = this.settings;
+    const { register: perOctave } = this.settings;
     for (const voice of context) {
-      const register = floor + (1 - floor) * Math.exp(-falloff * Math.abs(output - voice.output) / 1200);
+      // Each octave apart multiplies a context note's vote by the register factor.
+      const register = perOctave ** (Math.abs(output - voice.output) / 1200);
       const weight = voice.weight * register;
       total += weight * distance(node, voice.node);
       weightSum += weight;

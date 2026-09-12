@@ -22,8 +22,7 @@ let audio = null, sounds = new Map();
 const CONTROLS = [
   ['harmonic', 'Harmonic preference', 0, 12, 0.1, 'Higher values favour harmonic proximity over pitch accuracy.', 'main-controls'],
   ['pitchScale', 'Pitch flexibility', 1, 60, 1, 'Cents of pitch error that cost one point. Lower = more precise control.', 'main-controls'],
-  ['registerFloor', 'Distant-note influence', 0.05, 1, 0.05, 'Minimum retained register weight. 1 makes scoring register-blind.', 'main-controls'],
-  ['registerFalloff', 'Register sensitivity', 0, 3, 0.1, 'How quickly additional influence falls with octave separation.', 'main-controls'],
+  ['register', 'Weight per octave', 0.05, 1, 0.05, 'Each octave between a context note and the note being tuned multiplies that note’s vote by this. 1 makes scoring register-blind.', 'main-controls'],
   ['halfLife', 'Half-life', 0, 10, 0.1, 'Seconds. A note struck this long before the newest one counts half, held or released. 0 means no decay.', 'main-controls'],
   ['newNote', 'New-note factor', 0, 1, 0.05, 'Each note on a lattice node not already in context multiplies every released note’s weight by this. 1 means off.', 'main-controls'],
   ['released', 'Released : held weight', 0, 1, 0.05, 'A released note weighs this much against a held note struck at the same moment.', 'main-controls'],

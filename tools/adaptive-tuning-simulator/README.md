@@ -77,7 +77,7 @@ Its score is:
 
 ```text
 pitch cost   = ((q - p - d) / pitchScale)^2
-register_i   = floor + (1 - floor) × exp(-falloff × abs(q - onset_i) / 1200)
+register_i   = perOctave ^ (abs(q - onset_i) / 1200)
 weight_i     = contextBaseWeight_i × register_i
 harmony cost = harmonic × sum(weight_i × latticeDistance(node, node_i)) / sum(weight_i)
 total        = pitch cost + harmony cost
@@ -85,7 +85,7 @@ total        = pitch cost + harmony cost
 
 Lowest total wins, with deterministic coordinate-order ties.
 The finite octave realization and the nonzero pitch term preserve input register relative to the moving frame.
-The register floor prevents a distant context note's influence from disappearing entirely.
+Each octave apart multiplies a context note's vote by the same factor, so a distant note's influence fades smoothly and never reaches zero.
 Whole-performance octave transposition preserves the score and relative outcomes.
 
 After each onset, set `d = q - p`, carrying the full correction without octave wrapping.
@@ -94,7 +94,7 @@ Order dependence is expected, and changing the last note of a phrase can affect 
 The “intentional Pythagorean E” example works through ordinary pitch error and a different declared harmonic weight, not a separate hard match or chord exception.
 There is no automatic retuning and no special-case branch for any musical fixture.
 
-The baseline uses harmonic weight 6, pitch scale 20 cents, half-life 1 second, new-note factor 0.7, released weight 0.1, register floor 0.4 and falloff 0.8 per octave.
+The baseline uses harmonic weight 6, pitch scale 20 cents, half-life 1 second, new-note factor 0.7, released weight 0.1 and register weight 0.7 per octave.
 The paired precision examples use harmonic weight 2 with the same explicit seeded context and zero initial displacement.
 All other fixtures use the baseline.
 

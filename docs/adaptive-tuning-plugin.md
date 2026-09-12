@@ -132,7 +132,7 @@ see [issue #852](https://github.com/yan-h/harmonigraph/issues/852).
 
 ## Controls and live neighborhood
 
-The Tuning pane exposes the keyboard tuning, harmonic weight, pitch scale, neighborhood radius, allowed axes, half-life, new-note factor, released-to-held weight, register weighting, same-note tolerance, silence timeout and transport reset choices.
+The Tuning pane exposes the keyboard tuning, harmonic weight, pitch scale, neighborhood radius, allowed axes, half-life, new-note factor, released-to-held weight, register weight per octave, same-note tolerance, silence timeout and transport reset choices.
 Defaults match the simulator's baseline profile.
 The precision profile used by the paired intentional-E examples is obtained by setting harmonic weight to two.
 

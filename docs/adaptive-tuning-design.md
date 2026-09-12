@@ -196,6 +196,9 @@ A repeated node fades nothing, so repeating a note cannot erase the rest.
 Without it, 24 remembered notes held a fast major-third cycle in place.
 A stronger released-to-held penalty cannot substitute:
 a chord's first note is scored against released notes alone, where a factor common to all of them cancels.
+Register weighting is one multiplier per octave between a context note and the note being scored, 0.7 by default, with no floor (Yan, 2026-09-11):
+it replaced a floor and an exponential falloff whose falloff number had no direct musical reading.
+At 0.7 every agreed example keeps its outcome; at 0.6 or 0.8 one of the precision examples changes.
 An old held note can still weigh less than a note struck well after it and already released,
 which leans the sustained bass toward being left behind without making that a rule.
 Forgetting individual old notes must not itself erase the accumulated tuning displacement.

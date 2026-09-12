@@ -39,8 +39,9 @@ pub struct PolicyConfig {
     /// on a lattice node no held or remembered note occupies. Repeating a
     /// node, in any octave, costs nothing.
     pub new_note: u16,
-    pub register_floor: u16,
-    pub register_falloff: u16,
+    /// Every octave between a context note and the note being scored
+    /// multiplies that note's harmonic vote by this.
+    pub register: u16,
     pub tolerance: u32,
     pub silence_ms: u32,
     pub reset_stop: bool,
@@ -65,8 +66,9 @@ impl PolicyConfig {
         self.released = self.released.min(1000);
         self.half_life_ms = self.half_life_ms.min(20_000);
         self.new_note = self.new_note.min(1000);
-        self.register_floor = self.register_floor.clamp(10, 1000);
-        self.register_falloff = self.register_falloff.min(4000);
+        // Zero would leave a context note in another register no vote at all,
+        // and a context entirely in other registers an empty average.
+        self.register = self.register.clamp(10, 1000);
         self.tolerance = self.tolerance.min(20_000_000);
         self.silence_ms = self.silence_ms.min(120_000);
         self.keyboard = self.keyboard.map(|v| v.clamp(0, 1_200_000_000));
@@ -85,7 +87,7 @@ impl PolicyConfig {
                 | i32::from(self.reset_loop) << 27,
             i32::from(self.harmonic) | i32::from(self.pitch_scale) << 16,
             i32::from(self.released) | i32::from(self.half_life_ms) << 16,
-            i32::from(self.register_floor) | i32::from(self.register_falloff) << 16,
+            i32::from(self.register),
             self.tolerance as i32,
             self.silence_ms as i32,
             self.keyboard[0],
@@ -105,8 +107,7 @@ impl PolicyConfig {
             pitch_scale: (w[2] >> 16) as u16,
             released: w[3] as u16,
             half_life_ms: (w[3] >> 16) as u16,
-            register_floor: w[4] as u16,
-            register_falloff: (w[4] >> 16) as u16,
+            register: w[4] as u16,
             tolerance: w[5].max(0) as u32,
             silence_ms: w[6].max(0) as u32,
             keyboard: [w[7], w[8], w[9]],
