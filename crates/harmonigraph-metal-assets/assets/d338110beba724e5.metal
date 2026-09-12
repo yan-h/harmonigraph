@@ -65,7 +65,7 @@ struct ShadowParams {
     float width;
     float reach_sigmas;
     float depth;
-    float padding;
+    float occlusion;
 };
 struct ShadowTargetParams {
     metal::float2 pane_points;
@@ -192,6 +192,42 @@ uint2 unpackUint32x2_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint
     return uint2((b3 << 24 | b2 << 16 | b1 << 8 | b0), (b7 << 24 | b6 << 16 | b5 << 8 | b4));
 }
 
+bool cell_packed(
+    metal::float4 cell
+) {
+    bool local = {};
+    if (cell.z > 0.0) {
+        local = cell.w > 0.0;
+    } else {
+        local = false;
+    }
+    bool _e10 = local;
+    return _e10;
+}
+
+metal::float2 cell_texel(
+    metal::float2 points,
+    metal::float4 rect,
+    metal::float4 cell_1,
+    float k
+) {
+    return cell_1.xy + ((points - rect.xy) * k);
+}
+
+metal::float4 no_quad(
+) {
+    return metal::float4(2.0, 2.0, 0.0, 1.0);
+}
+
+metal::float4 cell_clip(
+    metal::float2 texel,
+    metal::float2 size,
+    float w
+) {
+    metal::float2 extent = metal::max(size, metal::float2(1.0));
+    return metal::float4((((2.0 * texel.x) / extent.x) - 1.0) * w, (1.0 - ((2.0 * texel.y) / extent.y)) * w, 0.0, w);
+}
+
 float glow_shadow(
     constant Uniforms& u
 ) {
@@ -230,16 +266,16 @@ float node_rim(
     constant Uniforms& u
 ) {
     float rim = {};
-    bool local = {};
+    bool local_1 = {};
     float _e4 = u.node.rings_outer;
     rim = metal::max(_e4, 0.0);
     if (marked) {
         float _e13 = u.node.mark_thickness;
-        local = _e13 > 0.0;
+        local_1 = _e13 > 0.0;
     } else {
-        local = false;
+        local_1 = false;
     }
-    bool _e17 = local;
+    bool _e17 = local_1;
     if (_e17) {
         float _e18 = rim;
         float _e22 = u.node.mark_inner;
@@ -294,7 +330,7 @@ VsOut node_vertex(
     return _e102;
 }
 
-struct vs_mainOutput {
+struct vs_node_cellOutput {
     metal::float4 clip_pos [[position]];
     metal::float2 uv [[user(loc0), center_perspective]];
     metal::float4 color [[user(loc1), center_perspective]];
@@ -313,13 +349,13 @@ struct vs_mainOutput {
 };
 struct vb_15_type { metal::uchar data[120]; };
 struct vb_14_type { metal::uchar data[64]; };
-vertex vs_mainOutput vs_main(
+vertex vs_node_cellOutput vs_node_cell(
   uint vertex_index [[vertex_id]]
 , constant Uniforms& u [[buffer(0)]]
 , uint i_id [[instance_id]]
 , const device vb_15_type* vb_15_in [[buffer(15)]]
 , const device vb_14_type* vb_14_in [[buffer(14)]]
-, constant _mslBufferSizes& _buffer_sizes [[buffer(2)]]
+, constant _mslBufferSizes& _buffer_sizes [[buffer(1)]]
 ) {
     metal::float3 world_pos = {};
     metal::float4 color = {};
@@ -346,27 +382,69 @@ vertex vs_mainOutput vs_main(
         ring = unpackFloat32_(vb_15_elem.data[100], vb_15_elem.data[101], vb_15_elem.data[102], vb_15_elem.data[103]);
         glow = unpackFloat32x3_(vb_15_elem.data[104], vb_15_elem.data[105], vb_15_elem.data[106], vb_15_elem.data[107], vb_15_elem.data[108], vb_15_elem.data[109], vb_15_elem.data[110], vb_15_elem.data[111], vb_15_elem.data[112], vb_15_elem.data[113], vb_15_elem.data[114], vb_15_elem.data[115]);
     }
-    metal::float4 rect = {};
-    metal::float4 cell = {};
+    metal::float4 rect_1 = {};
+    metal::float4 cell_2 = {};
     metal::float4 cell_map = {};
     metal::float4 who = {};
     if (i_id < (_buffer_sizes.buffer_size14 / 64)) {
         const vb_14_type vb_14_elem = vb_14_in[i_id];
-        rect = unpackFloat32x4_(vb_14_elem.data[0], vb_14_elem.data[1], vb_14_elem.data[2], vb_14_elem.data[3], vb_14_elem.data[4], vb_14_elem.data[5], vb_14_elem.data[6], vb_14_elem.data[7], vb_14_elem.data[8], vb_14_elem.data[9], vb_14_elem.data[10], vb_14_elem.data[11], vb_14_elem.data[12], vb_14_elem.data[13], vb_14_elem.data[14], vb_14_elem.data[15]);
-        cell = unpackFloat32x4_(vb_14_elem.data[16], vb_14_elem.data[17], vb_14_elem.data[18], vb_14_elem.data[19], vb_14_elem.data[20], vb_14_elem.data[21], vb_14_elem.data[22], vb_14_elem.data[23], vb_14_elem.data[24], vb_14_elem.data[25], vb_14_elem.data[26], vb_14_elem.data[27], vb_14_elem.data[28], vb_14_elem.data[29], vb_14_elem.data[30], vb_14_elem.data[31]);
+        rect_1 = unpackFloat32x4_(vb_14_elem.data[0], vb_14_elem.data[1], vb_14_elem.data[2], vb_14_elem.data[3], vb_14_elem.data[4], vb_14_elem.data[5], vb_14_elem.data[6], vb_14_elem.data[7], vb_14_elem.data[8], vb_14_elem.data[9], vb_14_elem.data[10], vb_14_elem.data[11], vb_14_elem.data[12], vb_14_elem.data[13], vb_14_elem.data[14], vb_14_elem.data[15]);
+        cell_2 = unpackFloat32x4_(vb_14_elem.data[16], vb_14_elem.data[17], vb_14_elem.data[18], vb_14_elem.data[19], vb_14_elem.data[20], vb_14_elem.data[21], vb_14_elem.data[22], vb_14_elem.data[23], vb_14_elem.data[24], vb_14_elem.data[25], vb_14_elem.data[26], vb_14_elem.data[27], vb_14_elem.data[28], vb_14_elem.data[29], vb_14_elem.data[30], vb_14_elem.data[31]);
         cell_map = unpackFloat32x4_(vb_14_elem.data[32], vb_14_elem.data[33], vb_14_elem.data[34], vb_14_elem.data[35], vb_14_elem.data[36], vb_14_elem.data[37], vb_14_elem.data[38], vb_14_elem.data[39], vb_14_elem.data[40], vb_14_elem.data[41], vb_14_elem.data[42], vb_14_elem.data[43], vb_14_elem.data[44], vb_14_elem.data[45], vb_14_elem.data[46], vb_14_elem.data[47]);
         who = unpackFloat32x4_(vb_14_elem.data[48], vb_14_elem.data[49], vb_14_elem.data[50], vb_14_elem.data[51], vb_14_elem.data[52], vb_14_elem.data[53], vb_14_elem.data[54], vb_14_elem.data[55], vb_14_elem.data[56], vb_14_elem.data[57], vb_14_elem.data[58], vb_14_elem.data[59], vb_14_elem.data[60], vb_14_elem.data[61], vb_14_elem.data[62], vb_14_elem.data[63]);
     }
     const Instance inst = { world_pos, color, params, octaves, cents, marks, {}, melody_color, bass_color, scale_2, ring, {}, glow };
-    const ShadowCell box = { rect, cell, cell_map, who };
+    const ShadowCell box = { rect_1, cell_2, cell_map, who };
     VsOut out = {};
     VsOut _e3 = node_vertex(vertex_index, inst, u);
     out = _e3;
-    out.shadow_box = metal::float4(box.who.x, 0.0, 0.0, 0.0);
-    metal::float4 _e14 = out.clip_pos;
-    metal::float2 _e15 = pane_points(_e14, u);
-    out.shadow_at = metal::float4(_e15, box.cell_map.z, 1.0);
-    VsOut _e20 = out;
-    const auto _tmp = _e20;
-    return vs_mainOutput { _tmp.clip_pos, _tmp.uv, _tmp.color, _tmp.params, _tmp.octaves, _tmp.cents, _tmp.strip_row, _tmp.marks, _tmp.melody_color, _tmp.bass_color, _tmp.rim, _tmp.ring, _tmp.ink_carry, _tmp.shadow_box, _tmp.shadow_at };
+    metal::float4x4 _e8 = u.camera.view_proj;
+    metal::float4 centre_clip = _e8 * metal::float4(inst.world_pos, 1.0);
+    float _e16 = u.node.radius;
+    float uv_world = ((_e16 * 0.9) * 2.0) * metal::max(inst.scale, 0.05);
+    metal::float4x4 _e28 = u.camera.view_proj;
+    metal::float4 _e33 = u.camera.right;
+    metal::float4 right_clip = _e28 * metal::float4(inst.world_pos + (_e33.xyz * uv_world), 1.0);
+    metal::float2 _e40 = pane_points(centre_clip, u);
+    metal::float2 _e41 = pane_points(right_clip, u);
+    metal::float2 right = _e41 - _e40;
+    float uv_points = metal::length(right);
+    if (box.who.y < 0.5) {
+        metal::float4 _e49 = out.clip_pos;
+        metal::float2 _e50 = pane_points(_e49, u);
+        metal::float2 _e55 = cell_texel(_e50, box.rect, box.cell, box.cell_map.x);
+        metal::float4 _e57 = no_quad();
+        metal::float2 _e61 = u.shadow_target.atlas_texels;
+        float _e64 = out.clip_pos.w;
+        metal::float4 _e65 = cell_clip(_e55, _e61, _e64);
+        bool _e67 = cell_packed(box.cell);
+        out.clip_pos = _e67 ? _e65 : _e57;
+        out.shadow_box = box.cell;
+        out.shadow_at = metal::float4(_e55, uv_points, box.cell_map.w);
+        VsOut _e75 = out;
+        const auto _tmp = _e75;
+        return vs_node_cellOutput { _tmp.clip_pos, _tmp.uv, _tmp.color, _tmp.params, _tmp.octaves, _tmp.cents, _tmp.strip_row, _tmp.marks, _tmp.melody_color, _tmp.bass_color, _tmp.rim, _tmp.ring, _tmp.ink_carry, _tmp.shadow_box, _tmp.shadow_at };
+    }
+    metal::float2 corner_1 = metal::float2(((vertex_index & 1u) == 1u) ? 1.0 : 0.0, ((vertex_index & 2u) == 2u) ? 1.0 : 0.0);
+    metal::float2 texel_1 = box.cell.xy + (corner_1 * box.cell.zw);
+    metal::float2 points_1 = box.rect.xy + ((texel_1 - box.cell.xy) / metal::float2(metal::max(box.cell_map.x, 0.000001)));
+    metal::float4x4 _e112 = u.camera.view_proj;
+    metal::float4 _e117 = u.camera.up;
+    metal::float4 up_clip = _e112 * metal::float4(inst.world_pos + (_e117.xyz * uv_world), 1.0);
+    metal::float2 _e124 = pane_points(up_clip, u);
+    metal::float2 up = _e124 - _e40;
+    metal::float2 delta = points_1 - _e40;
+    float det = (right.x * up.y) - (right.y * up.x);
+    float stable_det = (det >= 0.0) ? metal::max(metal::abs(det), 0.000001) : -(metal::max(metal::abs(det), 0.000001));
+    out.uv = metal::float2((delta.x * up.y) - (delta.y * up.x), (right.x * delta.y) - (right.y * delta.x)) / metal::float2(stable_det);
+    metal::float4 _e163 = no_quad();
+    metal::float2 _e167 = u.shadow_target.atlas_texels;
+    metal::float4 _e169 = cell_clip(texel_1, _e167, 1.0);
+    bool _e171 = cell_packed(box.cell);
+    out.clip_pos = _e171 ? _e169 : _e163;
+    out.shadow_box = box.cell;
+    out.shadow_at = metal::float4(texel_1, -(metal::max(uv_points, 0.000001)), box.cell_map.w);
+    VsOut _e182 = out;
+    const auto _tmp = _e182;
+    return vs_node_cellOutput { _tmp.clip_pos, _tmp.uv, _tmp.color, _tmp.params, _tmp.octaves, _tmp.cents, _tmp.strip_row, _tmp.marks, _tmp.melody_color, _tmp.bass_color, _tmp.rim, _tmp.ring, _tmp.ink_carry, _tmp.shadow_box, _tmp.shadow_at };
 }

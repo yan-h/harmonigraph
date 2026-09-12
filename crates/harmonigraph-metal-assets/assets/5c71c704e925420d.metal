@@ -64,7 +64,7 @@ struct ShadowParams {
     float width;
     float reach_sigmas;
     float depth;
-    float padding;
+    float occlusion;
 };
 struct ShadowTargetParams {
     metal::float2 pane_points;
