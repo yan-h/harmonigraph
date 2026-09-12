@@ -4,6 +4,10 @@
 
 using metal::uint;
 
+struct SplitOut {
+    metal::float4 other;
+    metal::float4 ink;
+};
 struct Locals {
     metal::float2 screen_points;
     metal::float2 atlas_size;
@@ -168,7 +172,8 @@ struct fs_fill_litInput {
     metal::float2 sheet_size [[user(loc6), flat]];
 };
 struct fs_fill_litOutput {
-    metal::float4 member [[color(0)]];
+    metal::float4 other [[color(0)]];
+    metal::float4 ink [[color(1)]];
 };
 fragment fs_fill_litOutput fs_fill_lit(
   fs_fill_litInput varyings [[stage_in]]
@@ -188,5 +193,6 @@ fragment fs_fill_litOutput fs_fill_lit(
     metal::int2 coord_2 = naga_f2i32(in.position.xy);
     metal::float4 _e10 = glyph_light(coord_2, glow_tex);
     metal::float3 _e15 = wash_over(ink_1.xyz, ink_1.w, _e10.xyz, 1.0);
-    return fs_fill_litOutput { metal::float4(_e15, ink_1.w) };
+    const auto _tmp = SplitOut {metal::float4(_e15, ink_1.w), metal::float4(0.0, 0.0, 0.0, ink_1.w)};
+    return fs_fill_litOutput { _tmp.other, _tmp.ink };
 }

@@ -15,9 +15,9 @@ struct ShadowCaster {
     metal::float4 shade;
 };
 typedef ShadowCaster type_7[1];
-struct SceneOut {
-    metal::float4 picture;
-    metal::float4 nodes;
+struct SplitOut {
+    metal::float4 other;
+    metal::float4 ink;
 };
 struct CompositeParams {
     float darkest_pitch;
@@ -174,7 +174,8 @@ struct Painted {
     metal::packed_float3 rgb;
     float seen;
     float bloom;
-    char _pad3[12];
+    float ink_alpha;
+    char _pad4[8];
 };
 constant float DISTANCE_KIND = 1.0;
 constant float GAUSSIAN_GAIN = 2.5;
@@ -1349,12 +1350,6 @@ NodeInk node_ink(
     return NodeInk {active_rgb, active_alpha, _e304 / metal::max(active_alpha, 0.0001), _e308, _e309};
 }
 
-metal::float4 seen_of(
-    Painted paint
-) {
-    return metal::float4(paint.rgb, paint.seen);
-}
-
 metal::int2 naga_f2i32(metal::float2 value) {
     return static_cast<metal::int2>(metal::clamp(value, -2147483600.0, 2147483500.0));
 }
@@ -1387,45 +1382,55 @@ Painted node_paint(
         if (bloom <= 0.0) {
             metal::discard_fragment();
         }
-        return Painted {metal::float3(0.0), shadow, bloom};
+        return Painted {metal::float3(0.0), shadow, bloom, 0.0};
     }
-    NodeInk _e28 = node_ink(in_7, _e2.d, _e2.aa, _e2.oct, false, u);
-    ink_1 = _e28;
-    float _e31 = ink_1.alpha;
-    if (_e31 < INK_FLOOR) {
-        float _e37 = ink_1.sd;
-        ink_1 = NodeInk {metal::float3(0.0), 0.0, 0.0, 0.0, _e37};
+    NodeInk _e29 = node_ink(in_7, _e2.d, _e2.aa, _e2.oct, false, u);
+    ink_1 = _e29;
+    float _e32 = ink_1.alpha;
+    if (_e32 < INK_FLOOR) {
+        float _e38 = ink_1.sd;
+        ink_1 = NodeInk {metal::float3(0.0), 0.0, 0.0, 0.0, _e38};
     }
-    float _e43 = ink_1.mask;
-    bool _e48 = shadow_is_distance(in_7.shadow_box.x, shadow_casters, _buffer_sizes);
-    float shadow_exposure = _e48 ? 1.0 : (1.0 - _e43);
+    float _e44 = ink_1.mask;
+    bool _e49 = shadow_is_distance(in_7.shadow_box.x, shadow_casters, _buffer_sizes);
+    float shadow_exposure = _e49 ? 1.0 : (1.0 - _e44);
     float seen_through = 1.0 - ((1.0 - _e10.seen) * shadow_exposure);
     float bloom_through = 1.0 - ((1.0 - _e10.bloom) * shadow_exposure);
-    float _e66 = ink_1.alpha;
-    if (_e66 > 0.0) {
-        float _e73 = node_visibility(in_7.shadow_box.x, in_7.shadow_at.xy, shadow_atlas, shadow_sampler, shadow_casters, u, _buffer_sizes);
-        visibility_1 = _e73;
+    float _e67 = ink_1.alpha;
+    if (_e67 > 0.0) {
+        float _e74 = node_visibility(in_7.shadow_box.x, in_7.shadow_at.xy, shadow_atlas, shadow_sampler, shadow_casters, u, _buffer_sizes);
+        visibility_1 = _e74;
     }
-    float _e75 = ink_1.alpha;
-    float _e76 = visibility_1;
-    float visible_alpha = _e75 * _e76;
+    float _e76 = ink_1.alpha;
+    float _e77 = visibility_1;
+    float visible_alpha = _e76 * _e77;
     float final_alpha = 1.0 - ((1.0 - visible_alpha) * seen_through);
     float bloom_alpha = 1.0 - ((1.0 - visible_alpha) * bloom_through);
     if (bloom_alpha <= 0.0) {
         metal::discard_fragment();
     }
-    metal::int2 _e92 = light_coord(in_7.clip_pos.xy, glow_tex);
-    metal::float4 _e93 = glow_light(_e92, glow_tex);
-    metal::float3 _e95 = ink_1.rgb;
-    float _e97 = ink_1.alpha;
-    float _e99 = glow_wash(u);
-    float _e101 = ink_1.lit;
-    metal::float3 _e104 = wash_over(_e95, _e97, _e93.xyz, metal::mix(1.0, _e99, _e101));
-    float _e105 = visibility_1;
-    return Painted {_e104 * _e105, final_alpha, bloom_alpha};
+    metal::int2 _e93 = light_coord(in_7.clip_pos.xy, glow_tex);
+    metal::float4 _e94 = glow_light(_e93, glow_tex);
+    metal::float3 _e96 = ink_1.rgb;
+    float _e98 = ink_1.alpha;
+    float _e100 = glow_wash(u);
+    float _e102 = ink_1.lit;
+    metal::float3 _e105 = wash_over(_e96, _e98, _e94.xyz, metal::mix(1.0, _e100, _e102));
+    float _e106 = visibility_1;
+    return Painted {_e105 * _e106, final_alpha, bloom_alpha, visible_alpha};
 }
 
-struct fs_main_sceneInput {
+SplitOut node_split(
+    Painted paint,
+    float shadow_alpha,
+    constant Uniforms& u
+) {
+    float _e6 = u.geometry_shadow.occlusion;
+    float alpha_1 = metal::mix(shadow_alpha, paint.ink_alpha, metal::clamp(_e6, 0.0, 1.0));
+    return SplitOut {metal::float4(0.0, 0.0, 0.0, shadow_alpha), metal::float4(paint.rgb, alpha_1)};
+}
+
+struct fs_main_splitInput {
     metal::float2 uv [[user(loc0), center_perspective]];
     metal::float4 color [[user(loc1), center_perspective]];
     metal::float3 params [[user(loc2), center_perspective]];
@@ -1441,12 +1446,12 @@ struct fs_main_sceneInput {
     metal::float4 shadow_box [[user(loc10), flat]];
     metal::float4 shadow_at [[user(loc12), center_no_perspective]];
 };
-struct fs_main_sceneOutput {
-    metal::float4 picture [[color(0)]];
-    metal::float4 nodes [[color(1)]];
+struct fs_main_splitOutput {
+    metal::float4 other [[color(0)]];
+    metal::float4 ink [[color(1)]];
 };
-fragment fs_main_sceneOutput fs_main_scene(
-  fs_main_sceneInput varyings [[stage_in]]
+fragment fs_main_splitOutput fs_main_split(
+  fs_main_splitInput varyings [[stage_in]]
 , metal::float4 clip_pos [[position]]
 , metal::texture2d<float, metal::access::sample> glow_tex [[texture(0)]]
 , metal::texture2d<float, metal::access::sample> shadow_atlas [[texture(1)]]
@@ -1457,7 +1462,7 @@ fragment fs_main_sceneOutput fs_main_scene(
 ) {
     const VsOut in = { clip_pos, varyings.uv, {}, varyings.color, varyings.params, varyings.octaves, varyings.cents, varyings.strip_row, {}, varyings.marks, varyings.melody_color, varyings.bass_color, varyings.rim, varyings.ring, varyings.ink_carry, {}, varyings.shadow_box, varyings.shadow_at };
     Painted _e1 = node_paint(in, glow_tex, shadow_atlas, shadow_sampler, shadow_casters, u, _buffer_sizes);
-    metal::float4 _e2 = seen_of(_e1);
-    const auto _tmp = SceneOut {_e2, metal::float4(_e1.rgb, _e1.bloom)};
-    return fs_main_sceneOutput { _tmp.picture, _tmp.nodes };
+    SplitOut _e3 = node_split(_e1, _e1.seen, u);
+    const auto _tmp = _e3;
+    return fs_main_splitOutput { _tmp.other, _tmp.ink };
 }

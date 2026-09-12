@@ -15,9 +15,9 @@ struct ShadowCaster {
     metal::float4 shade;
 };
 typedef ShadowCaster type_6[1];
-struct SceneOut {
-    metal::float4 picture;
-    metal::float4 nodes;
+struct SplitOut {
+    metal::float4 other;
+    metal::float4 ink;
 };
 struct CompositeParams {
     float darkest_pitch;
@@ -120,7 +120,8 @@ struct Painted {
     metal::packed_float3 rgb;
     float seen;
     float bloom;
-    char _pad3[12];
+    float ink_alpha;
+    char _pad4[8];
 };
 struct PlusVsOut {
     metal::float4 clip_pos;
@@ -463,21 +464,21 @@ Painted plus_paint(
     metal::int2 _e64 = light_coord(in_1.clip_pos.xy, glow_tex);
     metal::float4 _e65 = glow_light(_e64, glow_tex);
     metal::float3 _e68 = wash_over(ink_1, alpha_1, _e65.xyz, 1.0);
-    return Painted {_e68, final_alpha, bloom_alpha};
+    return Painted {_e68, final_alpha, bloom_alpha, alpha_1};
 }
 
-struct fs_plus_sceneInput {
+struct fs_plus_splitInput {
     metal::float2 uv [[user(loc0), center_perspective]];
     metal::float4 color [[user(loc1), center_perspective]];
     metal::float4 shadow_box [[user(loc3), flat]];
     metal::float4 shadow_at [[user(loc4), center_no_perspective]];
 };
-struct fs_plus_sceneOutput {
-    metal::float4 picture [[color(0)]];
-    metal::float4 nodes [[color(1)]];
+struct fs_plus_splitOutput {
+    metal::float4 other [[color(0)]];
+    metal::float4 ink [[color(1)]];
 };
-fragment fs_plus_sceneOutput fs_plus_scene(
-  fs_plus_sceneInput varyings [[stage_in]]
+fragment fs_plus_splitOutput fs_plus_split(
+  fs_plus_splitInput varyings [[stage_in]]
 , metal::float4 clip_pos [[position]]
 , metal::texture2d<float, metal::access::sample> glow_tex [[texture(0)]]
 , metal::texture2d<float, metal::access::sample> shadow_atlas [[texture(1)]]
@@ -489,6 +490,6 @@ fragment fs_plus_sceneOutput fs_plus_scene(
     const PlusVsOut in = { clip_pos, varyings.uv, {}, varyings.color, varyings.shadow_box, varyings.shadow_at };
     Painted _e1 = plus_paint(in, glow_tex, shadow_atlas, shadow_sampler, shadow_casters, u, _buffer_sizes);
     metal::float4 _e2 = seen_of(_e1);
-    const auto _tmp = SceneOut {_e2, metal::float4(_e1.rgb, _e1.bloom)};
-    return fs_plus_sceneOutput { _tmp.picture, _tmp.nodes };
+    const auto _tmp = SplitOut {_e2, metal::float4(0.0, 0.0, 0.0, _e1.seen)};
+    return fs_plus_splitOutput { _tmp.other, _tmp.ink };
 }

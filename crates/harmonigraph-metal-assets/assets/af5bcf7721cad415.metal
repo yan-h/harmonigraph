@@ -15,9 +15,9 @@ struct ShadowCaster {
     metal::float4 shade;
 };
 typedef ShadowCaster type_4[1];
-struct SceneOut {
-    metal::float4 picture;
-    metal::float4 nodes;
+struct SplitOut {
+    metal::float4 other;
+    metal::float4 ink;
 };
 struct Locals {
     metal::float2 screen_points;
@@ -130,17 +130,17 @@ float shadow_transmittance(
     return 1.0 - (metal::clamp(level, 0.0, 1.0) * (1.0 - through));
 }
 
-struct fs_shadow_boxInput {
+struct fs_shadow_box_plainInput {
     metal::float2 at [[user(loc0), center_perspective]];
     float level [[user(loc1), flat]];
     uint who [[user(loc2), flat]];
 };
-struct fs_shadow_boxOutput {
-    metal::float4 picture [[color(0)]];
-    metal::float4 nodes [[color(1)]];
+struct fs_shadow_box_plainOutput {
+    metal::float4 other [[color(0)]];
+    metal::float4 ink [[color(1)]];
 };
-fragment fs_shadow_boxOutput fs_shadow_box(
-  fs_shadow_boxInput varyings [[stage_in]]
+fragment fs_shadow_box_plainOutput fs_shadow_box_plain(
+  fs_shadow_box_plainInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , metal::texture2d<float, metal::access::sample> shadow_atlas [[texture(3)]]
 , metal::sampler shadow_sampler [[sampler(1)]]
@@ -152,7 +152,7 @@ fragment fs_shadow_boxOutput fs_shadow_box(
     float _e3 = shadow_kernel(in.who, in.at, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
     float _e6 = locals.shadow_depth;
     float _e8 = shadow_transmittance(_e3, _e6, in.level);
-    float _e11 = shadow_transmittance(_e3, 1.0, in.level);
-    const auto _tmp = SceneOut {metal::float4(0.0, 0.0, 0.0, 1.0 - _e8), metal::float4(0.0, 0.0, 0.0, 1.0 - _e11)};
-    return fs_shadow_boxOutput { _tmp.picture, _tmp.nodes };
+    metal::float4 shadow = metal::float4(0.0, 0.0, 0.0, 1.0 - _e8);
+    const auto _tmp = SplitOut {shadow, shadow};
+    return fs_shadow_box_plainOutput { _tmp.other, _tmp.ink };
 }

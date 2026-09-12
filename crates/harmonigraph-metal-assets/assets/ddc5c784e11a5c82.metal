@@ -49,14 +49,16 @@ fragment fs_compositeOutput fs_composite(
 , metal::sampler scene_samp [[sampler(0)]]
 , metal::texture2d<float, metal::access::sample> bloom_tex [[texture(1)]]
 , constant CompositeParams& bu [[buffer(0)]]
+, metal::texture2d<float, metal::access::sample> ink_tex [[texture(2)]]
 ) {
     const BlitOut in = { pos, varyings.uv };
     metal::float4 scene = scene_tex.sample(scene_samp, in.uv);
     metal::float4 bloom = bloom_tex.sample(scene_samp, in.uv);
-    float _e13 = bu.bloom_strength;
-    metal::float3 rgb_1 = scene.xyz + (bloom.xyz * _e13);
+    metal::float4 ink = ink_tex.sample(scene_samp, in.uv);
+    float _e19 = bu.bloom_strength;
+    metal::float3 rgb_1 = (scene.xyz + ink.xyz) + (bloom.xyz * _e19);
     bool has_light = metal::any(rgb_1 > metal::float3(0.0));
-    metal::float3 _e22 = dither_to_unorm8_(rgb_1, in.pos.xy);
-    metal::float3 dithered = has_light ? _e22 : rgb_1;
+    metal::float3 _e28 = dither_to_unorm8_(rgb_1, in.pos.xy);
+    metal::float3 dithered = has_light ? _e28 : rgb_1;
     return fs_compositeOutput { metal::float4(dithered, scene.w) };
 }
