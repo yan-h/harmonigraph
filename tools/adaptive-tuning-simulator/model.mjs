@@ -3,15 +3,17 @@ export const AXES = [1200 * Math.log2(3 / 2), 1200 * Math.log2(5 / 4), 1200 * Ma
 // Released entries remembered: a storage bound with no control, as in the plugin.
 export const MEMORY = 24;
 export const DEFAULTS = Object.freeze({
-  radius: 3, axes: 2, harmonic: 6, pitchScale: 20,
+  radius: 3, axes: 2, pitchFlexibility: 100,
   register: 0.7,
   tolerance: 0.5, silence: 0, resetStop: false, resetLoop: false, halfLife: 0.5,
 });
-export const keyOf = n => n.join(',');
+export const keyOf = n => n?.join(',') ?? '';
+export const pitchCost = (error, flexibility) => Math.expm1((error / flexibility) ** 2) / Math.expm1(1);
 export const latticeCents = n => 4800 + n.reduce((sum, x, i) => sum + x * AXES[i], 0);
 export const distance = (a, b) => a.reduce((sum, x, i) => sum + Math.abs(x - b[i]), 0);
 export const mod = (x, n) => ((x % n) + n) % n;
 export function nodeName(n) {
+  if (!n) return 'Unsnapped';
   const diatonic = 4 * n[0] + 2 * n[1] + 6 * n[2], degree = mod(diatonic, 7);
   const nominal = 7 * n[0] + 4 * n[1] + 10 * n[2];
   const alteration = nominal - (12 * Math.floor(diatonic / 7) + [0, 2, 4, 5, 7, 9, 11][degree]);
@@ -35,7 +37,7 @@ export function parsePitch(text) {
 }
 function validateSettings(raw) {
   const s = { ...DEFAULTS, ...raw };
-  const bounds = { radius: [1, 5], axes: [1, 3], harmonic: [0, 20], pitchScale: [1, 100],
+  const bounds = { radius: [1, 5], axes: [1, 3], pitchFlexibility: [1, 100],
     register: [0.01, 1], tolerance: [0, 20], silence: [0, 120], halfLife: [0, 20] };
   for (const [name, [lo, hi]] of Object.entries(bounds)) {
     if (!Number.isFinite(s[name]) || s[name] < lo || s[name] > hi) throw new Error(`Invalid ${name}: expected ${lo}–${hi}.`);
@@ -92,7 +94,18 @@ export class Simulator {
     if (!entries.length) entries.push({ node: [0, 0, 0], output: 4800, input: 4800, weight: 1, status: 'origin', id: 'origin' });
     return entries;
   }
-  candidates(context = this.context()) {
+  prepareContext() {
+    const context = this.context();
+    const anchor = context.find(v => v.node)?.node ?? [0, 0, 0];
+    const local = this.candidates([{ node: anchor }]);
+    return context.map(v => {
+      if (v.node) return v;
+      const error = n => Math.abs(mod(latticeCents(n) - v.output + 600, 1200) - 600);
+      const node = local.reduce((best, n) => error(n) < error(best) ? n : best);
+      return { ...v, node };
+    });
+  }
+  candidates(context = this.prepareContext()) {
     const { radius, axes } = this.settings;
     const result = new Map();
     for (const anchor of context) {
@@ -128,36 +141,37 @@ export class Simulator {
   }
   evaluate(input) {
     if (!Number.isFinite(input)) throw new Error('Input pitch must be finite.');
-    const context = this.context(), target = input + this.reference;
+    const context = this.prepareContext(), target = input + this.reference;
     const candidates = this.candidates(context).map(node => {
       const base = latticeCents(node);
       const octave = Math.floor((target - base) / 1200 + 0.5);
       const output = base + 1200 * octave;
       const error = output - target;
-      const pitchCost = (error / this.settings.pitchScale) ** 2;
+      const cost = pitchCost(error, this.settings.pitchFlexibility);
       const harmonicDistance = this.harmonicCost(node, output, context);
-      const harmonicCost = this.settings.harmonic * harmonicDistance;
-      return { node, octave, output, error, pitchCost, harmonicCost, harmonicDistance, score: pitchCost + harmonicCost };
+      const harmonicCost = -1 / (1 + harmonicDistance);
+      return { node, octave, output, error, pitchCost: cost, harmonicCost, harmonicDistance, score: cost + harmonicCost };
     }).sort((a, b) => a.score - b.score || compareNodes(a.node, b.node));
-    return { input, target, reference: this.reference, context, candidates, winner: candidates[0] };
+    return { input, target, reference: this.reference, context, candidates, winner: candidates.find(c => c.score < 0) ?? { node: null, output: target, score: 0 } };
   }
   on(input, id = `note-${this.serial + 1}`) {
     if (this.held.has(id)) this.off(id);
     const result = this.evaluate(input);
-    const voice = { id, node: [...result.winner.node], input, output: result.winner.output,
-      correction: result.winner.output - input, bend: 0, stamp: ++this.serial, time: this.time };
+    const voice = { id, node: result.winner.node?.slice() ?? null, input, output: result.winner.output,
+      correction: result.winner.node ? result.winner.output - input : this.reference, bend: 0, stamp: ++this.serial, time: this.time };
     // A strike on the node struck last, nothing else struck between, is a hold:
     // it keeps that strike's time, so repeating a note moves no clock.
-    if (this.front && keyOf(this.front.node) === keyOf(voice.node)) voice.time = this.front.time;
+    if (!voice.node) this.front = null;
+    else if (this.front && keyOf(this.front.node) === keyOf(voice.node)) voice.time = this.front.time;
     else this.front = { node: voice.node, time: this.time };
     this.recent = this.recent.filter(e => Math.abs(e.output - voice.output) > this.settings.tolerance);
     this.held.set(id, voice);
     // The simplest moving reference: last onset's full output-minus-input
     // correction. Never fold this number modulo 1200: long journeys cross octaves.
-    this.reference = voice.correction;
+    if (voice.node) this.reference = voice.correction;
     this.lastRelease = null;
     this.last = result;
-    this.history.push({ ...voice, node: [...voice.node] });
+    this.history.push({ ...voice, node: voice.node?.slice() ?? null });
     return result;
   }
   seed(entries) {
@@ -207,23 +221,23 @@ export class Simulator {
   }
   reachability(low, high) {
     if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low || high - low > 12000) throw new Error('Choose an ascending input range of at most ten octaves.');
-    const context = this.context(), nodes = this.candidates(context);
-    const scale2 = this.settings.pitchScale ** 2;
+    const context = this.prepareContext(), nodes = this.candidates(context);
+    const flexibility = this.settings.pitchFlexibility;
     const pieces = [];
-    // Register weights use each candidate's realized output, so harmonic costs
-    // are constant within an octave realization. All pitch parabolas have equal
-    // curvature. Their pairwise differences are linear: compute winner intervals
-    // analytically, instead of claiming a coarse pitch scan is exhaustive.
+    // Register weights and harmonic benefits are constant per realization.
+    // Strict convexity gives one crossing between translated exponential costs;
+    // solve it numerically instead of scanning inputs at an arbitrary spacing.
     for (const node of nodes) {
       const base = latticeCents(node);
-      const first = Math.ceil((low + this.reference - 600 - base) / 1200);
-      const last = Math.floor((high + this.reference + 600 - base) / 1200);
+      const first = Math.ceil((low + this.reference - flexibility - base) / 1200);
+      const last = Math.floor((high + this.reference + flexibility - base) / 1200);
       for (let octave = first; octave <= last; octave++) {
         const output = base + 1200 * octave, center = output - this.reference;
-        const lo = Math.max(low, center - 600), hi = Math.min(high, center + 600);
+        const benefit = 1 / (1 + this.harmonicCost(node, output, context));
+        const radius = flexibility * Math.sqrt(Math.log1p(Math.expm1(1) * benefit));
+        const lo = Math.max(low, center - radius), hi = Math.min(high, center + radius);
         if (hi <= lo) continue;
-        pieces.push({ node, octave, output, center, lo, hi,
-          cost: this.settings.harmonic * this.harmonicCost(node, output, context) });
+        pieces.push({ node, octave, output, center, lo, hi, cost: -benefit });
       }
     }
     const bands = [];
@@ -231,14 +245,23 @@ export class Simulator {
       let ranges = [[a.lo, a.hi]];
       for (const b of pieces) {
         if (a === b || b.hi <= a.lo || b.lo >= a.hi) continue;
-        // score(a)-score(b) = slope * input + intercept.
-        const slope = 2 * (b.center - a.center) / scale2;
-        const intercept = (a.center - b.center) * (a.center + b.center) / scale2 + a.cost - b.cost;
-        let cutLo = b.lo, cutHi = b.hi;
-        if (Math.abs(slope) < 1e-12) {
-          if (intercept < -1e-10 || (Math.abs(intercept) <= 1e-10 && compareNodes(a.node, b.node) <= 0)) continue;
-        } else if (slope > 0) cutLo = Math.max(cutLo, -intercept / slope);
-        else cutHi = Math.min(cutHi, -intercept / slope);
+        let cutLo = Math.max(a.lo, b.lo), cutHi = Math.min(a.hi, b.hi);
+        if (a.center === b.center) {
+          if (a.cost < b.cost || (a.cost === b.cost && compareNodes(a.node, b.node) <= 0)) continue;
+        } else {
+          const difference = x => pitchCost(x - a.center, flexibility) - pitchCost(x - b.center, flexibility) + a.cost - b.cost;
+          const left = difference(cutLo), right = difference(cutHi);
+          if (left <= 0 && right <= 0) continue;
+          if (left < 0 || right < 0) {
+            const increasing = a.center < b.center;
+            let lo = cutLo, hi = cutHi;
+            for (let i = 0; i < 48; i++) {
+              const middle = (lo + hi) / 2;
+              if ((difference(middle) < 0) === increasing) lo = middle; else hi = middle;
+            }
+            if (increasing) cutLo = (lo + hi) / 2; else cutHi = (lo + hi) / 2;
+          }
+        }
         if (cutHi <= cutLo) continue;
         const next = [];
         for (const [lo, hi] of ranges) {
@@ -257,7 +280,7 @@ export class Simulator {
     // Isolated ties and range endpoints can select a node with no positive-width
     // winning interval. Include their actual deterministic winners as point hits.
     const boundaries = new Set([low, high, ...bands.flatMap(b => [b.low, b.high]), ...pieces.flatMap(p => [p.lo, p.hi])]);
-    const points = [...boundaries].map(input => ({ input, ...this.evaluate(input).winner }));
+    const points = [...boundaries].map(input => ({ input, ...this.evaluate(input).winner })).filter(p => p.node);
     return { low, high, bands, points, keys: new Set([...bands, ...points].map(b => keyOf(b.node))), nodes };
   }
 }

@@ -123,14 +123,13 @@ test('winner intervals agree with direct selection across pitches and registers'
     }
     for (let input = 3600.137; input < 8400; input += 13.719) {
       const band = reach.bands.find(b => input >= b.low && input < b.high);
-      assert.ok(band, `uncovered input ${input}`);
-      assert.equal(keyOf(sim.evaluate(input).winner.node), keyOf(band.node));
+      assert.equal(keyOf(sim.evaluate(input).winner.node), keyOf(band?.node));
     }
   }
-  const sim = new Simulator({ harmonic: 4 });
-  const endpoint = sim.reachability(5399.9, 5400);
-  assert.ok(endpoint.keys.has(keyOf(sim.evaluate(5400).winner.node)), 'include an endpoint-only winner');
-  assert.ok(sim.reachability(5000, 5000.00000001).keys.size > 0, 'tiny accepted ranges retain a winner');
+  const sim = new Simulator();
+  const endpoint = sim.reachability(4799.9, 4800);
+  assert.ok(endpoint.keys.has(keyOf(sim.evaluate(4800).winner.node)), 'include winners at the range endpoint');
+  assert.ok(sim.reachability(4800, 4800.00000001).keys.size > 0, 'tiny accepted ranges retain a winner');
 });
 
 test('transport settings clear context without changing a held voice correction on a loop', () => {
@@ -151,7 +150,23 @@ test('continuous input parser accepts fine pitches and reports invalid programs'
   assert.equal(parsePitch('Eb3'), 5100);
   assert.throws(() => parseProgram('on C3 c\nwait nope'), /Line 2/);
   assert.throws(() => parseProgram('on C3'), /Line 1/);
-  assert.throws(() => new Simulator({ pitchScale: 0 }), /pitchScale/);
+  assert.throws(() => new Simulator({ pitchFlexibility: 0 }), /pitchFlexibility/);
   assert.equal(nodeName([0, 3, 0]), 'B♯');
   assert.equal(nodeName([0, 18, 0]), 'D♯10', 'long journeys retain unwrapped diatonic spelling');
+});
+
+
+test('unsnapped attacks preserve full drift and interrupt a repeated node', () => {
+  const sim = new Simulator({ axes: 1, radius: 1, pitchFlexibility: 50 });
+  sim.reference = 2400;
+  sim.on(4800, 'c'); sim.wait(0.1);
+  const e = sim.on(5200, 'e');
+  assert.equal(e.winner.node, null);
+  assert.equal(e.winner.output, 7600);
+  assert.equal(sim.reference, 2400);
+  assert.equal(nodeName(e.winner.node), 'Unsnapped');
+  sim.wait(0.1); sim.on(4800, 'c-again');
+  assert.equal(sim.held.get('c-again').time, 0.2);
+  sim.allOff();
+  assert.doesNotThrow(() => sim.reachability(7200, 8400));
 });

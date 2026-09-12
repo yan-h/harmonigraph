@@ -1,5 +1,5 @@
 //! Non-realtime analytic reachability over an explicitly bounded input register.
-//! Equal-curvature pitch parabolas differ linearly on each octave interval.
+//! Shifted exponential pitch costs cross at most once on each overlap.
 use super::*;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
@@ -30,31 +30,50 @@ pub fn reachable(
     let reference = snapshot.reference as f64 / 1_000_000.0;
     let mut scratch = PolicyScratch::default();
     prepare(c, &snapshot.context, &mut scratch)?;
+    // A key that loses to passthrough still excludes other key classes. Build
+    // the occupied windows from every candidate, before clipping by benefit.
+    let mut occupied = Vec::new();
+    for &node in &scratch.candidates {
+        occupied.extend(key_windows(c, node, low, high));
+    }
+    occupied.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut gaps = Vec::new();
+    let mut cursor = low;
+    for (lo, hi) in occupied {
+        if lo > cursor {
+            gaps.push((cursor, lo));
+        }
+        cursor = cursor.max(hi);
+    }
+    if cursor < high {
+        gaps.push((cursor, high));
+    }
+    let flexibility = c.policy.pitch_flexibility;
+    let max_radius = f64::from(flexibility);
     let mut pieces = Vec::new();
     for &node in &scratch.candidates {
         let base = c.cents(node);
-        let first = ((low + reference - 600.0 - base) / 1200.0).ceil() as i64;
-        let last = ((high + reference + 600.0 - base) / 1200.0).floor() as i64;
+        let first = ((low + reference - max_radius - base) / 1200.0).ceil() as i64;
+        let last = ((high + reference + max_radius - base) / 1200.0).floor() as i64;
+        let mut eligible = gaps.clone();
+        eligible.extend(key_windows(c, node, low, high));
         for octave in first..=last {
-            let output = base + 1200.0 * octave as f64;
+            let output = ((base + 1200.0 * octave as f64) * 1_000_000.0).round() / 1_000_000.0;
             let center = output - reference;
-            let lo = low.max(center - 600.0);
-            let hi = high.min(center + 600.0);
-            if hi > lo {
-                pieces.push(Piece {
-                    node,
-                    center,
-                    low: lo,
-                    high: hi,
-                    cost: harmonic_cost(c, node, output, &scratch.context),
-                });
+            let benefit = harmonic_benefit(c, node, output, &scratch.context);
+            let radius = benefit_radius(flexibility, benefit);
+            for &(lo, hi) in &eligible {
+                let lo = lo.max(center - radius);
+                let hi = hi.min(center + radius);
+                if hi > lo {
+                    pieces.push(Piece { node, center, low: lo, high: hi, cost: -benefit });
+                }
             }
         }
         if cancelled() {
             return Ok(Vec::new());
         }
     }
-    let scale2 = f64::from(c.policy.pitch_scale).powi(2);
     let mut result = Vec::new();
     let mut boundaries = vec![low, high];
     for a in &pieces {
@@ -67,18 +86,42 @@ pub fn reachable(
             if std::ptr::eq(a, b) || b.high <= a.low || b.low >= a.high {
                 continue;
             }
-            let slope = 2.0 * (b.center - a.center) / scale2;
-            let intercept =
-                (a.center - b.center) * (a.center + b.center) / scale2 + a.cost - b.cost;
-            let (mut lo, mut hi) = (b.low, b.high);
-            if slope.abs() < 1e-12 {
-                if intercept < -1e-10 || (intercept.abs() <= 1e-10 && key(a.node) <= key(b.node)) {
+            let (mut lo, mut hi) = (b.low.max(a.low), b.high.min(a.high));
+            if a.center == b.center {
+                if a.cost < b.cost || (a.cost == b.cost && key(a.node) <= key(b.node)) {
                     continue;
                 }
-            } else if slope > 0.0 {
-                lo = lo.max(-intercept / slope);
             } else {
-                hi = hi.min(-intercept / slope);
+                let difference = |x| {
+                    pitch_cost(flexibility, x - a.center) - pitch_cost(flexibility, x - b.center)
+                        + a.cost
+                        - b.cost
+                };
+                let (left, right) = (difference(lo), difference(hi));
+                if left <= 0.0 && right <= 0.0 {
+                    continue;
+                }
+                if left < 0.0 || right < 0.0 {
+                    // P is strictly convex, so two translated copies have a
+                    // strictly monotone difference. Bisect their sole crossing
+                    // to finer than the input's one-microcent resolution.
+                    let increasing = a.center < b.center;
+                    let (mut lower, mut upper) = (lo, hi);
+                    for _ in 0..48 {
+                        let middle = (lower + upper) * 0.5;
+                        if (difference(middle) < 0.0) == increasing {
+                            lower = middle;
+                        } else {
+                            upper = middle;
+                        }
+                    }
+                    let crossing = (lower + upper) * 0.5;
+                    if increasing {
+                        lo = crossing;
+                    } else {
+                        hi = crossing;
+                    }
+                }
             }
             if hi <= lo {
                 continue;
@@ -102,9 +145,8 @@ pub fn reachable(
             }
         }
         if !ranges.is_empty() {
-            result.push(a.node);
             for (lo, hi) in ranges {
-                boundaries.extend([lo, hi]);
+                boundaries.extend([lo, (lo + hi) * 0.5, hi]);
             }
         }
     }
@@ -126,30 +168,22 @@ pub fn reachable(
             result.push(node);
         }
     }
-    // The keyboard filter admits a node only within a few cents of a key,
-    // which continuous boundary samples almost never land on. Every
-    // rendering the candidates have is a key, so play each one in every octave.
-    let mut keys: Vec<_> =
-        scratch.candidates.iter().map(|&n| keyboard_class(c.policy.keyboard, n)).collect();
-    keys.sort_unstable();
-    keys.dedup();
-    for class in keys {
-        if cancelled() {
-            return Ok(Vec::new());
-        }
-        let pitch = i64::from(c.c_offset) + class;
-        let first = ((low * 1_000_000.0 - pitch as f64) / OCTAVE as f64).ceil() as i64;
-        let last = ((high * 1_000_000.0 - pitch as f64) / OCTAVE as f64).floor() as i64;
-        for octave in first..=last {
-            let onset = OrderedOnset { pitch: pitch + octave * OCTAVE };
-            if let Some(node) =
-                select_prepared(c, snapshot.reference, onset, &scratch)?.assignment.node()
-            {
-                result.push(node);
-            }
-        }
-    }
     result.sort_by_key(|n| key(*n));
     result.dedup();
     Ok(result)
+}
+
+/// Input windows in which this node belongs to the preferred keyboard pool.
+fn key_windows(config: MusicalConfig, node: LatticePos, low: f64, high: f64) -> Vec<(f64, f64)> {
+    let center = (i64::from(config.c_offset) + keyboard_class(config.policy.keyboard, node)) as f64
+        / 1_000_000.0;
+    let tolerance = KEYBOARD_TOLERANCE as f64 / 1_000_000.0;
+    let first = ((low - tolerance - center) / 1200.0).ceil() as i64;
+    let last = ((high + tolerance - center) / 1200.0).floor() as i64;
+    (first..=last)
+        .map(|octave| {
+            let center = center + 1200.0 * octave as f64;
+            (low.max(center - tolerance), high.min(center + tolerance))
+        })
+        .collect()
 }

@@ -1,10 +1,7 @@
 //! Musical integration through the exported production callbacks.
 //!
-//! These are the tests the fault cut did not change: policy v2 is untouched,
-//! so what a chord across three tracks comes out as is what it always was.
-//! What changed underneath is where the answer is read from — there is one
-//! authority now, the Hub's own schedule, rather than a plan and an accepted
-//! output that had to agree.
+//! The Hub's schedule is the authority for display, take and future context;
+//! these fixtures also check the tuning expressions actually emitted to hosts.
 use super::*;
 use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig};
 use harmonigraph_core::{canonical::VoiceBaseline, LatticePos, Tuning};
@@ -392,6 +389,42 @@ fn production_tune_preserves_player_pitch_and_freezes_only_the_adaptive_correcti
     assert_eq!(after.frozen_offset_microcents, correction);
     assert_eq!(after.onset_pitch_microcents, onset.onset_pitch_microcents);
     assert_ne!(after.pitch_microcents, onset.pitch_microcents, "what sounds did move");
+    phrase.release_all();
+}
+
+#[test]
+fn an_unsnapped_onset_emits_existing_drift_without_claiming_a_node_or_the_reference() {
+    let _scope = crate::test_scope::enter();
+    let mut phrase = Phrase::new();
+    phrase.step([vec![note(1, 0, 60, 0, true)], vec![note(2, 0, 64, 0, true)], vec![]], [0, 1, 2]);
+    phrase.idle();
+    let correction = phrase.voice(1, 64, 0).frozen_offset_microcents;
+    assert_ne!(correction, 0, "the just E establishes drift before the missing candidate");
+    configure_policy(&phrase.hub, PolicyConfig { radius: 1, axes: 1, ..Default::default() });
+    // Around held C and E, one fifth-step reaches F/G and A/B. None earns
+    // enough benefit to retune this C-sharp, including its initial bend.
+    phrase.step([vec![], vec![], vec![note(3, 0, 61, 0, true), expression(3, 0.05, 0)]], [0, 1, 2]);
+    let output = phrase.idle();
+    let voice = phrase.voice(2, 61, 0);
+    assert_eq!(voice.attack_node, None);
+    assert_eq!(voice.frozen_offset_microcents, correction);
+    assert_eq!(voice.onset_pitch_microcents, 6_105_000_000 + correction);
+    let emitted = output[2]
+        .iter()
+        .find_map(|(_, event)| match event {
+            Event::Expression { kind: 2, value, .. } => Some(*value),
+            _ => None,
+        })
+        .expect("even an unsnapped onset emits its drift and player expression");
+    assert!((emitted - (0.05 + correction as f64 / 100_000_000.0)).abs() < 1e-9);
+    assert_eq!(inspect_hub(&phrase.hub, |hub| hub.test_next_context().reference), correction);
+    phrase.sources[2].shared().set_retune(false);
+    phrase.idle();
+    assert_eq!(
+        inspect_hub(&phrase.hub, |hub| hub.test_next_context().reference),
+        correction,
+        "the unsnapped source did not take ownership of the reference"
+    );
     phrase.release_all();
 }
 

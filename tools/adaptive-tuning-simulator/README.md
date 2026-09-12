@@ -81,27 +81,31 @@ Realize each eligible node in the octave nearest `p + d`, giving candidate outpu
 Its score is:
 
 ```text
-pitch cost   = ((q - p - d) / pitchScale)^2
+pitch cost   = expm1(((q - p - d) / pitchFlexibility)^2) / expm1(1)
 register_i   = perOctave ^ (abs(q - onset_i) / 1200)
 vote_n       = max over the voices i on node n of contextBaseWeight_i × register_i
-harmony cost = harmonic × sum(vote_n × latticeDistance(node, n)) / sum(vote_n)
-total        = pitch cost + harmony cost
+distance     = sum(vote_n × latticeDistance(node, n)) / sum(vote_n)
+benefit      = 1 / (1 + distance)
+total        = pitch cost - benefit
 ```
 
 Lowest total wins, with deterministic coordinate-order ties.
+Keeping the incoming pitch plus drift scores zero; a node must earn a strictly negative total to beat it.
+Unsnapped notes have no assigned node, and their actual pitches are projected locally only for subsequent context scoring.
 The finite octave realization and the nonzero pitch term preserve input register relative to the moving frame.
 Each octave apart multiplies a context note's vote by the same factor, so a distant note's influence fades smoothly and never reaches zero.
 A node sounding in several registers votes once, through its strongest voice, so an octave doubling adds nothing.
 Whole-performance octave transposition preserves the score and relative outcomes.
 
-After each onset, set `d = q - p`, carrying the full correction without octave wrapping.
-This is intentionally the simplest moving reference to probe: it follows the last onset's correction, not a twelve-key map, inferred chord root or long-term origin average.
+After each assigned onset, set `d = q - p`, carrying the full correction without octave wrapping.
+This is intentionally the simplest moving reference to probe: it follows the last assigned onset's correction, not a twelve-key map, inferred chord root or long-term origin average.
 Order dependence is expected, and changing the last note of a phrase can affect what happens next.
-The “intentional Pythagorean E” example works through ordinary pitch error and a different declared harmonic weight, not a separate hard match or chord exception.
+The “intentional Pythagorean E” example works through exponential pitch error and a different declared pitch flexibility, not a separate hard match or chord exception.
 There is no automatic retuning and no special-case branch for any musical fixture.
 
-The baseline uses harmonic weight 6, pitch scale 20 cents, half-life 0.5 seconds and register weight 0.7 per octave.
-The paired precision examples use harmonic weight 2 with the same explicit seeded context and zero initial displacement.
+The baseline uses pitch flexibility 100 cents, half-life 0.5 seconds and register weight 0.7 per octave.
+The paired precision examples use pitch flexibility 50 cents with the same explicit seeded context and zero initial displacement.
+The flexibility replaces both old scoring controls; it is the displacement where pitch cost equals the maximum possible harmonic benefit, so an entire flexibility-unit move cannot beat staying unsnapped.
 All other fixtures use the baseline.
 
 ### Bends, resets and memory
@@ -126,9 +130,10 @@ The reported set is the union across that entire range and all seventh layers, n
 The range is limited to ten octaves per calculation; this is an inspection bound, not a limit on accumulated drift.
 It makes no claim about inputs outside the shown range.
 
-Each candidate/octave realization has constant harmonic cost because its register weights use its realized output `q`.
-Its pitch-cost parabola has the same curvature as every competitor's.
-Within each nearest-octave validity interval, pairwise score differences are linear, so winning ranges can be computed by clipping intervals at their analytic intersections.
+Each candidate/octave realization has constant harmonic benefit because its register weights use its realized output `q`.
+First solve the interval where its pitch cost is smaller than that benefit.
+The difference between two shifted exponential pitch curves is strictly monotone, so overlapping intervals have at most one crossing, found by bisection.
+Inputs where every node costs more than staying unsnapped leave gaps in the reported ranges.
 Boundary-only winners are also evaluated explicitly using the selector's tie behaviour.
 Calculations use JavaScript floating-point arithmetic.
 

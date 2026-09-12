@@ -439,7 +439,8 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     .header_response
     .on_hover_text(
         "A key may only become a lattice node this keyboard would play at the pitch the key \
-         sent; an attack bent off every key is chosen from every node. Learn sets it from the \
+         sent; when no key matches, all local nodes compete. A note stays unsnapped when \
+         pitch cost outweighs harmonic benefit. Learn sets the keyboard from the \
          fifth it hears.",
     );
     if p != before {
@@ -462,14 +463,14 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     instance_controls(ui, params);
     let mut p = state.runtime.adaptive_policy;
     let before = p;
-    p.harmonic =
-        adaptive_value(ui, p.harmonic.into(), 0..=20_000, 1000.0, "Harmonic weight", "", "") as u16;
     ui.checkbox(
         &mut state.runtime.neighbourhood.visible,
         "Show reachable neighbourhood (input C2–C7)",
     );
-    p.pitch_scale = adaptive_value(ui, p.pitch_scale.into(), 1..=100, 1.0, "Pitch scale", "¢", "")
-        .max(1) as u16;
+    p.pitch_flexibility = adaptive_value(
+        ui, p.pitch_flexibility.into(), 1..=100, 1.0, "Pitch flexibility", "¢",
+        "Cents of displacement beyond accumulated drift that cost one point. The exponential penalty rises increasingly quickly; a note stays unsnapped when its harmonic benefit cannot cover that cost.",
+    ) as u16;
     p.radius =
         adaptive_value(ui, p.radius.into(), 1..=5, 1.0, "Neighbourhood steps", "", "").max(1) as u8;
     ui.label("Allowed axes");

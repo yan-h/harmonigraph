@@ -23,11 +23,10 @@ const KEYBOARD_TOLERANCE: i64 = 5_000_000;
 /// exhaustion instead of scoring an incomplete neighbourhood.
 pub const MAX_CANDIDATES: usize = 4096;
 pub const CONFIG: PolicyConfig = PolicyConfig {
-    version: 2,
+    version: 3,
     radius: 3,
     axes: 2,
-    harmonic: 6000,
-    pitch_scale: 20,
+    pitch_flexibility: 100,
     half_life_ms: 500,
     register: 700,
     tolerance: 500_000,
@@ -94,20 +93,26 @@ pub struct OrderedOnset {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Assignment {
-    Selected { node: LatticePos, correction_microcents: i64 },
-    NoCandidate,
+    Selected {
+        node: LatticePos,
+        correction_microcents: i64,
+    },
+    /// Snapping earns no net benefit: retain drift without claiming a node.
+    NoCandidate {
+        correction_microcents: i64,
+    },
 }
 impl Assignment {
     pub fn correction_microcents(self) -> i64 {
         match self {
-            Self::Selected { correction_microcents, .. } => correction_microcents,
-            Self::NoCandidate => 0,
+            Self::Selected { correction_microcents, .. }
+            | Self::NoCandidate { correction_microcents } => correction_microcents,
         }
     }
     pub fn node(self) -> Option<LatticePos> {
         match self {
             Self::Selected { node, .. } => Some(node),
-            Self::NoCandidate => None,
+            Self::NoCandidate { .. } => None,
         }
     }
 }
@@ -177,16 +182,21 @@ impl Memory {
     /// last with nothing else struck between. That is a hold, and keeps the
     /// earlier strike's moment, so repeating a note moves no clock and weighs
     /// exactly as holding it does. A node has no octave, so a repeat in another
-    /// register is a hold too.
+    /// register is a hold too. An unassigned attack breaks that run without
+    /// moving the drift reference.
     pub fn attack(
         &mut self,
         input: i64,
         correction: i64,
         tolerance: u32,
-        node: LatticePos,
+        node: Option<LatticePos>,
         at: i64,
     ) -> i64 {
         self.remove_match(input + correction, tolerance);
+        let Some(node) = node else {
+            self.front = None;
+            return at;
+        };
         self.reference = correction;
         match self.front {
             Some((front, struck)) if front == node => struck,
@@ -329,7 +339,7 @@ pub fn prepare(
             v.node = v.node.map(|n| n.respell(config.tempered));
         }
     }
-    // Grouped by node for `harmonic_cost`, which counts each node once.
+    // Grouped by node for `harmonic_distance`, which counts each node once.
     scratch.context.sort_unstable_by_key(|v| (key(v.node.unwrap()), v.pitch));
     for v in &scratch.context {
         local_nodes(config, v.node.unwrap(), |n| {
@@ -346,7 +356,7 @@ pub fn prepare(
     }
     Ok(())
 }
-pub fn harmonic_cost(
+pub fn harmonic_distance(
     config: MusicalConfig,
     node: LatticePos,
     output: f64,
@@ -370,7 +380,25 @@ pub fn harmonic_cost(
         total += vote * distance(node, voices[0].node.unwrap());
         sum += vote;
     }
-    f64::from(config.policy.harmonic) / 1000.0 * total / sum
+    total / sum
+}
+/// A zero-error candidate costs zero, and one flexibility unit costs one.
+/// Unlike a squared penalty, the exponential increasingly resists large moves.
+pub fn pitch_cost(flexibility: u16, error_cents: f64) -> f64 {
+    (error_cents / f64::from(flexibility)).powi(2).exp_m1() / 1.0f64.exp_m1()
+}
+pub fn harmonic_benefit(
+    config: MusicalConfig,
+    node: LatticePos,
+    output: f64,
+    context: &[ContextPitch],
+) -> f64 {
+    1.0 / (1.0 + harmonic_distance(config, node, output, context))
+}
+/// The radius where a candidate's pitch cost equals its harmonic benefit.
+/// Used to find the display envelope, not as a separate selection cutoff.
+pub fn benefit_radius(flexibility: u16, benefit: f64) -> f64 {
+    f64::from(flexibility) * (benefit * 1.0f64.exp_m1()).ln_1p().sqrt()
 }
 /// Where the keyboard tuning renders `node`, in microcents above the lattice's
 /// C offset, within one octave.
@@ -380,48 +408,51 @@ pub fn keyboard_class(keyboard: [i32; 3], node: LatticePos) -> i64 {
         + i64::from(node.sevens) * i64::from(keyboard[2]))
     .rem_euclid(OCTAVE)
 }
-/// A key may only become a node the keyboard tuning renders within
-/// [`KEYBOARD_TOLERANCE`] of the pitch it sent. When none is, the attack was
-/// bent off every key and every candidate competes.
+/// Prefer nodes the keyboard renders within [`KEYBOARD_TOLERANCE`] of the
+/// incoming key. Only when that pool is empty do all local nodes compete.
+/// The pool's best node must earn more harmonic benefit than its pitch cost;
+/// otherwise the unsnapped, drift-preserving onset wins with cost zero.
 pub fn select_prepared(
     config: MusicalConfig,
     reference: i64,
     onset: OrderedOnset,
     scratch: &PolicyScratch,
 ) -> Result<Decision, InputError> {
-    let input = onset.pitch as f64 / 1_000_000.0;
-    let target = input + reference as f64 / 1_000_000.0;
+    let target = onset.pitch.checked_add(reference).ok_or(InputError::InvalidPitch)?;
+    let target_cents = target as f64 / 1_000_000.0;
     let pressed = onset.pitch.wrapping_sub(i64::from(config.c_offset)).rem_euclid(OCTAVE);
-    let mut best = (f64::INFINITY, LatticePos::ORIGIN, 0.0);
-    let mut admissible = None::<(f64, LatticePos, f64)>;
+    let mut best = None::<(f64, LatticePos, i64)>;
+    let mut admissible = None::<(f64, LatticePos, i64)>;
     for &node in &scratch.candidates {
         let base = config.cents(node);
-        let output = base + ((target - base) / 1200.0 + 0.5).floor() * 1200.0;
-        let score = ((output - target) / f64::from(config.policy.pitch_scale)).powi(2)
-            + harmonic_cost(config, node, output, &scratch.context);
+        let output = base + ((target_cents - base) / 1200.0 + 0.5).floor() * 1200.0;
+        let output = (output * 1_000_000.0).round();
+        if output < i64::MIN as f64 || output >= i64::MAX as f64 {
+            continue;
+        }
+        let output = output as i64;
+        // Score the actual emitted microcents, including at break-even points.
+        let error = output.abs_diff(target);
+        let score = pitch_cost(config.policy.pitch_flexibility, error as f64 / 1_000_000.0)
+            - harmonic_benefit(config, node, output as f64 / 1_000_000.0, &scratch.context);
         let beats =
-            |b: (f64, LatticePos, f64)| score < b.0 || (score == b.0 && key(node) < key(b.1));
-        if beats(best) {
-            best = (score, node, output);
+            |b: (f64, LatticePos, i64)| score < b.0 || (score == b.0 && key(node) < key(b.1));
+        if best.is_none_or(beats) {
+            best = Some((score, node, output));
         }
         let off = (keyboard_class(config.policy.keyboard, node) - pressed).rem_euclid(OCTAVE);
         if off.min(OCTAVE - off) <= KEYBOARD_TOLERANCE && admissible.is_none_or(beats) {
             admissible = Some((score, node, output));
         }
     }
-    let best = admissible.unwrap_or(best);
-    if !best.0.is_finite() {
-        return Err(InputError::InvalidPitch);
-    }
-    let correction = (best.2 - input) * 1_000_000.0;
-    if correction.abs() >= i64::MAX as f64 {
-        return Err(InputError::InvalidPitch);
-    }
+    let Some(best) = admissible.or(best).filter(|b| b.0 < 0.0) else {
+        return Ok(Decision {
+            assignment: Assignment::NoCandidate { correction_microcents: reference },
+        });
+    };
+    let correction = best.2.checked_sub(onset.pitch).ok_or(InputError::InvalidPitch)?;
     Ok(Decision {
-        assignment: Assignment::Selected {
-            node: best.1,
-            correction_microcents: correction.round() as i64,
-        },
+        assignment: Assignment::Selected { node: best.1, correction_microcents: correction },
     })
 }
 pub fn assign_new_note(

@@ -1,22 +1,47 @@
 # Moving-neighborhood plugin policy
 
-This is the implementation record for policy version 2, based on the [design](adaptive-tuning-design.md) and [simulator](../tools/adaptive-tuning-simulator/README.md).
-It replaces the fixed origin domain, 50-cent input window and per-key history.
+This is the implementation record for policy version 3, based on the [design](adaptive-tuning-design.md) and [simulator](../tools/adaptive-tuning-simulator/README.md).
+It replaces the fixed origin domain and per-key history with a moving neighbourhood and reference.
 The existing central sequencer still orders attacks; this change does not introduce chord batching, extra latency, or automatic retuning.
 
 ## Musical decisions
 
 The Rust scorer uses the simulator's baseline settings and score.
 Input is an absolute pitch, including its register, per-note attack expression and original MIDI channel displacement.
-The previous onset's full output-minus-input correction establishes the moving reference.
+The previous assigned onset's full output-minus-input correction establishes the moving reference.
 That displacement is never octave-wrapped, so repeating the same controller chords can continue moving along the lattice.
 
 Candidate nodes are the union of local Manhattan balls around the contributing context.
 The selected axes restrict which steps may be taken.
 Harmonically remote nodes are excluded before pitch matching, even if their acoustic pitch would match exactly.
-The nearest octave realization of each eligible node is scored with pitch error and register-weighted harmonic distance.
-A node sounding in several registers votes once, through whichever of its voices votes most for that candidate, so an octave doubling adds nothing.
-Ties use coordinate order.
+Each node is realized in the octave nearest the incoming pitch plus the moving reference.
+Let `e` be its displacement from that target, `s` be Pitch flexibility in cents, and `D` be its register-weighted harmonic distance from context:
+
+```text
+pitch cost       = expm1((e / s)^2) / expm1(1)
+harmonic benefit = 1 / (1 + D)
+net cost         = pitch cost - harmonic benefit
+```
+
+The lowest net cost wins, with coordinate-order ties between nodes.
+Keeping the incoming pitch plus the existing drift is a competing unsnapped option with cost zero;
+only a strictly negative node score earns a lattice assignment.
+This is one score rather than a separate fixed pitch cutoff.
+Its exponential increasingly resists large adjustments, and the bounded harmonic benefit cannot buy arbitrarily large errors.
+At a displacement of `s` the pitch cost reaches one, which no harmonic benefit can exceed.
+
+Pitch flexibility is the only pitch/harmony control, from 1 to 100 cents, defaulting to 100.
+The default preserves the established musical fixture spellings; paired precision examples use 50 cents.
+Existing saved Harmonic weight and Pitch scale fields are ignored, and the new field defaults to 100 cents without a compatibility translation.
+Other saved settings retain their values.
+The state mailbox uses policy version 3.
+
+An unsnapped onset has no assigned lattice node and does not move or take ownership of the reference.
+It still contributes its actual onset pitch to context, where unassigned pitches are projected locally for harmonic scoring,
+and it interrupts a consecutive run of attacks on the same node.
+The pitch cost measures each new adjustment rather than total displacement, so accumulated drift can still cross octaves.
+A node sounding in several registers votes once, through whichever of its voices votes most for that candidate;
+an octave doubling adds nothing.
 
 A released note never outranks a held one, however long that has been held:
 while anything is held the context is the held references alone, and released memory is the context only when nothing is held.
@@ -83,15 +108,16 @@ Instrument release tails and pedal sustain do not turn released context back int
 
 The keyboard tuning is three sizes, for primes 3, 5 and 7, describing how the player's controller renders a lattice node.
 It shares the lattice's C offset rather than having one of its own.
-Scoring obeys one rule with it:
-a key may only become a node that the keyboard's own tuning would render at the pitch the key sent.
+The preferred pool contains nodes that the keyboard's own tuning would render at the pitch the key sent.
 A candidate is admissible when its keyboard rendering, reduced to one octave, lies within 5¢ of the input pitch class,
-and the ordinary pitch and harmonic terms choose among the admissible candidates.
-If none is admissible, the attack was bent off every key, and every candidate competes exactly as it would with no keyboard at all.
+and the exponential pitch cost and harmonic benefit choose among those candidates before comparing the winner with the unsnapped option.
+An unprofitable keyboard match keeps the note unsnapped instead of unlocking another key's spelling.
+If none is admissible, either the attack was bent off the available keys or its key's node is outside the neighbourhood;
+every local candidate then competes without the keyboard filter, still against the unsnapped option.
 The window is a fixed 5¢ rather than the same-note tolerance.
 A learned fifth multiplied out to twelve or fourteen fifths can miss by a few cents, and a controller that sends its tuning as pitch bend quantizes it;
 the window only has to stay well under the smallest distinction a meantone or schismatic keyboard makes, about 20¢.
-A deliberate attack bend the size of the 21.5¢ intentional Pythagorean E still falls back.
+A deliberate attack bend the size of the 21.5¢ intentional Pythagorean E still falls back among nearby nodes.
 
 The rendering is taken from the candidate as it was respelled for the lattice's tempered set, so a tempered lattice needs no special case.
 The default is 12-TET (700, 400, 1000¢), which cannot tell apart any two nodes in one semitone class, so the default scorer's drift is unchanged.
@@ -113,19 +139,24 @@ With retuning off, the lattice is a picture of the input and should equal the ke
 with it on, the lattice is the target, and Learn moves only the shared C offset and the keyboard tuning.
 Toggling Retune copies nothing in either direction.
 
-The live neighborhood outlines apply the same filter.
-Besides the analytic boundaries, the worker plays every key the candidates render, in each octave of the C2–C7 range.
-The simulator has no keyboard tuning, so with any keyboard but 12-TET the outline is Rust-only.
+The live neighborhood outlines use the same exponential score and unsnapped option.
+For each octave realization, the worker solves where pitch cost exhausts harmonic benefit,
+then intersects that interval with the candidate's keyboard windows and the gaps outside every keyboard window.
+All candidate keys contribute those windows, including ones that cannot themselves earn an assignment.
+Strict convexity makes the difference between two shifted exponential pitch curves monotone;
+the worker bisects their single crossing instead of assuming the old quadratic score's linear intersection.
+Endpoints and interval interiors are checked through the production selector.
+The simulator uses the same score but has no keyboard filter.
 
-Cases written down rather than handled:
-
-1. The outlines are approximate inside a key's tolerance window.
-They play each key at its exact rendering, so a node that wins only between that pitch and the window's edge is missed;
-and the analytic envelope still lists an unfiltered winner whose whole winning range lies inside key windows, where the filter always overrides it.
-The windows are 10¢ wide, so this matters only where two admissible nodes nearly tie.
-2. A policy edit from the pane sends the whole policy the editor last saw, keyboard included.
+One configuration-edit race remains:
+a policy edit from the pane sends the whole policy the editor last saw, keyboard included.
 One that lands just after Learn has changed the keyboard puts the old keyboard back until the held chord next changes and Learn fires again.
-3. When no node of the key's class is within the neighbourhood, as with a small radius on a tempered lattice, the fallback still plays the key at the nearest node's pitch, up to a semitone off, as it always has.
+
+With a schismatic keyboard and radius three, C followed by the key four fifths above it cannot reach the Pythagorean E node.
+The fallback can choose the nearby 5/4 E, but cannot double C even at maximum pitch flexibility.
+Playing G before E or increasing the radius to four makes Pythagorean E available.
+The keyboard's separate 5/4 key still matches the just-third node directly.
+This is the exponential fallback for [issue #864](https://github.com/yan-h/harmonigraph/issues/864).
 
 An accepted consequence, not a bug:
 the syntonic comma pump still drifts on a meantone keyboard, because that keyboard cannot tell `(1,0)` from `(-3,1)`.
@@ -134,9 +165,9 @@ see [issue #852](https://github.com/yan-h/harmonigraph/issues/852).
 
 ## Controls and live neighborhood
 
-The Tuning pane exposes the keyboard tuning, harmonic weight, pitch scale, neighborhood radius, allowed axes, half-life, register weight per octave, same-note tolerance, silence timeout and transport reset choices.
+The Tuning pane exposes the keyboard tuning, pitch flexibility, neighborhood radius, allowed axes, half-life, register weight per octave, same-note tolerance, silence timeout and transport reset choices.
 Defaults match the simulator's baseline profile.
-The precision profile used by the paired intentional-E examples is obtained by setting harmonic weight to two.
+The precision profile used by the paired intentional-E examples is obtained by setting Pitch flexibility to 50 cents.
 
 The live lattice can outline nodes that win for some arbitrary next input in the explicitly labeled C2–C7 register range.
 This is a union across registers and seventh layers, not twelve keyboard mappings or a single-octave sample.
@@ -146,7 +177,7 @@ The outlines are selection-style UI annotations and can overlap foreground geome
 They are intentionally absent from preview/export pictures, like live hover and session controls.
 
 The Hub publishes its authoritative next-attack context, including scheduled predecessor assignments, rather than reconstructing it from visual note fades.
-A worker calculates winner intervals analytically and checks their boundaries.
+A worker calculates winner intervals and checks their boundaries through the selector.
 Changing context cancels obsolete work and hides its old result while the new result is pending.
 The cache key contains only resolved musical settings, onset references, weights and unwrapped displacement.
 Camera changes, callback time, performance counters and display fades do not restart that calculation.
