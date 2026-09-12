@@ -783,6 +783,93 @@ fn a_names_shadow_reaches_as_far_as_its_width_says() {
     assert_eq!(missed, 0, "the wider Shadow left {missed} of the narrow shadow's pixels lit");
 }
 
+/// A name casts the same shadow whether a node or another name was drawn just
+/// before it.
+///
+/// An unsounding name — its node culled, the cross under it faded out — comes
+/// out of the walk straight after the previous name, so its shadow box is the
+/// next draw after that name's fill. The box's pipeline once left out group 1,
+/// which the fill declares, and wgpu rebinds nothing for a group a pipeline
+/// switch only drops; on Metal every group's slots count the groups ahead of
+/// it, so the box read the fill's LIGHT where its atlas should have been, found
+/// a standoff of nothing, and laid one flat shadow over its whole padded box.
+///
+/// One name at one place, shot behind another name and behind the node alone,
+/// so the draw before it is the only thing the two shots differ in near it.
+#[test]
+fn a_names_shadow_is_the_same_after_another_name_as_after_a_node() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The lit node stays: its light is the ground both names' shadows land on,
+    // and a shadow over black darkens nothing a shot could read.
+    let mut scene = lit_node_and_a_name(1.6, FRESH_SHADOW, 1.0);
+    let lit = scene.nodes[0];
+    // As in `two_adjacent_names_from_different_sheets_draw_the_nearer_last`: a
+    // silent node on the nearer sheet ships nothing, so its name follows the
+    // lit node's with nothing drawn between the two.
+    let silent = harmonigraph_scene::NodeInstance {
+        world_pos: lit.world_pos + glam::Vec3::Z,
+        activation: 0.0,
+        octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
+        melody_slots: 0,
+        bass_slots: 0,
+        melody_level: 0.0,
+        bass_level: 0.0,
+        trail: 0.0,
+        on_home: false,
+        // Copied, its light shares the lit node's row and owner, and that put
+        // the lit node's light out: the ground here peaked at 12, against 206.
+        glow: harmonigraph_scene::GlowStep::default(),
+        ..lit
+    };
+    scene.nodes = vec![silent, lit];
+    let (culled, home) = (0u32, 1u32);
+    let rect_at = |world: glam::Vec3| {
+        let at = on_screen(&scene, SIZE, world);
+        [at.x - NAME_SIZE / 2.0, at.y - NAME_SIZE / 2.0, NAME_SIZE, NAME_SIZE]
+    };
+    let first = name_glyph(&scene, rect_at(-NAME_AT));
+    let second = name_glyph(&scene, rect_at(NAME_AT));
+    let behind_a_name =
+        shooter.shot_with(&scene, names(vec![(home, vec![first]), (culled, vec![second])]));
+    let behind_the_node = shooter.shot_with(&scene, names(vec![(culled, vec![second])]));
+    let unnamed = shooter.shot_with(&scene, names(vec![(home, vec![first])]));
+
+    // Everything within a few glyphs of the second name, which the first name
+    // standing across the node from it reaches none of.
+    let centre = on_screen(&scene, SIZE, NAME_AT);
+    let reach = 3.0 * NAME_SIZE;
+    let near: Vec<usize> = (0..SIZE[1])
+        .flat_map(|y| (0..SIZE[0]).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            (x as f32 + 0.5 - centre.x).abs() < reach && (y as f32 + 0.5 - centre.y).abs() < reach
+        })
+        .map(|(x, y)| ((y * SIZE[0] + x) * 4) as usize)
+        .collect();
+    let shadowed = near
+        .iter()
+        .filter(|&&i| brightness(&behind_the_node[i..i + 3]) < brightness(&unnamed[i..i + 3]))
+        .count();
+    assert!(
+        shadowed > 40,
+        "the second name darkened only {shadowed} pixels around it: there is no shadow here to \
+         compare",
+    );
+    let worst = near
+        .iter()
+        .map(|&i| (0..3).map(|c| behind_a_name[i + c].abs_diff(behind_the_node[i + c])).max())
+        .max()
+        .flatten()
+        .unwrap_or(0);
+    assert!(
+        worst <= 1,
+        "the second name's neighbourhood moved by {worst} with a name drawn before it instead of \
+         a node",
+    );
+}
+
 /// The mid-grey the share tests stand on, as the pane's ground and the
 /// Shooter's clear alike.
 const GREY: f32 = 0.55;

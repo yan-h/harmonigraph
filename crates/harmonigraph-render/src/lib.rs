@@ -2182,6 +2182,7 @@ fn create_scene_pipelines(
                 device,
                 glyph_shader,
                 glyph_layout,
+                layouts.glow,
                 layouts.shadow,
                 layouts.casters,
                 LATTICE_COLOR_FORMAT,
