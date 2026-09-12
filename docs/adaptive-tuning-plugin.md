@@ -15,6 +15,7 @@ Candidate nodes are the union of local Manhattan balls around the contributing c
 The selected axes restrict which steps may be taken.
 Harmonically remote nodes are excluded before pitch matching, even if their acoustic pitch would match exactly.
 The nearest octave realization of each eligible node is scored with pitch error and register-weighted harmonic distance.
+A node sounding in several registers votes once, through whichever of its voices votes most for that candidate, so an octave doubling adds nothing.
 Ties use coordinate order.
 
 Every reference decays on one clock:

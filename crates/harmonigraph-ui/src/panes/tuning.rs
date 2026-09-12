@@ -426,8 +426,9 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     let before = p;
     ui.collapsing("Keyboard", |ui| {
         for (value, label) in p.keyboard.iter_mut().zip(["Fifth", "Third", "Seventh"]) {
-            *value = adaptive_value(ui, *value as u32, 0..=1_200_000_000, 1_000_000.0, label, "¢")
-                as i32;
+            *value =
+                adaptive_value(ui, *value as u32, 0..=1_200_000_000, 1_000_000.0, label, "¢", "")
+                    as i32;
         }
         if ui.button("Derive from fifth").clicked() {
             p.keyboard = tuning::fifth_generated(p.keyboard[0]);
@@ -462,15 +463,15 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     let mut p = state.runtime.adaptive_policy;
     let before = p;
     p.harmonic =
-        adaptive_value(ui, p.harmonic.into(), 0..=20_000, 1000.0, "Harmonic weight", "") as u16;
+        adaptive_value(ui, p.harmonic.into(), 0..=20_000, 1000.0, "Harmonic weight", "", "") as u16;
     ui.checkbox(
         &mut state.runtime.neighbourhood.visible,
         "Show reachable neighbourhood (input C2–C7)",
     );
-    p.pitch_scale =
-        adaptive_value(ui, p.pitch_scale.into(), 1..=100, 1.0, "Pitch scale", "¢").max(1) as u16;
+    p.pitch_scale = adaptive_value(ui, p.pitch_scale.into(), 1..=100, 1.0, "Pitch scale", "¢", "")
+        .max(1) as u16;
     p.radius =
-        adaptive_value(ui, p.radius.into(), 1..=5, 1.0, "Neighbourhood steps", "").max(1) as u8;
+        adaptive_value(ui, p.radius.into(), 1..=5, 1.0, "Neighbourhood steps", "", "").max(1) as u8;
     ui.label("Allowed axes");
     theme::reserve_scroll_gutter(ui);
     egui::ScrollArea::horizontal().id_salt("adaptive-axes-scroll").show(ui, |ui| {
@@ -486,16 +487,34 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                 ui.selectable_value(&mut p.axes, 3, "Fifths + thirds + sevenths");
             });
     });
-    ui.collapsing("Context", |ui| {
-        p.half_life_ms =
-            adaptive_value(ui, p.half_life_ms.into(), 0..=20_000, 1000.0, "Half-life", "s") as u16;
-        ui.weak("A note struck this long before the newest one counts half, held or released. Zero means no decay.");
-        p.released =
-            adaptive_value(ui, p.released.into(), 0..=1000, 1000.0, "Released : held weight", "")
-                as u16;
-        p.register =
-            adaptive_value(ui, p.register.into(), 10..=1000, 1000.0, "Weight per octave", "") as u16;
-        ui.weak("Each octave between a context note and the note being tuned multiplies that note's vote by this. One ignores register.");
+    let context = ui.collapsing("Context", |ui| {
+        p.half_life_ms = adaptive_value(
+            ui,
+            p.half_life_ms.into(),
+            0..=20_000,
+            1000.0,
+            "Half-life",
+            "s",
+            "A note struck this long before the newest counts half. 0: no decay.",
+        ) as u16;
+        p.released = adaptive_value(
+            ui,
+            p.released.into(),
+            0..=1000,
+            1000.0,
+            "Released : held weight",
+            "",
+            "What a released note counts against a held one.",
+        ) as u16;
+        p.register = adaptive_value(
+            ui,
+            p.register.into(),
+            10..=1000,
+            1000.0,
+            "Weight per octave",
+            "",
+            "Each octave between two notes multiplies the vote by this. 1: ignore register.",
+        ) as u16;
         p.tolerance = adaptive_value(
             ui,
             p.tolerance,
@@ -503,14 +522,24 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             1_000_000.0,
             "Same-note tolerance",
             "¢",
+            "Onsets this close in pitch count as one note.",
         );
-        p.silence_ms = adaptive_value(ui, p.silence_ms, 0..=120_000, 1000.0, "Silence reset", "s");
-        ui.weak("Silence reset: zero means never.");
-        ui.checkbox(&mut p.reset_stop, "Reset context on stop");
-        ui.checkbox(&mut p.reset_loop, "Reset context on loop / seek");
+        p.silence_ms = adaptive_value(
+            ui,
+            p.silence_ms,
+            0..=120_000,
+            1000.0,
+            "Silence reset",
+            "s",
+            "Forget the context after this long with nothing held. 0: never.",
+        );
+        ui.checkbox(&mut p.reset_stop, "Reset context on stop")
+            .on_hover_text("Forget the context when the transport stops.");
+        ui.checkbox(&mut p.reset_loop, "Reset context on loop / seek")
+            .on_hover_text("Forget the context when playback jumps.");
     });
-    ui.weak(
-        "New attacks follow the moving context. Sounding notes keep their adaptive correction.",
+    context.header_response.on_hover_text(
+        "New notes follow the moving context; sounding notes keep their correction.",
     );
     if p != before {
         state.runtime.edit_tuning(
@@ -723,6 +752,7 @@ fn adaptive_value(
     scale: f32,
     label: &str,
     unit: &str,
+    hint: &str,
 ) -> u32 {
     let mut value = raw as f32 / scale;
     let mut bar = ValueBar::new(
@@ -732,7 +762,9 @@ fn adaptive_value(
     )
     .unit(1.0, unit);
     bar = if scale == 1.0 { bar.integer() } else { bar.decimals(2) };
-    if bar.show(ui).changed() {
+    let response = bar.show(ui);
+    let response = if hint.is_empty() { response } else { response.on_hover_text(hint) };
+    if response.changed() {
         (value * scale).round() as u32
     } else {
         raw

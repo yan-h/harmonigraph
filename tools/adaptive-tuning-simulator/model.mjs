@@ -105,14 +105,20 @@ export class Simulator {
     return [...result.values()].sort(compareNodes);
   }
   harmonicCost(node, output, context) {
-    let total = 0, weightSum = 0;
     const { register: perOctave } = this.settings;
+    // A node sounding in several registers votes once, through whichever of its
+    // voices votes most, so an octave doubling adds nothing.
+    const votes = new Map();
     for (const voice of context) {
       // Each octave apart multiplies a context note's vote by the register factor.
-      const register = perOctave ** (Math.abs(output - voice.output) / 1200);
-      const weight = voice.weight * register;
-      total += weight * distance(node, voice.node);
-      weightSum += weight;
+      const vote = voice.weight * perOctave ** (Math.abs(output - voice.output) / 1200);
+      const key = keyOf(voice.node);
+      if (!(votes.get(key)?.vote >= vote)) votes.set(key, { vote, node: voice.node });
+    }
+    let total = 0, weightSum = 0;
+    for (const { vote, node: at } of votes.values()) {
+      total += vote * distance(node, at);
+      weightSum += vote;
     }
     return total / weightSum;
   }

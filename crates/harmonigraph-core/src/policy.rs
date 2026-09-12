@@ -342,6 +342,8 @@ pub fn prepare(
             v.node = v.node.map(|n| n.respell(config.tempered));
         }
     }
+    // Grouped by node for `harmonic_cost`, which counts each node once.
+    scratch.context.sort_unstable_by_key(|v| (key(v.node.unwrap()), v.pitch));
     for v in &scratch.context {
         local_nodes(config, v.node.unwrap(), |n| {
             // Deduplicate each ball against the current sorted union. No heap
@@ -365,14 +367,21 @@ pub fn harmonic_cost(
 ) -> f64 {
     // Every octave between the candidate and a context note multiplies that
     // note's vote by the register factor; one in the same register keeps it all.
+    // A node sounding in several registers votes once, through whichever of
+    // its voices votes most, so an octave doubling adds nothing. `prepare`
+    // leaves `context` grouped by node.
     let per_octave = f64::from(config.policy.register) / 1000.0;
     let mut total = 0.0;
     let mut sum = 0.0;
-    for v in context {
-        let register = per_octave.powf((output - v.pitch as f64 / 1_000_000.0).abs() / 1200.0);
-        let weight = v.weight * register;
-        total += weight * distance(node, v.node.unwrap());
-        sum += weight;
+    for voices in context.chunk_by(|a, b| a.node == b.node) {
+        let vote = voices
+            .iter()
+            .map(|v| {
+                v.weight * per_octave.powf((output - v.pitch as f64 / 1_000_000.0).abs() / 1200.0)
+            })
+            .fold(0.0, f64::max);
+        total += vote * distance(node, voices[0].node.unwrap());
+        sum += vote;
     }
     f64::from(config.policy.harmonic) / 1000.0 * total / sum
 }

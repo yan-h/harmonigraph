@@ -81,14 +81,15 @@ Its score is:
 ```text
 pitch cost   = ((q - p - d) / pitchScale)^2
 register_i   = perOctave ^ (abs(q - onset_i) / 1200)
-weight_i     = contextBaseWeight_i × register_i
-harmony cost = harmonic × sum(weight_i × latticeDistance(node, node_i)) / sum(weight_i)
+vote_n       = max over the voices i on node n of contextBaseWeight_i × register_i
+harmony cost = harmonic × sum(vote_n × latticeDistance(node, n)) / sum(vote_n)
 total        = pitch cost + harmony cost
 ```
 
 Lowest total wins, with deterministic coordinate-order ties.
 The finite octave realization and the nonzero pitch term preserve input register relative to the moving frame.
 Each octave apart multiplies a context note's vote by the same factor, so a distant note's influence fades smoothly and never reaches zero.
+A node sounding in several registers votes once, through its strongest voice, so an octave doubling adds nothing.
 Whole-performance octave transposition preserves the score and relative outcomes.
 
 After each onset, set `d = q - p`, carrying the full correction without octave wrapping.

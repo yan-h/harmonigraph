@@ -206,6 +206,8 @@ A recency queue that faded notes by their place in it was measured and dropped, 
 Repeating a note must not do much more than holding it (Yan, 2026-09-11).
 Striking the note struck last again, with nothing else struck between, is therefore a hold that keeps that strike's age:
 before it, spamming a note moved the clock, and four seconds of repeats took its share of the weight from 52% to 99%.
+Nor may a note sounding in several registers count once per voice (Yan, 2026-09-11):
+it votes once, through whichever of its voices votes most for the note being scored, so an octave doubling adds nothing where it used to add a whole vote.
 Register weighting is one multiplier per octave between a context note and the note being scored, 0.7 by default, with no floor (Yan, 2026-09-11):
 it replaced a floor and an exponential falloff whose falloff number had no direct musical reading.
 At 0.7 every agreed example keeps its outcome; at 0.6 or 0.8 one of the precision examples changes.

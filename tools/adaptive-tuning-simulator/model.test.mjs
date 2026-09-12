@@ -72,6 +72,12 @@ test('a note struck or released long before the newest weighs less, and waiting 
   assert.deepEqual(sim.context(), before);
 });
 
+test('octave copies of a note add no vote', () => {
+  const cost = seeds => { const sim = new Simulator(); sim.seed(seeds); return sim.harmonicCost([1, 0, 0], 5501.955, sim.context()); };
+  const c3 = { id: 'c3', input: 4800, node: [0, 0, 0] }, e = { id: 'e', input: 5186.3137, node: [0, 1, 0] };
+  assert.equal(cost([{ ...c3, id: 'c1', input: 2400 }, c3, e, { ...c3, id: 'c2', input: 3600 }]), cost([c3, e]));
+});
+
 test('striking the note struck last again is holding it', () => {
   const context = repeat => {
     const sim = new Simulator(); sim.on(4800, 'c'); sim.on(5200, 'e'); sim.on(5500, 'g');

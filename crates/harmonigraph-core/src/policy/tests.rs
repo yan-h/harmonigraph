@@ -259,6 +259,27 @@ fn memory_refreshes_actual_register_pitch_and_orders_by_attack() {
     assert_eq!(h.memory.len, 0);
 }
 #[test]
+fn octave_copies_of_a_note_add_no_vote() {
+    // C two and three octaves below C3 votes less than C3 does for a G by G3,
+    // so adding those copies changes nothing; each used to add a vote of its own.
+    let config = just();
+    let voice = |pitch, node| ContextPitch { pitch, node: Some(node), weight: 1.0 };
+    let (c, e) = (LatticePos::ORIGIN, LatticePos::new(0, 1, 0));
+    let cost = |context: &[ContextPitch]| {
+        let mut scratch = PolicyScratch::default();
+        prepare(config, context, &mut scratch).unwrap();
+        harmonic_cost(config, LatticePos::new(1, 0, 0), 5501.955, &scratch.context)
+    };
+    let alone = cost(&[voice(4_800_000_000, c), voice(5_186_313_714, e)]);
+    let doubled = cost(&[
+        voice(2_400_000_000, c),
+        voice(4_800_000_000, c),
+        voice(5_186_313_714, e),
+        voice(3_600_000_000, c),
+    ]);
+    assert_eq!(alone, doubled);
+}
+#[test]
 fn hard_boundary_and_configured_axes_ignore_exact_remote_pitch() {
     let mut c = just();
     c.policy.axes = 1;
