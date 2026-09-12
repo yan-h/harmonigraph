@@ -326,8 +326,8 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32, depth: f32) -> Shadow
 }
 
 // Prototype: foreground node shapes reduce rear ink's COVERAGE, so its
-// contrast fades into whatever is behind it. The ordinary shadow still
-// multiplies that background later, unchanged. Read only later node casters:
+// contrast fades into whatever is behind it. The split scene keeps ordinary
+// shadows on that background alone. Read only later node casters:
 // a node never hides itself, and labels/crosses keep their existing behavior.
 // The field itself is opacity (not the depth-amplified bloom tail), which
 // keeps faint distant shadows from erasing detail. No extra persisted dial.
@@ -2105,6 +2105,8 @@ struct Painted {
     /// The copy the bright pass reads, always at a whole shadow (1). Never the
     /// smaller of the two: a deeper shadow leaves less of the frame.
     bloom: f32,
+    /// Ink coverage alone, with receiver visibility already applied.
+    ink_alpha: f32,
 }
 
 /// The visible composite keeps the whole shadow tail. Node ink has already
@@ -2114,24 +2116,11 @@ fn seen_of(paint: Painted) -> vec4<f32> {
     return vec4<f32>(paint.rgb, paint.seen);
 }
 
-/// What a node paints at this fragment: its own ink, and the multiply its own
-/// SHADOW lays over everything already in the frame under it, twice
-/// (see [`Painted`]). The single-attachment entry point below spends the
-/// visible one alone.
-///
-/// The shadow rides the blend the pass already composites under.
-/// `PREMULTIPLIED_ALPHA_BLENDING` is `out = src + dst * (1 - src.a)`, so a
-/// fragment of `rgb = ink, a = 1 - (1 - alpha) * T` leaves
-/// `ink + (1 - alpha) * T * dst`: the node's ink over the frame, and everything
-/// under it multiplied by `T`. Where the node has no ink that is `dst * T`
-/// alone — the shadow, on ground, on a ring behind, on another node's name,
-/// whatever the frame holds there — and where it HAS ink the ink term is not
-/// multiplied, so a node is the one thing its own shadow never darkens.
-///
-/// The background multiply is unchanged by partial occlusion: a rear node
-/// reduces its ink coverage before this composite, revealing the layers below
-/// it. Its own shadow remains, so hiding ink never restores light already
-/// blocked by that node. The pooled light keeps every ordinary shadow.
+/// A node supplies its ink and the composite alphas for the background.
+/// Premultiplied blending with alpha `1-(1-A*V)*T` leaves the background
+/// multiplied by `(1-A*V)*T`, exposing it as receiver visibility V falls.
+/// Its own shadow T remains even when its ink is hidden. `node_split` keeps
+/// that multiply off the separate node-ink contribution.
 fn node_paint(in: VsOut) -> Painted {
     let g = node_geom(in, false);
     // The one tap, taken whatever the node paints here — a fragment the ink
@@ -2151,7 +2140,7 @@ fn node_paint(in: VsOut) -> Painted {
         if bloom <= 0.0 {
             discard;
         }
-        return Painted(vec3<f32>(0.0), shadow, bloom);
+        return Painted(vec3<f32>(0.0), shadow, bloom, 0.0);
     }
     var ink = node_ink(in, g.d, g.aa, g.oct, false);
     if ink.alpha < INK_FLOOR {
@@ -2189,12 +2178,12 @@ fn node_paint(in: VsOut) -> Painted {
     //
     // The RAW light, and that is right in this model rather than a
     // compromise: a node's own shadow does not darken the light it is washed
-    // with, and every item drawn in FRONT of it multiplies that wash along with
-    // the rest of the frame under it.
+    // with. Foreground nodes reduce the washed ink's visibility; markers and
+    // labels retain their ordinary shadowing of it.
     let coord = light_coord(in.clip_pos.xy);
     let light = glow_light(coord);
     let washed = wash_over(ink.rgb, ink.alpha, light.rgb, mix(1.0, glow_wash(), ink.lit));
-    return Painted(washed * visibility, final_alpha, bloom_alpha);
+    return Painted(washed * visibility, final_alpha, bloom_alpha, visible_alpha);
 }
 
 /// A node's shadow source, into its own cell of the atlas (`shadow.rs`). Under
@@ -2476,17 +2465,34 @@ fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
     return out;
 }
 
-/// The node pipelines. `fs_main` serves bloom-off production and the parity
-/// reference. `fs_main_scene` also writes the independent bloom input.
+// The single-target path remains the reference for ink rasterization tests.
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     return seen_of(node_paint(in));
 }
 
+// Receiver visibility fades both RGB and coverage before either component is
+// blended. The ink component then takes only foreground ink coverage, while
+// the other component still takes every ordinary shadow. This restores the
+// background under fading ink without applying a second darkening to it.
+fn node_split(paint: Painted, shadow_alpha: f32) -> SplitOut {
+    // Zero keeps the pre-prototype reference available to GPU A/B probes.
+    let alpha = mix(shadow_alpha, paint.ink_alpha, clamp(u.geometry_shadow.occlusion, 0.0, 1.0));
+    return SplitOut(vec4<f32>(0.0, 0.0, 0.0, shadow_alpha), vec4<f32>(paint.rgb, alpha));
+}
+
+@fragment
+fn fs_main_split(in: VsOut) -> SplitOut {
+    let paint = node_paint(in);
+    return node_split(paint, paint.seen);
+}
+
 @fragment
 fn fs_main_scene(in: VsOut) -> SceneOut {
     let paint = node_paint(in);
-    return SceneOut(seen_of(paint), vec4<f32>(paint.rgb, paint.bloom));
+    let seen = node_split(paint, paint.seen);
+    let bloom = node_split(paint, paint.bloom);
+    return SceneOut(seen.other, seen.ink, bloom.other, bloom.ink);
 }
 
 // ---- Node glow -------------------------------------------------------------
@@ -3247,7 +3253,7 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     let coord = light_coord(in.clip_pos.xy);
     let light = glow_light(coord);
     let washed = wash_over(ink, alpha, light.rgb, 1.0);
-    return Painted(washed, final_alpha, bloom_alpha);
+    return Painted(washed, final_alpha, bloom_alpha, alpha);
 }
 
 /// One cross's coverage, into the markers' shared BLUR cell of the shadow
@@ -3268,7 +3274,16 @@ fn fs_plus(in: PlusVsOut) -> @location(0) vec4<f32> {
 }
 
 @fragment
+fn fs_plus_split(in: PlusVsOut) -> SplitOut {
+    let paint = plus_paint(in);
+    return SplitOut(seen_of(paint), vec4<f32>(0.0, 0.0, 0.0, paint.seen));
+}
+
+@fragment
 fn fs_plus_scene(in: PlusVsOut) -> SceneOut {
     let paint = plus_paint(in);
-    return SceneOut(seen_of(paint), vec4<f32>(paint.rgb, paint.bloom));
+    return SceneOut(
+        seen_of(paint), vec4<f32>(0.0, 0.0, 0.0, paint.seen),
+        vec4<f32>(paint.rgb, paint.bloom), vec4<f32>(0.0, 0.0, 0.0, paint.bloom),
+    );
 }

@@ -24,8 +24,8 @@
 //! sheet behind it. They arrive as glyphs, from the same collector the rest
 //! of the UI's text goes through; what differs is which pass they land in,
 //! and so that they inherit its render scale. They do NOT reach the bloom:
-//! while bloom is on the pass carries a second colour attachment without
-//! their ink, and the bright pass reads that (see [`LatticeBloom::nodes_view`]).
+//! while bloom is on the pass carries a second pair of colour attachments
+//! without their ink or coverage, and the bright pass reads their sum.
 //!
 //! With the `hot-reload` feature (enabled by the standalone harness), the
 //! .wgsl files are watched on disk and every pipeline cut from them rebuilds
@@ -108,8 +108,7 @@ pub use spectral_shadow::spectral_shadow_prepare_callback;
 /// nothing; at 0.5 a name is as soft as the lattice under it, where it used
 /// to stay native-resolution whatever the picture did.
 ///
-/// The bloom does NOT follow, though it would from a single-attachment pass:
-/// see [`LatticeBloom::nodes_view`], which is the copy the bright pass reads.
+/// Bloom reads its own label-free component pair; see [`LatticeBloom`].
 #[derive(Default)]
 pub struct LatticeLabels {
     /// Every glyph of every label, one label's glyphs contiguous, in the
@@ -321,7 +320,7 @@ pub fn bloom_strength(raw: f32) -> f32 {
     raw.clamp(0.0, 4.0)
 }
 
-/// The lattice's colour between its own passes: the node light, both scene
+/// The lattice's colour between its own passes: the node light, all scene
 /// attachments, and every stage of the bloom chain.
 ///
 /// The host surface is normally an 8-bit `Unorm` texture, which is the right
@@ -337,7 +336,7 @@ const LATTICE_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Flo
 const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 
 /// Entry points a (re)loaded shader must provide. The `_scene` pair is the
-/// two-attachment form the offscreen pass draws through; the bare pair is
+/// four-attachment form with bloom; `_split` writes the visible pair; the bare pair is
 /// the single-attachment one the parity test's reference path uses; the
 /// `glow_gather` pair is the light's own pass — one quad over the whole target
 /// and the fold that walks every lit node at each of its pixels; the `ink` four
@@ -349,9 +348,11 @@ const LATTICE_ENTRY_POINTS: &[&str] = &[
     "vs_main",
     "fs_main",
     "fs_main_scene",
+    "fs_main_split",
     "vs_plus",
     "fs_plus",
     "fs_plus_scene",
+    "fs_plus_split",
     "vs_glow_gather",
     "fs_glow_gather",
     "vs_ink_strip",
@@ -957,6 +958,7 @@ struct CompiledLatticeResources {
     ink_blur_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
+    bright_layout: wgpu::BindGroupLayout,
     /// One texture + the shared sampler, which is what every single-texture
     /// reader here binds: each pass of the bloom chain, and the glow target —
     /// taken at group 0 by the composite that lays the light down and at group
@@ -1384,11 +1386,13 @@ impl PaneBuffers {
 /// fractions of the pane's NATIVE screen size, so the halo's on-screen
 /// width doesn't change with the render-scale setting.
 struct Offscreen {
-    /// The descriptor format shared by both scene attachments.
+    /// The descriptor format shared by all scene attachments.
     #[cfg(test)]
     format: wgpu::TextureFormat,
     color_view: wgpu::TextureView,
-    /// The independent label-free scene attachment and its filtered halo.
+    /// Node-origin RGB, spared ordinary node shadows and summed at composite.
+    ink_view: wgpu::TextureView,
+    /// The independent label-free scene pair and its filtered halo.
     /// Present only while bloom is on; toggling it never replaces glow history.
     bloom: Option<LatticeBloom>,
     /// The node glow's own target, present only while the view asks for one.
@@ -1400,7 +1404,7 @@ struct Offscreen {
     /// answer to different bars: a name's shadow lands on the ground at a Reach
     /// of 0, where there is no light and no glow target at all.
     shadow: Option<shadow::ShadowTarget>,
-    /// Composite: scene color + blurred bloom (quarter A) + uniforms.
+    /// Composite: background + node ink + blurred bloom (quarter A) + uniforms.
     composite_bind_group: wgpu::BindGroup,
     size: [u32; 2],
     screen_size: [u32; 2],
@@ -1408,33 +1412,10 @@ struct Offscreen {
 
 /// The allocations whose contents are needed only while bloom is enabled.
 struct LatticeBloom {
-    /// The same picture with the node LABELS left out, written beside
-    /// `color_view` by the scene pass's second attachment.
-    ///
-    /// The bright pass reads THIS, so a name is not in the bloom at all: it
-    /// neither glows nor — the half that is easier to miss — takes a bite out
-    /// of the halo of the node it covers, which is what a name in the bloom
-    /// input does by standing where that node's own bright pixels were.
-    ///
-    /// Both halves measured, by rendering a frame four ways (labels on/off
-    /// crossed with bloom on/off) and subtracting, which isolates the bloom
-    /// TERM: text in the bright pass added up to 28/255 of light in its own
-    /// halo, against the whole frame's bloom peaking at 33, and took up to
-    /// 9/255 back out of the halo it crossed.
-    ///
-    /// A whole second colour target is what that costs, at the render-scaled
-    /// size — about 28 MB for a Retina-sized pane at scale 1 now that the
-    /// lattice works in half floats, and it grows with the square of the render
-    /// scale like the main scene target. There is one more colour write per
-    /// node fragment and nothing else — no extra pass, no extra draw call, no
-    /// extra geometry.
-    ///
-    /// There is also no cheaper slot. The bright pass samples a finished
-    /// texture, so "after bloom but still interleaved with the nodes" does not
-    /// exist, and anything short of a second attachment (a stencil, a
-    /// threshold) buys back the memory by punching a hole in the node's own
-    /// halo where the name sits — which is the artifact this removes.
+    /// The label-free background and node-ink components. Threshold their sum
+    /// so separating shadow receivers does not change what counts as bright.
     nodes_view: wgpu::TextureView,
+    ink_view: wgpu::TextureView,
     chain: BloomChain,
 }
 
@@ -1524,6 +1505,7 @@ const INK_STRIP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 struct OffscreenShared<'a> {
     format: wgpu::TextureFormat,
     composite_layout: &'a wgpu::BindGroupLayout,
+    bright_layout: &'a wgpu::BindGroupLayout,
     /// One texture plus the sampler; see [`CompiledLatticeResources::filter_layout`].
     filter_layout: &'a wgpu::BindGroupLayout,
     /// The shadow atlas as its readers take it; see
@@ -1714,11 +1696,14 @@ impl Offscreen {
 
         let color = tex("lattice_offscreen_color", size[0], size[1], format, attach_and_sample);
         let color_view = color.create_view(&Default::default());
+        let ink_view = tex("lattice_offscreen_ink", size[0], size[1], format, attach_and_sample)
+            .create_view(&Default::default());
         let composite_bind_group = Self::composite_binding(
             device,
             shared,
             uniform_buffer,
             &color_view,
+            &ink_view,
             shared.bloom_dummy,
         );
 
@@ -1730,6 +1715,7 @@ impl Offscreen {
             shadow: None,
             composite_bind_group,
             color_view,
+            ink_view,
             size,
             screen_size,
         }
@@ -1740,6 +1726,7 @@ impl Offscreen {
         shared: &OffscreenShared<'_>,
         uniforms: &wgpu::Buffer,
         color: &wgpu::TextureView,
+        ink: &wgpu::TextureView,
         bloom: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1759,6 +1746,10 @@ impl Offscreen {
                     resource: wgpu::BindingResource::TextureView(bloom),
                 },
                 wgpu::BindGroupEntry { binding: 3, resource: uniforms.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(ink),
+                },
             ],
         })
     }
@@ -1777,24 +1768,28 @@ impl Offscreen {
             return;
         }
         self.bloom = want.then(|| {
-            let nodes_view = device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("lattice_offscreen_nodes"),
-                    size: wgpu::Extent3d {
-                        width: self.size[0],
-                        height: self.size[1],
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: shared.format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
-                .create_view(&Default::default());
-            let chain = BloomChain::new(
+            let tex = |label| {
+                device
+                    .create_texture(&wgpu::TextureDescriptor {
+                        label: Some(label),
+                        size: wgpu::Extent3d {
+                            width: self.size[0],
+                            height: self.size[1],
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: shared.format,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                    })
+                    .create_view(&Default::default())
+            };
+            let nodes_view = tex("lattice_bloom_other");
+            let ink_view = tex("lattice_bloom_ink");
+            let mut chain = BloomChain::new(
                 device,
                 "lattice",
                 shared.format,
@@ -1803,13 +1798,34 @@ impl Offscreen {
                 &nodes_view,
                 self.screen_size,
             );
-            LatticeBloom { nodes_view, chain }
+            // Only the first step needs two sources; the shared filter tail
+            // still takes one texture. Keyed by this bloom allocation's size.
+            chain.bright_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("lattice_bright_split"),
+                layout: shared.bright_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&nodes_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(shared.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(&ink_view),
+                    },
+                ],
+            });
+            LatticeBloom { nodes_view, ink_view, chain }
         });
         self.composite_bind_group = Self::composite_binding(
             device,
             shared,
             uniforms,
             &self.color_view,
+            &self.ink_view,
             self.bloom.as_ref().map_or(shared.bloom_dummy, |b| &b.chain.quarter_a_view),
         );
     }
@@ -2034,7 +2050,7 @@ fn create_pipeline(
     layouts: SceneLayouts<'_>,
     entry_points: (&str, &str),
     vertex_layouts: &[wgpu::VertexBufferLayout<'_>],
-    bloom: bool,
+    attachments: usize,
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_pipeline_layout"),
@@ -2047,19 +2063,12 @@ fn create_pipeline(
         ..Default::default()
     });
 
-    // The offscreen pass's second attachment takes the same fragment under the
-    // same blending: it is the same picture, drawn again without the labels.
     let color_target = wgpu::ColorTargetState {
         format: target_format,
-        // Shader outputs premultiplied alpha.
         blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         write_mask: wgpu::ColorWrites::ALL,
     };
-    let targets: &[Option<wgpu::ColorTargetState>] = if bloom {
-        &[Some(color_target.clone()), Some(color_target)]
-    } else {
-        &[Some(color_target)]
-    };
+    let targets = vec![Some(color_target); attachments];
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         // Name the pipeline after its vertex entry point, so a GPU capture
@@ -2076,7 +2085,7 @@ fn create_pipeline(
             module: shader,
             entry_point: Some(entry_points.1),
             compilation_options: Default::default(),
-            targets,
+            targets: &targets,
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleStrip,
@@ -2089,19 +2098,21 @@ fn create_pipeline(
     })
 }
 
-/// Build both scene pipelines from one shared module. `bloom` picks the
-/// two-attachment fragment entry points along with the pass state that goes
-/// with them — the pair travels together, since a pipeline whose shader
-/// writes one attachment cannot be used in a pass that carries two.
+/// One target for rasterization references, two for the split visible scene,
+/// four when the label-free bloom pair is also needed.
 fn create_pipelines(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
     layouts: SceneLayouts<'_>,
-    bloom: bool,
+    attachments: usize,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
-    let (node, plus) =
-        if bloom { ("fs_main_scene", "fs_plus_scene") } else { ("fs_main", "fs_plus") };
+    let (node, plus) = match attachments {
+        1 => ("fs_main", "fs_plus"),
+        2 => ("fs_main_split", "fs_plus_split"),
+        4 => ("fs_main_scene", "fs_plus_scene"),
+        _ => unreachable!("scene attachment count"),
+    };
     (
         create_pipeline(
             device,
@@ -2110,7 +2121,7 @@ fn create_pipelines(
             layouts,
             ("vs_main", node),
             &[GpuInstance::LAYOUT, shadow::ShadowBox::BESIDE_NODES],
-            bloom,
+            attachments,
         ),
         create_pipeline(
             device,
@@ -2119,13 +2130,13 @@ fn create_pipelines(
             layouts,
             ("vs_plus", plus),
             &[GpuPlus::LAYOUT],
-            bloom,
+            attachments,
         ),
     )
 }
 
 /// The ordered scene pass's attachment-compatible draws. Index 0 carries
-/// only the picture; index 1 also writes the independent bloom input.
+/// the two visible components; index 1 also writes the independent bloom pair.
 /// Startup and hot reload build both through the same factory.
 #[derive(Clone)]
 struct ScenePipelines {
@@ -2147,8 +2158,13 @@ fn create_scene_pipelines(
     glyph_layout: &wgpu::BindGroupLayout,
 ) -> [ScenePipelines; 2] {
     [false, true].map(|bloom| {
-        let (nodes, pluses) =
-            create_pipelines(device, lattice_shader, LATTICE_COLOR_FORMAT, layouts, bloom);
+        let (nodes, pluses) = create_pipelines(
+            device,
+            lattice_shader,
+            LATTICE_COLOR_FORMAT,
+            layouts,
+            if bloom { 4 } else { 2 },
+        );
         ScenePipelines {
             nodes,
             pluses,
@@ -2159,7 +2175,7 @@ fn create_scene_pipelines(
                 glyph_layout,
                 Some(layouts.glow),
                 ("vs_glyph", "fs_fill_lit"),
-                bloom,
+                if bloom { 4 } else { 2 },
                 EGUI_BLEND,
             ),
             shadow_box: text::create_shadow_box_pipeline(
@@ -2418,7 +2434,7 @@ fn create_ink_strip_pipelines(
 /// pass, before any node, marker or label.
 ///
 /// With bloom on it writes both the picture and the independent bloom input.
-/// With bloom off the existing single-attachment blit samples the same light.
+/// With bloom off it writes just the visible pair.
 /// Both use painter order and the same premultiplied blend.
 fn create_glow_over_pipeline(
     device: &wgpu::Device,
@@ -2439,7 +2455,7 @@ fn create_glow_over_pipeline(
         blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         write_mask: wgpu::ColorWrites::ALL,
     };
-    let targets = [Some(target.clone()), Some(target)];
+    let targets = vec![Some(target); if bloom { 4 } else { 2 }];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("fs_glow_over"),
         layout: Some(&layout),
@@ -2451,9 +2467,9 @@ fn create_glow_over_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some(if bloom { "fs_glow_over" } else { "fs_blit" }),
+            entry_point: Some(if bloom { "fs_glow_over" } else { "fs_glow_split" }),
             compilation_options: Default::default(),
-            targets: &targets[..if bloom { 2 } else { 1 }],
+            targets: &targets,
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleStrip,
@@ -2657,7 +2673,13 @@ impl CompiledLatticeResources {
 
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("lattice_composite_bind_group_layout"),
-            entries: &[texture_entry(0), sampler_entry(1), texture_entry(2), uniform_entry(3)],
+            entries: &[
+                texture_entry(0),
+                sampler_entry(1),
+                texture_entry(2),
+                uniform_entry(3),
+                texture_entry(5),
+            ],
         });
         progress(startup::Stage::Bloom);
         let composite_pipeline = create_post_pipeline(
@@ -2678,7 +2700,18 @@ impl CompiledLatticeResources {
                 None,
             )
         };
-        let bright_pipeline = filter("fs_bright");
+        let bright_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("lattice_bright_layout"),
+            entries: &[texture_entry(0), sampler_entry(1), texture_entry(5)],
+        });
+        let bright_pipeline = create_post_pipeline(
+            device,
+            &blit_shader,
+            "fs_bright_split",
+            LATTICE_COLOR_FORMAT,
+            &bright_layout,
+            None,
+        );
         let downsample_pipeline = filter("fs_blit");
         let blur_h_pipeline = filter("fs_blur_h");
         let blur_v_pipeline = filter("fs_blur_v");
@@ -2800,6 +2833,7 @@ impl CompiledLatticeResources {
             ink_blur_pipeline,
             bind_group_layout,
             composite_layout,
+            bright_layout,
             filter_layout,
             glow_dummy_bind_group,
             bloom_dummy: glow_dummy,
@@ -2929,6 +2963,7 @@ impl LatticeResources {
         let shared = OffscreenShared {
             format: LATTICE_COLOR_FORMAT,
             composite_layout: &self.compiled.composite_layout,
+            bright_layout: &self.compiled.bright_layout,
             filter_layout: &self.compiled.filter_layout,
             shadow_layout: &self.compiled.shadow_layout,
             sampler: &self.compiled.sampler,

@@ -1132,17 +1132,38 @@ fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
         .count();
     assert!(onto_far > 20, "the near name darkened {onto_far} visible pixels of the far node");
 
-    // The far name leaves the near node's opaque pixels alone, bar a level of
-    // rounding: `opaque` is the pixels whose ALPHA reaches 255, and a coverage
-    // a thousandth short of 1 lets a thousandth of what is behind through.
-    let onto_near = opaque
+    // Equality after RGBA8 quantization includes almost-opaque AA edges.
+    // Remove their one-pixel boundary before asserting that the near ink
+    // completely covers a far label. The would_have check below still proves
+    // that the surviving interior lies under that label's shadow.
+    let interior: Vec<usize> = opaque
+        .iter()
+        .copied()
+        .filter(|&i| {
+            let x = (i / 4) as u32 % SIZE[0];
+            let y = (i / 4) as u32 / SIZE[0];
+            x > 0
+                && x + 1 < SIZE[0]
+                && y > 0
+                && y + 1 < SIZE[1]
+                && (-1..=1).all(|dy| {
+                    (-1..=1).all(|dx| {
+                        let neighbour =
+                            ((y as i32 + dy) * SIZE[0] as i32 + x as i32 + dx) as usize * 4;
+                        opaque.contains(&neighbour)
+                    })
+                })
+        })
+        .collect();
+    assert!(interior.len() > 500, "the mask must retain substantial opaque ink");
+    let onto_near = interior
         .iter()
         .filter(|&&i| (0..4).any(|c| far_named[i + c].abs_diff(bare[i + c]) > 1))
         .count();
     assert_eq!(onto_near, 0, "the far name's shadow reached {onto_near} pixels of the near node");
     // ...though its shadow does land there with the near node out of the way.
     let without_named = shooter.shot_with(&without, name(&without, 0));
-    let would_have = opaque
+    let would_have = interior
         .iter()
         .filter(|&&i| brightness(&without_named[i..i + 3]) < brightness(&without_bare[i..i + 3]))
         .count();

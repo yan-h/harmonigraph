@@ -113,6 +113,7 @@ fn baked_blit_shader_validates() {
         "vs_blit",
         "fs_blit",
         "fs_bright",
+        "fs_bright_split",
         "fs_blur_h",
         "fs_blur_v",
         "fs_composite",

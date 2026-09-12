@@ -854,11 +854,13 @@ impl LatticeCallback {
         };
         let attachments = [
             attachment(&offscreen.color_view),
+            attachment(&offscreen.ink_view),
             offscreen.bloom.as_ref().and_then(|b| attachment(&b.nodes_view)),
+            offscreen.bloom.as_ref().and_then(|b| attachment(&b.ink_view)),
         ];
         let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("lattice_scene_pass"),
-            color_attachments: &attachments[..if offscreen.bloom.is_some() { 2 } else { 1 }],
+            color_attachments: &attachments[..if offscreen.bloom.is_some() { 4 } else { 2 }],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,

@@ -506,7 +506,7 @@ fn glyph_light(coord: vec2<i32>) -> vec4<f32> {
 /// them is the BINDING: only the lattice has a light to hand a glyph pipeline,
 /// and a pipeline declares the groups its entry point reads.
 @fragment
-fn fs_fill_lit(in: VertexOut) -> @location(0) vec4<f32> {
+fn fs_fill_lit(in: VertexOut) -> SplitOut {
     let cov = coverage(in, in.texel);
     if cov <= 0.0 {
         discard;
@@ -516,7 +516,10 @@ fn fs_fill_lit(in: VertexOut) -> @location(0) vec4<f32> {
     let ink = in.fill * cov;
     let coord = vec2<i32>(in.position.xy);
     let light = glyph_light(coord);
-    return vec4<f32>(wash_over(ink.rgb, ink.a, light.rgb, 1.0), ink.a);
+    return SplitOut(
+        vec4<f32>(wash_over(ink.rgb, ink.a, light.rgb, 1.0), ink.a),
+        vec4<f32>(0.0, 0.0, 0.0, ink.a),
+    );
 }
 
 /// A lattice name's coverage, into its own cell of the shadow atlas
@@ -727,12 +730,10 @@ fn vs_shadow_box(
 /// layout with group 0 and nothing else, and a pane with no atlas has no dummy
 /// to bind.
 ///
-/// The two attachments part in the SHADOW here as they do at every other
-/// caster's draw (`Painted` in lattice.wgsl): one ink into both, and the alpha
-/// — which is what the fragment takes off the frame under it — deeper in the
-/// copy the bright pass reads. What is a NAME's alone is the ink, kept out of
-/// `nodes` so it neither glows nor bites the halo of the node it covers
-/// (`SceneOut`, common.wgsl).
+/// A label shadow darkens both components of each picture, at the visible
+/// depth for the first pair and full depth for the bloom pair. The glyph ink
+/// is kept out of both bloom components so it neither glows nor bites the
+/// halo of the node it covers (`SceneOut`, common.wgsl).
 ///
 /// What it buys: the composite is `scene + bloom * strength` into an 8-bit
 /// target, so over a bright halo the unshadowed pixel is already past 1 and
@@ -753,14 +754,17 @@ fn fs_shadow_box(in: BoxOut) -> SceneOut {
     let lit = shadow_transmittance(full, 1.0, in.level);
     return SceneOut(
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
+        vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
+        vec4<f32>(0.0, 0.0, 0.0, 1.0 - lit),
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - lit),
     );
 }
 
 // The same visible shadow when the scene has no bloom attachment.
 @fragment
-fn fs_shadow_box_plain(in: BoxOut) -> @location(0) vec4<f32> {
+fn fs_shadow_box_plain(in: BoxOut) -> SplitOut {
     let full = shadow_kernel(in.who, in.at);
     let t = shadow_transmittance(full, locals.shadow_depth, in.level);
-    return vec4<f32>(0.0, 0.0, 0.0, 1.0 - t);
+    let shadow = vec4<f32>(0.0, 0.0, 0.0, 1.0 - t);
+    return SplitOut(shadow, shadow);
 }

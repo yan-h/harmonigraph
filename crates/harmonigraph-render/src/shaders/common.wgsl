@@ -371,21 +371,17 @@ fn cell_clip(texel: vec2<f32>, size: vec2<f32>, w: f32) -> vec4<f32> {
     );
 }
 
-// The two attachments the offscreen scene pass carries.
-//
-// `picture` is everything, and is what the composite puts on screen. `nodes` is
-// the same picture with the node LABELS left out — the bright pass reads it, so
-// a name neither glows nor takes a bite out of the halo of the node it covers.
-//
-// A label's ink reaches `picture` alone, its pipeline writing that attachment
-// and no other; every other draw writes the same INK to both, so the ink of a
-// name is the one thing the two pictures hold different amounts of. What they
-// are otherwise allowed to differ in is a caster's SHADOW: a premultiplied
-// fragment's alpha is what it takes off the frame UNDER it, so a deeper alpha
-// here is the same item over a darker copy of the frame rather than a different
-// item (lattice.wgsl's `Painted`, text.wgsl's `fs_shadow_box`) — `nodes`
-// always at a whole shadow (1), whatever `picture`'s own depth is.
+// Each picture keeps node ink separate from everything ordinary shadows
+// multiply. Summing the RGB components restores the picture; only `other.a`
+// carries its coverage over the pane. Labels write the visible pair only.
+struct SplitOut {
+    @location(0) other: vec4<f32>,
+    @location(1) ink: vec4<f32>,
+};
+
 struct SceneOut {
-    @location(0) picture: vec4<f32>,
-    @location(1) nodes: vec4<f32>,
+    @location(0) other: vec4<f32>,
+    @location(1) ink: vec4<f32>,
+    @location(2) bloom_other: vec4<f32>,
+    @location(3) bloom_ink: vec4<f32>,
 };

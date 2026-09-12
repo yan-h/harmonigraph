@@ -34,6 +34,8 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
             scene.nodes[0].octaves.fill(f32::from(lit));
             scene.nodes[0].world_pos = glam::vec3(-0.6, 0.0, -1.0);
             let mut front = scene.nodes[0];
+            // A real light source even when the receiver is unlit.
+            front.octaves.fill(1.0);
             front.world_pos = glam::vec3(0.9, 0.0, 1.0);
             scene.nodes.push(front);
             rows_per_node(&mut scene);
@@ -79,6 +81,50 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
                     );
                 }
             }
+            // With no glow and a black clear, ordinary background shadows
+            // have no RGB to darken. Changing their depth must leave ALL node
+            // ink identical, both directly and through bloom. The old path
+            // must differ here, proving that this fixture reaches a rear node
+            // under a foreground shadow rather than merely missing it.
+            scene.glow_reach = 0.0;
+            for bloom in [0.0, 1.0] {
+                scene.bloom_strength = bloom;
+                scene.shadow.lattice_geometry.depth = 0.18;
+                let faint = shot(&scene, true);
+                let old_faint = shot(&scene, false);
+                scene.shadow.lattice_geometry.depth = 0.8;
+                let deep = shot(&scene, true);
+                assert_eq!(
+                    differing_pixels(&faint, &deep),
+                    0,
+                    "{kernel:?}, lit={lit}, bloom={bloom}: node ink still receives shadow darkness"
+                );
+                if bloom == 0.0 {
+                    assert!(
+                        differing_pixels(&old_faint, &shot(&scene, false)) > 50,
+                        "the control must actually shadow rear ink"
+                    );
+                }
+            }
+            // The same depth adjustment must still darken exposed glow.
+            scene.bloom_strength = 0.0;
+            scene.glow_reach = 2.0;
+            let deep_glow = shot(&scene, true);
+            scene.shadow.lattice_geometry.depth = 0.18;
+            let faint_glow = shot(&scene, true);
+            let changed_glow = faint_glow
+                .chunks_exact(4)
+                .zip(deep_glow.chunks_exact(4))
+                .zip(ink.chunks_exact(4))
+                .filter(|((faint, deep), mask)| {
+                    mask[..3] == [0, 0, 0] && brightness(faint) - brightness(deep) > 6
+                })
+                .count();
+            assert!(
+                changed_glow > 50,
+                "{kernel:?}, lit={lit}: shadow darkness reached only {changed_glow} glow pixels"
+            );
+
             // The bloom path must also use the reduced coverage, and the
             // final surviving foreground node must never occlude itself.
             scene.bloom_strength = 1.0;

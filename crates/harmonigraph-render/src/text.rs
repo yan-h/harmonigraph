@@ -729,9 +729,9 @@ fn create_spectral_shadow_pipeline(
 /// A name's shadow into the scene pass, over the name's own box
 /// (`fs_shadow_box`).
 ///
-/// With bloom on, both attachments under the premultiplied blend the multiply
-/// rides on: the bloom reads the second, and a halo a name darkens has to bloom
-/// as darkened. The glyphs beside it write the first alone
+/// The shadow multiplies both visible components and, with bloom on, both
+/// bloom components: a halo a name darkens has to bloom as darkened.
+/// The glyphs beside it write the visible pair alone
 /// ([`create_text_pipeline`]), which is what keeps the name itself out of the
 /// bloom.
 ///
@@ -756,7 +756,7 @@ pub(crate) fn create_shadow_box_pipeline(
         blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         write_mask: wgpu::ColorWrites::ALL,
     });
-    let targets = [target.clone(), target];
+    let targets = vec![target; if bloom { 4 } else { 2 }];
     glyph_pipeline(
         device,
         shader,
@@ -764,7 +764,7 @@ pub(crate) fn create_shadow_box_pipeline(
         &[Some(layout), None, Some(atlas), Some(casters)],
         ("vs_shadow_box", if bloom { "fs_shadow_box" } else { "fs_shadow_box_plain" }),
         &[],
-        &targets[..if bloom { 2 } else { 1 }],
+        &targets,
     )
 }
 
@@ -892,7 +892,7 @@ impl TextResources {
             layout,
             None,
             ("vs_glyph", "fs_fill"),
-            false,
+            1,
             crate::EGUI_BLEND,
         );
         let (_, distance, pad) = create_glyph_cell_pipelines(device, &shader, layout);
@@ -1156,10 +1156,10 @@ pub(crate) fn blank_sdf_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgp
 /// its own text, so a label composites over the picture identically to the
 /// stamped version it replaces.
 ///
-/// `bloom` declares the scene pass's second colour attachment, with no writes
-/// from the glyph fill. That copy feeds the bright pass, so a name's ink
-/// neither glows nor cuts a hole in the node halo it covers. Both attachment
-/// choices are depthless and take their place in painter order.
+/// `attachments` is one for ordinary text, two for the lattice's visible
+/// components, or four when its label-free bloom pair is present. Glyph fill
+/// covers both visible components and writes nothing to either bloom target,
+/// so a name neither glows nor cuts a hole in the node halo it covers.
 ///
 /// `blend` is [`crate::EGUI_BLEND`]. Its alpha term is egui's own —
 /// `src * (1 - dst.a) + dst`, which is the same arithmetic as premultiplied
@@ -1186,7 +1186,7 @@ pub(crate) fn create_text_pipeline(
     layout: &wgpu::BindGroupLayout,
     glow: Option<&wgpu::BindGroupLayout>,
     entries: (&str, &str),
-    bloom: bool,
+    attachments: usize,
     blend: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
     let mut targets = vec![Some(wgpu::ColorTargetState {
@@ -1194,16 +1194,21 @@ pub(crate) fn create_text_pipeline(
         blend: Some(blend),
         write_mask: wgpu::ColorWrites::ALL,
     })];
-    // The pass's nodes-only attachment, declared and never written — an empty
-    // write mask rather than a `None` target, which wgpu rejects: a pipeline's
-    // formats have to match the pass's attachment for attachment, so the way
-    // to write nothing is to say so in the mask.
-    if bloom {
-        targets.push(Some(wgpu::ColorTargetState {
-            format: target_format,
-            blend: None,
-            write_mask: wgpu::ColorWrites::empty(),
-        }));
+    // Lattice labels cover both visible components; neither bloom component
+    // receives glyph color OR coverage. Other text surfaces have one target.
+    assert!(matches!(attachments, 1 | 2 | 4));
+    if attachments >= 2 {
+        targets.push(targets[0].clone());
+    }
+    if attachments == 4 {
+        targets.extend(std::iter::repeat_n(
+            Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::empty(),
+            }),
+            2,
+        ));
     }
     glyph_pipeline(
         device,

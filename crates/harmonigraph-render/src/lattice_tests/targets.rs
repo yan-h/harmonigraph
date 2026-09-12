@@ -39,9 +39,11 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     let bloomed = shooter.shot_again(&scene);
     assert!(total_light(&bloomed) > 64, "release fixture must emit visible light");
     let color = target(&shooter).color_view.clone();
+    let ink = target(&shooter).ink_view.clone();
     let glow = target(&shooter).glow.as_ref().unwrap().view.clone();
     let raw = history(&shooter).raw_views.clone();
     let initial_bloom = target(&shooter).bloom.as_ref().unwrap().nodes_view.clone();
+    let initial_bloom_ink = target(&shooter).bloom.as_ref().unwrap().ink_view.clone();
     let bytes = |view: &wgpu::TextureView| {
         let tex = view.texture();
         u64::from(tex.width()) * u64::from(tex.height()) * 8
@@ -49,6 +51,7 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     let bloom = target(&shooter).bloom.as_ref().unwrap();
     let bloom_bytes = [
         &bloom.nodes_view,
+        &bloom.ink_view,
         &bloom.chain.half_view,
         &bloom.chain.quarter_a_view,
         &bloom.chain.quarter_b_view,
@@ -56,13 +59,18 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     .into_iter()
     .map(bytes)
     .sum::<u64>();
-    assert_eq!(bloom_bytes, 720_896, "256-square pane: nodes plus half and two quarters, RGBA16F");
+    assert_eq!(
+        bloom_bytes, 1_245_184,
+        "256-square pane: bloom pair plus half and two quarters, RGBA16F"
+    );
     assert_eq!(bytes(&color), 524_288);
+    assert_eq!(bytes(&ink), 524_288);
 
     // Changing strength while enabled must keep the same allocation.
     scene.bloom_strength = 0.5;
     shooter.shot_again(&scene);
     assert_eq!(target(&shooter).bloom.as_ref().unwrap().nodes_view, initial_bloom);
+    assert_eq!(target(&shooter).bloom.as_ref().unwrap().ink_view, initial_bloom_ink);
     scene.bloom_strength = 0.0;
     let plain = shooter.shot_again(&scene);
     assert!(target(&shooter).bloom.is_none());
@@ -72,11 +80,13 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
         scene.bloom_strength = 1.0;
         assert_eq!(bloomed, shooter.shot_again(&scene), "on recovers identical pixels");
         assert_ne!(target(&shooter).bloom.as_ref().unwrap().nodes_view, initial_bloom);
+        assert_ne!(target(&shooter).bloom.as_ref().unwrap().ink_view, initial_bloom_ink);
         scene.bloom_strength = 0.0;
         assert_eq!(plain, shooter.shot_again(&scene), "off recovers identical pixels");
         let held = target(&shooter);
         assert!(held.bloom.is_none());
         assert_eq!(held.color_view, color);
+        assert_eq!(held.ink_view, ink);
         assert_eq!(held.glow.as_ref().unwrap().view, glow);
         assert_eq!(history(&shooter).raw_views, raw);
     }
@@ -90,6 +100,7 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
         assert!(total_light(&resized) > total_light(&plain) / 2);
         assert_eq!(history(&shooter).raw_views, raw);
         assert_ne!(target(&shooter).color_view, color);
+        assert_ne!(target(&shooter).ink_view, ink);
     }
     // Preserve the current growth/reseed contract, which does not carry an
     // inkless release through growth. This really crosses capacity 1 -> 2.

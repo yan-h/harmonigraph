@@ -273,7 +273,7 @@ fn offscreen_composite_matches_direct_draw() {
     const SIZE: [u32; 2] = [256, 256];
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let scene = parity_scene();
-    let cb = LatticeCallback::from_scene(
+    let mut cb = LatticeCallback::from_scene(
         &scene,
         LatticeLabels::default(),
         egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
@@ -281,6 +281,10 @@ fn offscreen_composite_matches_direct_draw() {
         7,
         None,
     );
+
+    // Compare the split storage against the ordinary compositing reference.
+    // Replacement occlusion has its own depth-independence GPU regression.
+    cb.uniforms.geometry_shadow.occlusion = 0.0;
 
     // prepare(): uploads buffers and renders the offscreen scene pass.
     let mut resources = CallbackResources::default();
@@ -317,7 +321,7 @@ fn offscreen_composite_matches_direct_draw() {
         casters: &res.compiled.caster_layout,
     };
     let shader = lattice_module(&device, &with_common(SHADER_SRC));
-    let (node_pipeline, plus_pipeline) = create_pipelines(&device, &shader, format, layouts, false);
+    let (node_pipeline, plus_pipeline) = create_pipelines(&device, &shader, format, layouts, 1);
     // The stand-in light at group 1: this path has no glow pass to composite,
     // and the fixture asks for none (`parity_scene` holds the reach at 0), so
     // the offscreen path is reading the same transparent nothing.
