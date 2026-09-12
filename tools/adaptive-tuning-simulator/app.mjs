@@ -24,7 +24,6 @@ const CONTROLS = [
   ['pitchScale', 'Pitch flexibility', 1, 60, 1, 'Cents of pitch error that cost one point. Lower = more precise control.', 'main-controls'],
   ['register', 'Weight per octave', 0.05, 1, 0.05, 'Each octave between a context note and the note being tuned multiplies that note’s vote by this. 1 makes scoring register-blind.', 'main-controls'],
   ['halfLife', 'Half-life', 0, 10, 0.1, 'Seconds. A note struck this long before the newest one counts half, held or released. 0 means no decay.', 'main-controls'],
-  ['released', 'Released : held weight', 0, 1, 0.05, 'A released note weighs this much against a held note struck at the same moment.', 'main-controls'],
   ['radius', 'Neighbourhood radius', 1, 5, 1, 'Maximum lattice steps from any contributing context note.', 'extra-controls'],
   ['tolerance', 'Same-note tolerance', 0, 20, 0.1, 'Cents of absolute onset-pitch difference that refresh one memory entry.', 'extra-controls'],
 ];

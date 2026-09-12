@@ -166,8 +166,9 @@ impl Sequencer {
         }
     }
     /// The context one assignment sees: every held voice newest first,
-    /// deduplicated within the repetition tolerance, then released memory,
-    /// each decayed by the age of its attack at the newest attack among them.
+    /// deduplicated within the repetition tolerance, each decayed by the age of
+    /// its attack at the newest held attack — or, with nothing held, released
+    /// memory (`Memory::append`).
     fn fill(&mut self, rate: f64) {
         self.working.clear();
         let mut voices = [None; HELD_SESSION];
@@ -177,13 +178,7 @@ impl Sequencer {
             count += 1;
         }
         voices[..count].sort_unstable_by_key(|v| std::cmp::Reverse(v.unwrap().decision));
-        let newest = voices[..count]
-            .iter()
-            .flatten()
-            .map(|v| v.onset)
-            .chain(self.memory.newest())
-            .max()
-            .unwrap_or(0);
+        let newest = voices[..count].iter().flatten().map(|v| v.onset).max().unwrap_or(0);
         for voice in voices[..count].iter().flatten() {
             if !self.working.iter().any(|v| {
                 v.pitch.abs_diff(voice.onset_pitch) <= u64::from(self.config.policy.tolerance)
@@ -194,7 +189,7 @@ impl Sequencer {
                 });
             }
         }
-        self.memory.append(&mut self.working, self.config.policy, newest, rate);
+        self.memory.append(&mut self.working, self.config.policy, rate);
     }
     /// Drop a context voice without contributing it to released memory. Two
     /// callers, and neither is a note ending: an onset the scheduled state
@@ -687,18 +682,18 @@ impl Hub {
         // displaces: it leaves policy context here or never.
         //
         // Forgotten rather than released, and those are NOT the same picture.
-        // A real note-off feeds `Memory`, and `fill` appends that back into
-        // the scoring context at released weight, so an off-then-on IS scored
-        // with its predecessor's pitch present where a replacement is not.
+        // A real note-off feeds `Memory`, and with nothing else held `fill`
+        // scores from that memory, so an off-then-on IS scored with its
+        // predecessor's pitch present where a replacement is not.
         // What that difference is worth was measured rather than assumed: over
         // a harmony change, a clip-loop chain of repeats, a lone repeated note
         // and a note held until a drifted context respells it, the entry never
-        // moved the chosen spelling. It arrives at `released`/1000 behind
-        // every held voice, and when the retrigger keeps its predecessor's
+        // moved the chosen spelling. With anything held it is not in the
+        // context at all, and when the retrigger keeps its predecessor's
         // spelling `Memory::attack` deletes it again on that same decision.
-        // Where it does show is the published reach: a replacement draws one
-        // fewer released node, which is the answer to want, since nothing
-        // ended and released memory owes this no entry.
+        // Where it does show, with nothing else held, is the published reach:
+        // a replacement draws one fewer released node, which is the answer to
+        // want, since nothing ended and released memory owes this no entry.
         //
         // Before the score rather than after, because after `fill` the
         // displaced voice would still be there at HELD weight — a second
@@ -1094,6 +1089,14 @@ impl Hub {
     #[cfg(test)]
     pub fn test_next_context(&self) -> policy::reach::Snapshot {
         self.shared.neighbourhood.read().expect("published next-attack context")
+    }
+    /// Released notes remembered, whatever is held: the next-attack context
+    /// shows memory only when nothing is.
+    #[cfg(test)]
+    pub fn test_memory(&self) -> usize {
+        let mut context = Vec::new();
+        self.sequencer.memory.append(&mut context, self.sequencer.config.policy, self.rate);
+        context.len()
     }
 }
 

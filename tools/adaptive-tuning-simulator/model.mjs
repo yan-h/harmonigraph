@@ -4,7 +4,7 @@ export const AXES = [1200 * Math.log2(3 / 2), 1200 * Math.log2(5 / 4), 1200 * Ma
 export const MEMORY = 24;
 export const DEFAULTS = Object.freeze({
   radius: 3, axes: 2, harmonic: 6, pitchScale: 20,
-  released: 0.1, register: 0.7,
+  register: 0.7,
   tolerance: 0.5, silence: 0, resetStop: false, resetLoop: false, halfLife: 0.5,
 });
 export const keyOf = n => n.join(',');
@@ -36,7 +36,7 @@ export function parsePitch(text) {
 function validateSettings(raw) {
   const s = { ...DEFAULTS, ...raw };
   const bounds = { radius: [1, 5], axes: [1, 3], harmonic: [0, 20], pitchScale: [1, 100],
-    released: [0, 1], register: [0.01, 1],tolerance: [0, 20], silence: [0, 120], halfLife: [0, 20] };
+    register: [0.01, 1], tolerance: [0, 20], silence: [0, 120], halfLife: [0, 20] };
   for (const [name, [lo, hi]] of Object.entries(bounds)) {
     if (!Number.isFinite(s[name]) || s[name] < lo || s[name] > hi) throw new Error(`Invalid ${name}: expected ${lo}–${hi}.`);
   }
@@ -68,21 +68,25 @@ export class Simulator {
     // for release and expression. Octave duplicates retain their own registers.
     const held = [...this.held.values()].sort((a, b) => b.stamp - a.stamp);
     // Every contribution halves in weight once per half-life between its
-    // attack and the newest attack in context, held or released: a release
-    // does not restart the age. One clock for all, so waiting scales every
-    // weight alike and changes no decision.
-    const { halfLife, released } = this.settings;
-    const newest = Math.max(...held.map(v => v.time), ...this.recent.map(e => e.time));
-    const decay = time => halfLife > 0 ? 0.5 ** ((newest - time) / halfLife) : 1;
+    // attack and the newest attack in context: a release does not restart the
+    // age. One clock for all, so waiting scales every weight alike and changes
+    // no decision.
+    const { halfLife } = this.settings;
+    const decay = (time, newest) => halfLife > 0 ? 0.5 ** ((newest - time) / halfLife) : 1;
+    const newest = Math.max(...held.map(v => v.time));
     for (const voice of held) {
       if (!entries.some(e => Math.abs(e.output - voice.output) <= this.settings.tolerance)) {
-        entries.push({ ...voice, weight: decay(voice.time), status: 'held' });
+        entries.push({ ...voice, weight: decay(voice.time, newest), status: 'held' });
       }
     }
-    for (const entry of this.recent) {
-      if (entries.some(e => Math.abs(e.output - entry.output) <= this.settings.tolerance)) continue;
-      const weight = released * decay(entry.time);
-      if (weight > 0) entries.push({ ...entry, weight, status: 'released' });
+    // A held note outranks every released one however long it has been held,
+    // so released memory is the context only when nothing is held.
+    if (!held.length) {
+      const last = Math.max(...this.recent.map(e => e.time));
+      for (const entry of this.recent) {
+        const weight = decay(entry.time, last);
+        if (weight > 0) entries.push({ ...entry, weight, status: 'released' });
+      }
     }
     // An empty phrase has an explicit origin reference, not a stale per-key map.
     if (!entries.length) entries.push({ node: [0, 0, 0], output: 4800, input: 4800, weight: 1, status: 'origin', id: 'origin' });

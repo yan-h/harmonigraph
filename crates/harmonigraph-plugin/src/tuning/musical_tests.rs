@@ -313,14 +313,14 @@ fn production_a_note_released_long_before_the_rest_weighs_less() {
     }
 }
 
-/// A release does not restart a note's age. C, struck a chord before the F
-/// and A still sounding over it, is let go as D arrives. It keeps its old
-/// attack's weight, so D is tuned to the sounding F–A, a just fifth under A.
-/// When a release restarted the age, C came back at the released weight
-/// against an F–A eight half-lives old, and D took 9/8 from it: 680 cents
-/// under the sounding A.
+/// A released note never outvotes a held one. C, struck a chord before the F
+/// and A still sounding over it, is let go as D arrives; with F–A held it is
+/// not in the context, so D is tuned to the sounding F–A, a just fifth under
+/// A. When a release restarted the age and released notes shared the context,
+/// C came back at the released weight against an F–A eight half-lives old, and
+/// D took 9/8 from it: 680 cents under the sounding A.
 #[test]
-fn production_a_released_note_keeps_the_age_of_its_attack() {
+fn production_a_released_note_never_outvotes_a_held_one() {
     let _scope = crate::test_scope::enter();
     let mut phrase = Phrase::new();
     // Eight seconds of 512-sample callbacks at 44.1 kHz.

@@ -497,15 +497,6 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             "s",
             "A note struck this long before the newest counts half. 0: no decay.",
         ) as u16;
-        p.released = adaptive_value(
-            ui,
-            p.released.into(),
-            0..=1000,
-            1000.0,
-            "Released : held weight",
-            "",
-            "What a released note counts against a held one.",
-        ) as u16;
         p.register = adaptive_value(
             ui,
             p.register.into(),

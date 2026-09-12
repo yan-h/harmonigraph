@@ -14,8 +14,9 @@ fn retune_off_forgets_held_and_released_context_but_preserves_sounding_pitch() {
     let before = inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, 64)).unwrap();
     assert_ne!(before.frozen_offset_microcents, 0, "a correction must actually be preserved");
     assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 1);
-    assert!(
-        inspect_hub(&pair.hub, |hub| hub.test_next_context()).context.len() >= 2,
+    assert_eq!(
+        inspect_hub(&pair.hub, |hub| hub.test_memory()),
+        1,
         "the fixture must reach the toggle with both held and released pitches"
     );
 
