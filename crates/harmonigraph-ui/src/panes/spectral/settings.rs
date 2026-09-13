@@ -112,24 +112,17 @@ pub(crate) fn spectrum_settings_pane(
                  1× is the reference size; labels stay the same size when you zoom.",
         );
 
-    section(ui, "Atmosphere (prototype)");
+    section(ui, "Softness and glow");
     let atmosphere = &mut cfg.atmosphere;
-    crate::widgets::toggle_switch(ui, &mut atmosphere.enabled, "Enabled");
-    if ui.small_button("Reset atmosphere").clicked() {
+    if ui.small_button("Reset softness and glow").clicked() {
         *atmosphere = harmonigraph_scene::SpectralAtmosphere::default();
     }
-    ui.add_enabled_ui(atmosphere.enabled, |ui| {
-        ValueBar::new(&mut atmosphere.diffusion, 0.0..=1.0, "Diffusion")
-            .percent().show(ui).on_hover_text("Smooth fine spectrogram detail at every brightness. 0% restores the detailed heatmap; 100% uses only the softened field.");
-        ValueBar::new(&mut atmosphere.spread, 0.25..=3.0, "Cloud spread")
-            .unit(1.0, "×").show(ui);
-        ValueBar::new(&mut atmosphere.texture, 0.0..=1.0, "Cloud texture")
-            .percent().show(ui).on_hover_text("Gentle density variations in the diffused spectrogram. The texture stays in the pane as the sound moves through it; 0% gives a smooth field.");
-        ValueBar::new(&mut atmosphere.glow, 0.0..=1.0, "Analyzer glow")
-            .percent().show(ui).on_hover_text("Light around the live spectrum analyzer.");
-        ValueBar::new(&mut atmosphere.note_glow, 0.0..=1.0, "Note glow")
-            .percent().show(ui).on_hover_text("Additional glow around note ribbons. Adjust their shadows under Display → Lighting → Shadows.");
-    });
+    ValueBar::new(&mut atmosphere.diffusion, 0.0..=1.0, "Diffusion")
+        .percent().show(ui).on_hover_text("Smooth fine spectrogram detail at every brightness. 0% restores the detailed heatmap; 100% uses only the softened field.");
+    ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")
+        .percent().show(ui).on_hover_text("Blend the live analyzer from a plain fill into translucent shading, a tinted rim and a soft halo. The measured contour stays unchanged. Independent of spectrogram diffusion.");
+    ValueBar::new(&mut atmosphere.note_glow, 0.0..=1.0, "Note glow")
+        .percent().show(ui).on_hover_text("Additional glow around note ribbons. Adjust their shadows under Display → Lighting → Shadows.");
 
     // ---- Audio spectrum -------------------------------------------------
     // Always analyzed: the pane IS the analyzer, the spectrogram reads the

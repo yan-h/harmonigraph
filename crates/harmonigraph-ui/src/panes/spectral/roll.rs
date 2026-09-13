@@ -338,15 +338,10 @@ pub(super) fn draw_roll(
         notes,
         RollAxes { pitch_dir: dir(axes.dir_pitch()), depth_dir: dir(axes.dir_depth()) },
         // Keep the shared bloom, with the prototype's extra ribbon light
-        // added after bright extraction. Disabling atmosphere restores the
-        // original amount, and never changes a note's palette or shadow.
+        // added after bright extraction, independently of the spectrogram
+        // and analyzer. Zero extra glow restores the original amount.
         harmonigraph_render::bloom_strength(
-            state.appearance.view.bloom_strength
-                + if state.appearance.spectrum.atmosphere.enabled {
-                    state.appearance.spectrum.atmosphere.note_glow
-                } else {
-                    0.0
-                },
+            state.appearance.view.bloom_strength + state.appearance.spectrum.atmosphere.note_glow,
         ),
         state.appearance.view.shadow.spectral_geometry,
         state.surfaces.target_format,

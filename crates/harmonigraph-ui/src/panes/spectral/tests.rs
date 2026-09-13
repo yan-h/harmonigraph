@@ -1857,6 +1857,55 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
     output.shapes.into_iter().map(|s| s.shape).collect()
 }
 
+#[test]
+fn analyzer_softness_is_independent_and_keeps_the_measured_contour() {
+    let mut cfg =
+        SpectrumConfig { show_spectrogram: false, show_roll: false, ..Default::default() };
+    let meshes = |cfg| {
+        paint_tone(reference_pane(), cfg)
+            .into_iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Mesh(mesh) => Some(mesh),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let soft = meshes(cfg);
+    assert_eq!(soft.len(), 3, "fixture must draw the halo, body and rim");
+    cfg.atmosphere.diffusion = 0.0;
+    cfg.atmosphere.note_glow = 0.0;
+    assert_eq!(meshes(cfg), soft, "other effects changed the analyzer");
+    cfg.atmosphere.analyzer_softness = 0.5;
+    let half = meshes(cfg);
+    assert_eq!(half.len(), 3);
+    for (full, half) in soft.iter().zip(&half) {
+        assert_eq!(full.indices, half.indices);
+        assert!(full.vertices.len() > 100, "fixture must reach the sampled contour");
+        assert_eq!(
+            full.vertices.iter().map(|v| v.pos).collect::<Vec<_>>(),
+            half.vertices.iter().map(|v| v.pos).collect::<Vec<_>>(),
+            "softness moved measured frequencies or levels"
+        );
+        assert_ne!(full, half, "the dial did not change this part of the treatment");
+    }
+    for (full, half) in soft[1].vertices.chunks_exact(3).zip(half[1].vertices.chunks_exact(3)) {
+        let plain_alpha = if full[2].pos.distance(full[0].pos) > 0.5 { 210 } else { 0 };
+        for (full, half) in full.iter().zip(half) {
+            let expected = (plain_alpha + u16::from(full.color.a())) / 2;
+            assert!(u16::from(half.color.a()).abs_diff(expected) <= 1);
+        }
+    }
+    cfg.atmosphere.analyzer_softness = 0.0;
+    let plain = paint_tone(reference_pane(), cfg);
+    assert!(!plain.iter().any(|shape| matches!(shape, egui::Shape::Mesh(_))));
+    assert!(
+        plain.iter().any(|shape| {
+            matches!(shape, egui::Shape::LineSegment { stroke, .. } if stroke.color.a() == 210)
+        }),
+        "zero softness must draw the original plain fill"
+    );
+}
+
 /// The whole pane, painted in every orientation with a roll that has
 /// held notes, bent notes, notes off the pitch range and notes older
 /// than the window. Geometry this fiddly is easy to make degenerate
@@ -2628,8 +2677,7 @@ struct PaintedRuling {
 /// One frame of the pane with a tone in it, split into the frequency rulings
 /// and the shape indices of the spectrum's own slabs.
 fn painted_rulings(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
-    let strong = theme::hairline()
-        .gamma_multiply(RULING_FADE.0 * if cfg.atmosphere.enabled { 0.4 } else { 1.0 });
+    let strong = theme::hairline().gamma_multiply(RULING_FADE.0 * 0.4);
     let axes = Axes::new(rect, &cfg);
     let (mut rulings, mut slabs) = (Vec::new(), Vec::new());
     for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
@@ -2654,8 +2702,7 @@ fn painted_rulings(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>
 /// rulings the pane wrote a number beside, since the numbers themselves leave
 /// it as one opaque text callback.
 fn painted_levels(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
-    let strong = theme::hairline()
-        .gamma_multiply(RULING_FADE.0 * if cfg.atmosphere.enabled { 0.4 } else { 1.0 });
+    let strong = theme::hairline().gamma_multiply(RULING_FADE.0 * 0.4);
     let axes = Axes::new(rect, &cfg);
     let (mut levels, mut slabs) = (Vec::new(), Vec::new());
     for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {

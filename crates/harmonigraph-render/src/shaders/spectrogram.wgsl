@@ -238,37 +238,13 @@ struct Cloud {
     size: vec2<f32>,
     step: vec2<f32>,
     diffusion: f32,
-    texture: f32,
     ppp: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
 @group(1) @binding(2) var cloud_sampler: sampler;
 @group(1) @binding(3) var<uniform> cloud: Cloud;
 
-// The same soft value-noise medium as the lattice nebula. This field lives
-// in the pane; changing pitch, history range or playback position only moves
-// its illumination. The light itself is never displaced by the texture.
-fn cloud_hash(cell: vec2<i32>) -> f32 {
-    var n = bitcast<u32>(cell.x) * 0x9e3779b9u ^ bitcast<u32>(cell.y);
-    n = (n ^ (n >> 16u)) * 0x7feb352du;
-    n = (n ^ (n >> 15u)) * 0x846ca68bu;
-    n = n ^ (n >> 16u);
-    return f32(n >> 8u) / 16777216.0;
-}
-fn cloud_noise(p: vec2<f32>) -> f32 {
-    let cell = vec2<i32>(floor(p));
-    let f = fract(p);
-    let w = f * f * (3.0 - 2.0 * f);
-    return mix(
-        mix(cloud_hash(cell), cloud_hash(cell + vec2<i32>(1, 0)), w.x),
-        mix(cloud_hash(cell + vec2<i32>(0, 1)), cloud_hash(cell + vec2<i32>(1, 1)), w.x),
-        w.y,
-    );
-}
 // Scalar display intensity has no gamma transfer function. In particular,
 // the float source target must not take fs_heatmap_linear's RGB conversion.
 @fragment
@@ -288,34 +264,25 @@ fn fs_density_source(in: VertexOut) -> @location(0) vec4<f32> {
 }
 @fragment
 fn fs_cloud_light(in: VertexOut) -> @location(0) vec4<f32> {
-    // Bake the soft intensity and pane-fixed density at quarter resolution.
-    // Both belong to one field; neither has been colored yet.
+    // Combine the two smoothing scales at quarter resolution so the final
+    // full-resolution pass needs only one filtered read per pixel.
     let uv = in.position.xy / vec2<f32>(textureDimensions(wide_light));
-    let p = (uv - 0.5) * cloud.size / cloud.size.y * 6.0;
-    let warp = vec2<f32>(cloud_noise(p), cloud_noise(p + vec2<f32>(8.3, 2.7)));
-    let body = cloud_noise(p + warp * 1.2);
-    let detail = cloud_noise(p * 2.3 + vec2<f32>(3.1, 7.4));
-    let density = 0.25 + 0.75 * smoothstep(0.25, 0.70, body * 0.75 + detail * 0.25);
     let close = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
     let wide = textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r;
-    return vec4<f32>(close * 0.75 + wide * 0.25, density, 0.0, 1.0);
+    return vec4<f32>(close * 0.75 + wide * 0.25, 0.0, 0.0, 1.0);
 }
-fn baked_density(position: vec2<f32>) -> vec2<f32> {
+fn baked_density(position: vec2<f32>) -> f32 {
     let uv = (position / cloud.ppp - cloud.origin) / cloud.size;
     // The source texture is reused for the finished scalar material only
     // after both filters have consumed it. No attachment samples itself.
-    return textureSampleLevel(close_light, cloud_sampler, uv, 0.0).rg;
+    return textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
 }
-fn diffused_level(core: f32, material: vec2<f32>) -> f32 {
+fn diffused_level(core: f32, material: f32) -> f32 {
     // Diffusion removes raw detail at every brightness. Its upper endpoint
     // is entirely filtered; restoring bright peaks here also restores grain.
     // Ease out the raw contribution so the default 70% leaves only 9% detail.
     let raw = (1.0 - cloud.diffusion) * (1.0 - cloud.diffusion);
-    let level = mix(material.x, core, raw);
-    // Texture shapes that same field. Fade its effect at the brightest peaks
-    // and as diffusion approaches zero, so neither endpoint has a jump.
-    let texture = cloud.texture * cloud.diffusion * (1.0 - smoothstep(0.7, 1.0, level));
-    return level * mix(1.0, material.y, texture);
+    return mix(material, core, raw);
 }
 fn density_color(level: f32) -> vec4<f32> {
     // Interpolate the authored palette's center samples only after diffusion.

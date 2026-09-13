@@ -24,9 +24,7 @@ struct Uniforms {
     size: [f32; 2],
     step: [f32; 2],
     diffusion: f32,
-    texture: f32,
     ppp: f32,
-    _pad: [f32; 3],
 }
 
 pub(super) struct Pipelines {
@@ -332,15 +330,13 @@ impl Targets {
             (read.rows as f32 * self.size[axis] as f32 / visible_pixels).round().max(1.0) as u32;
         queue.write_buffer(&self.source_uniform, 0, bytemuck::bytes_of(&read));
         let settings = atmosphere.settings.sanitized();
-        let radius = rect.width().min(rect.height()) * 0.008 * settings.spread;
+        let radius = rect.width().min(rect.height()) * 0.008;
         let uniforms = Uniforms {
             origin: rect.min.into(),
             size: rect.size().into(),
             step: [radius / rect.width(), radius / rect.height()],
             diffusion: settings.diffusion,
-            texture: settings.texture,
             ppp,
-            _pad: [0.0; 3],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }

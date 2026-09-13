@@ -2,18 +2,18 @@
 
 The Spectral pane can draw the blue-green audio field as softly diffused clouds,
 with the purple-yellow note ribbons standing above it on their existing soft shadows.
-Display → Analyzer → Atmosphere (prototype) controls the treatment.
-It opens enabled;
-disabling it restores the previous heatmap,
-analyzer,
-grid and ribbon-bloom paths.
+Display → Analyzer → Softness and glow has three independent amounts.
+Each can be set to zero without switching off the others.
 
 - **Diffusion** removes fine spectrogram detail at every brightness.
   At 0% the original detailed heatmap returns;
   at 100% only the softened field remains.
-- **Cloud spread** sets their reach relative to the pane size.
-- **Cloud texture** adds gentle density variations to the unified field.
-- **Analyzer glow** controls the aura around the live spectrum.
+  Its smoothing radius is fixed relative to the pane size.
+  There is no procedural cloud texture or spread control.
+- **Analyzer softness** blends the live analyzer from a plain fill and white rim into translucent shading,
+  a tinted rim and a soft colored halo.
+  At 0% the original analyzer returns;
+  at 100% the full treatment is applied.
 - **Note glow** adds ribbon bloom without changing the lattice's bloom setting.
 
 The measured heatmap and its diffused body share one intensity field and one palette lookup.
@@ -31,16 +31,9 @@ Diffusion fades the raw contribution as `(1 - diffusion)²`,
 so the default 70% leaves 9% raw detail and 100% leaves none.
 Bright peaks are softened along with the rest of the field;
 the close filter preserves distinct pitch bands without restoring their original grain.
-The lattice's smooth value-noise recipe supplies one shared density across the pane,
-with broad shapes and a softer detail layer.
-That density only attenuates the combined intensity;
-it never displaces it,
-adds a tint or illuminates silence.
-Its influence fades out at full brightness and as Diffusion approaches zero.
-The soft level and texture density are baked at quarter resolution into the now-free source texture,
+The close and wide levels are combined at quarter resolution into the now-free source texture,
 then bilinearly sampled beside the full-resolution measured level.
-Shaping cost follows the reduced image size,
-and this final bake adds no texture allocation.
+This keeps the final pass to one filtered read per pixel without another texture allocation.
 The unified level is colored once through the existing palette,
 interpolating between its samples.
 Its first half-slice joins true black continuously,
@@ -53,19 +46,12 @@ The backdrop uses a zero measured level and the same diffusion and palette as re
 then the opaque measured mesh replaces its own pixels with the unified field.
 The analyzer divider and pane clip still bound this backdrop,
 including when the axes turn or the divider moves.
-The cloud medium uses aspect-correct pane coordinates,
-like the lattice:
-the spectrogram's intensity illuminates it at the active pitches as history moves through it.
-Pitch zoom,
-axis orientation and history-window changes do not reseed or rescale the medium.
-It is stationary during playback and pause;
-there is no independent cloud animation.
 
 The analyzer uses the original sample positions for its shaded body and colored rim.
 Only its surrounding aura is smoothed.
 Both audio layers still use the spectral palette;
 note ribbons still use the pitch palette and the existing shadow atlas.
-The prototype reduces grid and now-line contrast without reducing label contrast.
+The grid and now-line keep their reduced contrast independently of these controls.
 The live editor and offline renderer share all these drawing paths.
 
 Each spectrogram pane owns four reduced textures,
@@ -74,13 +60,19 @@ Palette,
 zoom,
 time and appearance changes refresh source pixels and uniforms without reallocating the textures.
 Grid uploads retain their existing generation/shape key and dirty-slab updates.
-Empty or disabled frames never composite a retained cloud image.
+Empty frames and zero diffusion never composite a retained filtered image.
 The production Metal catalog explicitly constructs the atmospheric pipelines,
 even though their runtime allocation remains lazy.
 
 The `spectrum.atmosphere` section defaults missing fields individually and normalizes on load.
-The new `diffusion` field defaults to 70% for existing appearances and recorded takes.
-The existing `glow` field now controls only the analyzer,
-and keeps its saved value.
+Diffusion defaults to 70%,
+analyzer softness to 100% and note glow to 50%.
+Saved diffusion and note-glow values are retained.
+The former `enabled`,
+`glow`,
+`spread` and `texture` fields are removed and ignored on load;
+previously disabled appearances now use their stored diffusion and note-glow amounts,
+and the new analyzer softness defaults to its full treatment.
+No compatibility shim or version bump is needed for discarded struct fields.
 No stored palette,
 audio analysis or lattice setting is rewritten.

@@ -666,9 +666,7 @@ impl CallbackTrait for SpectrogramCallback {
         };
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        if let Some(settings) =
-            self.atmosphere.filter(|a| a.settings.enabled && a.settings.diffusion > 0.0)
-        {
+        if let Some(settings) = self.atmosphere.filter(|a| a.settings.sanitized().diffusion > 0.0) {
             let viewport = egui::epaint::ViewportInPixels::from_points(
                 &self.rect,
                 ppp,
@@ -718,7 +716,7 @@ impl CallbackTrait for SpectrogramCallback {
                 target.blur(egui_encoder, cloud);
                 {
                     // Once filtering is finished, the raw source texture is
-                    // free to hold the soft intensity and density. Bake across the whole
+                    // free to hold the soft intensity. Bake across the whole
                     // spectrogram region so the Gaussian tail survives past
                     // the moving history edge. The raw detail keeps its measured mesh.
                     let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1312,7 +1310,6 @@ mod tests {
                 }
                 cb.grid = grid_of(Arc::new(bytes), BINS, 128, 0);
                 cb.vertices = full_quad(128);
-                cb.atmosphere.as_mut().unwrap().settings.texture = 0.0;
                 phases.push([0.0, 0.7, 1.0].map(|diffusion| {
                     cb.atmosphere.as_mut().unwrap().settings.diffusion = diffusion;
                     fresh_frame(&device, &queue, &cb)
@@ -1351,7 +1348,6 @@ mod tests {
         // An edited palette may start above black. The diffused tail must
         // still reach actual black rather than leave that first slice glowing.
         Arc::make_mut(&mut cb.shades.lut)[0] = [80, 0, 0, 255];
-        cb.atmosphere.as_mut().unwrap().settings.texture = 0.0;
         let soft = fresh_frame(&device, &queue, &cb);
         cb.atmosphere.as_mut().unwrap().settings.diffusion = 0.0;
         let zero = fresh_frame(&device, &queue, &cb);
@@ -1379,7 +1375,6 @@ mod tests {
             let mut cb = cloud_fixture();
             // History starts inside the pane. A ten-pixel ridge seeds enough
             // scalar density for a visible tail six pixels beyond that edge.
-            cb.atmosphere.as_mut().unwrap().settings.texture = 0.0;
             let mut bytes = vec![0; cb.grid.run.len()];
             for slab in 0..4 {
                 bytes[slab * BINS as usize + 472..slab * BINS as usize + 552].fill(255);
@@ -1437,38 +1432,22 @@ mod tests {
     }
 
     #[test]
-    fn spectral_cloud_medium_stays_in_the_pane_as_data_axes_change() {
+    fn spectral_diffusion_adds_no_texture_or_analyzer_coupling() {
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = cloud_fixture();
-        // A uniform colored source reveals the shared medium independently
-        // of pitch/time geometry. It covers enough noise cells to expose a
-        // field accidentally tied to the data, or a missing texture entirely.
         cb.grid.run = Arc::new(vec![96; cb.grid.run.len()]);
-        cb.atmosphere.as_mut().unwrap().settings.texture = 1.0;
-        let original = fresh_frame(&device, &queue, &cb);
-        cb.read.min_midi += 12.0;
-        cb.read.span *= 0.5;
-        for vertex in &mut cb.vertices {
-            vertex.pos = [SIZE[1] as f32 - vertex.pos[1], vertex.pos[0]];
-        }
-        cb.atmosphere.as_mut().unwrap().pitch_vertical = false;
-        let turned = fresh_frame(&device, &queue, &cb);
-        assert!(compare(&original, &turned).0 <= 1, "data axes moved the medium");
-
-        cb.atmosphere.as_mut().unwrap().settings.texture = 0.0;
-        let untextured = fresh_frame(&device, &queue, &cb);
-        let mut largest_attenuation = 0;
-        for (textured, plain) in original.chunks_exact(4).zip(untextured.chunks_exact(4)) {
-            for channel in 0..3 {
-                assert!(
-                    textured[channel] <= plain[channel].saturating_add(1),
-                    "texture added light"
-                );
-                largest_attenuation =
-                    largest_attenuation.max(plain[channel].saturating_sub(textured[channel]));
+        let smooth = fresh_frame(&device, &queue, &cb);
+        // A broad uniform field must stay uniform. Keep the probes beyond
+        // the wide filter's reach from the image edges.
+        for y in 32..96 {
+            for x in 32..96 {
+                let blue = smooth[(y * 128 + x) * 4 + 2];
+                assert!((95..=97).contains(&blue), "texture modulated the field at {x},{y}");
             }
         }
-        assert!(largest_attenuation > 10, "fixture never revealed the medium");
+        cb.atmosphere.as_mut().unwrap().settings.analyzer_softness = 0.0;
+        cb.atmosphere.as_mut().unwrap().settings.note_glow = 0.0;
+        assert_eq!(smooth, fresh_frame(&device, &queue, &cb));
     }
 
     #[test]
@@ -1502,13 +1481,13 @@ mod tests {
             frame_with(&device, &queue, &mut resources, &cb),
             "unequal pane replaced this cloud target"
         );
-        cb.atmosphere.as_mut().unwrap().settings.enabled = false;
+        cb.atmosphere.as_mut().unwrap().settings.diffusion = 0.0;
         let disabled = frame_with(&device, &queue, &mut resources, &cb);
         cb.atmosphere = None;
         assert_eq!(
             disabled,
             fresh_frame(&device, &queue, &cb),
-            "disabled atmosphere changed the original heatmap"
+            "zero diffusion changed the original heatmap"
         );
         cb.atmosphere = other.atmosphere;
         frame_with(&device, &queue, &mut resources, &cb);

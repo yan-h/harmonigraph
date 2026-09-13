@@ -18,7 +18,7 @@ pub(super) fn draw_profile(
     if visible.len() < 2 {
         return;
     }
-    let settings = cfg.atmosphere.sanitized();
+    let softness = cfg.atmosphere.sanitized().analyzer_softness;
     let sd = |d| if split < 1.0 { split - d } else { d };
     let samples: Vec<_> = visible
         .iter()
@@ -52,11 +52,10 @@ pub(super) fn draw_profile(
         }
     };
 
-    if settings.glow > 0.0 {
+    if softness > 0.0 {
         let mut halo = Mesh::default();
-        let stride = ((samples.len() as f32 * 0.005 * settings.spread).round() as usize).max(1);
-        let reach = axes.pitch_len().min(axes.depth_len()) * 0.05 * settings.spread
-            / axes.depth_len().max(1.0);
+        let stride = ((samples.len() as f32 * 0.005).round() as usize).max(1);
+        let reach = axes.pitch_len().min(axes.depth_len()) * 0.05 / axes.depth_len().max(1.0);
         for (i, &(t, _, _)) in samples.iter().enumerate() {
             let (mut depth, mut rgb, mut total) = (0.0, [0.0; 3], 0.0);
             for tap in -4i32..=4 {
@@ -83,7 +82,7 @@ pub(super) fn draw_profile(
                     &mut halo,
                     t,
                     depth / total + x * reach,
-                    tint(color, weight * settings.glow * active * 0.38),
+                    tint(color, weight * 0.65 * softness * active * 0.38),
                 );
             }
         }
@@ -96,8 +95,10 @@ pub(super) fn draw_profile(
         // A dark translucent foot, a colored body, then the exact measured
         // edge. Peak positions and the volume-color lookup stay unchanged.
         let active = (d * axes.depth_len() / 0.5).clamp(0.0, 1.0);
+        let plain_alpha = if d * axes.depth_len() > 0.5 { 210.0 / 255.0 } else { 0.0 };
         for (fraction, alpha) in [(0.0, 0.28), (0.72, 0.59), (1.0, 0.86)] {
-            vertex(&mut body, t, d * fraction, tint(color, alpha * active));
+            let alpha = egui::lerp(plain_alpha..=alpha * active, softness);
+            vertex(&mut body, t, d * fraction, tint(color, alpha));
         }
     }
     connect(&mut body, samples.len(), 3);
@@ -107,7 +108,9 @@ pub(super) fn draw_profile(
         let mut edge = Mesh::default();
         let half = PROFILE_PT * 0.5 / axes.depth_len().max(1.0);
         for &(t, d, color) in &samples {
-            let highlight = |v: u8| (f32::from(v) * 0.72 + 255.0 * 0.28).round() as u8;
+            let highlight = |v: u8| {
+                egui::lerp(255.0..=f32::from(v) * 0.72 + 255.0 * 0.28, softness).round() as u8
+            };
             let color = tint(
                 Color32::from_rgb(highlight(color.r()), highlight(color.g()), highlight(color.b())),
                 cfg.keyline,

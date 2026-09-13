@@ -5,11 +5,7 @@ struct Cloud {
     size: vec2<f32>,
     step: vec2<f32>,
     diffusion: f32,
-    texture: f32,
     ppp: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
 };
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var linear_sampler: sampler;

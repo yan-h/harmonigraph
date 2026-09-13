@@ -339,8 +339,7 @@ pub(crate) fn spectral_pane(
     // export, not a NaN.
     if split > 0.0 {
         for ruling in &grid {
-            let fade = if ruling.decade { RULING_FADE.0 } else { RULING_FADE.1 }
-                * if cfg.atmosphere.enabled { 0.4 } else { 1.0 };
+            let fade = if ruling.decade { RULING_FADE.0 } else { RULING_FADE.1 } * 0.4;
             painter.line_segment(
                 [axes.at(ruling.t, 0.0), axes.at(ruling.t, split)],
                 egui::Stroke::new(1.0, theme::hairline().gamma_multiply(fade)),
@@ -354,8 +353,7 @@ pub(crate) fn spectral_pane(
         // would be a statement about loudness laid across a heatmap that reads
         // its own.
         for level in &levels {
-            let fade = if level.numbered { RULING_FADE.0 } else { RULING_FADE.1 }
-                * if cfg.atmosphere.enabled { 0.4 } else { 1.0 };
+            let fade = if level.numbered { RULING_FADE.0 } else { RULING_FADE.1 } * 0.4;
             painter.line_segment(
                 axes.across_pitch(level_d(level.level)),
                 egui::Stroke::new(1.0, theme::hairline().gamma_multiply(fade)),
@@ -447,7 +445,7 @@ pub(crate) fn spectral_pane(
                 egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
             };
 
-            if cfg.atmosphere.enabled {
+            if cfg.atmosphere.analyzer_softness > 0.0 {
                 atmosphere::draw_profile(&painter, &axes, &cfg, &visible, budget, split);
             } else {
                 // The spectrum is a filled shape, like the spectrogram — no outline
@@ -558,7 +556,7 @@ pub(crate) fn spectral_pane(
     // built around, so the boundary is marked whether or not anything is
     // sounding on it.
     if !whole_song && split < 1.0 && split > 0.0 {
-        let fade = if cfg.atmosphere.enabled { 0.6 } else { 1.0 };
+        let fade = 0.6;
         painter.line_segment(
             axes.across_pitch(split),
             egui::Stroke::new(1.0, theme::hairline().gamma_multiply(fade)),
