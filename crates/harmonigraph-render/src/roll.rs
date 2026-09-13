@@ -41,6 +41,20 @@ use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 pub(crate) const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 
+/// Screen the flat note color over the heatmap: C + background * (1 - C).
+/// Premultiplied coverage also fades the Screen contribution at edges/leads.
+/// Shadows keep ordinary over; screening black would remove their darkness.
+/// The same body pipeline draws the bloom source, so overlapping notes combine
+/// as light in both places without another texture or pass.
+const NOTE_BLEND: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrc,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: EGUI_BLEND.alpha,
+};
+
 /// Entry points the roll shader must provide: the vertex stage, and each of
 /// the two layers in each of the two shadings [`create_roll_pipeline`] picks
 /// between. Its entry point is assembled from those two words, so a rename in
@@ -139,9 +153,8 @@ pub struct RollInstance {
     /// ribbon that has spent the whole release dissolving.
     ///
     /// Drawn under the lead instead it needs no ramp of its own. The outline
-    /// layer goes down before ANY body, so a lead at full opacity covers the
-    /// cap and a lead on its way out uncovers it at exactly the rate it goes:
-    /// the crossfade is the compositing.
+    /// layer goes down before ANY body; as the lead's colored light fades,
+    /// the dark cap becomes visible through the same compositing.
     ///
     /// A REACH rather than an opacity, and that is the whole of what this field
     /// decides. The cap stands OUTSIDE the note's end, in the stretch the lead
@@ -476,8 +489,7 @@ impl RollResources {
             )
         };
         // The chain overwrites its whole target, so those three take no blend;
-        // the one that lands in the egui pass blends the way every other thing
-        // the roll draws does.
+        // the bloom composite uses ordinary over in the egui pass.
         let blit_shader = crate::blit_module(device);
         let filter = |entry| {
             crate::create_post_pipeline(
@@ -675,9 +687,7 @@ impl RollBloom {
     }
 }
 
-/// The note pipeline: instanced quads, blended exactly the way egui blends
-/// its own shapes so a note composites over the spectrogram identically to
-/// the tessellated version it replaces.
+/// The shadow uses ordinary over; the flat body screens over the heatmap.
 fn create_roll_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
@@ -719,7 +729,7 @@ fn create_roll_pipeline(
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
-                blend: Some(EGUI_BLEND),
+                blend: Some(if layer == "core" { NOTE_BLEND } else { EGUI_BLEND }),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -1540,8 +1550,13 @@ mod tests {
                     0,
                 );
                 queue.submit(buffers.into_iter().chain([encoder.finish()]));
-                let texture =
-                    render_to_texture(&device, &queue, size, FORMAT, wgpu::Color::WHITE, |pass| {
+                let texture = render_to_texture(
+                    &device,
+                    &queue,
+                    size,
+                    FORMAT,
+                    wgpu::Color { r: 0.5, g: 0.5, b: 0.5, a: 1.0 },
+                    |pass| {
                         cb.paint(
                             egui::PaintCallbackInfo {
                                 viewport: rect,
@@ -1552,7 +1567,8 @@ mod tests {
                             pass,
                             &resources,
                         );
-                    });
+                    },
+                );
                 let frame = readback(&device, &queue, &texture, size);
                 let pixel = |x: f32, y: f32| {
                     let i = ((((y * ppp).floor() as u32) * size[0] + (x * ppp).floor() as u32) * 4)
@@ -1562,21 +1578,25 @@ mod tests {
                 // The widest fixture probes beyond the old 8-point support.
                 let shadow_pixel = pixel(shadow_x, 32.0);
                 assert!(
-                    shadow_pixel[0] < 245 && shadow_pixel[1] == shadow_pixel[0],
+                    shadow_pixel[0] < 118 && shadow_pixel[1] == shadow_pixel[0],
                     "{kernel:?} at {ppp} ppp left no black under-body shadow: {shadow_pixel:?}",
                 );
-                assert_eq!(pixel(32.0, 32.0), [255, 0, 0, 255], "the body covers {kernel:?}");
+                assert_eq!(
+                    pixel(32.0, 32.0),
+                    [255, 128, 128, 255],
+                    "the body screens over {kernel:?}"
+                );
                 assert_eq!(
                     pixel(clear[0], clear[1]),
-                    [255; 4],
+                    [128, 128, 128, 255],
                     "{kernel:?} reached beyond its atlas"
                 );
             }
         }
     }
 
-    /// The pitch color stays at the center, the sides shade smoothly, and the
-    /// entire body is opaque over either a dark or a bright heatmap cell.
+    /// A flat note screens over dark and bright heatmap cells, while its
+    /// outline still darkens the background outside the body.
     ///
     /// The outline standing outside is the flood invariant, and the reason it
     /// is read off a distance rather than drawn as a stroke of the note's path:
@@ -1585,31 +1605,64 @@ mod tests {
     /// paint the interior over. Coverage taken at distance 0..4 cannot reach
     /// inside a box whose interior is at negative distance.
     #[test]
-    fn a_note_has_opaque_shaded_sides_and_an_outside_outline() {
+    fn a_flat_note_screens_over_the_heatmap_and_keeps_its_dark_outline() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let frame = draw(&device, &queue, vec![centered_note()], bg_color());
+        let note = RollInstance { core: [128, 64, 192, 255], ..centered_note() };
+        for (background, expected) in [
+            (wgpu::Color::BLACK, [128, 64, 192, 255]),
+            (bg_color(), [160, 136, 224, 255]),
+            (wgpu::Color::WHITE, [255; 4]),
+        ] {
+            let frame = draw(&device, &queue, vec![note], background);
+            for x in [128, 138] {
+                assert!(
+                    near(pixel(&frame, x, 128), expected),
+                    "flat Screen fill at x={x}: {:?}, expected {expected:?}",
+                    pixel(&frame, x, 128)
+                );
+            }
+        }
+        let frame = draw(&device, &queue, vec![note], bg_color());
         // The note's edge is at x = 140 and the outline runs to 144.
         let at = |x: u32| pixel(&frame, x, 128);
-        const RED: [u8; 4] = [255, 0, 0, 255];
-        assert!(near(at(128), RED), "the note's middle is not painted: {:?}", at(128));
-        let side = at(138);
-        assert!(
-            at(134)[0] > side[0].saturating_add(20) && side[0] > 170,
-            "the shoulder is not a gradual shade of the center: {:?}, {side:?}",
-            at(134),
-        );
-        assert_eq!(&side[1..], &[0, 0, 255], "the shaded side changed hue or opacity");
-        let bright = draw(&device, &queue, vec![centered_note()], wgpu::Color::WHITE);
-        for x in 116..140 {
-            assert_eq!(at(x), pixel(&bright, x, 128), "the background shows through at {x}");
-        }
         assert!(shadowed(at(141)), "no outline standing against the note's edge: {:?}", at(141),);
         // Solid nearly all the way out — the last half pixel of the reach is
         // the antialiasing ramp a hard edge still gets — and gone past it.
         assert!(shadowed(at(142)), "the outline is short of its reach: {:?}", at(142));
         assert!(near(at(145), BG), "the outline reaches further than it should: {:?}", at(145));
+    }
+
+    /// Overlapping bodies combine as light in either order, including the
+    /// source the existing bloom chain draws from.
+    #[test]
+    fn overlapping_notes_screen_together_with_and_without_bloom() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let first = RollInstance { core: [128, 64, 192, 255], ..centered_note() };
+        let second =
+            RollInstance { center: [136.0, 128.0], core: [64, 192, 32, 255], ..centered_note() };
+        for bloom in [0.0, 1.5] {
+            let forward =
+                draw_bloomed(&device, &queue, vec![first, second], TOP, bloom, wgpu::Color::BLACK);
+            let reverse =
+                draw_bloomed(&device, &queue, vec![second, first], TOP, bloom, wgpu::Color::BLACK);
+            if bloom == 0.0 {
+                assert!(
+                    near(pixel(&forward, 132, 128), [160, 208, 200, 255]),
+                    "the overlapping bodies did not Screen: {:?}",
+                    pixel(&forward, 132, 128)
+                );
+            }
+            for (a, b) in forward.chunks_exact(4).zip(reverse.chunks_exact(4)) {
+                assert!(
+                    near(a.try_into().unwrap(), b.try_into().unwrap()),
+                    "note order changed the picture at bloom {bloom}: {a:?}, {b:?}"
+                );
+            }
+        }
     }
 
     /// The outline wraps EVERY side of the note — its ends as much as its
@@ -1631,8 +1684,8 @@ mod tests {
         // corner is at (140, 188) and the outline reaches 4 past it.
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
         let at = |x: u32, y: u32| pixel(&frame, x, y);
-        const RED: [u8; 4] = [255, 0, 0, 255];
-        assert!(at(138, 128)[0] > 170, "the note's body went missing: {:?}", at(138, 128));
+        const RED: [u8; 4] = [255, 96, 128, 255]; // Screen over BG.
+        assert!(near(at(138, 128), RED), "the note's body went missing: {:?}", at(138, 128));
         assert!(shadowed(at(142, 128)), "no outline along the flank: {:?}", at(142, 128));
         assert!(near(at(128, 186), RED), "the note's body was cut at its end: {:?}", at(128, 186));
         assert!(shadowed(at(128, 190)), "no outline across the end: {:?}", at(128, 190));
@@ -1697,19 +1750,19 @@ mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // Black on white with no outline: every painted byte is the body's own
+        // White on black with no outline: every painted byte is the body's own
         // coverage, read straight off the frame. Under `TOP` the depth axis
         // runs down the screen, so the leading tip of this note is at y = 68
         // and its trailing end at y = 188. A lead of 40 points reaches to
         // y = 108, and the fade is measured back from the tip.
         let bare = |lead: f32, fade: f32| RollInstance {
             outline_reach: 0.0,
-            core: [0, 0, 0, 255],
+            core: [255; 4],
             ..led_note(lead, fade, 1.0)
         };
         let cov = |fade: f32, y: u32| {
-            let frame = draw(&device, &queue, vec![bare(40.0, fade)], wgpu::Color::WHITE);
-            1.0 - f32::from(pixel(&frame, 128, y)[0]) / 255.0
+            let frame = draw(&device, &queue, vec![bare(40.0, fade)], wgpu::Color::BLACK);
+            f32::from(pixel(&frame, 128, y)[0]) / 255.0
         };
 
         // A fade over 20 points of the tip: coverage climbs linearly from
@@ -1764,17 +1817,14 @@ mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // Black on white, no outline, a square-ended 40-point lead — so the
+        // White on black, no outline, a square-ended 40-point lead — so the
         // only thing between the tip (y = 68) and the note's own end (y = 108)
         // is the opacity, with no ramp on top of it to unpick.
         let cov = |alpha: f32, y: u32| {
-            let note = RollInstance {
-                outline_reach: 0.0,
-                core: [0, 0, 0, 255],
-                ..led_note(40.0, 0.0, alpha)
-            };
-            let frame = draw(&device, &queue, vec![note], wgpu::Color::WHITE);
-            1.0 - f32::from(pixel(&frame, 128, y)[0]) / 255.0
+            let note =
+                RollInstance { outline_reach: 0.0, core: [255; 4], ..led_note(40.0, 0.0, alpha) };
+            let frame = draw(&device, &queue, vec![note], wgpu::Color::BLACK);
+            f32::from(pixel(&frame, 128, y)[0]) / 255.0
         };
         for alpha in [0.25f32, 0.5, 0.75, 1.0] {
             // Well inside the lead, and well inside the note.
@@ -1802,8 +1852,8 @@ mod tests {
     /// finishes, which is the one moment nothing should happen.
     ///
     /// Under the lead it needs no ramp: the outline layer is drawn before ANY
-    /// body, so what shows through is what the lead has stopped covering, and
-    /// the crossfade is the compositing. Read two points inside the note's own
+    /// body, and the cap becomes visible as the lead's Screen contribution
+    /// fades. Read two points inside the note's own
     /// end, where the cap is solid and the lead is over it: the red is the
     /// lead's, the black underneath is the cap's, and the lead's opacity is the
     /// only thing dividing them.
@@ -1820,9 +1870,13 @@ mod tests {
             let frame = draw(&device, &queue, vec![led_note(40.0, 0.0, alpha)], bg_color());
             pixel(&frame, 128, 106)
         };
-        // The lead standing: its own red, and no sign of what is under it.
+        // The lead adds its own red to the cap; the other channels retain it.
+        let under = at(0.0);
         let full = at(1.0);
-        assert!(near(full, [255, 0, 0, 255]), "the lead is not opaque over its cap: {full:?}");
+        assert!(
+            near(full, [255, under[1], under[2], 255]),
+            "the lead lost its color over its cap: {full:?}"
+        );
         // Gone: the cap in full, black against a background that is not.
         assert!(
             shadowed(at(0.0)),
@@ -1831,14 +1885,8 @@ mod tests {
         );
         // And in between the two are mixed in the lead's own proportion — the
         // red at half opacity over black, rather than over the background.
-        let under = at(0.0);
         let half = at(0.5);
-        let expected = [
-            ((255u16 + u16::from(under[0])) / 2) as u8,
-            (u16::from(under[1]) / 2) as u8,
-            (u16::from(under[2]) / 2) as u8,
-            255,
-        ];
+        let expected = [((255u16 + u16::from(under[0])) / 2) as u8, under[1], under[2], 255];
         assert!(
             near(half, expected),
             "a half-gone lead does not sit half over its cap: {half:?}, expected {expected:?}",
@@ -1900,27 +1948,10 @@ mod tests {
         // note, and outside any rounding of it (a radius clamped to the note's
         // half-length would arc from 17 out, missing this by half a point).
         let corner = pixel(&frame, 147, 130);
-        assert_eq!(corner, pixel(&frame, 147, 128), "the tap has a shaded or rounded time cap");
-        assert!(corner[0] > 170 && corner[2] == 0, "the tap's corner is missing: {corner:?}");
-    }
-
-    #[test]
-    fn a_glides_shading_follows_its_pitch_centerline() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let note = RollInstance { center: [128.5, 128.5], shear: 1.0, ..centered_note() };
-        let frame = draw(&device, &queue, vec![note], bg_color());
-        let side = pixel(&frame, 138, 128);
-        assert!(side[0] < 230 && side[0] > 170, "the fixture missed the shaded side: {side:?}");
-        for step in [-16, 0, 16] {
-            assert_eq!(
-                pixel(&frame, (138 + step) as u32, (128 + step) as u32),
-                side,
-                "the shoulder drifted across the glide",
-            );
-            assert_eq!(pixel(&frame, (128 + step) as u32, (128 + step) as u32), [255, 0, 0, 255]);
-        }
+        assert!(
+            near(corner, [255, 96, 128, 255]),
+            "the tap's corner is missing ({corner:?}) — something is rounding it off",
+        );
     }
 
     /// The outline must still stand OUTSIDE a note floored to its minimum
@@ -1948,7 +1979,10 @@ mod tests {
         let at = |x: u32| pixel(&frame, x, 128);
         let middle = at(128);
         assert!(middle[0] > 150, "the outline flooded the note's own color: {middle:?}");
-        assert!(middle[1] < 32, "something light flooded the note's middle: {middle:?}");
+        assert!(
+            middle[1] < BG[1],
+            "the antialiased shadow did not darken the backdrop: {middle:?}"
+        );
         assert!(shadowed(at(130)), "no outline beside it: {:?}", at(130));
         assert!(near(at(134), BG), "the outline reaches further than it should: {:?}", at(134));
     }
@@ -2364,7 +2398,7 @@ mod tests {
         }
     }
 
-    /// An outline never covers another note's BODY.
+    /// An outline cannot erase another note's own color.
     ///
     /// The outline is opaque where it meets its own note — it has to be, or it
     /// takes its color from the spectrogram cell behind it and washes out
@@ -2373,12 +2407,12 @@ mod tests {
     /// along time what it reaches into is the next note, since repeats of one
     /// key butt together there. The later note blanked the tail of the earlier.
     ///
-    /// Every outline is drawn before every body, so an outline can darken the
-    /// picture and never another note. Two notes butted exactly, in colors
-    /// that can be told apart, and read on both sides of the join: whichever
-    /// note is drawn first, the other's outline is behind it.
+    /// Every outline is drawn before every body. Screen adds the note's own
+    /// color after that darkening, though the backdrop it takes through can
+    /// still carry a neighbor's shadow. Two notes butt exactly; their saturated
+    /// color channels must survive on both sides of the join.
     #[test]
-    fn an_outline_never_covers_another_notes_body() {
+    fn an_outline_cannot_erase_another_notes_own_color() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
@@ -2401,14 +2435,14 @@ mod tests {
         // Two points inside the earlier note's tail, which is two points inside
         // the later note's outline. This is the pixel that went black.
         assert!(
-            near(pixel(&frame, 128, 126), RED),
+            pixel(&frame, 128, 126)[0] == RED[0],
             "the later note's outline blanked the earlier note's tail: {:?}",
             pixel(&frame, 128, 126),
         );
         // And the same join from the other side: paint order is not what is
         // deciding it.
         assert!(
-            near(pixel(&frame, 128, 130), GREEN),
+            pixel(&frame, 128, 130)[1] == GREEN[1],
             "the earlier note's outline blanked the later note's head: {:?}",
             pixel(&frame, 128, 130),
         );

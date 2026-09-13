@@ -98,14 +98,10 @@ metal::float4 core_color(
     VertexOut in_4,
     constant Locals& locals
 ) {
-    float across_1 = metal::abs(in_4.local.x - (in_4.shear * in_4.local.y)) / metal::max(in_4.half_extent.x, 0.0001);
-    float width = (2.0 * in_4.half_extent.x) / metal::sqrt(1.0 + (in_4.shear * in_4.shear));
-    float shoulder = metal::smoothstep(0.3, 1.0, across_1) * metal::smoothstep(1.5, 3.0, width);
-    metal::float4 color = metal::float4(in_4.core.xyz * (1.0 - (0.3 * shoulder)), in_4.core.w);
-    float _e42 = box_distance(in_4);
-    float _e44 = inside(_e42, 0.0, locals);
-    float _e46 = lead_coverage(in_4, locals);
-    return (color * _e44) * _e46;
+    float _e2 = box_distance(in_4);
+    float _e4 = inside(_e2, 0.0, locals);
+    float _e6 = lead_coverage(in_4, locals);
+    return (in_4.core * _e4) * _e6;
 }
 
 struct fs_core_gammaInput {

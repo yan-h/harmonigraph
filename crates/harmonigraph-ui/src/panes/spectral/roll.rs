@@ -696,12 +696,10 @@ fn note_instances_with_floor(
             // number that decides nothing is still worth not carrying.
             let cap_px = outline_px.min((behind_px - 0.5 * feather_px).max(0.0));
 
-            // Opaque so the heatmap cannot change a note's pitch color.
+            // Full color strength; Screen lets the heatmap brighten the fill.
             let alpha = 1.0;
             let pitch = (p0 + p1) * 0.5;
-            // The same pitch color as the lattice node. The shader keeps it
-            // at the ribbon's center and shades the sides without lowering
-            // their opacity.
+            // The same pitch color as the lattice node, solid edge to edge.
             let core = note_color(state, pitch, alpha);
             // Reading outward: the note, the dark outline standing against
             // every one of its edges and fading out, then whatever the
@@ -719,8 +717,8 @@ fn note_instances_with_floor(
             // Wrapping the ENDS costs the notes around it nothing, and that is
             // a fact about the ORDER they are drawn in rather than about the
             // outline: `harmonigraph_render::roll` lays every outline down and
-            // then every body over them, so an outline can darken the picture
-            // and never another note.
+            // then every body over them. Screen adds each note's own color
+            // after the outlines have darkened the backdrop.
             //
             // It has to be that way round rather than something gentler at the
             // seam. Coverage is OPAQUE where the outline meets its own note
