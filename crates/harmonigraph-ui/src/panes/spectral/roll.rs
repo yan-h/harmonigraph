@@ -32,6 +32,10 @@ use crate::PictureState;
 /// alike.
 const MIN_RIBBON_PX: f32 = 1.5;
 
+/// Keep most of the pitch color even over bright spectral bands, while letting
+/// a little heatmap texture through. The surround has its own full opacity.
+const BODY_OPACITY: f32 = 0.8;
+
 /// Shortest a note may draw along TIME, in DEVICE pixels — the floor that stops
 /// a brief note flickering as the roll scrolls.
 ///
@@ -595,9 +599,8 @@ fn note_instances_with_floor(
         // and whatever its release has left once it is up. Per note and decided
         // once for it, since every segment of a note releases together.
         //
-        // NOT `alpha`, which the segment loop below already uses for the note's
-        // own opacity — a different number about a different part of the
-        // picture, and one that shadows this where the two meet.
+        // Separate from BODY_OPACITY: release fades the lead without changing
+        // the retained note's color strength.
         let standing = lead_alpha(note, now, cfg.roll_lead_release);
         // Peekable so the loop can tell which segment is the LAST, which is the
         // one the lead extends: a note's segments run oldest first, so its
@@ -670,8 +673,8 @@ fn note_instances_with_floor(
             //
             // The shader stands the cap against the note's own end UNDER the
             // lead, so the RELEASE needs no ramp here: the lead's own ink
-            // covers the cap while the lead is opaque and uncovers it as it
-            // goes, so the edge comes up through the tongue over the whole
+            // increasingly reveals the cap as it fades, so the edge comes up
+            // through the tongue over the whole
             // release. The alternative is an edge that arrives whole the frame
             // the lead is dropped, which lands on a ribbon that has spent that
             // release dissolving — nothing else in the picture moves then, and
@@ -696,11 +699,9 @@ fn note_instances_with_floor(
             // number that decides nothing is still worth not carrying.
             let cap_px = outline_px.min((behind_px - 0.5 * feather_px).max(0.0));
 
-            // Full color strength; Screen lets the heatmap brighten the fill.
-            let alpha = 1.0;
             let pitch = (p0 + p1) * 0.5;
-            // The same pitch color as the lattice node, solid edge to edge.
-            let core = note_color(state, pitch, alpha);
+            // A flat pitch color with modest background show-through.
+            let core = note_color(state, pitch, BODY_OPACITY);
             // Reading outward: the note, the dark outline standing against
             // every one of its edges and fading out, then whatever the
             // spectrogram is doing.
@@ -717,8 +718,8 @@ fn note_instances_with_floor(
             // Wrapping the ENDS costs the notes around it nothing, and that is
             // a fact about the ORDER they are drawn in rather than about the
             // outline: `harmonigraph_render::roll` lays every outline down and
-            // then every body over them. Screen adds each note's own color
-            // after the outlines have darkened the backdrop.
+            // then every body over them. Only the body's own opacity can let
+            // part of a neighboring shadow show through its color.
             //
             // It has to be that way round rather than something gentler at the
             // seam. Coverage is OPAQUE where the outline meets its own note
@@ -1059,6 +1060,7 @@ mod tests {
         for reach in [0.05, 2.0, 4.0] {
             let lit = ribbon(reach);
             let note = one(&lit);
+            assert_eq!(note.core[3], 204, "the body must keep 80% color strength");
             assert_eq!(note.outline_reach, reach, "the outline is not the reach it was set to");
             assert_eq!(
                 note.outline,
