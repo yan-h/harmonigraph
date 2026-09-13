@@ -55,9 +55,6 @@ struct GlowParams {
     float row_capacity;
     float lit;
     float accumulation;
-    float wide_strength;
-    float wide_spread;
-    metal::float2 padding;
 };
 struct NebulaParams {
     float depth;
@@ -147,94 +144,65 @@ constant float GLOW_LOBE_KAPPA = 4.0;
 constant float PLUS_QUAD_MARGIN = 1.6;
 constant metal::float3 GLOW_LUMINANCE = metal::float3(0.2126, 0.7152, 0.0722);
 
-float aa_inside(
-    float edge,
-    float x,
+bool cell_packed(
+    metal::float4 cell
+) {
+    bool local = {};
+    if (cell.z > 0.0) {
+        local = cell.w > 0.0;
+    } else {
+        local = false;
+    }
+    bool _e10 = local;
+    return _e10;
+}
+
+metal::float4 no_quad(
+) {
+    return metal::float4(2.0, 2.0, 0.0, 1.0);
+}
+
+metal::float4 cell_clip(
+    metal::float2 texel,
+    metal::float2 size,
     float w
 ) {
-    return 1.0 - metal::smoothstep(edge - w, edge + w, x);
+    metal::float2 extent = metal::max(size, metal::float2(1.0));
+    return metal::float4((((2.0 * texel.x) / extent.x) - 1.0) * w, (1.0 - ((2.0 * texel.y) / extent.y)) * w, 0.0, w);
 }
 
-float aa_width(
-    float coord_fwidth,
-    float surface_scale,
-    constant Uniforms& u
-) {
-    float _e6 = u.composite.render_scale;
-    float knob = (AA_SOFTNESS_PX * metal::max(_e6, 0.01)) * metal::clamp(surface_scale, 0.0, 1.0);
-    return metal::max(coord_fwidth, 0.0001) * metal::max(knob, 1.0);
-}
-
-float plus_box_sd(
-    metal::float2 uv,
-    float end,
-    constant Uniforms& u
-) {
-    metal::float2 p = metal::abs(uv);
-    metal::float2 q = metal::float2(metal::max(p.x, p.y), metal::min(p.x, p.y));
-    float _e16 = u.marker.half_width;
-    metal::float2 corner = metal::float2(q.x - end, q.y - _e16);
-    return metal::length(metal::max(corner, metal::float2(0.0))) + metal::min(metal::max(corner.x, corner.y), 0.0);
-}
-
-float plus_sd(
-    metal::float2 uv_1,
-    constant Uniforms& u
-) {
-    float _e2 = plus_box_sd(uv_1, 1.0, u);
-    return _e2;
-}
-
-float plus_taper(
-    metal::float2 uv_2,
-    constant Uniforms& u
-) {
-    metal::float2 p_1 = metal::abs(uv_2);
-    metal::float2 q_1 = metal::float2(metal::max(p_1.x, p_1.y), metal::min(p_1.x, p_1.y));
-    float _e12 = u.marker.taper_start;
-    float start = metal::min(_e12, 0.999);
-    float fade = metal::smoothstep(start, 1.0, metal::clamp(q_1.x, 0.0, 1.0));
-    return 1.0 - fade;
-}
-
-float plus_body_coverage(
-    metal::float2 uv_3,
-    float aa,
-    constant Uniforms& u
-) {
-    float _e3 = plus_sd(uv_3, u);
-    float _e4 = aa_inside(0.0, _e3, aa);
-    return _e4;
-}
-
-float plus_coverage(
-    metal::float2 uv_4,
-    float aa_1,
-    constant Uniforms& u
-) {
-    float _e2 = plus_body_coverage(uv_4, aa_1, u);
-    float _e3 = plus_taper(uv_4, u);
-    return _e2 * _e3;
-}
-
-struct fs_plus_cellInput {
+struct vs_plus_cellInput {
+};
+struct vs_plus_cellOutput {
+    metal::float4 clip_pos [[position]];
     metal::float2 uv [[user(loc0), center_perspective]];
     metal::float4 color [[user(loc1), center_perspective]];
     metal::float4 shadow_box [[user(loc3), flat]];
     metal::float4 shadow_at [[user(loc4), center_no_perspective]];
 };
-struct fs_plus_cellOutput {
-    metal::float4 member [[color(0)]];
-};
-fragment fs_plus_cellOutput fs_plus_cell(
-  fs_plus_cellInput varyings [[stage_in]]
-, metal::float4 clip_pos [[position]]
+vertex vs_plus_cellOutput vs_plus_cell(
+  uint vertex_index [[vertex_id]]
 , constant Uniforms& u [[buffer(0)]]
 ) {
-    const PlusVsOut in = { clip_pos, varyings.uv, {}, varyings.color, varyings.shadow_box, varyings.shadow_at };
-    float _e3 = metal::fwidth(in.uv.x);
-    float _e6 = aa_width(_e3, in.shadow_at.w, u);
-    float aa_2 = metal::min(_e6, 0.6);
-    float _e10 = plus_coverage(in.uv, aa_2, u);
-    return fs_plus_cellOutput { metal::float4(_e10, 0.0, 0.0, 0.0) };
+    PlusVsOut out = {};
+    metal::float2 corner = metal::float2(((vertex_index & 1u) == 1u) ? 1.0 : 0.0, ((vertex_index & 2u) == 2u) ? 1.0 : 0.0);
+    metal::float4 rect = u.marker_cell.rect;
+    metal::float4 cell_1 = u.marker_cell.cell;
+    float _e30 = u.marker_cell.points_to_texels;
+    metal::float2 texel_1 = cell_1.xy + ((corner * rect.zw) * _e30);
+    metal::float4 _e35 = no_quad();
+    metal::float2 _e39 = u.shadow_target.atlas_texels;
+    metal::float4 _e41 = cell_clip(texel_1, _e39, 1.0);
+    bool _e42 = cell_packed(cell_1);
+    out.clip_pos = _e42 ? _e41 : _e35;
+    float _e47 = u.marker_cell.arm_points;
+    float arm_points = metal::max(_e47, 0.000001);
+    out.uv = ((corner * 2.0) - metal::float2(1.0)) * ((rect.z * 0.5) / arm_points);
+    out.color = metal::float4(1.0);
+    out.shadow_box = metal::float4(0.0);
+    float _e71 = u.marker_cell.aa_scale;
+    out.shadow_at = metal::float4(0.0, 0.0, 0.0, _e71);
+    PlusVsOut _e76 = out;
+    const auto _tmp = _e76;
+    return vs_plus_cellOutput { _tmp.clip_pos, _tmp.uv, _tmp.color, _tmp.shadow_box, _tmp.shadow_at };
 }

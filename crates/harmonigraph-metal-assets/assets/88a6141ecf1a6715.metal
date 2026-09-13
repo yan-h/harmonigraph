@@ -60,9 +60,6 @@ struct GlowParams {
     float row_capacity;
     float lit;
     float accumulation;
-    float wide_strength;
-    float wide_spread;
-    metal::float2 padding;
 };
 struct NebulaParams {
     float depth;
@@ -250,7 +247,6 @@ metal::float4 glow_layer(
     constant Uniforms& u,
     metal::texture2d<float, metal::access::sample> ink_strip
 ) {
-    float mix_out_1 = {};
     float _e4 = glow_level(node.light.x);
     float _e8 = u.glow.reach;
     float reach = metal::max(_e8, 0.0);
@@ -259,35 +255,22 @@ metal::float4 glow_layer(
     float _e19 = glow_rim(node.mark.x, u);
     float d_1 = metal::length(uv);
     float span_1 = metal::max(_e19 + reach, 0.1);
-    float _e27 = u.glow.wide_spread;
-    float wide_span = span_1 * metal::max(_e27, 1.0);
-    float _e34 = u.glow.wide_strength;
-    float extent = (_e34 > 0.0) ? wide_span : span_1;
-    if (d_1 >= extent) {
+    if (d_1 >= span_1) {
         return metal::float4(0.0);
     }
-    float _e41 = glow_curve_at(d_1, span_1, u);
-    float t = metal::max(1.0 - ((d_1 * d_1) / (wide_span * wide_span)), 0.0);
-    float _e52 = u.glow.wide_strength;
-    float wide = (((_e52 * t) * t) * t) * (1.0 - _e41);
-    float profile = _e41 + wide;
-    float skirt = GLOW_BASE * profile;
+    float _e28 = glow_curve_at(d_1, span_1, u);
+    float skirt = GLOW_BASE * _e28;
     float seam = metal::max(_e19, 0.1);
-    mix_out_1 = metal::min(1.0, (d_1 * d_1) / (seam * seam));
-    if (wide > 0.0) {
-        float _e72 = mix_out_1;
-        mix_out_1 = _e72 * (_e41 / profile);
-    }
+    float mix_out_1 = metal::min(1.0, (d_1 * d_1) / (seam * seam));
     float alpha = metal::clamp((skirt * _e4) * strength, 0.0, 1.0);
     if (alpha <= 0.0) {
         return metal::float4(0.0);
     }
-    float _e89 = mix_out_1;
-    metal::float4 _e90 = glow_ink(node.light.y, metal::atan2(uv.y, uv.x), _e89, ink_strip);
-    if (_e90.w <= 0.0) {
+    metal::float4 _e51 = glow_ink(node.light.y, metal::atan2(uv.y, uv.x), mix_out_1, ink_strip);
+    if (_e51.w <= 0.0) {
         return metal::float4(0.0);
     }
-    return metal::float4(_e90.xyz, alpha);
+    return metal::float4(_e51.xyz, alpha);
 }
 
 metal::float3 glow_linear(

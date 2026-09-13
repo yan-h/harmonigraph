@@ -70,9 +70,6 @@ struct GlowParams {
     float row_capacity;
     float lit;
     float accumulation;
-    float wide_strength;
-    float wide_spread;
-    metal::float2 padding;
 };
 struct NebulaParams {
     float depth;
