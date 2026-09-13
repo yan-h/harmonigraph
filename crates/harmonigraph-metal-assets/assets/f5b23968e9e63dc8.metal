@@ -193,6 +193,15 @@ float heatmap_level(
     return metal::mix(_e46, _e48, fx);
 }
 
+metal::float3 linear_from_gamma_rgb(
+    metal::float3 srgb
+) {
+    metal::bool3 cutoff = srgb < metal::float3(0.04045);
+    metal::float3 lower = srgb / metal::float3(12.92);
+    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
+    return metal::select(higher, lower, cutoff);
+}
+
 metal::float2 baked_density(
     metal::float2 position,
     metal::texture2d<float, metal::access::sample> close_light,
@@ -212,13 +221,13 @@ float diffused_level(
     metal::float2 material,
     constant Cloud& cloud
 ) {
-    float retain = metal::smoothstep(0.45, 0.95, core);
-    float _e8 = cloud.diffusion;
-    float _e12 = cloud.diffusion;
-    float level_2 = metal::mix(core, material.x, _e8) + ((_e12 * retain) * metal::max(core - material.x, 0.0));
-    float _e22 = cloud.texture;
-    float _e25 = cloud.diffusion;
-    float texture = (_e22 * _e25) * (1.0 - metal::smoothstep(0.7, 1.0, level_2));
+    float _e4 = cloud.diffusion;
+    float _e9 = cloud.diffusion;
+    float raw = (1.0 - _e4) * (1.0 - _e9);
+    float level_2 = metal::mix(material.x, core, raw);
+    float _e17 = cloud.texture;
+    float _e20 = cloud.diffusion;
+    float texture = (_e17 * _e20) * (1.0 - metal::smoothstep(0.7, 1.0, level_2));
     return level_2 * metal::mix(1.0, material.y, texture);
 }
 
@@ -258,15 +267,15 @@ metal::float4 cloud_color(
     return _e6;
 }
 
-struct fs_cloud_gammaInput {
+struct fs_cloud_linearInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_gammaOutput {
+struct fs_cloud_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_gammaOutput fs_cloud_gamma(
-  fs_cloud_gammaInput varyings [[stage_in]]
+fragment fs_cloud_linearOutput fs_cloud_linear(
+  fs_cloud_linearInput varyings [[stage_in]]
 , metal::float4 position_1 [[position]]
 , constant Locals& locals [[buffer(0)]]
 , device type_3 const& grid [[buffer(1)]]
@@ -278,5 +287,6 @@ fragment fs_cloud_gammaOutput fs_cloud_gamma(
 ) {
     const VertexOut in = { position_1, varyings.slab, varyings.t };
     metal::float4 _e1 = cloud_color(in, locals, grid, lut, close_light, cloud_sampler, cloud, _buffer_sizes);
-    return fs_cloud_gammaOutput { _e1 };
+    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
+    return fs_cloud_linearOutput { metal::float4(_e3, _e1.w) };
 }

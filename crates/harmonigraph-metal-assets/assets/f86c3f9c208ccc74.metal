@@ -44,9 +44,9 @@ uint stored(
     constant _mslBufferSizes& _buffer_sizes
 ) {
     uint _e4 = locals.stride;
-    uint i = (slot * _e4) + bucket;
-    uint _e11 = grid[metal::min(unsigned(i >> 2u), (_buffer_sizes.size1 - 0 - 4) / 4)];
-    return (_e11 >> ((i & 3u) * 8u)) & 255u;
+    uint i_1 = (slot * _e4) + bucket;
+    uint _e11 = grid[metal::min(unsigned(i_1 >> 2u), (_buffer_sizes.size1 - 0 - 4) / 4)];
+    return (_e11 >> ((i_1 & 3u) * 8u)) & 255u;
 }
 
 float bucket_x(
@@ -76,8 +76,8 @@ float bucket_level(
     float _e17 = locals.level0_;
     float _e20 = locals.level_per_step;
     float _e25 = locals.level_per_midi;
-    float level = (_e17 + (_e20 * v)) + (_e25 * midi_1);
-    return metal::clamp(level, 0.0, 1.0);
+    float level_1 = (_e17 + (_e20 * v)) + (_e25 * midi_1);
+    return metal::clamp(level_1, 0.0, 1.0);
 }
 
 uint naga_f2u32(float value) {
@@ -197,6 +197,36 @@ fragment fs_density_sourceOutput fs_density_source(
 , constant _mslBufferSizes& _buffer_sizes [[buffer(2)]]
 ) {
     const VertexOut in = { position, varyings.slab, varyings.t };
-    float _e1 = heatmap_level(in, locals, grid, _buffer_sizes);
-    return fs_density_sourceOutput { metal::float4(_e1, 0.0, 0.0, 1.0) };
+    float level = 0.0;
+    uint i = 0u;
+    VertexOut tap = {};
+    float width = metal::fwidth(in.slab);
+    uint2 loop_bound_1 = uint2(4294967295u);
+    bool loop_init_1 = true;
+    while(true) {
+        if (metal::all(loop_bound_1 == uint2(0u))) { break; }
+        loop_bound_1 -= uint2(loop_bound_1.y == 0u, 1u);
+        if (!loop_init_1) {
+            uint _e25 = i;
+            i = _e25 + 1u;
+        }
+        loop_init_1 = false;
+        uint _e7 = i;
+        if (_e7 < 4u) {
+        } else {
+            break;
+        }
+        {
+            tap = in;
+            float _e12 = tap.slab;
+            uint _e13 = i;
+            tap.slab = _e12 + (((static_cast<float>(_e13) * 0.25) - 0.375) * width);
+            float _e21 = level;
+            VertexOut _e22 = tap;
+            float _e23 = heatmap_level(_e22, locals, grid, _buffer_sizes);
+            level = _e21 + _e23;
+        }
+    }
+    float _e28 = level;
+    return fs_density_sourceOutput { metal::float4(_e28 * 0.25, 0.0, 0.0, 1.0) };
 }
