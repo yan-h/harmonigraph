@@ -12,9 +12,11 @@ use harmonigraph_core::{NoteTracker, Tuning};
 /// invisible at its declaration, and this is what sees it.
 #[test]
 fn the_shadow_controls_keep_one_range_at_both_doors() {
-    for (asked_width, width, asked_depth, depth, asked_falloff, falloff) in [
-        (-1.0, 0.0, -0.5, 0.0, 0.0, SHADOW_FALLOFF_MIN),
-        (2.0, 1.0, 3.0, 1.0, 9.0, SHADOW_FALLOFF_MAX),
+    for (asked_width, widths, asked_depth, depth, asked_falloff, falloff) in [
+        (-1.0, [0.0; 4], -0.5, 0.0, 0.0, SHADOW_FALLOFF_MIN),
+        (2.0, [1.0, 1.0, 2.0, 2.0], 0.8, 0.8, 1.0, 1.0),
+        (3.0, [1.0, 1.0, 3.0, 3.0], 1.0, 1.0, 1.0, 1.0),
+        (9.0, [1.0, 1.0, 3.0, 3.0], 3.0, 1.0, 9.0, SHADOW_FALLOFF_MAX),
     ] {
         let asked = ShadowStyle {
             width: asked_width,
@@ -22,7 +24,8 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
             falloff: asked_falloff,
             ..ShadowStyle::default()
         };
-        let want = ShadowStyle { width, depth, falloff, ..ShadowStyle::default() };
+        let want =
+            widths.map(|width| ShadowStyle { width, depth, falloff, ..ShadowStyle::default() });
         let mut view = ViewConfig {
             shadow: ShadowSettings {
                 lattice_geometry: asked,
@@ -35,12 +38,12 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
         let scene =
             scene_of(&NoteTracker::new(), &Tuning::default(), &view, &FrameParams::default(), 0.0);
         for (group, drawn) in scene.shadow.groups().into_iter().enumerate() {
-            assert_eq!(drawn, want, "the picture drew group {group} at {asked:?}");
+            assert_eq!(drawn, want[group], "the picture drew group {group} at {asked:?}");
         }
 
         view.sanitize();
         for (group, kept) in view.shadow.groups().into_iter().enumerate() {
-            assert_eq!(kept, want, "the bar kept group {group} at {asked:?}");
+            assert_eq!(kept, want[group], "the bar kept group {group} at {asked:?}");
         }
     }
 }

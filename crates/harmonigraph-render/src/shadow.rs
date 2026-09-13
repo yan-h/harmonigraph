@@ -43,8 +43,8 @@ pub(crate) const SIGMA_CELL_MAX: f32 = 3.0;
 pub(crate) const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
 
 /// Screen-point reference behind the spectral groups' dimensionless Shadow
-/// width. At the top of the bar a spectral edge is four points wide; changing
-/// pane size or pitch zoom does not change it.
+/// width. One unit is four points; the bar's upper limit lives in the scene.
+/// Changing pane size or pitch zoom does not change it.
 pub const SPECTRAL_WIDTH_POINTS: f32 = 4.0;
 
 /// A spectral style's σ in screen points.
@@ -54,7 +54,7 @@ pub(crate) fn spectral_sigma_points(style: harmonigraph_scene::ShadowStyle) -> f
 
 /// How far a spectral style's selected renderer can paint past its caster.
 pub fn spectral_shadow_reach(style: harmonigraph_scene::ShadowStyle) -> f32 {
-    let style = style.clamped();
+    let style = style.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
     if style.casts() {
         spectral_sigma_points(style) * style.kernel.reach_sigmas(style.falloff)
     } else {

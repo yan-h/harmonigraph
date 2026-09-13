@@ -149,6 +149,16 @@ float shadow_kernel(
     return metal::min(GAUSSIAN_GAIN * metal::clamp(held, 0.0, 1.0), 1.0);
 }
 
+float shadow_transmittance(
+    float full,
+    float depth,
+    float level
+) {
+    float keep = metal::max(1.0 - metal::clamp(depth, 0.0, 1.0), SHADOW_KEEP_FLOOR);
+    float through = metal::pow(keep, metal::clamp(full, 0.0, 1.0));
+    return 1.0 - (metal::clamp(level, 0.0, 1.0) * (1.0 - through));
+}
+
 uint naga_f2u32(float value) {
     return static_cast<uint>(metal::clamp(value, 0.0, 4294967000.0));
 }
@@ -166,6 +176,7 @@ float node_visibility(
     float visibility = 1.0;
     bool local_1 = {};
     bool local_2 = {};
+    float hidden = {};
     float strength = metal::clamp(occlusion, 0.0, 1.0);
     if (strength == 0.0) {
         return 1.0;
@@ -206,18 +217,25 @@ float node_visibility(
         }
         bool _e59 = local_2;
         if (_e59) {
-            float _e60 = visibility;
-            uint _e67 = at;
-            float _e68 = shadow_kernel(_e67, points_1, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
-            visibility = _e60 * (1.0 - ((strength * metal::clamp(caster.shade.x, 0.0, 1.0)) * _e68));
+            uint _e60 = at;
+            float _e61 = shadow_kernel(_e60, points_1, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+            float level_1 = metal::clamp(caster.shade.x, 0.0, 1.0);
+            hidden = level_1 * _e61;
+            if (caster.shade.y < 0.5) {
+                float _e74 = shadow_transmittance(_e61, 1.0, level_1);
+                hidden = 1.0 - _e74;
+            }
+            float _e77 = visibility;
+            float _e78 = hidden;
+            visibility = _e77 * (1.0 - (strength * _e78));
         }
-        float _e73 = visibility;
-        if (_e73 == 0.0) {
+        float _e83 = visibility;
+        if (_e83 == 0.0) {
             break;
         }
     }
-    float _e76 = visibility;
-    return _e76;
+    float _e86 = visibility;
+    return _e86;
 }
 
 float outside_atlas(

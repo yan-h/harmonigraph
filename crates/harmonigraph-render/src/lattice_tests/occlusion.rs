@@ -29,6 +29,9 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
                 ..Default::default()
             };
             scene.octave_layout = probe_octave_layout();
+            // A thin ring against a wide blur: direct Gaussian coverage is
+            // too diluted here to hide most of the ink behind it.
+            scene.outer_inner = scene.outer_outer - 0.08;
             scene.lattice_ground = glam::vec4(0.35, 0.35, 0.35, 1.0);
             scene.pitch_lut.fill(glam::vec4(0.9, 0.6, 0.3, 1.0));
             scene.nodes[0].octaves.fill(f32::from(lit));
@@ -54,6 +57,7 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
                 let before = shot(&scene, false);
                 let after = shot(&scene, true);
                 let mut changed_ink = 0;
+                let mut mostly_hidden_ink = 0;
                 let mut unchanged_ground = 0;
                 let mut illuminated_ground = 0;
                 for ((old, new), mask) in
@@ -67,12 +71,21 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
                         }
                     } else if brightness(old) - brightness(new) > 6 {
                         changed_ink += 1;
+                        if brightness(old) > 32 && brightness(new) * 2 < brightness(old) {
+                            mostly_hidden_ink += 1;
+                        }
                     }
                 }
                 assert!(
                     changed_ink > 50,
                     "{kernel:?}, lit={lit}, glow={glow}: only {changed_ink} rear pixels faded"
                 );
+                if kernel == harmonigraph_scene::ShadowKernel::Gaussian && lit && glow == 0.0 {
+                    assert!(
+                        mostly_hidden_ink > 50,
+                        "a wide Gaussian hid most of only {mostly_hidden_ink} rear-ink pixels"
+                    );
+                }
                 assert!(unchanged_ground > 10_000, "the fixture must contain exposed background");
                 if glow > 0.0 {
                     assert!(

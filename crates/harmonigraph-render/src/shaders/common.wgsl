@@ -413,7 +413,17 @@ fn node_visibility(who: f32, points: vec2<f32>, occlusion: f32) -> f32 {
         // Reject before sampling: clamping an out-of-box sample to the cell
         // edge would otherwise extend its last nonzero texel indefinitely.
         if all(points >= caster.rect.xy) && all(points <= caster.rect.xy + caster.rect.zw) {
-            visibility *= 1.0 - strength * clamp(caster.shade.x, 0.0, 1.0) * shadow_kernel(at, points);
+            let full = shadow_kernel(at, points);
+            let level = clamp(caster.shade.x, 0.0, 1.0);
+            var hidden = level * full;
+            if caster.shade.y < 0.5 * DISTANCE_KIND {
+                // A wide Gaussian dilutes thin rings into fractional coverage.
+                // Spend that field at full depth to hide rear ink through its
+                // soft edge; linear coverage alone barely fades it. Darkness
+                // still controls only the ordinary shadow on the background.
+                hidden = 1.0 - shadow_transmittance(full, 1.0, level);
+            }
+            visibility *= 1.0 - strength * hidden;
         }
         if visibility == 0.0 {
             break;

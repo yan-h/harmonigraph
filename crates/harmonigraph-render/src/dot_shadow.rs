@@ -245,7 +245,7 @@ impl CallbackTrait for DotShadowCallback {
         resources
             .panes
             .retain(|_, pane| self.pass_nr.saturating_sub(pane.last_seen_pass) < PANE_TTL_PASSES);
-        let style = self.shadow.clamped();
+        let style = self.shadow.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
         let ppp = screen.pixels_per_point.max(f32::EPSILON);
         let sigma = if style.casts() { crate::shadow::spectral_sigma_points(style) } else { 0.0 };
         let casters: Vec<_> = self

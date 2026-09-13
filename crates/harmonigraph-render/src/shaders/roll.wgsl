@@ -1,5 +1,5 @@
 // The piano roll's notes: one instanced quad per note segment — a solid
-// rectangle in the note's own color, wrapped on every side by an outline that
+// rectangle with a flat color, wrapped on every side by an outline that
 // fades out, both falling out of a signed distance field. A segment may also
 // end in a fade at its LEADING tip (`lead_coverage`), which takes both layers
 // out together, and carry its own outline cap where the note inside it stops
@@ -7,7 +7,8 @@
 //
 // TWO LAYERS, drawn as two passes over the same instances rather than
 // composited per note: every note's outline (`fs_outline_*`), then every
-// note's body (`fs_core_*`). One quad's worth of geometry drawn twice.
+// note's body (`fs_core_*`). Both use ordinary over; body opacity is independent
+// of the dark outline. One quad's worth of geometry drawn twice.
 //
 // The order is the whole point. The outline is opaque where it meets its own
 // note — it has to be, or it takes its color from the spectrogram cell behind
@@ -15,8 +16,8 @@
 // composited with its own note lands on the NEIGHBOURING notes it reaches
 // into, and along time those neighbours are the next note: repeats of one key
 // butt together there, and the later one blanked the tail of the earlier.
-// Under every body instead, an outline can only ever darken the picture, never
-// another note.
+// Under every body instead, an outline darkens the backdrop before the note
+// paints its color. Only the body's own transparency can let that shadow through.
 //
 // What that costs is the seam between two notes that TOUCH: same key, no gap,
 // and the bodies now meet directly in one color where the outline used to
@@ -419,13 +420,11 @@ fn cap_coverage(in: VertexOut) -> f32 {
 /// note drawn in anything less than an opaque color has a black slab under it.
 /// The mask is that note's fill and no other's, so it takes nothing back off
 /// the fix: over a NEIGHBOUR the outline still paints in full, and the
-/// neighbour's body — drawn in the pass after this one — covers it.
+/// neighbour's body — drawn in the pass after this one — covers it to its own opacity.
 ///
-/// The ramp is what pairs with it. Coverage here is `1 - fill` where the body
-/// is `fill`, so the two sum to one across the note's antialiased boundary and
-/// the seam between them never shows what is behind the note — the same
-/// arithmetic the two had when they were composited in one fragment, split
-/// across two passes.
+/// Coverage here is `1 - fill` where the body is `fill`, so the dark wrap
+/// retreats as the note takes over its antialiased boundary. The body blends
+/// its flat color over that backdrop in the next pass.
 ///
 /// [`cap_coverage`] is the second shape this layer draws, standing against the
 /// end of the note INSIDE a box that carries a lead — a place the mask above
@@ -437,9 +436,9 @@ fn outline_color(in: VertexOut) -> vec4<f32> {
     return in.outline * max(wrap, cap_coverage(in));
 }
 
-/// Premultiplied gamma-space color of the BODY layer: the note, solid in its
-/// own color right to its edge — except at a leading tip that is set to fade,
-/// where [`lead_coverage`] takes it out.
+/// Flat premultiplied gamma-space body color. A leading tip set to fade loses
+/// its contribution through
+/// [`lead_coverage`].
 fn core_color(in: VertexOut) -> vec4<f32> {
     return in.core * inside(box_distance(in), 0.0) * lead_coverage(in);
 }
