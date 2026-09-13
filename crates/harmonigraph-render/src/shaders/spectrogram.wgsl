@@ -286,9 +286,11 @@ fn cloud_edge(uv: vec2<f32>) -> f32 {
         * smoothstep(vec2<f32>(0.0), feather, vec2<f32>(1.0) - uv);
     return coverage.x * coverage.y;
 }
-fn cloud_color(in: VertexOut) -> vec4<f32> {
-    let core = heatmap_color(in).rgb;
-    let uv = (in.position.xy / cloud.ppp - cloud.origin) / cloud.size;
+@fragment
+fn fs_cloud_light(in: VertexOut) -> @location(0) vec4<f32> {
+    // Bake the soft material at the filter targets' resolution. The source
+    // geometry still supplies semantic time/pitch coordinates to the noise.
+    let uv = in.position.xy / vec2<f32>(textureDimensions(wide_light));
     let origin = cloud.time.x - floor(cloud.time.x / 4096.0) * 4096.0;
     let p = vec2<f32>((origin + in.slab * cloud.time.y) * cloud.time_scale, (locals.min_midi + in.t * locals.span) * 0.18);
     // Two centered folds break up the rectangular noise lattice. Integer
@@ -317,9 +319,20 @@ fn cloud_color(in: VertexOut) -> vec4<f32> {
         * cloud_edge(wide_uv);
     let modulation = mix(1.0, density, amount);
     let light = gamma_from_linear_rgb(close * 0.35 + wide * 0.75) * cloud.glow * modulation;
+    // Store the display-space material in the reused float source target;
+    // the final bilinear upsample also softens the finest wisps.
+    return vec4<f32>(clamp(light, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+}
+fn cloud_color(in: VertexOut) -> vec4<f32> {
+    let core = heatmap_color(in).rgb;
+    let uv = (in.position.xy / cloud.ppp - cloud.origin) / cloud.size;
+    // Binding zero holds the finished material during this pass, and the
+    // close halo while fs_cloud_light is baking it. Neither pass aliases
+    // the attachment it writes.
+    let light = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).rgb;
     // Screen light into the exact core: highlights keep their headroom and
     // the surrounding cloud cannot replace a narrow measured ridge.
-    return vec4<f32>(core + (vec3<f32>(1.0) - core) * clamp(light, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    return vec4<f32>(core + (vec3<f32>(1.0) - core) * light, 1.0);
 }
 @fragment
 fn fs_cloud_gamma(in: VertexOut) -> @location(0) vec4<f32> {

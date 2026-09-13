@@ -22,6 +22,10 @@ Quintic gradient noise supplies two centered domain folds and three scales of bi
 Those folds displace the surrounding light in the pane's time and pitch directions,
 while the detailed heatmap stays at its measured coordinates.
 Warped light fades smoothly at texture boundaries.
+The folds and display-space cloud material are baked at quarter resolution into the now-free source texture,
+then bilinearly sampled beside the full-resolution heatmap core.
+Shaping cost follows the reduced image size,
+and this final bake adds no texture allocation.
 Clouds remain inside the available audio-history strip in this prototype;
 they do not extend into an unwritten startup region or a stale-data gap.
 Filtering uses linear float textures;

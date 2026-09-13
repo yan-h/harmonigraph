@@ -31,14 +31,18 @@ const SPECTROGRAM_SRC: &str = include_str!("shaders/spectrogram.wgsl");
 mod atmosphere;
 pub use atmosphere::SpectrogramAtmosphere;
 
-/// Entry points the spectrogram shader must provide: the vertex stage, and the
-/// fragment stage in each of the two shadings
-/// [`create_spectrogram_pipeline`] picks between. Its entry point is assembled
-/// from the shading, so a rename in the WGSL is a panic at pipeline creation
-/// and nothing sooner.
+/// The detailed heatmap, reduced cloud material, and final composite entry
+/// points, including both target color spaces. Validate their names before
+/// a lazy runtime pipeline is the first place a WGSL rename gets noticed.
 #[cfg(test)]
-pub(crate) const SPECTROGRAM_ENTRY_POINTS: &[&str] =
-    &["vs_heatmap", "fs_heatmap_gamma", "fs_heatmap_linear", "fs_cloud_gamma", "fs_cloud_linear"];
+pub(crate) const SPECTROGRAM_ENTRY_POINTS: &[&str] = &[
+    "vs_heatmap",
+    "fs_heatmap_gamma",
+    "fs_heatmap_linear",
+    "fs_cloud_light",
+    "fs_cloud_gamma",
+    "fs_cloud_linear",
+];
 
 /// The stored-dB grid the shader reads: `capacity` slots of `bins` bytes, slab
 /// `key` living in slot `key.rem_euclid(capacity)`.
@@ -408,7 +412,7 @@ fn create_spectrogram_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
     layout: &wgpu::BindGroupLayout,
-    cloud_layout: Option<&wgpu::BindGroupLayout>,
+    cloud: Option<(&wgpu::BindGroupLayout, &str)>,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("spectrogram_shader"),
@@ -417,7 +421,7 @@ fn create_spectrogram_pipeline(
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("spectrogram_pipeline_layout"),
         bind_group_layouts: &std::iter::once(Some(layout))
-            .chain(cloud_layout.map(Some))
+            .chain(cloud.map(|(layout, _)| Some(layout)))
             .collect::<Vec<_>>(),
         ..Default::default()
     });
@@ -428,7 +432,8 @@ fn create_spectrogram_pipeline(
     } else {
         "gamma"
     };
-    let material = if cloud_layout.is_some() { "cloud" } else { "heatmap" };
+    let fragment =
+        cloud.map(|(_, entry)| entry.to_owned()).unwrap_or_else(|| format!("fs_heatmap_{shade}"));
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("spectrogram"),
         layout: Some(&pipeline_layout),
@@ -440,7 +445,7 @@ fn create_spectrogram_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some(&format!("fs_{material}_{shade}")),
+            entry_point: Some(&fragment),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
@@ -706,6 +711,30 @@ impl CallbackTrait for SpectrogramCallback {
                     pass.draw(0..pane.count, 0..1);
                 }
                 target.blur(egui_encoder, cloud);
+                {
+                    // Once filtering is finished, the raw source texture is
+                    // free to hold the shaped light. Noise and displacement
+                    // run at quarter resolution; the exact core still draws
+                    // at full resolution in the final composite.
+                    let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("spectral_cloud_material"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &target.source_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        ..Default::default()
+                    });
+                    pass.set_pipeline(&cloud.bake);
+                    pass.set_bind_group(0, &target.source_group, &[]);
+                    pass.set_bind_group(1, &target.bake_group, &[]);
+                    pass.set_vertex_buffer(0, pane.vertex_buffer.slice(..));
+                    pass.draw(0..pane.count, 0..1);
+                }
                 pane.cloud_ready = true;
             }
         }

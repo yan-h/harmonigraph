@@ -37,6 +37,7 @@ struct Uniforms {
 
 pub(super) struct Pipelines {
     pub source: wgpu::RenderPipeline,
+    pub bake: wgpu::RenderPipeline,
     pub composite: wgpu::RenderPipeline,
     filter_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
@@ -122,11 +123,24 @@ impl Pipelines {
         });
         Self {
             source: create_spectrogram_pipeline(device, FORMAT, source_layout, None),
+            bake: create_spectrogram_pipeline(
+                device,
+                FORMAT,
+                source_layout,
+                Some((&composite_layout, "fs_cloud_light")),
+            ),
             composite: create_spectrogram_pipeline(
                 device,
                 format,
                 source_layout,
-                Some(&composite_layout),
+                Some((
+                    &composite_layout,
+                    if format.is_srgb() || format == FORMAT {
+                        "fs_cloud_linear"
+                    } else {
+                        "fs_cloud_gamma"
+                    },
+                )),
             ),
             filter_layout,
             composite_layout,
@@ -149,6 +163,7 @@ pub(super) struct Targets {
     pub source_group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     filter_groups: [wgpu::BindGroup; 3],
+    pub bake_group: wgpu::BindGroup,
     pub composite_group: wgpu::BindGroup,
 }
 
@@ -216,25 +231,29 @@ impl Targets {
                 ],
             })
         });
-        let composite_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("spectral_cloud_composite_group"),
-            layout: &pipelines.composite_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&views[1]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&views[2]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
-                },
-                wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
-            ],
-        });
+        let cloud_group = |front| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("spectral_cloud_composite_group"),
+                layout: &pipelines.composite_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(front),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&views[2]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
+                    },
+                    wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
+                ],
+            })
+        };
+        let bake_group = cloud_group(&views[1]);
+        let composite_group = cloud_group(&source_view);
         let source_group = source_group(device, source_layout, &source_uniform, grid, lut);
         Self {
             size,
@@ -244,6 +263,7 @@ impl Targets {
             source_group,
             uniform,
             filter_groups,
+            bake_group,
             composite_group,
         }
     }
