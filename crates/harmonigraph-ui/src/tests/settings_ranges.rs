@@ -49,7 +49,7 @@ fn loaded(edge: Edge) -> SharedState {
         plus_arm, plus_taper, plus_width, glow_reach, glow_strength, glow_accumulation,
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
-    poison!(a.view.atmosphere; haze_amount, haze_scale, haze_speed, warm_fraction,
+    poison!(a.view.atmosphere; nebula_depth, nebula_scale, nebula_speed, warm_fraction,
         mote_size, mote_brightness, drift_amount, drift_speed, twinkle_amount,
         twinkle_speed, parallax, breath_amount, breath_speed);
     a.view.atmosphere.mote_count = if matches!(edge, Edge::High) { u32::MAX } else { 0 };

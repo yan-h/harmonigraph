@@ -1,15 +1,12 @@
-//! Dusk prototype: a coarse cloud mesh and a bounded set of drifting lights.
-//! Both are ordinary egui geometry behind the lattice, shared by the editor
-//! and offline draw path. No simulation, texture history, or additional GPU pass.
+//! Dusk controls and a bounded set of drifting lights behind the lattice.
+//! Nebula texture and breathing belong to the renderer's existing glow pass.
+//! Motes use ordinary egui geometry shared by the editor and offline draw path.
 //! Phase is decorative: exports repeat, but takes do not store the live clock origin.
 
 use egui::{vec2, Color32, Mesh, Painter, Rect, Vec2};
 use harmonigraph_scene::{
     AtmosphereSettings, Camera, Projection, ViewConfig, ATMOSPHERE_MOTES_MAX,
 };
-
-const CLOUD_COLUMNS: u32 = 48;
-const CLOUD_ROWS: u32 = 32;
 
 pub(super) fn settings(ui: &mut egui::Ui, settings: &mut AtmosphereSettings) {
     use crate::widgets::{toggle_switch, ValueBar};
@@ -20,12 +17,12 @@ pub(super) fn settings(ui: &mut egui::Ui, settings: &mut AtmosphereSettings) {
         *settings = AtmosphereSettings::default();
     }
     ui.add_enabled_ui(settings.enabled, |ui| {
-        ui.label(egui::RichText::new("Nebula haze").strong());
-        multiplier(ui, &mut settings.haze_amount, "Haze brightness", 0.0..=4.0);
-        multiplier(ui, &mut settings.haze_scale, "Cloud size", 0.25..=4.0);
-        multiplier(ui, &mut settings.haze_speed, "Cloud speed", 0.0..=20.0)
-            .on_hover_text("1× is the original slow drift. 0 freezes the cloud motion.");
-        tint(ui, "Haze tint", &mut settings.haze_color);
+        ui.label(egui::RichText::new("Nebula glow").strong());
+        ValueBar::new(&mut settings.nebula_depth, 0.0..=1.0, "Texture depth")
+            .percent().show(ui).on_hover_text("Cloud texture in the combined lattice glow. 0% restores smooth halos. Requires Lattice glow below; colors come from the notes.");
+        multiplier(ui, &mut settings.nebula_scale, "Cloud size", 0.25..=4.0);
+        multiplier(ui, &mut settings.nebula_speed, "Cloud speed", 0.0..=20.0)
+            .on_hover_text("1× is a slow drift. 0 freezes the cloud motion.");
 
         ui.label(egui::RichText::new("Stars and fireflies").strong());
         let mut count = settings.mote_count as f32;
@@ -78,21 +75,7 @@ fn hash(mut n: u32) -> f32 {
     (n >> 8) as f32 / 16_777_216.0
 }
 
-fn noise(p: Vec2) -> f32 {
-    let x = p.x.floor() as i32;
-    let y = p.y.floor() as i32;
-    let f = vec2(p.x - p.x.floor(), p.y - p.y.floor());
-    let s = f * f * (vec2(3.0, 3.0) - f * 2.0);
-    let at = |dx, dy| {
-        hash((x.wrapping_add(dx) as u32).wrapping_mul(0x9e37_79b9) ^ y.wrapping_add(dy) as u32)
-    };
-    let a = egui::lerp(at(0, 0)..=at(1, 0), s.x);
-    let b = egui::lerp(at(0, 1)..=at(1, 1), s.x);
-    egui::lerp(a..=b, s.y)
-}
-
-// Zero alpha is additive light in egui's premultiplied mesh. Keep the cloud
-// colours faint and leave the user's background visible through the field.
+// Zero alpha is additive light in egui's premultiplied mesh.
 fn light(rgb: [f32; 3], strength: f32) -> Color32 {
     Color32::from_rgb_additive(
         (rgb[0] * strength).round().clamp(0.0, 255.0) as u8,
@@ -145,43 +128,8 @@ fn atmosphere(
 ) -> Mesh {
     let mut mesh = Mesh::default();
     let count = if settings.mote_brightness > 0.0 { settings.mote_count } else { 0 };
-    let haze = settings.haze_amount > 0.0;
-    mesh.vertices
-        .reserve((u32::from(haze) * (CLOUD_COLUMNS + 1) * (CLOUD_ROWS + 1) + count * 37) as usize);
-    mesh.indices.reserve((u32::from(haze) * CLOUD_COLUMNS * CLOUD_ROWS * 6 + count * 180) as usize);
-    let aspect = rect.width() / rect.height().max(1.0);
-    // Use the shared presentation clock in f64 until after taking sin. Long
-    // sessions retain slow motion, and seeking offline reproduces the frame.
-    let haze_time = now * f64::from(settings.haze_speed);
-    let drift = vec2((haze_time * 0.021).sin() as f32, (haze_time * 0.017).cos() as f32) * 0.22;
-    if haze {
-        for y in 0..=CLOUD_ROWS {
-            for x in 0..=CLOUD_COLUMNS {
-                let uv = vec2(x as f32 / CLOUD_COLUMNS as f32, y as f32 / CLOUD_ROWS as f32);
-                let p = (vec2(uv.x * aspect, uv.y) * 2.8 + parallax) / settings.haze_scale;
-                let warp = vec2(noise(p + drift), noise(p + vec2(8.3, 2.7) - drift));
-                let cloud = noise(p + warp * 0.7 + drift);
-                let veil = noise(p * 1.8 - drift + vec2(3.1, 7.4));
-                let edge = (16.0 * uv.x * (1.0 - uv.x) * uv.y * (1.0 - uv.y)).sqrt();
-                let density = ((cloud - 0.28).max(0.0) * 1.6).powi(2) * edge;
-                let plum = veil;
-                let tint = settings.haze_color.map(f32::from);
-                let rgb = [tint[0] * (0.4 + 0.6 * plum), tint[1] * (1.0 - 0.41 * plum), tint[2]];
-                mesh.colored_vertex(
-                    rect.min + uv * rect.size(),
-                    light(rgb, density * settings.haze_amount),
-                );
-            }
-        }
-        for y in 0..CLOUD_ROWS {
-            for x in 0..CLOUD_COLUMNS {
-                let a = y * (CLOUD_COLUMNS + 1) + x;
-                let b = a + CLOUD_COLUMNS + 1;
-                mesh.add_triangle(a, a + 1, b);
-                mesh.add_triangle(a + 1, b + 1, b);
-            }
-        }
-    }
+    mesh.vertices.reserve((count * 37) as usize);
+    mesh.indices.reserve((count * 180) as usize);
     // Fixed seeds keep each mote's identity through resizing and repeated
     // layout passes. Bounded wandering avoids wraparound pops at the edges.
     let scale = (rect.height() / 800.0).clamp(0.45, 2.0);
@@ -271,7 +219,7 @@ mod tests {
         let later = atmosphere(rect, Vec2::ZERO, config, 3.0, 1.0);
         assert_eq!(first.vertices, again.vertices);
         assert_ne!(first.vertices, later.vertices);
-        assert_eq!(first.vertices.len(), 49 * 33 + 96 * 37);
+        assert_eq!(first.vertices.len(), 96 * 37);
         assert!(first.is_valid());
         assert!(first.vertices.iter().any(|v| v.color.r() > 80));
         let distant = atmosphere(
@@ -286,9 +234,7 @@ mod tests {
             1.0,
         );
         assert!(
-            distant.vertices[49 * 33..]
-                .iter()
-                .any(|v| { rect.contains(v.pos) && v.color.r() > 80 }),
+            distant.vertices.iter().any(|v| { rect.contains(v.pos) && v.color.r() > 80 }),
             "a long pan must not carry away every firefly"
         );
     }

@@ -106,7 +106,9 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
                     );
                 }
             }
-            // The same depth adjustment must still darken exposed glow.
+            // The same depth adjustment must still darken exposed glow,
+            // including the cloud texture in the pooled light.
+            scene.atmosphere.nebula_depth = 0.85;
             scene.bloom_strength = 0.0;
             scene.glow_reach = 2.0;
             let deep_glow = shot(&scene, true);

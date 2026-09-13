@@ -1662,7 +1662,7 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.atmosphere = AtmosphereSettings {
-        haze_amount: 2.25,
+        nebula_depth: 0.45,
         mote_count: 217,
         cool_color: [19, 128, 219],
         breath_speed: 2.2,
@@ -1690,11 +1690,11 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
             assert_eq!(&loaded[other], expected, "omitting {key} changed {other}");
         }
     }
-    state.picture.appearance.view.atmosphere.haze_amount = f32::NAN;
+    state.picture.appearance.view.atmosphere.nebula_depth = f32::NAN;
     state.picture.appearance.view.atmosphere.mote_count = u32::MAX;
     state.picture.appearance.view.atmosphere.breath_amount = 7.0;
     let restored = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
-    assert_eq!(restored.view.atmosphere.haze_amount, AtmosphereSettings::default().haze_amount);
+    assert_eq!(restored.view.atmosphere.nebula_depth, AtmosphereSettings::default().nebula_depth);
     assert_eq!(restored.view.atmosphere.mote_count, ATMOSPHERE_MOTES_MAX);
     assert_eq!(restored.view.atmosphere.breath_amount, 1.0);
     assert_eq!(restored.view.atmosphere.cool_color, [19, 128, 219]);

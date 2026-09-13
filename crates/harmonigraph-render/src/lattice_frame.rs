@@ -96,6 +96,9 @@ impl LatticeCallback {
         let render_scale = scene.render_scale.clamp(RENDER_SCALE_RANGE.0, RENDER_SCALE_RANGE.1);
         let camera = scene.camera;
         let atmosphere = scene.atmosphere.sanitized();
+        // Reduce the decorative clock in f64 before uploading bounded phases.
+        let nebula_time =
+            scene.glow_timing.map_or(0.0, |clock| clock.now) * f64::from(atmosphere.nebula_speed);
         let view_proj = camera.view_proj(aspect);
         let (right, up) = camera.right_up();
 
@@ -491,6 +494,16 @@ impl LatticeCallback {
                     }
                 } else {
                     bytemuck::Zeroable::zeroed()
+                },
+                nebula: NebulaParams {
+                    depth: if atmosphere.enabled { atmosphere.nebula_depth } else { 0.0 },
+                    scale: atmosphere.nebula_scale,
+                    drift: Float2([
+                        (nebula_time * 0.071).sin() as f32 * 0.9,
+                        (nebula_time * 0.053).cos() as f32 * 0.9,
+                    ]),
+                    target_size: Float2([1.0; 2]),
+                    padding: Float2([0.0; 2]),
                 },
                 // Every shadow still casts with the glow disabled. Markers
                 // inherit notation's style even though this pipeline draws them.

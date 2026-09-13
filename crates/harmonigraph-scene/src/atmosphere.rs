@@ -9,10 +9,9 @@ pub const ATMOSPHERE_MOTES_MAX: u32 = 384;
 #[serde(default)]
 pub struct AtmosphereSettings {
     pub enabled: bool,
-    pub haze_amount: f32,
-    pub haze_scale: f32,
-    pub haze_speed: f32,
-    pub haze_color: [u8; 3],
+    pub nebula_depth: f32,
+    pub nebula_scale: f32,
+    pub nebula_speed: f32,
     pub mote_count: u32,
     pub warm_fraction: f32,
     pub mote_size: f32,
@@ -32,10 +31,9 @@ impl Default for AtmosphereSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            haze_amount: 1.0,
-            haze_scale: 1.0,
-            haze_speed: 1.0,
-            haze_color: [20, 17, 26],
+            nebula_depth: 0.75,
+            nebula_scale: 1.0,
+            nebula_speed: 1.0,
             mote_count: 96,
             warm_fraction: 0.25,
             mote_size: 1.0,
@@ -63,9 +61,9 @@ impl AtmosphereSettings {
                 fallback
             }
         };
-        self.haze_amount = clamp(self.haze_amount, fresh.haze_amount, 0.0, 4.0);
-        self.haze_scale = clamp(self.haze_scale, fresh.haze_scale, 0.25, 4.0);
-        self.haze_speed = clamp(self.haze_speed, fresh.haze_speed, 0.0, 20.0);
+        self.nebula_depth = clamp(self.nebula_depth, fresh.nebula_depth, 0.0, 1.0);
+        self.nebula_scale = clamp(self.nebula_scale, fresh.nebula_scale, 0.25, 4.0);
+        self.nebula_speed = clamp(self.nebula_speed, fresh.nebula_speed, 0.0, 20.0);
         self.mote_count = self.mote_count.min(ATMOSPHERE_MOTES_MAX);
         self.warm_fraction = clamp(self.warm_fraction, fresh.warm_fraction, 0.0, 1.0);
         self.mote_size = clamp(self.mote_size, fresh.mote_size, 0.25, 4.0);

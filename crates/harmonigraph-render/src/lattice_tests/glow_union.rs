@@ -101,6 +101,69 @@ fn a_held_nodes_light_breathes_without_advancing_its_ink_history() {
 }
 
 #[test]
+fn nebula_textures_the_combined_light_without_creating_or_recoloring_it() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    for (levels, accumulation) in [(vec![1.0], 0.0), (vec![1.0, 1.0], 0.5), (vec![1.0; 32], 1.0)] {
+        let mut scene = scene(&levels, 0.75, levels.len() == 2);
+        scene.glow_accumulation = accumulation;
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            distance: 28.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.atmosphere.breath_amount = 0.0;
+        scene.glow_timing =
+            Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.3, release: 2.5 });
+        let smooth = glow(&mut shooter, &scene);
+        scene.atmosphere.nebula_depth = 1.0;
+        let textured = glow(&mut shooter, &scene);
+        let mut changed = 0;
+        let mut empty = 0;
+        let mut darkest_ratio = 1.0f32;
+        let mut brightest_ratio = 0.0f32;
+        for (before, after) in smooth.chunks_exact(4).zip(textured.chunks_exact(4)) {
+            if before[3] == 0 {
+                assert_eq!(after, before, "texture cannot create light outside a halo");
+                empty += 1;
+                continue;
+            }
+            assert!(after.iter().zip(before).all(|(a, b)| a <= b));
+            if before[3] > 30 && after[3] > 5 {
+                let ratio = f32::from(after[3]) / f32::from(before[3]);
+                darkest_ratio = darkest_ratio.min(ratio);
+                brightest_ratio = brightest_ratio.max(ratio);
+                for c in 0..3 {
+                    assert!(
+                        (f32::from(after[c]) - f32::from(before[c]) * ratio).abs() < 2.0,
+                        "the cloud mask must preserve the glow's hue"
+                    );
+                }
+                changed += usize::from(before[3] - after[3] > 5);
+            }
+        }
+        assert!(
+            changed > 1000 && empty > 1000,
+            "measure both a broad halo and unlit ground: changed={changed}, empty={empty}"
+        );
+        assert!(
+            brightest_ratio - darkest_ratio > 0.25,
+            "texture must vary spatially, not just dim the halo"
+        );
+        scene.glow_timing.as_mut().unwrap().now = 8.0;
+        shooter.shot_again(&scene);
+        let later = read_glow(&shooter);
+        assert_ne!(textured, later, "clouds must drift inside a held glow");
+        assert_eq!(later, glow(&mut shooter, &scene), "texture cannot depend on history");
+        scene.atmosphere.nebula_speed = 0.0;
+        assert_eq!(textured, glow(&mut shooter, &scene), "zero speed freezes the cloud field");
+        scene.atmosphere.enabled = false;
+        assert_eq!(smooth, glow(&mut shooter, &scene), "master off restores the smooth glow");
+    }
+}
+
+#[test]
 fn tile_candidates_keep_the_untiled_picture_through_resize_and_reuse() {
     let Some(mut shooter) = Shooter::new([512, 512]) else { return };
     let mut scene = scene(&[1.0; 4], 0.75, true);
