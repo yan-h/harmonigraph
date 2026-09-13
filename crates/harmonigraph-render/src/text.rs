@@ -27,8 +27,9 @@
 //! a pass over a picture that has no depth and no order to belong to — and
 //! the pieces the lattice reuses are the ones that say `pub(crate)`.
 //!
-//! **Compositing.** Every glyph shadow is laid down before any visible glyph
-//! fill. The spectral panes keep their skin-coloured knockout and the lattice
+//! **Compositing.** Each complete layer draws its shadows before its glyph
+//! fills, so foreground names cover and shadow earlier names. The spectral
+//! panes keep their skin-coloured knockout and the lattice
 //! keeps its scene-order compositor; only the field producing their coverage
 //! is shared.
 
@@ -160,11 +161,14 @@ pub struct GlyphSdfAtlas {
 ///
 /// `slide` is the axis this pane's text scrolls along, which the reconstruction
 /// filter follows — see [`SlideAxis`].
+/// `layer_ends` holds increasing glyph offsets after complete labels. Empty
+/// means one layer; any trailing glyphs form a final layer.
 /// `pass_nr` is the painter context's cumulative pass number.
 #[allow(clippy::too_many_arguments)]
 pub fn text_paint_callback(
     rect: egui::Rect,
     glyphs: Vec<GlyphInstance>,
+    layer_ends: Vec<u32>,
     shadow: Option<harmonigraph_scene::ShadowStyle>,
     atlas: Option<FontAtlas>,
     marks: Option<FontAtlas>,
@@ -179,6 +183,7 @@ pub fn text_paint_callback(
         rect,
         TextCallback {
             glyphs,
+            layer_ends,
             shadow,
             atlas,
             marks,
@@ -194,6 +199,7 @@ pub fn text_paint_callback(
 
 struct TextCallback {
     glyphs: Vec<GlyphInstance>,
+    layer_ends: Vec<u32>,
     shadow: Option<harmonigraph_scene::ShadowStyle>,
     atlas: Option<FontAtlas>,
     marks: Option<FontAtlas>,
@@ -1434,8 +1440,8 @@ impl CallbackTrait for TextCallback {
         );
         render_pass.set_bind_group(0, bind_group, &[]);
         render_pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-        // Every knockout, then every fill: neighbouring glyphs remain one
-        // label rather than each shadowing the other's visible ink.
+        // A layer keeps letters and marks together. Later layers cast onto
+        // earlier ink without any glyph shadowing its own name.
         let shadow = self.shadow_surface_id.and_then(|surface_id| {
             crate::spectral_shadow::binding(
                 callback_resources,
@@ -1443,10 +1449,8 @@ impl CallbackTrait for TextCallback {
                 crate::spectral_shadow::ProducerKey::Text(self.pane_id),
             )
         });
-        if let Some(shadow) = shadow.filter(|binding| binding.active) {
-            render_pass.set_pipeline(&resources.shadow_pipeline);
-            render_pass.set_bind_group(2, shadow.atlas, &[]);
-            render_pass.set_bind_group(3, shadow.casters, &[]);
+        let shadow = shadow.filter(|binding| binding.active);
+        if let Some(shadow) = shadow.as_ref() {
             let stride = std::mem::size_of::<crate::shadow::ShadowBox>() as u64;
             render_pass.set_vertex_buffer(
                 1,
@@ -1455,10 +1459,23 @@ impl CallbackTrait for TextCallback {
                         ..stride * u64::from(shadow.start + shadow.count),
                 ),
             );
-            render_pass.draw(0..4, 0..pane.count);
         }
-        render_pass.set_pipeline(&resources.fill_pipeline);
-        render_pass.draw(0..4, 0..pane.count);
+        let layer_ends = if shadow.is_some() { self.layer_ends.as_slice() } else { &[] };
+        let mut start = 0;
+        for end in layer_ends.iter().copied().chain(std::iter::once(pane.count)) {
+            if end <= start {
+                continue;
+            }
+            if let Some(shadow) = shadow.as_ref() {
+                render_pass.set_pipeline(&resources.shadow_pipeline);
+                render_pass.set_bind_group(2, shadow.atlas, &[]);
+                render_pass.set_bind_group(3, shadow.casters, &[]);
+                render_pass.draw(0..4, start..end);
+            }
+            render_pass.set_pipeline(&resources.fill_pipeline);
+            render_pass.draw(0..4, start..end);
+            start = end;
+        }
     }
 }
 
@@ -1558,6 +1575,7 @@ pub(crate) mod tests {
             },
         ] {
             let cb = TextCallback {
+                layer_ends: Vec::new(),
                 glyphs: vec![glyph()],
                 shadow: Some(style),
                 atlas: Some(atlas()),
@@ -1713,6 +1731,7 @@ pub(crate) mod tests {
         let shared = uploaded.texture.expect("the fixture uploads a texture");
 
         let cb = TextCallback {
+            layer_ends: Vec::new(),
             glyphs: vec![glyph()],
             shadow: None,
             atlas: None,
@@ -1864,6 +1883,7 @@ pub(crate) mod tests {
         let physical_width = (SIZE[0] as f32 * ppp).round() as u32;
         let size = [physical_width.div_ceil(64) * 64, (SIZE[1] as f32 * ppp).round() as u32];
         let cb = TextCallback {
+            layer_ends: Vec::new(),
             glyphs: vec![glyph],
             shadow,
             atlas: Some(sheet),
@@ -1875,6 +1895,16 @@ pub(crate) mod tests {
             shadow_surface_id: shadow.map(|_| 0),
             pass_nr: 0,
         };
+        (draw_callback(device, queue, &cb, size, ppp), size)
+    }
+
+    fn draw_callback(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cb: &TextCallback,
+        size: [u32; 2],
+        ppp: f32,
+    ) -> Vec<u8> {
         let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -1899,7 +1929,52 @@ pub(crate) mod tests {
                     &resources,
                 );
             });
-        (readback(device, queue, &texture, size), size)
+        readback(device, queue, &texture, size)
+    }
+
+    #[test]
+    fn a_front_label_shadows_back_ink_but_not_its_own_letters() {
+        let Some((device, queue)) = headless_device() else { return };
+        for kernel in
+            [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
+        {
+            let mut cb = TextCallback {
+                glyphs: vec![
+                    glyph(),
+                    GlyphInstance {
+                        rect: [28.0, 24.0, 8.0, 8.0],
+                        sdf_rect: [28.0, 24.0, 8.0, 8.0],
+                        fill: [0, 255, 0, 255],
+                        ..glyph()
+                    },
+                ],
+                layer_ends: Vec::new(),
+                shadow: Some(harmonigraph_scene::ShadowStyle {
+                    width: 0.5,
+                    depth: 1.0,
+                    kernel,
+                    ..Default::default()
+                }),
+                atlas: Some(atlas()),
+                marks: None,
+                sdf: Some(sdf_atlas()),
+                slide: SlideAxis::default(),
+                target_format: FORMAT,
+                pane_id: 0,
+                shadow_surface_id: Some(0),
+                pass_nr: 0,
+            };
+            let together = draw_callback(&device, &queue, &cb, SIZE, 1.0);
+            cb.layer_ends = vec![1, 2];
+            let layered = draw_callback(&device, &queue, &cb, SIZE, 1.0);
+            // x=26 is back ink within the front glyph's shadow, but outside
+            // its fill. Keeping both glyphs in one name must preserve it.
+            assert_eq!(pixel(&together, 26, 28), [255; 4]);
+            let shaded = pixel(&layered, 26, 28);
+            assert!(shaded[1] < 250 && shaded[2] < 250, "{kernel:?}: {shaded:?}");
+            // The overlapping foreground fill covers the back glyph.
+            assert_eq!(pixel(&layered, 30, 28), [0, 255, 0, 255]);
+        }
     }
 
     fn pixel(frame: &[u8], x: u32, y: u32) -> [u8; 4] {
@@ -2029,6 +2104,7 @@ pub(crate) mod tests {
             return;
         };
         let cb = TextCallback {
+            layer_ends: Vec::new(),
             // The letter where `glyph` puts it, the mark 16 points to its left.
             glyphs: vec![glyph(), GlyphInstance { rect: [8.0, 24.0, 8.0, 8.0], ..mark() }],
             shadow: None,
@@ -2111,6 +2187,7 @@ pub(crate) mod tests {
             }
         }
         let cb = TextCallback {
+            layer_ends: Vec::new(),
             glyphs: [(4.3, 0.0, 0.0), (24.3, 12.0, 12.0), (44.3, 24.0, 40.0)]
                 .iter()
                 .map(|&(x, u, v)| GlyphInstance {
@@ -2224,6 +2301,7 @@ pub(crate) mod tests {
             FontAtlas { image: std::sync::Arc::new(image), key }
         };
         let at = |x: f32, pane_id: u64, atlas: Option<FontAtlas>| TextCallback {
+            layer_ends: Vec::new(),
             glyphs: vec![GlyphInstance { rect: [x, 24.0, 8.0, 8.0], ..glyph() }],
             shadow: None,
             atlas,
@@ -2305,6 +2383,7 @@ pub(crate) mod tests {
             &mut resources,
             [
                 TextCallback {
+                    layer_ends: Vec::new(),
                     glyphs: vec![reaching],
                     shadow: None,
                     atlas: None,
