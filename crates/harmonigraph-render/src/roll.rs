@@ -1587,7 +1587,7 @@ mod tests {
         assert!(near(at(128), RED), "the note's middle is not painted: {:?}", at(128));
         let side = at(138);
         assert!(
-            at(134)[0] > side[0] + 20 && side[0] > 170,
+            at(134)[0] > side[0].saturating_add(20) && side[0] > 170,
             "the shoulder is not a gradual shade of the center: {:?}, {side:?}",
             at(134),
         );
