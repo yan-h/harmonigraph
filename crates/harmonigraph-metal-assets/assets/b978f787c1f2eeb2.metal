@@ -14,7 +14,7 @@ struct Cloud {
     metal::float2 origin;
     metal::float2 size;
     metal::float2 step;
-    float glow;
+    float diffusion;
     float texture;
     float ppp;
     float _pad0_;
@@ -57,13 +57,6 @@ float cloud_noise(
     return metal::mix(metal::mix(_e11, _e16, w.x), metal::mix(_e23, _e28, w.x), w.y);
 }
 
-metal::float3 gamma_from_linear_rgb(
-    metal::float3 linear
-) {
-    metal::float3 c = metal::max(linear, metal::float3(0.0));
-    return metal::select((1.055 * metal::pow(c, metal::float3(0.41666666))) - metal::float3(0.055), c * 12.92, c <= metal::float3(0.0031308));
-}
-
 struct fs_cloud_lightInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
@@ -89,14 +82,10 @@ fragment fs_cloud_lightOutput fs_cloud_light(
     metal::float2 warp = metal::float2(_e22, _e27);
     float _e32 = cloud_noise(p_1 + (warp * 1.2));
     float _e39 = cloud_noise((p_1 * 2.3) + metal::float2(3.1, 7.4));
-    float density = 0.08 + (0.92 * metal::smoothstep(0.25, 0.7, (_e32 * 0.75) + (_e39 * 0.25)));
+    float density = 0.25 + (0.75 * metal::smoothstep(0.25, 0.7, (_e32 * 0.75) + (_e39 * 0.25)));
     metal::float4 _e55 = close_light.sample(cloud_sampler, uv, metal::level(0.0));
-    metal::float3 close = _e55.xyz;
+    float close = _e55.x;
     metal::float4 _e60 = wide_light.sample(cloud_sampler, uv, metal::level(0.0));
-    metal::float3 wide = _e60.xyz;
-    metal::float3 _e67 = gamma_from_linear_rgb((close * 0.2) + (wide * 0.8));
-    float _e70 = cloud.glow;
-    float _e74 = cloud.texture;
-    metal::float3 light = (_e67 * _e70) * metal::mix(1.0, density, _e74);
-    return fs_cloud_lightOutput { metal::float4(metal::clamp(light, metal::float3(0.0), metal::float3(1.0)), 1.0) };
+    float wide = _e60.x;
+    return fs_cloud_lightOutput { metal::float4((close * 0.75) + (wide * 0.25), density, 0.0, 1.0) };
 }

@@ -35,17 +35,6 @@ struct VertexOut {
     float t;
     char _pad3[8];
 };
-struct Cloud {
-    metal::float2 origin;
-    metal::float2 size;
-    metal::float2 step;
-    float glow;
-    float texture;
-    float ppp;
-    float _pad0_;
-    float _pad1_;
-    float _pad2_;
-};
 
 uint stored(
     uint slot,
@@ -169,11 +158,10 @@ uint naga_mod(uint lhs, uint rhs) {
     return lhs % metal::select(rhs, 1u, rhs == 0u);
 }
 
-metal::float4 heatmap_color(
+float heatmap_level(
     VertexOut in_1,
     constant Locals& locals,
     device type_3 const& grid,
-    metal::texture2d<float, metal::access::sample> lut,
     constant _mslBufferSizes& _buffer_sizes
 ) {
     uint _e3 = locals.run_slabs;
@@ -191,73 +179,24 @@ metal::float4 heatmap_color(
     uint s1_ = naga_mod(_e39 + j1_, _e43);
     float _e46 = read_level(s0_, in_1.t, locals, grid, _buffer_sizes);
     float _e48 = read_level(s1_, in_1.t, locals, grid, _buffer_sizes);
-    float level_1 = metal::mix(_e46, _e48, fx);
-    uint levels = metal::uint2(lut.get_width(), lut.get_height()).x;
-    uint i_1 = metal::min(naga_f2u32(level_1 * static_cast<float>(levels)), levels - 1u);
-    uint clamped_lod_e63 = metal::min(uint(0), lut.get_num_mip_levels() - 1);
-    metal::float4 c = lut.read(metal::min(metal::uint2(metal::uint2(i_1, 0u)), metal::uint2(lut.get_width(clamped_lod_e63), lut.get_height(clamped_lod_e63)) - 1), clamped_lod_e63);
-    return metal::float4(c.xyz, 1.0);
+    return metal::mix(_e46, _e48, fx);
 }
 
-metal::float3 linear_from_gamma_rgb(
-    metal::float3 srgb
-) {
-    metal::bool3 cutoff = srgb < metal::float3(0.04045);
-    metal::float3 lower = srgb / metal::float3(12.92);
-    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
-    return metal::select(higher, lower, cutoff);
-}
-
-metal::float3 baked_light(
-    metal::float2 position,
-    metal::texture2d<float, metal::access::sample> close_light,
-    metal::sampler cloud_sampler,
-    constant Cloud& cloud
-) {
-    float _e3 = cloud.ppp;
-    metal::float2 _e8 = cloud.origin;
-    metal::float2 _e12 = cloud.size;
-    metal::float2 uv = ((position / metal::float2(_e3)) - _e8) / _e12;
-    metal::float4 _e17 = close_light.sample(cloud_sampler, uv, metal::level(0.0));
-    return _e17.xyz;
-}
-
-metal::float4 cloud_color(
-    VertexOut in_2,
-    constant Locals& locals,
-    device type_3 const& grid,
-    metal::texture2d<float, metal::access::sample> lut,
-    metal::texture2d<float, metal::access::sample> close_light,
-    metal::sampler cloud_sampler,
-    constant Cloud& cloud,
-    constant _mslBufferSizes& _buffer_sizes
-) {
-    metal::float4 _e1 = heatmap_color(in_2, locals, grid, lut, _buffer_sizes);
-    metal::float3 core = _e1.xyz;
-    metal::float3 _e5 = baked_light(in_2.position.xy, close_light, cloud_sampler, cloud);
-    return metal::float4(core + ((metal::float3(1.0) - core) * _e5), 1.0);
-}
-
-struct fs_cloud_linearInput {
+struct fs_density_sourceInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_linearOutput {
+struct fs_density_sourceOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_linearOutput fs_cloud_linear(
-  fs_cloud_linearInput varyings [[stage_in]]
-, metal::float4 position_1 [[position]]
+fragment fs_density_sourceOutput fs_density_source(
+  fs_density_sourceInput varyings [[stage_in]]
+, metal::float4 position [[position]]
 , constant Locals& locals [[buffer(0)]]
 , device type_3 const& grid [[buffer(1)]]
-, metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
-, metal::texture2d<float, metal::access::sample> close_light [[texture(1)]]
-, metal::sampler cloud_sampler [[sampler(0)]]
-, constant Cloud& cloud [[buffer(2)]]
-, constant _mslBufferSizes& _buffer_sizes [[buffer(3)]]
+, constant _mslBufferSizes& _buffer_sizes [[buffer(2)]]
 ) {
-    const VertexOut in = { position_1, varyings.slab, varyings.t };
-    metal::float4 _e1 = cloud_color(in, locals, grid, lut, close_light, cloud_sampler, cloud, _buffer_sizes);
-    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
-    return fs_cloud_linearOutput { metal::float4(_e3, 1.0) };
+    const VertexOut in = { position, varyings.slab, varyings.t };
+    float _e1 = heatmap_level(in, locals, grid, _buffer_sizes);
+    return fs_density_sourceOutput { metal::float4(_e1, 0.0, 0.0, 1.0) };
 }
