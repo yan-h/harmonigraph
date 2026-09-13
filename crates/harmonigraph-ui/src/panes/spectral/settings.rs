@@ -124,7 +124,7 @@ pub(crate) fn spectrum_settings_pane(
         ValueBar::new(&mut atmosphere.spread, 0.25..=3.0, "Cloud spread")
             .unit(1.0, "×").show(ui);
         ValueBar::new(&mut atmosphere.texture, 0.0..=1.0, "Cloud texture")
-            .percent().show(ui).on_hover_text("Soft variation in the surrounding light, anchored to the recorded sound so paused history stays still.");
+            .percent().show(ui).on_hover_text("A diffuse cloudy medium lit by the spectrogram colors. The texture stays in the pane as the sound moves through it; 0% restores smooth light.");
         ValueBar::new(&mut atmosphere.note_glow, 0.0..=1.0, "Note glow")
             .percent().show(ui).on_hover_text("Additional glow around note ribbons. Adjust their shadows under Display → Lighting → Shadows.");
     });

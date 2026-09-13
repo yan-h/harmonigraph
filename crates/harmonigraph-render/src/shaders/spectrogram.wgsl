@@ -235,92 +235,57 @@ struct Cloud {
     step: vec2<f32>,
     glow: f32,
     texture: f32,
-    time: vec2<f32>,
     ppp: f32,
-    time_scale: f32,
-    time_direction: vec2<f32>,
-    pitch_direction: vec2<f32>,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
 @group(1) @binding(2) var cloud_sampler: sampler;
 @group(1) @binding(3) var<uniform> cloud: Cloud;
 
-fn cloud_hash(cell: vec2<i32>) -> u32 {
-    // The slowest rate is 1/32 cell per second; faster rates are powers of
-    // two above it. A 128-cell repeat therefore preserves the 4096s rebase.
-    let x = u32(((cell.x % 128) + 128) % 128);
-    var n = x * 374761393u + bitcast<u32>(cell.y) * 668265263u;
-    n = (n ^ (n >> 13u)) * 1274126177u;
-    return n ^ (n >> 16u);
-}
-fn cloud_gradient(cell: vec2<i32>) -> vec2<f32> {
-    let directions = array<vec2<f32>, 8>(
-        vec2<f32>(1.0, 0.0), vec2<f32>(0.7071068, 0.7071068),
-        vec2<f32>(0.0, 1.0), vec2<f32>(-0.7071068, 0.7071068),
-        vec2<f32>(-1.0, 0.0), vec2<f32>(-0.7071068, -0.7071068),
-        vec2<f32>(0.0, -1.0), vec2<f32>(0.7071068, -0.7071068));
-    return directions[cloud_hash(cell) & 7u];
+// The same soft value-noise medium as the lattice nebula. This field lives
+// in the pane; changing pitch, history range or playback position only moves
+// its illumination. The light itself is never displaced by the texture.
+fn cloud_hash(cell: vec2<i32>) -> f32 {
+    var n = bitcast<u32>(cell.x) * 0x9e3779b9u ^ bitcast<u32>(cell.y);
+    n = (n ^ (n >> 16u)) * 0x7feb352du;
+    n = (n ^ (n >> 15u)) * 0x846ca68bu;
+    n = n ^ (n >> 16u);
+    return f32(n >> 8u) / 16777216.0;
 }
 fn cloud_noise(p: vec2<f32>) -> f32 {
     let cell = vec2<i32>(floor(p));
     let f = fract(p);
-    // Gradient noise has rounded slopes rather than flat random tiles.
-    // Quintic interpolation also keeps curvature continuous at cell edges.
-    let w = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-    return 0.5 + mix(
-        mix(dot(cloud_gradient(cell), f),
-            dot(cloud_gradient(cell + vec2<i32>(1, 0)), f - vec2<f32>(1.0, 0.0)), w.x),
-        mix(dot(cloud_gradient(cell + vec2<i32>(0, 1)), f - vec2<f32>(0.0, 1.0)),
-            dot(cloud_gradient(cell + vec2<i32>(1, 1)), f - vec2<f32>(1.0, 1.0)), w.x), w.y);
+    let w = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(cloud_hash(cell), cloud_hash(cell + vec2<i32>(1, 0)), w.x),
+        mix(cloud_hash(cell + vec2<i32>(0, 1)), cloud_hash(cell + vec2<i32>(1, 1)), w.x),
+        w.y,
+    );
 }
 fn gamma_from_linear_rgb(linear: vec3<f32>) -> vec3<f32> {
     let c = max(linear, vec3<f32>(0.0));
     return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3<f32>(0.0031308));
 }
-fn cloud_edge(uv: vec2<f32>) -> f32 {
-    // A warped read approaching the texture boundary fades out continuously
-    // instead of snapping from a clamped edge texel to black.
-    let feather = vec2<f32>(2.0) / vec2<f32>(textureDimensions(wide_light));
-    let coverage = smoothstep(vec2<f32>(0.0), feather, uv)
-        * smoothstep(vec2<f32>(0.0), feather, vec2<f32>(1.0) - uv);
-    return coverage.x * coverage.y;
-}
 @fragment
 fn fs_cloud_light(in: VertexOut) -> @location(0) vec4<f32> {
-    // Bake the soft material at the filter targets' resolution. The source
-    // geometry still supplies semantic time/pitch coordinates to the noise.
+    // Bake at quarter resolution, with the same pane aspect at every DPI.
+    // Like the lattice, a shared density gently absorbs the gathered light;
+    // it has no color or light of its own and cannot brighten silence.
     let uv = in.position.xy / vec2<f32>(textureDimensions(wide_light));
-    let origin = cloud.time.x - floor(cloud.time.x / 4096.0) * 4096.0;
-    let p = vec2<f32>((origin + in.slab * cloud.time.y) * cloud.time_scale, (locals.min_midi + in.t * locals.span) * 0.18);
-    // Two centered folds break up the rectangular noise lattice. Integer
-    // octaves preserve the 4096-second wrap through every nested noise read.
-    let q = vec2<f32>(cloud_noise(p + vec2<f32>(3.1, 7.4)),
-                      cloud_noise(p + vec2<f32>(8.3, 2.7))) - 0.5;
-    let r = vec2<f32>(cloud_noise(p * 2.0 + q * 1.2 + vec2<f32>(1.7, 9.2)),
-                      cloud_noise(p * 2.0 + q * 1.2 + vec2<f32>(6.8, 3.5))) - 0.5;
-    let folded = p + q * 1.6 + r * 0.35;
-    let billow = cloud_noise(folded);
-    let wisps = 0.65 * cloud_noise(folded * 2.0 + vec2<f32>(5.2, 1.3))
-              + 0.35 * cloud_noise(folded * 4.0 + vec2<f32>(2.8, 6.1));
-    let plain = 1.0 - cloud.texture;
-    let amount = 1.0 - plain * plain * plain * plain;
-    let density = 0.12 + 1.2 * smoothstep(0.25, 0.75, billow * 0.7 + wisps * 0.3);
-    // Distort only the surrounding light. Semantic axis vectors make the
-    // same folds follow a rotated or reversed view, including held end caps.
-    let flow = q + r * 0.15;
-    let displacement = (cloud.time_direction * flow.x + cloud.pitch_direction * flow.y)
-        * cloud.step * (12.0 * amount);
-    let close_uv = uv;
-    let wide_uv = uv + displacement;
-    let close = textureSampleLevel(close_light, cloud_sampler, close_uv, 0.0).rgb
-        * cloud_edge(close_uv);
-    let wide = textureSampleLevel(wide_light, cloud_sampler, wide_uv, 0.0).rgb
-        * cloud_edge(wide_uv);
-    let modulation = mix(1.0, density, amount);
-    let light = gamma_from_linear_rgb(close * 0.35 + wide * 0.75) * cloud.glow * modulation;
-    // Store the display-space material in the reused float source target;
-    // the final bilinear upsample also softens the finest wisps.
+    let p = (uv - 0.5) * cloud.size / cloud.size.y * 6.0;
+    let warp = vec2<f32>(cloud_noise(p), cloud_noise(p + vec2<f32>(8.3, 2.7)));
+    let body = cloud_noise(p + warp * 1.2);
+    let detail = cloud_noise(p * 2.3 + vec2<f32>(3.1, 7.4));
+    let density = 0.08 + 0.92 * smoothstep(0.25, 0.70, body * 0.75 + detail * 0.25);
+    let close = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).rgb;
+    let wide = textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).rgb;
+    let light = gamma_from_linear_rgb(close * 0.2 + wide * 0.8)
+        * cloud.glow * mix(1.0, density, cloud.texture);
+    // Texture attenuates the combined RGB equally, preserving its pitch-volume
+    // palette. The full-resolution pass still draws the exact heatmap core.
     return vec4<f32>(clamp(light, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }
 fn cloud_color(in: VertexOut) -> vec4<f32> {

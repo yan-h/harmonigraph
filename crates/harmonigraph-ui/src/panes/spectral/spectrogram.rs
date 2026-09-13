@@ -294,12 +294,7 @@ pub(crate) fn draw_spectrogram(
         painter.ctx().cumulative_pass_nr(),
         Some(harmonigraph_render::SpectrogramAtmosphere {
             settings: cfg.atmosphere,
-            time: [layout.t_origin.rem_euclid(4096.0) as f32, layout.bucket as f32],
-            window: time.window() as f32,
-            directions: [
-                (axes.dir_depth() * if time.whole_song() { 1.0 } else { -1.0 }).into(),
-                axes.dir_pitch().into(),
-            ],
+            pitch_vertical: axes.dir_pitch().y.abs() > 0.5,
         }),
     ));
 }

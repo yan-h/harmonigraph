@@ -6,11 +6,10 @@ struct Cloud {
     step: vec2<f32>,
     glow: f32,
     texture: f32,
-    time: vec2<f32>,
     ppp: f32,
-    time_scale: f32,
-    time_direction: vec2<f32>,
-    pitch_direction: vec2<f32>,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var linear_sampler: sampler;
@@ -54,9 +53,9 @@ fn fs_close_v(in: Vertex) -> @location(0) vec4<f32> {
 }
 @fragment
 fn fs_wide_h(in: Vertex) -> @location(0) vec4<f32> {
-    return filtered(in.uv, vec2<f32>(cloud.step.x * 3.0, 0.0));
+    return filtered(in.uv, vec2<f32>(cloud.step.x * 5.0, 0.0));
 }
 @fragment
 fn fs_wide_v(in: Vertex) -> @location(0) vec4<f32> {
-    return filtered(in.uv, vec2<f32>(0.0, cloud.step.y * 3.0));
+    return filtered(in.uv, vec2<f32>(0.0, cloud.step.y * 5.0));
 }

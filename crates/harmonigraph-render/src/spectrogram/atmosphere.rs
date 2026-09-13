@@ -12,12 +12,8 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 #[derive(Clone, Copy, Debug)]
 pub struct SpectrogramAtmosphere {
     pub settings: harmonigraph_scene::SpectralAtmosphere,
-    /// Absolute audio time at slab zero, and seconds occupied by one slab.
-    pub time: [f32; 2],
-    /// Full visible history span, independent of how much data has arrived.
-    pub window: f32,
-    /// Screen unit vectors toward increasing audio time and pitch.
-    pub directions: [[f32; 2]; 2],
+    /// Axis used to preserve the reduced source image's pitch footprint.
+    pub pitch_vertical: bool,
 }
 
 #[repr(C)]
@@ -28,11 +24,8 @@ struct Uniforms {
     step: [f32; 2],
     glow: f32,
     texture: f32,
-    time: [f32; 2],
     ppp: f32,
-    time_scale: f32,
-    time_direction: [f32; 2],
-    pitch_direction: [f32; 2],
+    _pad: [f32; 3],
 }
 
 pub(super) struct Pipelines {
@@ -288,7 +281,7 @@ impl Targets {
     ) {
         read.origin_points = rect.min.into();
         read.viewport_points = rect.size().into();
-        let pitch_vertical = atmosphere.directions[1][1].abs() > 0.5;
+        let pitch_vertical = atmosphere.pitch_vertical;
         let axis = usize::from(pitch_vertical);
         // A clipped pane can cover only part of the full pitch axis. Keep
         // that axis's bucket footprint per reduced pixel, not one full-range
@@ -305,17 +298,8 @@ impl Targets {
             step: [radius / rect.width(), radius / rect.height()],
             glow: settings.glow,
             texture: settings.texture,
-            time: atmosphere.time,
             ppp,
-            // A handful of broad folds even in a short history view. Dyadic
-            // rates preserve the shader's 4096-second period at every zoom.
-            time_scale: (4.0 / atmosphere.window.max(0.001))
-                .log2()
-                .ceil()
-                .exp2()
-                .clamp(1.0 / 32.0, 8.0),
-            time_direction: atmosphere.directions[0],
-            pitch_direction: atmosphere.directions[1],
+            _pad: [0.0; 3],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }

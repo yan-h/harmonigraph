@@ -1229,9 +1229,7 @@ mod tests {
             Arc::new((0..256).map(|v| [0, (v as f32 * 0.7) as u8, v as u8, 255]).collect());
         cb.atmosphere = Some(SpectrogramAtmosphere {
             settings: harmonigraph_scene::SpectralAtmosphere::default(),
-            time: [12.0, 0.25],
-            window: 3.0,
-            directions: [[1.0, 0.0], [0.0, -1.0]],
+            pitch_vertical: true,
         });
         cb
     }
@@ -1258,40 +1256,44 @@ mod tests {
             "sRGB target changed the cloud material"
         );
         cb.target_format = FORMAT;
-        cb.atmosphere.as_mut().unwrap().time[0] += 4096.0;
-        assert!(
-            compare(&lit, &fresh_frame(&device, &queue, &cb)).0 <= 1,
-            "time rebase changed cloud texture"
-        );
         cb.grid.run = Arc::new(vec![0; cb.grid.run.len()]);
         let silent = fresh_frame(&device, &queue, &cb);
         assert!(silent.chunks_exact(4).all(|p| p == [0, 0, 0, 255]), "silence emitted light");
     }
 
     #[test]
-    fn spectral_cloud_shape_turns_with_its_data() {
+    fn spectral_cloud_medium_stays_in_the_pane_as_data_axes_change() {
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = cloud_fixture();
+        // A uniform colored source reveals the shared medium independently
+        // of pitch/time geometry. It covers enough noise cells to expose a
+        // field accidentally tied to the data, or a missing texture entirely.
+        cb.grid.run = Arc::new(vec![96; cb.grid.run.len()]);
+        cb.atmosphere.as_mut().unwrap().settings.texture = 1.0;
         let original = fresh_frame(&device, &queue, &cb);
+        cb.read.min_midi += 12.0;
+        cb.read.span *= 0.5;
         for vertex in &mut cb.vertices {
             vertex.pos = [SIZE[1] as f32 - vertex.pos[1], vertex.pos[0]];
         }
-        let atmosphere = cb.atmosphere.as_mut().unwrap();
-        atmosphere.directions = atmosphere.directions.map(|[x, y]| [-y, x]);
+        cb.atmosphere.as_mut().unwrap().pitch_vertical = false;
         let turned = fresh_frame(&device, &queue, &cb);
-        let side = SIZE[0] as usize;
-        let mut worst = 0;
-        for y in 0..side {
-            for x in 0..side {
-                for channel in 0..4 {
-                    worst = worst.max(
-                        original[(y * side + x) * 4 + channel]
-                            .abs_diff(turned[(x * side + side - 1 - y) * 4 + channel]),
-                    );
-                }
+        assert!(compare(&original, &turned).0 <= 1, "data axes moved the medium");
+
+        cb.atmosphere.as_mut().unwrap().settings.texture = 0.0;
+        let untextured = fresh_frame(&device, &queue, &cb);
+        let mut largest_attenuation = 0;
+        for (textured, plain) in original.chunks_exact(4).zip(untextured.chunks_exact(4)) {
+            for channel in 0..3 {
+                assert!(
+                    textured[channel] <= plain[channel].saturating_add(1),
+                    "texture added light"
+                );
+                largest_attenuation =
+                    largest_attenuation.max(plain[channel].saturating_sub(textured[channel]));
             }
         }
-        assert!(worst <= 1, "turning the pane changed the cloud's shape: {worst}");
+        assert!(largest_attenuation > 10, "fixture never revealed the medium");
     }
 
     #[test]
