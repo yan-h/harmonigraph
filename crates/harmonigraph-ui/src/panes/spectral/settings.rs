@@ -112,6 +112,15 @@ pub(crate) fn spectrum_settings_pane(
                  1× is the reference size; labels stay the same size when you zoom.",
         );
 
+    section(ui, "Softness and glow");
+    let atmosphere = &mut cfg.atmosphere;
+    ValueBar::new(&mut atmosphere.diffusion, 0.0..=1.0, "Diffusion")
+        .percent().show(ui).on_hover_text("Smooth fine spectrogram detail at every brightness. 0% restores the detailed heatmap; 100% uses only the softened field.");
+    ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")
+        .percent().show(ui).on_hover_text("Blend the live analyzer from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram diffusion and outline opacity.");
+    ValueBar::new(&mut atmosphere.note_glow, 0.0..=1.0, "Note glow")
+        .percent().show(ui).on_hover_text("Additional glow around note ribbons. Adjust their shadows under Display → Lighting → Shadows.");
+
     // ---- Audio spectrum -------------------------------------------------
     // Always analyzed: the pane IS the analyzer, the spectrogram reads the
     // same buckets, and giving the whole depth axis to the roll is what the
@@ -225,9 +234,8 @@ pub(crate) fn spectrum_settings_pane(
         }
     });
 
-    ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Outline opacity")
-        .percent().show(ui).on_hover_text(
-        "Opacity of the outline along the spectrum curve. 0% hides the outline; 100% makes it fully visible.",
+    ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Outline opacity").percent().show(ui).on_hover_text(
+        "Opacity of the white spectrum outline. Independent of Analyzer softness; 0% hides it.",
     );
 
     section(ui, "History");

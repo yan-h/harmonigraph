@@ -13,6 +13,7 @@
 //! in one file, that shared coordinate system was reachable only as a pane's
 //! insides, and the pane was the most-edited file in the crate.
 
+mod atmosphere;
 pub(crate) mod axes;
 mod gestures;
 pub(crate) mod names;
@@ -38,8 +39,8 @@ pub(super) use settings::spectrum_settings_pane;
 use crate::panes::window_shows_node;
 use crate::{theme, PictureState};
 use axes::{
-    frequency_grid, label_anchor, level_grid, loudness_db, plot_budget, spectrogram_level_db,
-    text_scales, Axes, PitchScale, TimeAxis, LABEL_GAP_PT, LABEL_INSET_PT, MARKING_PT, PROFILE_PT,
+    frequency_grid, label_anchor, level_grid, plot_budget, text_scales, Axes, PitchScale, TimeAxis,
+    LABEL_GAP_PT, LABEL_INSET_PT, MARKING_PT,
 };
 use egui::Sense;
 use gestures::{drag_split, drag_zoom, spectrum_split};
@@ -255,13 +256,12 @@ pub(crate) fn spectral_pane(
     // grid asks how much room a number takes before it decides which of its
     // lines get one.
     let marking_font = egui::FontId::monospace(MARKING_PT * text.markings);
-    // dB depth mapping: the Analyzer section's ceiling tops out where the profile
-    // line lands ON the pane's edge (see `plot_budget`) and its floor sets the
+    // dB depth mapping: the Analyzer section's ceiling places the measured
+    // contour near the pane edge (see `plot_budget`) and its floor sets the
     // bottom. Tilt is the conventional reference slope (negative), so the display
     // SUBTRACTS it per octave above the 1 kHz pivot: -4.5 lifts treble
     // 4.5 dB/oct.
     let budget = plot_budget(split, axes.depth_len());
-    let d_of = |db: f32, midi: f32| loudness_db(&cfg, db, midi) * budget;
     // The spectrum joins the spectrogram: its region mirrors so the baseline
     // sits on the now-line (against the spectrogram's newest column) and the
     // peaks point outward. With no roll/spectrogram (split == 1) there's
@@ -338,7 +338,7 @@ pub(crate) fn spectral_pane(
     // export, not a NaN.
     if split > 0.0 {
         for ruling in &grid {
-            let fade = if ruling.decade { RULING_FADE.0 } else { RULING_FADE.1 };
+            let fade = if ruling.decade { RULING_FADE.0 } else { RULING_FADE.1 } * 0.4;
             painter.line_segment(
                 [axes.at(ruling.t, 0.0), axes.at(ruling.t, split)],
                 egui::Stroke::new(1.0, theme::hairline().gamma_multiply(fade)),
@@ -352,7 +352,7 @@ pub(crate) fn spectral_pane(
         // would be a statement about loudness laid across a heatmap that reads
         // its own.
         for level in &levels {
-            let fade = if level.numbered { RULING_FADE.0 } else { RULING_FADE.1 };
+            let fade = if level.numbered { RULING_FADE.0 } else { RULING_FADE.1 } * 0.4;
             painter.line_segment(
                 axes.across_pitch(level_d(level.level)),
                 egui::Stroke::new(1.0, theme::hairline().gamma_multiply(fade)),
@@ -430,48 +430,7 @@ pub(crate) fn spectral_pane(
                 })
                 .collect();
 
-            // Color from the SAME gradient as the spectrogram, keyed by the
-            // volume-color dB window, so the curve reads in the heatmap's scheme
-            // rather than a flat accent. `tint` keeps the gradient's hue/brightness and only
-            // sets opacity (gamma_multiply would darken it toward black).
-            let hue = |db: f32, midi: f32| {
-                spectrogram::cell_color(
-                    cfg.spectrogram_gradient,
-                    spectrogram_level_db(&cfg, db, midi),
-                )
-            };
-            let tint = |c: egui::Color32, a: u8| {
-                egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
-            };
-
-            // The spectrum is a filled shape, like the spectrogram — no outline
-            // curve. Each slab is one bucket in its own gradient color, opaque
-            // enough to read as a solid fill; densely packed, their tops make
-            // the shape's edge (no separate line to fray).
-            let slab = axes.pitch_len() / cols as f32 + 0.5;
-            for &(midi, t, level) in &visible {
-                let d = d_of(level, midi);
-                if d * axes.depth_len() > 0.5 {
-                    painter.line_segment(
-                        [axes.at(t, sd(0.0)), axes.at(t, sd(d))],
-                        egui::Stroke::new(slab, tint(hue(level, midi), 210)),
-                    );
-                }
-            }
-
-            // ...and a light rim along their tops, the same edge the note
-            // ribbons carry. The spectrum's own colors come from the
-            // spectrogram's gradient, so where the curve is quiet it is drawn
-            // at that gradient's dark end — against the pane's dark background,
-            // with no edge, the shape simply stops existing. Follows the
-            // profile the slabs make rather than being a separate curve.
-            if let Some(edge) = roll::keyline(&cfg, 1.0) {
-                let top: Vec<egui::Pos2> = visible
-                    .iter()
-                    .map(|&(midi, t, level)| axes.at(t, sd(d_of(level, midi))))
-                    .collect();
-                painter.add(egui::Shape::line(top, egui::Stroke::new(PROFILE_PT, edge)));
-            }
+            atmosphere::draw_profile(&painter, &axes, &cfg, &visible, budget, split);
         }
     }
 
@@ -551,7 +510,11 @@ pub(crate) fn spectral_pane(
     // built around, so the boundary is marked whether or not anything is
     // sounding on it.
     if !whole_song && split < 1.0 && split > 0.0 {
-        painter.line_segment(axes.across_pitch(split), egui::Stroke::new(1.0, theme::hairline()));
+        let fade = 0.6;
+        painter.line_segment(
+            axes.across_pitch(split),
+            egui::Stroke::new(1.0, theme::hairline().gamma_multiply(fade)),
+        );
     }
 
     // Whole-song mode marks `now` with a playhead instead — the one moving

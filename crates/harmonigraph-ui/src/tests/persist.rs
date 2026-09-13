@@ -545,6 +545,12 @@ fn a_blob_naming_a_curve_time_off_its_own_bar_opens_on_one_that_fits() {
 
 #[test]
 fn analyzer_scalars_are_normalized_before_any_settings_are_drawn() {
+    let previous: SpectrumConfig =
+        ron::from_str("(analyzer_min_brightness:0.9, floor_db:-90.0)").unwrap();
+    assert_eq!(previous.keyline, SpectrumConfig::default().keyline);
+    assert_eq!(previous.floor_db, -90.0);
+    let outlined: SpectrumConfig = ron::from_str("(keyline:0.9)").unwrap();
+    assert_eq!(outlined.keyline, 0.9);
     type Field = fn(&mut SpectrumConfig) -> &mut f32;
     let fields: [(Field, f32, f32); 6] = [
         (|cfg| &mut cfg.tilt, -6.0, 0.0),
@@ -1702,6 +1708,28 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     let restored = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
     assert_eq!(restored.view.atmosphere.nebula_depth, AtmosphereSettings::default().nebula_depth);
     assert_eq!(restored.view.atmosphere.breath_amount, 1.0);
+}
+
+#[test]
+fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
+    use harmonigraph_scene::SpectralAtmosphere;
+    let partial: SpectralAtmosphere =
+        ron::from_str("(diffusion:0.23, enabled:false, glow:0.4, spread:2.0, texture:0.8)")
+            .unwrap();
+    assert_eq!(partial, SpectralAtmosphere { diffusion: 0.23, ..Default::default() });
+    let mut state = fresh();
+    state.picture.appearance.spectrum.atmosphere =
+        SpectralAtmosphere { diffusion: f32::NAN, analyzer_softness: 999.0, note_glow: 0.27 };
+    state.picture.appearance.camera.yaw = 1.23;
+    let saved = state.save_persist();
+    let mut editor = fresh();
+    assert!(editor.load_persist(&saved));
+    let offline = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
+    let expected =
+        SpectralAtmosphere { analyzer_softness: 1.0, note_glow: 0.27, ..Default::default() };
+    assert_eq!(editor.picture.appearance.spectrum.atmosphere, expected);
+    assert_eq!(offline.spectrum.atmosphere, expected);
+    assert_eq!(editor.picture.appearance.camera.yaw, 1.23);
 }
 
 /// The Display page picked in the editor survives the window closing and
