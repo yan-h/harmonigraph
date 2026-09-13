@@ -320,9 +320,9 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32, depth: f32) -> Shadow
     );
 }
 
-// Node shadows and partial occlusion interpret the same field as coverage.
-// Their amplitudes differ, but neither remaps that field through an exponent:
-// changing darkness cannot broaden the normalized shadow profile. The bloom
+// Node shadows interpret the field as coverage, so changing darkness cannot
+// broaden the normalized shadow profile. Gaussian receiver occlusion spends
+// that field separately at full depth (`node_visibility`). The bloom
 // copy uses full amplitude on this same profile, not an amplified outer tail.
 fn node_shadow_through(who: f32, points: vec2<f32>, level: f32) -> ShadowThrough {
     if level <= 0.0 {
