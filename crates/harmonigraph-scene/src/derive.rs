@@ -550,6 +550,7 @@ pub fn derive_scene(
         // this to their high-water mark.
         glow_rows: nodes_len,
         glow_timing: None,
+        atmosphere: view.atmosphere.sanitized(),
     }
 }
 

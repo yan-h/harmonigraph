@@ -767,6 +767,13 @@ mod tests {
         assert_ne!(first[0], first[5], "the silent atmosphere is frozen");
         let second = render_take(silent(), &settings).expect("the same GPU is available");
         assert_eq!(first, second, "ambient motion depends on render history");
+        let mut appearance = AppearanceDocument::default();
+        appearance.view.atmosphere.enabled = false;
+        let mut disabled = silent();
+        disabled.header.appearance = Some(appearance.serialize());
+        let off = render_take(disabled, &settings).expect("the same GPU is available");
+        assert_ne!(first[0], off[0], "the recorded atmosphere setting must reach export");
+        assert_eq!(off[1], off[5], "disabled atmosphere must stop moving in silence");
     }
 
     /// Offline export calls the same pane and paint callbacks as the editor;

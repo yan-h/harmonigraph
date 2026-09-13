@@ -10,7 +10,8 @@ use harmonigraph_scene::{
 };
 
 pub(super) fn lighting_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
-    ui.heading("Bloom");
+    super::lattice_atmosphere::settings(ui, &mut appearance.view.atmosphere);
+    section(ui, "Bloom");
     ValueBar::new(&mut appearance.view.bloom_strength, 0.0..=1.5, "Bloom amount")
         .unit(1.0, "×")
         .show(ui)

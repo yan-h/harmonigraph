@@ -49,6 +49,10 @@ fn loaded(edge: Edge) -> SharedState {
         plus_arm, plus_taper, plus_width, glow_reach, glow_strength, glow_accumulation,
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
+    poison!(a.view.atmosphere; haze_amount, haze_scale, haze_speed, warm_fraction,
+        mote_size, mote_brightness, drift_amount, drift_speed, twinkle_amount,
+        twinkle_speed, parallax, breath_amount, breath_speed);
+    a.view.atmosphere.mote_count = if matches!(edge, Edge::High) { u32::MAX } else { 0 };
     a.view.extent_sevens = edge.integer();
     a.view.center_sevens = edge.integer();
     for shadow in a.view.shadow.groups_mut() {
@@ -159,7 +163,7 @@ fn scenarios() -> Vec<Scenario> {
             SettingsPane::Page(DisplayPage::Colors) => 2,
             SettingsPane::Page(DisplayPage::Lattice) => 25,
             SettingsPane::Page(DisplayPage::Analyzer) => 11,
-            SettingsPane::Page(DisplayPage::Lighting) => 21,
+            SettingsPane::Page(DisplayPage::Lighting) => 35,
             SettingsPane::Page(DisplayPage::System) => 2,
             SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console | panes::Tab::Notes) => 0,
             _ => panic!("add the new settings page's range scenario"),
@@ -205,6 +209,7 @@ fn check(edge: Edge) {
         a.spectrum.show_spectrogram = scenario.enabled;
         a.spectrum.note_names = scenario.enabled;
         a.view.show_perf = scenario.enabled;
+        a.view.atmosphere.enabled = scenario.enabled;
         for style in a.view.shadow.groups_mut() {
             style.kernel =
                 if scenario.enabled { ShadowKernel::Distance } else { ShadowKernel::Gaussian };

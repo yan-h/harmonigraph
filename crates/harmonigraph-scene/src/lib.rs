@@ -25,6 +25,7 @@
 //! Every public item is re-exported at the crate root, so downstream code
 //! keeps using `harmonigraph_scene::Camera` rather than module paths.
 
+pub mod atmosphere;
 pub mod camera;
 pub mod color;
 pub mod derive;
@@ -35,6 +36,7 @@ pub mod style;
 pub mod trail;
 pub mod view;
 
+pub use atmosphere::{AtmosphereSettings, ATMOSPHERE_MOTES_MAX};
 pub use camera::{Camera, Projection, Projector, VisibleSheet};
 pub use color::{
     gradient_color, grey_of_lightness, hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N,
@@ -951,6 +953,7 @@ pub struct Scene {
     /// Present for carried UI and offline scenes. With no clock, direct
     /// renderer callers supply their own [`GlowStep::mix`].
     pub glow_timing: Option<GlowTiming>,
+    pub atmosphere: AtmosphereSettings,
 }
 
 impl Scene {

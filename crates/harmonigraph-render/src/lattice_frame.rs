@@ -95,6 +95,7 @@ impl LatticeCallback {
         let aspect = size_points.x / size_points.y.max(1.0);
         let render_scale = scene.render_scale.clamp(RENDER_SCALE_RANGE.0, RENDER_SCALE_RANGE.1);
         let camera = scene.camera;
+        let atmosphere = scene.atmosphere.sanitized();
         let view_proj = camera.view_proj(aspect);
         let (right, up) = camera.right_up();
 
@@ -360,6 +361,13 @@ impl LatticeCallback {
         }
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
         let mut loose_drawn = false;
+        let mut glow_breath = (scene.glow_timing.is_some()
+            && scene.glow_reach > 0.0
+            && scene.glow_strength > 0.0
+            && atmosphere.enabled
+            && atmosphere.breath_amount > 0.0
+            && atmosphere.breath_speed > 0.0)
+            .then(|| Vec::with_capacity(order.len()));
         for (k, &(_, _, i)) in order.iter().enumerate() {
             if k == split {
                 push_loose(&mut draws, &mut pluses, &loose);
@@ -381,6 +389,13 @@ impl LatticeCallback {
                 node_cells.push(casters.len() as u32);
                 casters.push(node_caster(&scene.nodes[i], &instance));
                 instances.push(instance);
+                if let (Some(levels), Some(clock)) = (&mut glow_breath, scene.glow_timing) {
+                    levels.push(if instance.glow[0] > 0.0 {
+                        atmosphere.breath(scene.nodes[i].lattice_pos, clock.now)
+                    } else {
+                        1.0
+                    });
+                }
                 if scene.glow_timing.is_some() {
                     glow_owners.push(scene.nodes[i].glow.incarnation);
                 }
@@ -407,6 +422,7 @@ impl LatticeCallback {
             instances,
             glow_owners,
             glow_timing: scene.glow_timing,
+            glow_breath,
             glyphs,
             casters,
             node_cells,

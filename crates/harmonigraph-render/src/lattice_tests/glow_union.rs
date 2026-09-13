@@ -91,6 +91,13 @@ fn a_held_nodes_light_breathes_without_advancing_its_ink_history() {
     // A fresh pane at the same time must agree with the carried pane: breathing
     // is a display modulation, with no accumulated effect on the ink colour.
     assert_eq!(later, glow(&mut shooter, &scene));
+    scene.atmosphere.breath_amount = 0.0;
+    let steady = glow(&mut shooter, &scene);
+    scene.glow_timing.as_mut().unwrap().now = 0.0;
+    assert_eq!(steady, glow(&mut shooter, &scene), "zero depth must stop breathing");
+    scene.atmosphere.breath_amount = 1.0;
+    scene.atmosphere.enabled = false;
+    assert_eq!(steady, glow(&mut shooter, &scene), "the master switch includes breathing");
 }
 
 #[test]

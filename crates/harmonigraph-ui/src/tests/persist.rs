@@ -1656,6 +1656,50 @@ fn a_view_carrying_a_key_the_struct_does_not_have_loads_intact() {
     );
 }
 
+#[test]
+fn atmosphere_keys_default_individually_and_normalize_on_load() {
+    use harmonigraph_scene::{AtmosphereSettings, ATMOSPHERE_MOTES_MAX};
+    let mut state = fresh();
+    state.picture.appearance.camera.yaw = 1.23;
+    state.picture.appearance.view.atmosphere = AtmosphereSettings {
+        haze_amount: 2.25,
+        mote_count: 217,
+        cool_color: [19, 128, 219],
+        breath_speed: 2.2,
+        ..Default::default()
+    };
+    let saved = state.save_persist();
+    let full = ron::to_string(&state.picture.appearance.view.atmosphere).unwrap();
+    let defaults = ron::to_string(&AtmosphereSettings::default()).unwrap();
+    let pairs = top_level_pairs(&full);
+    let fresh_pairs: std::collections::HashMap<_, _> =
+        top_level_pairs(&defaults).into_iter().collect();
+    for (key, _) in &pairs {
+        let kept: Vec<_> =
+            pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();
+        let without = replace_pair(&saved, "atmosphere", &full, &format!("({})", kept.join(",")));
+        assert_ne!(saved, without, "the omitted key must be in the saved blob");
+        let mut restored = fresh();
+        assert!(restored.load_persist(&without), "omitting {key} sank the document");
+        assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
+        let loaded = ron::to_string(&restored.picture.appearance.view.atmosphere).unwrap();
+        let loaded: std::collections::HashMap<_, _> =
+            top_level_pairs(&loaded).into_iter().collect();
+        for (other, text) in &pairs {
+            let expected = if other == key { &fresh_pairs[other] } else { text };
+            assert_eq!(&loaded[other], expected, "omitting {key} changed {other}");
+        }
+    }
+    state.picture.appearance.view.atmosphere.haze_amount = f32::NAN;
+    state.picture.appearance.view.atmosphere.mote_count = u32::MAX;
+    state.picture.appearance.view.atmosphere.breath_amount = 7.0;
+    let restored = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
+    assert_eq!(restored.view.atmosphere.haze_amount, AtmosphereSettings::default().haze_amount);
+    assert_eq!(restored.view.atmosphere.mote_count, ATMOSPHERE_MOTES_MAX);
+    assert_eq!(restored.view.atmosphere.breath_amount, 1.0);
+    assert_eq!(restored.view.atmosphere.cool_color, [19, 128, 219]);
+}
+
 /// The Display page picked in the editor survives the window closing and
 /// reopening.
 ///

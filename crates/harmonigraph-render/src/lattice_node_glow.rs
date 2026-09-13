@@ -118,8 +118,9 @@ impl LatticeCallback {
         let to_pixels = |p: glam::Vec3| project_onto(&view_proj, pixels, p);
         self.instances
             .iter()
-            .filter(|inst| inst.glow[0] > 0.0)
-            .filter_map(|inst| {
+            .enumerate()
+            .filter(|(_, inst)| inst.glow[0] > 0.0)
+            .filter_map(|(index, inst)| {
                 // One node uv in world units, as `node_vertex` spends it: the
                 // quad's own margin cancels against the uv it hands out, so the
                 // map is the same whatever margin sized the billboard.
@@ -167,9 +168,7 @@ impl LatticeCallback {
                     // and colour history on every breath.
                     light: [
                         inst.glow[0]
-                            * self
-                                .glow_timing
-                                .map_or(1.0, |clock| breath(inst.world_pos, clock.now)),
+                            * self.glow_breath.as_ref().map_or(1.0, |levels| levels[index]),
                         inst.glow[1],
                     ],
                     mark: [inst.glow[3], radius],
@@ -177,16 +176,6 @@ impl LatticeCallback {
             })
             .collect()
     }
-}
-
-/// Stable world position gives each node a phase independent of draw order,
-/// culling, and recycled ink rows. Only carried live/offline light breathes;
-/// clockless renderer callers continue to supply their exact light level.
-fn breath(position: [f32; 3], now: f64) -> f32 {
-    let phase = f64::from(position[0]) * 2.173
-        + f64::from(position[1]) * 3.719
-        + f64::from(position[2]) * 5.137;
-    (0.91 + 0.06 * (now * 0.73 + phase).sin() + 0.03 * (now * 1.13 + phase * 1.7).sin()) as f32
 }
 
 /// An upper bound on how far one lit node's halo reaches from its centre, in

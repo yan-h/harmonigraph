@@ -5,7 +5,7 @@
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, SevensLabel};
 use crate::{
-    Camera, ShadowSettings, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX,
+    AtmosphereSettings, Camera, ShadowSettings, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX,
     GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX,
     MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
     SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN,
@@ -1043,6 +1043,8 @@ pub struct ViewConfig {
     /// plugin draws. This is a layer of the lattice's nodes, drawn from the
     /// same octave colours their discs are.
     pub glow_reach: f32,
+    /// All experimental dusk effects, shared by the editor and exports.
+    pub atmosphere: AtmosphereSettings,
     /// How much light the node glow lays down. Inert while
     /// [`glow_reach`](Self::glow_reach) is 0.
     pub glow_strength: f32,
@@ -2078,6 +2080,7 @@ impl ViewConfig {
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
         self.glow_curve = self.glow_curve.sanitized();
+        self.atmosphere = self.atmosphere.sanitized();
         // Every Shadow group, over the groups the settings enumerate rather
         // than by name, so a group added at step 7 arrives sanitized. The width
         // is what every caster's quad is grown by — a number from outside the
@@ -2382,6 +2385,7 @@ impl Default for ViewConfig {
             // into a shared field, laid down at about a fifth strength —
             // where the DAW look was captured on 2026-09-10.
             glow_reach: 4.546_375,
+            atmosphere: AtmosphereSettings::default(),
             glow_strength: 0.218_918_92,
             glow_curve: GlowCurve::default(),
             // Four groups at four styles, which is the picture as captured
