@@ -40,11 +40,7 @@ struct Cloud {
     metal::float2 size;
     metal::float2 step;
     float diffusion;
-    float texture;
     float ppp;
-    float _pad0_;
-    float _pad1_;
-    float _pad2_;
 };
 
 uint stored(
@@ -202,7 +198,7 @@ metal::float3 linear_from_gamma_rgb(
     return metal::select(higher, lower, cutoff);
 }
 
-metal::float2 baked_density(
+float baked_density(
     metal::float2 position,
     metal::texture2d<float, metal::access::sample> close_light,
     metal::sampler cloud_sampler,
@@ -213,22 +209,18 @@ metal::float2 baked_density(
     metal::float2 _e12 = cloud.size;
     metal::float2 uv = ((position / metal::float2(_e3)) - _e8) / _e12;
     metal::float4 _e17 = close_light.sample(cloud_sampler, uv, metal::level(0.0));
-    return _e17.xy;
+    return _e17.x;
 }
 
 float diffused_level(
     float core,
-    metal::float2 material,
+    float material,
     constant Cloud& cloud
 ) {
     float _e4 = cloud.diffusion;
     float _e9 = cloud.diffusion;
     float raw = (1.0 - _e4) * (1.0 - _e9);
-    float level_2 = metal::mix(material.x, core, raw);
-    float _e17 = cloud.texture;
-    float _e20 = cloud.diffusion;
-    float texture = (_e17 * _e20) * (1.0 - metal::smoothstep(0.7, 1.0, level_2));
-    return level_2 * metal::mix(1.0, material.y, texture);
+    return metal::mix(material, core, raw);
 }
 
 metal::float4 density_color(
@@ -261,7 +253,7 @@ metal::float4 cloud_color(
     constant _mslBufferSizes& _buffer_sizes
 ) {
     float _e1 = heatmap_level(in_2, locals, grid, _buffer_sizes);
-    metal::float2 _e4 = baked_density(in_2.position.xy, close_light, cloud_sampler, cloud);
+    float _e4 = baked_density(in_2.position.xy, close_light, cloud_sampler, cloud);
     float _e5 = diffused_level(_e1, _e4, cloud);
     metal::float4 _e6 = density_color(_e5, lut);
     return _e6;

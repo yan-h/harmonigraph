@@ -9,11 +9,7 @@ struct Cloud {
     metal::float2 size;
     metal::float2 step;
     float diffusion;
-    float texture;
     float ppp;
-    float _pad0_;
-    float _pad1_;
-    float _pad2_;
 };
 struct Vertex {
     metal::float4 position;
