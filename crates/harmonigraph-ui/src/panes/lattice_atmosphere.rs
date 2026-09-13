@@ -1,4 +1,4 @@
-//! Controls for the lattice's nebula glow, wide halo and breathing.
+//! Controls for the lattice's nebula glow and breathing.
 
 use harmonigraph_scene::AtmosphereSettings;
 
@@ -17,12 +17,6 @@ pub(super) fn settings(ui: &mut egui::Ui, settings: &mut AtmosphereSettings) {
         multiplier(ui, &mut settings.nebula_scale, "Cloud size", 0.25..=4.0);
         multiplier(ui, &mut settings.nebula_speed, "Cloud speed", 0.0..=20.0)
             .on_hover_text("1× is a slow drift. 0 freezes the cloud motion.");
-
-        ui.label(egui::RichText::new("Wide glow").strong());
-        ValueBar::new(&mut settings.wide_strength, 0.0..=1.0, "Amount")
-            .percent().show(ui).on_hover_text("A faint second halo with the note's average glow color. It lights the lattice too. 0 restores the close halo alone; requires Lattice glow below.");
-        multiplier(ui, &mut settings.wide_spread, "Spread", 1.0..=6.0)
-            .on_hover_text("Outer radius relative to the close halo. The close halo keeps its existing range and falloff.");
 
         ui.label(egui::RichText::new("Breathing halos").strong());
         ValueBar::new(&mut settings.breath_amount, 0.0..=1.0, "Breathing depth")

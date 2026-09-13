@@ -151,7 +151,7 @@ fn atmosphere_costs_by_polyphony() {
             "audit settings: render scale {}, glow reach {}, strength {}, atmosphere {:?}",
             view.render_scale, view.glow_reach, view.glow_strength, view.atmosphere
         );
-        for case in ["all", "off", "no-wide", "no-nebula", "no-breath", "half-scale", "no-glow"] {
+        for case in ["all", "off", "no-nebula", "no-breath", "half-scale", "no-glow"] {
             if std::env::var("PROBE_CASE").ok().is_some_and(|v| v != case) {
                 continue;
             }
@@ -172,7 +172,6 @@ fn atmosphere_costs_by_polyphony() {
             });
             match case {
                 "off" => variant.atmosphere.enabled = false,
-                "no-wide" => variant.atmosphere.wide_strength = 0.0,
                 "no-nebula" => variant.atmosphere.nebula_depth = 0.0,
                 "no-breath" => variant.atmosphere.breath_amount = 0.0,
                 "half-scale" => variant.render_scale *= 0.5,

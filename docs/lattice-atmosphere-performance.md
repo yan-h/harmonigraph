@@ -1,5 +1,13 @@
 # Lattice atmosphere performance audit
 
+The measurements below record the audit at `9849a5b9`.
+The subsequent change in this PR removes the wide-glow component, its controls, and its persisted fields entirely.
+The historical `no-wide` probe case is therefore no longer present;
+nebula texture, breathing, and the original directional halo remain.
+The outer-tail shortcut and broad-wash replacement discussed below apply to the removed component.
+For the remaining glow, independent half-resolution rendering is the smallest useful prototype;
+flat-color splats plus a shared blur simplify the renderer only if directional octave color, the exact Reach/Curve profile, and the existing nonlinear overlap model are deliberately dropped.
+
 Audit of `53d55b97` (the atmosphere prototype, PR #871), on 2026-09-13.
 This change adds a repeatable measurement and records optimization candidates;
 it does not change the picture or the production renderer.

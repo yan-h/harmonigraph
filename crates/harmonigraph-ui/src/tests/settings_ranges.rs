@@ -50,7 +50,7 @@ fn loaded(edge: Edge) -> SharedState {
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
     poison!(a.view.atmosphere; nebula_depth, nebula_scale, nebula_speed,
-        wide_strength, wide_spread, breath_amount, breath_speed);
+        breath_amount, breath_speed);
     a.view.extent_sevens = edge.integer();
     a.view.center_sevens = edge.integer();
     for shadow in a.view.shadow.groups_mut() {
@@ -161,7 +161,7 @@ fn scenarios() -> Vec<Scenario> {
             SettingsPane::Page(DisplayPage::Colors) => 2,
             SettingsPane::Page(DisplayPage::Lattice) => 25,
             SettingsPane::Page(DisplayPage::Analyzer) => 12,
-            SettingsPane::Page(DisplayPage::Lighting) => 28,
+            SettingsPane::Page(DisplayPage::Lighting) => 26,
             SettingsPane::Page(DisplayPage::System) => 2,
             SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console | panes::Tab::Notes) => 0,
             _ => panic!("add the new settings page's range scenario"),
