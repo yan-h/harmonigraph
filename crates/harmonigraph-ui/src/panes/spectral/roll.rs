@@ -133,7 +133,7 @@ pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32
 /// far-edge cull keeps a leaving note alive for), so an outline that will not
 /// paint must not be paid for either.
 fn outline(style: harmonigraph_scene::ShadowStyle) -> (f32, Color32) {
-    let reach = harmonigraph_render::spectral_shadow_reach(style.clamped());
+    let reach = harmonigraph_render::spectral_shadow_reach(style);
     (reach, if style.casts() { Color32::BLACK } else { Color32::TRANSPARENT })
 }
 
@@ -595,9 +595,8 @@ fn note_instances_with_floor(
         // and whatever its release has left once it is up. Per note and decided
         // once for it, since every segment of a note releases together.
         //
-        // NOT `alpha`, which the segment loop below already uses for the note's
-        // own opacity — a different number about a different part of the
-        // picture, and one that shadows this where the two meet.
+        // Separate from `roll_opacity`: release fades the lead without changing
+        // the retained note's color strength.
         let standing = lead_alpha(note, now, cfg.roll_lead_release);
         // Peekable so the loop can tell which segment is the LAST, which is the
         // one the lead extends: a note's segments run oldest first, so its
@@ -670,8 +669,8 @@ fn note_instances_with_floor(
             //
             // The shader stands the cap against the note's own end UNDER the
             // lead, so the RELEASE needs no ramp here: the lead's own ink
-            // covers the cap while the lead is opaque and uncovers it as it
-            // goes, so the edge comes up through the tongue over the whole
+            // increasingly reveals the cap as it fades, so the edge comes up
+            // through the tongue over the whole
             // release. The alternative is an edge that arrives whole the frame
             // the lead is dropped, which lands on a ribbon that has spent that
             // release dissolving — nothing else in the picture moves then, and
@@ -696,16 +695,9 @@ fn note_instances_with_floor(
             // number that decides nothing is still worth not carrying.
             let cap_px = outline_px.min((behind_px - 0.5 * feather_px).max(0.0));
 
-            // Notes always draw fully opaque — how much of the heatmap comes
-            // through a note is the Fill setting's business, not an opacity
-            // here, and a released note fades on the lattice's fade.
-            let alpha = 1.0;
             let pitch = (p0 + p1) * 0.5;
-            // The note's TRUE color, so a note matches the node it lit up on
-            // the lattice. It is painted solid, edge to edge — the interior
-            // and the boundary are one thing, and a heatmap cell showing
-            // through a note said neither clearly.
-            let core = note_color(state, pitch, alpha);
+            // A flat pitch color with the configured background show-through.
+            let core = note_color(state, pitch, cfg.roll_opacity);
             // Reading outward: the note, the dark outline standing against
             // every one of its edges and fading out, then whatever the
             // spectrogram is doing.
@@ -722,8 +714,8 @@ fn note_instances_with_floor(
             // Wrapping the ENDS costs the notes around it nothing, and that is
             // a fact about the ORDER they are drawn in rather than about the
             // outline: `harmonigraph_render::roll` lays every outline down and
-            // then every body over them, so an outline can darken the picture
-            // and never another note.
+            // then every body over them. Only the body's own opacity can let
+            // part of a neighboring shadow show through its color.
             //
             // It has to be that way round rather than something gentler at the
             // seam. Coverage is OPAQUE where the outline meets its own note
@@ -1005,6 +997,25 @@ mod tests {
         &rects[0]
     }
 
+    /// The ribbon body takes its opacity from the Analyzer setting while the
+    /// dark surround keeps its independent full strength.
+    #[test]
+    fn a_note_uses_the_configured_ribbon_opacity() {
+        let mut state = fresh();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.low_midi = 54.0;
+        state.appearance.spectrum.high_midi = 66.0;
+        state.appearance.spectrum.roll_thickness = 2.0;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+
+        for (opacity, alpha) in [(0.0, 0), (0.25, 64), (0.8, 204), (1.0, 255)] {
+            state.appearance.spectrum.roll_opacity = opacity;
+            let note = *one(&instances(&state, 0.05));
+            assert_eq!(note.core[3], alpha, "opacity {opacity} produced alpha {}", note.core[3]);
+            assert_eq!(note.outline[3], 255, "opacity {opacity} dimmed the surround");
+        }
+    }
+
     /// The outline stands the same distance off at every zoom and every note
     /// width — an edge does not thin out because the ribbon it wraps did, and
     /// does not thicken because the range was zoomed in.
@@ -1064,6 +1075,7 @@ mod tests {
         for reach in [0.05, 2.0, 4.0] {
             let lit = ribbon(reach);
             let note = one(&lit);
+            assert_eq!(note.core[3], 204, "the body must keep 80% color strength");
             assert_eq!(note.outline_reach, reach, "the outline is not the reach it was set to");
             assert_eq!(
                 note.outline,

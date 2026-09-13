@@ -546,7 +546,12 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64,
     rays(&painter, &spiral);
     let lit = sounding(&spiral, state, now);
     let marks = dots(&spiral, state, &lit);
-    let dot_shadow = state.appearance.view.shadow.spectral_geometry.clamped();
+    let dot_shadow = state
+        .appearance
+        .view
+        .shadow
+        .spectral_geometry
+        .clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
     if dot_shadow.casts() && !marks.is_empty() {
         painter.add(harmonigraph_render::dot_shadow_paint_callback(
             rect,

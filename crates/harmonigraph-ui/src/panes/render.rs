@@ -1302,6 +1302,10 @@ mod tests {
                 for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
                     state.appearance.view.shadow.spectral_geometry.kernel = kernel;
                     state.appearance.view.shadow.spectral_text.kernel = kernel;
+                    state.appearance.view.shadow.spectral_geometry.width =
+                        harmonigraph_scene::SPECTRAL_SHADOW_MAX;
+                    state.appearance.view.shadow.spectral_text.width =
+                        harmonigraph_scene::SPECTRAL_SHADOW_MAX;
                     let saved = state.appearance.view.shadow;
                     for width in [240.0, 480.0] {
                         let scaled = preview_shadows(saved, width, &state.appearance.render);

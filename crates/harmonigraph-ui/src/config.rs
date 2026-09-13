@@ -414,9 +414,13 @@ pub struct SpectrumConfig {
     /// Seconds of history the roll's depth spans.
     pub roll_seconds: f32,
     /// Note ribbon width, in semitones of the pitch axis. This IS the note's
-    /// painted width — a note is a solid rectangle of its own color, with
+    /// painted width — a note is a flat rectangle of its own color, with
     /// nothing straddling its boundary.
     pub roll_thickness: f32,
+    /// Opacity of the note ribbon's colored body. Its dark surround keeps its
+    /// own full strength, so lowering this reveals more of the spectrogram
+    /// without washing out the edge that separates the two pictures.
+    pub roll_opacity: f32,
     /// How far a SOUNDING note carries past the now-line and into the spectrum,
     /// as a fraction of the spectrum's own share of the depth axis. 0 = not at
     /// all; 0.1 reaches a tenth of the way across the analyzer. The note's
@@ -650,6 +654,7 @@ impl SpectrumConfig {
             *ROLL_THICKNESS_RANGE.start(),
             *ROLL_THICKNESS_RANGE.end(),
         );
+        self.roll_opacity = bounded(self.roll_opacity, fresh.roll_opacity, 0.0, 1.0);
         // The lead and its fade, which are the same shape of pair on the same
         // shape of bar (the Lead bar), and carry the same trap: a NaN reach
         // becomes the MAX of the fade's clamp, and `f32::clamp` asserts
@@ -904,6 +909,10 @@ impl Default for SpectrumConfig {
             // the roll readable when the pitch range is zoomed out over the
             // whole spectrum.
             roll_thickness: 0.3,
+            // Keep most of the pitch color even over bright spectral bands,
+            // while letting a little heatmap texture through. The surround
+            // has its own full opacity.
+            roll_opacity: 0.8,
             // A long tongue whose fade spans nearly its whole reach: about a
             // third of the analyzer, softening almost from the note itself. A
             // sounding note reaches well into the curve it is making, so which
