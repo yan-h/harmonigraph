@@ -1201,7 +1201,8 @@ mod tests {
         cb.atmosphere = Some(SpectrogramAtmosphere {
             settings: harmonigraph_scene::SpectralAtmosphere::default(),
             time: [12.0, 0.25],
-            pitch_vertical: true,
+            window: 3.0,
+            directions: [[1.0, 0.0], [0.0, -1.0]],
         });
         cb
     }
@@ -1236,6 +1237,32 @@ mod tests {
         cb.grid.run = Arc::new(vec![0; cb.grid.run.len()]);
         let silent = fresh_frame(&device, &queue, &cb);
         assert!(silent.chunks_exact(4).all(|p| p == [0, 0, 0, 255]), "silence emitted light");
+    }
+
+    #[test]
+    fn spectral_cloud_shape_turns_with_its_data() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = cloud_fixture();
+        let original = fresh_frame(&device, &queue, &cb);
+        for vertex in &mut cb.vertices {
+            vertex.pos = [SIZE[1] as f32 - vertex.pos[1], vertex.pos[0]];
+        }
+        let atmosphere = cb.atmosphere.as_mut().unwrap();
+        atmosphere.directions = atmosphere.directions.map(|[x, y]| [-y, x]);
+        let turned = fresh_frame(&device, &queue, &cb);
+        let side = SIZE[0] as usize;
+        let mut worst = 0;
+        for y in 0..side {
+            for x in 0..side {
+                for channel in 0..4 {
+                    worst = worst.max(
+                        original[(y * side + x) * 4 + channel]
+                            .abs_diff(turned[(x * side + side - 1 - y) * 4 + channel]),
+                    );
+                }
+            }
+        }
+        assert!(worst <= 1, "turning the pane changed the cloud's shape: {worst}");
     }
 
     #[test]
@@ -1767,5 +1794,8 @@ mod tests {
 
 #[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
 pub(super) fn asset_catalog(device: &wgpu::Device, format: wgpu::TextureFormat) {
-    drop(SpectrogramResources::new(device, format));
+    let resources = SpectrogramResources::new(device, format);
+    // Runtime creation stays lazy, but the strict Metal catalog must cover
+    // every production route before the first enabled atmospheric frame.
+    drop(atmosphere::Pipelines::new(device, format, &resources.layout));
 }

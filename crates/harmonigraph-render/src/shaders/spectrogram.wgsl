@@ -237,41 +237,85 @@ struct Cloud {
     texture: f32,
     time: vec2<f32>,
     ppp: f32,
-    _pad: f32,
+    time_scale: f32,
+    time_direction: vec2<f32>,
+    pitch_direction: vec2<f32>,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
 @group(1) @binding(2) var cloud_sampler: sampler;
 @group(1) @binding(3) var<uniform> cloud: Cloud;
 
-fn cloud_hash(cell: vec2<i32>) -> f32 {
-    // A 4096-second period at 1/8 cell per second lets the CPU rebase time
-    // before converting to f32. Adjacent slabs stay continuous across wrap.
-    let x = u32(((cell.x % 512) + 512) % 512);
+fn cloud_hash(cell: vec2<i32>) -> u32 {
+    // The slowest rate is 1/32 cell per second; faster rates are powers of
+    // two above it. A 128-cell repeat therefore preserves the 4096s rebase.
+    let x = u32(((cell.x % 128) + 128) % 128);
     var n = x * 374761393u + bitcast<u32>(cell.y) * 668265263u;
     n = (n ^ (n >> 13u)) * 1274126177u;
-    return f32(n ^ (n >> 16u)) / 4294967295.0;
+    return n ^ (n >> 16u);
+}
+fn cloud_gradient(cell: vec2<i32>) -> vec2<f32> {
+    let directions = array<vec2<f32>, 8>(
+        vec2<f32>(1.0, 0.0), vec2<f32>(0.7071068, 0.7071068),
+        vec2<f32>(0.0, 1.0), vec2<f32>(-0.7071068, 0.7071068),
+        vec2<f32>(-1.0, 0.0), vec2<f32>(-0.7071068, -0.7071068),
+        vec2<f32>(0.0, -1.0), vec2<f32>(0.7071068, -0.7071068));
+    return directions[cloud_hash(cell) & 7u];
 }
 fn cloud_noise(p: vec2<f32>) -> f32 {
     let cell = vec2<i32>(floor(p));
     let f = fract(p);
-    let w = f * f * (3.0 - 2.0 * f);
-    return mix(
-        mix(cloud_hash(cell), cloud_hash(cell + vec2<i32>(1, 0)), w.x),
-        mix(cloud_hash(cell + vec2<i32>(0, 1)), cloud_hash(cell + vec2<i32>(1, 1)), w.x), w.y);
+    // Gradient noise has rounded slopes rather than flat random tiles.
+    // Quintic interpolation also keeps curvature continuous at cell edges.
+    let w = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    return 0.5 + mix(
+        mix(dot(cloud_gradient(cell), f),
+            dot(cloud_gradient(cell + vec2<i32>(1, 0)), f - vec2<f32>(1.0, 0.0)), w.x),
+        mix(dot(cloud_gradient(cell + vec2<i32>(0, 1)), f - vec2<f32>(0.0, 1.0)),
+            dot(cloud_gradient(cell + vec2<i32>(1, 1)), f - vec2<f32>(1.0, 1.0)), w.x), w.y);
 }
 fn gamma_from_linear_rgb(linear: vec3<f32>) -> vec3<f32> {
     let c = max(linear, vec3<f32>(0.0));
     return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3<f32>(0.0031308));
 }
+fn cloud_edge(uv: vec2<f32>) -> f32 {
+    // A warped read approaching the texture boundary fades out continuously
+    // instead of snapping from a clamped edge texel to black.
+    let feather = vec2<f32>(2.0) / vec2<f32>(textureDimensions(wide_light));
+    let coverage = smoothstep(vec2<f32>(0.0), feather, uv)
+        * smoothstep(vec2<f32>(0.0), feather, vec2<f32>(1.0) - uv);
+    return coverage.x * coverage.y;
+}
 fn cloud_color(in: VertexOut) -> vec4<f32> {
     let core = heatmap_color(in).rgb;
     let uv = (in.position.xy / cloud.ppp - cloud.origin) / cloud.size;
-    let close = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).rgb;
-    let wide = textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).rgb;
-    let p = vec2<f32>((cloud.time.x + in.slab * cloud.time.y) * 0.125, (locals.min_midi + in.t * locals.span) * 0.18);
-    let density = 0.45 + 0.55 * (0.7 * cloud_noise(p) + 0.3 * cloud_noise(p * 2.0));
-    let modulation = mix(1.0, density, cloud.texture);
+    let origin = cloud.time.x - floor(cloud.time.x / 4096.0) * 4096.0;
+    let p = vec2<f32>((origin + in.slab * cloud.time.y) * cloud.time_scale, (locals.min_midi + in.t * locals.span) * 0.18);
+    // Two centered folds break up the rectangular noise lattice. Integer
+    // octaves preserve the 4096-second wrap through every nested noise read.
+    let q = vec2<f32>(cloud_noise(p + vec2<f32>(3.1, 7.4)),
+                      cloud_noise(p + vec2<f32>(8.3, 2.7))) - 0.5;
+    let r = vec2<f32>(cloud_noise(p * 2.0 + q * 1.2 + vec2<f32>(1.7, 9.2)),
+                      cloud_noise(p * 2.0 + q * 1.2 + vec2<f32>(6.8, 3.5))) - 0.5;
+    let folded = p + q * 1.6 + r * 0.35;
+    let billow = cloud_noise(folded);
+    let wisps = 0.65 * cloud_noise(folded * 2.0 + vec2<f32>(5.2, 1.3))
+              + 0.35 * cloud_noise(folded * 4.0 + vec2<f32>(2.8, 6.1));
+    let plain = 1.0 - cloud.texture;
+    let amount = 1.0 - plain * plain * plain * plain;
+    let density = 0.12 + 1.2 * smoothstep(0.25, 0.75, billow * 0.7 + wisps * 0.3);
+    // Distort only the surrounding light. Semantic axis vectors make the
+    // same folds follow a rotated or reversed view, including held end caps.
+    let flow = q + r * 0.15;
+    let displacement = (cloud.time_direction * flow.x + cloud.pitch_direction * flow.y)
+        * cloud.step * (12.0 * amount);
+    let close_uv = uv;
+    let wide_uv = uv + displacement;
+    let close = textureSampleLevel(close_light, cloud_sampler, close_uv, 0.0).rgb
+        * cloud_edge(close_uv);
+    let wide = textureSampleLevel(wide_light, cloud_sampler, wide_uv, 0.0).rgb
+        * cloud_edge(wide_uv);
+    let modulation = mix(1.0, density, amount);
     let light = gamma_from_linear_rgb(close * 0.35 + wide * 0.75) * cloud.glow * modulation;
     // Screen light into the exact core: highlights keep their headroom and
     // the surrounding cloud cannot replace a narrow measured ridge.

@@ -295,7 +295,11 @@ pub(crate) fn draw_spectrogram(
         Some(harmonigraph_render::SpectrogramAtmosphere {
             settings: cfg.atmosphere,
             time: [layout.t_origin.rem_euclid(4096.0) as f32, layout.bucket as f32],
-            pitch_vertical: !cfg.orientation.is_time_vertical(),
+            window: time.window() as f32,
+            directions: [
+                (axes.dir_depth() * if time.whole_song() { 1.0 } else { -1.0 }).into(),
+                axes.dir_pitch().into(),
+            ],
         }),
     ));
 }

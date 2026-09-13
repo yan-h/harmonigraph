@@ -14,7 +14,10 @@ pub struct SpectrogramAtmosphere {
     pub settings: harmonigraph_scene::SpectralAtmosphere,
     /// Absolute audio time at slab zero, and seconds occupied by one slab.
     pub time: [f32; 2],
-    pub pitch_vertical: bool,
+    /// Full visible history span, independent of how much data has arrived.
+    pub window: f32,
+    /// Screen unit vectors toward increasing audio time and pitch.
+    pub directions: [[f32; 2]; 2],
 }
 
 #[repr(C)]
@@ -27,7 +30,9 @@ struct Uniforms {
     texture: f32,
     time: [f32; 2],
     ppp: f32,
-    _pad: f32,
+    time_scale: f32,
+    time_direction: [f32; 2],
+    pitch_direction: [f32; 2],
 }
 
 pub(super) struct Pipelines {
@@ -143,7 +148,7 @@ pub(super) struct Targets {
     source_uniform: wgpu::Buffer,
     pub source_group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
-    filter_groups: [wgpu::BindGroup; 2],
+    filter_groups: [wgpu::BindGroup; 3],
     pub composite_group: wgpu::BindGroup,
 }
 
@@ -194,7 +199,7 @@ impl Targets {
             std::mem::size_of::<SpectrogramUniforms>() as u64,
         );
         let uniform = buffer("spectral_cloud_uniform", std::mem::size_of::<Uniforms>() as u64);
-        let filter_groups = [&source_view, &views[0]].map(|view| {
+        let filter_groups = [&source_view, &views[0], &views[1]].map(|view| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("spectral_cloud_filter_group"),
                 layout: &pipelines.filter_layout,
@@ -263,12 +268,12 @@ impl Targets {
     ) {
         read.origin_points = rect.min.into();
         read.viewport_points = rect.size().into();
-        let axis = usize::from(atmosphere.pitch_vertical);
+        let pitch_vertical = atmosphere.directions[1][1].abs() > 0.5;
+        let axis = usize::from(pitch_vertical);
         // A clipped pane can cover only part of the full pitch axis. Keep
         // that axis's bucket footprint per reduced pixel, not one full-range
         // footprint per texel of the smaller visible rectangle.
-        let visible_pixels =
-            if atmosphere.pitch_vertical { rect.height() } else { rect.width() } * ppp;
+        let visible_pixels = if pitch_vertical { rect.height() } else { rect.width() } * ppp;
         read.rows =
             (read.rows as f32 * self.size[axis] as f32 / visible_pixels).round().max(1.0) as u32;
         queue.write_buffer(&self.source_uniform, 0, bytemuck::bytes_of(&read));
@@ -282,15 +287,24 @@ impl Targets {
             texture: settings.texture,
             time: atmosphere.time,
             ppp,
-            _pad: 0.0,
+            // A handful of broad folds even in a short history view. Dyadic
+            // rates preserve the shader's 4096-second period at every zoom.
+            time_scale: (4.0 / atmosphere.window.max(0.001))
+                .log2()
+                .ceil()
+                .exp2()
+                .clamp(1.0 / 32.0, 8.0),
+            time_direction: atmosphere.directions[0],
+            pitch_direction: atmosphere.directions[1],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }
 
     pub fn blur(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
-        // Source -> scratch -> close; source -> scratch -> wide. No pass samples the
-        // attachment it writes, and close remains available to the composite.
-        for (i, (input, output)) in [(0, 0), (1, 1), (0, 0), (1, 2)].into_iter().enumerate() {
+        // Source -> scratch -> close; close -> scratch -> wide. Feeding the
+        // already softened image to the wide kernel closes its sampling gaps.
+        // Every pass reads a different texture from the attachment it writes.
+        for (i, (input, output)) in [(0, 0), (1, 1), (2, 0), (1, 2)].into_iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("spectral_cloud_blur"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

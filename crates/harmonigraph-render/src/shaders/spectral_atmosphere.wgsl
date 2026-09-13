@@ -8,7 +8,9 @@ struct Cloud {
     texture: f32,
     time: vec2<f32>,
     ppp: f32,
-    _pad: f32,
+    time_scale: f32,
+    time_direction: vec2<f32>,
+    pitch_direction: vec2<f32>,
 };
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var linear_sampler: sampler;
@@ -27,11 +29,13 @@ fn vs_fullscreen(@builtin(vertex_index) vertex: u32) -> Vertex {
     return out;
 }
 fn filtered(uv: vec2<f32>, step: vec2<f32>) -> vec4<f32> {
-    let weights = array<f32, 5>(0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+    // Half-step taps fill the gaps a sparse kernel leaves around narrow
+    // spectral ridges. The wide passes further diffuse this close image.
+    let weights = array<f32, 9>(1.0, 0.9576695, 0.8411289, 0.6775490, 0.5005531, 0.3391493, 0.2107477, 0.1201064, 0.0627770);
     var color = vec3<f32>(0.0);
     var total = 0.0;
-    for (var i = -4; i <= 4; i = i + 1) {
-        let x = f32(i);
+    for (var i = -8; i <= 8; i = i + 1) {
+        let x = f32(i) * 0.5;
         let weight = weights[u32(abs(i))];
         let tap = uv + step * x;
         let inside = all(tap >= vec2<f32>(0.0)) && all(tap <= vec2<f32>(1.0));
