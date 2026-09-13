@@ -151,7 +151,7 @@ impl LatticeCallback {
             ring: n.audio_ring,
             // Untimed snapshots seed current ink. Encoded timed frames replace
             // the third value with the renderer's own history coefficient.
-            glow: [n.glow.level, n.glow.row as f32, 1.0],
+            glow: [n.glow.level, n.glow.row as f32, 1.0, 1.0],
         };
 
         let split = order.iter().position(|&(plane, _, _)| plane <= 0.0).unwrap_or(order.len());
@@ -366,19 +366,18 @@ impl LatticeCallback {
         }
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
         let mut loose_drawn = false;
-        let mut glow_breath = (scene.glow_timing.is_some()
+        let breathes = scene.glow_timing.is_some()
             && scene.glow_reach > 0.0
             && scene.glow_strength > 0.0
             && atmosphere.enabled
             && atmosphere.breath_amount > 0.0
-            && atmosphere.breath_speed > 0.0)
-            .then(|| Vec::with_capacity(order.len()));
+            && atmosphere.breath_speed > 0.0;
         for (k, &(_, _, i)) in order.iter().enumerate() {
             if k == split {
                 push_loose(&mut draws, &mut pluses, &loose);
                 loose_drawn = true;
             }
-            let instance = to_gpu(&scene.nodes[i]);
+            let mut instance = to_gpu(&scene.nodes[i]);
             let ships = paints(&instance);
             // The cross, whether or not the node it stands on draws anything:
             // an idle position is exactly where a marker does its work, and the
@@ -393,14 +392,12 @@ impl LatticeCallback {
                 // is a blur of, and what it multiplies the frame under it by.
                 node_cells.push(casters.len() as u32);
                 casters.push(node_caster(&scene.nodes[i], &instance));
-                instances.push(instance);
-                if let (Some(levels), Some(clock)) = (&mut glow_breath, scene.glow_timing) {
-                    levels.push(if instance.glow[0] > 0.0 {
-                        atmosphere.breath(scene.nodes[i].lattice_pos, clock.now)
-                    } else {
-                        1.0
-                    });
+                // Display modulation is separate from the ink-history level and coefficient.
+                if breathes && instance.glow[0] > 0.0 {
+                    instance.glow[3] = atmosphere
+                        .breath(scene.nodes[i].lattice_pos, scene.glow_timing.unwrap().now);
                 }
+                instances.push(instance);
                 if scene.glow_timing.is_some() {
                     glow_owners.push(scene.nodes[i].glow.incarnation);
                 }
@@ -427,7 +424,6 @@ impl LatticeCallback {
             instances,
             glow_owners,
             glow_timing: scene.glow_timing,
-            glow_breath,
             glyphs,
             casters,
             node_cells,

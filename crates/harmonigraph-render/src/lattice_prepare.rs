@@ -8,8 +8,7 @@ struct PreparedFrame {
     offscreen_size: Option<[u32; 2]>,
     screen_size: [u32; 2],
     glow: bool,
-    lit_nodes: Vec<GpuGlowNode>,
-    tile_nodes: Vec<u32>,
+    has_light: bool,
     packed: shadow::Packed,
     shadow_wanted: Option<[u32; 2]>,
     blurs: bool,
@@ -99,11 +98,6 @@ impl CallbackTrait for LatticeCallback {
                 // pipeline's layout — one zeroed entry, which is a caster with
                 // no cells and a multiply of 1.
                 casters: frame.packed.casters.len().max(1),
-                // And at least one lit node, on the same rule: a frame with the
-                // light on and nothing lit still binds the list, and the pass
-                // that would read it is skipped.
-                glow_nodes: frame.lit_nodes.len().max(1),
-                glow_tiles: frame.tile_nodes.len().max(1),
             },
             shared_sdf.texture.as_ref(),
         );
@@ -246,13 +240,13 @@ impl LatticeCallback {
                     // layers reaches the light around it in the same reload —
                     // they are one shader drawing one node, and reloading half
                     // of it is a halo of the previous build.
-                    let glow_gather_pipeline = create_glow_gather_pipeline(
+                    let (glow_splat_pipeline, glow_resolve_pipeline) = create_glow_pipelines(
                         device,
                         &lattice_shader,
                         LATTICE_COLOR_FORMAT,
                         &resources.compiled.bind_group_layout,
                         &resources.compiled.strip_layout,
-                        &resources.compiled.glow_node_layout,
+                        &resources.compiled.glow_statistics_layout,
                     );
                     // ...and the strip the light is coloured out of, on the
                     // same argument one step further back: an edit to what a
@@ -265,7 +259,8 @@ impl LatticeCallback {
                     );
                     resources.compiled.node_cell_pipeline = node_cell_pipeline;
                     resources.compiled.plus_cell_pipeline = plus_cell_pipeline;
-                    resources.compiled.glow_gather_pipeline = glow_gather_pipeline;
+                    resources.compiled.glow_splat_pipeline = glow_splat_pipeline;
+                    resources.compiled.glow_resolve_pipeline = glow_resolve_pipeline;
                     resources.compiled.ink_strip_pipeline = ink_strip_pipeline;
                     resources.compiled.ink_blur_pipeline = ink_blur_pipeline;
 
@@ -326,7 +321,7 @@ impl LatticeCallback {
         sheets: FrameSheets,
     ) {
         let FrameSheets { has_atlas, sizes: sheet_sizes } = sheets;
-        let PreparedFrame { lit_nodes, tile_nodes, packed, .. } = frame;
+        let PreparedFrame { has_light, packed, .. } = frame;
         if self.instances.len() > pane.instance_capacity {
             pane.instance_capacity = self.instances.len().next_power_of_two();
             pane.instance_buffer = create_vertex_buffer::<GpuInstance>(
@@ -356,14 +351,6 @@ impl LatticeCallback {
                 &self.instances
             };
             queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(instances));
-        }
-
-        // This frame's lit nodes, into a buffer that may be larger than they
-        // are. Nothing zeroes the tail: this frame's tile lists reference only
-        // its live nodes, so entries a wider frame left behind are never walked.
-        if !lit_nodes.is_empty() {
-            queue.write_buffer(&pane.glow_node_buffer, 0, bytemuck::cast_slice(lit_nodes));
-            queue.write_buffer(&pane.glow_tile_buffer, 0, bytemuck::cast_slice(tile_nodes));
         }
 
         if self.pluses.len() > pane.plus_capacity {
@@ -523,10 +510,8 @@ impl LatticeCallback {
         // is what maps a fragment's place on a cross into a cell no cross
         // placed (`vs_plus`).
         let mut uniforms = self.uniforms;
-        // How far into the lit-node list this frame's own entries run, which is
-        // settled here for the same reason the atlas's texels are: the map that
-        // fills it needs the target's pixels, and this is where they are known.
-        uniforms.glow.lit = lit_nodes.len() as f32;
+        // Whether this frame contributes any light to the statistics targets.
+        uniforms.glow.lit = f32::from(*has_light);
         if let Some(target) = &pane.offscreen {
             uniforms.nebula.target_size = Float2(target.size.map(|v| v as f32));
         }
@@ -577,12 +562,7 @@ impl LatticeCallback {
         let offscreen_size = anything.then_some(size);
 
         let glow = self.glow_draws();
-        // Every lit node, mapped onto the pixels of the target the light is
-        // gathered into. Here rather than in `from_scene` because that is the
-        // one thing the map needs which the callback is not built with: the
-        // render-scaled size, settled just above.
-        let lit_nodes = if glow { self.glow_nodes(size) } else { Vec::new() };
-        let tile_nodes = lattice_node_glow::tiles::pack(&lit_nodes, size);
+        let has_light = glow && self.instances.iter().any(|node| node.glow[0] > 0.0);
         // Every caster's cell, packed for this frame (`shadow::pack`): the
         // Gaussian's one marker cross, one per node and one per name, each at
         // the resolution its own σ asks for. A caster whose group has either
@@ -623,16 +603,7 @@ impl LatticeCallback {
         // pass nor the plane.
         let blurs =
             packed.boxes.iter().any(|b| b.cell[2] > 0.0 && b.who[1] < 0.5 * shadow::DISTANCE_KIND);
-        PreparedFrame {
-            offscreen_size,
-            screen_size,
-            glow,
-            lit_nodes,
-            tile_nodes,
-            packed,
-            shadow_wanted,
-            blurs,
-        }
+        PreparedFrame { offscreen_size, screen_size, glow, has_light, packed, shadow_wanted, blurs }
     }
 
     fn encode_shadows(
@@ -793,42 +764,7 @@ impl LatticeCallback {
                 pass.draw(0..4, 0..pane.instance_count);
             }
 
-            // Cleared to transparent, which is what the gather writes where
-            // no node reaches — so the clear is the answer for the frames
-            // that skip the draw below, and agrees with it everywhere else.
-            let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("lattice_glow_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &glow.view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            // ONE quad over the target, each pixel folding its tile's
-            // candidates from group 2. The fold is commutative,
-            // so this target is one field of light with no depth in it
-            // at all — which is what makes it safe to lay under
-            // every sheet as a single layer.
-            //
-            // Skipped with nothing lit, where the clear above has already
-            // written what the pass would: the light is over, or the frame
-            // ships only markers and names.
-            if has_lit_nodes {
-                pass.set_bind_group(0, &pane.bind_group, &[]);
-                pass.set_bind_group(1, &strip.blurred_bind_group, &[]);
-                pass.set_bind_group(2, &pane.glow_node_bind_group, &[]);
-                pass.set_bind_group(3, &pane.glow_tile_bind_group, &[]);
-                pass.set_pipeline(&compiled.glow_gather_pipeline);
-                pass.draw(0..4, 0..1);
-            }
+            glow.draw(egui_encoder, compiled, pane, strip, has_lit_nodes);
         }
     }
 
@@ -973,7 +909,7 @@ impl LatticeCallback {
         egui_encoder: &mut wgpu::CommandEncoder,
         frame: &PreparedFrame,
     ) {
-        let PreparedFrame { lit_nodes, packed, blurs, .. } = frame;
+        let PreparedFrame { has_light, packed, blurs, .. } = frame;
         let blurs = *blurs;
         // The scene pass: draw into the pane's offscreen target, on the
         // encoder egui-wgpu executes before its own render pass. paint()
@@ -994,13 +930,7 @@ impl LatticeCallback {
 
             self.encode_shadows(&resources.compiled, pane, offscreen, egui_encoder, packed, blurs);
 
-            self.encode_node_glow(
-                &resources.compiled,
-                pane,
-                offscreen,
-                egui_encoder,
-                !lit_nodes.is_empty(),
-            );
+            self.encode_node_glow(&resources.compiled, pane, offscreen, egui_encoder, *has_light);
 
             self.encode_scene(&resources.compiled, pane, offscreen, egui_encoder);
 
