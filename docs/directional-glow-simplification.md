@@ -9,7 +9,7 @@ its color patches and dense-chord blending were not preferred.
 
 Every halo uses the view's maximum configured ring/mark rim plus Reach,
 scaled with node size.
-Marks still contribute their original directional colors,
+Marks still contribute their colors through the original angular ink strip,
 but appearing or disappearing no longer changes a node's halo footprint.
 This removes the per-node mark-size envelope,
 its attack/release bookkeeping,
@@ -17,6 +17,14 @@ and its scene and GPU inputs.
 Unmarked nodes can have a slightly wider halo than before;
 a marked node already used this maximum rim.
 Breathing still modulates brightness rather than footprint.
+
+Color transitions use the ordinary ring rim independently of that larger footprint.
+The glow eases from its mean at the center to fully directional color at the ring edge,
+so widening the configured mark rim does not wash out nearby color patches.
+This restores the original transition for unmarked nodes;
+marked nodes now reach fully directional color closer to their centers than before.
+Both radii are fixed view geometry,
+with no per-node size envelope.
 
 ## Implemented: one renderer-owned ink clock
 

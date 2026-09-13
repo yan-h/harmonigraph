@@ -444,3 +444,50 @@ fn marks_do_not_change_the_halo_footprint() {
         assert_eq!(bare, alpha(glow(&mut shooter, &scene)), "mark level {level}");
     }
 }
+
+/// Inactive mark geometry may widen the footprint, but must not wash the
+/// directional colors toward their mean outside the ordinary ring edge.
+#[test]
+fn the_color_transition_ends_at_the_ring_even_with_a_wider_halo() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 0.75, false);
+    scene.glow_blend = 0.0;
+    scene.nodes[0].octaves.fill(1.0);
+    scene.pitch_lut = std::array::from_fn(|i| {
+        let t = i as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
+        glam::vec4(1.0 - t, 0.05, t, 1.0)
+    });
+    scene.mark_thickness = 0.0;
+    let ordinary = glow(&mut shooter, &scene);
+    scene.mark_inner = scene.rings_outer;
+    scene.mark_thickness = 0.6;
+    let wide = glow(&mut shooter, &scene);
+    let per_uv = on_screen(&scene, SIZE, glam::Vec3::X * scene.node_radius * 1.8).x - CENTRE.x;
+    let hue = |p: &[u8]| {
+        let sum = p[..3].iter().map(|&c| f32::from(c)).sum::<f32>();
+        glam::vec3(f32::from(p[0]), f32::from(p[1]), f32::from(p[2])) / sum
+    };
+    let mut count = 0;
+    let mut low = glam::Vec3::ONE;
+    let mut high = glam::Vec3::ZERO;
+    let mut worst = 0.0f32;
+    for (i, (a, b)) in ordinary.chunks_exact(4).zip(wide.chunks_exact(4)).enumerate() {
+        let at = glam::vec2((i % 256) as f32 + 0.5, (i / 256) as f32 + 0.5);
+        let d = at.distance(CENTRE) / per_uv;
+        if d <= scene.rings_outer + 0.02 || d >= scene.rings_outer + 0.3 {
+            continue;
+        }
+        assert!(a[3] > 40 && b[3] > 40, "sample a visible halo, not quantization noise");
+        let (a, b) = (hue(a), hue(b));
+        low = low.min(a);
+        high = high.max(a);
+        worst = worst.max((a - b).abs().max_element());
+        count += 1;
+    }
+    assert!(
+        count > 100 && (high - low).max_element() > 0.2,
+        "probe multiple directional colors in the affected annulus: count={count}, spread={:?}",
+        high - low
+    );
+    assert!(worst < 0.025, "a wider footprint averaged directional colors: hue error {worst}");
+}
