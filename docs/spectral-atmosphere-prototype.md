@@ -32,7 +32,7 @@ The broad filter reaches five times as far as the close filter,
 so nearby pitch energy pools into a diffuse body.
 The soft field mixes 75% close and 25% wide diffusion.
 Diffusion fades the raw contribution as `(1 - diffusion)²`,
-so the default 70% leaves 9% raw detail and 100% leaves none.
+so the default 10% leaves 81% raw detail and 100% leaves none.
 Bright peaks are softened along with the rest of the field;
 the close filter preserves distinct pitch bands without restoring their original grain.
 The close and wide levels are combined at quarter resolution into the now-free source texture,
@@ -69,19 +69,21 @@ Palette,
 zoom,
 time and appearance changes refresh source pixels and uniforms without reallocating the textures.
 Grid uploads retain their existing generation/shape key and dirty-slab updates.
+Retained filter bindings follow grid and palette allocation changes even while diffusion is disabled,
+so re-enabling after a resize or display-mode change reads current audio.
 Empty frames and zero diffusion never composite a retained filtered image.
 The production Metal catalog explicitly constructs the atmospheric pipelines,
 even though their runtime allocation remains lazy.
 
 The `spectrum.atmosphere` section defaults missing fields individually and normalizes on load.
-Diffusion defaults to 70%,
-analyzer softness to 100% and note glow to 50%.
+Diffusion defaults to 10%,
+analyzer softness to 50% and note glow to 50%.
 Saved diffusion and note-glow values are retained.
 The former `enabled`,
 `glow`,
 `spread` and `texture` fields are removed and ignored on load;
 previously disabled appearances now use their stored diffusion and note-glow amounts,
-and the new analyzer softness defaults to its full treatment.
+and missing analyzer softness defaults to 50%.
 The `spectrum.keyline` field retains saved outline opacity and defaults to 30% when missing.
 The experimental `spectrum.analyzer_min_brightness` field is discarded;
 appearances saved during that experiment restore the default outline opacity.

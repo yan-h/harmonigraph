@@ -114,9 +114,6 @@ pub(crate) fn spectrum_settings_pane(
 
     section(ui, "Softness and glow");
     let atmosphere = &mut cfg.atmosphere;
-    if ui.small_button("Reset softness and glow").clicked() {
-        *atmosphere = harmonigraph_scene::SpectralAtmosphere::default();
-    }
     ValueBar::new(&mut atmosphere.diffusion, 0.0..=1.0, "Diffusion")
         .percent().show(ui).on_hover_text("Smooth fine spectrogram detail at every brightness. 0% restores the detailed heatmap; 100% uses only the softened field.");
     ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")

@@ -628,6 +628,11 @@ impl CallbackTrait for SpectrogramCallback {
                     },
                 ],
             }));
+            // A retained filter must follow allocation changes even while
+            // diffusion is disabled, before its next frame uses this grid.
+            if let Some(target) = pane.cloud.as_mut() {
+                target.rebind(device, layout, &grid.buffer, &lut.view);
+            }
         }
 
         if self.vertices.len() > pane.vertex_capacity {
@@ -690,9 +695,6 @@ impl CallbackTrait for SpectrogramCallback {
                         Some(atmosphere::Targets::new(device, cloud, size, layout, grid, lut));
                 }
                 let target = pane.cloud.as_mut().expect("allocated above");
-                if remade && !resize {
-                    target.rebind(device, layout, grid, lut);
-                }
                 target.update(queue, uniforms, rect, ppp, settings);
                 {
                     let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1234,7 +1236,12 @@ mod tests {
         cb.shades.lut =
             Arc::new((0..256).map(|v| [0, (v as f32 * 0.7) as u8, v as u8, 255]).collect());
         cb.atmosphere = Some(SpectrogramAtmosphere {
-            settings: harmonigraph_scene::SpectralAtmosphere::default(),
+            // Pin the visible diffusion used by the pixel probes independently
+            // of the fresh appearance's gentler setting.
+            settings: harmonigraph_scene::SpectralAtmosphere {
+                diffusion: 0.7,
+                ..Default::default()
+            },
             region: cb.rect,
             pitch_vertical: true,
         });
@@ -1326,7 +1333,7 @@ mod tests {
             assert!(raw > 2048 * 100, "fixture missed bright grain, temporal={temporal}");
             assert!(
                 difference(1) < raw / 6,
-                "default diffusion kept bright grain, temporal={temporal}"
+                "70% diffusion kept bright grain, temporal={temporal}"
             );
             assert!(
                 difference(2) <= 2048,
@@ -1482,6 +1489,11 @@ mod tests {
             "unequal pane replaced this cloud target"
         );
         cb.atmosphere.as_mut().unwrap().settings.diffusion = 0.0;
+        // Mode or viewport changes can replace the grid while diffusion is
+        // disabled. Re-enabling at the same pane size must use that new grid.
+        cb.grid.capacity *= 2;
+        cb.grid.generation += 1;
+        cb.grid.run = Arc::new(vec![64; cb.grid.run.len()]);
         let disabled = frame_with(&device, &queue, &mut resources, &cb);
         cb.atmosphere = None;
         assert_eq!(
@@ -1490,7 +1502,11 @@ mod tests {
             "zero diffusion changed the original heatmap"
         );
         cb.atmosphere = other.atmosphere;
-        frame_with(&device, &queue, &mut resources, &cb);
+        assert_eq!(
+            frame_with(&device, &queue, &mut resources, &cb),
+            fresh_frame(&device, &queue, &cb),
+            "re-enabled diffusion retained the replaced grid"
+        );
         cb.vertices.clear();
         let empty = frame_with(&device, &queue, &mut resources, &cb);
         assert!(empty.chunks_exact(4).all(|p| p == [0, 0, 0, 255]));

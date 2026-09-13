@@ -1775,7 +1775,8 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
     // the full budget and the slab end nearest `edge` IS the clearance. `edge`
     // is the depth the curve grows toward, which is the only thing the two
     // layouts below disagree about.
-    let reach = |rect: egui::Rect, cfg: SpectrumConfig, edge: f32| {
+    let reach = |rect: egui::Rect, mut cfg: SpectrumConfig, edge: f32| {
+        cfg.atmosphere.analyzer_softness = 1.0;
         let axes = Axes::new(rect, &cfg);
         let mut nearest = f32::INFINITY;
         for shape in paint_tone(rect, cfg) {
@@ -1865,6 +1866,7 @@ fn analyzer_softness_is_independent_and_keeps_the_measured_contour() {
         keyline: 0.0,
         ..Default::default()
     };
+    cfg.atmosphere.analyzer_softness = 1.0;
     let meshes = |cfg| {
         paint_tone(reference_pane(), cfg)
             .into_iter()
@@ -2768,7 +2770,8 @@ struct PaintedRuling {
 
 /// One frame of the pane with a tone in it, split into the frequency rulings
 /// and the shape indices of the spectrum's own slabs.
-fn painted_rulings(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
+fn painted_rulings(rect: egui::Rect, mut cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
+    cfg.atmosphere.analyzer_softness = 1.0;
     let strong = theme::hairline().gamma_multiply(RULING_FADE.0 * 0.4);
     let axes = Axes::new(rect, &cfg);
     let (mut rulings, mut slabs) = (Vec::new(), Vec::new());
@@ -2793,7 +2796,8 @@ fn painted_rulings(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>
 /// NUMBERED level takes — the only thing in the shape list that says which
 /// rulings the pane wrote a number beside, since the numbers themselves leave
 /// it as one opaque text callback.
-fn painted_levels(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
+fn painted_levels(rect: egui::Rect, mut cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
+    cfg.atmosphere.analyzer_softness = 1.0;
     let strong = theme::hairline().gamma_multiply(RULING_FADE.0 * 0.4);
     let axes = Axes::new(rect, &cfg);
     let (mut levels, mut slabs) = (Vec::new(), Vec::new());

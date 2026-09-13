@@ -767,14 +767,14 @@ mod tests {
         assert_eq!(first, off, "atmosphere must not create light without notes");
 
         let lit = lit_take();
-        let wide = render_take(lit.clone(), &settings).expect("the same GPU is available");
-        let mut close = lit;
-        let mut appearance = AppearanceDocument::parse(close.header.appearance.as_ref().unwrap())
+        let textured = render_take(lit.clone(), &settings).expect("the same GPU is available");
+        let mut smooth = lit;
+        let mut appearance = AppearanceDocument::parse(smooth.header.appearance.as_ref().unwrap())
             .expect("the recorded appearance is valid");
-        appearance.view.atmosphere.wide_strength = 0.0;
-        close.header.appearance = Some(appearance.serialize());
-        let close = render_take(close, &settings).expect("the same GPU is available");
-        assert_ne!(wide[2], close[2], "the recorded wide glow setting must reach export");
+        appearance.view.atmosphere.nebula_depth = 0.0;
+        smooth.header.appearance = Some(appearance.serialize());
+        let smooth = render_take(smooth, &settings).expect("the same GPU is available");
+        assert_ne!(textured[2], smooth[2], "the recorded nebula setting must reach export");
     }
 
     /// Offline export calls the same pane and paint callbacks as the editor;

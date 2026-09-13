@@ -115,9 +115,6 @@ uniform_group! {
         /// not the bound (`fs_glow_gather`).
         lit: f32,
         accumulation: f32,
-        wide_strength: f32,
-        wide_spread: f32,
-        padding: Float2,
     }
 }
 uniform_group! {

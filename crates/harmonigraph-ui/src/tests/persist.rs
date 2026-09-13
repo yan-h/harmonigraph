@@ -1669,15 +1669,20 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     use harmonigraph_scene::AtmosphereSettings;
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
-    state.picture.appearance.view.atmosphere = AtmosphereSettings {
-        nebula_depth: 0.45,
-        wide_strength: 0.37,
-        wide_spread: 3.2,
-        breath_speed: 2.2,
-        ..Default::default()
-    };
+    state.picture.appearance.view.atmosphere =
+        AtmosphereSettings { nebula_depth: 0.45, breath_speed: 2.2, ..Default::default() };
     let saved = state.save_persist();
     let full = ron::to_string(&state.picture.appearance.view.atmosphere).unwrap();
+    let retired = format!("(wide_strength:0.9,wide_spread:6.0,{}", &full[1..]);
+    let old = replace_pair(&saved, "atmosphere", &full, &retired);
+    let mut restored = fresh();
+    assert!(restored.load_persist(&old), "retired wide-glow keys sank the document");
+    assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
+    assert_eq!(
+        restored.picture.appearance.view.atmosphere,
+        state.picture.appearance.view.atmosphere
+    );
+
     let defaults = ron::to_string(&AtmosphereSettings::default()).unwrap();
     let pairs = top_level_pairs(&full);
     let fresh_pairs: std::collections::HashMap<_, _> =
@@ -1699,13 +1704,10 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
         }
     }
     state.picture.appearance.view.atmosphere.nebula_depth = f32::NAN;
-    state.picture.appearance.view.atmosphere.wide_spread = 999.0;
     state.picture.appearance.view.atmosphere.breath_amount = 7.0;
     let restored = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
     assert_eq!(restored.view.atmosphere.nebula_depth, AtmosphereSettings::default().nebula_depth);
-    assert_eq!(restored.view.atmosphere.wide_spread, 6.0);
     assert_eq!(restored.view.atmosphere.breath_amount, 1.0);
-    assert_eq!(restored.view.atmosphere.wide_strength, 0.37);
 }
 
 #[test]
@@ -1723,7 +1725,8 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     let mut editor = fresh();
     assert!(editor.load_persist(&saved));
     let offline = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
-    let expected = SpectralAtmosphere { note_glow: 0.27, ..Default::default() };
+    let expected =
+        SpectralAtmosphere { analyzer_softness: 1.0, note_glow: 0.27, ..Default::default() };
     assert_eq!(editor.picture.appearance.spectrum.atmosphere, expected);
     assert_eq!(offline.spectrum.atmosphere, expected);
     assert_eq!(editor.picture.appearance.camera.yaw, 1.23);
