@@ -112,6 +112,23 @@ pub(crate) fn spectrum_settings_pane(
                  1× is the reference size; labels stay the same size when you zoom.",
         );
 
+    section(ui, "Atmosphere (prototype)");
+    let atmosphere = &mut cfg.atmosphere;
+    crate::widgets::toggle_switch(ui, &mut atmosphere.enabled, "Enabled");
+    if ui.small_button("Reset atmosphere").clicked() {
+        *atmosphere = harmonigraph_scene::SpectralAtmosphere::default();
+    }
+    ui.add_enabled_ui(atmosphere.enabled, |ui| {
+        ValueBar::new(&mut atmosphere.glow, 0.0..=1.0, "Spectral light")
+            .percent().show(ui).on_hover_text("Close halos and wide clouds around spectral energy. The detailed heatmap and measured peak positions stay sharp.");
+        ValueBar::new(&mut atmosphere.spread, 0.25..=3.0, "Cloud spread")
+            .unit(1.0, "×").show(ui);
+        ValueBar::new(&mut atmosphere.texture, 0.0..=1.0, "Cloud texture")
+            .percent().show(ui).on_hover_text("Soft variation in the surrounding light, anchored to the recorded sound so paused history stays still.");
+        ValueBar::new(&mut atmosphere.note_glow, 0.0..=1.0, "Note glow")
+            .percent().show(ui).on_hover_text("Additional glow around note ribbons. Adjust their shadows under Display → Lighting → Shadows.");
+    });
+
     // ---- Audio spectrum -------------------------------------------------
     // Always analyzed: the pane IS the analyzer, the spectrogram reads the
     // same buckets, and giving the whole depth axis to the roll is what the

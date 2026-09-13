@@ -337,14 +337,17 @@ pub(super) fn draw_roll(
         region,
         notes,
         RollAxes { pitch_dir: dir(axes.dir_pitch()), depth_dir: dir(axes.dir_depth()) },
-        // The LATTICE's bloom, on the roll's notes. One setting for both
-        // pictures rather than a second bar here: the two are showing the same
-        // notes in the same colors, and a light a node has that its ribbon does
-        // not is a difference between them that says nothing. Through the
-        // renderer's own bound for the same reason — a strength the lattice
-        // clamps and the roll does not is that difference in the other
-        // direction.
-        harmonigraph_render::bloom_strength(state.appearance.view.bloom_strength),
+        // Keep the shared bloom, with the prototype's extra ribbon light
+        // added after bright extraction. Disabling atmosphere restores the
+        // original amount, and never changes a note's palette or shadow.
+        harmonigraph_render::bloom_strength(
+            state.appearance.view.bloom_strength
+                + if state.appearance.spectrum.atmosphere.enabled {
+                    state.appearance.spectrum.atmosphere.note_glow
+                } else {
+                    0.0
+                },
+        ),
         state.appearance.view.shadow.spectral_geometry,
         state.surfaces.target_format,
         crate::panes::lattice::pane_id(options.surface),

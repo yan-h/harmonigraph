@@ -174,12 +174,13 @@ pub(super) fn heatmap_vertices(
 /// smooth in both axes, and opaque so the plane is a filled image rather than
 /// bright patches floating on the background.
 ///
-/// Opaque and untinted, which is a decision about the SHARED SCHEME rather than
+/// The detailed core is opaque and untinted, which is a decision about the SHARED SCHEME rather than
 /// an implementation detail: an Opacity setting would fade the heatmap so it can
 /// sit under the notes, and the spectrum curve is drawn from the same
 /// [`cell_color`] ramp against the same `loudness_db` and takes no tint — so a
 /// faded heatmap means equal levels stop looking equal across the two halves of
-/// one pane. A heatmap worth less than solid is one to turn off.
+/// one pane. The atmosphere prototype derives surrounding light from a
+/// separate reduced image and composites it with this unchanged core read.
 pub(crate) fn draw_spectrogram(
     painter: &egui::Painter,
     axes: &Axes,
@@ -291,6 +292,11 @@ pub(crate) fn draw_spectrogram(
         target_format,
         crate::panes::lattice::pane_id(surface),
         painter.ctx().cumulative_pass_nr(),
+        Some(harmonigraph_render::SpectrogramAtmosphere {
+            settings: cfg.atmosphere,
+            time: [layout.t_origin.rem_euclid(4096.0) as f32, layout.bucket as f32],
+            pitch_vertical: !cfg.orientation.is_time_vertical(),
+        }),
     ));
 }
 

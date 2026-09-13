@@ -1789,6 +1789,15 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
                     let depth = (axes.depth_at(point) - edge).abs();
                     nearest = nearest.min(depth * axes.depth_len());
                 }
+            } else if let egui::Shape::Mesh(mesh) = shape {
+                // The cloud material's body ends at the original measured
+                // contour. Its 86% rim is distinct from the halo and keyline.
+                for vertex in &mesh.vertices {
+                    if vertex.color.a() == 219 {
+                        let depth = (axes.depth_at(vertex.pos) - edge).abs();
+                        nearest = nearest.min(depth * axes.depth_len());
+                    }
+                }
             }
         }
         assert!(nearest.is_finite(), "{rect:?} drew no spectrum at all");
@@ -1955,7 +1964,7 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
         // pitch axis.
         let hairline = out.shapes.iter().position(|s| {
             matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
-                if stroke.color == theme::hairline())
+                if stroke.color == theme::hairline().gamma_multiply(0.6))
         });
         let hairline = hairline.expect("expected a now-line in the frame");
         (callbacks.len(), callbacks.iter().filter(|&&c| c < hairline).count())
@@ -2591,8 +2600,10 @@ fn whole_song_mode_rules_no_frequencies() {
 /// Whether a stroke color is one of the two a ruling — of either grid — is
 /// drawn in.
 fn is_ruling(color: egui::Color32) -> bool {
-    color == theme::hairline().gamma_multiply(RULING_FADE.0)
-        || color == theme::hairline().gamma_multiply(RULING_FADE.1)
+    [1.0, 0.4].into_iter().any(|fade| {
+        color == theme::hairline().gamma_multiply(RULING_FADE.0 * fade)
+            || color == theme::hairline().gamma_multiply(RULING_FADE.1 * fade)
+    })
 }
 
 /// Whether a painted segment is a FREQUENCY ruling rather than a level one.
@@ -2617,10 +2628,15 @@ struct PaintedRuling {
 /// One frame of the pane with a tone in it, split into the frequency rulings
 /// and the shape indices of the spectrum's own slabs.
 fn painted_rulings(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
-    let strong = theme::hairline().gamma_multiply(RULING_FADE.0);
+    let strong = theme::hairline()
+        .gamma_multiply(RULING_FADE.0 * if cfg.atmosphere.enabled { 0.4 } else { 1.0 });
     let axes = Axes::new(rect, &cfg);
     let (mut rulings, mut slabs) = (Vec::new(), Vec::new());
     for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
+        if matches!(&shape, egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color.a() == 219))
+        {
+            slabs.push(i);
+        }
         let egui::Shape::LineSegment { points, stroke } = shape else { continue };
         if is_ruling(stroke.color) && rules_a_frequency(&axes, points) {
             rulings.push(PaintedRuling { index: i, points, strong: stroke.color == strong });
@@ -2638,10 +2654,15 @@ fn painted_rulings(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>
 /// rulings the pane wrote a number beside, since the numbers themselves leave
 /// it as one opaque text callback.
 fn painted_levels(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
-    let strong = theme::hairline().gamma_multiply(RULING_FADE.0);
+    let strong = theme::hairline()
+        .gamma_multiply(RULING_FADE.0 * if cfg.atmosphere.enabled { 0.4 } else { 1.0 });
     let axes = Axes::new(rect, &cfg);
     let (mut levels, mut slabs) = (Vec::new(), Vec::new());
     for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
+        if matches!(&shape, egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color.a() == 219))
+        {
+            slabs.push(i);
+        }
         let egui::Shape::LineSegment { points, stroke } = shape else { continue };
         if is_ruling(stroke.color) && !rules_a_frequency(&axes, points) {
             levels.push(PaintedRuling { index: i, points, strong: stroke.color == strong });

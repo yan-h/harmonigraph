@@ -228,3 +228,61 @@ fn fs_heatmap_linear(in: VertexOut) -> @location(0) vec4<f32> {
     let gamma = heatmap_color(in);
     return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), gamma.a);
 }
+
+struct Cloud {
+    origin: vec2<f32>,
+    size: vec2<f32>,
+    step: vec2<f32>,
+    glow: f32,
+    texture: f32,
+    time: vec2<f32>,
+    ppp: f32,
+    _pad: f32,
+};
+@group(1) @binding(0) var close_light: texture_2d<f32>;
+@group(1) @binding(1) var wide_light: texture_2d<f32>;
+@group(1) @binding(2) var cloud_sampler: sampler;
+@group(1) @binding(3) var<uniform> cloud: Cloud;
+
+fn cloud_hash(cell: vec2<i32>) -> f32 {
+    // A 4096-second period at 1/8 cell per second lets the CPU rebase time
+    // before converting to f32. Adjacent slabs stay continuous across wrap.
+    let x = u32(((cell.x % 512) + 512) % 512);
+    var n = x * 374761393u + bitcast<u32>(cell.y) * 668265263u;
+    n = (n ^ (n >> 13u)) * 1274126177u;
+    return f32(n ^ (n >> 16u)) / 4294967295.0;
+}
+fn cloud_noise(p: vec2<f32>) -> f32 {
+    let cell = vec2<i32>(floor(p));
+    let f = fract(p);
+    let w = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(cloud_hash(cell), cloud_hash(cell + vec2<i32>(1, 0)), w.x),
+        mix(cloud_hash(cell + vec2<i32>(0, 1)), cloud_hash(cell + vec2<i32>(1, 1)), w.x), w.y);
+}
+fn gamma_from_linear_rgb(linear: vec3<f32>) -> vec3<f32> {
+    let c = max(linear, vec3<f32>(0.0));
+    return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3<f32>(0.0031308));
+}
+fn cloud_color(in: VertexOut) -> vec4<f32> {
+    let core = heatmap_color(in).rgb;
+    let uv = (in.position.xy / cloud.ppp - cloud.origin) / cloud.size;
+    let close = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).rgb;
+    let wide = textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).rgb;
+    let p = vec2<f32>((cloud.time.x + in.slab * cloud.time.y) * 0.125, (locals.min_midi + in.t * locals.span) * 0.18);
+    let density = 0.45 + 0.55 * (0.7 * cloud_noise(p) + 0.3 * cloud_noise(p * 2.0));
+    let modulation = mix(1.0, density, cloud.texture);
+    let light = gamma_from_linear_rgb(close * 0.35 + wide * 0.75) * cloud.glow * modulation;
+    // Screen light into the exact core: highlights keep their headroom and
+    // the surrounding cloud cannot replace a narrow measured ridge.
+    return vec4<f32>(core + (vec3<f32>(1.0) - core) * clamp(light, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+}
+@fragment
+fn fs_cloud_gamma(in: VertexOut) -> @location(0) vec4<f32> {
+    return cloud_color(in);
+}
+@fragment
+fn fs_cloud_linear(in: VertexOut) -> @location(0) vec4<f32> {
+    let color = cloud_color(in);
+    return vec4<f32>(linear_from_gamma_rgb(color.rgb), 1.0);
+}

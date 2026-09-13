@@ -60,6 +60,7 @@ fn loaded(edge: Edge) -> SharedState {
     poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
         attack, release, keyline, roll_seconds, roll_thickness, roll_opacity, roll_lead,
         roll_lead_fade, roll_lead_release, note_name_scale, volume_floor_db, volume_ceiling_db);
+    poison!(a.spectrum.atmosphere; glow, spread, texture, note_glow);
     saved.workspace.interaction.ui_scale = v;
     // These owners have NO ValueBar/RangeBar today. Still pass through their
     // real shared load boundary; zero Video visits below explicitly records
@@ -160,7 +161,7 @@ fn scenarios() -> Vec<Scenario> {
             SettingsPane::Tab(panes::Tab::Tuning) => 7,
             SettingsPane::Page(DisplayPage::Colors) => 2,
             SettingsPane::Page(DisplayPage::Lattice) => 25,
-            SettingsPane::Page(DisplayPage::Analyzer) => 12,
+            SettingsPane::Page(DisplayPage::Analyzer) => 16,
             SettingsPane::Page(DisplayPage::Lighting) => 28,
             SettingsPane::Page(DisplayPage::System) => 2,
             SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console | panes::Tab::Notes) => 0,

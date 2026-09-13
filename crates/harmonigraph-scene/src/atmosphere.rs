@@ -1,6 +1,41 @@
-//! Saved controls for the lattice's atmosphere prototype.
+//! Saved controls for the lattice and spectral atmosphere prototypes.
 
 use harmonigraph_core::LatticePos;
+
+/// Light surrounding spectral energy; the measured heatmap stays sharp.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SpectralAtmosphere {
+    pub enabled: bool,
+    pub glow: f32,
+    pub spread: f32,
+    pub texture: f32,
+    pub note_glow: f32,
+}
+
+impl Default for SpectralAtmosphere {
+    fn default() -> Self {
+        Self { enabled: true, glow: 0.65, spread: 1.0, texture: 0.3, note_glow: 0.5 }
+    }
+}
+
+impl SpectralAtmosphere {
+    pub fn sanitized(mut self) -> Self {
+        let fresh = Self::default();
+        let clamp = |value: f32, fallback: f32, low, high| {
+            if value.is_finite() {
+                value.clamp(low, high)
+            } else {
+                fallback
+            }
+        };
+        self.glow = clamp(self.glow, fresh.glow, 0.0, 1.0);
+        self.spread = clamp(self.spread, fresh.spread, 0.25, 3.0);
+        self.texture = clamp(self.texture, fresh.texture, 0.0, 1.0);
+        self.note_glow = clamp(self.note_glow, fresh.note_glow, 0.0, 1.0);
+        self
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

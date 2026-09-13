@@ -1003,9 +1003,9 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
     let path = state.workspace.dock.find_tab(&tab).expect("the Display tab");
     state.workspace.dock.set_active_tab(path).expect("selecting the tab");
-    // Tall enough that the Smoothing bar is on screen below the picker row and
-    // the whole Plot and Spectrum sections above it.
-    let screen_h = 880.0;
+    // Tall enough that Release is actually on screen below the picker,
+    // view and atmosphere controls; a clipped bar cannot start this drag.
+    let screen_h = 1280.0;
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
     // The settings leaf, whose bars run the width of the column at x ~700..1000:
     // from under its tab bar down to the 0.55 split.
