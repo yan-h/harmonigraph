@@ -1,0 +1,48 @@
+    Finished `release` profile [optimized] target(s) in 0.95s
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_render-5d554a4c0a87c825)
+
+running 1 test
+test lattice_tests::timing::atmosphere_costs_by_polyphony ... audit settings: render scale 1, glow reach 4.795308, strength 0.57099295, atmosphere AtmosphereSettings { enabled: true, nebula_depth: 0.13964213, nebula_scale: 0.5817162, nebula_speed: 1.0, wide_strength: 0.052935988, wide_spread: 1.610383, breath_amount: 0.5829385, breath_speed: 1.8134576 }
+adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+12 MIDI notes / half-scale: target [768, 768], 337 glow candidates, 213 global
+12 MIDI notes / half-scale: cold prepare CPU 105.151 ms (includes pipeline/target creation), bloom 0.6339277
+12 MIDI notes / half-scale: submit through completion 16.676 ms median (p10 14.813, p90 33.554); includes final paint, host encoding and waiting
+12 MIDI notes / half-scale: callback CPU 0.077 ms median
+12 MIDI notes / half-scale: 81 names on 1025 lit nodes at 1536x1536: prepare's encoder 1.046 ms/frame (p10 0.350, p90 8.929, 120 frames); prepare CPU 0.464 ms median
+METAL_TIMING_ASSETS Statistics { loaded: 52, source: 0, load_failed: 0, rejected: 0 }
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 262 filtered out; finished in 3.15s
+
+    Finished `release` profile [optimized] target(s) in 0.21s
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_render-5d554a4c0a87c825)
+
+running 1 test
+test lattice_tests::timing::atmosphere_costs_by_polyphony ... audit settings: render scale 1, glow reach 4.795308, strength 0.57099295, atmosphere AtmosphereSettings { enabled: true, nebula_depth: 0.13964213, nebula_scale: 0.5817162, nebula_speed: 1.0, wide_strength: 0.052935988, wide_spread: 1.610383, breath_amount: 0.5829385, breath_speed: 1.8134576 }
+adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+12 MIDI notes / all: target [1536, 1536], 337 glow candidates, 285 global
+12 MIDI notes / all: cold prepare CPU 35.748 ms (includes pipeline/target creation), bloom 0.6339277
+12 MIDI notes / all: submit through completion 57.764 ms median (p10 51.158, p90 72.634); includes final paint, host encoding and waiting
+12 MIDI notes / all: callback CPU 0.099 ms median
+12 MIDI notes / all: 81 names on 1025 lit nodes at 1536x1536: prepare's encoder 1.208 ms/frame (p10 0.616, p90 12.704, 120 frames); prepare CPU 0.738 ms median
+METAL_TIMING_ASSETS Statistics { loaded: 52, source: 0, load_failed: 0, rejected: 0 }
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 262 filtered out; finished in 8.38s
+
+    Finished `release` profile [optimized] target(s) in 0.38s
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_render-5d554a4c0a87c825)
+
+running 1 test
+test lattice_tests::timing::atmosphere_costs_by_polyphony ... audit settings: render scale 1, glow reach 4.795308, strength 0.57099295, atmosphere AtmosphereSettings { enabled: true, nebula_depth: 0.13964213, nebula_scale: 0.5817162, nebula_speed: 1.0, wide_strength: 0.052935988, wide_spread: 1.610383, breath_amount: 0.5829385, breath_speed: 1.8134576 }
+adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+12 MIDI notes / no-glow: target [1536, 1536], 0 glow candidates, 0 global
+12 MIDI notes / no-glow: cold prepare CPU 36.626 ms (includes pipeline/target creation), bloom 0.6339277
+12 MIDI notes / no-glow: submit through completion 9.416 ms median (p10 7.962, p90 27.171); includes final paint, host encoding and waiting
+12 MIDI notes / no-glow: callback CPU 0.064 ms median
+12 MIDI notes / no-glow: 81 names on 1025 lit nodes at 1536x1536: prepare's encoder 0.406 ms/frame (p10 0.232, p90 1.704, 120 frames); prepare CPU 0.442 ms median
+METAL_TIMING_ASSETS Statistics { loaded: 52, source: 0, load_failed: 0, rejected: 0 }
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 262 filtered out; finished in 2.01s
+

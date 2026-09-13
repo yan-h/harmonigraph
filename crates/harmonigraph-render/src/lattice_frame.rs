@@ -491,13 +491,6 @@ impl LatticeCallback {
                         // mapped onto the target's pixels.
                         lit: 0.0,
                         accumulation: scene.glow_accumulation,
-                        wide_strength: if atmosphere.enabled {
-                            atmosphere.wide_strength
-                        } else {
-                            0.0
-                        },
-                        wide_spread: atmosphere.wide_spread,
-                        padding: Float2([0.0; 2]),
                     }
                 } else {
                     bytemuck::Zeroable::zeroed()

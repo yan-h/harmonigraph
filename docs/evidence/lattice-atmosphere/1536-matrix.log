@@ -1,0 +1,59 @@
+   Compiling harmonigraph-render v0.4.0 (/Users/yan/.codex/worktrees/d360/harmonigraph/crates/harmonigraph-render)
+    Finished `release` profile [optimized] target(s) in 52.47s
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_render-5d554a4c0a87c825)
+
+running 1 test
+test lattice_tests::timing::atmosphere_costs_by_polyphony ... audit settings: render scale 1, glow reach 4.795308, strength 0.57099295, atmosphere AtmosphereSettings { enabled: true, nebula_depth: 0.13964213, nebula_scale: 0.5817162, nebula_speed: 1.0, wide_strength: 0.052935988, wide_spread: 1.610383, breath_amount: 0.5829385, breath_speed: 1.8134576 }
+adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+12 MIDI notes / all: target [1536, 1536], 337 glow candidates, 285 global
+12 MIDI notes / all: cold prepare CPU 35.223 ms (includes pipeline/target creation), bloom 0.6339277
+12 MIDI notes / all: submit through completion 58.188 ms median (p10 51.401, p90 71.191); includes final paint, host encoding and waiting
+12 MIDI notes / all: callback CPU 0.103 ms median
+12 MIDI notes / all: 81 names on 1025 lit nodes at 1536x1536: prepare's encoder 1.055 ms/frame (p10 0.534, p90 6.291, 120 frames); prepare CPU 0.610 ms median
+METAL_TIMING_ASSETS Statistics { loaded: 52, source: 0, load_failed: 0, rejected: 0 }
+adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+12 MIDI notes / off: target [1536, 1536], 221 glow candidates, 193 global
+12 MIDI notes / off: cold prepare CPU 52.004 ms (includes pipeline/target creation), bloom 0.6339277
+12 MIDI notes / off: submit through completion 51.858 ms median (p10 45.739, p90 63.166); includes final paint, host encoding and waiting
+12 MIDI notes / off: callback CPU 0.075 ms median
+12 MIDI notes / off: 81 names on 1025 lit nodes at 1536x1536: prepare's encoder 1.497 ms/frame (p10 0.428, p90 26.433, 120 frames); prepare CPU 0.635 ms median
+METAL_TIMING_ASSETS Statistics { loaded: 104, source: 0, load_failed: 0, rejected: 0 }
+adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+12 MIDI notes / no-wide: target [1536, 1536], 221 glow candidates, 193 global
+12 MIDI notes / no-wide: cold prepare CPU 116.051 ms (includes pipeline/target creation), bloom 0.6339277
+12 MIDI notes / no-wide: submit through completion 51.006 ms median (p10 43.283, p90 73.667); includes final paint, host encoding and waiting
+12 MIDI notes / no-wide: callback CPU 0.115 ms median
+12 MIDI notes / no-wide: 81 names on 1025 lit nodes at 1536x1536: prepare's encoder 1.147 ms/frame (p10 0.432, p90 6.391, 120 frames); prepare CPU 0.657 ms median
+METAL_TIMING_ASSETS Statistics { loaded: 156, source: 0, load_failed: 0, rejected: 0 }
+adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+12 MIDI notes / no-nebula: target [1536, 1536], 337 glow candidates, 285 global
+12 MIDI notes / no-nebula: cold prepare CPU 204.381 ms (includes pipeline/target creation), bloom 0.6339277
+12 MIDI notes / no-nebula: submit through completion 75.920 ms median (p10 65.280, p90 92.775); includes final paint, host encoding and waiting
+12 MIDI notes / no-nebula: callback CPU 0.130 ms median
+12 MIDI notes / no-nebula: 81 names on 1025 lit nodes at 1536x1536: prepare's encoder 1.496 ms/frame (p10 0.559, p90 9.069, 120 frames); prepare CPU 0.867 ms median
+METAL_TIMING_ASSETS Statistics { loaded: 208, source: 0, load_failed: 0, rejected: 0 }
+adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+12 MIDI notes / no-breath: target [1536, 1536], 337 glow candidates, 285 global
+12 MIDI notes / no-breath: cold prepare CPU 79.460 ms (includes pipeline/target creation), bloom 0.6339277
+12 MIDI notes / no-breath: submit through completion 95.472 ms median (p10 71.073, p90 145.311); includes final paint, host encoding and waiting
+12 MIDI notes / no-breath: callback CPU 0.084 ms median
+12 MIDI notes / no-breath: 81 names on 1025 lit nodes at 1536x1536: prepare's encoder 4.398 ms/frame (p10 0.320, p90 63.720, 120 frames); prepare CPU 1.357 ms median
+METAL_TIMING_ASSETS Statistics { loaded: 260, source: 0, load_failed: 0, rejected: 0 }
+adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+12 MIDI notes / half-scale: target [768, 768], 337 glow candidates, 213 global
+12 MIDI notes / half-scale: cold prepare CPU 1852.145 ms (includes pipeline/target creation), bloom 0.6339277
+12 MIDI notes / half-scale: submit through completion 45.588 ms median (p10 25.412, p90 115.490); includes final paint, host encoding and waiting
+12 MIDI notes / half-scale: callback CPU 0.146 ms median
+12 MIDI notes / half-scale: 81 names on 1025 lit nodes at 1536x1536: prepare's encoder 2.929 ms/frame (p10 0.701, p90 13.812, 120 frames); prepare CPU 5.523 ms median
+METAL_TIMING_ASSETS Statistics { loaded: 312, source: 0, load_failed: 0, rejected: 0 }
+adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+12 MIDI notes / no-glow: target [1536, 1536], 0 glow candidates, 0 global
+12 MIDI notes / no-glow: cold prepare CPU 1727.918 ms (includes pipeline/target creation), bloom 0.6339277
+12 MIDI notes / no-glow: submit through completion 14.522 ms median (p10 10.454, p90 34.568); includes final paint, host encoding and waiting
+12 MIDI notes / no-glow: callback CPU 0.075 ms median
+12 MIDI notes / no-glow: 81 names on 1025 lit nodes at 1536x1536: prepare's encoder 0.711 ms/frame (p10 0.235, p90 3.845, 120 frames); prepare CPU 0.691 ms median
+METAL_TIMING_ASSETS Statistics { loaded: 364, source: 0, load_failed: 0, rejected: 0 }
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 262 filtered out; finished in 69.82s
+

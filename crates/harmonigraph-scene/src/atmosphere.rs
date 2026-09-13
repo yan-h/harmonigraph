@@ -9,8 +9,6 @@ pub struct AtmosphereSettings {
     pub nebula_depth: f32,
     pub nebula_scale: f32,
     pub nebula_speed: f32,
-    pub wide_strength: f32,
-    pub wide_spread: f32,
     pub breath_amount: f32,
     pub breath_speed: f32,
 }
@@ -22,8 +20,6 @@ impl Default for AtmosphereSettings {
             nebula_depth: 0.139_642_13,
             nebula_scale: 0.581_716_2,
             nebula_speed: 1.0,
-            wide_strength: 0.052_935_988,
-            wide_spread: 1.610_383,
             breath_amount: 0.582_938_5,
             breath_speed: 1.813_457_6,
         }
@@ -43,8 +39,6 @@ impl AtmosphereSettings {
         self.nebula_depth = clamp(self.nebula_depth, fresh.nebula_depth, 0.0, 1.0);
         self.nebula_scale = clamp(self.nebula_scale, fresh.nebula_scale, 0.25, 4.0);
         self.nebula_speed = clamp(self.nebula_speed, fresh.nebula_speed, 0.0, 20.0);
-        self.wide_strength = clamp(self.wide_strength, fresh.wide_strength, 0.0, 1.0);
-        self.wide_spread = clamp(self.wide_spread, fresh.wide_spread, 1.0, 6.0);
         self.breath_amount = clamp(self.breath_amount, fresh.breath_amount, 0.0, 1.0);
         self.breath_speed = clamp(self.breath_speed, fresh.breath_speed, 0.0, 4.0);
         self

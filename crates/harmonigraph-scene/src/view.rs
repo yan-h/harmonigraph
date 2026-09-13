@@ -1004,15 +1004,14 @@ pub struct ViewConfig {
     /// composite is then exactly the plain scene, so there is deliberately
     /// no separate on/off toggle.
     pub bloom_strength: f32,
-    /// The close halo: how far past a node's outermost drawn edge its light
+    /// The node halo: how far past a node's outermost drawn edge its light
     /// spreads, in the quad UV units the layer sizes are in. 0 turns it off —
     /// nothing is drawn at all — so the glow's other fields need no toggle of
     /// their own, and the Glow section greys them under it.
     ///
     /// What it draws is every sounding octave's hue laid round the node by
     /// angle, over a falloff sized to the whole node: the node's outermost
-    /// drawn edge plus this reach is the close falloff's domain. Atmosphere
-    /// can add a wider tail whose span is a multiple of that domain.
+    /// drawn edge plus this reach is the falloff's domain and outer limit.
     ///
     /// [`glow_curve`](Self::glow_curve) says how much light is left at each
     /// distance inside that span. Keeping the two separate makes a wide Reach
@@ -1021,7 +1020,7 @@ pub struct ViewConfig {
     /// second picture — several lattice steps, where every node's light
     /// overlaps its neighbourhood's.
     ///
-    /// Both glow components switch off at 0: the view draws exactly the
+    /// The glow switches off at 0: the view draws exactly the
     /// ink the ring stack describes and nothing around it.
     ///
     /// Every node's glow is drawn into a target of its own, with SCREEN
@@ -1042,7 +1041,7 @@ pub struct ViewConfig {
     /// plugin draws. This is a layer of the lattice's nodes, drawn from the
     /// same octave colours their discs are.
     pub glow_reach: f32,
-    /// Experimental glow texture, wide tail and breathing, shared by editor and exports.
+    /// Experimental glow texture and breathing, shared by editor and exports.
     pub atmosphere: AtmosphereSettings,
     /// How much light the node glow lays down. Inert while
     /// [`glow_reach`](Self::glow_reach) is 0.
@@ -2357,7 +2356,7 @@ impl Default for ViewConfig {
             // the two below.
             plus_arm: 0.305_142_85,
             // A hairline stroke, so the crosses stay marks rather than blocks
-            // through the wide glow field.
+            // through the node glow field.
             plus_width: 0.045_857_143,
             // About two thirds of each arm is taper, so the marker arrives at
             // a fine point rather than carrying its width to the tip.
@@ -2380,7 +2379,7 @@ impl Default for ViewConfig {
             bloom_strength: 0.633_927_7,
             // A reach spanning several lattice steps turns each node's light
             // into a shared field, at just over half strength as captured
-            // from the DAW on 2026-09-13. The wide tail adds a softer spread.
+            // from the DAW on 2026-09-13.
             glow_reach: 4.795_308,
             atmosphere: AtmosphereSettings::default(),
             glow_strength: 0.570_992_95,
