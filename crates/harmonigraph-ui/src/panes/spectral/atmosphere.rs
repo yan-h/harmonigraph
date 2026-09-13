@@ -93,15 +93,6 @@ pub(super) fn draw_profile(
         painter.add(halo);
     }
 
-    // A muted color from this palette gives black samples a visible body.
-    // Apply the floor after shading, so Softness cannot dim it away.
-    let anchor = cell_color(cfg.spectrogram_gradient, 0.35);
-    let peak = f32::from(anchor.r().max(anchor.g()).max(anchor.b()));
-    let floor_tint = [anchor.r(), anchor.g(), anchor.b()].map(|channel| {
-        let hue = if peak > 0.0 { f32::from(channel) / peak } else { 1.0 };
-        0.75 * hue + 0.25
-    });
-    let minimum = cfg.analyzer_min_brightness.clamp(0.0, 1.0) * 255.0;
     let mut body = Mesh::default();
     for &(t, d, color) in &samples {
         // A dark translucent foot, a colored body, then the exact measured
@@ -110,20 +101,20 @@ pub(super) fn draw_profile(
         let plain_alpha = if d * axes.depth_len() > 0.5 { 210.0 / 255.0 } else { 0.0 };
         for (fraction, alpha) in [(0.0, 0.28), (0.72, 0.59), (1.0, 0.86)] {
             let alpha = egui::lerp(plain_alpha..=alpha * active, softness);
-            let mut shaded = tint(color, alpha);
-            let peak = f32::from(shaded.r().max(shaded.g()).max(shaded.b()));
-            let floor = minimum * active;
-            if peak < floor {
-                let rgb = [shaded.r(), shaded.g(), shaded.b()];
-                let lifted: [f32; 3] =
-                    std::array::from_fn(|i| f32::from(rgb[i]) + floor_tint[i] * (floor - peak));
-                let scale = floor / lifted.into_iter().fold(0.0_f32, f32::max);
-                let [r, g, b] = lifted.map(|v| (v * scale).round() as u8);
-                shaded = Color32::from_rgba_premultiplied(r, g, b, shaded.a().max(r.max(g).max(b)));
-            }
-            vertex(&mut body, t, d * fraction, shaded);
+            vertex(&mut body, t, d * fraction, tint(color, alpha));
         }
     }
     connect(&mut body, samples.len(), 3);
     painter.add(body);
+
+    // The white contour supplies contrast at the palette's dark end.
+    // Its color, width and opacity never depend on the material's softness.
+    let opacity = cfg.keyline.clamp(0.0, 1.0);
+    if opacity > 0.004 && samples.iter().any(|&(_, d, _)| d > 0.0) {
+        let top = samples.iter().map(|&(t, d, _)| axes.at(t, sd(d))).collect();
+        painter.add(egui::Shape::line(
+            top,
+            egui::Stroke::new(1.0, Color32::WHITE.gamma_multiply(opacity)),
+        ));
+    }
 }

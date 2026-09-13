@@ -545,13 +545,16 @@ fn a_blob_naming_a_curve_time_off_its_own_bar_opens_on_one_that_fits() {
 
 #[test]
 fn analyzer_scalars_are_normalized_before_any_settings_are_drawn() {
-    let previous: SpectrumConfig = ron::from_str("(keyline:0.9, floor_db:-90.0)").unwrap();
-    assert_eq!(previous.analyzer_min_brightness, SpectrumConfig::default().analyzer_min_brightness);
+    let previous: SpectrumConfig =
+        ron::from_str("(analyzer_min_brightness:0.9, floor_db:-90.0)").unwrap();
+    assert_eq!(previous.keyline, SpectrumConfig::default().keyline);
     assert_eq!(previous.floor_db, -90.0);
+    let outlined: SpectrumConfig = ron::from_str("(keyline:0.9)").unwrap();
+    assert_eq!(outlined.keyline, 0.9);
     type Field = fn(&mut SpectrumConfig) -> &mut f32;
     let fields: [(Field, f32, f32); 6] = [
         (|cfg| &mut cfg.tilt, -6.0, 0.0),
-        (|cfg| &mut cfg.analyzer_min_brightness, 0.0, 1.0),
+        (|cfg| &mut cfg.keyline, 0.0, 1.0),
         (|cfg| &mut cfg.roll_fraction, 0.0, 1.0),
         (|cfg| &mut cfg.roll_seconds, ROLL_SECONDS_MIN, ROLL_SECONDS_MAX),
         (|cfg| &mut cfg.roll_thickness, 0.2, 2.0),

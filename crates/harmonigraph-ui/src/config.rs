@@ -372,9 +372,9 @@ pub struct SpectrumConfig {
     /// one of several, and a blob that pinned the old picture would be
     /// preserving it.
     pub marking_scale: f32,
-    /// Minimum brightness of the analyzer's shaded fill, independent of
-    /// softness. Zero leaves the palette's dark end unlit.
-    pub analyzer_min_brightness: f32,
+    /// Opacity of the white analyzer outline, independent of softness.
+    /// Zero hides the outline.
+    pub keyline: f32,
     /// Spectral light and note halos, independent of the lattice's atmosphere.
     pub atmosphere: harmonigraph_scene::SpectralAtmosphere,
     /// Displayed pitch range, as (fractional) MIDI note numbers. The
@@ -644,8 +644,7 @@ impl SpectrumConfig {
         } else {
             fresh.tilt
         };
-        self.analyzer_min_brightness =
-            bounded(self.analyzer_min_brightness, fresh.analyzer_min_brightness, 0.0, 1.0);
+        self.keyline = bounded(self.keyline, fresh.keyline, 0.0, 1.0);
         self.atmosphere = self.atmosphere.sanitized();
         self.roll_fraction = bounded(self.roll_fraction, fresh.roll_fraction, 0.0, 1.0);
         self.roll_seconds =
@@ -887,8 +886,8 @@ impl Default for SpectrumConfig {
             // couple of kHz.
             tilt: -4.5,
             marking_scale: 1.184_416_5,
-            // A faint colored silhouette keeps the palette's dark end visible.
-            analyzer_min_brightness: 0.16,
+            // Keep quiet contours visible without lifting the fill's dark end.
+            keyline: 0.3,
             atmosphere: harmonigraph_scene::SpectralAtmosphere::default(),
             // The analyzer range captured from the DAW on 2026-09-13.
             low_midi: 41.322_09,

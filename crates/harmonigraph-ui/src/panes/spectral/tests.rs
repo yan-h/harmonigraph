@@ -1862,7 +1862,7 @@ fn analyzer_softness_is_independent_and_keeps_the_measured_contour() {
     let mut cfg = SpectrumConfig {
         show_spectrogram: false,
         show_roll: false,
-        analyzer_min_brightness: 0.0,
+        keyline: 0.0,
         ..Default::default()
     };
     let meshes = |cfg| {
@@ -1910,7 +1910,7 @@ fn analyzer_softness_is_independent_and_keeps_the_measured_contour() {
 }
 
 #[test]
-fn analyzer_visibility_lifts_quiet_fill_after_shading_but_leaves_silence_dark() {
+fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
     let mut cfg = SpectrumConfig {
         floor_db: -100.0,
         ceiling_db: 0.0,
@@ -1934,57 +1934,66 @@ fn analyzer_visibility_lifts_quiet_fill_after_shading_but_leaves_silence_dark() 
                 1.0,
             );
         });
-        let meshes: Vec<_> = out
-            .shapes
-            .into_iter()
-            .filter_map(|s| match s.shape {
-                egui::Shape::Mesh(mesh) => Some(mesh),
-                _ => None,
-            })
-            .collect();
+        let (mut meshes, mut outlines) = (Vec::new(), Vec::new());
+        for s in out.shapes {
+            match s.shape {
+                egui::Shape::Mesh(mesh) => meshes.push(mesh),
+                egui::Shape::Path(path) => outlines.push(path),
+                _ => {}
+            }
+        }
         assert_eq!(meshes.len(), if cfg.atmosphere.analyzer_softness > 0.0 { 2 } else { 1 });
-        meshes.last().unwrap().clone()
+        (meshes, outlines)
     };
-    let rgb = |v: &egui::epaint::Vertex| [v.color.r(), v.color.g(), v.color.b()];
-    let mut quiet = None;
+    let mut contour = None;
     for softness in [0.0, 0.5, 1.0] {
         cfg.atmosphere.analyzer_softness = softness;
-        cfg.analyzer_min_brightness = 0.0;
-        let unlit = draw(cfg, &visible);
-        cfg.analyzer_min_brightness = 0.16;
-        let lit = draw(cfg, &visible);
-        assert_eq!(lit.vertices.len(), 15);
-        for (before, after) in unlit.vertices.iter().zip(&lit.vertices) {
-            assert_eq!(before.pos, after.pos, "visibility moved the measured contour");
-            assert!(rgb(after).into_iter().all(|c| c <= after.color.a()));
-        }
-        assert!(lit.vertices[..3].iter().all(|v| v.color == egui::Color32::TRANSPARENT));
-        assert!(
-            unlit.vertices[6..12].iter().all(|v| rgb(v).into_iter().all(|c| c <= 2)),
-            "fixture must reach near-black measured frequencies"
+        cfg.keyline = 0.3;
+        let (meshes, outlines) = draw(cfg, &visible);
+        assert_eq!(outlines.len(), 1);
+        assert_eq!(outlines[0].points.len(), visible.len());
+        assert_eq!(
+            outlines[0].stroke,
+            egui::Stroke::new(1.0, egui::Color32::WHITE.gamma_multiply(0.3)).into()
         );
-        let color = rgb(&lit.vertices[6]);
-        assert_eq!(*color.iter().max().unwrap(), 41);
-        assert!(*color.iter().min().unwrap() < 30, "visibility lost the palette tint");
-        assert!(
-            lit.vertices[3..6].iter().all(|v| *rgb(v).iter().max().unwrap() < 41),
-            "visibility did not fade toward the analyzer floor"
+        assert_eq!(
+            contour.get_or_insert(outlines.clone()),
+            &outlines,
+            "softness changed the outline"
         );
-        assert!(lit.vertices[6..12].iter().all(|v| rgb(v) == color));
-        assert_eq!(quiet.get_or_insert(color), &color, "softness dimmed the visibility floor");
-        assert_eq!(&lit.vertices[12..], &unlit.vertices[12..], "visibility changed bright fill");
+        let body = meshes.last().unwrap();
+        assert_eq!(body.vertices.len(), 15);
+        assert!(
+            body.vertices[6..12].iter().all(|v| v.color.r().max(v.color.g()).max(v.color.b()) <= 2),
+            "quiet measured frequencies must keep their near-black fill"
+        );
+        assert!(
+            body.vertices[8].pos.distance(body.vertices[6].pos) > 0.5,
+            "fixture needs a visible quiet contour"
+        );
+        cfg.keyline = 0.7;
+        let (brighter_meshes, brighter_outlines) = draw(cfg, &visible);
+        assert_eq!(brighter_meshes, meshes, "outline opacity changed the fill or halo");
+        assert_eq!(brighter_outlines[0].points, outlines[0].points);
+        assert_eq!(
+            brighter_outlines[0].stroke,
+            egui::Stroke::new(1.0, egui::Color32::WHITE.gamma_multiply(0.7)).into()
+        );
+        cfg.keyline = 0.0;
+        let (hidden_meshes, hidden_outlines) = draw(cfg, &visible);
+        assert_eq!(hidden_meshes, meshes);
+        assert!(hidden_outlines.is_empty(), "zero opacity must hide the outline");
     }
-    cfg.spectrogram_gradient.hue_start += 120.0;
-    assert_ne!(
-        rgb(&draw(cfg, &visible).vertices[6]),
-        quiet.unwrap(),
-        "visibility ignored the palette"
-    );
+    cfg.keyline = 1.0;
     cfg.tilt = -6.0;
     assert!(loudness_db(&cfg, -120.0, 135.0) > 0.05, "fixture must lift the stored silence floor");
-    let silence = draw(cfg, &[(135.0, 0.0, -120.0), (135.0, 1.0, -120.0)]);
+    let (silence, outlines) = draw(cfg, &[(135.0, 0.0, -120.0), (135.0, 1.0, -120.0)]);
+    assert!(outlines.is_empty(), "digital silence must not draw an outline");
     assert!(
-        silence.vertices.iter().all(|v| v.color == egui::Color32::TRANSPARENT),
+        silence
+            .iter()
+            .flat_map(|mesh| &mesh.vertices)
+            .all(|v| v.color == egui::Color32::TRANSPARENT),
         "tilt gave digital silence a visible body"
     );
 }

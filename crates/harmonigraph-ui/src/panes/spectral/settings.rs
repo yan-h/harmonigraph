@@ -120,9 +120,7 @@ pub(crate) fn spectrum_settings_pane(
     ValueBar::new(&mut atmosphere.diffusion, 0.0..=1.0, "Diffusion")
         .percent().show(ui).on_hover_text("Smooth fine spectrogram detail at every brightness. 0% restores the detailed heatmap; 100% uses only the softened field.");
     ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")
-        .percent().show(ui).on_hover_text("Blend the live analyzer from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram diffusion and minimum brightness.");
-    ValueBar::new(&mut cfg.analyzer_min_brightness, 0.0..=1.0, "Minimum brightness")
-        .percent().show(ui).on_hover_text("Keep quiet analyzer frequencies visible with a faint color from the current palette. Applied after shading, independently of Softness. 0% leaves the dark end unlit; silence still disappears.");
+        .percent().show(ui).on_hover_text("Blend the live analyzer from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram diffusion and outline opacity.");
     ValueBar::new(&mut atmosphere.note_glow, 0.0..=1.0, "Note glow")
         .percent().show(ui).on_hover_text("Additional glow around note ribbons. Adjust their shadows under Display → Lighting → Shadows.");
 
@@ -238,6 +236,10 @@ pub(crate) fn spectrum_settings_pane(
             ui.selectable_value(&mut cfg.tilt, step, option_label(&format!("{step:.1}")));
         }
     });
+
+    ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Outline opacity").percent().show(ui).on_hover_text(
+        "Opacity of the white spectrum outline. Independent of Analyzer softness; 0% hides it.",
+    );
 
     section(ui, "History");
     ui.checkbox(&mut cfg.show_roll, "Show MIDI notes").on_hover_text(

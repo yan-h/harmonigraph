@@ -2,7 +2,7 @@
 
 The Spectral pane can draw the blue-green audio field as softly diffused clouds,
 with the purple-yellow note ribbons standing above it on their existing soft shadows.
-Display → Analyzer → Softness and glow has four independent amounts.
+Display → Analyzer → Softness and glow has three independent amounts.
 Each can be set to zero without switching off the others.
 
 - **Diffusion** removes fine spectrogram detail at every brightness.
@@ -14,11 +14,11 @@ Each can be set to zero without switching off the others.
   and a soft colored halo.
   At 0% only the flat fill remains;
   at 100% the full treatment is applied.
-- **Minimum brightness** keeps quiet analyzer frequencies visible with a faint palette-colored fill.
-  It is applied after shading,
-  so Softness cannot dim the visibility floor.
-  At 0% the palette's dark end stays unlit.
 - **Note glow** adds ribbon bloom without changing the lattice's bloom setting.
+
+**Outline opacity** independently controls the analyzer's white contour under Audio analysis.
+It keeps quiet frequencies visible while their fill retains the palette's dark colors.
+At 0% the outline disappears.
 
 The measured heatmap and its diffused body share one intensity field and one palette lookup.
 A quarter-resolution scalar image of the measured geometry supplies two cascaded separable Gaussian filters.
@@ -52,14 +52,12 @@ The analyzer divider and pane clip still bound this backdrop,
 including when the axes turn or the divider moves.
 
 The analyzer uses the original sample positions for its shaded body,
-with one continuous mesh across the entire Softness range and no outline.
+with one continuous mesh across the entire Softness range.
 Only its surrounding aura is smoothed.
-The fill's minimum brightness uses a muted shade from the current palette,
-blended into shaded colors only when they fall below the requested brightness.
-The floor applies to the final premultiplied color,
-preserving bright vertices and valid alpha without an extra drawing pass.
-It fades continuously over the first half-point of measured height and is zero at silence.
+The white outline follows the measured edge;
+its width and opacity are independent of Softness.
 The stored zero-power level is excluded before tilt can lift it into a visible contour.
+An entirely silent analyzer draws no outline.
 Both audio layers still use the spectral palette;
 note ribbons still use the pitch palette and the existing shadow atlas.
 The grid and now-line keep their reduced contrast independently of these controls.
@@ -84,9 +82,9 @@ The former `enabled`,
 `spread` and `texture` fields are removed and ignored on load;
 previously disabled appearances now use their stored diffusion and note-glow amounts,
 and the new analyzer softness defaults to its full treatment.
-The former `spectrum.keyline` field is also removed;
-its saved opacity is ignored,
-and `spectrum.analyzer_min_brightness` defaults to 16% in existing appearances and takes.
+The `spectrum.keyline` field retains saved outline opacity and defaults to 30% when missing.
+The experimental `spectrum.analyzer_min_brightness` field is discarded;
+appearances saved during that experiment restore the default outline opacity.
 No compatibility shim or version bump is needed for discarded struct fields.
 No stored palette,
 audio analysis or lattice setting is rewritten.

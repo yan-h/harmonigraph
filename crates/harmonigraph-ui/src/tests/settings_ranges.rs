@@ -58,7 +58,7 @@ fn loaded(edge: Edge) -> SharedState {
     }
     poison!(a.camera; yaw, pitch, cabinet_angle, cabinet_scale);
     poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
-        attack, release, analyzer_min_brightness, roll_seconds, roll_thickness, roll_opacity, roll_lead,
+        attack, release, keyline, roll_seconds, roll_thickness, roll_opacity, roll_lead,
         roll_lead_fade, roll_lead_release, note_name_scale, volume_floor_db, volume_ceiling_db);
     poison!(a.spectrum.atmosphere; diffusion, analyzer_softness, note_glow);
     saved.workspace.interaction.ui_scale = v;
