@@ -50,6 +50,10 @@ uniform_group! {
         brightest_pitch: f32,
         render_scale: f32,
         bloom_strength: f32,
+        /// Dusk brightness, warmth, glow-color response, reserved.
+        dusk: Float4,
+        /// Bounded motion offsets, reduced from the f64 presentation clock.
+        dusk_drift: Float4,
     }
 }
 uniform_group! {

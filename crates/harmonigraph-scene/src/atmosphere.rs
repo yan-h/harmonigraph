@@ -2,9 +2,6 @@
 
 use harmonigraph_core::LatticePos;
 
-/// The particle budget is independent of pane size and the number of notes.
-pub const ATMOSPHERE_MOTES_MAX: u32 = 384;
-
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AtmosphereSettings {
@@ -12,17 +9,10 @@ pub struct AtmosphereSettings {
     pub nebula_depth: f32,
     pub nebula_scale: f32,
     pub nebula_speed: f32,
-    pub mote_count: u32,
-    pub warm_fraction: f32,
-    pub mote_size: f32,
-    pub mote_brightness: f32,
-    pub warm_color: [u8; 3],
-    pub cool_color: [u8; 3],
-    pub drift_amount: f32,
-    pub drift_speed: f32,
-    pub twinkle_amount: f32,
-    pub twinkle_speed: f32,
-    pub parallax: f32,
+    pub dusk_strength: f32,
+    pub dusk_warmth: f32,
+    pub dusk_speed: f32,
+    pub dusk_response: f32,
     pub breath_amount: f32,
     pub breath_speed: f32,
 }
@@ -34,17 +24,10 @@ impl Default for AtmosphereSettings {
             nebula_depth: 0.75,
             nebula_scale: 1.0,
             nebula_speed: 1.0,
-            mote_count: 96,
-            warm_fraction: 0.25,
-            mote_size: 1.0,
-            mote_brightness: 1.0,
-            warm_color: [230, 182, 100],
-            cool_color: [100, 137, 180],
-            drift_amount: 1.0,
-            drift_speed: 1.0,
-            twinkle_amount: 0.92,
-            twinkle_speed: 1.0,
-            parallax: 0.0,
+            dusk_strength: 1.0,
+            dusk_warmth: 0.45,
+            dusk_speed: 1.0,
+            dusk_response: 0.25,
             breath_amount: 0.18,
             breath_speed: 1.0,
         }
@@ -64,15 +47,10 @@ impl AtmosphereSettings {
         self.nebula_depth = clamp(self.nebula_depth, fresh.nebula_depth, 0.0, 1.0);
         self.nebula_scale = clamp(self.nebula_scale, fresh.nebula_scale, 0.25, 4.0);
         self.nebula_speed = clamp(self.nebula_speed, fresh.nebula_speed, 0.0, 20.0);
-        self.mote_count = self.mote_count.min(ATMOSPHERE_MOTES_MAX);
-        self.warm_fraction = clamp(self.warm_fraction, fresh.warm_fraction, 0.0, 1.0);
-        self.mote_size = clamp(self.mote_size, fresh.mote_size, 0.25, 4.0);
-        self.mote_brightness = clamp(self.mote_brightness, fresh.mote_brightness, 0.0, 4.0);
-        self.drift_amount = clamp(self.drift_amount, fresh.drift_amount, 0.0, 4.0);
-        self.drift_speed = clamp(self.drift_speed, fresh.drift_speed, 0.0, 4.0);
-        self.twinkle_amount = clamp(self.twinkle_amount, fresh.twinkle_amount, 0.0, 1.0);
-        self.twinkle_speed = clamp(self.twinkle_speed, fresh.twinkle_speed, 0.0, 4.0);
-        self.parallax = clamp(self.parallax, fresh.parallax, 0.0, 1.0);
+        self.dusk_strength = clamp(self.dusk_strength, fresh.dusk_strength, 0.0, 3.0);
+        self.dusk_warmth = clamp(self.dusk_warmth, fresh.dusk_warmth, 0.0, 1.0);
+        self.dusk_speed = clamp(self.dusk_speed, fresh.dusk_speed, 0.0, 4.0);
+        self.dusk_response = clamp(self.dusk_response, fresh.dusk_response, 0.0, 1.0);
         self.breath_amount = clamp(self.breath_amount, fresh.breath_amount, 0.0, 1.0);
         self.breath_speed = clamp(self.breath_speed, fresh.breath_speed, 0.0, 4.0);
         self

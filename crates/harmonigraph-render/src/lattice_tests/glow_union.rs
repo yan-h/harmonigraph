@@ -423,3 +423,73 @@ fn accumulation_sweeps_to_the_original_screen_of_each_colour_channel() {
         assert!(mixed.iter().zip(glow(&mut shooter, &scene)).all(|(a, b)| a.abs_diff(b) <= 1));
     }
 }
+
+#[test]
+fn dusk_borrows_the_rendered_glow_colour_and_rebinds_after_toggles() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 1.0, false);
+    scene.camera = harmonigraph_scene::Camera {
+        projection: harmonigraph_scene::Projection::Orthographic,
+        distance: 28.0,
+        yaw: 0.0,
+        pitch: 0.0,
+        ..Default::default()
+    };
+    scene.atmosphere.dusk_strength = 2.0;
+    scene.atmosphere.dusk_speed = 0.0;
+    scene.atmosphere.dusk_response = 1.0;
+    let mut tint = |color| {
+        scene.pitch_lut.fill(color);
+        shooter.shot_again(&scene)
+    };
+    let red = tint(glam::vec4(1.0, 0.02, 0.01, 1.0));
+    let blue = tint(glam::vec4(0.01, 0.02, 1.0, 1.0));
+    // The actual glow target is the support mask: measure background colour
+    // where foreground light cannot itself account for the red/blue change.
+    let field = read_glow(&shooter);
+    let borrowed = red
+        .chunks_exact(4)
+        .zip(blue.chunks_exact(4))
+        .zip(field.chunks_exact(4))
+        .filter(|((r, b), light)| light[3] == 0 && r[0] > b[0] + 2 && b[2] > r[2] + 2)
+        .count();
+    assert!(borrowed > 1000, "actual glow hue must reach unlit background: {borrowed}");
+    scene.atmosphere.dusk_response = 0.0;
+    let fixed = shooter.shot_again(&scene);
+    scene.atmosphere.dusk_response = 1.0;
+    assert_eq!(
+        blue,
+        shooter.shot_again(&scene),
+        "changing response cannot rebuild or reset the source"
+    );
+    assert_ne!(blue, fixed, "zero response must restore the independent dusk palette");
+    // Exercise both composite-binding rebuilds on one pane. After glow is
+    // disabled the tint reads a transparent stand-in, not the old blue light.
+    scene.nodes.clear();
+    let empty = shooter.shot_again(&scene);
+    scene.glow_reach = 0.0;
+    assert_eq!(empty, shooter.shot_again(&scene));
+    scene.bloom_strength = 1.0;
+    assert_eq!(empty, shooter.shot_again(&scene));
+    scene.glow_reach = 2.88;
+    assert_eq!(empty, shooter.shot_again(&scene));
+}
+
+#[test]
+fn dusk_draws_without_geometry_or_glow_and_uses_the_presentation_clock() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[], 0.0, false);
+    scene.pluses.clear();
+    scene.atmosphere.dusk_strength = 1.0;
+    assert!(scene.glow_timing.is_none());
+    let first = shooter.shot(&scene);
+    assert!(first.chunks_exact(4).filter(|p| p[..3].iter().any(|c| *c > 5)).count() > 1000);
+    scene.atmosphere_time = 20.0;
+    let later = shooter.shot_again(&scene);
+    assert_ne!(first, later, "the dusk clock must run even with glow off");
+    assert_eq!(later, shooter.shot(&scene), "duplicate draws and fresh panes agree");
+    scene.atmosphere.dusk_speed = 0.0;
+    assert_eq!(first, shooter.shot_again(&scene));
+    scene.atmosphere.enabled = false;
+    assert!(shooter.shot_again(&scene).chunks_exact(4).all(|p| p[..3] == [0; 3]));
+}

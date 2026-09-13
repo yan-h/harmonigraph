@@ -49,10 +49,8 @@ fn loaded(edge: Edge) -> SharedState {
         plus_arm, plus_taper, plus_width, glow_reach, glow_strength, glow_accumulation,
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
-    poison!(a.view.atmosphere; nebula_depth, nebula_scale, nebula_speed, warm_fraction,
-        mote_size, mote_brightness, drift_amount, drift_speed, twinkle_amount,
-        twinkle_speed, parallax, breath_amount, breath_speed);
-    a.view.atmosphere.mote_count = if matches!(edge, Edge::High) { u32::MAX } else { 0 };
+    poison!(a.view.atmosphere; nebula_depth, nebula_scale, nebula_speed,
+        dusk_strength, dusk_warmth, dusk_speed, dusk_response, breath_amount, breath_speed);
     a.view.extent_sevens = edge.integer();
     a.view.center_sevens = edge.integer();
     for shadow in a.view.shadow.groups_mut() {
@@ -163,7 +161,7 @@ fn scenarios() -> Vec<Scenario> {
             SettingsPane::Page(DisplayPage::Colors) => 2,
             SettingsPane::Page(DisplayPage::Lattice) => 25,
             SettingsPane::Page(DisplayPage::Analyzer) => 11,
-            SettingsPane::Page(DisplayPage::Lighting) => 35,
+            SettingsPane::Page(DisplayPage::Lighting) => 30,
             SettingsPane::Page(DisplayPage::System) => 2,
             SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console | panes::Tab::Notes) => 0,
             _ => panic!("add the new settings page's range scenario"),

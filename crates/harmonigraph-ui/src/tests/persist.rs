@@ -1658,13 +1658,13 @@ fn a_view_carrying_a_key_the_struct_does_not_have_loads_intact() {
 
 #[test]
 fn atmosphere_keys_default_individually_and_normalize_on_load() {
-    use harmonigraph_scene::{AtmosphereSettings, ATMOSPHERE_MOTES_MAX};
+    use harmonigraph_scene::AtmosphereSettings;
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.atmosphere = AtmosphereSettings {
         nebula_depth: 0.45,
-        mote_count: 217,
-        cool_color: [19, 128, 219],
+        dusk_response: 0.37,
+        dusk_warmth: 0.62,
         breath_speed: 2.2,
         ..Default::default()
     };
@@ -1691,13 +1691,13 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
         }
     }
     state.picture.appearance.view.atmosphere.nebula_depth = f32::NAN;
-    state.picture.appearance.view.atmosphere.mote_count = u32::MAX;
+    state.picture.appearance.view.atmosphere.dusk_strength = 999.0;
     state.picture.appearance.view.atmosphere.breath_amount = 7.0;
     let restored = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
     assert_eq!(restored.view.atmosphere.nebula_depth, AtmosphereSettings::default().nebula_depth);
-    assert_eq!(restored.view.atmosphere.mote_count, ATMOSPHERE_MOTES_MAX);
+    assert_eq!(restored.view.atmosphere.dusk_strength, 3.0);
     assert_eq!(restored.view.atmosphere.breath_amount, 1.0);
-    assert_eq!(restored.view.atmosphere.cool_color, [19, 128, 219]);
+    assert_eq!(restored.view.atmosphere.dusk_response, 0.37);
 }
 
 /// The Display page picked in the editor survives the window closing and

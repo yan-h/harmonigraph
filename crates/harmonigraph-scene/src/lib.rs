@@ -36,7 +36,7 @@ pub mod style;
 pub mod trail;
 pub mod view;
 
-pub use atmosphere::{AtmosphereSettings, ATMOSPHERE_MOTES_MAX};
+pub use atmosphere::AtmosphereSettings;
 pub use camera::{Camera, Projection, Projector, VisibleSheet};
 pub use color::{
     gradient_color, grey_of_lightness, hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N,
@@ -954,6 +954,8 @@ pub struct Scene {
     /// renderer callers supply their own [`GlowStep::mix`].
     pub glow_timing: Option<GlowTiming>,
     pub atmosphere: AtmosphereSettings,
+    /// Decorative presentation time, including frames with the node glow disabled.
+    pub atmosphere_time: f64,
 }
 
 impl Scene {

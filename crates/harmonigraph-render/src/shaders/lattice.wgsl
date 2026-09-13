@@ -12,6 +12,8 @@ struct CompositeParams {
     brightest_pitch: f32,
     render_scale: f32,
     bloom_strength: f32,
+    dusk: vec4<f32>,
+    dusk_drift: vec4<f32>,
 };
 
 struct CameraParams {
