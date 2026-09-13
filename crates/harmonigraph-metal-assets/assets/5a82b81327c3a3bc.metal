@@ -10,11 +10,10 @@ struct Cloud {
     metal::float2 step;
     float glow;
     float texture;
-    metal::float2 time;
     float ppp;
-    float time_scale;
-    metal::float2 time_direction;
-    metal::float2 pitch_direction;
+    float _pad0_;
+    float _pad1_;
+    float _pad2_;
 };
 struct Vertex {
     metal::float4 position;
@@ -94,6 +93,6 @@ fragment fs_wide_vOutput fs_wide_v(
 ) {
     const Vertex in = { position, varyings.uv };
     float _e5 = cloud.step.y;
-    metal::float4 _e10 = filtered(in.uv, metal::float2(0.0, _e5 * 3.0), source, linear_sampler);
+    metal::float4 _e10 = filtered(in.uv, metal::float2(0.0, _e5 * 5.0), source, linear_sampler);
     return fs_wide_vOutput { _e10 };
 }

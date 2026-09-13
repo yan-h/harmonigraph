@@ -41,11 +41,10 @@ struct Cloud {
     metal::float2 step;
     float glow;
     float texture;
-    metal::float2 time;
     float ppp;
-    float time_scale;
-    metal::float2 time_direction;
-    metal::float2 pitch_direction;
+    float _pad0_;
+    float _pad1_;
+    float _pad2_;
 };
 
 uint stored(
@@ -200,6 +199,15 @@ metal::float4 heatmap_color(
     return metal::float4(c.xyz, 1.0);
 }
 
+metal::float3 linear_from_gamma_rgb(
+    metal::float3 srgb
+) {
+    metal::bool3 cutoff = srgb < metal::float3(0.04045);
+    metal::float3 lower = srgb / metal::float3(12.92);
+    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
+    return metal::select(higher, lower, cutoff);
+}
+
 metal::float4 cloud_color(
     VertexOut in_2,
     constant Locals& locals,
@@ -221,15 +229,15 @@ metal::float4 cloud_color(
     return metal::float4(core + ((metal::float3(1.0) - core) * light), 1.0);
 }
 
-struct fs_cloud_gammaInput {
+struct fs_cloud_linearInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_gammaOutput {
+struct fs_cloud_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_gammaOutput fs_cloud_gamma(
-  fs_cloud_gammaInput varyings [[stage_in]]
+fragment fs_cloud_linearOutput fs_cloud_linear(
+  fs_cloud_linearInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , constant Locals& locals [[buffer(0)]]
 , device type_3 const& grid [[buffer(1)]]
@@ -241,5 +249,6 @@ fragment fs_cloud_gammaOutput fs_cloud_gamma(
 ) {
     const VertexOut in = { position, varyings.slab, varyings.t };
     metal::float4 _e1 = cloud_color(in, locals, grid, lut, close_light, cloud_sampler, cloud, _buffer_sizes);
-    return fs_cloud_gammaOutput { _e1 };
+    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
+    return fs_cloud_linearOutput { metal::float4(_e3, 1.0) };
 }

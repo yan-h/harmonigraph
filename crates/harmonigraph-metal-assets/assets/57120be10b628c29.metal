@@ -10,11 +10,10 @@ struct Cloud {
     metal::float2 step;
     float glow;
     float texture;
-    metal::float2 time;
     float ppp;
-    float time_scale;
-    metal::float2 time_direction;
-    metal::float2 pitch_direction;
+    float _pad0_;
+    float _pad1_;
+    float _pad2_;
 };
 struct Vertex {
     metal::float4 position;

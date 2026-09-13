@@ -10,11 +10,10 @@ struct Cloud {
     metal::float2 step;
     float glow;
     float texture;
-    metal::float2 time;
     float ppp;
-    float time_scale;
-    metal::float2 time_direction;
-    metal::float2 pitch_direction;
+    float _pad0_;
+    float _pad1_;
+    float _pad2_;
 };
 struct Vertex {
     metal::float4 position;
@@ -79,14 +78,14 @@ metal::float4 filtered(
     return metal::float4(_e61 / metal::float3(_e62), 1.0);
 }
 
-struct fs_close_hInput {
+struct fs_wide_hInput {
     metal::float2 uv [[user(loc0), center_perspective]];
 };
-struct fs_close_hOutput {
+struct fs_wide_hOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_close_hOutput fs_close_h(
-  fs_close_hInput varyings [[stage_in]]
+fragment fs_wide_hOutput fs_wide_h(
+  fs_wide_hInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , metal::texture2d<float, metal::access::sample> source [[texture(0)]]
 , metal::sampler linear_sampler [[sampler(0)]]
@@ -94,6 +93,6 @@ fragment fs_close_hOutput fs_close_h(
 ) {
     const Vertex in = { position, varyings.uv };
     float _e5 = cloud.step.x;
-    metal::float4 _e8 = filtered(in.uv, metal::float2(_e5, 0.0), source, linear_sampler);
-    return fs_close_hOutput { _e8 };
+    metal::float4 _e10 = filtered(in.uv, metal::float2(_e5 * 5.0, 0.0), source, linear_sampler);
+    return fs_wide_hOutput { _e10 };
 }
