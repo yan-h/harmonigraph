@@ -32,10 +32,6 @@ use crate::PictureState;
 /// alike.
 const MIN_RIBBON_PX: f32 = 1.5;
 
-/// Keep most of the pitch color even over bright spectral bands, while letting
-/// a little heatmap texture through. The surround has its own full opacity.
-const BODY_OPACITY: f32 = 0.8;
-
 /// Shortest a note may draw along TIME, in DEVICE pixels — the floor that stops
 /// a brief note flickering as the roll scrolls.
 ///
@@ -599,7 +595,7 @@ fn note_instances_with_floor(
         // and whatever its release has left once it is up. Per note and decided
         // once for it, since every segment of a note releases together.
         //
-        // Separate from BODY_OPACITY: release fades the lead without changing
+        // Separate from `roll_opacity`: release fades the lead without changing
         // the retained note's color strength.
         let standing = lead_alpha(note, now, cfg.roll_lead_release);
         // Peekable so the loop can tell which segment is the LAST, which is the
@@ -700,8 +696,8 @@ fn note_instances_with_floor(
             let cap_px = outline_px.min((behind_px - 0.5 * feather_px).max(0.0));
 
             let pitch = (p0 + p1) * 0.5;
-            // A flat pitch color with modest background show-through.
-            let core = note_color(state, pitch, BODY_OPACITY);
+            // A flat pitch color with the configured background show-through.
+            let core = note_color(state, pitch, cfg.roll_opacity);
             // Reading outward: the note, the dark outline standing against
             // every one of its edges and fading out, then whatever the
             // spectrogram is doing.
@@ -999,6 +995,25 @@ mod tests {
     fn one(rects: &[RollInstance]) -> &RollInstance {
         assert_eq!(rects.len(), 1, "expected one note segment, got {}", rects.len());
         &rects[0]
+    }
+
+    /// The ribbon body takes its opacity from the Analyzer setting while the
+    /// dark surround keeps its independent full strength.
+    #[test]
+    fn a_note_uses_the_configured_ribbon_opacity() {
+        let mut state = fresh();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.low_midi = 54.0;
+        state.appearance.spectrum.high_midi = 66.0;
+        state.appearance.spectrum.roll_thickness = 2.0;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+
+        for (opacity, alpha) in [(0.0, 0), (0.25, 64), (0.8, 204), (1.0, 255)] {
+            state.appearance.spectrum.roll_opacity = opacity;
+            let note = *one(&instances(&state, 0.05));
+            assert_eq!(note.core[3], alpha, "opacity {opacity} produced alpha {}", note.core[3]);
+            assert_eq!(note.outline[3], 255, "opacity {opacity} dimmed the surround");
+        }
     }
 
     /// The outline stands the same distance off at every zoom and every note

@@ -1504,14 +1504,15 @@ fn history_stays_editable_without_midi_ribbons() {
         state.picture.appearance.spectrum.show_spectrogram = true;
         let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
         let shapes = tab_body(&mut state, tab, 420.0, PANE_HEIGHT).shapes;
-        ["History duration", "Ribbon width", "Extension release"]
+        ["History duration", "Ribbon width", "Ribbon opacity", "Extension release"]
             .map(|name| track_color(&shapes, one_text_y(&shapes, name)))
     };
     let shown = colors(true);
     let hidden = colors(false);
     assert_eq!(shown[0], hidden[0], "the spectrogram lost its history control");
     assert_ne!(shown[1], hidden[1], "ribbon width stayed live without ribbons");
-    assert_ne!(shown[2], hidden[2], "extension release stayed live without ribbons");
+    assert_ne!(shown[2], hidden[2], "ribbon opacity stayed live without ribbons");
+    assert_ne!(shown[3], hidden[3], "extension release stayed live without ribbons");
 }
 
 /// Each reading's own bar is the LIVE one — Tolerance under Fold, Zoom under
