@@ -77,6 +77,23 @@ fn read_glow(shooter: &Shooter) -> Vec<u8> {
 }
 
 #[test]
+fn a_held_nodes_light_breathes_without_advancing_its_ink_history() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 0.75, false);
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.3, release: 2.5 });
+    let first = glow(&mut shooter, &scene);
+    scene.glow_timing.as_mut().unwrap().now = 4.0;
+    shooter.shot_again(&scene);
+    let later = read_glow(&shooter);
+    assert!(first.iter().any(|&v| v > 20), "the held node must light the target");
+    assert_ne!(first, later, "a constant held note's halo must breathe");
+    // A fresh pane at the same time must agree with the carried pane: breathing
+    // is a display modulation, with no accumulated effect on the ink colour.
+    assert_eq!(later, glow(&mut shooter, &scene));
+}
+
+#[test]
 fn tile_candidates_keep_the_untiled_picture_through_resize_and_reuse() {
     let Some(mut shooter) = Shooter::new([512, 512]) else { return };
     let mut scene = scene(&[1.0; 4], 0.75, true);

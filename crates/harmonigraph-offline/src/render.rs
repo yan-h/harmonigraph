@@ -747,6 +747,28 @@ mod tests {
         assert!(first[mid] != dark[mid], "the glow changed no pixel of frame {mid}");
     }
 
+    #[test]
+    fn lattice_atmosphere_moves_in_silence_and_replays_identically() {
+        let settings = Settings {
+            layout: Layout::preset("lattice").unwrap(),
+            fps: 2.0,
+            end: 3.0,
+            ..settings()
+        };
+        let silent = || {
+            let mut take = take();
+            take.events.clear();
+            take
+        };
+        // No notes, audio, or camera changes: movement can only come from
+        // the atmosphere, through the actual shared pane/egui/GPU draw path.
+        let Some(first) = render_take(silent(), &settings) else { return };
+        assert_eq!(first.len(), 6);
+        assert_ne!(first[0], first[5], "the silent atmosphere is frozen");
+        let second = render_take(silent(), &settings).expect("the same GPU is available");
+        assert_eq!(first, second, "ambient motion depends on render history");
+    }
+
     /// Offline export calls the same pane and paint callbacks as the editor;
     /// exercise that shared route at every UI/export scale promised by #556.
     /// The mixed frame is compared with its two depths shut so a passing render

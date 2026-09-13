@@ -107,6 +107,7 @@ pub(crate) fn draw_lattice(
     response: Option<&egui::Response>,
     stats: Option<std::sync::Arc<harmonigraph_render::LatticeStats>>,
 ) {
+    super::lattice_atmosphere::paint(ui.painter(), rect, state.appearance.camera, now);
     // The lattice this pane shows, which is a different window from the one
     // the pane beside it shows and from the one the names are chosen out of —
     // see `ViewConfig::scrolled`. Derived here, per copy and per frame, and
