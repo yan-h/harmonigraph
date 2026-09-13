@@ -1407,6 +1407,11 @@ fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow()
         [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
     {
         let mut scene = one_node_behind_another();
+        scene.outer_inner = scene.outer_outer - 0.08;
+        for node in &mut scene.nodes {
+            node.melody_level = 0.0;
+            node.bass_level = 0.0;
+        }
         scene.shadow = one_shadow(1.0, 0.18, kernel);
         scene.shadow.lattice_text.width = 0.0;
         scene.shadow.lattice_text.depth = 0.0;
@@ -1436,6 +1441,22 @@ fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow()
             })
             .count();
         assert!(faded > 30, "{kernel:?}: only {faded} rear-label pixels partially faded");
+        if kernel == harmonigraph_scene::ShadowKernel::Gaussian {
+            // Subtract the front-only contribution so foreground ink cannot
+            // count as a hidden label. A faint skirt alone is not occlusion.
+            let mostly_hidden = (0..rear.len())
+                .step_by(4)
+                .filter(|&i| {
+                    let old = i32::from(rear_old[i]) - i32::from(bare_old[i]);
+                    let new = i32::from(rear[i]) - i32::from(bare[i]);
+                    old > 32 && new >= 0 && new * 2 < old
+                })
+                .count();
+            assert!(
+                mostly_hidden > 30,
+                "a wide Gaussian hid most of only {mostly_hidden} rear-label pixels"
+            );
+        }
         // A black clear with no glow or text shadows gives the ordinary node
         // shadow nothing to darken except misplaced ink. This must be exact,
         // including when the label-free bloom attachment is present.
