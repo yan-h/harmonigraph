@@ -3,7 +3,7 @@
 
 use egui::{Color32, Mesh, Painter};
 
-use super::axes::{loudness_db, spectrogram_level_db, Axes, PROFILE_PT};
+use super::axes::{loudness_db, power_db, spectrogram_level_db, Axes};
 use super::spectrogram::cell_color;
 use crate::SpectrumConfig;
 
@@ -19,13 +19,16 @@ pub(super) fn draw_profile(
         return;
     }
     let softness = cfg.atmosphere.sanitized().analyzer_softness;
+    let silence = power_db(0.0);
     let sd = |d| if split < 1.0 { split - d } else { d };
     let samples: Vec<_> = visible
         .iter()
         .map(|&(midi, t, level)| {
             (
                 t,
-                loudness_db(cfg, level, midi) * budget,
+                // Tilt can lift the stored zero-power floor above the plot's
+                // floor at high pitches. It must not give silence a body.
+                if level > silence { loudness_db(cfg, level, midi) * budget } else { 0.0 },
                 cell_color(cfg.spectrogram_gradient, spectrogram_level_db(cfg, level, midi)),
             )
         })
@@ -90,6 +93,15 @@ pub(super) fn draw_profile(
         painter.add(halo);
     }
 
+    // A muted color from this palette gives black samples a visible body.
+    // Apply the floor after shading, so Softness cannot dim it away.
+    let anchor = cell_color(cfg.spectrogram_gradient, 0.35);
+    let peak = f32::from(anchor.r().max(anchor.g()).max(anchor.b()));
+    let floor_tint = [anchor.r(), anchor.g(), anchor.b()].map(|channel| {
+        let hue = if peak > 0.0 { f32::from(channel) / peak } else { 1.0 };
+        0.75 * hue + 0.25
+    });
+    let minimum = cfg.analyzer_min_brightness.clamp(0.0, 1.0) * 255.0;
     let mut body = Mesh::default();
     for &(t, d, color) in &samples {
         // A dark translucent foot, a colored body, then the exact measured
@@ -98,27 +110,20 @@ pub(super) fn draw_profile(
         let plain_alpha = if d * axes.depth_len() > 0.5 { 210.0 / 255.0 } else { 0.0 };
         for (fraction, alpha) in [(0.0, 0.28), (0.72, 0.59), (1.0, 0.86)] {
             let alpha = egui::lerp(plain_alpha..=alpha * active, softness);
-            vertex(&mut body, t, d * fraction, tint(color, alpha));
+            let mut shaded = tint(color, alpha);
+            let peak = f32::from(shaded.r().max(shaded.g()).max(shaded.b()));
+            let floor = minimum * active;
+            if peak < floor {
+                let rgb = [shaded.r(), shaded.g(), shaded.b()];
+                let lifted: [f32; 3] =
+                    std::array::from_fn(|i| f32::from(rgb[i]) + floor_tint[i] * (floor - peak));
+                let scale = floor / lifted.into_iter().fold(0.0_f32, f32::max);
+                let [r, g, b] = lifted.map(|v| (v * scale).round() as u8);
+                shaded = Color32::from_rgba_premultiplied(r, g, b, shaded.a().max(r.max(g).max(b)));
+            }
+            vertex(&mut body, t, d * fraction, shaded);
         }
     }
     connect(&mut body, samples.len(), 3);
     painter.add(body);
-
-    if cfg.keyline > 0.004 {
-        let mut edge = Mesh::default();
-        let half = PROFILE_PT * 0.5 / axes.depth_len().max(1.0);
-        for &(t, d, color) in &samples {
-            let highlight = |v: u8| {
-                egui::lerp(255.0..=f32::from(v) * 0.72 + 255.0 * 0.28, softness).round() as u8
-            };
-            let color = tint(
-                Color32::from_rgb(highlight(color.r()), highlight(color.g()), highlight(color.b())),
-                cfg.keyline,
-            );
-            vertex(&mut edge, t, d - half, color);
-            vertex(&mut edge, t, d + half, color);
-        }
-        connect(&mut edge, samples.len(), 2);
-        painter.add(edge);
-    }
 }

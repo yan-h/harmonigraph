@@ -10,27 +10,10 @@
 
 use crate::PictureState;
 
-/// The profile line along the spectrum curve's top, in points — the light edge
-/// that gives the fill a boundary to be seen by (see
-/// [`keyline`](super::roll::keyline) for what colors it).
-pub(super) const PROFILE_PT: f32 = 1.0;
-
-/// What the spectrum curve stops short of the pane's outer edge by, in POINTS:
-/// half the profile line, which is centred on the curve's top and would
-/// otherwise be half-clipped by the edge.
-///
-/// That is the WHOLE clearance, and deliberately so — at the ceiling the ink
-/// reaches the pane edge and the pane carries no empty band at all. Where the
-/// analyzer ends is already drawn, by the dock separator between it and the
-/// pane beside it; a second boundary inside the picture is one border too
-/// many.
-///
-/// In points rather than as a fraction of the spectrum's share. A fraction is
-/// an empty margin that grows with the pane, so the same picture carries a
-/// thicker border the larger it is drawn, and on a tall analyzer that band is
-/// the loudest empty thing on it. What the room is for is one line, and a line
-/// is the same width at every pane size.
-pub(super) const PLOT_HEADROOM_PT: f32 = PROFILE_PT * 0.5;
+/// Fixed clearance for the analyzer's measured contour, in points.
+/// Keep this independent of shading and pane size, so an appearance edit
+/// never moves the level drawn against the axis.
+pub(super) const PLOT_HEADROOM_PT: f32 = 0.5;
 
 /// How far into the depth axis the spectrum curve may reach: the spectrum's
 /// whole share of it, less [`PLOT_HEADROOM_PT`] expressed in that axis' own

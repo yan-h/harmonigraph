@@ -79,28 +79,6 @@ const MIN_RIBBON_PX: f32 = 1.5;
 /// nothing sounded.
 const MIN_LENGTH_DEVICE_PX: f32 = 2.0;
 
-/// The light edge drawn along the spectrum's profile, at `cfg.keyline`
-/// strength — `None` when the setting is off or too faint to be worth a shape.
-///
-/// The curve takes its colors from the spectrogram gradient, so where it is
-/// quiet it is drawn at that gradient's dark end against the pane's dark
-/// background, with no edge, and the shape stops existing. A light rim gives
-/// it an edge to be seen by. It is a setting because how much is right depends
-/// entirely on the gradient in play — one running to white swallows a rim that
-/// a dimmer or more colored one leaves standing, and the bars reach both.
-///
-/// The threshold is a fade-out floor: below it the line is too faint to be
-/// worth a shape at all.
-///
-/// The profile's edge alone. A note's is the outline [`outline`] draws, which
-/// is a dark surround with its own reach and fade — the profile is one line on
-/// a filled slab rather than a shape to pick out of a picture, and needs
-/// neither.
-pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32> {
-    let strength = cfg.keyline.clamp(0.0, 1.0) * alpha;
-    (strength > 0.004).then_some(Color32::WHITE.gamma_multiply(strength))
-}
-
 /// The dark surround standing outside a note: its selected kernel's whole
 /// reach in screen points and its pane-owned colour.
 ///
