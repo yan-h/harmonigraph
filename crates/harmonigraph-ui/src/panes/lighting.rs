@@ -6,7 +6,7 @@ use crate::AppearanceDocument;
 use harmonigraph_scene::{
     GlowCurve, ShadowKernel, ShadowSettings, ShadowStyle, ViewConfig, GLOW_BALLISTICS_MAX,
     GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX,
-    SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN,
+    SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN, SPECTRAL_SHADOW_MAX,
 };
 
 pub(super) fn lighting_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
@@ -171,7 +171,8 @@ fn shadow_group(
         (ShadowKernel::Distance, "Contour", "Follows the outline of each shape, keeping letters and thin strokes distinct even at large widths."),
         (ShadowKernel::Gaussian, "Blur", "A soft blur of each shape. Thin strokes cast lighter shadows than thick shapes."),
     ]);
-    let bar = ValueBar::new(&mut style.width, 0.0..=GLOW_SHADOW_MAX, "Shadow width");
+    let width_max = if lattice { GLOW_SHADOW_MAX } else { SPECTRAL_SHADOW_MAX };
+    let bar = ValueBar::new(&mut style.width, 0.0..=width_max, "Shadow width");
     let (bar, hint) = if lattice {
         (bar.percent(), "Shadow width as a percentage of the node radius. Scales with lattice zoom. 0% removes the shadow.")
     } else {

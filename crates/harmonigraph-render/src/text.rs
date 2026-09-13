@@ -1292,7 +1292,7 @@ impl CallbackTrait for TextCallback {
         }
 
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
-        let style = self.shadow.map(harmonigraph_scene::ShadowStyle::clamped);
+        let style = self.shadow.map(|style| style.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX));
         let sigma =
             style.filter(|style| style.casts()).map_or(0.0, crate::shadow::spectral_sigma_points);
         let kernel = style.map_or(harmonigraph_scene::ShadowKernel::Distance, |s| s.kernel);
@@ -1966,6 +1966,46 @@ pub(crate) mod tests {
             "the Distance shadow did not reach two points past the glyph: {outer:?}",
         );
         assert_eq!(pixel(&frame, 4, 4), [0, 0, 0, 0], "nothing anywhere else");
+    }
+
+    /// The enlarged range must reach past the old maximum on both paths,
+    /// including the coarse glyph field and downsampled Gaussian atlas.
+    #[test]
+    fn spectral_text_can_cast_beyond_the_old_width_limit_at_every_scale() {
+        use harmonigraph_scene::{ShadowKernel, ShadowStyle, SPECTRAL_SHADOW_MAX};
+
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
+            for ppp in [1.0f32, 1.5, 2.0, 4.0] {
+                for width in [1.0, SPECTRAL_SHADOW_MAX] {
+                    let shadow = ShadowStyle { width, depth: 1.0, kernel, ..Default::default() };
+                    let (frame, size) = draw_from_scaled(
+                        &device,
+                        &queue,
+                        glyph(),
+                        Some(shadow),
+                        atlas(),
+                        SlideAxis::default(),
+                        ppp,
+                    );
+                    // The glyph starts at x=24. This is over nine points out,
+                    // beyond the old distance support (8 pt) and Gaussian (6 pt).
+                    let at = (((28.0 * ppp) as u32 * size[0] + (14.0 * ppp) as u32) * 4) as usize;
+                    let pixel = &frame[at..at + 4];
+                    if width == 1.0 {
+                        assert_eq!(pixel, [0; 4], "old {kernel:?} at {ppp} ppp");
+                    } else {
+                        assert!(
+                            pixel[0] > 2 && pixel[3] > 2,
+                            "wide {kernel:?} at {ppp} ppp was capped: {pixel:?}"
+                        );
+                        assert_eq!(&pixel[1..3], [0, 0], "the shadow's own hue");
+                    }
+                }
+            }
+        }
     }
 
     /// Each instance reads the sheet it names, and only that one.

@@ -683,8 +683,10 @@ impl ShadowKernel {
 pub struct ShadowStyle {
     /// Which of the two renderers turns this group's ink into its shadow.
     pub kernel: ShadowKernel,
-    /// How wide the shadow is, 0..=[`GLOW_SHADOW_MAX`](crate::GLOW_SHADOW_MAX),
-    /// as a share of the caster group's reference size. Lattice groups use a
+    /// How wide the shadow is, as a share of the caster group's reference size.
+    /// The upper limit is [`GLOW_SHADOW_MAX`](crate::GLOW_SHADOW_MAX) for lattice
+    /// groups and [`SPECTRAL_SHADOW_MAX`](crate::SPECTRAL_SHADOW_MAX) for spectral
+    /// groups. Lattice groups use a
     /// node radius; spectral groups use the renderer's fixed four-point edge
     /// unit so their shadows stay screen-constant across pitch zoom and pane
     /// size. Half of that resolved width is the σ a Gaussian blurs at and the
@@ -794,10 +796,10 @@ impl ShadowStyle {
     /// ([`SHADOW_FALLOFF_MIN`]) rather than a taste, so a number under it is a
     /// visible edge at a fixed radius. The kernel takes no clamp: an enum is in
     /// range or the blob did not parse.
-    pub fn clamped(self) -> ShadowStyle {
+    pub fn clamped(self, width_max: f32) -> ShadowStyle {
         ShadowStyle {
             kernel: self.kernel,
-            width: self.width.clamp(0.0, crate::GLOW_SHADOW_MAX),
+            width: self.width.clamp(0.0, width_max),
             depth: self.depth.clamp(0.0, 1.0),
             falloff: self.falloff.clamp(SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX),
         }
@@ -880,9 +882,8 @@ impl Default for ShadowSettings {
 impl ShadowSettings {
     /// Every group, in the order the settings pane lists them.
     ///
-    /// The one place the groups are enumerated, so a group added at step 7 is
-    /// added to the struct and to this and to nothing else: the clamp, the
-    /// sanitize and the tests that sweep the groups all read it.
+    /// The sanitizer's finite-value repair and the tests sweep this list;
+    /// [`clamped`](Self::clamped) assigns each group's width limit.
     pub fn groups(&self) -> [ShadowStyle; 4] {
         [self.lattice_geometry, self.lattice_text, self.spectral_geometry, self.spectral_text]
     }
@@ -900,10 +901,10 @@ impl ShadowSettings {
     /// Every group held to its bars' ranges; see [`ShadowStyle::clamped`].
     pub fn clamped(self) -> ShadowSettings {
         ShadowSettings {
-            lattice_geometry: self.lattice_geometry.clamped(),
-            lattice_text: self.lattice_text.clamped(),
-            spectral_geometry: self.spectral_geometry.clamped(),
-            spectral_text: self.spectral_text.clamped(),
+            lattice_geometry: self.lattice_geometry.clamped(crate::GLOW_SHADOW_MAX),
+            lattice_text: self.lattice_text.clamped(crate::GLOW_SHADOW_MAX),
+            spectral_geometry: self.spectral_geometry.clamped(crate::SPECTRAL_SHADOW_MAX),
+            spectral_text: self.spectral_text.clamped(crate::SPECTRAL_SHADOW_MAX),
         }
     }
 }

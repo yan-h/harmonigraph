@@ -253,9 +253,8 @@ pub const GLOW_CURVE_SHAPE_MAX: f32 = 8.0;
 /// which puts the middle of a node at saturation somewhere short of this.
 pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 
-/// How wide a group's shadow may be asked to be (see [`ShadowStyle::width`]),
-/// in the quad UV units the layer sizes above are in — the far end of every
-/// Shadow bar.
+/// How wide a lattice group's shadow may be asked to be (see [`ShadowStyle::width`]),
+/// in the quad UV units the layer sizes above are in.
 ///
 /// One node radius, so the percentage printed on the bar is its literal share
 /// of the node and its far end is 100%. That still takes the blur well past the
@@ -269,6 +268,11 @@ pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 /// `REACH_SIGMAS · σ` past its own ink (`shadow_reach_uv` in lattice.wgsl), and
 /// so the fill the scene pass pays. `timing.rs` is what reads that back.
 pub const GLOW_SHADOW_MAX: f32 = 1.0;
+
+/// Spectral notes and text can cast three four-point edge units (12 points).
+/// Keep the unit fixed so opening the range preserves saved widths. Wider
+/// shadows cover more pixels; the shared blur still caps its kernel radius.
+pub const SPECTRAL_SHADOW_MAX: f32 = 3.0;
 
 /// The longest attack or release the node glow offers, in seconds (see
 /// [`ViewConfig::glow_attack`]).

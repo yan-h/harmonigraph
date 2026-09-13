@@ -133,7 +133,7 @@ pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32
 /// far-edge cull keeps a leaving note alive for), so an outline that will not
 /// paint must not be paid for either.
 fn outline(style: harmonigraph_scene::ShadowStyle) -> (f32, Color32) {
-    let reach = harmonigraph_render::spectral_shadow_reach(style.clamped());
+    let reach = harmonigraph_render::spectral_shadow_reach(style);
     (reach, if style.casts() { Color32::BLACK } else { Color32::TRANSPARENT })
 }
 

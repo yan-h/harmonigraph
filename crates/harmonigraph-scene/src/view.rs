@@ -6,9 +6,8 @@ use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, SevensLabel};
 use crate::{
     Camera, ShadowSettings, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX,
-    GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX,
-    MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
-    SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN,
+    GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES,
+    NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -2086,11 +2085,11 @@ impl ViewConfig {
         // standoff's window still shuts on nothing visible, which is why zero
         // is not its floor the way it is the other two's.
         for (style, fresh) in self.shadow.groups_mut().into_iter().zip(fresh.shadow.groups()) {
-            style.width = finite_or(style.width, fresh.width).clamp(0.0, GLOW_SHADOW_MAX);
-            style.depth = finite_or(style.depth, fresh.depth).clamp(0.0, 1.0);
-            style.falloff = finite_or(style.falloff, fresh.falloff)
-                .clamp(SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX);
+            style.width = finite_or(style.width, fresh.width);
+            style.depth = finite_or(style.depth, fresh.depth);
+            style.falloff = finite_or(style.falloff, fresh.falloff);
         }
+        self.shadow = self.shadow.clamped();
         // The SHARES — of the light a lit slice stands in, of the light's own
         // peak, of a whole turn — so their range is the unit interval.
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);

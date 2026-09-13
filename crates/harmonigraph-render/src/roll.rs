@@ -277,7 +277,7 @@ struct RollUniforms {
 }
 
 fn shadow_uniform(style: harmonigraph_scene::ShadowStyle) -> [f32; 4] {
-    let style = style.clamped();
+    let style = style.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
     let sigma = if style.casts() { crate::shadow::spectral_sigma_points(style) } else { 0.0 };
     [
         sigma,
@@ -800,7 +800,7 @@ impl CallbackTrait for RollCallback {
         let resources: &mut RollResources =
             callback_resources.get_mut().expect("inserted above when missing");
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
-        let style = self.shadow.clamped();
+        let style = self.shadow.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
         let shadow = shadow_uniform(style);
         let sigma = shadow[0];
         let casters: Vec<crate::shadow::Caster> = self
@@ -1489,12 +1489,16 @@ mod tests {
         for kernel in
             [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
         {
-            for ppp in [1.0f32, 1.5, 2.0, 4.0] {
+            for (ppp, width) in [1.0f32, 1.5, 2.0, 4.0].into_iter().flat_map(|ppp| {
+                [0.5, harmonigraph_scene::SPECTRAL_SHADOW_MAX].map(|width| (ppp, width))
+            }) {
+                let (shadow_x, clear) =
+                    if width > 1.0 { (17.0, [0.0, 0.0]) } else { (25.0, [12.0, 12.0]) };
                 let physical = (64.0 * ppp).round() as u32;
                 let size = [physical.div_ceil(64) * 64, physical];
                 let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
                 let shadow = harmonigraph_scene::ShadowStyle {
-                    width: 0.5,
+                    width,
                     depth: 1.0,
                     kernel,
                     ..Default::default()
@@ -1555,13 +1559,18 @@ mod tests {
                         as usize;
                     [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
                 };
-                let shadow_pixel = pixel(25.0, 32.0);
+                // The widest fixture probes beyond the old 8-point support.
+                let shadow_pixel = pixel(shadow_x, 32.0);
                 assert!(
                     shadow_pixel[0] < 245 && shadow_pixel[1] == shadow_pixel[0],
                     "{kernel:?} at {ppp} ppp left no black under-body shadow: {shadow_pixel:?}",
                 );
                 assert_eq!(pixel(32.0, 32.0), [255, 0, 0, 255], "the body covers {kernel:?}");
-                assert_eq!(pixel(12.0, 12.0), [255; 4], "{kernel:?} reached beyond its atlas");
+                assert_eq!(
+                    pixel(clear[0], clear[1]),
+                    [255; 4],
+                    "{kernel:?} reached beyond its atlas"
+                );
             }
         }
     }
