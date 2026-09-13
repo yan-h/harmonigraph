@@ -1,6 +1,38 @@
-//! Saved controls for the lattice's atmosphere prototype.
+//! Saved controls for the lattice and spectral atmosphere prototypes.
 
 use harmonigraph_core::LatticePos;
+
+/// Independent spectrogram diffusion, analyzer shading and note light.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SpectralAtmosphere {
+    pub diffusion: f32,
+    pub analyzer_softness: f32,
+    pub note_glow: f32,
+}
+
+impl Default for SpectralAtmosphere {
+    fn default() -> Self {
+        Self { diffusion: 0.1, analyzer_softness: 0.5, note_glow: 0.5 }
+    }
+}
+
+impl SpectralAtmosphere {
+    pub fn sanitized(mut self) -> Self {
+        let fresh = Self::default();
+        let clamp = |value: f32, fallback: f32, low, high| {
+            if value.is_finite() {
+                value.clamp(low, high)
+            } else {
+                fallback
+            }
+        };
+        self.diffusion = clamp(self.diffusion, fresh.diffusion, 0.0, 1.0);
+        self.analyzer_softness = clamp(self.analyzer_softness, fresh.analyzer_softness, 0.0, 1.0);
+        self.note_glow = clamp(self.note_glow, fresh.note_glow, 0.0, 1.0);
+        self
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

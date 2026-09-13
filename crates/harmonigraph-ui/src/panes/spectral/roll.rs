@@ -79,28 +79,6 @@ const MIN_RIBBON_PX: f32 = 1.5;
 /// nothing sounded.
 const MIN_LENGTH_DEVICE_PX: f32 = 2.0;
 
-/// The light edge drawn along the spectrum's profile, at `cfg.keyline`
-/// strength — `None` when the setting is off or too faint to be worth a shape.
-///
-/// The curve takes its colors from the spectrogram gradient, so where it is
-/// quiet it is drawn at that gradient's dark end against the pane's dark
-/// background, with no edge, and the shape stops existing. A light rim gives
-/// it an edge to be seen by. It is a setting because how much is right depends
-/// entirely on the gradient in play — one running to white swallows a rim that
-/// a dimmer or more colored one leaves standing, and the bars reach both.
-///
-/// The threshold is a fade-out floor: below it the line is too faint to be
-/// worth a shape at all.
-///
-/// The profile's edge alone. A note's is the outline [`outline`] draws, which
-/// is a dark surround with its own reach and fade — the profile is one line on
-/// a filled slab rather than a shape to pick out of a picture, and needs
-/// neither.
-pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32> {
-    let strength = cfg.keyline.clamp(0.0, 1.0) * alpha;
-    (strength > 0.004).then_some(Color32::WHITE.gamma_multiply(strength))
-}
-
 /// The dark surround standing outside a note: its selected kernel's whole
 /// reach in screen points and its pane-owned colour.
 ///
@@ -337,14 +315,12 @@ pub(super) fn draw_roll(
         region,
         notes,
         RollAxes { pitch_dir: dir(axes.dir_pitch()), depth_dir: dir(axes.dir_depth()) },
-        // The LATTICE's bloom, on the roll's notes. One setting for both
-        // pictures rather than a second bar here: the two are showing the same
-        // notes in the same colors, and a light a node has that its ribbon does
-        // not is a difference between them that says nothing. Through the
-        // renderer's own bound for the same reason — a strength the lattice
-        // clamps and the roll does not is that difference in the other
-        // direction.
-        harmonigraph_render::bloom_strength(state.appearance.view.bloom_strength),
+        // Keep the shared bloom, with the prototype's extra ribbon light
+        // added after bright extraction, independently of the spectrogram
+        // and analyzer. Zero extra glow restores the original amount.
+        harmonigraph_render::bloom_strength(
+            state.appearance.view.bloom_strength + state.appearance.spectrum.atmosphere.note_glow,
+        ),
         state.appearance.view.shadow.spectral_geometry,
         state.surfaces.target_format,
         crate::panes::lattice::pane_id(options.surface),

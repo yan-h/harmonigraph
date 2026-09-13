@@ -185,7 +185,7 @@ fn read_level(slot: u32, t: f32) -> f32 {
 /// The lookup TRUNCATES into the table, matching the level's own quantization
 /// — the table is sampled at the centre of each slice, so the entry a level
 /// falls into is the one nearest it.
-fn heatmap_color(in: VertexOut) -> vec4<f32> {
+fn heatmap_level(in: VertexOut) -> f32 {
     // Slab centres sit at half-integers, so the taps straddle `slab - 0.5`.
     let n = f32(locals.run_slabs);
     let jx = clamp(floor(in.slab - 0.5), 0.0, n - 1.0);
@@ -199,7 +199,11 @@ fn heatmap_color(in: VertexOut) -> vec4<f32> {
     let s0 = (locals.first_slot + j0) % locals.capacity;
     let s1 = (locals.first_slot + j1) % locals.capacity;
 
-    let level = mix(read_level(s0, in.t), read_level(s1, in.t), fx);
+    return mix(read_level(s0, in.t), read_level(s1, in.t), fx);
+}
+
+fn heatmap_color(in: VertexOut) -> vec4<f32> {
+    let level = heatmap_level(in);
     let levels = textureDimensions(lut).x;
     let i = min(u32(level * f32(levels)), levels - 1u);
     let c = textureLoad(lut, vec2<u32>(i, 0u), 0);
@@ -227,4 +231,93 @@ fn fs_heatmap_gamma(in: VertexOut) -> @location(0) vec4<f32> {
 fn fs_heatmap_linear(in: VertexOut) -> @location(0) vec4<f32> {
     let gamma = heatmap_color(in);
     return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), gamma.a);
+}
+
+struct Cloud {
+    origin: vec2<f32>,
+    size: vec2<f32>,
+    step: vec2<f32>,
+    diffusion: f32,
+    ppp: f32,
+};
+@group(1) @binding(0) var close_light: texture_2d<f32>;
+@group(1) @binding(1) var wide_light: texture_2d<f32>;
+@group(1) @binding(2) var cloud_sampler: sampler;
+@group(1) @binding(3) var<uniform> cloud: Cloud;
+
+// Scalar display intensity has no gamma transfer function. In particular,
+// the float source target must not take fs_heatmap_linear's RGB conversion.
+@fragment
+fn fs_density_source(in: VertexOut) -> @location(0) vec4<f32> {
+    // Pitch already averages the reduced pixel's bucket footprint. Average
+    // time too: a single center read can turn fine on/off slabs into a solid
+    // bright or dark source depending on the scrolling phase. Four stratified
+    // taps cover this quarter-resolution pixel at a fixed, bounded cost.
+    let width = fwidth(in.slab);
+    var level = 0.0;
+    for (var i = 0u; i < 4u; i += 1u) {
+        var tap = in;
+        tap.slab += (f32(i) * 0.25 - 0.375) * width;
+        level += heatmap_level(tap);
+    }
+    return vec4<f32>(level * 0.25, 0.0, 0.0, 1.0);
+}
+@fragment
+fn fs_cloud_light(in: VertexOut) -> @location(0) vec4<f32> {
+    // Combine the two smoothing scales at quarter resolution so the final
+    // full-resolution pass needs only one filtered read per pixel.
+    let uv = in.position.xy / vec2<f32>(textureDimensions(wide_light));
+    let close = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
+    let wide = textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r;
+    return vec4<f32>(close * 0.75 + wide * 0.25, 0.0, 0.0, 1.0);
+}
+fn baked_density(position: vec2<f32>) -> f32 {
+    let uv = (position / cloud.ppp - cloud.origin) / cloud.size;
+    // The source texture is reused for the finished scalar material only
+    // after both filters have consumed it. No attachment samples itself.
+    return textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
+}
+fn diffused_level(core: f32, material: f32) -> f32 {
+    // Diffusion removes raw detail at every brightness. Its upper endpoint
+    // is entirely filtered; restoring bright peaks here also restores grain.
+    // Ease out the raw contribution so the default 70% leaves only 9% detail.
+    let raw = (1.0 - cloud.diffusion) * (1.0 - cloud.diffusion);
+    return mix(material, core, raw);
+}
+fn density_color(level: f32) -> vec4<f32> {
+    // Interpolate the authored palette's center samples only after diffusion.
+    // The first half-slice joins true black smoothly, even for an edited ramp
+    // whose first sample is nonblack; there is no separate halo color curve.
+    let levels = textureDimensions(lut).x;
+    let x = clamp(level, 0.0, 1.0) * f32(levels) - 0.5;
+    let i = u32(clamp(floor(x), 0.0, f32(levels - 1u)));
+    let a = textureLoad(lut, vec2<u32>(i, 0u), 0).rgb;
+    if x < 0.0 {
+        return vec4<f32>(a * (x + 0.5) * 2.0, 1.0);
+    }
+    let b = textureLoad(lut, vec2<u32>(min(i + 1u, levels - 1u), 0u), 0).rgb;
+    return vec4<f32>(mix(a, b, fract(x)), 1.0);
+}
+// Empty history uses the same field and palette with a zero measured core.
+// This quad never samples the grid, so the oldest column cannot be smeared.
+@fragment
+fn fs_cloud_backdrop_gamma(in: VertexOut) -> @location(0) vec4<f32> {
+    return density_color(diffused_level(0.0, baked_density(in.position.xy)));
+}
+@fragment
+fn fs_cloud_backdrop_linear(in: VertexOut) -> @location(0) vec4<f32> {
+    let gamma = density_color(diffused_level(0.0, baked_density(in.position.xy)));
+    return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), 1.0);
+}
+fn cloud_color(in: VertexOut) -> vec4<f32> {
+    return density_color(diffused_level(heatmap_level(in), baked_density(in.position.xy)));
+}
+@fragment
+fn fs_cloud_gamma(in: VertexOut) -> @location(0) vec4<f32> {
+    return cloud_color(in);
+}
+@fragment
+fn fs_cloud_linear(in: VertexOut) -> @location(0) vec4<f32> {
+    let color = cloud_color(in);
+    return vec4<f32>(linear_from_gamma_rgb(color.rgb), color.a);
 }

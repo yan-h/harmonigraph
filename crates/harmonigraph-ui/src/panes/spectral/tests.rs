@@ -1749,8 +1749,8 @@ fn the_roll_only_takes_depth_when_it_is_shown() {
 /// A share is an empty band that grows with the pane, so the picture reads
 /// emptier the more room it is given — and the band is a border the analyzer
 /// draws inside itself, next to the one the dock separator already draws
-/// around it. Half a point is what the profile line needs to land inside the
-/// edge rather than half over it, and it is all the gap there is.
+/// around it. The measured contour keeps its half-point clearance when the
+/// shading changes, rather than moving with the appearance controls.
 ///
 /// Both halves are the claim: the budget is what the drawn curve is scaled by,
 /// and the paint is where a slab could still land somewhere else.
@@ -1775,7 +1775,8 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
     // the full budget and the slab end nearest `edge` IS the clearance. `edge`
     // is the depth the curve grows toward, which is the only thing the two
     // layouts below disagree about.
-    let reach = |rect: egui::Rect, cfg: SpectrumConfig, edge: f32| {
+    let reach = |rect: egui::Rect, mut cfg: SpectrumConfig, edge: f32| {
+        cfg.atmosphere.analyzer_softness = 1.0;
         let axes = Axes::new(rect, &cfg);
         let mut nearest = f32::INFINITY;
         for shape in paint_tone(rect, cfg) {
@@ -1788,6 +1789,15 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
                 for point in points {
                     let depth = (axes.depth_at(point) - edge).abs();
                     nearest = nearest.min(depth * axes.depth_len());
+                }
+            } else if let egui::Shape::Mesh(mesh) = shape {
+                // The cloud material's body ends at the original measured
+                // contour. Its 86% outer fill is distinct from the halo.
+                for vertex in &mesh.vertices {
+                    if vertex.color.a() == 219 {
+                        let depth = (axes.depth_at(vertex.pos) - edge).abs();
+                        nearest = nearest.min(depth * axes.depth_len());
+                    }
                 }
             }
         }
@@ -1846,6 +1856,148 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
         spectral_pane(ui, &mut state, 1.0, 0, 1.0, Navigation::Docked);
     });
     output.shapes.into_iter().map(|s| s.shape).collect()
+}
+
+#[test]
+fn analyzer_softness_is_independent_and_keeps_the_measured_contour() {
+    let mut cfg = SpectrumConfig {
+        show_spectrogram: false,
+        show_roll: false,
+        keyline: 0.0,
+        ..Default::default()
+    };
+    cfg.atmosphere.analyzer_softness = 1.0;
+    let meshes = |cfg| {
+        paint_tone(reference_pane(), cfg)
+            .into_iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Mesh(mesh) => Some(mesh),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let soft = meshes(cfg);
+    assert_eq!(soft.len(), 2, "fixture must draw the halo and body, without an outline");
+    cfg.atmosphere.diffusion = 0.0;
+    cfg.atmosphere.note_glow = 0.0;
+    assert_eq!(meshes(cfg), soft, "other effects changed the analyzer");
+    cfg.atmosphere.analyzer_softness = 0.5;
+    let half = meshes(cfg);
+    assert_eq!(half.len(), 2);
+    for (full, half) in soft.iter().zip(&half) {
+        assert_eq!(full.indices, half.indices);
+        assert!(full.vertices.len() > 100, "fixture must reach the sampled contour");
+        assert_eq!(
+            full.vertices.iter().map(|v| v.pos).collect::<Vec<_>>(),
+            half.vertices.iter().map(|v| v.pos).collect::<Vec<_>>(),
+            "softness moved measured frequencies or levels"
+        );
+        assert_ne!(full, half, "the dial did not change this part of the treatment");
+    }
+    for (full, half) in soft[1].vertices.chunks_exact(3).zip(half[1].vertices.chunks_exact(3)) {
+        let plain_alpha = if full[2].pos.distance(full[0].pos) > 0.5 { 210 } else { 0 };
+        for (full, half) in full.iter().zip(half) {
+            let expected = (plain_alpha + u16::from(full.color.a())) / 2;
+            assert!(u16::from(half.color.a()).abs_diff(expected) <= 1);
+        }
+    }
+    cfg.atmosphere.analyzer_softness = 0.0;
+    let plain = meshes(cfg);
+    assert_eq!(plain.len(), 1, "zero softness must draw only the flat fill");
+    assert_eq!(
+        soft[1].vertices.iter().map(|v| v.pos).collect::<Vec<_>>(),
+        plain[0].vertices.iter().map(|v| v.pos).collect::<Vec<_>>(),
+    );
+    assert!(plain[0].vertices.iter().any(|v| v.color.a() == 210));
+}
+
+#[test]
+fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
+    let mut cfg = SpectrumConfig {
+        floor_db: -100.0,
+        ceiling_db: 0.0,
+        volume_floor_db: -40.0,
+        volume_ceiling_db: 0.0,
+        tilt: 0.0,
+        ..Default::default()
+    };
+    // Silence, a subpixel sliver, two visible but palette-black levels,
+    // and a bright peak. The quiet levels must reach actual body vertices.
+    let visible = [-120.0, -99.9, -99.0, -80.0, 0.0].map(|db| (69.0, (db + 120.0) / 120.0, db));
+    let draw = |cfg: SpectrumConfig, samples: &[(f32, f32, f32)]| {
+        let axes = Axes::new(WIDE, &cfg);
+        let out = painted_into(SCREEN, WIDE, |ui| {
+            atmosphere::draw_profile(
+                ui.painter(),
+                &axes,
+                &cfg,
+                samples,
+                plot_budget(1.0, axes.depth_len()),
+                1.0,
+            );
+        });
+        let (mut meshes, mut outlines) = (Vec::new(), Vec::new());
+        for s in out.shapes {
+            match s.shape {
+                egui::Shape::Mesh(mesh) => meshes.push(mesh),
+                egui::Shape::Path(path) => outlines.push(path),
+                _ => {}
+            }
+        }
+        assert_eq!(meshes.len(), if cfg.atmosphere.analyzer_softness > 0.0 { 2 } else { 1 });
+        (meshes, outlines)
+    };
+    let mut contour = None;
+    for softness in [0.0, 0.5, 1.0] {
+        cfg.atmosphere.analyzer_softness = softness;
+        cfg.keyline = 0.3;
+        let (meshes, outlines) = draw(cfg, &visible);
+        assert_eq!(outlines.len(), 1);
+        assert_eq!(outlines[0].points.len(), visible.len());
+        assert_eq!(
+            outlines[0].stroke,
+            egui::Stroke::new(1.0, egui::Color32::WHITE.gamma_multiply(0.3)).into()
+        );
+        assert_eq!(
+            contour.get_or_insert(outlines.clone()),
+            &outlines,
+            "softness changed the outline"
+        );
+        let body = meshes.last().unwrap();
+        assert_eq!(body.vertices.len(), 15);
+        assert!(
+            body.vertices[6..12].iter().all(|v| v.color.r().max(v.color.g()).max(v.color.b()) <= 2),
+            "quiet measured frequencies must keep their near-black fill"
+        );
+        assert!(
+            body.vertices[8].pos.distance(body.vertices[6].pos) > 0.5,
+            "fixture needs a visible quiet contour"
+        );
+        cfg.keyline = 0.7;
+        let (brighter_meshes, brighter_outlines) = draw(cfg, &visible);
+        assert_eq!(brighter_meshes, meshes, "outline opacity changed the fill or halo");
+        assert_eq!(brighter_outlines[0].points, outlines[0].points);
+        assert_eq!(
+            brighter_outlines[0].stroke,
+            egui::Stroke::new(1.0, egui::Color32::WHITE.gamma_multiply(0.7)).into()
+        );
+        cfg.keyline = 0.0;
+        let (hidden_meshes, hidden_outlines) = draw(cfg, &visible);
+        assert_eq!(hidden_meshes, meshes);
+        assert!(hidden_outlines.is_empty(), "zero opacity must hide the outline");
+    }
+    cfg.keyline = 1.0;
+    cfg.tilt = -6.0;
+    assert!(loudness_db(&cfg, -120.0, 135.0) > 0.05, "fixture must lift the stored silence floor");
+    let (silence, outlines) = draw(cfg, &[(135.0, 0.0, -120.0), (135.0, 1.0, -120.0)]);
+    assert!(outlines.is_empty(), "digital silence must not draw an outline");
+    assert!(
+        silence
+            .iter()
+            .flat_map(|mesh| &mesh.vertices)
+            .all(|v| v.color == egui::Color32::TRANSPARENT),
+        "tilt gave digital silence a visible body"
+    );
 }
 
 /// The whole pane, painted in every orientation with a roll that has
@@ -1955,7 +2107,7 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
         // pitch axis.
         let hairline = out.shapes.iter().position(|s| {
             matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
-                if stroke.color == theme::hairline())
+                if stroke.color == theme::hairline().gamma_multiply(0.6))
         });
         let hairline = hairline.expect("expected a now-line in the frame");
         (callbacks.len(), callbacks.iter().filter(|&&c| c < hairline).count())
@@ -2591,8 +2743,10 @@ fn whole_song_mode_rules_no_frequencies() {
 /// Whether a stroke color is one of the two a ruling — of either grid — is
 /// drawn in.
 fn is_ruling(color: egui::Color32) -> bool {
-    color == theme::hairline().gamma_multiply(RULING_FADE.0)
-        || color == theme::hairline().gamma_multiply(RULING_FADE.1)
+    [1.0, 0.4].into_iter().any(|fade| {
+        color == theme::hairline().gamma_multiply(RULING_FADE.0 * fade)
+            || color == theme::hairline().gamma_multiply(RULING_FADE.1 * fade)
+    })
 }
 
 /// Whether a painted segment is a FREQUENCY ruling rather than a level one.
@@ -2616,11 +2770,16 @@ struct PaintedRuling {
 
 /// One frame of the pane with a tone in it, split into the frequency rulings
 /// and the shape indices of the spectrum's own slabs.
-fn painted_rulings(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
-    let strong = theme::hairline().gamma_multiply(RULING_FADE.0);
+fn painted_rulings(rect: egui::Rect, mut cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
+    cfg.atmosphere.analyzer_softness = 1.0;
+    let strong = theme::hairline().gamma_multiply(RULING_FADE.0 * 0.4);
     let axes = Axes::new(rect, &cfg);
     let (mut rulings, mut slabs) = (Vec::new(), Vec::new());
     for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
+        if matches!(&shape, egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color.a() == 219))
+        {
+            slabs.push(i);
+        }
         let egui::Shape::LineSegment { points, stroke } = shape else { continue };
         if is_ruling(stroke.color) && rules_a_frequency(&axes, points) {
             rulings.push(PaintedRuling { index: i, points, strong: stroke.color == strong });
@@ -2637,11 +2796,16 @@ fn painted_rulings(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>
 /// NUMBERED level takes — the only thing in the shape list that says which
 /// rulings the pane wrote a number beside, since the numbers themselves leave
 /// it as one opaque text callback.
-fn painted_levels(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
-    let strong = theme::hairline().gamma_multiply(RULING_FADE.0);
+fn painted_levels(rect: egui::Rect, mut cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
+    cfg.atmosphere.analyzer_softness = 1.0;
+    let strong = theme::hairline().gamma_multiply(RULING_FADE.0 * 0.4);
     let axes = Axes::new(rect, &cfg);
     let (mut levels, mut slabs) = (Vec::new(), Vec::new());
     for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
+        if matches!(&shape, egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color.a() == 219))
+        {
+            slabs.push(i);
+        }
         let egui::Shape::LineSegment { points, stroke } = shape else { continue };
         if is_ruling(stroke.color) && !rules_a_frequency(&axes, points) {
             levels.push(PaintedRuling { index: i, points, strong: stroke.color == strong });

@@ -60,8 +60,8 @@ pub use roll::{roll_paint_callback, RollAxes, RollInstance};
 /// palette change is a uniform.
 mod spectrogram;
 pub use spectrogram::{
-    spectrogram_paint_callback, SpectrogramGrid, SpectrogramHeadless, SpectrogramRead,
-    SpectrogramShades, SpectrogramVertex,
+    spectrogram_paint_callback, SpectrogramAtmosphere, SpectrogramGrid, SpectrogramHeadless,
+    SpectrogramRead, SpectrogramShades, SpectrogramVertex,
 };
 
 mod dot_shadow;

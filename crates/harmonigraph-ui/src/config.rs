@@ -372,11 +372,11 @@ pub struct SpectrumConfig {
     /// one of several, and a blob that pinned the old picture would be
     /// preserving it.
     pub marking_scale: f32,
-    /// Strength of the light edge drawn along the spectrum's profile, 0 = none.
-    /// The profile's alone — note ribbons use
-    /// `ViewConfig::shadow.spectral_geometry`. See
-    /// `panes::spectral::roll::keyline`.
+    /// Opacity of the white analyzer outline, independent of softness.
+    /// Zero hides the outline.
     pub keyline: f32,
+    /// Spectral light and note halos, independent of the lattice's atmosphere.
+    pub atmosphere: harmonigraph_scene::SpectralAtmosphere,
     /// Displayed pitch range, as (fractional) MIDI note numbers. The
     /// analyzer always covers `SPECTRUM_MIN_MIDI..=SPECTRUM_MAX_MIDI`
     /// (~16 Hz to ~16.7 kHz); this only zooms the view.
@@ -645,6 +645,7 @@ impl SpectrumConfig {
             fresh.tilt
         };
         self.keyline = bounded(self.keyline, fresh.keyline, 0.0, 1.0);
+        self.atmosphere = self.atmosphere.sanitized();
         self.roll_fraction = bounded(self.roll_fraction, fresh.roll_fraction, 0.0, 1.0);
         self.roll_seconds =
             bounded(self.roll_seconds, fresh.roll_seconds, ROLL_SECONDS_MIN, ROLL_SECONDS_MAX);
@@ -885,10 +886,9 @@ impl Default for SpectrumConfig {
             // couple of kHz.
             tilt: -4.5,
             marking_scale: 1.184_416_5,
-            // Enough of an edge to hold the profile against a bright
-            // spectrogram cell, little enough that it doesn't read as a second
-            // curve of its own.
+            // Keep quiet contours visible without lifting the fill's dark end.
             keyline: 0.3,
+            atmosphere: harmonigraph_scene::SpectralAtmosphere::default(),
             // The analyzer range captured from the DAW on 2026-09-13.
             low_midi: 41.322_09,
             high_midi: 131.344_91,
