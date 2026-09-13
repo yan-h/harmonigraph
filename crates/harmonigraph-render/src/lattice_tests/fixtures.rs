@@ -109,16 +109,8 @@ pub(super) fn parity_scene() -> Scene {
             // A row per node in the order they are built, settled: the light's
             // own clock is the shell's pass and no shell has run here, so this
             // fixture is the picture with nothing carried — which is exactly
-            // what a still image of the draw paths wants. The mark the light
-            // is sized against is settled on this node's own, for the same
-            // reason.
-            glow: harmonigraph_scene::GlowStep {
-                incarnation: 0,
-                level: 1.0,
-                row: i,
-                mix: 1.0,
-                marked: f32::from(i == 0 || i == 2 || i == 4),
-            },
+            // what a still image of the draw paths wants.
+            glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, row: i },
             trail: 0.0,
         });
     }
@@ -290,7 +282,7 @@ impl Shooter {
     ///
     /// One thing survives a frame here and it is a node's light: the ink strip
     /// keeps each row's colour, and a row's next reading is mixed into what it
-    /// already held (`harmonigraph_scene::GlowStep::mix`). That is exactly what
+    /// already held when `Scene::glow_timing` is set. That is exactly what
     /// every other shot's fresh pane exists to keep out — a fixture is settled
     /// unless it says otherwise — so a test that wants the carrying has to ask
     /// for it.
@@ -477,15 +469,8 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // The lattice pass draws the ring on every node it ships; the
         // gate is the fold's answer and there is no fold here.
         audio_ring: 1.0,
-        // Lit and settled on the strip's first row: one node, nothing carried,
-        // and the light sized against whichever ends this fixture is wearing.
-        glow: harmonigraph_scene::GlowStep {
-            incarnation: 0,
-            level: 1.0,
-            row: 0,
-            mix: 1.0,
-            marked: f32::from((melody_slots | bass_slots) != 0),
-        },
+        // Lit and settled on the strip's first row: one node, nothing carried.
+        glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, row: 0 },
         trail: 0.0,
     }];
     // BLACK, which is the colour `Shooter::shot` clears to, so the pane and the

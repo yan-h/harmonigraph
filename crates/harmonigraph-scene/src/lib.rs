@@ -338,9 +338,8 @@ pub const PITCH_LUT_N: usize = 64;
 /// the COLOUR is stepped on the GPU, where the node's ink is read (the ink
 /// strip in harmonigraph-render). Both follow [`GlowTiming`], measured from
 /// the last pass each consumer actually used. Layout passes can be discarded
-/// before the GPU sees them. [`marked`](Self::marked) carries the light's size
-/// on the CPU beside its level.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// before the GPU sees them. Halo size is fixed by the view rather than carried per node.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GlowStep {
     /// Unique owner of this row while the light lives. The renderer compares
     /// it with the owner whose ink it actually encoded, across discarded UI passes.
@@ -359,38 +358,6 @@ pub struct GlowStep {
     /// instance list is sorted by depth and culled, so its own order is exactly
     /// what cannot be used.
     pub row: u32,
-    /// Coefficient used by the CPU level step, `1 - exp(-dt/tau)`.
-    /// Direct scenes without [`Scene::glow_timing`] also use this for GPU ink.
-    /// Carried scenes resolve ink against the renderer's own encoded history,
-    /// reseeding new textures and changed row owners there.
-    pub mix: f32,
-    /// How much of a MARK the light still has this node wearing, carried on the
-    /// same [`mix`](Self::mix) as everything else about it.
-    ///
-    /// The light's span is the node's outermost drawn edge plus the Reach, and
-    /// a mark is the one layer that moves that edge per node: a marked node
-    /// reaches its strip past the outermost ring, an unmarked one stops at the
-    /// ring. Read straight off `melody_slots | bass_slots` that edge is a STEP
-    /// — the bit is set while the marking voice exists and clear the frame it
-    /// is pruned — so the whole halo snapped a size smaller one Fade after the
-    /// key came up, while its own level was still near full and had seconds of
-    /// release left to run. Carried instead, the light's size comes off on the
-    /// light's own clock, exactly as its brightness and its colour do.
-    ///
-    /// A share rather than a bit, and read as one: the shader interpolates the
-    /// node's rim between the two the mark chooses between (`glow_rim` in
-    /// lattice.wgsl), so what the light draws against is the edge as the light
-    /// remembers it and not the edge the node has this frame.
-    pub marked: f32,
-}
-
-impl Default for GlowStep {
-    /// Unlit, on row 0, settling. A node nothing has stepped is a node with no
-    /// light, and the mix is the value that makes the next step a settle rather
-    /// than a fade up from a colour nobody drew.
-    fn default() -> GlowStep {
-        GlowStep { incarnation: 0, level: 0.0, row: 0, mix: 1.0, marked: 0.0 }
-    }
 }
 
 /// The glow clock at scene derivation. GPU history advances only when the
@@ -954,8 +921,8 @@ pub struct Scene {
     /// `nodes.len()` out of [`derive_scene`], where every node has its own row
     /// in the list's own order (see [`NodeInstance::glow`]).
     pub glow_rows: u32,
-    /// Present for carried UI and offline scenes. With no clock, direct
-    /// renderer callers supply their own [`GlowStep::mix`].
+    /// Present for carried UI and offline scenes. Without a clock, the renderer
+    /// draws a stateless snapshot of the current ink.
     pub glow_timing: Option<GlowTiming>,
     pub atmosphere: AtmosphereSettings,
 }

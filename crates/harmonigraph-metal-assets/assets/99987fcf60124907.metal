@@ -115,7 +115,8 @@ struct GlowNode {
     metal::float2 inv_y;
     metal::float2 centre;
     metal::float2 light;
-    metal::float2 mark;
+    float radius;
+    float _padding;
 };
 typedef GlowNode type_14[1];
 typedef uint type_15[1];
@@ -176,12 +177,10 @@ float node_rim(
 }
 
 float glow_rim(
-    float marked_1,
     constant Uniforms& u
 ) {
-    float _e2 = node_rim(false, u);
-    float _e4 = node_rim(true, u);
-    return metal::mix(_e2, _e4, metal::clamp(marked_1, 0.0, 1.0));
+    float _e1 = node_rim(true, u);
+    return _e1;
 }
 
 float glow_level(
@@ -252,15 +251,16 @@ metal::float4 glow_layer(
     float reach = metal::max(_e8, 0.0);
     float _e14 = u.glow.strength;
     float strength = metal::max(_e14, 0.0);
-    float _e19 = glow_rim(node.mark.x, u);
+    float _e17 = glow_rim(u);
     float d_1 = metal::length(uv);
-    float span_1 = metal::max(_e19 + reach, 0.1);
+    float span_1 = metal::max(_e17 + reach, 0.1);
     if (d_1 >= span_1) {
         return metal::float4(0.0);
     }
-    float _e28 = glow_curve_at(d_1, span_1, u);
-    float skirt = GLOW_BASE * _e28;
-    float seam = metal::max(_e19, 0.1);
+    float _e26 = glow_curve_at(d_1, span_1, u);
+    float skirt = GLOW_BASE * _e26;
+    float _e29 = node_rim(false, u);
+    float seam = metal::max(_e29, 0.1);
     float mix_out_1 = metal::min(1.0, (d_1 * d_1) / (seam * seam));
     float alpha = metal::clamp((skirt * _e4) * strength, 0.0, 1.0);
     if (alpha <= 0.0) {

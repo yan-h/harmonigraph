@@ -477,8 +477,6 @@ pub fn derive_scene(
                 incarnation: 0,
                 level: activation.max(melody.level).max(bass.level),
                 row: nodes.len() as u32,
-                mix: 1.0,
-                marked: f32::from((melody.slots | bass.slots) != 0),
             },
             trail: 0.0,
         });

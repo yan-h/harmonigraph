@@ -31,11 +31,13 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     scene.nodes[0].octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
     scene.nodes[0].activation = 1.0;
     scene.nodes[0].audio_ring = 0.0;
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 1.0, release: 2.0 });
+    scene.nodes[0].glow.incarnation = 1;
     shooter.shot(&scene);
     // Nothing but the held GPU colour remains.
     scene.nodes[0].activation = 0.0;
     scene.nodes[0].octaves.fill(0.0);
-    scene.nodes[0].glow.mix = 0.0;
     let bloomed = shooter.shot_again(&scene);
     assert!(total_light(&bloomed) > 64, "release fixture must emit visible light");
     let color = target(&shooter).color_view.clone();
@@ -105,12 +107,12 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     // Preserve the current growth/reseed contract, which does not carry an
     // inkless release through growth. This really crosses capacity 1 -> 2.
     scene.glow_rows = 2;
-    scene.nodes[0].glow.mix = 1.0;
     let grown = shooter.shot_again(&scene);
     assert_eq!(history(&shooter).rows, 2);
     assert_ne!(history(&shooter).raw_views, raw);
     assert_eq!(total_light(&grown), 0, "growth reseeds from empty current ink");
     // Reusing row zero seeds its new green owner instead of stale red.
+    scene.nodes[0].glow.incarnation = 2;
     scene.nodes[0].activation = 1.0;
     scene.nodes[0].octaves.fill(1.0);
     scene.pitch_lut.fill(glam::Vec4::new(0.0, 1.0, 0.0, 1.0));
@@ -156,6 +158,9 @@ fn history_scene() -> Scene {
     scene.pitch_lut.fill(glam::Vec4::new(1.0, 0.0, 0.0, 1.0));
     scene.nodes[0].octaves.fill(1.0);
     scene.nodes[0].audio_ring = 0.0;
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 1.0, release: 2.0 });
+    scene.nodes[0].glow.incarnation = 1;
     scene
 }
 
@@ -163,7 +168,6 @@ fn release(scene: &mut Scene) {
     for node in &mut scene.nodes {
         node.activation = 0.0;
         node.octaves.fill(0.0);
-        node.glow.mix = 0.0;
     }
 }
 
@@ -251,7 +255,6 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
     scene.glow_timing =
         Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 1.0, release: 2.0 });
     scene.nodes[0].glow.incarnation = 1;
-    scene.nodes[0].glow.mix = 0.0;
     scene.node_radius = 0.6;
     // Reordering here measures row identity, independently of the Gaussian
     // shadow atlas repacking when the caster order changes.
@@ -336,7 +339,6 @@ fn glow_clock_consumes_only_encoded_callbacks_and_uses_the_previous_level() {
         Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 1.0, release: 4.0 });
     scene.nodes[0].glow.incarnation = 1;
     scene.nodes[0].glow.level = 0.25;
-    scene.nodes[0].glow.mix = 0.0;
     for pane in [10, 20] {
         shooter.pane = pane;
         assert!(total_light(&shooter.shot_again(&scene)) > 64);
@@ -425,4 +427,17 @@ fn glow_off_discards_history_when_target_maintenance_runs() {
     assert_eq!(super::INK_STRIP_CREATIONS.get(), creations + 1);
     assert_ne!(history(&shooter).raw_views, raw);
     assert_eq!(total_light(&reset), 0, "glow on cannot resurrect the discarded red history");
+}
+
+/// Untimed scenes are independent snapshots even when a pane already has history.
+#[test]
+fn untimed_snapshots_seed_current_ink_on_a_reused_pane() {
+    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
+    let mut scene = history_scene();
+    let red = shooter.shot(&scene);
+    scene.glow_timing = None;
+    scene.pitch_lut.fill(glam::Vec4::new(0.0, 1.0, 0.0, 1.0));
+    let green = shooter.shot_again(&scene);
+    assert_ne!(red, green, "the fixture must change colour");
+    assert_eq!(green, shooter.shot(&scene), "untimed colour cannot carry old ink");
 }

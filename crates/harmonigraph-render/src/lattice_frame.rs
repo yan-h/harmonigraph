@@ -149,7 +149,9 @@ impl LatticeCallback {
             bass_color: n.bass_color.to_array(),
             scale: n.scale,
             ring: n.audio_ring,
-            glow: [n.glow.level, n.glow.row as f32, n.glow.mix, n.glow.marked],
+            // Untimed snapshots seed current ink. Encoded timed frames replace
+            // the third value with the renderer's own history coefficient.
+            glow: [n.glow.level, n.glow.row as f32, 1.0],
         };
 
         let split = order.iter().position(|&(plane, _, _)| plane <= 0.0).unwrap_or(order.len());

@@ -26,7 +26,7 @@ pub(crate) fn pack(nodes: &[GpuGlowNode], size: [u32; 2]) -> Vec<u32> {
         // One pixel of slack keeps floating-point projection error from
         // excluding a fragment on a tile boundary. The shader still evaluates
         // the original analytic field, so this adds candidates, not light.
-        let radius = node.mark[1] + 1.0;
+        let radius = node.radius + 1.0;
         let lo = ((centre - radius) / TILE as f32).floor().max(glam::Vec2::ZERO);
         let hi = ((centre + radius) / TILE as f32).floor() + 1.0;
         let bounds = [
@@ -93,7 +93,7 @@ mod tests {
             for x in 0..64 {
                 nodes.push(GpuGlowNode {
                     centre: [(x * TILE + TILE / 2) as f32, (y * TILE + TILE / 2) as f32],
-                    mark: [0.0, 3.0],
+                    radius: 3.0,
                     ..bytemuck::Zeroable::zeroed()
                 });
             }
@@ -107,7 +107,7 @@ mod tests {
         }
         // Full-screen halos must not allocate tile_count * node_count indices.
         for node in &mut nodes {
-            node.mark[1] = 10000.0;
+            node.radius = 10000.0;
         }
         let packed = pack(&nodes, [2048, 2048]);
         assert_eq!(packed.len(), 4 + 4096 + 4096);

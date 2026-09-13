@@ -265,8 +265,9 @@ fn a_lone_glow_keeps_its_colour_profile_and_fade() {
         for (index, pixel) in pixels.chunks_exact(4).enumerate() {
             let at = glam::vec2((index % 256) as f32 + 0.5, (index / 256) as f32 + 0.5);
             let d = at.distance(CENTRE) / per_uv;
-            // This fixture has no marks, a rim at 0.795 UV and a linear falloff.
-            let a = (0.8 * gain * level * (1.0 - d / (0.795 + 2.88)).max(0.0)).min(1.0);
+            // Even unmarked nodes use the maximum configured mark rim.
+            let rim = scene.rings_outer.max(scene.mark_inner + scene.mark_thickness);
+            let a = (0.8 * gain * level * (1.0 - d / (rim + 2.88)).max(0.0)).min(1.0);
             for (got, channel) in pixel.iter().zip([colour[0], colour[1], colour[2], 1.0]) {
                 assert!(
                     (f32::from(*got) - a * channel * 255.0).abs() < 1.1,
@@ -422,4 +423,71 @@ fn accumulation_sweeps_to_the_original_screen_of_each_colour_channel() {
         scene.nodes.reverse();
         assert!(mixed.iter().zip(glow(&mut shooter, &scene)).all(|(a, b)| a.abs_diff(b) <= 1));
     }
+}
+
+/// Marks can change direction and hue, but no longer resize a held halo.
+#[test]
+fn marks_do_not_change_the_halo_footprint() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 0.75, false);
+    assert!(
+        scene.mark_inner + scene.mark_thickness > scene.rings_outer + 0.1,
+        "the mark must extend beyond the rings to exercise the old size change"
+    );
+    scene.nodes[0].octaves.fill(1.0);
+    let alpha = |pixels: Vec<u8>| pixels.chunks_exact(4).map(|p| p[3]).collect::<Vec<_>>();
+    let bare = alpha(glow(&mut shooter, &scene));
+    assert!(bare.iter().filter(|&&v| v > 20).count() > 1000);
+    for level in [0.25, 1.0, 0.0] {
+        scene.nodes[0].melody_slots = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
+        scene.nodes[0].melody_level = level;
+        assert_eq!(bare, alpha(glow(&mut shooter, &scene)), "mark level {level}");
+    }
+}
+
+/// Inactive mark geometry may widen the footprint, but must not wash the
+/// directional colors toward their mean outside the ordinary ring edge.
+#[test]
+fn the_color_transition_ends_at_the_ring_even_with_a_wider_halo() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 0.75, false);
+    scene.glow_blend = 0.0;
+    scene.nodes[0].octaves.fill(1.0);
+    scene.pitch_lut = std::array::from_fn(|i| {
+        let t = i as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
+        glam::vec4(1.0 - t, 0.05, t, 1.0)
+    });
+    scene.mark_thickness = 0.0;
+    let ordinary = glow(&mut shooter, &scene);
+    scene.mark_inner = scene.rings_outer;
+    scene.mark_thickness = 0.6;
+    let wide = glow(&mut shooter, &scene);
+    let per_uv = on_screen(&scene, SIZE, glam::Vec3::X * scene.node_radius * 1.8).x - CENTRE.x;
+    let hue = |p: &[u8]| {
+        let sum = p[..3].iter().map(|&c| f32::from(c)).sum::<f32>();
+        glam::vec3(f32::from(p[0]), f32::from(p[1]), f32::from(p[2])) / sum
+    };
+    let mut count = 0;
+    let mut low = glam::Vec3::ONE;
+    let mut high = glam::Vec3::ZERO;
+    let mut worst = 0.0f32;
+    for (i, (a, b)) in ordinary.chunks_exact(4).zip(wide.chunks_exact(4)).enumerate() {
+        let at = glam::vec2((i % 256) as f32 + 0.5, (i / 256) as f32 + 0.5);
+        let d = at.distance(CENTRE) / per_uv;
+        if d <= scene.rings_outer + 0.02 || d >= scene.rings_outer + 0.3 {
+            continue;
+        }
+        assert!(a[3] > 40 && b[3] > 40, "sample a visible halo, not quantization noise");
+        let (a, b) = (hue(a), hue(b));
+        low = low.min(a);
+        high = high.max(a);
+        worst = worst.max((a - b).abs().max_element());
+        count += 1;
+    }
+    assert!(
+        count > 100 && (high - low).max_element() > 0.2,
+        "probe multiple directional colors in the affected annulus: count={count}, spread={:?}",
+        high - low
+    );
+    assert!(worst < 0.025, "a wider footprint averaged directional colors: hue error {worst}");
 }

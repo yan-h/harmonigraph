@@ -319,7 +319,7 @@ struct vs_mainOutput {
     metal::float4 shadow_box [[user(loc10), flat]];
     metal::float4 shadow_at [[user(loc12), center_no_perspective]];
 };
-struct vb_15_type { metal::uchar data[120]; };
+struct vb_15_type { metal::uchar data[116]; };
 struct vb_14_type { metal::uchar data[64]; };
 vertex vs_mainOutput vs_main(
   uint vertex_index [[vertex_id]]
@@ -340,7 +340,7 @@ vertex vs_mainOutput vs_main(
     float scale_2 = {};
     float ring = {};
     metal::float3 glow = {};
-    if (i_id < (_buffer_sizes.buffer_size15 / 120)) {
+    if (i_id < (_buffer_sizes.buffer_size15 / 116)) {
         const vb_15_type vb_15_elem = vb_15_in[i_id];
         world_pos = unpackFloat32x3_(vb_15_elem.data[0], vb_15_elem.data[1], vb_15_elem.data[2], vb_15_elem.data[3], vb_15_elem.data[4], vb_15_elem.data[5], vb_15_elem.data[6], vb_15_elem.data[7], vb_15_elem.data[8], vb_15_elem.data[9], vb_15_elem.data[10], vb_15_elem.data[11]);
         color = unpackFloat32x4_(vb_15_elem.data[12], vb_15_elem.data[13], vb_15_elem.data[14], vb_15_elem.data[15], vb_15_elem.data[16], vb_15_elem.data[17], vb_15_elem.data[18], vb_15_elem.data[19], vb_15_elem.data[20], vb_15_elem.data[21], vb_15_elem.data[22], vb_15_elem.data[23], vb_15_elem.data[24], vb_15_elem.data[25], vb_15_elem.data[26], vb_15_elem.data[27]);
