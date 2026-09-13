@@ -437,11 +437,21 @@ fn outline_color(in: VertexOut) -> vec4<f32> {
     return in.outline * max(wrap, cap_coverage(in));
 }
 
-/// Premultiplied gamma-space color of the BODY layer: the note, solid in its
-/// own color right to its edge — except at a leading tip that is set to fade,
-/// where [`lead_coverage`] takes it out.
+/// An opaque ribbon with its pitch color at the center and softly shaded
+/// sides. Only RGB changes: letting the heatmap through would change the
+/// note's color, and the outside shadow still provides its separation.
+///
+/// Shade across pitch, so time endpoints stay square and adjoining segments
+/// of a glide have no shaded caps. The narrowest ribbons stay flat and bright;
+/// the shoulder arrives gradually from 1.5 to 3 points of perpendicular width.
+/// Points keep the material identical in the scene and half-resolution bloom
+/// source, whose antialiasing feathers necessarily differ.
 fn core_color(in: VertexOut) -> vec4<f32> {
-    return in.core * inside(box_distance(in), 0.0) * lead_coverage(in);
+    let across = abs(in.local.x - in.shear * in.local.y) / max(in.half_extent.x, 0.0001);
+    let width = 2.0 * in.half_extent.x / sqrt(1.0 + in.shear * in.shear);
+    let shoulder = smoothstep(0.3, 1.0, across) * smoothstep(1.5, 3.0, width);
+    let color = vec4<f32>(in.core.rgb * (1.0 - 0.3 * shoulder), in.core.a);
+    return color * inside(box_distance(in), 0.0) * lead_coverage(in);
 }
 
 // 0-1 linear from 0-1 sRGB gamma. Lifted from egui's own shader, and used

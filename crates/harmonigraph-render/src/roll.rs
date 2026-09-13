@@ -1566,9 +1566,8 @@ mod tests {
         }
     }
 
-    /// A note is a SOLID rectangle of its own color, with the outline standing
-    /// entirely outside it: reading outward from the middle — the note's color
-    /// right to its edge, the outline, nothing.
+    /// The pitch color stays at the center, the sides shade smoothly, and the
+    /// entire body is opaque over either a dark or a bright heatmap cell.
     ///
     /// The outline standing outside is the flood invariant, and the reason it
     /// is read off a distance rather than drawn as a stroke of the note's path:
@@ -1577,7 +1576,7 @@ mod tests {
     /// paint the interior over. Coverage taken at distance 0..4 cannot reach
     /// inside a box whose interior is at negative distance.
     #[test]
-    fn a_note_is_solid_and_its_outline_stands_outside_it() {
+    fn a_note_has_opaque_shaded_sides_and_an_outside_outline() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
@@ -1586,7 +1585,17 @@ mod tests {
         let at = |x: u32| pixel(&frame, x, 128);
         const RED: [u8; 4] = [255, 0, 0, 255];
         assert!(near(at(128), RED), "the note's middle is not painted: {:?}", at(128));
-        assert!(near(at(138), RED), "the fill stops short of the note's edge: {:?}", at(138));
+        let side = at(138);
+        assert!(
+            at(134)[0] > side[0] + 20 && side[0] > 170,
+            "the shoulder is not a gradual shade of the center: {:?}, {side:?}",
+            at(134),
+        );
+        assert_eq!(&side[1..], &[0, 0, 255], "the shaded side changed hue or opacity");
+        let bright = draw(&device, &queue, vec![centered_note()], wgpu::Color::WHITE);
+        for x in 116..140 {
+            assert_eq!(at(x), pixel(&bright, x, 128), "the background shows through at {x}");
+        }
         assert!(shadowed(at(141)), "no outline standing against the note's edge: {:?}", at(141),);
         // Solid nearly all the way out — the last half pixel of the reach is
         // the antialiasing ramp a hard edge still gets — and gone past it.
@@ -1614,7 +1623,7 @@ mod tests {
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
         let at = |x: u32, y: u32| pixel(&frame, x, y);
         const RED: [u8; 4] = [255, 0, 0, 255];
-        assert!(near(at(138, 128), RED), "the note's body went missing: {:?}", at(138, 128));
+        assert!(at(138, 128)[0] > 170, "the note's body went missing: {:?}", at(138, 128));
         assert!(shadowed(at(142, 128)), "no outline along the flank: {:?}", at(142, 128));
         assert!(near(at(128, 186), RED), "the note's body was cut at its end: {:?}", at(128, 186));
         assert!(shadowed(at(128, 190)), "no outline across the end: {:?}", at(128, 190));
@@ -1882,10 +1891,27 @@ mod tests {
         // note, and outside any rounding of it (a radius clamped to the note's
         // half-length would arc from 17 out, missing this by half a point).
         let corner = pixel(&frame, 147, 130);
-        assert!(
-            near(corner, [255, 0, 0, 255]),
-            "the tap's corner is missing ({corner:?}) — something is rounding it off",
-        );
+        assert_eq!(corner, pixel(&frame, 147, 128), "the tap has a shaded or rounded time cap");
+        assert!(corner[0] > 170 && corner[2] == 0, "the tap's corner is missing: {corner:?}");
+    }
+
+    #[test]
+    fn a_glides_shading_follows_its_pitch_centerline() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let note = RollInstance { center: [128.5, 128.5], shear: 1.0, ..centered_note() };
+        let frame = draw(&device, &queue, vec![note], bg_color());
+        let side = pixel(&frame, 138, 128);
+        assert!(side[0] < 230 && side[0] > 170, "the fixture missed the shaded side: {side:?}");
+        for step in [-16, 0, 16] {
+            assert_eq!(
+                pixel(&frame, (138 + step) as u32, (128 + step) as u32),
+                side,
+                "the shoulder drifted across the glide",
+            );
+            assert_eq!(pixel(&frame, (128 + step) as u32, (128 + step) as u32), [255, 0, 0, 255]);
+        }
     }
 
     /// The outline must still stand OUTSIDE a note floored to its minimum

@@ -696,15 +696,12 @@ fn note_instances_with_floor(
             // number that decides nothing is still worth not carrying.
             let cap_px = outline_px.min((behind_px - 0.5 * feather_px).max(0.0));
 
-            // Notes always draw fully opaque — how much of the heatmap comes
-            // through a note is the Fill setting's business, not an opacity
-            // here, and a released note fades on the lattice's fade.
+            // Opaque so the heatmap cannot change a note's pitch color.
             let alpha = 1.0;
             let pitch = (p0 + p1) * 0.5;
-            // The note's TRUE color, so a note matches the node it lit up on
-            // the lattice. It is painted solid, edge to edge — the interior
-            // and the boundary are one thing, and a heatmap cell showing
-            // through a note said neither clearly.
+            // The same pitch color as the lattice node. The shader keeps it
+            // at the ribbon's center and shades the sides without lowering
+            // their opacity.
             let core = note_color(state, pitch, alpha);
             // Reading outward: the note, the dark outline standing against
             // every one of its edges and fading out, then whatever the
