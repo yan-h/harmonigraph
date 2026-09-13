@@ -203,9 +203,9 @@ struct GlowNode {
     // x: the node's carried light level (`Instance::glow` x). y: its ROW of the
     // ink strip, which is where its colour is (`Instance::glow` y).
     light: vec2<f32>,
-    // x: how much of a MARK the light still has this node wearing, which is
-    // what sizes its halo (`glow_rim`). y: conservative pixel radius for CPU tiling.
-    mark: vec2<f32>,
+    // Conservative pixel radius for CPU tiling, followed by storage alignment padding.
+    radius: f32,
+    _padding: f32,
 };
 
 // Every lit node this frame, in the order the instance buffer holds them.
@@ -422,24 +422,10 @@ fn node_rim(marked: bool) -> f32 {
     return rim;
 }
 
-// The rim a node's LIGHT is measured against: the same two answers `node_rim`
-// chooses between, with the mark's share of the choice CARRIED (`GlowNode::mark`
-// x, `panes::glow_fade` in harmonigraph-ui) rather than switched by the bit.
-//
-// The light's whole span is this plus the Reach, so reading the bit put a step
-// in it: the bit is set while the marking voice exists and clear the frame it
-// is pruned, one Fade after the key came up, and the halo — still near full,
-// with seconds of its own release to run — jumped a size smaller in one frame.
-// A light is the slow part of the picture in its size exactly as in its
-// brightness, and this is where the two are made to agree.
-//
-// Interpolating the two rims rather than the mark's own drawn width, because
-// what the light needs is one length to lay its falloff over, and a mark is a
-// wedge: its width is a direction the node reaches in, not a circle it fills.
-// The pair are the circle with the mark and the circle without, and the light
-// eases between them.
-fn glow_rim(marked: f32) -> f32 {
-    return mix(node_rim(false), node_rim(true), clamp(marked, 0.0, 1.0));
+// Every halo uses the view's maximum ring/mark rim. Marks contribute color
+// without resizing the light when they arrive or leave.
+fn glow_rim() -> f32 {
+    return node_rim(true);
 }
 
 // How far the billboard has to reach, in uv, for a shape reaching `g` past a
@@ -2931,14 +2917,10 @@ fn glow_layer(node: GlowNode, uv: vec2<f32>) -> vec4<f32> {
     let level = glow_level(node.light.x);
     let reach = max(u.glow.reach, 0.0);
     let strength = max(u.glow.strength, 0.0);
-    // The rim the LIGHT is measured against, which both lengths below are cut
-    // from. Read here rather than carried on `GlowNode`: it is `node_rim`'s two
-    // frame-wide answers eased by the one thing that IS per node, so spending
-    // it on the CPU would be `node_rim` written a second time in Rust.
-    let lit_rim = glow_rim(node.mark.x);
+    // One view-level rim sizes every halo, independent of active marks.
+    let lit_rim = glow_rim();
     let d = length(uv);
-    // The close halo spans the node's outermost drawn edge as the
-    // LIGHT has it ([`glow_rim`]) plus the Reach. It is the falloff's domain,
+    // The halo spans the configured maximum rim plus Reach. This is the falloff's domain,
     // so the halo is a field the node sits inside rather than a rim light on
     // its edge, and it is where the curve reaches zero, so the Reach bar says
     // how far the close component goes.

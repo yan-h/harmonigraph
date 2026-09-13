@@ -602,27 +602,9 @@ struct GpuInstance {
     /// is a level because a ring arrives and leaves on the Fade like every
     /// other layer of a node (see `harmonigraph_scene::RingFade`).
     ring: f32,
-    /// The node's own light: x how bright it is, y which ROW of the ink strip
-    /// keeps its colour, z how much of this frame's reading the two of them
-    /// take, w how much of a MARK the light still has the node wearing
-    /// (`harmonigraph_scene::GlowStep`, filled in by the shell's
-    /// `panes::glow_fade`).
-    ///
-    /// All four are the glow's and nothing else reads them. The level is a
-    /// CARRIED one and not the largest envelope on the node, which is the whole
-    /// point of it: it can be above zero on a node whose every layer has gone
-    /// silent, and such a node is shipped for exactly that reason (see the cull
-    /// in `from_scene`) so its light can go on leaving. So is the mark, and for
-    /// the same reason: it is the light's SIZE, and a size that stepped when
-    /// the marking voice was pruned snapped a halo still at full brightness.
-    ///
-    /// Only the first THREE cross as a vertex attribute. The mark is read by
-    /// the light alone, and the light is no longer drawn over this stream: it
-    /// reaches the gather through [`GpuGlowNode`], which this is the source
-    /// for ([`LatticeCallback::glow_nodes`]). Kept as four here because this
-    /// is where a node's light is assembled, and splitting one `GlowStep`
-    /// across two fields to save a float nobody uploads twice buys nothing.
-    glow: [f32; 4],
+    /// Carried brightness, stable ink row, and the renderer's color-history
+    /// coefficient. Untimed snapshots seed current ink with coefficient 1.
+    glow: [f32; 3],
 }
 
 impl GpuInstance {
@@ -641,11 +623,6 @@ impl GpuInstance {
         // the rest off their numbers — which is what keeps this list and
         // lattice.wgsl's `Instance` readable side by side.
         //
-        // Location 12 is THREE of `glow`'s four floats, and the stride is still
-        // the struct's: the mark is spent on the CPU into the lit-node buffer
-        // and no vertex stage reads it (`GpuInstance::glow`). A narrower
-        // attribute over a wider field is well-formed — the offsets above it
-        // are already fixed and nothing is read past what is named.
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
             4 => Float32, 6 => Uint32x2,
@@ -2370,13 +2347,11 @@ fn create_glow_gather_pipeline(
 /// full-target quad would blur rows nothing wrote — and, worse for the reading
 /// pass, would have no instance to take a row and a mix off.
 ///
-/// **The reading is not stateless**, and it is the one thing in the draw path
-/// that is not: a row is an average of this frame's ink and what that row
-/// already held, so the pass reads last frame's strip
-/// (`InkStrip::carried`). Deterministic all the same, and that is what the
-/// offline renderer needs: the mix arrives per instance from the frame's own
-/// clock, and a render started afresh builds the strips afresh and seeds them
-/// on the first frame.
+/// **Timed scenes carry color**: a row averages current ink with the previous
+/// strip (`InkStrip::carried`). The renderer computes each instance's mix from
+/// the time since this pane last encoded an ink pass. This is deterministic
+/// for offline rendering too. Fresh strips seed on their first frame; untimed
+/// scenes always seed current ink as independent snapshots.
 ///
 /// **No blending on either.** Each writes the row it draws, and a strip texel
 /// is a colour and a weight rather than something to composite.

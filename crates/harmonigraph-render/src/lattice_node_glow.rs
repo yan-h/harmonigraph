@@ -23,8 +23,9 @@ pub(super) struct GpuGlowNode {
     pub(super) inv_y: [f32; 2],
     pub(super) centre: [f32; 2],
     pub(super) light: [f32; 2],
-    /// Mark envelope and conservative halo radius in target pixels (for tiling).
-    pub(super) mark: [f32; 2],
+    /// Conservative halo radius in target pixels, used by CPU tiling.
+    pub(super) radius: f32,
+    pub(super) _padding: f32,
 }
 
 /// What binds that list to the light's pass: one read-only storage buffer, at
@@ -171,7 +172,8 @@ impl LatticeCallback {
                             * self.glow_breath.as_ref().map_or(1.0, |levels| levels[index]),
                         inst.glow[1],
                     ],
-                    mark: [inst.glow[3], radius],
+                    radius,
+                    _padding: 0.0,
                 })
             })
             .collect()
@@ -183,17 +185,8 @@ impl LatticeCallback {
 /// uv axes as pixel vectors, which is the frame
 /// [`LatticeCallback::glow_nodes`] inverts.
 ///
-/// A BOUND and not the exact extent, because the one thing it is read for is a
-/// cull: too large keeps a node that lights nothing, which costs a loop
-/// iteration, and too small drops a node that lights something, which is a hole
-/// in the picture. It is loose in the RIM, and loose toward keeping.
-///
-/// In uv the halo stops at `glow_layer`'s `span` — the rim the LIGHT is measured
-/// against plus the Reach, floored where the shader floors it. `glow_rim` eases
-/// that rim between `node_rim`'s two answers on the mark this node carries, and
-/// the marked answer is the larger of the two, so taking it once for the frame
-/// bounds every node whatever any of them carries. That is the whole of the
-/// slack: a frame with no marks in it is bounded by the mark's rim anyway.
+/// Every halo uses the same configured maximum ring/mark rim plus Reach.
+/// This matches `glow_rim()` in the shader regardless of which marks are lit.
 ///
 /// From uv to pixels the halo's disc maps to an ELLIPSE, whose semi-major axis
 /// is the largest singular value of the 2x2 frame `[r u]`. Written out rather

@@ -1063,7 +1063,6 @@ fn a_subfloor_mark_does_not_mask_a_gaussian_shadow_before_it_is_visible() {
         scene.shadow.lattice_geometry.kernel = Gaussian;
         scene.nodes[0].melody_slots = if level > 0.0 { MIDDLE_C } else { 0 };
         scene.nodes[0].melody_level = level;
-        scene.nodes[0].glow.marked = f32::from(level > 0.0);
         scene
     };
 
@@ -1601,7 +1600,6 @@ fn a_zero_width_mark_casts_no_distance_shadow() {
         scene.mark_thickness = 0.0;
         scene.nodes[0].melody_slots = slots;
         scene.nodes[0].melody_level = f32::from(slots != 0);
-        scene.nodes[0].glow.marked = f32::from(slots != 0);
         scene
     };
     let absent = shooter.shot(&staged(0));
@@ -1648,7 +1646,6 @@ fn a_marked_nodes_shadow_stands_off_an_unmarked_ones_by_the_strip_alone() {
         let mut scene = on_ground(shadow, DEPTH);
         scene.nodes[0].melody_slots = slots;
         scene.nodes[0].melody_level = f32::from(slots != 0);
-        scene.nodes[0].glow.marked = f32::from(slots != 0);
         scene
     };
     // The pane with no node on it at all: what both reaches below are read

@@ -265,8 +265,9 @@ fn a_lone_glow_keeps_its_colour_profile_and_fade() {
         for (index, pixel) in pixels.chunks_exact(4).enumerate() {
             let at = glam::vec2((index % 256) as f32 + 0.5, (index / 256) as f32 + 0.5);
             let d = at.distance(CENTRE) / per_uv;
-            // This fixture has no marks, a rim at 0.795 UV and a linear falloff.
-            let a = (0.8 * gain * level * (1.0 - d / (0.795 + 2.88)).max(0.0)).min(1.0);
+            // Even unmarked nodes use the maximum configured mark rim.
+            let rim = scene.rings_outer.max(scene.mark_inner + scene.mark_thickness);
+            let a = (0.8 * gain * level * (1.0 - d / (rim + 2.88)).max(0.0)).min(1.0);
             for (got, channel) in pixel.iter().zip([colour[0], colour[1], colour[2], 1.0]) {
                 assert!(
                     (f32::from(*got) - a * channel * 255.0).abs() < 1.1,
@@ -421,5 +422,25 @@ fn accumulation_sweeps_to_the_original_screen_of_each_colour_channel() {
         assert!(mixed.chunks_exact(4).all(|p| p[..3].iter().all(|c| *c <= p[3])));
         scene.nodes.reverse();
         assert!(mixed.iter().zip(glow(&mut shooter, &scene)).all(|(a, b)| a.abs_diff(b) <= 1));
+    }
+}
+
+/// Marks can change direction and hue, but no longer resize a held halo.
+#[test]
+fn marks_do_not_change_the_halo_footprint() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 0.75, false);
+    assert!(
+        scene.mark_inner + scene.mark_thickness > scene.rings_outer + 0.1,
+        "the mark must extend beyond the rings to exercise the old size change"
+    );
+    scene.nodes[0].octaves.fill(1.0);
+    let alpha = |pixels: Vec<u8>| pixels.chunks_exact(4).map(|p| p[3]).collect::<Vec<_>>();
+    let bare = alpha(glow(&mut shooter, &scene));
+    assert!(bare.iter().filter(|&&v| v > 20).count() > 1000);
+    for level in [0.25, 1.0, 0.0] {
+        scene.nodes[0].melody_slots = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
+        scene.nodes[0].melody_level = level;
+        assert_eq!(bare, alpha(glow(&mut shooter, &scene)), "mark level {level}");
     }
 }

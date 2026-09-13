@@ -982,7 +982,6 @@ fn a_node_with_no_light_writes_into_no_other_nodes_colour() {
         let mut scene = two_colour_node(WIDTH, WIDTH);
         scene.nodes[0].melody_slots = 0;
         scene.nodes[0].melody_level = 0.0;
-        scene.nodes[0].glow.mix = 1.0;
         let mut idle = scene.nodes[0];
         idle.world_pos.x += 1.2;
         idle.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
@@ -1050,7 +1049,8 @@ fn a_light_in_its_release_survives_the_pane_changing_size() {
     // Sounding: the octave band alone, which is what puts a colour in the row.
     let sounding = || -> Scene {
         let mut scene = two_colour_node(WIDTH, 0.0);
-        scene.nodes[0].glow.mix = 1.0;
+        scene.glow_timing =
+            Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 1.0, release: 1.0 });
         scene
     };
     // Releasing: the note fade has run out, so the node draws no layer at all
@@ -1058,7 +1058,8 @@ fn a_light_in_its_release_survives_the_pane_changing_size() {
     // the strip knows what colour it is.
     let releasing = || -> Scene {
         let mut scene = two_colour_node(0.0, 0.0);
-        scene.nodes[0].glow.mix = 0.0;
+        scene.glow_timing =
+            Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 1.0, release: 1.0 });
         scene
     };
     let unlit = |mut scene: Scene| -> Scene {
@@ -1099,9 +1100,8 @@ fn a_light_in_its_release_survives_the_pane_changing_size() {
 /// The COLOUR half of the glow's own clock. A node's ink is read in WGSL and
 /// kept in a strip on the GPU, so this is where it is carried: the reading is
 /// mixed into the row that node already had
-/// (`harmonigraph_scene::GlowStep::mix`), on the same coefficient the level
-/// took on the CPU. What that buys is a hue that MORPHS when the chord under it
-/// changes, rather than one that cuts.
+/// using the time since the renderer last encoded this pane. The hue morphs
+/// when the chord under it changes.
 ///
 /// [`two_colour_node`]'s two layers, which is the fixture built for exactly
 /// this reading: the octave band flat RED and the audio ring flat GREEN, so a
@@ -1118,14 +1118,14 @@ fn a_nodes_light_takes_its_colour_from_the_frame_before() {
     };
     // The band alone, and the ring alone, each at the same width so neither
     // layer carries more of the node than the other.
-    let red = |mix: f32| -> Scene {
+    let red = |now: f64| -> Scene {
         let mut scene = two_colour_node(WIDTH, 0.0);
-        scene.nodes[0].glow.mix = mix;
+        scene.glow_timing = Some(harmonigraph_scene::GlowTiming { now, attack: 1.0, release: 1.0 });
         scene
     };
-    let green = |mix: f32| -> Scene {
+    let green = |now: f64| -> Scene {
         let mut scene = two_colour_node(0.0, WIDTH);
-        scene.nodes[0].glow.mix = mix;
+        scene.glow_timing = Some(harmonigraph_scene::GlowTiming { now, attack: 1.0, release: 1.0 });
         scene
     };
     let unlit = |mut scene: Scene| -> Scene {
@@ -1133,14 +1133,14 @@ fn a_nodes_light_takes_its_colour_from_the_frame_before() {
         scene
     };
     // The two ends, each settled on a pane of its own.
-    let red_off = shooter.shot(&unlit(red(1.0)));
-    let green_off = shooter.shot(&unlit(green(1.0)));
-    let all_red = added_light(&shooter.shot(&red(1.0)), &red_off);
-    let all_green = added_light(&shooter.shot(&green(1.0)), &green_off);
+    let red_off = shooter.shot(&unlit(red(0.0)));
+    let green_off = shooter.shot(&unlit(green(0.0)));
+    let all_red = added_light(&shooter.shot(&red(0.0)), &red_off);
+    let all_green = added_light(&shooter.shot(&green(0.0)), &green_off);
     // And the frame after a red one, on the same pane, taking a tenth of the
-    // new reading — a Glow attack long against the frame it is stepped over.
-    let _ = shooter.shot(&red(1.0));
-    let carried = added_light(&shooter.shot_again(&green(0.1)), &green_off);
+    // new reading after -ln(0.9) seconds at a one-second time constant.
+    let _ = shooter.shot(&red(0.0));
+    let carried = added_light(&shooter.shot_again(&green(-0.9_f64.ln())), &green_off);
 
     // Non-vacuous first: each layer alone has to light the halo in its own
     // colour, or the reading below is measuring nothing.
@@ -1165,6 +1165,8 @@ fn a_nodes_light_takes_its_colour_from_the_frame_before() {
 fn glow_free_blur_cull_matches_unculled_rows_through_release_and_reuse() {
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
     let mut scene = two_colour_node(0.18, 0.0);
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 1.0, release: 1.0 });
     scene.spectral =
         ringing_node(None, Some(harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0), PROBE_RANGE)
             .spectral;
@@ -1207,7 +1209,6 @@ fn glow_free_blur_cull_matches_unculled_rows_through_release_and_reuse() {
                 // Positive glow, no current MIDI ink, but an audio ring remains.
                 scene.nodes[0].activation = 0.0;
                 scene.nodes[0].octaves.fill(0.0);
-                scene.nodes[0].glow.mix = 0.0;
             }
             2 => scene.nodes[0].glow.level = 0.0,
             3 => {
