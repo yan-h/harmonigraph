@@ -162,12 +162,31 @@ impl LatticeCallback {
                     inv_x: [u.y / det, -u.x / det],
                     inv_y: [-r.y / det, r.x / det],
                     centre: centre.to_array(),
-                    light: [inst.glow[0], inst.glow[1]],
+                    // Modulate only the displayed light. Feeding this back
+                    // into InkHistory would change its attack/release decision
+                    // and colour history on every breath.
+                    light: [
+                        inst.glow[0]
+                            * self
+                                .glow_timing
+                                .map_or(1.0, |clock| breath(inst.world_pos, clock.now)),
+                        inst.glow[1],
+                    ],
                     mark: [inst.glow[3], radius],
                 })
             })
             .collect()
     }
+}
+
+/// Stable world position gives each node a phase independent of draw order,
+/// culling, and recycled ink rows. Only carried live/offline light breathes;
+/// clockless renderer callers continue to supply their exact light level.
+fn breath(position: [f32; 3], now: f64) -> f32 {
+    let phase = f64::from(position[0]) * 2.173
+        + f64::from(position[1]) * 3.719
+        + f64::from(position[2]) * 5.137;
+    (0.91 + 0.06 * (now * 0.73 + phase).sin() + 0.03 * (now * 1.13 + phase * 1.7).sin()) as f32
 }
 
 /// An upper bound on how far one lit node's halo reaches from its centre, in
