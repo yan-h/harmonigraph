@@ -208,6 +208,20 @@ metal::float3 linear_from_gamma_rgb(
     return metal::select(higher, lower, cutoff);
 }
 
+metal::float3 baked_light(
+    metal::float2 position,
+    metal::texture2d<float, metal::access::sample> close_light,
+    metal::sampler cloud_sampler,
+    constant Cloud& cloud
+) {
+    float _e3 = cloud.ppp;
+    metal::float2 _e8 = cloud.origin;
+    metal::float2 _e12 = cloud.size;
+    metal::float2 uv = ((position / metal::float2(_e3)) - _e8) / _e12;
+    metal::float4 _e17 = close_light.sample(cloud_sampler, uv, metal::level(0.0));
+    return _e17.xyz;
+}
+
 metal::float4 cloud_color(
     VertexOut in_2,
     constant Locals& locals,
@@ -220,13 +234,8 @@ metal::float4 cloud_color(
 ) {
     metal::float4 _e1 = heatmap_color(in_2, locals, grid, lut, _buffer_sizes);
     metal::float3 core = _e1.xyz;
-    float _e7 = cloud.ppp;
-    metal::float2 _e12 = cloud.origin;
-    metal::float2 _e16 = cloud.size;
-    metal::float2 uv = ((in_2.position.xy / metal::float2(_e7)) - _e12) / _e16;
-    metal::float4 _e21 = close_light.sample(cloud_sampler, uv, metal::level(0.0));
-    metal::float3 light = _e21.xyz;
-    return metal::float4(core + ((metal::float3(1.0) - core) * light), 1.0);
+    metal::float3 _e5 = baked_light(in_2.position.xy, close_light, cloud_sampler, cloud);
+    return metal::float4(core + ((metal::float3(1.0) - core) * _e5), 1.0);
 }
 
 struct fs_cloud_linearInput {
@@ -238,7 +247,7 @@ struct fs_cloud_linearOutput {
 };
 fragment fs_cloud_linearOutput fs_cloud_linear(
   fs_cloud_linearInput varyings [[stage_in]]
-, metal::float4 position [[position]]
+, metal::float4 position_1 [[position]]
 , constant Locals& locals [[buffer(0)]]
 , device type_3 const& grid [[buffer(1)]]
 , metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
@@ -247,7 +256,7 @@ fragment fs_cloud_linearOutput fs_cloud_linear(
 , constant Cloud& cloud [[buffer(2)]]
 , constant _mslBufferSizes& _buffer_sizes [[buffer(3)]]
 ) {
-    const VertexOut in = { position, varyings.slab, varyings.t };
+    const VertexOut in = { position_1, varyings.slab, varyings.t };
     metal::float4 _e1 = cloud_color(in, locals, grid, lut, close_light, cloud_sampler, cloud, _buffer_sizes);
     metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
     return fs_cloud_linearOutput { metal::float4(_e3, 1.0) };

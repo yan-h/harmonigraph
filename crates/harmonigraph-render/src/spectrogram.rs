@@ -1288,6 +1288,14 @@ mod tests {
             cb.atmosphere.as_mut().unwrap().pitch_vertical = turns % 2 == 0;
             let mut resources = CallbackResources::default();
             let lit = frame_with(&device, &queue, &mut resources, &cb);
+            if turns == 0 {
+                cb.target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
+                assert!(
+                    compare(&lit, &fresh_frame(&device, &queue, &cb)).0 <= 1,
+                    "sRGB target changed the light beyond recorded history"
+                );
+                cb.target_format = FORMAT;
+            }
             let mut corners = [egui::pos2(32.0, 0.0), egui::pos2(112.0, 128.0)];
             for corner in &mut corners {
                 for _ in 0..turns {
