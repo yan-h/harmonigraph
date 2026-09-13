@@ -335,6 +335,8 @@ impl Magnify {
 #[derive(Default)]
 pub(crate) struct TextBatch {
     glyphs: Vec<GlyphInstance>,
+    /// End of each complete shadow/fill layer; ungrouped text stays in one layer.
+    layer_ends: Vec<u32>,
     /// Which node each of those glyphs names, for a batch whose text is going
     /// to the LATTICE's own pass rather than over the finished picture. Filled
     /// by [`TextBatch::attached_to`] and empty for every other pane, which has
@@ -382,6 +384,14 @@ pub(crate) struct TextPiece {
 }
 
 impl TextBatch {
+    /// Close one layer after all its letters and marks have been collected.
+    pub(crate) fn finish_layer(&mut self) {
+        let end = self.glyphs.len() as u32;
+        if end > self.layer_ends.last().copied().unwrap_or(0) {
+            self.layer_ends.push(end);
+        }
+    }
+
     /// Draw everything `f` emits magnified by `factor` about `origin` — the
     /// label's own anchor, so the whole piece grows about the thing it names
     /// rather than sliding off it.
@@ -689,6 +699,7 @@ impl TextBatch {
         painter.add(harmonigraph_render::text_paint_callback(
             rect,
             std::mem::take(&mut self.glyphs),
+            std::mem::take(&mut self.layer_ends),
             shadow,
             atlas,
             marks,

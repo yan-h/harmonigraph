@@ -432,6 +432,10 @@ const WIDEST_NAME: NoteName =
 #[derive(Clone, Copy, Debug)]
 pub(super) struct NoteLabel {
     pub name: NoteName,
+    /// Musical onset, independent of the label anchor or release time.
+    pub onset: f64,
+    /// Drawn pitch height, for simultaneous notes (including cropped bends).
+    pub pitch: f32,
     /// Screen box the name covers, padded — what the THINNING reasons about,
     /// and an estimate throughout ([`name_extent`]).
     ///
@@ -816,11 +820,8 @@ pub(super) fn plan(
         // worse of the two: an absent name reads as "no room", one that comes
         // and goes reads as a fault.
         //
-        // What it costs is that a held name can overlap another. Briefly, and
-        // it lands on top (held names are appended last, and drawn in order),
-        // and it is the note being played: of the three ways to break the tie,
-        // this is the only one that never withholds a name that could have
-        // been shown.
+        // What it costs is that a held name can overlap another. Both remain
+        // available to draw; onset and then pitch decide which sits on top.
         //
         // All of which is about a name standing at the now-line while the
         // picture scrolls past it, so the exemption belongs to the ANCHOR
@@ -839,9 +840,13 @@ pub(super) fn plan(
             // Two keys sounding one pitch — a doubled MIDI source, a layered
             // MPE part — would otherwise stamp the same name on the same
             // points once per voice. The name still appears; it is drawn once.
-            if !held.iter().any(|l| l.name == name && l.rect == rect) {
+            if let Some(existing) = held.iter_mut().find(|l| l.name == name && l.rect == rect) {
+                existing.onset = existing.onset.max(note.start);
+            } else {
                 held.push(NoteLabel {
                     name,
+                    onset: note.start,
+                    pitch: drawn.pitch,
                     rect,
                     lead,
                     grow,
@@ -900,6 +905,8 @@ pub(super) fn plan(
             lanes.push(key);
             placed.push(NoteLabel {
                 name,
+                onset: note.start,
+                pitch: drawn.pitch,
                 rect,
                 lead,
                 grow,
@@ -960,17 +967,10 @@ pub(super) fn plan(
             !doomed.contains(&(index - 1))
         });
     }
-    // Sounding notes reach the sweep in the tracker's key order — stable, but
-    // not an order that means anything here: it would decide which of two
-    // overlapping held names lands on top, and that has to follow from where
-    // they sit rather than from how they are stored. Every other name was
-    // already ordered by the sweep.
-    held.sort_unstable_by(|a, b| {
-        a.rect.min.x.total_cmp(&b.rect.min.x).then(a.rect.min.y.total_cmp(&b.rect.min.y))
-    });
-    // Held names last, so that where one overlaps another it is the note under
-    // your finger that stays readable.
     placed.append(&mut held);
+    // Paint oldest first, then low to high for simultaneous onsets. Releasing
+    // a note or reversing the time axis must not change its stacking order.
+    placed.sort_by(|a, b| a.onset.total_cmp(&b.onset).then(a.pitch.total_cmp(&b.pitch)));
     placed
 }
 
@@ -1526,6 +1526,7 @@ pub(super) fn draw(
     // `draw_stacked_name` sizes everything off the lattice's letter, so the
     // rung crosses back into its terms here — a conversion, not a second snap.
     let scale = LABEL_PT * raster / marks::NAME_SIZE;
+    batch.finish_layer();
     for label in labels {
         marks::draw_stacked_name(
             batch,
@@ -1546,6 +1547,7 @@ pub(super) fn draw(
             // pitch zoom.
             marks::NameLead::Letter(label.grow),
         );
+        batch.finish_layer();
     }
 }
 
@@ -1816,6 +1818,25 @@ mod tests {
         PitchScale { min_midi, max_midi, span: max_midi - min_midi }
     }
 
+    #[test]
+    fn overlapping_names_stack_by_onset_then_pitch_in_every_orientation() {
+        for orientation in SpectralOrientation::ALL {
+            for travel in [false, true] {
+                let mut state = turned(24.0, 10.0, orientation);
+                state.appearance.spectrum.note_names_travel = travel;
+                for event in [on(1.0, 67), on(1.0, 64), on(2.0, 60), off(2.5, 60)] {
+                    state.runtime.tracker.handle_event(event);
+                }
+                let names = labels(&state, 3.0);
+                assert_eq!(
+                    names.iter().map(|l| (l.onset, l.pitch)).collect::<Vec<_>>(),
+                    [(1.0, 64.0), (1.0, 67.0), (2.0, 60.0)],
+                    "orientation {orientation:?}, travel {travel}"
+                );
+            }
+        }
+    }
+
     /// Every note is named, repeats of one pitch included — that is the whole
     /// difference from marking a pitch once and ruling a line forward from it.
     /// A repeat is where you look to ask "what was that again", and it is the
@@ -1994,6 +2015,8 @@ mod tests {
             .iter()
             .map(|&name| NoteLabel {
                 name,
+                onset: 0.0,
+                pitch: 60.0,
                 rect: label_rect(&axes, axes.dir_depth(), 0.5, 0.5, &name, LABEL_PT, FLAT),
                 lead: axes.at(0.5, 0.5) + axes.dir_depth() * (LABEL_INSET * FLAT.air),
                 grow: axes.dir_depth(),
@@ -3834,6 +3857,8 @@ mod tests {
                         let scales = NameScale { label: zoom, air: 1.0 };
                         let label = NoteLabel {
                             name,
+                            onset: 0.0,
+                            pitch: 60.0,
                             rect: label_rect(&axes, grow, 0.5, 0.5, &name, size, scales),
                             lead: anchor + grow * (LABEL_INSET * scales.air),
                             grow,
