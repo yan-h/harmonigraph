@@ -1,4 +1,4 @@
-//! Saved controls for the lattice's dusk prototype.
+//! Saved controls for the lattice's atmosphere prototype.
 
 use harmonigraph_core::LatticePos;
 
@@ -9,10 +9,8 @@ pub struct AtmosphereSettings {
     pub nebula_depth: f32,
     pub nebula_scale: f32,
     pub nebula_speed: f32,
-    pub dusk_strength: f32,
-    pub dusk_warmth: f32,
-    pub dusk_speed: f32,
-    pub dusk_response: f32,
+    pub wide_strength: f32,
+    pub wide_spread: f32,
     pub breath_amount: f32,
     pub breath_speed: f32,
 }
@@ -24,10 +22,8 @@ impl Default for AtmosphereSettings {
             nebula_depth: 0.75,
             nebula_scale: 1.0,
             nebula_speed: 1.0,
-            dusk_strength: 1.0,
-            dusk_warmth: 0.45,
-            dusk_speed: 1.0,
-            dusk_response: 0.25,
+            wide_strength: 0.20,
+            wide_spread: 4.0,
             breath_amount: 0.18,
             breath_speed: 1.0,
         }
@@ -47,10 +43,8 @@ impl AtmosphereSettings {
         self.nebula_depth = clamp(self.nebula_depth, fresh.nebula_depth, 0.0, 1.0);
         self.nebula_scale = clamp(self.nebula_scale, fresh.nebula_scale, 0.25, 4.0);
         self.nebula_speed = clamp(self.nebula_speed, fresh.nebula_speed, 0.0, 20.0);
-        self.dusk_strength = clamp(self.dusk_strength, fresh.dusk_strength, 0.0, 3.0);
-        self.dusk_warmth = clamp(self.dusk_warmth, fresh.dusk_warmth, 0.0, 1.0);
-        self.dusk_speed = clamp(self.dusk_speed, fresh.dusk_speed, 0.0, 4.0);
-        self.dusk_response = clamp(self.dusk_response, fresh.dusk_response, 0.0, 1.0);
+        self.wide_strength = clamp(self.wide_strength, fresh.wide_strength, 0.0, 1.0);
+        self.wide_spread = clamp(self.wide_spread, fresh.wide_spread, 1.0, 6.0);
         self.breath_amount = clamp(self.breath_amount, fresh.breath_amount, 0.0, 1.0);
         self.breath_speed = clamp(self.breath_speed, fresh.breath_speed, 0.0, 4.0);
         self

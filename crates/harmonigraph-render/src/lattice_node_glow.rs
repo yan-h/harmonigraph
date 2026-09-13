@@ -189,7 +189,8 @@ impl LatticeCallback {
 /// in the picture. It is loose in the RIM, and loose toward keeping.
 ///
 /// In uv the halo stops at `glow_layer`'s `span` — the rim the LIGHT is measured
-/// against plus the Reach, floored where the shader floors it. `glow_rim` eases
+/// against plus the Reach, floored where the shader floors it, then multiplied
+/// by the wide spread when enabled. `glow_rim` eases
 /// that rim between `node_rim`'s two answers on the mark this node carries, and
 /// the marked answer is the larger of the two, so taking it once for the frame
 /// bounds every node whatever any of them carries. That is the whole of the
@@ -209,7 +210,11 @@ pub(super) fn halo_pixels(uniforms: &Uniforms, r: glam::Vec2, u: glam::Vec2) -> 
     } else {
         bare
     };
-    let span = (rim + uniforms.glow.reach.max(0.0)).max(0.1);
+    let close = (rim + uniforms.glow.reach.max(0.0)).max(0.1);
+    // Both offscreen rejection and tile candidate packing must see the outer
+    // tail. Amount zero restores the original bound and its gather cost.
+    let span = close
+        * if uniforms.glow.wide_strength > 0.0 { uniforms.glow.wide_spread.max(1.0) } else { 1.0 };
     // The larger eigenvalue of `[r u]^T [r u]`, whose root is that singular
     // value: half the trace plus the root of the discriminant. Both halves are
     // non-negative, so no floor is wanted under the root — one at zero would

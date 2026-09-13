@@ -1,4 +1,4 @@
-//! Controls for the lattice's nebula glow, dusk wash and breathing.
+//! Controls for the lattice's nebula glow, wide halo and breathing.
 
 use harmonigraph_scene::AtmosphereSettings;
 
@@ -18,15 +18,11 @@ pub(super) fn settings(ui: &mut egui::Ui, settings: &mut AtmosphereSettings) {
         multiplier(ui, &mut settings.nebula_speed, "Cloud speed", 0.0..=20.0)
             .on_hover_text("1× is a slow drift. 0 freezes the cloud motion.");
 
-        ui.label(egui::RichText::new("Dusk wash").strong());
-        multiplier(ui, &mut settings.dusk_strength, "Color depth", 0.0..=3.0)
-            .on_hover_text("Broad pools of dusk color behind the lattice. 0 removes the wash.");
-        ValueBar::new(&mut settings.dusk_warmth, 0.0..=1.0, "Warmth")
-            .percent().show(ui);
-        multiplier(ui, &mut settings.dusk_speed, "Drift speed", 0.0..=4.0)
-            .on_hover_text("0 freezes the pools; glow color can still influence their tint.");
-        ValueBar::new(&mut settings.dusk_response, 0.0..=1.0, "Follow glow color")
-            .percent().show(ui).on_hover_text("Gently borrows the average foreground glow color, including its existing attack and release fades. 0 keeps the dusk palette independent.");
+        ui.label(egui::RichText::new("Wide glow").strong());
+        ValueBar::new(&mut settings.wide_strength, 0.0..=1.0, "Amount")
+            .percent().show(ui).on_hover_text("A faint second halo with the note's average glow color. It lights the lattice too. 0 restores the close halo alone; requires Lattice glow below.");
+        multiplier(ui, &mut settings.wide_spread, "Spread", 1.0..=6.0)
+            .on_hover_text("Outer radius relative to the close halo. The close halo keeps its existing range and falloff.");
 
         ui.label(egui::RichText::new("Breathing halos").strong());
         ValueBar::new(&mut settings.breath_amount, 0.0..=1.0, "Breathing depth")

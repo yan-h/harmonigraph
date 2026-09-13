@@ -1663,8 +1663,8 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.atmosphere = AtmosphereSettings {
         nebula_depth: 0.45,
-        dusk_response: 0.37,
-        dusk_warmth: 0.62,
+        wide_strength: 0.37,
+        wide_spread: 3.2,
         breath_speed: 2.2,
         ..Default::default()
     };
@@ -1691,13 +1691,13 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
         }
     }
     state.picture.appearance.view.atmosphere.nebula_depth = f32::NAN;
-    state.picture.appearance.view.atmosphere.dusk_strength = 999.0;
+    state.picture.appearance.view.atmosphere.wide_spread = 999.0;
     state.picture.appearance.view.atmosphere.breath_amount = 7.0;
     let restored = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
     assert_eq!(restored.view.atmosphere.nebula_depth, AtmosphereSettings::default().nebula_depth);
-    assert_eq!(restored.view.atmosphere.dusk_strength, 3.0);
+    assert_eq!(restored.view.atmosphere.wide_spread, 6.0);
     assert_eq!(restored.view.atmosphere.breath_amount, 1.0);
-    assert_eq!(restored.view.atmosphere.dusk_response, 0.37);
+    assert_eq!(restored.view.atmosphere.wide_strength, 0.37);
 }
 
 /// The Display page picked in the editor survives the window closing and

@@ -748,32 +748,33 @@ mod tests {
     }
 
     #[test]
-    fn lattice_atmosphere_moves_in_silence_and_replays_identically() {
+    fn lattice_atmosphere_requires_note_light_in_export() {
         let settings = Settings {
             layout: Layout::preset("lattice").unwrap(),
             fps: 2.0,
             end: 3.0,
             ..settings()
         };
-        let silent = || {
-            let mut take = take();
-            take.events.clear();
-            take
-        };
-        // No notes, audio, or camera changes: movement can only come from
-        // the atmosphere, through the actual shared pane/egui/GPU draw path.
-        let Some(first) = render_take(silent(), &settings) else { return };
+        let mut silent = take();
+        silent.events.clear();
+        let Some(first) = render_take(silent.clone(), &settings) else { return };
         assert_eq!(first.len(), 6);
-        assert_ne!(first[0], first[5], "the silent atmosphere is frozen");
-        let second = render_take(silent(), &settings).expect("the same GPU is available");
-        assert_eq!(first, second, "ambient motion depends on render history");
+        assert_eq!(first[1], first[5], "no independent background motion in silence");
         let mut appearance = AppearanceDocument::default();
         appearance.view.atmosphere.enabled = false;
-        let mut disabled = silent();
-        disabled.header.appearance = Some(appearance.serialize());
-        let off = render_take(disabled, &settings).expect("the same GPU is available");
-        assert_ne!(first[0], off[0], "the recorded atmosphere setting must reach export");
-        assert_eq!(off[1], off[5], "disabled atmosphere must stop moving in silence");
+        silent.header.appearance = Some(appearance.serialize());
+        let off = render_take(silent, &settings).expect("the same GPU is available");
+        assert_eq!(first, off, "atmosphere must not create light without notes");
+
+        let lit = lit_take();
+        let wide = render_take(lit.clone(), &settings).expect("the same GPU is available");
+        let mut close = lit;
+        let mut appearance = AppearanceDocument::parse(close.header.appearance.as_ref().unwrap())
+            .expect("the recorded appearance is valid");
+        appearance.view.atmosphere.wide_strength = 0.0;
+        close.header.appearance = Some(appearance.serialize());
+        let close = render_take(close, &settings).expect("the same GPU is available");
+        assert_ne!(wide[2], close[2], "the recorded wide glow setting must reach export");
     }
 
     /// Offline export calls the same pane and paint callbacks as the editor;

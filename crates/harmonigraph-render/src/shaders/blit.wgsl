@@ -1,9 +1,9 @@
 // Post-processing for the offscreen scene texture, and the final
 // composite into the egui render pass. Deliberately not hot-reloadable —
-// this owns compositing, the fixed bloom chain, and the screen-space dusk wash.
-// Node-light iteration belongs in lattice.wgsl.
+// this is plumbing plus a fixed bloom chain; scene-look iteration belongs
+// in lattice.wgsl.
 //
-// Every pass draws a viewport-filling quad (vs_blit, or vs_composite):
+// Every pass draws the same viewport-filling quad (vs_blit):
 //   fs_bright     scene -> half res, soft-knee luminance threshold
 //   fs_blit       plain copy (half -> quarter downsample)
 //   fs_blur_h/v   separable 9-tap Gaussian over the quarter-res texture
@@ -25,15 +25,13 @@
 // Composite-only bindings (declared module-wide; pipelines whose entry
 // points don't reference them omit them from their layout).
 @group(0) @binding(2) var bloom_tex: texture_2d<f32>;
-// The first named group of the lattice buffer: CompositeParams in uniforms.rs.
+// The first 16 bytes of the lattice buffer: CompositeParams in uniforms.rs.
 // Binding 3 is this shorter view; the full lattice binds Uniforms at binding 0.
 struct CompositeParams {
     @align(16) darkest_pitch: f32,
     brightest_pitch: f32,
     render_scale: f32,
     bloom_strength: f32,
-    dusk: vec4<f32>,
-    dusk_drift: vec4<f32>,
 };
 @group(0) @binding(3) var<uniform> bu: CompositeParams;
 // The strength on its own, for a caller with no scene uniforms to take the
@@ -85,60 +83,6 @@ fn vs_blit(@builtin(vertex_index) vi: u32) -> BlitOut {
     out.pos = vec4<f32>(corner * 2.0 - 1.0, 0.0, 1.0);
     out.uv = vec2<f32>(corner.x, 1.0 - corner.y);
     return out;
-}
-
-// The wash borrows the actual pooled light, including GPU ink history, rather
-// than approximating layer colours on the CPU. Only the four composite
-// vertices take these fixed 192 taps; no full-frame blur or readback is needed.
-@group(0) @binding(6) var dusk_glow_tex: texture_2d<f32>;
-
-struct CompositeOut {
-    @builtin(position) pos: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) @interpolate(flat) glow: vec3<f32>,
-};
-
-@vertex
-fn vs_composite(@builtin(vertex_index) vi: u32) -> CompositeOut {
-    let corner = vec2<f32>(f32(vi & 1u), f32(vi >> 1u));
-    var colour = vec3<f32>(0.0);
-    if bu.dusk.x > 0.0 && bu.dusk.z > 0.0 {
-        for (var y = 0u; y < 12u; y += 1u) {
-            for (var x = 0u; x < 16u; x += 1u) {
-                let at = (vec2<f32>(f32(x), f32(y)) + 0.5) / vec2<f32>(16.0, 12.0);
-                colour += textureSampleLevel(dusk_glow_tex, scene_samp, at, 0.0).rgb;
-            }
-        }
-        colour /= 192.0;
-    }
-    return CompositeOut(vec4<f32>(corner * 2.0 - 1.0, 0.0, 1.0), vec2<f32>(corner.x, 1.0 - corner.y), colour);
-}
-
-fn dusk_pool(uv: vec2<f32>, center: vec2<f32>, radius: vec2<f32>) -> f32 {
-    let d = (uv - center) / radius;
-    let t = max(1.0 - dot(d, d), 0.0);
-    return t * t * t;
-}
-
-fn dusk_wash(uv: vec2<f32>, glow: vec3<f32>) -> vec3<f32> {
-    if bu.dusk.x <= 0.0 {
-        return vec3<f32>(0.0);
-    }
-    let warm = bu.dusk.y;
-    let indigo = mix(vec3<f32>(0.035, 0.035, 0.095), vec3<f32>(0.075, 0.035, 0.080), warm);
-    let plum = mix(vec3<f32>(0.055, 0.030, 0.080), vec3<f32>(0.105, 0.045, 0.055), warm);
-    let amber = mix(vec3<f32>(0.035, 0.045, 0.080), vec3<f32>(0.120, 0.070, 0.025), warm);
-    let a = dusk_pool(uv, vec2<f32>(0.18, 0.28) + bu.dusk_drift.xy, vec2<f32>(0.80, 0.85));
-    let b = dusk_pool(uv, vec2<f32>(0.76, 0.65) + bu.dusk_drift.zw, vec2<f32>(0.80, 0.75));
-    let c = dusk_pool(uv, vec2<f32>(0.40, 0.85) - bu.dusk_drift.xy, vec2<f32>(0.75, 0.85));
-    let base = indigo * a + plum * b + amber * c * 0.55;
-    let peak = max(max(glow.r, glow.g), glow.b);
-    // Weak light has weak influence; normalising it alone would let a nearly
-    // invisible fading note recolour the whole background at full strength.
-    let influence = bu.dusk.z * clamp(peak * 8.0, 0.0, 1.0);
-    let hue = glow / max(peak, 0.001);
-    let brightness = max(max(base.r, base.g), base.b);
-    return mix(base, hue * brightness, influence) * bu.dusk.x;
 }
 
 // Plain copy; used for the half -> quarter downsample (the linear sampler
@@ -207,14 +151,11 @@ fn fs_blur_v(in: BlitOut) -> @location(0) vec4<f32> {
 // contour into screen-fixed sub-pixel grain. With strength 0 this reduces to
 // the dithered scene blit.
 @fragment
-fn fs_composite(in: CompositeOut) -> @location(0) vec4<f32> {
+fn fs_composite(in: BlitOut) -> @location(0) vec4<f32> {
     let scene = textureSample(scene_tex, scene_samp, in.uv);
     let bloom = textureSample(bloom_tex, scene_samp, in.uv);
     let ink = textureSample(ink_tex, scene_samp, in.uv);
-    // Remaining scene coverage places the wash behind foreground ink and
-    // shadows, while keeping it out of the bloom input and glow feedback.
-    let dusk = dusk_wash(in.uv, in.glow) * (1.0 - scene.a);
-    let rgb = scene.rgb + ink.rgb + bloom.rgb * bu.bloom_strength + dusk;
+    let rgb = scene.rgb + ink.rgb + bloom.rgb * bu.bloom_strength;
     // The quad covers the pane, including transparent pixels and the pure-alpha
     // masks that cast black shadows. Leave zero source RGB exact: premultiplied
     // blending still ADDS it, so noise there would invent light and stipple the

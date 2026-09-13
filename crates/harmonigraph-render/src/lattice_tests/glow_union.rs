@@ -77,6 +77,108 @@ fn read_glow(shooter: &Shooter) -> Vec<u8> {
 }
 
 #[test]
+fn wide_glow_reaches_offscreen_sources_and_lights_silent_slices() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 0.75, false);
+    scene.camera = harmonigraph_scene::Camera {
+        projection: harmonigraph_scene::Projection::Orthographic,
+        distance: 28.0,
+        yaw: 0.0,
+        pitch: 0.0,
+        ..Default::default()
+    };
+    scene.glow_reach = 0.8;
+    scene.atmosphere.breath_amount = 0.0;
+    scene.atmosphere.wide_spread = 4.0;
+    let origin = on_screen(&scene, SIZE, glam::Vec3::ZERO);
+    let per_world = on_screen(&scene, SIZE, glam::Vec3::X).x - origin.x;
+    scene.nodes[0].world_pos.x = (-60.0 - origin.x) / per_world;
+    let make_call = |scene: &Scene| {
+        LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            egui::vec2(256.0, 256.0),
+            wgpu::TextureFormat::Rgba8Unorm,
+            11,
+            None,
+        )
+    };
+    assert!(make_call(&scene).glow_nodes(SIZE).is_empty(), "close halo misses the pane");
+    let close_glow = glow(&mut shooter, &scene);
+    assert!(close_glow.iter().all(|v| *v == 0));
+    scene.atmosphere.wide_strength = 0.6;
+    assert_eq!(make_call(&scene).glow_nodes(SIZE).len(), 1);
+    let wide_glow = glow(&mut shooter, &scene);
+    assert!(wide_glow.chunks_exact(4).filter(|p| p[3] > 5).count() > 1000);
+
+    let mut receiver = scene.nodes[0];
+    receiver.world_pos = glam::vec3((-origin.x + 8.0) / per_world, 0.0, 0.0);
+    receiver.lattice_pos = harmonigraph_core::LatticePos::new(1, 0, 0);
+    // Keep the octave disc shipped, with every slice unsounding.
+    receiver.activation = 1.0;
+    receiver.scale = 1.5;
+    receiver.octaves.fill(0.0);
+    receiver.glow.level = 0.0;
+    scene.nodes.push(receiver);
+    rows_per_node(&mut scene);
+    let with_receiver = shooter.shot(&scene);
+    assert_eq!(wide_glow, read_glow(&shooter), "silent receiver cannot emit light");
+    scene.atmosphere.wide_strength = 0.0;
+    let dark_receiver = shooter.shot(&scene);
+    scene.nodes.pop();
+    let dark_ground = shooter.shot(&scene);
+    let mut slices = 0;
+    let mut lit_slices = 0;
+    for ((dark, ground), lit) in dark_receiver
+        .chunks_exact(4)
+        .zip(dark_ground.chunks_exact(4))
+        .zip(with_receiver.chunks_exact(4))
+    {
+        // Fully covered ground-colored ghost slices, excluding the lit core
+        // and antialiased edges: other receiver ink cannot carry this claim.
+        let ghost = dark[..3]
+            .iter()
+            .zip(scene.lattice_ground.to_array())
+            .all(|(byte, channel)| (f32::from(*byte) - channel * 255.0).abs() <= 1.0);
+        if ghost && dark[..3] != ground[..3] {
+            slices += 1;
+            lit_slices += usize::from(luminance(lit) > luminance(dark) + 0.002);
+        }
+    }
+    assert!(slices > 100, "the fixture must contain visible silent ink: {slices}");
+    assert!(lit_slices * 2 > slices, "wide glow lights {lit_slices}/{slices} silent pixels");
+    scene.atmosphere.wide_strength = 0.6;
+    scene.nodes[0].world_pos.x -= 100.0;
+    assert!(make_call(&scene).glow_nodes(SIZE).is_empty());
+    assert!(glow(&mut shooter, &scene).iter().all(|v| *v == 0));
+}
+
+#[test]
+fn wide_glow_keeps_the_close_peak_and_obeys_the_master_switch() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 0.75, false);
+    scene.atmosphere.breath_amount = 0.0;
+    let close = glow(&mut shooter, &scene);
+    scene.atmosphere.wide_spread = 6.0;
+    assert_eq!(close, glow(&mut shooter, &scene), "zero amount ignores spread");
+    scene.atmosphere.wide_strength = 1.0;
+    let wide = glow(&mut shooter, &scene);
+    let centre = (128 * 256 + 128) * 4;
+    assert_eq!(close[centre + 3], wide[centre + 3]);
+    assert!(close[centre..centre + 3]
+        .iter()
+        .zip(&wide[centre..centre + 3])
+        .all(|(a, b)| a.abs_diff(*b) <= 1));
+    assert!(wide.chunks_exact(4).all(|p| p[3] <= 154));
+    assert!(
+        wide.chunks_exact(4).zip(close.chunks_exact(4)).filter(|(w, c)| w[3] > c[3] + 5).count()
+            > 1000
+    );
+    scene.atmosphere.enabled = false;
+    assert_eq!(close, glow(&mut shooter, &scene));
+}
+
+#[test]
 fn a_held_nodes_light_breathes_without_advancing_its_ink_history() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0], 0.75, false);
@@ -174,6 +276,8 @@ fn tile_candidates_keep_the_untiled_picture_through_resize_and_reuse() {
     for (size, accumulation) in [([512, 512], 0.0), ([576, 257], 0.5), ([256, 256], 1.0)] {
         shooter.size = size;
         scene.glow_accumulation = accumulation;
+        scene.atmosphere.wide_strength = if size == [512, 512] { 0.0 } else { 0.6 };
+        scene.atmosphere.wide_spread = 4.0;
         shooter.shot_again(&scene);
         let tiled = read_glow(&shooter);
         let extent = egui::vec2(size[0] as f32, size[1] as f32);
@@ -282,39 +386,45 @@ fn a_lone_glow_keeps_its_colour_profile_and_fade() {
 #[test]
 fn different_hues_meet_at_screened_luminance_in_either_order() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
-    let at = |levels: &[f32]| {
-        let mut scene = scene(levels, 0.75, true);
-        scene.pitch_lut = std::array::from_fn(|i| {
-            if i * 2 < harmonigraph_scene::PITCH_LUT_N {
-                glam::Vec4::new(1.0, 0.15, 0.1, 1.0)
-            } else {
-                glam::Vec4::new(0.1, 1.0, 0.25, 1.0)
+    for wide in [0.0, 0.7] {
+        let at = |levels: &[f32]| {
+            let mut scene = scene(levels, 0.75, true);
+            scene.atmosphere.wide_strength = wide;
+            scene.atmosphere.wide_spread = 4.0;
+            scene.glow_reach = if wide > 0.0 { 0.2 } else { 2.88 };
+            scene.pitch_lut = std::array::from_fn(|i| {
+                if i * 2 < harmonigraph_scene::PITCH_LUT_N {
+                    glam::Vec4::new(1.0, 0.15, 0.1, 1.0)
+                } else {
+                    glam::Vec4::new(0.1, 1.0, 0.25, 1.0)
+                }
+            });
+            scene
+        };
+        let left = glow(&mut shooter, &at(&[1.0, 0.0]));
+        let right = glow(&mut shooter, &at(&[0.0, 1.0]));
+        let mut pair = at(&[1.0, 1.0]);
+        let both = glow(&mut shooter, &pair);
+        let peak = linear(0.8 * 0.75);
+        let mut overlap = 0;
+        let mut lift = 0.0f64;
+        for ((l, r), b) in left.chunks_exact(4).zip(right.chunks_exact(4)).zip(both.chunks_exact(4))
+        {
+            let (a, c, got) = (luminance(l), luminance(r), luminance(b));
+            if a > 0.01 && c > 0.01 {
+                let expected = a + c - a * c / peak;
+                // Three byte-quantized readings plus the intermediate half-float.
+                assert!((got - expected).abs() < 0.006, "{got} != {expected}: {l:?}, {r:?}, {b:?}");
+                overlap += 1;
+                lift = lift.max(got - a.max(c));
             }
-        });
-        scene
-    };
-    let left = glow(&mut shooter, &at(&[1.0, 0.0]));
-    let right = glow(&mut shooter, &at(&[0.0, 1.0]));
-    let mut pair = at(&[1.0, 1.0]);
-    let both = glow(&mut shooter, &pair);
-    let peak = linear(0.8 * 0.75);
-    let mut overlap = 0;
-    let mut lift = 0.0f64;
-    for ((l, r), b) in left.chunks_exact(4).zip(right.chunks_exact(4)).zip(both.chunks_exact(4)) {
-        let (a, c, got) = (luminance(l), luminance(r), luminance(b));
-        if a > 0.01 && c > 0.01 {
-            let expected = a + c - a * c / peak;
-            // Three byte-quantized readings plus the intermediate half-float.
-            assert!((got - expected).abs() < 0.006, "{got} != {expected}: {l:?}, {r:?}, {b:?}");
-            overlap += 1;
-            lift = lift.max(got - a.max(c));
         }
+        assert!(overlap > 500, "both coloured halos must reach the measured pixels");
+        assert!(lift > 0.02, "the join must rise above the tails, not reproduce a near-max");
+        pair.nodes.reverse();
+        let reversed = glow(&mut shooter, &pair);
+        assert!(both.iter().zip(reversed).all(|(a, b)| a.abs_diff(b) <= 1));
     }
-    assert!(overlap > 500, "both coloured halos must reach the measured pixels");
-    assert!(lift > 0.02, "the join must rise above the tails, not reproduce a near-max");
-    pair.nodes.reverse();
-    let reversed = glow(&mut shooter, &pair);
-    assert!(both.iter().zip(reversed).all(|(a, b)| a.abs_diff(b) <= 1));
 }
 
 #[test]
@@ -422,74 +532,4 @@ fn accumulation_sweeps_to_the_original_screen_of_each_colour_channel() {
         scene.nodes.reverse();
         assert!(mixed.iter().zip(glow(&mut shooter, &scene)).all(|(a, b)| a.abs_diff(b) <= 1));
     }
-}
-
-#[test]
-fn dusk_borrows_the_rendered_glow_colour_and_rebinds_after_toggles() {
-    let Some(mut shooter) = Shooter::new(SIZE) else { return };
-    let mut scene = scene(&[1.0], 1.0, false);
-    scene.camera = harmonigraph_scene::Camera {
-        projection: harmonigraph_scene::Projection::Orthographic,
-        distance: 28.0,
-        yaw: 0.0,
-        pitch: 0.0,
-        ..Default::default()
-    };
-    scene.atmosphere.dusk_strength = 2.0;
-    scene.atmosphere.dusk_speed = 0.0;
-    scene.atmosphere.dusk_response = 1.0;
-    let mut tint = |color| {
-        scene.pitch_lut.fill(color);
-        shooter.shot_again(&scene)
-    };
-    let red = tint(glam::vec4(1.0, 0.02, 0.01, 1.0));
-    let blue = tint(glam::vec4(0.01, 0.02, 1.0, 1.0));
-    // The actual glow target is the support mask: measure background colour
-    // where foreground light cannot itself account for the red/blue change.
-    let field = read_glow(&shooter);
-    let borrowed = red
-        .chunks_exact(4)
-        .zip(blue.chunks_exact(4))
-        .zip(field.chunks_exact(4))
-        .filter(|((r, b), light)| light[3] == 0 && r[0] > b[0] + 2 && b[2] > r[2] + 2)
-        .count();
-    assert!(borrowed > 1000, "actual glow hue must reach unlit background: {borrowed}");
-    scene.atmosphere.dusk_response = 0.0;
-    let fixed = shooter.shot_again(&scene);
-    scene.atmosphere.dusk_response = 1.0;
-    assert_eq!(
-        blue,
-        shooter.shot_again(&scene),
-        "changing response cannot rebuild or reset the source"
-    );
-    assert_ne!(blue, fixed, "zero response must restore the independent dusk palette");
-    // Exercise both composite-binding rebuilds on one pane. After glow is
-    // disabled the tint reads a transparent stand-in, not the old blue light.
-    scene.nodes.clear();
-    let empty = shooter.shot_again(&scene);
-    scene.glow_reach = 0.0;
-    assert_eq!(empty, shooter.shot_again(&scene));
-    scene.bloom_strength = 1.0;
-    assert_eq!(empty, shooter.shot_again(&scene));
-    scene.glow_reach = 2.88;
-    assert_eq!(empty, shooter.shot_again(&scene));
-}
-
-#[test]
-fn dusk_draws_without_geometry_or_glow_and_uses_the_presentation_clock() {
-    let Some(mut shooter) = Shooter::new(SIZE) else { return };
-    let mut scene = scene(&[], 0.0, false);
-    scene.pluses.clear();
-    scene.atmosphere.dusk_strength = 1.0;
-    assert!(scene.glow_timing.is_none());
-    let first = shooter.shot(&scene);
-    assert!(first.chunks_exact(4).filter(|p| p[..3].iter().any(|c| *c > 5)).count() > 1000);
-    scene.atmosphere_time = 20.0;
-    let later = shooter.shot_again(&scene);
-    assert_ne!(first, later, "the dusk clock must run even with glow off");
-    assert_eq!(later, shooter.shot(&scene), "duplicate draws and fresh panes agree");
-    scene.atmosphere.dusk_speed = 0.0;
-    assert_eq!(first, shooter.shot_again(&scene));
-    scene.atmosphere.enabled = false;
-    assert!(shooter.shot_again(&scene).chunks_exact(4).all(|p| p[..3] == [0; 3]));
 }

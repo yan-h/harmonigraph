@@ -551,7 +551,6 @@ pub fn derive_scene(
         glow_rows: nodes_len,
         glow_timing: None,
         atmosphere: view.atmosphere.sanitized(),
-        atmosphere_time: now,
     }
 }
 

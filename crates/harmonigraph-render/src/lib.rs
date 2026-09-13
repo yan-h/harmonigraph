@@ -1707,7 +1707,6 @@ impl Offscreen {
             &color_view,
             &ink_view,
             shared.bloom_dummy,
-            shared.bloom_dummy,
         );
 
         Offscreen {
@@ -1731,7 +1730,6 @@ impl Offscreen {
         color: &wgpu::TextureView,
         ink: &wgpu::TextureView,
         bloom: &wgpu::TextureView,
-        glow: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("lattice_composite_bind_group"),
@@ -1750,10 +1748,6 @@ impl Offscreen {
                     resource: wgpu::BindingResource::TextureView(bloom),
                 },
                 wgpu::BindGroupEntry { binding: 3, resource: uniforms.as_entire_binding() },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::TextureView(glow),
-                },
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(ink),
@@ -1835,35 +1829,18 @@ impl Offscreen {
             &self.color_view,
             &self.ink_view,
             self.bloom.as_ref().map_or(shared.bloom_dummy, |b| &b.chain.quarter_a_view),
-            self.glow.as_ref().map_or(shared.bloom_dummy, |g| &g.view),
         );
     }
 
     /// Make this pane's viewport-sized light target exist while `want` says
     /// so. The separate pane history is maintained by the caller under the
     /// same guard; recreating this image never allocates or transfers a strip.
-    fn ensure_glow(
-        &mut self,
-        device: &wgpu::Device,
-        shared: &OffscreenShared<'_>,
-        uniforms: &wgpu::Buffer,
-        want: bool,
-    ) {
-        if want == self.glow.is_some() {
-            return;
+    fn ensure_glow(&mut self, device: &wgpu::Device, shared: &OffscreenShared<'_>, want: bool) {
+        match (want, self.glow.is_some()) {
+            (true, false) => self.glow = Some(GlowTarget::new(device, shared, self.size)),
+            (false, true) => self.glow = None,
+            _ => {}
         }
-        self.glow = want.then(|| GlowTarget::new(device, shared, self.size));
-        // This binding names the glow texture itself. Toggle/resize replaces
-        // that identity; changes to its contents or any dusk dial do not.
-        self.composite_bind_group = Self::composite_binding(
-            device,
-            shared,
-            uniforms,
-            &self.color_view,
-            &self.ink_view,
-            self.bloom.as_ref().map_or(shared.bloom_dummy, |b| &b.chain.quarter_a_view),
-            self.glow.as_ref().map_or(shared.bloom_dummy, |g| &g.view),
-        );
     }
 
     /// Make this pane's shadow atlas hold `want` texels — none at all where
@@ -2575,11 +2552,7 @@ fn create_post_pipeline(
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some(if entry_point == "fs_composite" {
-                "vs_composite"
-            } else {
-                "vs_blit"
-            }),
+            entry_point: Some("vs_blit"),
             compilation_options: Default::default(),
             buffers: &[],
         },
@@ -2705,20 +2678,10 @@ impl CompiledLatticeResources {
             label: Some("lattice_composite_bind_group_layout"),
             entries: &[
                 texture_entry(0),
-                wgpu::BindGroupLayoutEntry {
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ..sampler_entry(1)
-                },
+                sampler_entry(1),
                 texture_entry(2),
-                wgpu::BindGroupLayoutEntry {
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ..uniform_entry(3)
-                },
+                uniform_entry(3),
                 texture_entry(5),
-                wgpu::BindGroupLayoutEntry {
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ..texture_entry(6)
-                },
             ],
         });
         progress(startup::Stage::Bloom);
@@ -3134,7 +3097,7 @@ impl LatticeResources {
             // maintenance, not a hidden-view lifecycle or retirement policy.
             pane.ensure_ink_history(device, &self.compiled.strip_layout, wants.glow, wants.rows);
             if let Some(offscreen) = pane.offscreen.as_mut() {
-                offscreen.ensure_glow(device, &shared, &pane.uniform_buffer, wants.glow);
+                offscreen.ensure_glow(device, &shared, wants.glow);
                 offscreen.ensure_shadow(device, &shared, wants.shadow, wants.blurs);
             }
         }

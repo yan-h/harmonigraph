@@ -99,7 +99,6 @@ impl LatticeCallback {
         // Reduce the decorative clock in f64 before uploading bounded phases.
         let nebula_time =
             scene.glow_timing.map_or(0.0, |clock| clock.now) * f64::from(atmosphere.nebula_speed);
-        let dusk_time = scene.atmosphere_time * f64::from(atmosphere.dusk_speed);
         let view_proj = camera.view_proj(aspect);
         let (right, up) = camera.right_up();
 
@@ -444,18 +443,6 @@ impl LatticeCallback {
                     brightest_pitch: scene.brightest_pitch,
                     render_scale,
                     bloom_strength: bloom_strength(scene.bloom_strength),
-                    dusk: Float4([
-                        if atmosphere.enabled { atmosphere.dusk_strength } else { 0.0 },
-                        atmosphere.dusk_warmth,
-                        atmosphere.dusk_response,
-                        0.0,
-                    ]),
-                    dusk_drift: Float4([
-                        (dusk_time * 0.11).sin() as f32 * 0.10,
-                        (dusk_time * 0.08).cos() as f32 * 0.08,
-                        (dusk_time * 0.073 + 2.0).sin() as f32 * 0.10,
-                        (dusk_time * 0.095 + 1.0).cos() as f32 * 0.08,
-                    ]),
                 },
                 camera: CameraParams {
                     view_proj: Matrix4(view_proj.to_cols_array_2d().map(Float4)),
@@ -504,6 +491,13 @@ impl LatticeCallback {
                         // mapped onto the target's pixels.
                         lit: 0.0,
                         accumulation: scene.glow_accumulation,
+                        wide_strength: if atmosphere.enabled {
+                            atmosphere.wide_strength
+                        } else {
+                            0.0
+                        },
+                        wide_spread: atmosphere.wide_spread,
+                        padding: Float2([0.0; 2]),
                     }
                 } else {
                     bytemuck::Zeroable::zeroed()

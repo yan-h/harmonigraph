@@ -91,7 +91,7 @@ fn uniform_transport_matches_nagas_resolved_layout() {
     check_binding::<CompositeParams>(BLIT_SRC, 0, 3);
     // Blit binds the first named group, with no camera/node packing dependency.
     assert_eq!(std::mem::offset_of!(Uniforms, composite), 0);
-    assert_eq!(std::mem::size_of::<CompositeParams>(), 48);
+    assert_eq!(std::mem::size_of::<CompositeParams>(), 16);
     assert_eq!(std::mem::offset_of!(CompositeParams, bloom_strength), 12);
 }
 
@@ -110,7 +110,6 @@ fn baked_blit_shader_validates() {
     .expect("blit.wgsl must validate");
     for required in [
         "vs_blit",
-        "vs_composite",
         "fs_blit",
         "fs_bright",
         "fs_bright_split",

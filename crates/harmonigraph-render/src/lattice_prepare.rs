@@ -150,11 +150,7 @@ impl CallbackTrait for LatticeCallback {
         // Nothing was rendered into the offscreen target. The markers and the
         // labels count as much as the nodes here — see `prepare`, where the
         // same test decides whether the target exists at all.
-        if pane.instance_count == 0
-            && pane.plus_count == 0
-            && pane.glyph_count == 0
-            && !self.dusk_draws()
-        {
+        if pane.instance_count == 0 && pane.plus_count == 0 && pane.glyph_count == 0 {
             return;
         }
         let Some(offscreen) = &pane.offscreen else {
@@ -170,10 +166,6 @@ impl CallbackTrait for LatticeCallback {
 }
 
 impl LatticeCallback {
-    fn dusk_draws(&self) -> bool {
-        self.uniforms.composite.dusk.0[0] > 0.0
-    }
-
     fn poll_gpu_timer(&self, device: &wgpu::Device, resources: &mut LatticeResources) -> f32 {
         // Advance the GPU timer's readback cycle first: a result that landed
         // is published now, and the cycle returns to Idle so this frame can be
@@ -580,10 +572,8 @@ impl LatticeCallback {
         // markers down with them. So do the LABELS, for the same reason from the
         // other end: a hovered idle node paints nothing and is named, so a
         // lattice can be a frame of one label and nothing else.
-        let anything = !self.instances.is_empty()
-            || !self.pluses.is_empty()
-            || !self.glyphs.is_empty()
-            || self.dusk_draws();
+        let anything =
+            !self.instances.is_empty() || !self.pluses.is_empty() || !self.glyphs.is_empty();
         let offscreen_size = anything.then_some(size);
 
         let glow = self.glow_draws();
@@ -989,10 +979,7 @@ impl LatticeCallback {
         // encoder egui-wgpu executes before its own render pass. paint()
         // then just composites the finished texture.
         let pane = resources.panes.get(&self.pane_id).expect("created by pane_buffers above");
-        let draws = pane.instance_count > 0
-            || pane.plus_count > 0
-            || pane.glyph_count > 0
-            || self.dusk_draws();
+        let draws = pane.instance_count > 0 || pane.plus_count > 0 || pane.glyph_count > 0;
         if let Some(offscreen) = pane.offscreen.as_ref().filter(|_| draws) {
             // Bracket all lattice preparation, starting before the first
             // optional shadow/ink/glow pass and ending after optional bloom.

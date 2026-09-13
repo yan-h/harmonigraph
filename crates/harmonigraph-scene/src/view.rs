@@ -1005,15 +1005,15 @@ pub struct ViewConfig {
     /// composite is then exactly the plain scene, so there is deliberately
     /// no separate on/off toggle.
     pub bloom_strength: f32,
-    /// The node glow: how far past a node's outermost drawn edge its own light
+    /// The close halo: how far past a node's outermost drawn edge its light
     /// spreads, in the quad UV units the layer sizes are in. 0 turns it off —
     /// nothing is drawn at all — so the glow's other fields need no toggle of
     /// their own, and the Glow section greys them under it.
     ///
     /// What it draws is every sounding octave's hue laid round the node by
     /// angle, over a falloff sized to the whole node: the node's outermost
-    /// drawn edge plus this reach is both the falloff's domain and where its
-    /// window shuts, so this bar is exactly where the light stops.
+    /// drawn edge plus this reach is the close falloff's domain. Atmosphere
+    /// can add a wider tail whose span is a multiple of that domain.
     ///
     /// [`glow_curve`](Self::glow_curve) says how much light is left at each
     /// distance inside that span. Keeping the two separate makes a wide Reach
@@ -1022,7 +1022,7 @@ pub struct ViewConfig {
     /// second picture — several lattice steps, where every node's light
     /// overlaps its neighbourhood's.
     ///
-    /// It is the ONLY light a node has: a view with this at 0 draws exactly the
+    /// Both glow components switch off at 0: the view draws exactly the
     /// ink the ring stack describes and nothing around it.
     ///
     /// Every node's glow is drawn into a target of its own, with SCREEN
@@ -1043,12 +1043,12 @@ pub struct ViewConfig {
     /// plugin draws. This is a layer of the lattice's nodes, drawn from the
     /// same octave colours their discs are.
     pub glow_reach: f32,
-    /// All experimental dusk effects, shared by the editor and exports.
+    /// Experimental glow texture, wide tail and breathing, shared by editor and exports.
     pub atmosphere: AtmosphereSettings,
     /// How much light the node glow lays down. Inert while
     /// [`glow_reach`](Self::glow_reach) is 0.
     pub glow_strength: f32,
-    /// How the light's brightness falls inside [`glow_reach`](Self::glow_reach).
+    /// How the close halo's brightness falls inside [`glow_reach`](Self::glow_reach).
     /// The endpoints stay fixed: full at the node's centre and zero where the
     /// reach ends.
     pub glow_curve: GlowCurve,
