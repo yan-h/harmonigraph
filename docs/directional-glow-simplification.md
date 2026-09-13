@@ -104,7 +104,7 @@ consistent with half-float blending rounding after each contribution instead of 
 The row-reordering regression allows this one-byte difference while still detecting swapped colors.
 The contact sheets were visually reviewed before updating those references;
 the five offline golden images are unchanged.
-All 244 non-golden renderer checks pass (nine diagnostic tests are ignored).
+All 244 non-golden renderer checks pass (ten diagnostic tests are ignored).
 
 ### Local timing comparison
 
@@ -139,3 +139,16 @@ The extra targets consume 11.25 MiB at 768×768 or 45 MiB at 1536×1536,
 per lattice pane.
 It is a promising testable prototype,
 with the visual comparison in the DAW still left to the user.
+
+### Known prototype precision limit
+
+The one-byte reference-image difference is a measured bound for those scenes,
+not a guarantee for arbitrary overlap.
+The ignored `dense_faint_overlap_order_precision` GPU probe deliberately stacks faint halos at one position.
+At 1,024 contributors on Apple M1 Pro,
+reversing the color blocks changes the output by up to 2/255 at accumulation zero,
+4/255 at 0.5 and 7/255 at one.
+The 128-contributor fixture stays within 1/255;
+this particular 4,096-contributor fixture reaches the same rounded result in both orders.
+This does not yet establish a visible problem in an ordinary lattice scene.
+[Issue #878](https://github.com/yan-h/harmonigraph/issues/878) retains the reproduction and next measurements before promoting the prototype.

@@ -485,8 +485,7 @@ impl LatticeCallback {
                         curve: scene.glow_curve.shape(),
                         wash: scene.glow_wash,
                         row_capacity: scene.glow_rows.max(1) as f32,
-                        // Settled by prepare, which is where the lit nodes are
-                        // mapped onto the target's pixels.
+                        // Prepare sets this when any shipped instance is lit.
                         lit: 0.0,
                         accumulation: scene.glow_accumulation,
                     }

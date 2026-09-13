@@ -423,3 +423,42 @@ fn the_color_transition_ends_at_the_ring_even_with_a_wider_halo() {
     );
     assert!(worst < 0.025, "a wider footprint averaged directional colors: hue error {worst}");
 }
+
+#[test]
+#[ignore = "manual MRT precision stress measurement"]
+fn dense_faint_overlap_order_precision() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    // Follow-up: https://github.com/yan-h/harmonigraph/issues/878
+    // Coincident halos intentionally exceed ordinary lattice overlap. This
+    // probe measures f16 blend drift rather than asserting exact order parity.
+    for count in [128, 1024, 4096] {
+        let levels: Vec<f32> = (0..count)
+            .map(|i| if i < count * 500 / 4096 { 0.000382 / 0.8 } else { 0.004165 / 0.8 })
+            .collect();
+        let mut scene = scene(&levels, 1.0, false);
+        scene.atmosphere.enabled = false;
+        scene.pitch_lut = std::array::from_fn(|i| {
+            if i * 2 < harmonigraph_scene::PITCH_LUT_N {
+                glam::Vec4::new(1.0, 0.15, 0.1, 1.0)
+            } else {
+                glam::Vec4::new(0.1, 1.0, 0.25, 1.0)
+            }
+        });
+        for (i, node) in scene.nodes.iter_mut().enumerate() {
+            node.cents = if i < count * 500 / 4096 { 0.0 } else { 1100.0 };
+        }
+        for accumulation in [0.0, 0.5, 1.0] {
+            scene.glow_accumulation = accumulation;
+            let forward = glow(&mut shooter, &scene);
+            assert!(
+                forward.chunks_exact(4).any(|pixel| pixel[..3].iter().any(|v| *v > 20)),
+                "the stress fixture must produce visible overlapping light"
+            );
+            scene.nodes.reverse();
+            let backward = glow(&mut shooter, &scene);
+            scene.nodes.reverse();
+            let largest = forward.iter().zip(&backward).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+            eprintln!("precision count={count} accumulation={accumulation}: maximum order difference {largest}/255");
+        }
+    }
+}

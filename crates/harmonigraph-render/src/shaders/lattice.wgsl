@@ -491,7 +491,7 @@ struct Instance {
     @location(11) ring: f32,
     // The node's own light: x how bright it is, y which ROW of the ink strip
     // keeps its colour, z how much of this frame's reading the two of them
-    // take. All three are settled on the CPU, where a node has an identity that
+    // take, and w display-only breathing. They are settled on the CPU, where a node has an identity that
     // outlives a frame (`panes::glow_fade` in harmonigraph-ui).
     //
     // The level is CARRIED and not the largest envelope on the node, which is
@@ -501,11 +501,8 @@ struct Instance {
     // strip just built, or a row just handed over — and there is nothing to
     // carry from.
     //
-    // The MARK the light is still wearing is a fourth of the same set and is
-    // deliberately not here: it sizes the halo alone (`glow_rim`), and the halo
-    // is no longer drawn over a billboard, so the only stage that reads it
-    // takes it off `GlowNode` instead. `GpuInstance::glow` still carries it,
-    // that being where the CPU assembles the light; this stream stops at three.
+    // Breathing modulates the halo after history interpolation; it must not
+    // alter either the carried brightness or the ink-history coefficient.
     @location(12) glow: vec4<f32>,
 };
 
