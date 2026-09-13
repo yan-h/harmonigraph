@@ -18,7 +18,6 @@ constant float GLYPH_FADE_LIMIT = 1.3;
 constant float GLOW_BASE = 0.8;
 constant float SHADOW_REACH_SIGMAS = 3.0;
 constant uint INK_STRIP_N = 64u;
-constant uint GLOW_TILE_SIZE = 32u;
 constant bool EARLY_OUT = true;
 constant float INK_FLOOR = 0.01;
 constant uint OCTAVE_SLOTS = 11u;
@@ -35,14 +34,14 @@ constant float GLOW_LOBE_KAPPA = 4.0;
 constant float PLUS_QUAD_MARGIN = 1.6;
 constant metal::float3 GLOW_LUMINANCE = metal::float3(0.2126, 0.7152, 0.0722);
 
-struct vs_glow_gatherInput {
+struct vs_glow_resolveInput {
 };
-struct vs_glow_gatherOutput {
+struct vs_glow_resolveOutput {
     metal::float4 member [[position]];
 };
-vertex vs_glow_gatherOutput vs_glow_gather(
-  uint vertex_index [[vertex_id]]
+vertex vs_glow_resolveOutput vs_glow_resolve(
+  uint vertex_ [[vertex_id]]
 ) {
-    metal::float2 corner = metal::float2(static_cast<float>(vertex_index & 1u), static_cast<float>(vertex_index >> 1u));
-    return vs_glow_gatherOutput { metal::float4((corner * 2.0) - metal::float2(1.0), 0.0, 1.0) };
+    metal::float2 corner = metal::float2(static_cast<float>(vertex_ & 1u), static_cast<float>(vertex_ >> 1u));
+    return vs_glow_resolveOutput { metal::float4((corner * 2.0) - metal::float2(1.0), 0.0, 1.0) };
 }

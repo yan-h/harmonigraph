@@ -142,7 +142,7 @@ struct Instance {
     float scale;
     float ring;
     char _pad10[8];
-    metal::float3 glow;
+    metal::float4 glow;
 };
 struct type_13 {
     metal::float2 inner[4];
@@ -161,7 +161,6 @@ constant float GLYPH_FADE_LIMIT = 1.3;
 constant float GLOW_BASE = 0.8;
 constant float SHADOW_REACH_SIGMAS = 3.0;
 constant uint INK_STRIP_N = 64u;
-constant uint GLOW_TILE_SIZE = 32u;
 constant bool EARLY_OUT = true;
 constant float INK_FLOOR = 0.01;
 constant uint OCTAVE_SLOTS = 11u;
@@ -302,7 +301,7 @@ struct vs_ink_stripOutput {
     metal::float4 shadow_box [[user(loc10), flat]];
     metal::float4 shadow_at [[user(loc12), center_no_perspective]];
 };
-struct vb_15_type { metal::uchar data[116]; };
+struct vb_15_type { metal::uchar data[120]; };
 vertex vs_ink_stripOutput vs_ink_strip(
   uint vertex_index [[vertex_id]]
 , constant Uniforms& u [[buffer(0)]]
@@ -320,8 +319,8 @@ vertex vs_ink_stripOutput vs_ink_strip(
     metal::float4 bass_color = {};
     float scale_2 = {};
     float ring = {};
-    metal::float3 glow = {};
-    if (i_id < (_buffer_sizes.buffer_size15 / 116)) {
+    metal::float4 glow = {};
+    if (i_id < (_buffer_sizes.buffer_size15 / 120)) {
         const vb_15_type vb_15_elem = vb_15_in[i_id];
         world_pos = unpackFloat32x3_(vb_15_elem.data[0], vb_15_elem.data[1], vb_15_elem.data[2], vb_15_elem.data[3], vb_15_elem.data[4], vb_15_elem.data[5], vb_15_elem.data[6], vb_15_elem.data[7], vb_15_elem.data[8], vb_15_elem.data[9], vb_15_elem.data[10], vb_15_elem.data[11]);
         color = unpackFloat32x4_(vb_15_elem.data[12], vb_15_elem.data[13], vb_15_elem.data[14], vb_15_elem.data[15], vb_15_elem.data[16], vb_15_elem.data[17], vb_15_elem.data[18], vb_15_elem.data[19], vb_15_elem.data[20], vb_15_elem.data[21], vb_15_elem.data[22], vb_15_elem.data[23], vb_15_elem.data[24], vb_15_elem.data[25], vb_15_elem.data[26], vb_15_elem.data[27]);
@@ -333,7 +332,7 @@ vertex vs_ink_stripOutput vs_ink_strip(
         bass_color = unpackFloat32x4_(vb_15_elem.data[80], vb_15_elem.data[81], vb_15_elem.data[82], vb_15_elem.data[83], vb_15_elem.data[84], vb_15_elem.data[85], vb_15_elem.data[86], vb_15_elem.data[87], vb_15_elem.data[88], vb_15_elem.data[89], vb_15_elem.data[90], vb_15_elem.data[91], vb_15_elem.data[92], vb_15_elem.data[93], vb_15_elem.data[94], vb_15_elem.data[95]);
         scale_2 = unpackFloat32_(vb_15_elem.data[96], vb_15_elem.data[97], vb_15_elem.data[98], vb_15_elem.data[99]);
         ring = unpackFloat32_(vb_15_elem.data[100], vb_15_elem.data[101], vb_15_elem.data[102], vb_15_elem.data[103]);
-        glow = unpackFloat32x3_(vb_15_elem.data[104], vb_15_elem.data[105], vb_15_elem.data[106], vb_15_elem.data[107], vb_15_elem.data[108], vb_15_elem.data[109], vb_15_elem.data[110], vb_15_elem.data[111], vb_15_elem.data[112], vb_15_elem.data[113], vb_15_elem.data[114], vb_15_elem.data[115]);
+        glow = unpackFloat32x4_(vb_15_elem.data[104], vb_15_elem.data[105], vb_15_elem.data[106], vb_15_elem.data[107], vb_15_elem.data[108], vb_15_elem.data[109], vb_15_elem.data[110], vb_15_elem.data[111], vb_15_elem.data[112], vb_15_elem.data[113], vb_15_elem.data[114], vb_15_elem.data[115], vb_15_elem.data[116], vb_15_elem.data[117], vb_15_elem.data[118], vb_15_elem.data[119]);
     }
     const Instance inst = { world_pos, color, params, octaves, cents, marks, {}, melody_color, bass_color, scale_2, ring, {}, glow };
     VsOut out = {};

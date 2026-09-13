@@ -122,7 +122,12 @@ struct Instance {
     float scale;
     float ring;
     char _pad10[8];
-    metal::float3 glow;
+    metal::float4 glow;
+};
+struct GlowSplatOut {
+    metal::float4 position;
+    metal::float2 uv;
+    metal::float2 light;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float GAUSSIAN_GAIN = 2.5;
@@ -138,7 +143,6 @@ constant float GLYPH_FADE_LIMIT = 1.3;
 constant float GLOW_BASE = 0.8;
 constant float SHADOW_REACH_SIGMAS = 3.0;
 constant uint INK_STRIP_N = 64u;
-constant uint GLOW_TILE_SIZE = 32u;
 constant bool EARLY_OUT = true;
 constant float INK_FLOOR = 0.01;
 constant uint OCTAVE_SLOTS = 11u;
@@ -170,12 +174,46 @@ uint2 unpackUint32x2_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint
     return uint2((b3 << 24 | b2 << 16 | b1 << 8 | b0), (b7 << 24 | b6 << 16 | b5 << 8 | b4));
 }
 
-struct vs_ink_blurOutput {
-    metal::float4 member [[position]];
+float node_rim(
+    bool marked,
+    constant Uniforms& u
+) {
+    float rim = {};
+    bool local = {};
+    float _e4 = u.node.rings_outer;
+    rim = metal::max(_e4, 0.0);
+    if (marked) {
+        float _e13 = u.node.mark_thickness;
+        local = _e13 > 0.0;
+    } else {
+        local = false;
+    }
+    bool _e17 = local;
+    if (_e17) {
+        float _e18 = rim;
+        float _e22 = u.node.mark_inner;
+        float _e26 = u.node.mark_thickness;
+        rim = metal::max(_e18, _e22 + _e26);
+    }
+    float _e29 = rim;
+    return _e29;
+}
+
+float glow_rim(
+    constant Uniforms& u
+) {
+    float _e1 = node_rim(true, u);
+    return _e1;
+}
+
+struct vs_glow_splatOutput {
+    metal::float4 position [[position]];
+    metal::float2 uv [[user(loc0), center_perspective]];
+    metal::float2 light [[user(loc1), flat]];
 };
-struct vb_15_type { metal::uchar data[116]; };
-vertex vs_ink_blurOutput vs_ink_blur(
-  uint vertex_index [[vertex_id]]
+struct vb_15_type { metal::uchar data[120]; };
+vertex vs_glow_splatOutput vs_glow_splat(
+  uint vertex_ [[vertex_id]]
 , constant Uniforms& u [[buffer(0)]]
 , uint i_id [[instance_id]]
 , const device vb_15_type* vb_15_in [[buffer(15)]]
@@ -191,8 +229,8 @@ vertex vs_ink_blurOutput vs_ink_blur(
     metal::float4 bass_color = {};
     float scale = {};
     float ring = {};
-    metal::float3 glow = {};
-    if (i_id < (_buffer_sizes.buffer_size15 / 116)) {
+    metal::float4 glow = {};
+    if (i_id < (_buffer_sizes.buffer_size15 / 120)) {
         const vb_15_type vb_15_elem = vb_15_in[i_id];
         world_pos = unpackFloat32x3_(vb_15_elem.data[0], vb_15_elem.data[1], vb_15_elem.data[2], vb_15_elem.data[3], vb_15_elem.data[4], vb_15_elem.data[5], vb_15_elem.data[6], vb_15_elem.data[7], vb_15_elem.data[8], vb_15_elem.data[9], vb_15_elem.data[10], vb_15_elem.data[11]);
         color = unpackFloat32x4_(vb_15_elem.data[12], vb_15_elem.data[13], vb_15_elem.data[14], vb_15_elem.data[15], vb_15_elem.data[16], vb_15_elem.data[17], vb_15_elem.data[18], vb_15_elem.data[19], vb_15_elem.data[20], vb_15_elem.data[21], vb_15_elem.data[22], vb_15_elem.data[23], vb_15_elem.data[24], vb_15_elem.data[25], vb_15_elem.data[26], vb_15_elem.data[27]);
@@ -204,15 +242,33 @@ vertex vs_ink_blurOutput vs_ink_blur(
         bass_color = unpackFloat32x4_(vb_15_elem.data[80], vb_15_elem.data[81], vb_15_elem.data[82], vb_15_elem.data[83], vb_15_elem.data[84], vb_15_elem.data[85], vb_15_elem.data[86], vb_15_elem.data[87], vb_15_elem.data[88], vb_15_elem.data[89], vb_15_elem.data[90], vb_15_elem.data[91], vb_15_elem.data[92], vb_15_elem.data[93], vb_15_elem.data[94], vb_15_elem.data[95]);
         scale = unpackFloat32_(vb_15_elem.data[96], vb_15_elem.data[97], vb_15_elem.data[98], vb_15_elem.data[99]);
         ring = unpackFloat32_(vb_15_elem.data[100], vb_15_elem.data[101], vb_15_elem.data[102], vb_15_elem.data[103]);
-        glow = unpackFloat32x3_(vb_15_elem.data[104], vb_15_elem.data[105], vb_15_elem.data[106], vb_15_elem.data[107], vb_15_elem.data[108], vb_15_elem.data[109], vb_15_elem.data[110], vb_15_elem.data[111], vb_15_elem.data[112], vb_15_elem.data[113], vb_15_elem.data[114], vb_15_elem.data[115]);
+        glow = unpackFloat32x4_(vb_15_elem.data[104], vb_15_elem.data[105], vb_15_elem.data[106], vb_15_elem.data[107], vb_15_elem.data[108], vb_15_elem.data[109], vb_15_elem.data[110], vb_15_elem.data[111], vb_15_elem.data[112], vb_15_elem.data[113], vb_15_elem.data[114], vb_15_elem.data[115], vb_15_elem.data[116], vb_15_elem.data[117], vb_15_elem.data[118], vb_15_elem.data[119]);
     }
     const Instance inst = { world_pos, color, params, octaves, cents, marks, {}, melody_color, bass_color, scale, ring, {}, glow };
+    GlowSplatOut out = {};
+    out.position = metal::float4(2.0, 2.0, 0.0, 1.0);
+    out.uv = metal::float2(0.0);
+    out.light = metal::float2(inst.glow.x * inst.glow.w, inst.glow.y);
     if (inst.glow.x <= 0.0) {
-        return vs_ink_blurOutput { metal::float4(0.0, 0.0, 0.0, 1.0) };
+        GlowSplatOut _e25 = out;
+        const auto _tmp = _e25;
+        return vs_glow_splatOutput { _tmp.position, _tmp.uv, _tmp.light };
     }
-    metal::float2 corner = metal::float2(static_cast<float>(vertex_index & 1u), static_cast<float>(vertex_index >> 1u));
-    float _e21 = u.glow.row_capacity;
-    float rows = metal::max(_e21, 1.0);
-    float v = (inst.glow.y + corner.y) / rows;
-    return vs_ink_blurOutput { metal::float4((corner.x * 2.0) - 1.0, 1.0 - (2.0 * v), 0.0, 1.0) };
+    metal::float2 corner = (metal::float2(static_cast<float>(vertex_ & 1u), static_cast<float>(vertex_ >> 1u)) * 2.0) - metal::float2(1.0);
+    float _e38 = glow_rim(u);
+    float _e42 = u.glow.reach;
+    float span = metal::max(_e38 + metal::max(_e42, 0.0), 0.1);
+    out.uv = corner * span;
+    float _e53 = u.node.radius;
+    float radius = (_e53 * 1.8) * metal::max(inst.scale, 0.05);
+    metal::float4 _e64 = u.camera.right;
+    float _e68 = out.uv.x;
+    metal::float4 _e73 = u.camera.up;
+    float _e77 = out.uv.y;
+    metal::float3 world = inst.world_pos + (((_e64.xyz * _e68) + (_e73.xyz * _e77)) * radius);
+    metal::float4x4 _e86 = u.camera.view_proj;
+    out.position = _e86 * metal::float4(world, 1.0);
+    GlowSplatOut _e90 = out;
+    const auto _tmp = _e90;
+    return vs_glow_splatOutput { _tmp.position, _tmp.uv, _tmp.light };
 }
