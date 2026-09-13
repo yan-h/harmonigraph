@@ -1,10 +1,10 @@
 // Fixed-cost separable filtering of a quarter-resolution image. The source
-// contains only spectral light, never note bodies, labels or grid rulings.
+// contains only spectral intensity, never note bodies, labels or grid rulings.
 struct Cloud {
     origin: vec2<f32>,
     size: vec2<f32>,
     step: vec2<f32>,
-    glow: f32,
+    diffusion: f32,
     texture: f32,
     ppp: f32,
     _pad0: f32,
@@ -31,17 +31,17 @@ fn filtered(uv: vec2<f32>, step: vec2<f32>) -> vec4<f32> {
     // Half-step taps fill the gaps a sparse kernel leaves around narrow
     // spectral ridges. The wide passes further diffuse this close image.
     let weights = array<f32, 9>(1.0, 0.9576695, 0.8411289, 0.6775490, 0.5005531, 0.3391493, 0.2107477, 0.1201064, 0.0627770);
-    var color = vec3<f32>(0.0);
+    var level = 0.0;
     var total = 0.0;
     for (var i = -8; i <= 8; i = i + 1) {
         let x = f32(i) * 0.5;
         let weight = weights[u32(abs(i))];
         let tap = uv + step * x;
         let inside = all(tap >= vec2<f32>(0.0)) && all(tap <= vec2<f32>(1.0));
-        color += textureSampleLevel(source, linear_sampler, tap, 0.0).rgb * weight * select(0.0, 1.0, inside);
+        level += textureSampleLevel(source, linear_sampler, tap, 0.0).r * weight * select(0.0, 1.0, inside);
         total += weight;
     }
-    return vec4<f32>(color / total, 1.0);
+    return vec4<f32>(level / total, 0.0, 0.0, 1.0);
 }
 @fragment
 fn fs_close_h(in: Vertex) -> @location(0) vec4<f32> {

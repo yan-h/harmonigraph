@@ -119,12 +119,14 @@ pub(crate) fn spectrum_settings_pane(
         *atmosphere = harmonigraph_scene::SpectralAtmosphere::default();
     }
     ui.add_enabled_ui(atmosphere.enabled, |ui| {
-        ValueBar::new(&mut atmosphere.glow, 0.0..=1.0, "Spectral light")
-            .percent().show(ui).on_hover_text("Close halos and wide clouds around spectral energy. The detailed heatmap and measured peak positions stay sharp.");
+        ValueBar::new(&mut atmosphere.diffusion, 0.0..=1.0, "Diffusion")
+            .percent().show(ui).on_hover_text("Soften the spectrogram into a continuous cloud of color, retaining defined bright pitches. 0% restores the detailed heatmap.");
         ValueBar::new(&mut atmosphere.spread, 0.25..=3.0, "Cloud spread")
             .unit(1.0, "×").show(ui);
         ValueBar::new(&mut atmosphere.texture, 0.0..=1.0, "Cloud texture")
-            .percent().show(ui).on_hover_text("A diffuse cloudy medium lit by the spectrogram colors. The texture stays in the pane as the sound moves through it; 0% restores smooth light.");
+            .percent().show(ui).on_hover_text("Gentle density variations in the diffused spectrogram. The texture stays in the pane as the sound moves through it; 0% gives a smooth field.");
+        ValueBar::new(&mut atmosphere.glow, 0.0..=1.0, "Analyzer glow")
+            .percent().show(ui).on_hover_text("Light around the live spectrum analyzer.");
         ValueBar::new(&mut atmosphere.note_glow, 0.0..=1.0, "Note glow")
             .percent().show(ui).on_hover_text("Additional glow around note ribbons. Adjust their shadows under Display → Lighting → Shadows.");
     });

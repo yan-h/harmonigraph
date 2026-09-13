@@ -39,6 +39,7 @@ pub(crate) const SPECTROGRAM_ENTRY_POINTS: &[&str] = &[
     "vs_heatmap",
     "fs_heatmap_gamma",
     "fs_heatmap_linear",
+    "fs_density_source",
     "fs_cloud_light",
     "fs_cloud_gamma",
     "fs_cloud_linear",
@@ -351,7 +352,17 @@ impl SpectrogramResources {
             ],
         });
         SpectrogramResources {
-            pipeline: create_spectrogram_pipeline(device, target_format, &layout, None),
+            pipeline: create_spectrogram_pipeline(
+                device,
+                target_format,
+                &layout,
+                None,
+                if target_format.is_srgb() || target_format == wgpu::TextureFormat::Rgba16Float {
+                    "fs_heatmap_linear"
+                } else {
+                    "fs_heatmap_gamma"
+                },
+            ),
             cloud: None,
             layout,
             target_format,
@@ -414,7 +425,8 @@ fn create_spectrogram_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
     layout: &wgpu::BindGroupLayout,
-    cloud: Option<(&wgpu::BindGroupLayout, &str)>,
+    extra_layout: Option<&wgpu::BindGroupLayout>,
+    fragment: &str,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("spectrogram_shader"),
@@ -423,19 +435,10 @@ fn create_spectrogram_pipeline(
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("spectrogram_pipeline_layout"),
         bind_group_layouts: &std::iter::once(Some(layout))
-            .chain(cloud.map(|(layout, _)| Some(layout)))
+            .chain(extra_layout.map(Some))
             .collect::<Vec<_>>(),
         ..Default::default()
     });
-    // Same fork egui makes, for the same reason: an sRGB-aware target wants
-    // linear values and encodes them itself.
-    let shade = if target_format.is_srgb() || target_format == wgpu::TextureFormat::Rgba16Float {
-        "linear"
-    } else {
-        "gamma"
-    };
-    let fragment =
-        cloud.map(|(_, entry)| entry.to_owned()).unwrap_or_else(|| format!("fs_heatmap_{shade}"));
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("spectrogram"),
         layout: Some(&pipeline_layout),
@@ -447,7 +450,7 @@ fn create_spectrogram_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some(&fragment),
+            entry_point: Some(fragment),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
@@ -664,7 +667,7 @@ impl CallbackTrait for SpectrogramCallback {
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         if let Some(settings) =
-            self.atmosphere.filter(|a| a.settings.enabled && a.settings.glow > 0.0)
+            self.atmosphere.filter(|a| a.settings.enabled && a.settings.diffusion > 0.0)
         {
             let viewport = egui::epaint::ViewportInPixels::from_points(
                 &self.rect,
@@ -715,7 +718,7 @@ impl CallbackTrait for SpectrogramCallback {
                 target.blur(egui_encoder, cloud);
                 {
                     // Once filtering is finished, the raw source texture is
-                    // free to hold the shaped light. Bake across the whole
+                    // free to hold the soft intensity and density. Bake across the whole
                     // spectrogram region so the Gaussian tail survives past
                     // the moving history edge. The exact core keeps its mesh.
                     let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -788,8 +791,8 @@ impl CallbackTrait for SpectrogramCallback {
             let pipelines = resources.cloud.as_ref().expect("prepared cloud pipelines");
             let cloud = pane.cloud.as_ref().expect("prepared cloud");
             // The spectrogram's bed is black, including unwritten history.
-            // Lay its light down over that region first; then the opaque exact
-            // mesh replaces its own pixels with core + light exactly once.
+            // Color the diffused intensity there first; then the measured mesh
+            // replaces its own pixels with the unified core and soft field.
             render_pass.set_pipeline(&pipelines.backdrop);
             render_pass.set_bind_group(0, bind_group, &[]);
             render_pass.set_bind_group(1, &cloud.composite_group, &[]);
@@ -1268,15 +1271,64 @@ mod tests {
     }
 
     #[test]
+    fn spectral_diffusion_colors_the_combined_intensity_once() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = cloud_fixture();
+        // A curved ramp exposes RGB mixing: every correctly colored pixel
+        // must lie on red = green squared, including the dim cloud tail.
+        cb.shades.lut = Arc::new(
+            (0..256).map(|v| [((v * v) as f32 / 255.0).round() as u8, v as u8, 0, 255]).collect(),
+        );
+        let frame = fresh_frame(&device, &queue, &cb);
+        let mut body_pixels = 0;
+        for p in frame.chunks_exact(4) {
+            let expected = (f32::from(p[1]).powi(2) / 255.0).round() as u8;
+            assert!(p[0].abs_diff(expected) <= 2, "cloud left the intensity palette: {p:?}");
+            body_pixels += usize::from(p[1] > 8 && p[1] < 240);
+        }
+        assert!(body_pixels > 200, "fixture never reached the diffused body");
+    }
+
+    #[test]
+    fn spectral_diffusion_softens_faint_detail_with_one_fade_to_black() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = cloud_fixture();
+        cb.grid.run = Arc::new(cb.grid.run.iter().map(|&v| if v > 0 { 102 } else { 0 }).collect());
+        // An edited palette may start above black. The diffused tail must
+        // still reach actual black rather than leave that first slice glowing.
+        Arc::make_mut(&mut cb.shades.lut)[0] = [80, 0, 0, 255];
+        cb.atmosphere.as_mut().unwrap().settings.texture = 0.0;
+        let soft = fresh_frame(&device, &queue, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.diffusion = 0.0;
+        let zero = fresh_frame(&device, &queue, &cb);
+        cb.atmosphere = None;
+        let plain = fresh_frame(&device, &queue, &cb);
+        assert_eq!(zero, plain, "zero diffusion did not restore the measured heatmap");
+        let pixel = |frame: &[u8], y| frame[(y * SIZE[0] as usize + 64) * 4 + 2];
+        assert_eq!(pixel(&plain, 63), 102, "fixture missed the faint ridge");
+        assert!(pixel(&soft, 63) < 82, "faint grain kept its original contrast");
+        assert!(pixel(&soft, 60) > pixel(&plain, 60), "softened body never formed");
+        let far = (16 * SIZE[0] as usize + 64) * 4;
+        assert_eq!(&soft[far..far + 4], &[0, 0, 0, 255], "diffusion lifted the black background");
+        for y in 16..63 {
+            assert!(
+                pixel(&soft, y) <= pixel(&soft, y + 1).saturating_add(1),
+                "dark moat before the ridge at row {y}"
+            );
+        }
+    }
+
+    #[test]
     fn spectral_clouds_extend_past_the_scrolling_history_edge() {
         let Some((device, queue)) = headless_device() else { return };
         for turns in 0..4 {
             let mut cb = cloud_fixture();
-            // History starts inside the pane. A ridge in its oldest slabs
-            // lights the blank history area through the Gaussian tail.
+            // History starts inside the pane. A ten-pixel ridge seeds enough
+            // scalar density for a visible tail six pixels beyond that edge.
+            cb.atmosphere.as_mut().unwrap().settings.texture = 0.0;
             let mut bytes = vec![0; cb.grid.run.len()];
             for slab in 0..4 {
-                bytes[slab * BINS as usize + 500..slab * BINS as usize + 524].fill(255);
+                bytes[slab * BINS as usize + 472..slab * BINS as usize + 552].fill(255);
             }
             cb.grid.run = Arc::new(bytes);
             for vertex in &mut cb.vertices {
@@ -1296,7 +1348,7 @@ mod tests {
                 );
                 cb.target_format = FORMAT;
             }
-            let mut corners = [egui::pos2(32.0, 0.0), egui::pos2(112.0, 128.0)];
+            let mut corners = [egui::pos2(36.0, 0.0), egui::pos2(112.0, 128.0)];
             for corner in &mut corners {
                 for _ in 0..turns {
                     *corner = egui::pos2(SIZE[1] as f32 - corner.y, corner.x);
@@ -1313,14 +1365,20 @@ mod tests {
                 }
                 frame[(y * SIZE[0] as usize + x) * 4 + 2]
             };
-            assert!(pixel(&lit, 30, 63) > 4, "fixture did not reach the region boundary");
-            assert_eq!(pixel(&bounded, 30, 63), 0, "cloud crossed into the analyzer region");
-            assert!(pixel(&bounded, 34, 63) > 4, "updating the region lost its history tail");
+            assert!(pixel(&lit, 34, 63) > 4, "fixture did not reach the region boundary");
+            assert_eq!(pixel(&bounded, 34, 63), 0, "cloud crossed into the analyzer region");
+            assert!(pixel(&bounded, 38, 63) > 4, "updating the region lost its history tail");
             assert_eq!(pixel(&core, 34, 63), 0, "fixture smeared data beyond history");
             assert!(pixel(&lit, 34, 63) > 4, "cloud cropped at history edge, turn {turns}");
             assert_eq!(pixel(&lit, 8, 63), 0, "cloud did not decay into the empty history");
             assert_eq!(pixel(&core, 46, 63), 255, "fixture missed the measured ridge");
             assert_eq!(pixel(&lit, 46, 63), 255, "cloud diluted the measured ridge");
+            for x in 8..46 {
+                assert!(
+                    pixel(&lit, x, 63) <= pixel(&lit, x + 1, 63).saturating_add(1),
+                    "dark moat at history edge, turn {turns}, column {x}"
+                );
+            }
         }
     }
 

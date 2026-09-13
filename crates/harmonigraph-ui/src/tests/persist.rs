@@ -1709,6 +1709,7 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     assert_eq!(partial, SpectralAtmosphere { glow: 0.23, ..Default::default() });
     let mut state = fresh();
     state.picture.appearance.spectrum.atmosphere = SpectralAtmosphere {
+        diffusion: f32::NAN,
         glow: f32::NAN,
         spread: 999.0,
         texture: -1.0,

@@ -2,11 +2,12 @@
 
 use harmonigraph_core::LatticePos;
 
-/// Light surrounding spectral energy; the measured heatmap stays sharp.
+/// Spectrogram diffusion and the surrounding analyzer and note light.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SpectralAtmosphere {
     pub enabled: bool,
+    pub diffusion: f32,
     pub glow: f32,
     pub spread: f32,
     pub texture: f32,
@@ -15,7 +16,14 @@ pub struct SpectralAtmosphere {
 
 impl Default for SpectralAtmosphere {
     fn default() -> Self {
-        Self { enabled: true, glow: 0.65, spread: 1.0, texture: 0.3, note_glow: 0.5 }
+        Self {
+            enabled: true,
+            diffusion: 0.7,
+            glow: 0.65,
+            spread: 1.0,
+            texture: 0.3,
+            note_glow: 0.5,
+        }
     }
 }
 
@@ -29,6 +37,7 @@ impl SpectralAtmosphere {
                 fallback
             }
         };
+        self.diffusion = clamp(self.diffusion, fresh.diffusion, 0.0, 1.0);
         self.glow = clamp(self.glow, fresh.glow, 0.0, 1.0);
         self.spread = clamp(self.spread, fresh.spread, 0.25, 3.0);
         self.texture = clamp(self.texture, fresh.texture, 0.0, 1.0);

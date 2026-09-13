@@ -174,13 +174,10 @@ pub(super) fn heatmap_vertices(
 /// smooth in both axes, and opaque so the plane is a filled image rather than
 /// bright patches floating on the background.
 ///
-/// The detailed core is opaque and untinted, which is a decision about the SHARED SCHEME rather than
-/// an implementation detail: an Opacity setting would fade the heatmap so it can
-/// sit under the notes, and the spectrum curve is drawn from the same
-/// [`cell_color`] ramp against the same `loudness_db` and takes no tint — so a
-/// faded heatmap means equal levels stop looking equal across the two halves of
-/// one pane. The atmosphere prototype derives surrounding light from a
-/// separate reduced image and composites it with this unchanged core read.
+/// The heatmap is opaque and untinted, sharing the spectrum curve's
+/// [`cell_color`] ramp. Diffusion softens its display levels before that ramp
+/// is applied once, keeping the data and its surrounding body on one palette.
+/// At zero diffusion the original per-pixel level read is preserved.
 pub(crate) fn draw_spectrogram(
     painter: &egui::Painter,
     axes: &Axes,

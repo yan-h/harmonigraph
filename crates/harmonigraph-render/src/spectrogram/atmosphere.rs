@@ -1,5 +1,5 @@
-//! A small image of the heatmap supplies its light, without widening the
-//! detailed shader's bucket footprint. Targets belong to one pane and are
+//! A small scalar image diffuses the heatmap before its single palette lookup.
+//! Strong peaks retain their detailed bucket footprint. Targets belong to one pane and are
 //! keyed only on their size; source pixels and uniforms are refreshed every
 //! draw, including paused zooms and palette edits.
 
@@ -24,7 +24,7 @@ struct Uniforms {
     origin: [f32; 2],
     size: [f32; 2],
     step: [f32; 2],
-    glow: f32,
+    diffusion: f32,
     texture: f32,
     ppp: f32,
     _pad: [f32; 3],
@@ -118,38 +118,41 @@ impl Pipelines {
             })
         });
         Self {
-            source: create_spectrogram_pipeline(device, FORMAT, source_layout, None),
+            source: create_spectrogram_pipeline(
+                device,
+                FORMAT,
+                source_layout,
+                None,
+                "fs_density_source",
+            ),
             bake: create_spectrogram_pipeline(
                 device,
                 FORMAT,
                 source_layout,
-                Some((&composite_layout, "fs_cloud_light")),
+                Some(&composite_layout),
+                "fs_cloud_light",
             ),
             composite: create_spectrogram_pipeline(
                 device,
                 format,
                 source_layout,
-                Some((
-                    &composite_layout,
-                    if format.is_srgb() || format == FORMAT {
-                        "fs_cloud_linear"
-                    } else {
-                        "fs_cloud_gamma"
-                    },
-                )),
+                Some(&composite_layout),
+                if format.is_srgb() || format == FORMAT {
+                    "fs_cloud_linear"
+                } else {
+                    "fs_cloud_gamma"
+                },
             ),
             backdrop: create_spectrogram_pipeline(
                 device,
                 format,
                 source_layout,
-                Some((
-                    &composite_layout,
-                    if format.is_srgb() || format == FORMAT {
-                        "fs_cloud_backdrop_linear"
-                    } else {
-                        "fs_cloud_backdrop_gamma"
-                    },
-                )),
+                Some(&composite_layout),
+                if format.is_srgb() || format == FORMAT {
+                    "fs_cloud_backdrop_linear"
+                } else {
+                    "fs_cloud_backdrop_gamma"
+                },
             ),
             filter_layout,
             composite_layout,
@@ -335,7 +338,7 @@ impl Targets {
             origin: rect.min.into(),
             size: rect.size().into(),
             step: [radius / rect.width(), radius / rect.height()],
-            glow: settings.glow,
+            diffusion: settings.diffusion,
             texture: settings.texture,
             ppp,
             _pad: [0.0; 3],
