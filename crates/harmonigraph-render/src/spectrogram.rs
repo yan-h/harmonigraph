@@ -720,7 +720,7 @@ impl CallbackTrait for SpectrogramCallback {
                     // Once filtering is finished, the raw source texture is
                     // free to hold the soft intensity and density. Bake across the whole
                     // spectrogram region so the Gaussian tail survives past
-                    // the moving history edge. The exact core keeps its mesh.
+                    // the moving history edge. The raw detail keeps its measured mesh.
                     let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("spectral_cloud_material"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1257,7 +1257,8 @@ mod tests {
         assert_eq!(pixel(&core, 64, 56), 0, "fixture put core ink in the halo probe");
         assert!(pixel(&lit, 64, 56) > 3, "no light outside the measured ridge");
         assert_eq!(pixel(&core, 64, 63), 255, "fixture missed its narrow ridge");
-        assert_eq!(pixel(&lit, 64, 63), 255, "clouds diluted the sharp ridge");
+        assert!(pixel(&lit, 64, 63) > 4 * pixel(&lit, 64, 56), "diffusion lost the pitch ridge");
+        assert!(pixel(&lit, 64, 63) < pixel(&core, 64, 63), "bright ridge bypassed diffusion");
         assert_eq!(lit, fresh_frame(&device, &queue, &cb), "paused clouds moved");
         cb.target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
         assert!(
@@ -1287,6 +1288,59 @@ mod tests {
             body_pixels += usize::from(p[1] > 8 && p[1] < 240);
         }
         assert!(body_pixels > 200, "fixture never reached the diffused body");
+    }
+
+    #[test]
+    fn spectral_diffusion_removes_bright_grain_in_both_axes() {
+        let Some((device, queue)) = headless_device() else { return };
+        for temporal in [false, true] {
+            let mut phases = Vec::new();
+            for phase in 0..2 {
+                let mut cb = cloud_fixture();
+                // Four one-pixel stripes per reduced texel, inside a broad
+                // pitch band. The two phases have the same mean intensity.
+                // In time, the old center-only source reads all on or all off;
+                // in pitch, the source already averages each pixel footprint.
+                let mut bytes = vec![0; 128 * BINS as usize];
+                for slab in 0..128 {
+                    for bucket in 256..768 {
+                        let stripe = if temporal { slab } else { bucket / 8 };
+                        if matches!((stripe + phase * 2) % 4, 1 | 2) {
+                            bytes[slab * BINS as usize + bucket] = 255;
+                        }
+                    }
+                }
+                cb.grid = grid_of(Arc::new(bytes), BINS, 128, 0);
+                cb.vertices = full_quad(128);
+                cb.atmosphere.as_mut().unwrap().settings.texture = 0.0;
+                phases.push([0.0, 0.7, 1.0].map(|diffusion| {
+                    cb.atmosphere.as_mut().unwrap().settings.diffusion = diffusion;
+                    fresh_frame(&device, &queue, &cb)
+                }));
+            }
+            // Stay inside the band, away from the history/filter boundaries.
+            let difference = |setting: usize| -> u32 {
+                (48..80)
+                    .flat_map(|y| (32..96).map(move |x| (y * 128 + x) * 4 + 2))
+                    .map(|i| u32::from(phases[0][setting][i].abs_diff(phases[1][setting][i])))
+                    .sum()
+            };
+            let raw = difference(0);
+            assert!(raw > 2048 * 100, "fixture missed bright grain, temporal={temporal}");
+            assert!(
+                difference(1) < raw / 6,
+                "default diffusion kept bright grain, temporal={temporal}"
+            );
+            assert!(
+                difference(2) <= 2048,
+                "100% diffusion retained fine phase, temporal={temporal}"
+            );
+            for phase in &phases {
+                let full = &phase[2];
+                assert!(full[(64 * 128 + 64) * 4 + 2] > 80, "diffusion erased the pitch band");
+                assert!(full[(8 * 128 + 64) * 4 + 2] < 5, "diffusion lost the band separation");
+            }
+        }
     }
 
     #[test]
@@ -1372,7 +1426,7 @@ mod tests {
             assert!(pixel(&lit, 34, 63) > 4, "cloud cropped at history edge, turn {turns}");
             assert_eq!(pixel(&lit, 8, 63), 0, "cloud did not decay into the empty history");
             assert_eq!(pixel(&core, 46, 63), 255, "fixture missed the measured ridge");
-            assert_eq!(pixel(&lit, 46, 63), 255, "cloud diluted the measured ridge");
+            assert!(pixel(&lit, 46, 63) > 128, "diffusion lost the measured pitch band");
             for x in 8..46 {
                 assert!(
                     pixel(&lit, x, 63) <= pixel(&lit, x + 1, 63).saturating_add(1),

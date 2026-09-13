@@ -8,9 +8,9 @@ disabling it restores the previous heatmap,
 analyzer,
 grid and ribbon-bloom paths.
 
-- **Diffusion** blends fine spectrogram detail into a soft intensity field,
-  while retaining strong pitch centers.
-  At 0% the original detailed heatmap returns.
+- **Diffusion** removes fine spectrogram detail at every brightness.
+  At 0% the original detailed heatmap returns;
+  at 100% only the softened field remains.
 - **Cloud spread** sets their reach relative to the pane size.
 - **Cloud texture** adds gentle density variations to the unified field.
 - **Analyzer glow** controls the aura around the live spectrum.
@@ -20,14 +20,17 @@ The measured heatmap and its diffused body share one intensity field and one pal
 A quarter-resolution scalar image of the measured geometry supplies two cascaded separable Gaussian filters.
 It holds display levels before coloring,
 with no RGB or gamma conversion in the source or filters.
+The source averages its pitch footprint and takes four stratified time samples per reduced pixel,
+reducing aliasing as fine temporal detail scrolls across reduced pixels.
 Each pass uses 17 half-step taps;
 the wide filter reads the softened close image to fill the gaps that sparse taps leave around narrow ridges.
 The broad filter reaches five times as far as the close filter,
 so nearby pitch energy pools into a diffuse body.
 The soft field mixes 75% close and 25% wide diffusion.
-Diffusion blends the measured level toward this field;
-detail retention rises smoothly between levels 0.45 and 0.95,
-leaving full-bright centers intact while reducing low and medium grain.
+Diffusion fades the raw contribution as `(1 - diffusion)²`,
+so the default 70% leaves 9% raw detail and 100% leaves none.
+Bright peaks are softened along with the rest of the field;
+the close filter preserves distinct pitch bands without restoring their original grain.
 The lattice's smooth value-noise recipe supplies one shared density across the pane,
 with broad shapes and a softer detail layer.
 That density only attenuates the combined intensity;

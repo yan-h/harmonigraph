@@ -120,7 +120,7 @@ pub(crate) fn spectrum_settings_pane(
     }
     ui.add_enabled_ui(atmosphere.enabled, |ui| {
         ValueBar::new(&mut atmosphere.diffusion, 0.0..=1.0, "Diffusion")
-            .percent().show(ui).on_hover_text("Soften the spectrogram into a continuous cloud of color, retaining defined bright pitches. 0% restores the detailed heatmap.");
+            .percent().show(ui).on_hover_text("Smooth fine spectrogram detail at every brightness. 0% restores the detailed heatmap; 100% uses only the softened field.");
         ValueBar::new(&mut atmosphere.spread, 0.25..=3.0, "Cloud spread")
             .unit(1.0, "×").show(ui);
         ValueBar::new(&mut atmosphere.texture, 0.0..=1.0, "Cloud texture")

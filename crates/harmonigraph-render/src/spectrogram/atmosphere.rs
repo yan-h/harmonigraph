@@ -1,6 +1,5 @@
 //! A small scalar image diffuses the heatmap before its single palette lookup.
-//! Strong peaks retain their detailed bucket footprint. Targets belong to one pane and are
-//! keyed only on their size; source pixels and uniforms are refreshed every
+//! Targets belong to one pane and are keyed only on their size; source pixels and uniforms are refreshed every
 //! draw, including paused zooms and palette edits.
 
 use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex};

@@ -273,7 +273,18 @@ fn cloud_noise(p: vec2<f32>) -> f32 {
 // the float source target must not take fs_heatmap_linear's RGB conversion.
 @fragment
 fn fs_density_source(in: VertexOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(heatmap_level(in), 0.0, 0.0, 1.0);
+    // Pitch already averages the reduced pixel's bucket footprint. Average
+    // time too: a single center read can turn fine on/off slabs into a solid
+    // bright or dark source depending on the scrolling phase. Four stratified
+    // taps cover this quarter-resolution pixel at a fixed, bounded cost.
+    let width = fwidth(in.slab);
+    var level = 0.0;
+    for (var i = 0u; i < 4u; i += 1u) {
+        var tap = in;
+        tap.slab += (f32(i) * 0.25 - 0.375) * width;
+        level += heatmap_level(tap);
+    }
+    return vec4<f32>(level * 0.25, 0.0, 0.0, 1.0);
 }
 @fragment
 fn fs_cloud_light(in: VertexOut) -> @location(0) vec4<f32> {
@@ -296,13 +307,11 @@ fn baked_density(position: vec2<f32>) -> vec2<f32> {
     return textureSampleLevel(close_light, cloud_sampler, uv, 0.0).rg;
 }
 fn diffused_level(core: f32, material: vec2<f32>) -> f32 {
-    // Blend levels, not independently colored images. Faint/mid-level detail
-    // melts into the soft body while strong measured centers retain definition.
-    let retain = smoothstep(0.45, 0.95, core);
-    // Retain only peaks above the soft field. Reducing diffusion in a dark
-    // notch instead would carve a moat into a brighter neighbor's soft body.
-    let level = mix(core, material.x, cloud.diffusion)
-        + cloud.diffusion * retain * max(core - material.x, 0.0);
+    // Diffusion removes raw detail at every brightness. Its upper endpoint
+    // is entirely filtered; restoring bright peaks here also restores grain.
+    // Ease out the raw contribution so the default 70% leaves only 9% detail.
+    let raw = (1.0 - cloud.diffusion) * (1.0 - cloud.diffusion);
+    let level = mix(material.x, core, raw);
     // Texture shapes that same field. Fade its effect at the brightest peaks
     // and as diffusion approaches zero, so neither endpoint has a jump.
     let texture = cloud.texture * cloud.diffusion * (1.0 - smoothstep(0.7, 1.0, level));
