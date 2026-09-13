@@ -288,13 +288,26 @@ fn fs_cloud_light(in: VertexOut) -> @location(0) vec4<f32> {
     // palette. The full-resolution pass still draws the exact heatmap core.
     return vec4<f32>(clamp(light, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }
-fn cloud_color(in: VertexOut) -> vec4<f32> {
-    let core = heatmap_color(in).rgb;
-    let uv = (in.position.xy / cloud.ppp - cloud.origin) / cloud.size;
+fn baked_light(position: vec2<f32>) -> vec3<f32> {
+    let uv = (position / cloud.ppp - cloud.origin) / cloud.size;
     // Binding zero holds the finished material during this pass, and the
     // close halo while fs_cloud_light is baking it. Neither pass aliases
     // the attachment it writes.
-    let light = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).rgb;
+    return textureSampleLevel(close_light, cloud_sampler, uv, 0.0).rgb;
+}
+// Only this light-only pass covers the empty history region. It never reads
+// the grid, so extending its quad cannot smear the oldest measured column.
+@fragment
+fn fs_cloud_backdrop_gamma(in: VertexOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(baked_light(in.position.xy), 1.0);
+}
+@fragment
+fn fs_cloud_backdrop_linear(in: VertexOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(linear_from_gamma_rgb(baked_light(in.position.xy)), 1.0);
+}
+fn cloud_color(in: VertexOut) -> vec4<f32> {
+    let core = heatmap_color(in).rgb;
+    let light = baked_light(in.position.xy);
     // Screen light into the exact core: highlights keep their headroom and
     // the surrounding cloud cannot replace a narrow measured ridge.
     return vec4<f32>(core + (vec3<f32>(1.0) - core) * light, 1.0);

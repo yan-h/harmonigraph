@@ -294,6 +294,7 @@ pub(crate) fn draw_spectrogram(
         painter.ctx().cumulative_pass_nr(),
         Some(harmonigraph_render::SpectrogramAtmosphere {
             settings: cfg.atmosphere,
+            region: egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0)),
             pitch_vertical: axes.dir_pitch().y.abs() > 0.5,
         }),
     ));

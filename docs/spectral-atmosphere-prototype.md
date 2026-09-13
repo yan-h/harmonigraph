@@ -31,8 +31,14 @@ The display-space material is baked at quarter resolution into the now-free sour
 then bilinearly sampled beside the full-resolution heatmap core.
 Shaping cost follows the reduced image size,
 and this final bake adds no texture allocation.
-Clouds remain inside the available audio-history strip in this prototype;
-they do not extend into an unwritten startup region or a stale-data gap.
+The light is baked and drawn across the whole spectrogram region,
+so its Gaussian tails can fade into unwritten history or a stale-data gap.
+The measured heatmap and the blur source keep the original history mesh;
+only the light extends beyond it.
+A light-only backdrop fills the black history bed first,
+then the opaque measured mesh replaces its own pixels with the exact core and light once.
+The analyzer divider and pane clip still bound this backdrop,
+including when the axes turn or the divider moves.
 Filtering uses linear float textures;
 the final screen blend preserves highlight headroom.
 The cloud medium uses aspect-correct pane coordinates,

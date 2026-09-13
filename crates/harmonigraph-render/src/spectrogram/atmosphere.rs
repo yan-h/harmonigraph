@@ -3,8 +3,8 @@
 //! keyed only on their size; source pixels and uniforms are refreshed every
 //! draw, including paused zooms and palette edits.
 
-use super::{create_spectrogram_pipeline, SpectrogramUniforms};
-use crate::wgpu;
+use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex};
+use crate::{create_vertex_buffer, wgpu};
 
 pub(super) const SOURCE: &str = include_str!("../shaders/spectral_atmosphere.wgsl");
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -12,6 +12,8 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 #[derive(Clone, Copy, Debug)]
 pub struct SpectrogramAtmosphere {
     pub settings: harmonigraph_scene::SpectralAtmosphere,
+    /// The whole spectrogram region, including history that has no data yet.
+    pub region: egui::Rect,
     /// Axis used to preserve the reduced source image's pitch footprint.
     pub pitch_vertical: bool,
 }
@@ -32,6 +34,7 @@ pub(super) struct Pipelines {
     pub source: wgpu::RenderPipeline,
     pub bake: wgpu::RenderPipeline,
     pub composite: wgpu::RenderPipeline,
+    pub backdrop: wgpu::RenderPipeline,
     filter_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
     filters: [wgpu::RenderPipeline; 4],
@@ -135,6 +138,19 @@ impl Pipelines {
                     },
                 )),
             ),
+            backdrop: create_spectrogram_pipeline(
+                device,
+                format,
+                source_layout,
+                Some((
+                    &composite_layout,
+                    if format.is_srgb() || format == FORMAT {
+                        "fs_cloud_backdrop_linear"
+                    } else {
+                        "fs_cloud_backdrop_gamma"
+                    },
+                )),
+            ),
             filter_layout,
             composite_layout,
             filters,
@@ -151,6 +167,7 @@ impl Pipelines {
 pub(super) struct Targets {
     pub size: [u32; 2],
     pub source_view: wgpu::TextureView,
+    pub coverage_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 3],
     source_uniform: wgpu::Buffer,
     pub source_group: wgpu::BindGroup,
@@ -251,6 +268,11 @@ impl Targets {
         Self {
             size,
             source_view,
+            coverage_vertices: create_vertex_buffer::<SpectrogramVertex>(
+                device,
+                "spectral_cloud_coverage",
+                6,
+            ),
             views,
             source_uniform,
             source_group,
@@ -279,6 +301,23 @@ impl Targets {
         ppp: f32,
         atmosphere: SpectrogramAtmosphere,
     ) {
+        // The source mesh records only measured history. Its already-blurred
+        // light can occupy the whole spectrogram region, without crossing the
+        // analyzer divider or widening the exact heatmap's sample footprint.
+        let region = atmosphere.region.intersect(rect);
+        let region = if region.is_positive() {
+            region
+        } else {
+            egui::Rect::from_min_max(rect.min, rect.min)
+        };
+        let corners =
+            [region.left_top(), region.right_top(), region.right_bottom(), region.left_bottom()];
+        let vertices = [0, 1, 2, 0, 2, 3].map(|i| SpectrogramVertex {
+            pos: corners[i].into(),
+            slab: 0.0,
+            t: 0.0,
+        });
+        queue.write_buffer(&self.coverage_vertices, 0, bytemuck::cast_slice(&vertices));
         read.origin_points = rect.min.into();
         read.viewport_points = rect.size().into();
         let pitch_vertical = atmosphere.pitch_vertical;

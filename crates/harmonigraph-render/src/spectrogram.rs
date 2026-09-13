@@ -42,6 +42,8 @@ pub(crate) const SPECTROGRAM_ENTRY_POINTS: &[&str] = &[
     "fs_cloud_light",
     "fs_cloud_gamma",
     "fs_cloud_linear",
+    "fs_cloud_backdrop_gamma",
+    "fs_cloud_backdrop_linear",
 ];
 
 /// The stored-dB grid the shader reads: `capacity` slots of `bins` bytes, slab
@@ -713,9 +715,9 @@ impl CallbackTrait for SpectrogramCallback {
                 target.blur(egui_encoder, cloud);
                 {
                     // Once filtering is finished, the raw source texture is
-                    // free to hold the shaped light. Noise and displacement
-                    // run at quarter resolution; the exact core still draws
-                    // at full resolution in the final composite.
+                    // free to hold the shaped light. Bake across the whole
+                    // spectrogram region so the Gaussian tail survives past
+                    // the moving history edge. The exact core keeps its mesh.
                     let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("spectral_cloud_material"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -732,8 +734,8 @@ impl CallbackTrait for SpectrogramCallback {
                     pass.set_pipeline(&cloud.bake);
                     pass.set_bind_group(0, &target.source_group, &[]);
                     pass.set_bind_group(1, &target.bake_group, &[]);
-                    pass.set_vertex_buffer(0, pane.vertex_buffer.slice(..));
-                    pass.draw(0..pane.count, 0..1);
+                    pass.set_vertex_buffer(0, target.coverage_vertices.slice(..));
+                    pass.draw(0..6, 0..1);
                 }
                 pane.cloud_ready = true;
             }
@@ -783,14 +785,17 @@ impl CallbackTrait for SpectrogramCallback {
             1.0,
         );
         if pane.cloud_ready {
-            render_pass.set_pipeline(
-                &resources.cloud.as_ref().expect("prepared cloud pipelines").composite,
-            );
-            render_pass.set_bind_group(
-                1,
-                &pane.cloud.as_ref().expect("prepared cloud").composite_group,
-                &[],
-            );
+            let pipelines = resources.cloud.as_ref().expect("prepared cloud pipelines");
+            let cloud = pane.cloud.as_ref().expect("prepared cloud");
+            // The spectrogram's bed is black, including unwritten history.
+            // Lay its light down over that region first; then the opaque exact
+            // mesh replaces its own pixels with core + light exactly once.
+            render_pass.set_pipeline(&pipelines.backdrop);
+            render_pass.set_bind_group(0, bind_group, &[]);
+            render_pass.set_bind_group(1, &cloud.composite_group, &[]);
+            render_pass.set_vertex_buffer(0, cloud.coverage_vertices.slice(..));
+            render_pass.draw(0..6, 0..1);
+            render_pass.set_pipeline(&pipelines.composite);
         } else {
             render_pass.set_pipeline(&resources.pipeline);
         }
@@ -1229,6 +1234,7 @@ mod tests {
             Arc::new((0..256).map(|v| [0, (v as f32 * 0.7) as u8, v as u8, 255]).collect());
         cb.atmosphere = Some(SpectrogramAtmosphere {
             settings: harmonigraph_scene::SpectralAtmosphere::default(),
+            region: cb.rect,
             pitch_vertical: true,
         });
         cb
@@ -1259,6 +1265,55 @@ mod tests {
         cb.grid.run = Arc::new(vec![0; cb.grid.run.len()]);
         let silent = fresh_frame(&device, &queue, &cb);
         assert!(silent.chunks_exact(4).all(|p| p == [0, 0, 0, 255]), "silence emitted light");
+    }
+
+    #[test]
+    fn spectral_clouds_extend_past_the_scrolling_history_edge() {
+        let Some((device, queue)) = headless_device() else { return };
+        for turns in 0..4 {
+            let mut cb = cloud_fixture();
+            // History starts inside the pane. A ridge in its oldest slabs
+            // lights the blank history area through the Gaussian tail.
+            let mut bytes = vec![0; cb.grid.run.len()];
+            for slab in 0..4 {
+                bytes[slab * BINS as usize + 500..slab * BINS as usize + 524].fill(255);
+            }
+            cb.grid.run = Arc::new(bytes);
+            for vertex in &mut cb.vertices {
+                vertex.pos[0] = 40.0 + vertex.pos[0] * 0.375;
+                for _ in 0..turns {
+                    vertex.pos = [SIZE[1] as f32 - vertex.pos[1], vertex.pos[0]];
+                }
+            }
+            cb.atmosphere.as_mut().unwrap().pitch_vertical = turns % 2 == 0;
+            let mut resources = CallbackResources::default();
+            let lit = frame_with(&device, &queue, &mut resources, &cb);
+            let mut corners = [egui::pos2(32.0, 0.0), egui::pos2(112.0, 128.0)];
+            for corner in &mut corners {
+                for _ in 0..turns {
+                    *corner = egui::pos2(SIZE[1] as f32 - corner.y, corner.x);
+                }
+            }
+            cb.atmosphere.as_mut().unwrap().region =
+                egui::Rect::from_two_pos(corners[0], corners[1]);
+            let bounded = frame_with(&device, &queue, &mut resources, &cb);
+            cb.atmosphere = None;
+            let core = fresh_frame(&device, &queue, &cb);
+            let pixel = |frame: &[u8], mut x: usize, mut y: usize| {
+                for _ in 0..turns {
+                    (x, y) = (SIZE[1] as usize - 1 - y, x);
+                }
+                frame[(y * SIZE[0] as usize + x) * 4 + 2]
+            };
+            assert!(pixel(&lit, 30, 63) > 4, "fixture did not reach the region boundary");
+            assert_eq!(pixel(&bounded, 30, 63), 0, "cloud crossed into the analyzer region");
+            assert!(pixel(&bounded, 34, 63) > 4, "updating the region lost its history tail");
+            assert_eq!(pixel(&core, 34, 63), 0, "fixture smeared data beyond history");
+            assert!(pixel(&lit, 34, 63) > 4, "cloud cropped at history edge, turn {turns}");
+            assert_eq!(pixel(&lit, 8, 63), 0, "cloud did not decay into the empty history");
+            assert_eq!(pixel(&core, 46, 63), 255, "fixture missed the measured ridge");
+            assert_eq!(pixel(&lit, 46, 63), 255, "cloud diluted the measured ridge");
+        }
     }
 
     #[test]
@@ -1354,6 +1409,7 @@ mod tests {
             let mut resources = CallbackResources::default();
             let mut cb = cloud_fixture();
             cb.rect = egui::Rect::from_min_size(egui::pos2(0.24, 0.24), egui::vec2(96.49, 96.49));
+            cb.atmosphere.as_mut().unwrap().region = cb.rect;
             cb.read.rows = (96.0 * ppp) as u32;
             for v in &mut cb.vertices {
                 v.pos = v.pos.map(|x| x * 96.49 / 128.0 + 0.24);
@@ -1380,6 +1436,7 @@ mod tests {
             let origin = draw(&cb);
             let offset = egui::vec2(8.0, 12.0);
             cb.rect = cb.rect.translate(offset);
+            cb.atmosphere.as_mut().unwrap().region = cb.rect;
             for v in &mut cb.vertices {
                 v.pos[0] += offset.x;
                 v.pos[1] += offset.y;
