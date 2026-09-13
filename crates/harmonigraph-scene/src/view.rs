@@ -2151,12 +2151,12 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 /// in terms of it, the way it is written in terms of `octaves::DEFAULT_COUNT`.
 ///
 /// Where on the chrome's ladder this grey sits is said at the `Default` below.
-const DEFAULT_RING_GROUND: f32 = 8.0;
+const DEFAULT_RING_GROUND: f32 = 6.0;
 
 /// The `L*` a fresh [`ViewConfig::marker_ink`] opens on. Kept beside the ring
 /// ground because the accessors repair the two independently without building
 /// a fresh view to read either field.
-const DEFAULT_MARKER_INK: f32 = 37.0;
+const DEFAULT_MARKER_INK: f32 = 32.0;
 
 /// The `L*` a fresh [`ViewConfig::sounding_ink`] opens on: the top of the axis,
 /// so a sounding name is white and the fresh distance between the two ends of
@@ -2260,13 +2260,13 @@ impl Default for ViewConfig {
             // marks rather than a solid annulus, and every layer keeps clear
             // space around it. (The backdrop that holds the whole ring's shape
             // behind them is fixed on.)
-            band_width: 0.208_835_9,
+            band_width: 0.188_422_56,
             // The stack sits about seven tenths of the way out, leaving a broad
             // middle for the glow's field while the octave band reads as the
             // node's perimeter. Dialled to 0 the stack seats on the center and
             // its wedges close into pie slices, which is the same node read as
             // one solid measurement.
-            ring_inner: 0.689_362_76,
+            ring_inner: 0.703_436_8,
             // The two gaps are one number here: the radial padding is what puts
             // the band at its outer edge, and the same width cut angularly is
             // the slicing that reads as distinct marks. They are two bars
@@ -2275,12 +2275,10 @@ impl Default for ViewConfig {
             // person can meet by dialling neither.
             ring_gap: 0.05,
             octave_gap: 0.05,
-            // Where the DAW look was captured on 2026-09-08, just below the
-            // chrome's panel (8.8), when the lattice pane stood on the well grey
-            // (4.7) rather than on today's black. Nothing ties this to the skin — the chrome's
-            // ladder and the ground are dialled apart.
+            // Dark ground captured from the DAW on 2026-09-13. The ring and
+            // resting marker ink stay separate from the editor chrome.
             lattice_ground: DEFAULT_RING_GROUND,
-            // Well above the ring ground — 29 `L*` clear of it — so the
+            // Well above the ring ground — 26 `L*` clear of it — so the
             // resting positions stay legible through the broad glow without
             // competing with a sounding node's white name.
             marker_ink: DEFAULT_MARKER_INK,
@@ -2380,13 +2378,13 @@ impl Default for ViewConfig {
             // fifths the view opened on: a node's rings are quiet shapes and
             // the bloom is what gives them presence, while the glow beside it
             // shares that job — see `glow_blend` and `glow_wash` below.
-            bloom_strength: 0.635_427_53,
+            bloom_strength: 0.633_927_7,
             // A reach spanning several lattice steps turns each node's light
-            // into a shared field, laid down at about a fifth strength —
-            // where the DAW look was captured on 2026-09-10.
-            glow_reach: 4.546_375,
+            // into a shared field, at just over half strength as captured
+            // from the DAW on 2026-09-13. The wide tail adds a softer spread.
+            glow_reach: 4.795_308,
             atmosphere: AtmosphereSettings::default(),
-            glow_strength: 0.218_918_92,
+            glow_strength: 0.570_992_95,
             glow_curve: GlowCurve::default(),
             // Four groups at four styles, which is the picture as captured
             // from the DAW: the numbers themselves live in `impl Default for

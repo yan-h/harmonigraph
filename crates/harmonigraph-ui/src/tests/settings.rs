@@ -219,12 +219,16 @@ fn the_glow_curve_bar_draws_the_curve_the_scene_receives() {
     let paths = crate::widgets::curve_paths(&shapes);
     let mut descending: Vec<&Vec<egui::Pos2>> =
         paths.iter().filter(|path| path.first().unwrap().y < path.last().unwrap().y).collect();
-    // The glow's, and one Shadow falloff per group under it. Counted rather
-    // than taken on faith so a curve appearing from anywhere else still fails
-    // here, where the selection below would silently pick past it.
+    // The glow's and the enabled Distance falloffs. Disabled Gaussian bars
+    // are dimmed out of curve_paths' identifying color. Count rather than
+    // silently selecting past an unexpected curve.
     assert_eq!(
         descending.len(),
-        1 + harmonigraph_scene::ShadowSettings::default().groups().len(),
+        1 + harmonigraph_scene::ShadowSettings::default()
+            .groups()
+            .iter()
+            .filter(|style| style.kernel.is_distance())
+            .count(),
         "the Lighting page drew {} descending curves",
         descending.len()
     );

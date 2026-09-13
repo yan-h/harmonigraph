@@ -19,13 +19,13 @@ impl Default for AtmosphereSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            nebula_depth: 0.75,
-            nebula_scale: 1.0,
+            nebula_depth: 0.139_642_13,
+            nebula_scale: 0.581_716_2,
             nebula_speed: 1.0,
-            wide_strength: 0.20,
-            wide_spread: 4.0,
-            breath_amount: 0.18,
-            breath_speed: 1.0,
+            wide_strength: 0.052_935_988,
+            wide_spread: 1.610_383,
+            breath_amount: 0.582_938_5,
+            breath_speed: 1.813_457_6,
         }
     }
 }

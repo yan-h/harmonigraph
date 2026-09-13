@@ -1414,9 +1414,14 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
             let reach = sigma
                 * casters.iter().map(|c| kernel.reach_sigmas(c.falloff)).fold(0.0f32, f32::max);
             let box_points = pane + 2.0 * reach;
+            // The allocator rounds both atlas dimensions to powers of two.
+            // Apply the same rounding to this continuous size bound.
+            let bound = box_points
+                .to_array()
+                .map(|v| (BOXES * v).ceil() as u32)
+                .map(u32::next_power_of_two);
             assert!(
-                packed.size[0] as f32 <= BOXES * box_points.x
-                    && packed.size[1] as f32 <= BOXES * box_points.y,
+                packed.size[0] <= bound[0] && packed.size[1] <= bound[1],
                 "{kernel:?} at {width}: the atlas came out {:?} for a clipped box of {box_points} \
                  points: a caster's box is sized off a projection the pane cannot show",
                 packed.size,

@@ -833,30 +833,24 @@ impl Default for ShadowSettings {
     /// a group PRESENT with one field missing fills that field from
     /// [`ShadowStyle::default`] instead, which is written out there.
     ///
-    /// Four styles rather than one, last captured from the DAW on 2026-09-10: the
-    /// picture as dialled, group by group. Every group is a distance shadow
-    /// (see [`ShadowStyle::default`]); what differs is how far each kind of
-    /// ink casts, how dark, and how the decay is bent.
+    /// The picture captured from the DAW on 2026-09-13: Gaussian shadows for
+    /// lattice ink and distance shadows for the spectral pictures.
     fn default() -> ShadowSettings {
         ShadowSettings {
-            // As wide as the bar goes at under a fifth of the depth, with a
-            // long falloff: a node's rings and marks stand in a broad, shallow
-            // shadow without a hard edge.
+            // Broad and shallow: the node's rings and marks stand in a soft
+            // Gaussian shadow without a hard edge.
             lattice_geometry: ShadowStyle {
-                kernel: ShadowKernel::Distance,
-                width: 1.0,
-                depth: 0.184_287_82,
-                falloff: 1.361_747_5,
+                kernel: ShadowKernel::Gaussian,
+                width: 0.800_113_4,
+                depth: 0.190_952_61,
+                falloff: 1.113_477_8,
             },
-            // Tight and shallower than the geometry beside it, with a slightly
-            // longer than exponential falloff: a letterform or a resting
-            // marker keeps a crisp edge and sits close to what it is written
-            // on rather than standing off it.
+            // A narrower Gaussian shadow holds the text near its surface.
             lattice_text: ShadowStyle {
-                kernel: ShadowKernel::Distance,
-                width: 0.242_857_14,
-                depth: 0.297_857_14,
-                falloff: 1.083_516_8,
+                kernel: ShadowKernel::Gaussian,
+                width: 0.324_596_76,
+                depth: 0.219_002_02,
+                falloff: 1.528_976_2,
             },
             // Nine tenths deep under the roll's ribbons and the spiral's dots,
             // and wide enough to lift them off the heatmap.
