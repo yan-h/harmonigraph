@@ -889,20 +889,16 @@ impl Default for SpectrumConfig {
             // spectrogram cell, little enough that it doesn't read as a second
             // curve of its own.
             keyline: 0.3,
-            // The pitch range starts as the analyzer's whole axis — the zoom
-            // opens showing everything there is.
-            low_midi: harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI,
-            high_midi: harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
+            // The analyzer range captured from the DAW on 2026-09-13.
+            low_midi: 41.322_09,
+            high_midi: 131.344_91,
             show_roll: true,
             // Over three quarters of the pane to the roll, as captured from
             // the DAW on 2026-09-10; the analyzer's own display keeps the rest.
             roll_fraction: 0.776_992_8,
-            // About forty seconds, as captured from the DAW on 2026-09-10:
-            // enough history to read the recent section while the notes still
-            // have useful separation along the roll. The bar's logarithmic
-            // scale keeps both a phrase and a whole piece within easy reach
-            // from here.
-            roll_seconds: 41.245_564,
+            // Nearly three minutes of history, as captured from the DAW on
+            // 2026-09-13, to keep the recent musical section in view.
+            roll_seconds: 170.627_2,
             // Thin: a note is a line through the spectrogram at its own
             // pitch, not a slab over it. At 0.3 semitones a semitone of pitch
             // axis still separates two neighbouring keys, which is what makes

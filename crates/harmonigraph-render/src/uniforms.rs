@@ -115,6 +115,19 @@ uniform_group! {
         /// not the bound (`fs_glow_gather`).
         lit: f32,
         accumulation: f32,
+        wide_strength: f32,
+        wide_spread: f32,
+        padding: Float2,
+    }
+}
+uniform_group! {
+    /// A shared cloud field modulates the completed glow, never the ink history.
+    struct NebulaParams {
+        depth: f32,
+        scale: f32,
+        drift: Float2,
+        target_size: Float2,
+        padding: Float2,
     }
 }
 uniform_group! {
@@ -154,6 +167,7 @@ uniform_group! {
         octave: OctaveParams,
         spectral: SpectralParams,
         glow: GlowParams,
+        nebula: NebulaParams,
         geometry_shadow: ShadowParams,
         marker_shadow: ShadowParams,
         shadow_target: ShadowTargetParams,

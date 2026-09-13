@@ -67,6 +67,16 @@ struct GlowParams {
     float row_capacity;
     float lit;
     float accumulation;
+    float wide_strength;
+    float wide_spread;
+    metal::float2 padding;
+};
+struct NebulaParams {
+    float depth;
+    float scale;
+    metal::float2 drift;
+    metal::float2 target_size;
+    metal::float2 padding;
 };
 struct ShadowParams {
     float width;
@@ -100,6 +110,7 @@ struct Uniforms {
     OctaveParams octave;
     SpectralParams spectral;
     GlowParams glow;
+    NebulaParams nebula;
     ShadowParams geometry_shadow;
     ShadowParams marker_shadow;
     ShadowTargetParams shadow_target;

@@ -60,6 +60,16 @@ struct GlowParams {
     float row_capacity;
     float lit;
     float accumulation;
+    float wide_strength;
+    float wide_spread;
+    metal::float2 padding;
+};
+struct NebulaParams {
+    float depth;
+    float scale;
+    metal::float2 drift;
+    metal::float2 target_size;
+    metal::float2 padding;
 };
 struct ShadowParams {
     float width;
@@ -93,6 +103,7 @@ struct Uniforms {
     OctaveParams octave;
     SpectralParams spectral;
     GlowParams glow;
+    NebulaParams nebula;
     ShadowParams geometry_shadow;
     ShadowParams marker_shadow;
     ShadowTargetParams shadow_target;
@@ -223,12 +234,12 @@ float glow_curve_at(
     float span,
     constant Uniforms& u
 ) {
-    float p = metal::clamp(d / span, 0.0, 1.0);
+    float p_1 = metal::clamp(d / span, 0.0, 1.0);
     float shape = u.glow.curve;
-    float remaining = 1.0 - p;
+    float remaining = 1.0 - p_1;
     if (metal::abs(shape) < 0.05) {
         float shape2_ = shape * shape;
-        return remaining * ((1.0 - ((shape * p) * 0.5)) + (((shape2_ * p) * ((2.0 * p) - 1.0)) / 12.0));
+        return remaining * ((1.0 - ((shape * p_1) * 0.5)) + (((shape2_ * p_1) * ((2.0 * p_1) - 1.0)) / 12.0));
     }
     return (metal::exp(shape * remaining) - 1.0) / (metal::exp(shape) - 1.0);
 }
@@ -239,6 +250,7 @@ metal::float4 glow_layer(
     constant Uniforms& u,
     metal::texture2d<float, metal::access::sample> ink_strip
 ) {
+    float mix_out_1 = {};
     float _e4 = glow_level(node.light.x);
     float _e8 = u.glow.reach;
     float reach = metal::max(_e8, 0.0);
@@ -247,22 +259,35 @@ metal::float4 glow_layer(
     float _e19 = glow_rim(node.mark.x, u);
     float d_1 = metal::length(uv);
     float span_1 = metal::max(_e19 + reach, 0.1);
-    if (d_1 >= span_1) {
+    float _e27 = u.glow.wide_spread;
+    float wide_span = span_1 * metal::max(_e27, 1.0);
+    float _e34 = u.glow.wide_strength;
+    float extent = (_e34 > 0.0) ? wide_span : span_1;
+    if (d_1 >= extent) {
         return metal::float4(0.0);
     }
-    float _e28 = glow_curve_at(d_1, span_1, u);
-    float skirt = GLOW_BASE * _e28;
+    float _e41 = glow_curve_at(d_1, span_1, u);
+    float t = metal::max(1.0 - ((d_1 * d_1) / (wide_span * wide_span)), 0.0);
+    float _e52 = u.glow.wide_strength;
+    float wide = (((_e52 * t) * t) * t) * (1.0 - _e41);
+    float profile = _e41 + wide;
+    float skirt = GLOW_BASE * profile;
     float seam = metal::max(_e19, 0.1);
-    float mix_out_1 = metal::min(1.0, (d_1 * d_1) / (seam * seam));
+    mix_out_1 = metal::min(1.0, (d_1 * d_1) / (seam * seam));
+    if (wide > 0.0) {
+        float _e72 = mix_out_1;
+        mix_out_1 = _e72 * (_e41 / profile);
+    }
     float alpha = metal::clamp((skirt * _e4) * strength, 0.0, 1.0);
     if (alpha <= 0.0) {
         return metal::float4(0.0);
     }
-    metal::float4 _e51 = glow_ink(node.light.y, metal::atan2(uv.y, uv.x), mix_out_1, ink_strip);
-    if (_e51.w <= 0.0) {
+    float _e89 = mix_out_1;
+    metal::float4 _e90 = glow_ink(node.light.y, metal::atan2(uv.y, uv.x), _e89, ink_strip);
+    if (_e90.w <= 0.0) {
         return metal::float4(0.0);
     }
-    return metal::float4(_e51.xyz, alpha);
+    return metal::float4(_e90.xyz, alpha);
 }
 
 metal::float3 glow_linear(
@@ -275,6 +300,72 @@ metal::float3 glow_gamma(
     metal::float3 rgb_2
 ) {
     return metal::select((1.055 * metal::pow(metal::max(rgb_2, metal::float3(0.0031308)), metal::float3(0.41666666))) - metal::float3(0.055), rgb_2 * 12.92, rgb_2 <= metal::float3(0.0031308));
+}
+
+float nebula_hash(
+    metal::int2 cell
+) {
+    uint n = {};
+    n = (as_type<uint>(cell.x) * 2654435769u) ^ as_type<uint>(cell.y);
+    uint _e9 = n;
+    uint _e10 = n;
+    n = (_e9 ^ (_e10 >> 16u)) * 2146121005u;
+    uint _e16 = n;
+    uint _e17 = n;
+    n = (_e16 ^ (_e17 >> 15u)) * 2221713035u;
+    uint _e23 = n;
+    uint _e24 = n;
+    n = _e23 ^ (_e24 >> 16u);
+    uint _e28 = n;
+    return static_cast<float>(_e28 >> 8u) / 16777216.0;
+}
+
+metal::int2 naga_f2i32(metal::float2 value) {
+    return static_cast<metal::int2>(metal::clamp(value, -2147483600.0, 2147483500.0));
+}
+
+float nebula_noise(
+    metal::float2 p
+) {
+    metal::int2 cell_1 = naga_f2i32(metal::floor(p));
+    metal::float2 f = metal::fract(p);
+    metal::float2 w = (f * f) * (metal::float2(3.0) - (2.0 * f));
+    float _e11 = nebula_hash(cell_1);
+    float _e16 = nebula_hash(as_type<metal::int2>(as_type<metal::uint2>(cell_1) + as_type<metal::uint2>(metal::int2(1, 0))));
+    float _e23 = nebula_hash(as_type<metal::int2>(as_type<metal::uint2>(cell_1) + as_type<metal::uint2>(metal::int2(0, 1))));
+    float _e28 = nebula_hash(as_type<metal::int2>(as_type<metal::uint2>(cell_1) + as_type<metal::uint2>(metal::int2(1, 1))));
+    return metal::mix(metal::mix(_e11, _e16, w.x), metal::mix(_e23, _e28, w.x), w.y);
+}
+
+metal::float4 nebula_light(
+    metal::float4 light,
+    metal::float2 pixel,
+    constant Uniforms& u
+) {
+    bool local_4 = {};
+    float _e5 = u.nebula.depth;
+    if (!((_e5 <= 0.0))) {
+        local_4 = light.w <= 0.0;
+    } else {
+        local_4 = true;
+    }
+    bool _e15 = local_4;
+    if (_e15) {
+        return light;
+    }
+    metal::float2 _e19 = u.nebula.target_size;
+    float _e27 = u.nebula.target_size.y;
+    float _e33 = u.nebula.scale;
+    metal::float2 p_2 = ((pixel - (_e19 * 0.5)) / metal::float2(_e27)) * (5.0 / _e33);
+    metal::float2 drift = u.nebula.drift;
+    float _e42 = nebula_noise(p_2 + drift);
+    float _e48 = nebula_noise((p_2 + metal::float2(8.3, 2.7)) - drift);
+    metal::float2 warp = metal::float2(_e42, _e48);
+    float _e54 = nebula_noise((p_2 + (warp * 1.2)) + drift);
+    float _e62 = nebula_noise(((p_2 * 2.3) - drift) + metal::float2(3.1, 7.4));
+    float density = 0.08 + (0.92 * metal::smoothstep(0.25, 0.7, (_e54 * 0.75) + (_e62 * 0.25)));
+    float _e78 = u.nebula.depth;
+    return light * metal::mix(1.0, density, _e78);
 }
 metal::uint2 naga_f2u32(metal::float2 value) {
     return static_cast<metal::uint2>(metal::clamp(value, 0.0, 4294967000.0));
@@ -412,37 +503,41 @@ fragment fs_glow_gatherOutput fs_glow_gather(
     uint _e178 = count;
     if (_e178 <= 1u) {
         metal::float4 _e181 = sole;
-        return fs_glow_gatherOutput { _e181 };
+        metal::float4 _e183 = nebula_light(_e181, pos.xy, u);
+        return fs_glow_gatherOutput { _e183 };
     }
     if (accumulation >= 1.0) {
-        metal::float4 _e184 = accumulated;
-        return fs_glow_gatherOutput { _e184 };
+        metal::float4 _e186 = accumulated;
+        metal::float4 _e188 = nebula_light(_e186, pos.xy, u);
+        return fs_glow_gatherOutput { _e188 };
     }
-    metal::float3 _e185 = rgb;
-    float total = metal::dot(_e185, GLOW_LUMINANCE);
-    float _e188 = screen;
-    float light = metal::min(_e188, 1.0) * peak_luminance;
+    metal::float3 _e189 = rgb;
+    float total = metal::dot(_e189, GLOW_LUMINANCE);
+    float _e192 = screen;
+    float light_1 = metal::min(_e192, 1.0) * peak_luminance;
     if (total <= 0.0) {
-        float _e194 = coverage;
-        metal::float4 _e200 = accumulated;
-        return fs_glow_gatherOutput { metal::mix(metal::float4(0.0, 0.0, 0.0, peak * _e194), _e200, accumulation) };
+        float _e198 = coverage;
+        metal::float4 _e204 = accumulated;
+        metal::float4 _e207 = nebula_light(metal::mix(metal::float4(0.0, 0.0, 0.0, peak * _e198), _e204, accumulation), pos.xy, u);
+        return fs_glow_gatherOutput { _e207 };
     }
-    metal::float3 _e202 = rgb;
-    linear = _e202 * (light / total);
-    float _e207 = linear.x;
-    float _e209 = linear.y;
-    float _e212 = linear.z;
-    float largest = metal::max(metal::max(_e207, _e209), _e212);
+    metal::float3 _e208 = rgb;
+    linear = _e208 * (light_1 / total);
+    float _e213 = linear.x;
+    float _e215 = linear.y;
+    float _e218 = linear.z;
+    float largest = metal::max(metal::max(_e213, _e215), _e218);
     if (largest > peak_luminance) {
-        float chroma = metal::clamp((peak_luminance - light) / (largest - light), 0.0, 1.0);
-        metal::float3 _e222 = linear;
-        linear = metal::mix(metal::float3(light), _e222, chroma);
+        float chroma = metal::clamp((peak_luminance - light_1) / (largest - light_1), 0.0, 1.0);
+        metal::float3 _e228 = linear;
+        linear = metal::mix(metal::float3(light_1), _e228, chroma);
     }
-    metal::float3 _e224 = linear;
-    metal::float3 _e228 = glow_gamma(metal::max(_e224, metal::float3(0.0)));
-    metal::float3 colour = metal::min(_e228, metal::float3(peak));
-    float _e231 = coverage;
-    float alpha_1 = metal::max(peak * _e231, metal::max(metal::max(colour.x, colour.y), colour.z));
-    metal::float4 _e241 = accumulated;
-    return fs_glow_gatherOutput { metal::mix(metal::float4(colour, metal::min(alpha_1, peak)), _e241, accumulation) };
+    metal::float3 _e230 = linear;
+    metal::float3 _e234 = glow_gamma(metal::max(_e230, metal::float3(0.0)));
+    metal::float3 colour = metal::min(_e234, metal::float3(peak));
+    float _e237 = coverage;
+    float alpha_1 = metal::max(peak * _e237, metal::max(metal::max(colour.x, colour.y), colour.z));
+    metal::float4 _e247 = accumulated;
+    metal::float4 _e250 = nebula_light(metal::mix(metal::float4(colour, metal::min(alpha_1, peak)), _e247, accumulation), pos.xy, u);
+    return fs_glow_gatherOutput { _e250 };
 }

@@ -747,6 +747,36 @@ mod tests {
         assert!(first[mid] != dark[mid], "the glow changed no pixel of frame {mid}");
     }
 
+    #[test]
+    fn lattice_atmosphere_requires_note_light_in_export() {
+        let settings = Settings {
+            layout: Layout::preset("lattice").unwrap(),
+            fps: 2.0,
+            end: 3.0,
+            ..settings()
+        };
+        let mut silent = take();
+        silent.events.clear();
+        let Some(first) = render_take(silent.clone(), &settings) else { return };
+        assert_eq!(first.len(), 6);
+        assert_eq!(first[1], first[5], "no independent background motion in silence");
+        let mut appearance = AppearanceDocument::default();
+        appearance.view.atmosphere.enabled = false;
+        silent.header.appearance = Some(appearance.serialize());
+        let off = render_take(silent, &settings).expect("the same GPU is available");
+        assert_eq!(first, off, "atmosphere must not create light without notes");
+
+        let lit = lit_take();
+        let wide = render_take(lit.clone(), &settings).expect("the same GPU is available");
+        let mut close = lit;
+        let mut appearance = AppearanceDocument::parse(close.header.appearance.as_ref().unwrap())
+            .expect("the recorded appearance is valid");
+        appearance.view.atmosphere.wide_strength = 0.0;
+        close.header.appearance = Some(appearance.serialize());
+        let close = render_take(close, &settings).expect("the same GPU is available");
+        assert_ne!(wide[2], close[2], "the recorded wide glow setting must reach export");
+    }
+
     /// Offline export calls the same pane and paint callbacks as the editor;
     /// exercise that shared route at every UI/export scale promised by #556.
     /// The mixed frame is compared with its two depths shut so a passing render

@@ -12,6 +12,7 @@ pub mod plus;
 pub mod glow_fade;
 pub mod labels;
 pub mod lattice;
+mod lattice_atmosphere;
 pub mod lighting;
 pub mod nodes;
 pub mod notes;

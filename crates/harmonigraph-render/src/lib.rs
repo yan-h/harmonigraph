@@ -782,6 +782,8 @@ struct LatticeCallback {
     /// Row owners in exactly the shipped instance order, after sorting and culling.
     glow_owners: Vec<u64>,
     glow_timing: Option<harmonigraph_scene::GlowTiming>,
+    /// Display-only breathing factors in instance order, keyed by lattice identity.
+    glow_breath: Option<Vec<f32>>,
     /// Every label's glyphs, in the order the pass draws them.
     glyphs: Vec<GlyphInstance>,
     /// Every caster this frame, in the order the pass draws them: the markers'

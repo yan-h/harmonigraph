@@ -61,6 +61,17 @@ struct GlowParams {
     row_capacity: f32,
     lit: f32,
     accumulation: f32,
+    wide_strength: f32,
+    wide_spread: f32,
+    padding: vec2<f32>,
+};
+
+struct NebulaParams {
+    @align(16) depth: f32,
+    scale: f32,
+    drift: vec2<f32>,
+    target_size: vec2<f32>,
+    padding: vec2<f32>,
 };
 
 struct ShadowParams {
@@ -92,6 +103,7 @@ struct Uniforms {
     octave: OctaveParams,
     spectral: SpectralParams,
     glow: GlowParams,
+    nebula: NebulaParams,
     geometry_shadow: ShadowParams,
     marker_shadow: ShadowParams,
     shadow_target: ShadowTargetParams,
@@ -2466,12 +2478,10 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 // A node's own light, drawn into a target of its own and composited UNDER the
 // finished lattice.
 //
-// It is the ONLY light a node has: every sounding octave's hue laid round the
-// node by angle over an exponential falloff, windowed to nothing before the
-// quad's edge. The falloff spans the node's outermost drawn edge plus the
-// Reach, and the window shuts at the end of that same span, so the Reach bar
-// says exactly how far a note's light goes and there is no second skirt at a
-// second size for it to fight with.
+// The close halo carries each sounding octave's hue by angle, over a falloff
+// spanning the node's outermost drawn edge plus Reach. The optional wide tail
+// spreads the same ink's average tint farther. Both share one light field,
+// peak ceiling, envelope and wash onto the lattice's own ink.
 //
 // The COLOUR is settled first, in a pass of its own: a node's ink is read round
 // the node once per frame and kept as a strip (see The ink strip below), and
@@ -2931,11 +2941,11 @@ fn glow_layer(node: GlowNode, uv: vec2<f32>) -> vec4<f32> {
     // it on the CPU would be `node_rim` written a second time in Rust.
     let lit_rim = glow_rim(node.mark.x);
     let d = length(uv);
-    // ONE length under the whole layer: the node's outermost drawn edge as the
+    // The close halo spans the node's outermost drawn edge as the
     // LIGHT has it ([`glow_rim`]) plus the Reach. It is the falloff's domain,
     // so the halo is a field the node sits inside rather than a rim light on
     // its edge, and it is where the curve reaches zero, so the Reach bar says
-    // exactly how far the light goes.
+    // how far the close component goes.
     //
     // Not any quad's margin, which was the tempting reading of "window it at
     // the edge" while there was a quad: `quad_margin` floors at QUAD_MARGIN, so
@@ -2943,17 +2953,23 @@ fn glow_layer(node: GlowNode, uv: vec2<f32>) -> vec4<f32> {
     // being. There is no billboard now — this is the only thing that says where
     // a node's light stops, and nothing can clip it square at a corner.
     let span = max(lit_rim + reach, 0.1);
-    // Past the curve's zero endpoint there is no light. Not an early-out, and
-    // so needing no `EARLY_OUT` of its own — `glow_curve_at` is exactly 0 at
-    // the span, which carries `skirt` and the coverage below it to 0 by the
-    // same arithmetic the slow path runs.
-    if d >= span {
+    // Both components are exactly zero beyond their outermost endpoint.
+    let wide_span = span * max(u.glow.wide_spread, 1.0);
+    let extent = select(span, wide_span, u.glow.wide_strength > 0.0);
+    if d >= extent {
         return vec4<f32>(0.0);
     }
     // The falloff from the fixed full centre to the fixed zero edge. Strength
     // scales it after the curve, so moving the shape changes the distribution
     // of light without moving either endpoint or changing what the bar names.
-    let skirt = GLOW_BASE * glow_curve_at(d, span);
+    let close = glow_curve_at(d, span);
+    // A separate broad, soft tail. The close component keeps its own range
+    // and curve. Spending only its remaining headroom preserves the full
+    // centre and the gather's fixed peak, even with the broad amount at 1.
+    let t = max(1.0 - (d * d) / (wide_span * wide_span), 0.0);
+    let wide = u.glow.wide_strength * t * t * t * (1.0 - close);
+    let profile = close + wide;
+    let skirt = GLOW_BASE * profile;
 
     // How much of the strip's own DIRECTION this fragment gets, against the
     // flat tint of its mean. Every seam converges to a cusp at the node's
@@ -2977,7 +2993,12 @@ fn glow_layer(node: GlowNode, uv: vec2<f32>) -> vec4<f32> {
     // full direction at every radius it has — which is the cusp back again,
     // this time on the one node too small to hide it under its own ink.
     let seam = max(lit_rim, 0.1);
-    let mix_out = min(1.0, (d * d) / (seam * seam));
+    // The far component is the strip's average tint: its angular detail
+    // stays near the note instead of becoming long rays across the lattice.
+    var mix_out = min(1.0, (d * d) / (seam * seam));
+    if wide > 0.0 {
+        mix_out *= close / profile;
+    }
 
     // The level scales the COVERAGE, once, and not the blend as well: a note
     // halfway through its attack should lay down half as much of its colour,
@@ -3062,6 +3083,47 @@ fn glow_gamma(rgb: vec3<f32>) -> vec3<f32> {
 /// screen. Both endpoints are premultiplied, so their mix remains valid.
 /// The old endpoint intentionally permits buildup above the fixed peak and
 /// restores its per-channel colour mixing. Skip the unused fold at either end.
+// Integer hashing avoids a per-pixel transcendental and keeps spatial noise
+// repeatable. The field is shared across the pane: overlapping halos reveal
+// one cloud, with no separate cloud stamped onto each note.
+fn nebula_hash(cell: vec2<i32>) -> f32 {
+    var n = bitcast<u32>(cell.x) * 0x9e3779b9u ^ bitcast<u32>(cell.y);
+    n = (n ^ (n >> 16u)) * 0x7feb352du;
+    n = (n ^ (n >> 15u)) * 0x846ca68bu;
+    n = n ^ (n >> 16u);
+    return f32(n >> 8u) / 16777216.0;
+}
+
+fn nebula_noise(p: vec2<f32>) -> f32 {
+    let cell = vec2<i32>(floor(p));
+    let f = fract(p);
+    let w = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(nebula_hash(cell), nebula_hash(cell + vec2<i32>(1, 0)), w.x),
+        mix(nebula_hash(cell + vec2<i32>(0, 1)), nebula_hash(cell + vec2<i32>(1, 1)), w.x),
+        w.y,
+    );
+}
+
+fn nebula_light(light: vec4<f32>, pixel: vec2<f32>) -> vec4<f32> {
+    if u.nebula.depth <= 0.0 || light.a <= 0.0 {
+        return light;
+    }
+    // Aspect-correct pane coordinates, independent of DPI and render scale.
+    // Camera rebasing cannot reset this field; notes move through the medium.
+    let p = (pixel - u.nebula.target_size * 0.5)
+        / u.nebula.target_size.y * (5.0 / u.nebula.scale);
+    let drift = u.nebula.drift;
+    let warp = vec2<f32>(nebula_noise(p + drift), nebula_noise(p + vec2<f32>(8.3, 2.7) - drift));
+    let cloud = nebula_noise(p + warp * 1.2 + drift);
+    let detail = nebula_noise(p * 2.3 - drift + vec2<f32>(3.1, 7.4));
+    let density = 0.08 + 0.92 * smoothstep(0.25, 0.70, cloud * 0.75 + detail * 0.25);
+    // Attenuate premultiplied RGBA together: preserve note hue, valid alpha,
+    // and the gather's peak bound. No glow means no nebula light at all.
+    // Applying once after the fold also textures dense saturated chords.
+    return light * mix(1.0, density, u.nebula.depth);
+}
+
 @fragment
 fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     if u.glow.lit <= 0.0 {
@@ -3125,15 +3187,15 @@ fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     // Also preserves lone glows byte-for-byte through the nonlinear colour
     // round trip, including a node whose neighbours have completely faded.
     if count <= 1u {
-        return sole;
+        return nebula_light(sole, pos.xy);
     }
     if accumulation >= 1.0 {
-        return accumulated;
+        return nebula_light(accumulated, pos.xy);
     }
     let total = dot(rgb, GLOW_LUMINANCE);
     let light = min(screen, 1.0) * peak_luminance;
     if total <= 0.0 {
-        return mix(vec4<f32>(0.0, 0.0, 0.0, peak * coverage), accumulated, accumulation);
+        return nebula_light(mix(vec4<f32>(0.0, 0.0, 0.0, peak * coverage), accumulated, accumulation), pos.xy);
     }
     var linear = rgb * (light / total);
     let largest = max(max(linear.x, linear.y), linear.z);
@@ -3143,7 +3205,7 @@ fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     }
     let colour = min(glow_gamma(max(linear, vec3<f32>(0.0))), vec3<f32>(peak));
     let alpha = max(peak * coverage, max(max(colour.x, colour.y), colour.z));
-    return mix(vec4<f32>(colour, min(alpha, peak)), accumulated, accumulation);
+    return nebula_light(mix(vec4<f32>(colour, min(alpha, peak)), accumulated, accumulation), pos.xy);
 }
 
 /// What a resting marker paints; see [`node_paint`] for why the entry points

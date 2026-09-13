@@ -25,6 +25,7 @@
 //! Every public item is re-exported at the crate root, so downstream code
 //! keeps using `harmonigraph_scene::Camera` rather than module paths.
 
+pub mod atmosphere;
 pub mod camera;
 pub mod color;
 pub mod derive;
@@ -35,6 +36,7 @@ pub mod style;
 pub mod trail;
 pub mod view;
 
+pub use atmosphere::AtmosphereSettings;
 pub use camera::{Camera, Projection, Projector, VisibleSheet};
 pub use color::{
     gradient_color, grey_of_lightness, hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N,
@@ -898,7 +900,7 @@ pub struct Scene {
     pub render_scale: f32,
     /// Bloom intensity; 0 disables the whole post-process chain.
     pub bloom_strength: f32,
-    /// How far past a node's outermost drawn edge its own glow is shown, in
+    /// How far past a node's outermost drawn edge its close halo is shown, in
     /// quad UV units; 0 turns the whole glow off (see
     /// [`ViewConfig::glow_reach`]). Already clamped to [`GLOW_REACH_MAX`].
     pub glow_reach: f32,
@@ -906,7 +908,7 @@ pub struct Scene {
     /// [`GLOW_STRENGTH_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is
     /// 0, which is the pair's one off switch.
     pub glow_strength: f32,
-    /// The shape of the light's global falloff inside its reach (see
+    /// The shape of the close halo's falloff inside its reach (see
     /// [`ViewConfig::glow_curve`]); already sanitized.
     pub glow_curve: GlowCurve,
     /// The Shadow, a style per group of casters (see
@@ -955,6 +957,7 @@ pub struct Scene {
     /// Present for carried UI and offline scenes. With no clock, direct
     /// renderer callers supply their own [`GlowStep::mix`].
     pub glow_timing: Option<GlowTiming>,
+    pub atmosphere: AtmosphereSettings,
 }
 
 impl Scene {

@@ -987,7 +987,13 @@ fn a_name_is_not_darkened_by_its_own_shadow() {
     // (see `a_name_wears_the_wash_it_stands_in`). Under the light every pixel
     // of the name wears a different wash, so this is where the set is one
     // colour.
-    let unlit = lit_node_and_a_name(0.0, SHADOW, 0.0);
+    let at = |reach, depth| {
+        let mut scene = lit_node_and_a_name(reach, SHADOW, depth);
+        // Keep the quantized opaque-ink mask independent of fresh-look edits.
+        scene.lattice_ground = harmonigraph_scene::grey_of_lightness(8.0);
+        scene
+    };
+    let unlit = at(0.0, 0.0);
     let bare_unlit = shooter.shot(&unlit);
     let named_unlit = shooter.shot_with(&unlit, one_name(&unlit, SIZE));
     let drawn: std::collections::BTreeSet<usize> = (0..bare_unlit.len())
@@ -1000,9 +1006,9 @@ fn a_name_is_not_darkened_by_its_own_shadow() {
         drawn.iter().copied().filter(|&i| named_unlit[i..i + 3] == full).collect();
     assert!(own.len() > 30, "the name covers {} whole pixels of its own", own.len());
 
-    let flat = lit_node_and_a_name(1.6, SHADOW, 0.0);
+    let flat = at(1.6, 0.0);
     let named_flat = shooter.shot_with(&flat, one_name(&flat, SIZE));
-    let deep = lit_node_and_a_name(1.6, SHADOW, 1.0);
+    let deep = at(1.6, 1.0);
     let bare_deep = shooter.shot(&deep);
     let named_deep = shooter.shot_with(&deep, one_name(&deep, SIZE));
     let moved = own.iter().filter(|&&i| named_deep[i..i + 3] != named_flat[i..i + 3]).count();

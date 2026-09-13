@@ -208,6 +208,12 @@ pub(super) fn parity_scene() -> Scene {
         // A row per node, which is what the nodes above are built with.
         glow_rows,
         glow_timing: None,
+        // These fixtures measure the smooth glow. Texture has its own GPU probe.
+        atmosphere: harmonigraph_scene::AtmosphereSettings {
+            nebula_depth: 0.0,
+            wide_strength: 0.0,
+            ..Default::default()
+        },
     }
 }
 

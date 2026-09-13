@@ -527,6 +527,9 @@ impl LatticeCallback {
         // settled here for the same reason the atlas's texels are: the map that
         // fills it needs the target's pixels, and this is where they are known.
         uniforms.glow.lit = lit_nodes.len() as f32;
+        if let Some(target) = &pane.offscreen {
+            uniforms.nebula.target_size = Float2(target.size.map(|v| v as f32));
+        }
         if let Some(atlas) = pane.offscreen.as_ref().and_then(|o| o.shadow.as_ref()) {
             uniforms.shadow_target.atlas_texels = Float2(atlas.size.map(|v| v as f32));
         }
