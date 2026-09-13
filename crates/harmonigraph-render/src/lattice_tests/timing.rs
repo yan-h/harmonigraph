@@ -126,7 +126,68 @@ fn a_frame_of_audio_rings_costs_this_much() {
     }
 }
 
+/// Hold real MIDI notes and isolate the atmosphere's components on the same scene.
+/// `PROBE_SIZE`, `PROBE_NOTES`, and `PROBE_CASE` select a smaller matrix.
+/// Twelve and twenty-four notes share pitch classes but fill different octave
+/// wedges; the printed lit-node count distinguishes voices from light sources.
+/// `half-scale` scales the entire scene, not just the glow. Synthetic names
+/// and settled held notes keep the workload controlled; this excludes UI,
+/// scene derivation, note turnover, and the DAW's audio processing.
+#[test]
+#[ignore = "manual atmosphere performance audit"]
+fn atmosphere_costs_by_polyphony() {
+    use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
+    use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
+    for count in [1u8, 6, 12, 24] {
+        if std::env::var("PROBE_NOTES").ok().is_some_and(|v| v != count.to_string()) {
+            continue;
+        }
+        let mut tracker = NoteTracker::new();
+        for note in 48..48 + count {
+            tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 0.8));
+        }
+        let view = ViewConfig::default();
+        eprintln!(
+            "audit settings: render scale {}, glow reach {}, strength {}, atmosphere {:?}",
+            view.render_scale, view.glow_reach, view.glow_strength, view.atmosphere
+        );
+        for case in ["all", "off", "no-wide", "no-nebula", "no-breath", "half-scale", "no-glow"] {
+            if std::env::var("PROBE_CASE").ok().is_some_and(|v| v != case) {
+                continue;
+            }
+            let mut variant = harmonigraph_scene::derive_scene(
+                &tracker,
+                &Tuning::default(),
+                &view,
+                &view.reach(),
+                &FrameParams { fade_time: 0.0, ..Default::default() },
+                Camera::default(),
+                None,
+                1.0,
+            );
+            variant.glow_timing = Some(harmonigraph_scene::GlowTiming {
+                now: 1.0,
+                attack: view.glow_attack,
+                release: view.glow_release,
+            });
+            match case {
+                "off" => variant.atmosphere.enabled = false,
+                "no-wide" => variant.atmosphere.wide_strength = 0.0,
+                "no-nebula" => variant.atmosphere.nebula_depth = 0.0,
+                "no-breath" => variant.atmosphere.breath_amount = 0.0,
+                "half-scale" => variant.render_scale *= 0.5,
+                "no-glow" => variant.glow_strength = 0.0,
+                _ => {}
+            }
+            time_a_frame_of_names(variant, &format!("{count} MIDI notes / {case}"));
+        }
+    }
+}
+
 fn time_a_frame_of_names(mut scene: Scene, what: &str) {
+    let size = std::env::var("PROBE_SIZE")
+        .map(|v| [v.parse::<u32>().expect("PROBE_SIZE is pixels"); 2])
+        .unwrap_or(SIZE);
     crate::shader_assets::initialize();
     if let Ok(value) = std::env::var("PROBE_BLOOM") {
         scene.bloom_strength = value.parse().expect("PROBE_BLOOM is a strength");
@@ -141,6 +202,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         eprintln!("no GPU adapter; nothing timed");
         return;
     };
+    eprintln!("adapter: {:?}", adapter.get_info());
     let features = wgpu::Features::TIMESTAMP_QUERY;
     if !adapter.features().contains(features) {
         eprintln!("the adapter carries no timestamps; nothing timed");
@@ -155,9 +217,9 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     // The default distance rather than the golden's close one, so the pane
     // holds a lattice's worth of nodes and names.
     scene.camera.distance = harmonigraph_scene::Camera::default().distance;
-    let pane = glam::Vec2::new(SIZE[0] as f32, SIZE[1] as f32);
+    let pane = glam::Vec2::new(size[0] as f32, size[1] as f32);
     let projector = scene.projector(pane);
-    let unit = scene.node_radius * scene.camera.points_per_world(SIZE[1] as f32);
+    let unit = scene.node_radius * scene.camera.points_per_world(size[1] as f32);
     // Three strokes per lit node on the pane, about a name's size.
     let (w, h, gap) = (0.22 * unit, 0.55 * unit, 0.12 * unit);
     let runs: Vec<(u32, Vec<GlyphInstance>)> = scene
@@ -239,14 +301,20 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     let period = queue.get_timestamp_period();
     let mut resources = CallbackResources::default();
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(pane.x, pane.y));
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: 1.0 };
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let frames: usize =
         std::env::var("PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(FRAMES);
     let mut samples = Vec::with_capacity(frames);
+    let mut completion_samples = Vec::with_capacity(frames);
+    let mut callback_samples = Vec::with_capacity(frames);
     let mut cpu_samples = Vec::with_capacity(frames);
     for frame in 0..frames + 10 {
+        if let Some(clock) = &mut scene.glow_timing {
+            clock.now = 1.0 + frame as f64 / 60.0;
+        }
         let labels = names(runs.clone());
+        let callback_start = std::time::Instant::now();
         let mut cb = LatticeCallback::from_scene(
             &scene,
             labels,
@@ -255,6 +323,17 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
             1,
             None,
         );
+        let callback_ms = callback_start.elapsed().as_secs_f64() * 1000.0;
+        if frame == 0 {
+            let target = size.map(|v| (v as f32 * cb.render_scale).round() as u32);
+            let nodes = if cb.glow_draws() { cb.glow_nodes(target) } else { Vec::new() };
+            let tiles = lattice_node_glow::tiles::pack(&nodes, target);
+            let globals = if tiles.is_empty() { 0 } else { tiles[2] - tiles[1] };
+            eprintln!(
+                "{what}: target {target:?}, {} glow candidates, {globals} global",
+                nodes.len()
+            );
+        }
         cb.uniforms.geometry_shadow.occlusion = occlusion;
         let mut encoder = device.create_command_encoder(&Default::default());
         stamp(&mut encoder, 0);
@@ -267,11 +346,12 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         stamp(&mut encoder, 1);
         encoder.resolve_query_set(&set, 0..2, &resolve, 0);
         encoder.copy_buffer_to_buffer(&resolve, 0, &staging, 0, 16);
+        let completion_start = std::time::Instant::now();
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
         let _ = crate::gpu_harness::render_to_texture(
             &device,
             &queue,
-            SIZE,
+            size,
             format,
             wgpu::Color::BLACK,
             |pass| {
@@ -280,7 +360,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
                         viewport: rect,
                         clip_rect: rect,
                         pixels_per_point: 1.0,
-                        screen_size_px: SIZE,
+                        screen_size_px: size,
                     },
                     pass,
                     &resources,
@@ -290,6 +370,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         let slice = staging.slice(..);
         slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
         device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        let completion_ms = completion_start.elapsed().as_secs_f64() * 1000.0;
         let ticks: Vec<u64> = {
             let view = slice.get_mapped_range();
             bytemuck::cast_slice::<u8, u64>(&view).to_vec()
@@ -299,11 +380,18 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         let ms = (ticks[1] - ticks[0]) as f64 * f64::from(period) / 1.0e6;
         if frame >= 10 {
             samples.push(ms);
+            completion_samples.push(completion_ms);
             cpu_samples.push(cpu_ms);
+            callback_samples.push(callback_ms);
         }
     }
+    completion_samples.sort_by(f64::total_cmp);
+    eprintln!("{what}: submit through completion {:.3} ms median (p10 {:.3}, p90 {:.3}); includes final paint, host encoding and waiting",
+        completion_samples[frames / 2], completion_samples[frames / 10], completion_samples[frames * 9 / 10]);
     samples.sort_by(|a, b| a.total_cmp(b));
     cpu_samples.sort_by(f64::total_cmp);
+    callback_samples.sort_by(f64::total_cmp);
+    eprintln!("{what}: callback CPU {:.3} ms median", callback_samples[callback_samples.len() / 2]);
     let cpu_median = cpu_samples[cpu_samples.len() / 2];
     let median = samples[samples.len() / 2];
     let (lo, hi) = (samples[samples.len() / 10], samples[samples.len() * 9 / 10]);
@@ -311,8 +399,8 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         "{what}: {named} names on {} lit nodes at {}x{}: prepare's encoder \
          {median:.3} ms/frame (p10 {lo:.3}, p90 {hi:.3}, {} frames); prepare CPU {cpu_median:.3} ms median",
         scene.nodes.iter().filter(|n| n.activation > 0.0).count(),
-        SIZE[0],
-        SIZE[1],
+        size[0],
+        size[1],
         samples.len(),
     );
     eprintln!("METAL_TIMING_ASSETS {:?}", crate::shader_assets::statistics());
