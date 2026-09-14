@@ -18,6 +18,7 @@ mod frames;
 mod golden;
 mod render;
 mod replay;
+mod scratch;
 mod sink;
 mod wav;
 
