@@ -340,11 +340,23 @@ struct GridBuffer {
     /// The peak list is still a pure function of the slab's bytes — nothing
     /// about WHICH peaks a slot holds depends on a setting. This says only
     /// whether the work was done, because a Heatmap pane never reads the
-    /// buffer and picking a whole-song run costs 67 ms. It is not a second
+    /// buffer and picking a run costs 26 microseconds a slab — 27 ms at the
+    /// live ring's 1024 and 107 at the whole-song 4096
+    /// (`what_picking_a_full_run_costs`). It is not a second
     /// cache key in the dangerous direction: a stale `true` is impossible
     /// (only a write sets it, and a new key clears it by making a new record),
     /// and a stale `false` costs one refill from the run the caller hands over
     /// every frame.
+    ///
+    /// It is DELIBERATELY one-way inside a key: switching back to Heatmap
+    /// leaves it standing, so the dirty patches go on picking and writing a
+    /// slot nothing samples. That is a drip — 26 microseconds and 1.3 KB per
+    /// dirty slab, and nothing at all while the transport is parked — and it
+    /// buys the absence of the opposite failure, which is not a drip: clearing
+    /// it would make every switch BACK to Partials a whole-run refill, 27 ms
+    /// live and 107 whole-song, landing as a stall on the frame the reader
+    /// pressed the button on. A reader comparing the two pictures presses it
+    /// repeatedly.
     filled: bool,
 }
 
@@ -595,7 +607,7 @@ impl CallbackTrait for SpectrogramCallback {
         let peak_words = self.grid.capacity as usize * peaks::PEAK_STRIDE;
         let peak_size = (peak_words * std::mem::size_of::<[f32; 4]>()) as u64;
         // Only the detail that READS the peaks pays for picking them. Picking
-        // a whole-song run costs 67 ms of CPU, which a Heatmap pane has no use
+        // a whole-song run costs 107 ms of CPU, which a Heatmap pane has no use
         // for; what makes skipping it safe rather than a second cache key is
         // [`GridBuffer::filled`] plus the caller handing over the whole run
         // every frame, so the mode coming on refills from data already here.
@@ -2037,6 +2049,92 @@ mod tests {
             uploaded.load(Ordering::Relaxed),
             standing,
             "a frame that drew nothing acknowledged a run it never wrote",
+        );
+    }
+
+    /// A stroke finer than a row still draws every partial, at a level that
+    /// does not depend on where the partial falls between rows.
+    ///
+    /// The strokes are POINT-sampled at each fragment's own pitch, where the
+    /// heatmap's read takes an area mean over the fragment's footprint. That
+    /// is what the sigma floor in `stroke_level` is for, and this is what
+    /// executes it: 1024 buckets over 128 rows is eight buckets a row, and a
+    /// 5-cent stroke is 1.6 of them — a quarter of a row, so the floor binds
+    /// and lifts it to four.
+    ///
+    /// Without the floor the picture is a function of the fixture's alignment
+    /// rather than of the spectrum: a partial sitting half a row off the
+    /// nearest row centre draws at `exp(-16 / 5.12)`, four percent of its own
+    /// level, which is black. The partials below are spaced 37 buckets apart
+    /// against a row of 8, so their offsets walk the whole row — and the
+    /// assertion that one of them really is badly aligned is what keeps this
+    /// from passing on a fixture that happens to line up.
+    #[test]
+    fn a_stroke_finer_than_a_row_still_draws_every_partial() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let bins = BINS as usize;
+        let slabs = 4usize;
+        let mut bytes = vec![20u8; bins * slabs];
+        let mut at = Vec::new();
+        let mut bucket = 40usize;
+        while bucket < bins - 8 {
+            for s in 0..slabs {
+                bytes[s * bins + bucket] = 200;
+            }
+            at.push(bucket);
+            bucket += 37;
+        }
+        assert!(at.len() <= peaks::MAX_PEAKS, "{} partials overflow the cap", at.len());
+        let read = SpectrogramRead {
+            // No tilt, so a partial's level is the same wherever it sits and
+            // the only thing left to vary is its alignment to the rows.
+            level_per_midi: 0.0,
+            partials: true,
+            stroke_sigma: 0.05 * BINS_PER_SEMITONE,
+            prominence_steps: 10.0,
+            ..read_of(SPECTRUM_MIN_MIDI, bins as f32 / BINS_PER_SEMITONE, SIZE[1])
+        };
+        // A row's own width in buckets, and the half-footprint the floor is.
+        let row = bins as f32 / SIZE[1] as f32;
+        assert!(
+            read.stroke_sigma < 0.5 * row,
+            "a {:.1}-bucket stroke on a {row:.1}-bucket row does not reach the floor",
+            read.stroke_sigma,
+        );
+
+        let grid = grid_of(Arc::new(bytes), BINS, slabs as u32, 0);
+        let frame = fresh_frame(&device, &queue, &callback(full_quad(slabs as u32), &grid, &read));
+        // The bucket each pixel row samples, off the same coordinate
+        // [`full_quad`] lays down.
+        let row_x = |py: u32| t_at(py) * bins as f32;
+        let brightest = |x: f32| {
+            (0..SIZE[1])
+                .filter(|&py| (row_x(py) - x).abs() <= row)
+                .map(|py| frame[((py * SIZE[0] + SIZE[0] / 2) * 4) as usize])
+                .max()
+                .unwrap_or(0)
+        };
+        let levels: Vec<u8> = at.iter().map(|&b| brightest(b as f32 + 0.5)).collect();
+        let offsets: Vec<f32> = at
+            .iter()
+            .map(|&b| {
+                (0..SIZE[1]).map(|py| (row_x(py) - (b as f32 + 0.5)).abs()).fold(f32::MAX, f32::min)
+            })
+            .collect();
+        let worst_offset = offsets.iter().copied().fold(0.0, f32::max);
+        assert!(
+            worst_offset > 0.3 * row,
+            "every partial sits within {worst_offset:.2} buckets of a row centre, so the \
+             fixture never asks what happens between rows",
+        );
+        let (&best, &worst) = (levels.iter().max().unwrap(), levels.iter().min().unwrap());
+        assert!(best > 100, "the brightest partial drew at {best}/255, too dark to compare");
+        assert!(
+            f32::from(worst) >= 0.5 * f32::from(best),
+            "the dimmest partial drew at {worst}/255 against the brightest's {best}, so the \
+             picture is a function of where the partials fell between rows",
         );
     }
 

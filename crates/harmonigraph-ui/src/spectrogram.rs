@@ -766,9 +766,22 @@ pub(crate) fn read_of(view: &PaneView, rows: usize, slab_seconds: f64) -> Spectr
         // Seconds to slabs, for the same reason: the stroke's smoothing along
         // time is a stretch of MUSIC, so it covers the same stretch at every
         // rung of the slab ladder and the picture keeps its character when a
-        // Span drag crosses one. Floored at one slab — there is nothing to
-        // average below that — and capped so a fragment's gather stays
-        // bounded at the ladder's finest rung.
+        // Span drag crosses one.
+        //
+        // The FLOOR of one slab is not "there is nothing to average below
+        // that" — a sigma of 1 is still a five-tap blur. It is the
+        // anti-aliasing low-pass that goes with the slab sampling itself. The
+        // slabs sample time, and what they are sampling moves: a real +-15
+        // cent vibrato at 5 to 6 Hz needs better than 12 Hz to be read, and a
+        // 128 ms slab samples at 7.8. Undersampled, the peak positions alias
+        // and the stroke's edge reads ragged rather than wavy. One slab of
+        // sigma is the width that filter has to have, which is why the floor
+        // holds even where it makes the smoothing WIDER than the span asked
+        // for — at 128 ms slabs it is 128 ms, not 80.
+        //
+        // The CAP is the other end and a cost bound rather than a picture
+        // one: it stops a fragment's gather running away at the ladder's
+        // finest rung.
         gather_sigma_slabs: if slab_seconds > 0.0 {
             (harmonigraph_render::GATHER_SIGMA_SECONDS / slab_seconds) as f32
         } else {

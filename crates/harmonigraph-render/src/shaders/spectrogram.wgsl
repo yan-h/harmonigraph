@@ -130,6 +130,18 @@ fn bucket_x(t: f32) -> f32 {
     return (midi - locals.spectrum_min_midi) * locals.bins_per_semitone;
 }
 
+/// The level mapping itself: what a stored value `v` read at `midi` draws as,
+/// on the 0..1 the gradient is indexed by.
+///
+/// One definition, two readers — a bucket below and a peak in the Partials
+/// path — so what a stored step is worth cannot drift between the two
+/// pictures. The CLAMP lives here, at the reading, rather than at either
+/// caller: see [`bucket_level`] for what that buys.
+fn level_at(v: f32, midi: f32) -> f32 {
+    let level = locals.level0 + locals.level_per_step * v + locals.level_per_midi * midi;
+    return clamp(level, 0.0, 1.0);
+}
+
 /// The IMAGE this fragment resamples: one virtual row per bucket, each holding
 /// the level that bucket alone would be drawn at — the ramp's 0..1, tilted at
 /// the bucket's own pitch and clamped there.
@@ -142,9 +154,7 @@ fn bucket_x(t: f32) -> f32 {
 /// instead of being dragged off the ramp by its neighbours.
 fn bucket_level(slot: u32, b: u32) -> f32 {
     let midi = locals.spectrum_min_midi + (f32(b) + 0.5) / locals.bins_per_semitone;
-    let v = f32(stored(slot, b));
-    let level = locals.level0 + locals.level_per_step * v + locals.level_per_midi * midi;
-    return clamp(level, 0.0, 1.0);
+    return level_at(f32(stored(slot, b)), midi);
 }
 
 /// The level one fragment reads out of the slab in slot `slot`: an image
@@ -235,17 +245,14 @@ fn heatmap_level(in: VertexOut) -> f32 {
     return mix(read_level(s0, in.t), read_level(s1, in.t), fx);
 }
 
-/// The level one PEAK is drawn at, by the same affine a bucket takes in
-/// [`bucket_level`] — level0 + level_per_step * byte + level_per_midi * midi,
-/// clamped there and not after.
+/// The level one PEAK is drawn at, through the same [`level_at`] a bucket
+/// takes.
 ///
 /// The midi is the peak's own centroid rather than its bucket's centre, which
 /// is the whole reason the centroid is carried: a stroke is drawn where the
 /// partial is, and the tilt is evaluated there too.
 fn peak_level(peak: vec4<f32>) -> f32 {
-    let midi = locals.spectrum_min_midi + peak.x / locals.bins_per_semitone;
-    let level = locals.level0 + locals.level_per_step * peak.y + locals.level_per_midi * midi;
-    return clamp(level, 0.0, 1.0);
+    return level_at(peak.y, locals.spectrum_min_midi + peak.x / locals.bins_per_semitone);
 }
 
 /// Band index entry `k` of the record at `base`, out of the four packed into
@@ -268,9 +275,12 @@ fn band_start(base: u32, k: u32) -> u32 {
 ///
 /// It is the difference between a gather the picture wants and one the frame
 /// can afford: at the ladder's finest rung the gather is 21 slabs, and
-/// measured at 1600x1300 it costs 2.7 ms a frame over the heatmap
-/// (`what_partials_detail_costs_a_frame`). Visiting all 48 peaks of each, as
-/// this did before the index, cost more than that for THREE.
+/// measured at 1600x1300 the whole mode costs 2 to 3 ms a frame over the
+/// heatmap — with a scatter of about 1, so that is the size of the figure
+/// rather than three digits of it (`what_partials_detail_costs_a_frame`). At
+/// a 64 ms slab, where the gather is 7, it is about 1 ms. Visiting all 48
+/// peaks of every slab, as this did before the index, cost more than the
+/// upper figure for THREE of them.
 fn slab_stroke(slot: u32, x: f32, reach: f32, falloff: f32) -> f32 {
     let base = slot * locals.peak_stride;
     let count = band_start(base, locals.peak_bands);
@@ -310,9 +320,11 @@ fn slab_stroke(slot: u32, x: f32, reach: f32, falloff: f32) -> f32 {
 /// threshold, so a narrow gather draws a partial as a string of beads.
 ///
 /// The width is a fixed span of MUSIC (`gather_sigma_slabs` is a time in
-/// seconds divided by the slab width the pane settled on), so the smoothing
-/// covers the same stretch whether time is cut at 16 ms or at 128, and the
-/// picture does not change character when the Span crosses a ladder rung.
+/// seconds divided by the slab width the pane settled on) for as long as the
+/// slabs are fine enough to express it — at 16 ms slabs the 80 ms span is five
+/// of them. Below that the pane floors it at ONE slab, so at 128 ms slabs the
+/// smoothing is 128 ms rather than the 80 asked for, and the floor is
+/// deliberate: see `read_of`, which holds the same reason.
 ///
 /// Slabs outside the run are SKIPPED rather than clamped into it. Clamping
 /// would let the run's edge slab stand in for every tap past the end and drag
@@ -324,10 +336,22 @@ fn stroke_level(in: VertexOut) -> f32 {
     // its floor — slab j covering [j, j + 1) with its centre at j + 0.5.
     let jc = i32(clamp(floor(in.slab), 0.0, f32(n) - 1.0));
     let x = bucket_x(in.t);
+    // ANTI-ALIASING FLOOR on the pitch axis, and the analogue of what
+    // `read_level` does for the heatmap. That read takes the area mean over
+    // the fragment's own footprint; a stroke is POINT-sampled at the
+    // fragment's own pitch instead, so a Gaussian narrower than a row falls
+    // between rows — at 5 cents on a 384-row pane neighbouring rows differ by
+    // up to 19 dB and some partials are never drawn at all. Half the
+    // footprint, measured the way `read_level` measures it, is the narrowest
+    // stroke a row can carry. It binds ONLY where the stroke is finer than a
+    // row: at any width the picture is dialled to, this is the bar's sigma.
+    let half = 0.5 / f32(locals.rows);
+    let footprint = bucket_x(in.t + half) - bucket_x(in.t - half);
+    let stroke_sigma = max(locals.stroke_sigma, 0.5 * footprint);
     // Three sigma either side: past it the Gaussian is under 1.1%, which is
     // below one slice of a 4096-entry gradient at any level the ramp reaches.
-    let reach = 3.0 * locals.stroke_sigma;
-    let falloff = 1.0 / (2.0 * locals.stroke_sigma * locals.stroke_sigma);
+    let reach = 3.0 * stroke_sigma;
+    let falloff = 1.0 / (2.0 * stroke_sigma * stroke_sigma);
     let sigma = max(locals.gather_sigma_slabs, 0.001);
     // Two sigma along time rather than three: the tail past it is under 14%
     // of the centre tap and every one of those taps is a banded scan, so it

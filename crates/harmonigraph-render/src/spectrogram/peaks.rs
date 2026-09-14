@@ -66,7 +66,7 @@ pub(super) const PEAK_BANDS: usize = 127;
 /// per fragment, and a five-slab gather is 240 of them; with it a slab costs
 /// the peaks inside `[x - 3 sigma, x + 3 sigma]` plus at most one band of
 /// lead-in, which over a 3828-bucket slab holding 48 peaks is about two.
-pub(super) const PEAK_HEADER: usize = PEAK_BANDS.div_ceil(4) + 1;
+pub(super) const PEAK_HEADER: usize = (PEAK_BANDS + 1).div_ceil(4);
 
 /// `vec4`s one slot occupies: the header, then [`MAX_PEAKS`] entries. The
 /// shader indexes `slot * PEAK_STRIDE`.
@@ -407,5 +407,55 @@ mod tests {
             let want = found.iter().take_while(|peak| peak[0] < edge).count();
             assert_eq!(band(&slot, k), want, "band {k} starts at the wrong peak");
         }
+    }
+
+    /// What picking a whole run's peaks costs, which is what a FULL UPLOAD
+    /// pays synchronously inside `prepare`.
+    ///
+    /// The steady-state frame is not this: it patches the slab or two that
+    /// moved, and `what_partials_detail_costs_a_frame` in
+    /// `harmonigraph-offline` is what that costs. This lands instead on a
+    /// refold, a capacity change, the first frame of a surface, and the frame
+    /// the reader switches the detail on — every one of which already rewrites
+    /// the whole grid beside it.
+    ///
+    /// Both caps are measured because they are two different stalls: the live
+    /// ring's 1024 slabs is a frame the reader is dragging a Span through, and
+    /// the whole-song 4096 is once per offline render.
+    ///
+    /// `#[ignore]`, and it asserts nothing: the numbers belong to the machine
+    /// that ran them.
+    #[test]
+    #[ignore]
+    fn what_picking_a_full_run_costs() {
+        // A bed with a partial every 61 buckets — dense enough that the cap
+        // binds on every slab, so this is the worst case rather than a quiet
+        // passage.
+        let mut slab = vec![0u8; 3828];
+        let mut seed = 0x2545_f491u32;
+        for (j, byte) in slab.iter_mut().enumerate() {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *byte = (40 + ((seed >> 24) % 40) + u32::from(j % 61 == 0) * 90).min(255) as u8;
+        }
+        let mut record = vec![[0f32; 4]; PEAK_STRIDE];
+        // A throwaway pass in front, for the weight table's one-time build and
+        // the first touch of the slab. Without it the FIRST row pays for both
+        // and reads a third high, which is a difference between the two rows
+        // that has nothing to do with their size.
+        write_slot(&slab, &mut record);
+        eprintln!("\n== picking a full run, {} buckets a slab ==", slab.len());
+        for slabs in [1024usize, 4096] {
+            let start = std::time::Instant::now();
+            for _ in 0..slabs {
+                write_slot(&slab, &mut record);
+            }
+            let elapsed = start.elapsed().as_secs_f64();
+            eprintln!(
+                "{slabs:>5} slabs: {:>7.1} ms ({:.1} us a slab)",
+                elapsed * 1e3,
+                elapsed * 1e6 / slabs as f64,
+            );
+        }
+        eprintln!();
     }
 }
