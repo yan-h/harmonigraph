@@ -310,8 +310,9 @@ mod reload {
 /// the ceiling.
 ///
 /// One function rather than a bound at each place a strength is read, because
-/// the lattice, the piano roll and the spiral's dots take the SAME number and
-/// the whole claim [`BloomChain`] rests on is that it means one halo in every
+/// the lattice, the piano roll and the spiral's dots all read their strength
+/// through it (the roll adds the analyzer's Note glow first) and the whole
+/// claim [`BloomChain`] rests on is that one strength means one halo in every
 /// picture. A bound applied to one of them alone is a light a node has that its
 /// ribbon does not, which is a difference between them that says nothing.
 pub fn bloom_strength(raw: f32) -> f32 {

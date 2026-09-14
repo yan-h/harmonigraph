@@ -857,7 +857,7 @@ fn the_lights_colour_seams_run_at_one_width_from_its_edge_to_the_centre() {
     // node still shows its notes as distinct colors.
     // The arc is the strip's own — the light is a BLEND of the chord's hues by
     // design, and out where the mix reaches the strip in full it spans the arc
-    // GLOW_LOBE_KAPPA gives it. What this rules out is that arc collapsing to
+    // `InkKernel`'s von Mises lobe gives it. What this rules out is that arc collapsing to
     // the flat mean everywhere, which is what "average the node" looks like.
     assert!(
         at_edge > 15.0,

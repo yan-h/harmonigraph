@@ -213,7 +213,7 @@ The core parity fixtures are generated from the simulator with:
 node tools/adaptive-tuning-simulator/export-plugin-fixtures.mjs
 ```
 
-They record every onset in all fifteen musical examples with their declared settings and seeded context.
+They record every onset in all seventeen musical examples with their declared settings and seeded context.
 Rust and JavaScript differ only in axis precision: the plugin uses fixed microcents and the simulator uses floating-point logarithms.
 Parity compares coordinates exactly and output pitches within 0.001 cent.
 
