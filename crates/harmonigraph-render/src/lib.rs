@@ -565,7 +565,8 @@ struct GpuInstance {
     color: [f32; 4],
     /// x: activation, y: melody mark level, z: bass mark level (see
     /// lattice.wgsl). The mark levels ride with the activation rather than in
-    /// a vertex attribute of their own: all three are levels the same node
+    /// a vertex attribute of their own. w: signed linear transition phase.
+    /// The first three are levels the same node
     /// draws at, read together by the layers that draw it.
     params: [f32; 4],
     /// Per-octave activation, 8 bits per slot, little-endian packed

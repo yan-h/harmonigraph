@@ -1632,7 +1632,7 @@ fn transition_scale(phase: f32) -> f32 {
     if u.node.transition != 1.0 { return 1.0; }
     let p = abs(phase);
     if phase < 0.0 { return 0.55 + 0.45 * p; }
-    // Cubic back-out: a restrained 8% overshoot, then exactly the original size.
+    // Cubic back-out: about 4.5% overshoot, then exactly the original size.
     let t = p - 1.0;
     return 1.0 + 2.1 * t * t * t + 1.1 * t * t;
 }
@@ -1760,6 +1760,7 @@ fn base_node_ink(
     analytic: bool,
 ) -> NodeInk {
     let activation = in.params.x;
+    let focus = select(1.0, in.params.w * in.params.w, u.node.transition == 4.0);
 
     // A node is its RINGS and nothing else: the stack starts at the node's own
     // centre, so the innermost layer left on fills the middle with its own
@@ -1867,7 +1868,7 @@ fn base_node_ink(
         // slot is that ghost with its pitch painted OVER it — never one in
         // place of the other.
         let ink = oct_slot_ink(in, slot);
-        let opacity = ink.w;
+        let opacity = ink.w * focus;
         node_sd = layer_distance(
             node_sd,
             NodeLayer(shape_layer.sd, opacity, shape_layer.coverage),
@@ -1892,7 +1893,7 @@ fn base_node_ink(
             // Follow this slot's own level, even while a mark still holds
             // its extension: a released slice fades to the ground and keeps
             // the full wash field as its ink becomes grey.
-            glyph_lit = shape * level;
+            glyph_lit = shape * level * focus;
         }
     }
     // Ease the glyph layer off across the billboard's margin instead of
@@ -1955,7 +1956,7 @@ fn base_node_ink(
         in.marks.x,
         oct,
         in.uv,
-        NodeLayer(mark_strip.sd, in.params.y, mark_strip.coverage),
+        NodeLayer(mark_strip.sd, in.params.y * focus, mark_strip.coverage),
         mark_in,
         mark_out,
         aa,
@@ -1965,7 +1966,7 @@ fn base_node_ink(
         in.marks.y,
         oct,
         in.uv,
-        NodeLayer(mark_strip.sd, in.params.z, mark_strip.coverage),
+        NodeLayer(mark_strip.sd, in.params.z * focus, mark_strip.coverage),
         mark_in,
         mark_out,
         aa,
@@ -2038,8 +2039,14 @@ fn node_ink(src: VsOut, d: f32, aa: f32, oct: OctRing, analytic: bool) -> NodeIn
         // There are no lattice edges: trace the actual radial bands clockwise
         // from twelve o'clock, and retract toward that same anchor on release.
         let angle = fract(atan2(in.uv.x, in.uv.y) / TAU + 1.0);
-        let edge = (angle - p) * TAU * max(d, 0.05);
-        let coverage = 1.0 - smoothstep(-aa, aa, edge);
+        let end_delta = abs(angle - p);
+        let nearest = min(min(angle, 1.0 - angle), min(end_delta, 1.0 - end_delta));
+        // Distance to the nearest radial boundary, including the wrapped
+        // start seam. An unwrapped (angle - p) makes Distance shadows end in
+        // a hard ray on the other side of twelve o'clock.
+        let edge = select(1.0, -1.0, angle <= p)
+            * d * sin(min(nearest * TAU, 1.57079633));
+        let coverage = select(0.0, 1.0 - smoothstep(-aa, aa, edge), p > 0.0);
         ink.rgb *= coverage;
         ink.alpha *= coverage;
         ink.mask *= coverage;
@@ -2047,11 +2054,9 @@ fn node_ink(src: VsOut, d: f32, aa: f32, oct: OctRing, analytic: bool) -> NodeIn
     }
     if mode == 4.0 {
         // Core resolves out of the existing halo, then gives way to it again.
-        let focus = p * p;
-        ink.rgb *= focus;
-        ink.alpha *= focus;
-        ink.mask *= focus;
-        if focus < 0.5 { ink.sd = EMPTY_DISTANCE; }
+        // Opacity is spent per layer in base_node_ink, so the Distance
+        // shadow's half-level contour follows the actual faded layer too.
+        ink.mask *= p * p;
     }
     var accent = 0.0;
     var accent_sd = EMPTY_DISTANCE;
