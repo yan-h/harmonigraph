@@ -76,8 +76,8 @@ float bucket_level(
     float _e17 = locals.level0_;
     float _e20 = locals.level_per_step;
     float _e25 = locals.level_per_midi;
-    float level_1 = (_e17 + (_e20 * v)) + (_e25 * midi_1);
-    return metal::clamp(level_1, 0.0, 1.0);
+    float level = (_e17 + (_e20 * v)) + (_e25 * midi_1);
+    return metal::clamp(level, 0.0, 1.0);
 }
 
 uint naga_f2u32(float value) {
@@ -197,36 +197,74 @@ fragment fs_density_sourceOutput fs_density_source(
 , constant _mslBufferSizes& _buffer_sizes [[buffer(2)]]
 ) {
     const VertexOut in = { position, varyings.slab, varyings.t };
-    float level = 0.0;
-    uint i = 0u;
+    float at = {};
     VertexOut tap = {};
+    float left = {};
+    float integral = 0.0;
+    uint i = 0u;
+    float next = {};
     float width = metal::fwidth(in.slab);
+    if (width < 0.0001) {
+        float _e5 = heatmap_level(in, locals, grid, _buffer_sizes);
+        return fs_density_sourceOutput { metal::float4(_e5, 0.0, 0.0, 1.0) };
+    }
+    float high = in.slab + (width * 0.5);
+    at = in.slab - (width * 0.5);
+    float _e19 = at;
+    float covered = high - _e19;
+    if (covered <= 0.0) {
+        float _e23 = heatmap_level(in, locals, grid, _buffer_sizes);
+        return fs_density_sourceOutput { metal::float4(_e23, 0.0, 0.0, 1.0) };
+    }
+    tap = in;
+    float _e30 = at;
+    tap.slab = _e30;
+    VertexOut _e31 = tap;
+    float _e32 = heatmap_level(_e31, locals, grid, _buffer_sizes);
+    left = _e32;
+    uint _e38 = locals.run_slabs;
+    float last_center = static_cast<float>(_e38) - 0.5;
     uint2 loop_bound_1 = uint2(4294967295u);
     bool loop_init_1 = true;
     while(true) {
         if (metal::all(loop_bound_1 == uint2(0u))) { break; }
         loop_bound_1 -= uint2(loop_bound_1.y == 0u, 1u);
         if (!loop_init_1) {
-            uint _e25 = i;
-            i = _e25 + 1u;
+            uint _e80 = i;
+            i = _e80 + 1u;
         }
         loop_init_1 = false;
-        uint _e7 = i;
-        if (_e7 < 4u) {
+        uint _e44 = i;
+        uint _e47 = locals.run_slabs;
+        if (_e44 < (_e47 + 2u)) {
         } else {
             break;
         }
         {
-            tap = in;
-            float _e12 = tap.slab;
-            uint _e13 = i;
-            tap.slab = _e12 + (((static_cast<float>(_e13) * 0.25) - 0.375) * width);
-            float _e21 = level;
-            VertexOut _e22 = tap;
-            float _e23 = heatmap_level(_e22, locals, grid, _buffer_sizes);
-            level = _e21 + _e23;
+            float _e51 = at;
+            if (_e51 >= high) {
+                break;
+            }
+            float _e53 = at;
+            next = metal::min(high, metal::max(0.5, metal::floor(_e53 - 0.5) + 1.5));
+            float _e63 = at;
+            if (_e63 >= last_center) {
+                next = high;
+            }
+            float _e66 = next;
+            tap.slab = _e66;
+            VertexOut _e67 = tap;
+            float _e68 = heatmap_level(_e67, locals, grid, _buffer_sizes);
+            float _e69 = integral;
+            float _e70 = left;
+            float _e74 = next;
+            float _e75 = at;
+            integral = _e69 + (((_e70 + _e68) * 0.5) * (_e74 - _e75));
+            left = _e68;
+            float _e79 = next;
+            at = _e79;
         }
     }
-    float _e28 = level;
-    return fs_density_sourceOutput { metal::float4(_e28 * 0.25, 0.0, 0.0, 1.0) };
+    float _e83 = integral;
+    return fs_density_sourceOutput { metal::float4(_e83 / covered, 0.0, 0.0, 1.0) };
 }

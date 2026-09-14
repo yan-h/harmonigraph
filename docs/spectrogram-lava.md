@@ -88,8 +88,7 @@ with 35-cent pitch softness,
 25% spread,
 seven contours and 15% edge softness.
 The old `diffusion` field is removed,
-along with the provisional `blur_mix` key,
-so a saved value is ignored and the new controls take their defaults.
+so its saved value is ignored and the new controls take their defaults.
 Analyzer softness and note glow remain independent.
 The persisted struct retains container-level defaults and sanitizes every new numeric control.
 
@@ -108,3 +107,35 @@ Blur and Lava on the same broad field,
 quiet band,
 granular patch and black margins.
 Existing offline goldens exercise the shared live and whole-song drawing paths.
+
+## Measured cost
+
+Release probes on the local Apple Silicon machine,
+2026-09-14:
+
+| Quantity | Result |
+| --- | ---: |
+| Maximum history bin storage | 119.625 MiB |
+| Active slab accumulator | 29.9 KiB |
+| Mixed-tier refold after 8,192 arrivals | 5.80 ms |
+| Fresh column including allocation and readout | 0.0089 ms |
+| Complete frame fixtures at 1024 × 768 | 2.4–4.3 ms |
+| Complete frame fixtures at 3840 × 2160 | 5.8–7.4 ms |
+
+History storage is four times the former byte store;
+completed display slabs and GPU uploads retain their old byte representation.
+Scalar filtering uses four two-byte-per-pixel targets,
+whose dimensions follow the two musical widths.
+An axis with zero softness retains display resolution;
+when both widths are zero the renderer uses the detailed field directly.
+
+The CPU probe has two active bins and measures a median of eleven refolds.
+The frame figures are medians of three runs of the existing two-second audio fixture,
+including replay,
+analysis,
+UI and readback after sixteen warmup frames.
+The 180-second-span case still contains that two-second clip;
+it is not a worst-case full-history timing.
+Sequential runs have warmup and scheduling scatter,
+so Plain being slower than a style in some rows is not evidence of a shader speedup.
+[The retained measurements](evidence/spectrogram-lava/performance.txt) give every case and its method.

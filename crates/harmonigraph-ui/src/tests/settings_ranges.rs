@@ -161,7 +161,7 @@ fn scenarios() -> Vec<Scenario> {
             SettingsPane::Tab(panes::Tab::Tuning) => 7,
             SettingsPane::Page(DisplayPage::Colors) => 2,
             SettingsPane::Page(DisplayPage::Lattice) => 25,
-            SettingsPane::Page(DisplayPage::Analyzer) => 15,
+            SettingsPane::Page(DisplayPage::Analyzer) => 19,
             SettingsPane::Page(DisplayPage::Lighting) => 26,
             SettingsPane::Page(DisplayPage::System) => 2,
             SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console | panes::Tab::Notes) => 0,

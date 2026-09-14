@@ -1,0 +1,23 @@
+Release measurements, local Apple Silicon, 2026-09-14.
+Temporary probes removed after measurement.
+
+CPU: 8,192 raw arrivals, then a mixed-tier refold at 256 ms/slab; median of 11 runs.
+Two active bins (varying power and a quiet 1e-7 bin), all others zero.
+Fresh-column figure includes allocation, summation and quantized readout.
+
+Frames: existing two-second offline golden audio, 120 fps, first 16 frames excluded.
+Median of three runs per case; includes replay, analysis, UI, GPU and readback.
+Wide = 300 cents / 2,000 ms. Long span = same two-second clip in a 180-second window.
+These sequential fixture readings are not isolated GPU times or a speedup comparison.
+
+LAVA GPU [1024, 768] Plain wide=false span=1.5: 2.403 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [1024, 768] Blur wide=false span=1.5: 2.799 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [1024, 768] Lava wide=false span=1.5: 3.328 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [1024, 768] Lava wide=true span=1.5: 3.959 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [1024, 768] Lava wide=false span=180: 4.287 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [3840, 2160] Plain wide=false span=1.5: 7.026 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [3840, 2160] Blur wide=false span=1.5: 6.261 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [3840, 2160] Lava wide=false span=1.5: 5.807 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [3840, 2160] Lava wide=true span=1.5: 7.404 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [3840, 2160] Lava wide=false span=180: 6.145 ms/frame incl replay/analyzer/UI/readback
+LAVA CPU: mixed-tier refold 5.803 ms; per fresh column including allocation/readout 0.0089 ms; history 125435904 bytes; accumulator 30624 bytes
