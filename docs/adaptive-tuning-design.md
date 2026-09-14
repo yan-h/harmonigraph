@@ -291,6 +291,8 @@ stronger pitch fidelity should give a finely tuned controller more explicit choi
 Neither end can admit nodes outside the hard boundary.
 The proposal retains meaningful pitch sensitivity even at the strongest harmonic setting, since ignoring pitch entirely could make every input choose the same node.
 No score formula, weights or slider endpoints have been agreed.
+#865 settled it as a single Pitch flexibility control with an exponential pitch cost;
+the [implementation record](adaptive-tuning-plugin.md) holds the formula.
 
 ### Lattice reachability indicator
 
@@ -315,7 +317,7 @@ Context and balance changes may move those ranges and make nodes enter or leave 
 | Control | Intended purpose | Status |
 |---|---|---|
 | Neighbourhood size | Set the maximum permitted harmonic remoteness | Proposed; metric, range and default open |
-| Harmonic preference ↔ Pitch fidelity | Balance eligible candidates' harmonic suitability and input-pitch closeness | Requested; scoring, range and default open |
+| Harmonic preference ↔ Pitch fidelity | Balance eligible candidates' harmonic suitability and input-pitch closeness | Built as Pitch flexibility, 1 to 100 cents, default 100, with an exponential pitch cost (#865) |
 | Reset after silence | Set when context and accumulated drift reset, optionally never | Requested; timing semantics, range and default open |
 | Reset on transport events | Choose whether stopping/restarting playback and looping reset context | Requested; event triggers, one versus separate controls, reset scope and defaults open |
 | Allowed lattice axes / interval families | Control which harmonic relationships may supply candidates, including whether seventh-based relationships are allowed | Requested; UI, combinations and default open |
