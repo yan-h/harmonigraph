@@ -92,8 +92,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // early-out that decides whether a fragment gets there at all.
     //
     // The light's OWN pass is not compared here, and no longer has anything to
-    // compare: the gather has no `EARLY_OUT` branch at all where the billboard
-    // had one. A node with no light is not in `glow_nodes` to begin with, and
+    // compare: the splat has no `EARLY_OUT` branch at all where the billboard
+    // had one. `vs_glow_splat` culls an instance with no light, and
     // past a halo's span `glow_layer` returns zero by the arithmetic either
     // path would run.
     let lit_field = || {

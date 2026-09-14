@@ -675,7 +675,8 @@ fn widening_a_layer_gives_its_colour_more_of_the_light() {
 /// Measured as ANGULAR HARMONICS of the light's brightness round a circle,
 /// because that is what a spoke is: a ripple that goes round the node a whole
 /// number of times. The band under test starts above what a blurred ink can
-/// hold — the tightest lobe the Color blend bar reaches is GLOW_LOBE_KAPPA, whose
+/// hold — the tightest lobe the Color blend bar reaches is `InkKernel`'s
+/// concentration of 4, whose
 /// von Mises coefficients are already under a thousandth of the mean by the
 /// eighth harmonic — so anything found there is the machinery and not the node.
 /// At fbc6cd5 the twelfth carried 12% to 17% of the mean at every radius inside

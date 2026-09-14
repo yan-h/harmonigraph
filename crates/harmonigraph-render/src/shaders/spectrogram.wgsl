@@ -280,7 +280,8 @@ fn baked_density(position: vec2<f32>) -> f32 {
 fn diffused_level(core: f32, material: f32) -> f32 {
     // Diffusion removes raw detail at every brightness. Its upper endpoint
     // is entirely filtered; restoring bright peaks here also restores grain.
-    // Ease out the raw contribution so the default 70% leaves only 9% detail.
+    // Ease out the raw contribution: the default 10% keeps 81% of the detail,
+    // and 70% leaves only 9%.
     let raw = (1.0 - cloud.diffusion) * (1.0 - cloud.diffusion);
     return mix(material, core, raw);
 }
