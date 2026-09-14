@@ -730,11 +730,12 @@ pub(super) fn plan(
     // with an end that leaves FIRST, and whatever ribbon is behind that end
     // scrolls on unnamed: the name outlives its own anchor by the ink it
     // carries and no more, which is the fixed gap read the other way round.
+    // A note SHORTER than its name is the same rule the other way round again:
+    // the ribbon is gone first, and the name follows it off with its tail.
     //
-    // Measured in TAKE TIME like everything else here, and asked of the DRAWN
-    // anchor rather than the true one — a still picture holds a cropped name at
-    // its edge, where it always has ink, so this is a live question and answers
-    // trivially there.
+    // Measured in TAKE TIME like everything else here, and a LIVE question
+    // only — a still picture holds a cropped name at its edge, where it always
+    // has ink, so there the note answers instead (see `visible` below).
     let shows = |edge: &Edge, room: f64| {
         // THIS pitch's room, not its lane's — the two are not the same number,
         // and [`Lane`]'s second defect is the whole of why. Less the gap it
@@ -749,13 +750,12 @@ pub(super) fn plan(
     // ink meets the edge that half width before its centre does, so asked of
     // the centre alone a name went with half its ribbon still drawn (#825).
     //
-    // The RIBBON's width and not the name's box, for the reason the note's own
-    // term below gives across time: a name taller than its ribbon would keep a
-    // sliver of itself on the pane after the ribbon had gone. So such a name
-    // goes with the edge of its box still inside — the same trade the far edge
-    // makes — and the ribbon's outline, which the roll adds in points, is not
-    // waited for either. Past the edge the scissor cuts the name as it cuts
-    // the ribbon.
+    // The RIBBON's width and not the name's box, so a name taller than its
+    // ribbon goes with the edge of its box still inside, and the ribbon's
+    // outline, which the roll adds in points, is not waited for either. Past
+    // the edge the scissor cuts the name as it cuts the ribbon. The far edge
+    // no longer makes this trade — there a name stays until its own box has
+    // left (see `visible` below) — so the two edges now differ.
     let half_ribbon = cfg.roll_thickness * 0.5;
     let ribbon_reach = scale.min_midi - half_ribbon..=scale.max_midi + half_ribbon;
 
@@ -776,35 +776,40 @@ pub(super) fn plan(
         // Its POSITION only: the spelling is still asked of the true anchor,
         // for the reason [`drawn_edge`] gives.
         //
-        // Three questions, and the last one is the anchor's: the note has
-        // ribbon on the pane, that ribbon still reaches into the pitch zoom
-        // (`ribbon_reach`), and the NAME still has ink there ([`shows`](plan)).
+        // Two questions: the ribbon still reaches into the pitch zoom
+        // (`ribbon_reach`), and the name still has ink on the pane.
         //
-        // The third is what makes a travelling name leave with the end it is
-        // written on. At the leading edge it asks nothing the first has not —
-        // that end IS `stop(now)` — but at the ONSET it is sharper by whatever
-        // ribbon is left behind that end, and a note held longer than the Span
-        // scrolls the last of itself unnamed. That is the price of a gap that
-        // is a fixed distance from a note rather than a place on the pane, and
-        // it is the one worth paying: a name held back while its own note slid
-        // out from under it would be the only thing in the picture standing
-        // still.
+        // WHOSE ink is the layout's. Live it is the NAME's own ([`shows`](plan)),
+        // and a name goes when the last of it has scrolled off the far edge —
+        // never sooner, whatever its note is doing. At the leading edge that is
+        // the moment the ribbon goes. At the ONSET it is sooner than the ribbon
+        // for a note longer than its name, which scrolls the last of itself
+        // unnamed: the price of a gap that is a fixed distance from a note
+        // rather than a place on the pane, and the one worth paying, since a
+        // name held back while its note slid out from under it would be the
+        // only thing in the picture standing still. And it is LATER than the
+        // ribbon for a note shorter than its name, which lies past the ribbon's
+        // end and follows it off. Culled with the ribbon instead, that name
+        // blinked out with most of itself still showing the moment it reached
+        // the edge — on nearly every note, since at the default Span a name is
+        // seconds of take time long.
         //
-        // The NOTE's own term is not thereby redundant. A name is drawn while
-        // it has ink, and its ink runs a little past the ribbon's end (the
-        // inset, and whatever the box's estimate is generous by), so without it
-        // a name could outlive by a frame or two the thing it names — which is
-        // a label pointing at nothing, and the one failure neither end of this
-        // trade wants.
+        // A still picture asks the NOTE, because a cropped name is held at the
+        // crop ([`drawn_edge`]) and always has ink there: it lives as long as
+        // there is ribbon to hold it on, and a note that ended before the
+        // render began is not named at all.
         //
         // Only DRAWING is culled. A note off the far edge still takes its turn
         // in the thinning, which is what lets the names on the pane stand still
         // while it scrolls.
         //
         let drawn = drawn_edge(note, &edge, now, &time);
-        let visible = note.stop(now) >= oldest
-            && ribbon_reach.contains(&drawn.pitch)
-            && shows(&drawn, naming(edge.pitch, &mut names).1);
+        let visible = ribbon_reach.contains(&drawn.pitch)
+            && if time.whole_song() {
+                note.stop(now) >= oldest
+            } else {
+                shows(&edge, naming(edge.pitch, &mut names).1)
+            };
         // A held note whose name is anchored on the LEADING EDGE stands outside
         // the sweep in BOTH directions: it is named whatever is already there,
         // and it is not recorded, so it takes nothing out of the running for
@@ -2635,46 +2640,35 @@ mod tests {
         assert_eq!(said(&labels(&pressed(true), 1.5)), ["C"]);
     }
 
-    /// A name leaves with the END IT IS WRITTEN ON, and never outlasts its
-    /// ribbon — in every orientation.
+    /// A name leaves the far edge when its OWN BOX has left the pane — not
+    /// before, whatever its ribbon is doing, and not after — in every
+    /// orientation.
     ///
     /// Swept over [`SpectralOrientation::ALL`] because the orientation is what
     /// picks the anchor (see [`Anchor::of`]): the two that agree with the screen
-    /// name a ribbon's leading edge, the two that reverse it name the onset. The
-    /// two answer differently on purpose, and the difference IS the note's
-    /// length. A leading edge is the last of a note to leave, so its name goes
-    /// when the ribbon goes. An onset leaves first, so its name goes a note's
-    /// length earlier and the rest of the ribbon scrolls unnamed — which is what
-    /// a fixed gap costs, and is the whole trade [`place`](plan) makes. Held
-    /// back at the edge instead, the name would stand still in a moving picture
-    /// with the gap opening behind it.
+    /// name a ribbon's leading edge, the two that reverse it name the onset. At
+    /// a leading edge the name lies back over its ribbon and the two leave
+    /// together. At an onset they part both ways: a note longer than its name
+    /// keeps scrolling after the name has gone, and a note SHORTER than its name
+    /// is gone first, the name lying past its end.
     ///
-    /// Three lengths, because that shortfall IS the note's length: a test on
-    /// one note cannot tell an anchor that leaves with its end from one that
-    /// has simply been shifted.
+    /// That last case is the one this is for. Culled with its ribbon, such a
+    /// name blinked out with most of itself still on the pane — the moment it
+    /// reached the edge, and on nearly every note at the default Span, where a
+    /// name is seconds of take time long. So what is asserted is the last frame
+    /// the name is drawn: its box must already have left the pane (to within a
+    /// step), or something that could still be seen was taken away; and it must
+    /// have left only just, or the name was held back rather than scrolling.
     ///
-    /// The shortest is under a name's own REACH, and it is the only case that
-    /// asks anything of the note's own term in [`plan`]'s `visible`. Above that
-    /// reach the name's ink leaves before the ribbon does and the term decides
-    /// nothing; below it the name would outlive the thing it names, and the
-    /// `over >= 0` assertion is what catches it. Drop that term and this length
-    /// alone goes red.
-    ///
-    /// The slack is a second either way, against note lengths of 4 and 12: what
-    /// it covers is the ink each end carries past its own box — the name's inset
-    /// and the ribbon's outline — and what it cannot cover is a name on the
-    /// other end of its note.
-    ///
-    /// A SQUARE pane, so that the depth axis is one length in all four
-    /// orientations. A name's own reach along it is not: text runs across the
-    /// screen, so a name is its width deep where time runs across the pane and a
-    /// whole LINE BOX deep where time runs down it, twice as much. On the wide
-    /// pane the rest of this file uses, that is two and a half seconds of a
-    /// ten-second window — longer than a short note — and the sweep would be
-    /// measuring the shape of the type rather than which end a name is on.
+    /// Three lengths, the shortest under a name's own reach, and the guard
+    /// below proves the fixture gets there: at the onset that name outlasts its
+    /// ribbon. The pane is SQUARE so the depth axis is one length in all four
+    /// orientations; a name's own depth is not, being its width where time runs
+    /// across the pane and a whole line box where it runs down it.
     #[test]
-    fn a_name_leaves_with_the_end_it_is_written_on_and_never_outlasts_its_ribbon() {
+    fn a_name_leaves_the_far_edge_only_once_its_own_box_has() {
         let square = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 320.0) };
+        let step = 0.02;
         for orientation in SpectralOrientation::ALL {
             for length in [0.3f64, 4.0, 12.0] {
                 let mut state = turned(24.0, 10.0, orientation);
@@ -2685,39 +2679,49 @@ mod tests {
                 let axes = Axes::new(square, cfg);
                 let split = super::super::axes::spectrum_share(cfg);
                 let scale = scale_of(&state);
-                // The last moment each survives, walked at a step fine enough
-                // that the two cannot be a step apart by rounding alone.
-                let (mut named, mut drawn) = (f64::NAN, f64::NAN);
+                let (mut named, mut drawn, mut last) = (f64::NAN, f64::NAN, None);
                 let mut now = 1.0;
                 while now < 40.0 {
-                    if !labels_in(&state, now, square).is_empty() {
+                    if let Some(label) = labels_in(&state, now, square).first() {
                         named = now;
+                        last = Some(label.rect);
                     }
                     let ribbons =
                         super::super::roll::note_instances(&axes, &scale, &state, split, now, 2.0);
                     if !ribbons.is_empty() {
                         drawn = now;
                     }
-                    now += 0.02;
+                    now += step;
                 }
-                // Restated from [`Anchor::of`]'s rule rather than mapped from a
-                // list of orientations, so that a fifth one cannot be added
-                // against a table nobody remembers to extend. The setting is off
-                // here, so the anchor is whichever end reads first.
-                let expected = if orientation.is_time_reversed() { length } else { 0.0 };
-                let over = drawn - named;
+                let rect = last.expect("named at the onset at the latest");
+                // How much of the box still stood on the pane on that last
+                // frame, measured along the depth axis from the far edge to the
+                // box's shallowest point. Negative once it has wholly left.
+                let depth = axes.dir_depth();
+                let reach = (rect.width() * depth.x).abs() + (rect.height() * depth.y).abs();
+                let showing = (axes.at(0.5, 1.0) - rect.center()).dot(depth) + reach * 0.5;
+                let travel =
+                    (step / TimeAxis::new(&state, split, 0.0).seconds_per_point(&axes)) as f32;
                 assert!(
-                    over >= -0.001,
-                    "{orientation:?}, a {length} s note: the name outlasted its own ribbon \
-                     by {} s (name {named}, ribbon {drawn})",
-                    -over,
+                    showing <= travel + 1e-3,
+                    "{orientation:?}, a {length} s note: the name went with {showing} points of \
+                     its box still on the pane (name {named}, ribbon {drawn})",
                 );
                 assert!(
-                    (over - expected).abs() < 1.0,
-                    "{orientation:?}, a {length} s note: the name went {over} s before the \
-                     ribbon did, where the end it is written on leaves {expected} s before \
-                     it (name {named}, ribbon {drawn})",
+                    showing > -(LABEL_INSET + LABEL_PAD) - travel,
+                    "{orientation:?}, a {length} s note: the name stayed {} points past the \
+                     edge after its box had left (name {named}, ribbon {drawn})",
+                    -showing,
                 );
+                // The note's stop leaves the far edge a window after it.
+                let gone = 1.0 + length + 10.0;
+                if orientation.is_time_reversed() && length < 1.0 {
+                    assert!(
+                        named > gone + step,
+                        "{orientation:?}: the fixture is vacuous, the short note's name did not \
+                         outlast its note's end leaving at {gone} (name {named})",
+                    );
+                }
             }
         }
     }
