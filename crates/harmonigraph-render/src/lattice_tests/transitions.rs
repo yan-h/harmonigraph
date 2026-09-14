@@ -109,3 +109,37 @@ fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
         }
     }
 }
+
+#[test]
+fn draw_transition_distance_shadow_softens_across_its_start_seam() {
+    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
+    let mut scene = single_marked_node(MIDDLE_C, 0);
+    scene.note_transition = NoteTransition::DrawAndRetract;
+    scene.nodes[0].transition_phase = 0.65;
+    scene.mark_inner = 1.1;
+    scene.mark_thickness = 0.4;
+    scene.glow_strength = 0.0;
+    scene.shadow = one_shadow(0.85, 0.8, harmonigraph_scene::ShadowKernel::Distance);
+    scene.background = glam::Vec4::new(0.24, 0.24, 0.24, 1.0);
+    shooter.clear = crate::wgpu::Color { r: 0.24, g: 0.24, b: 0.24, a: 1.0 };
+    let (_, up) = scene.camera.right_up();
+    let top = up * (scene.node_radius * 1.8 * (scene.mark_inner + scene.mark_thickness));
+    let (at, _) =
+        crate::project_onto(&scene.camera.view_proj(1.0), glam::Vec2::splat(256.0), top).unwrap();
+    let frame = shooter.shot(&scene);
+    let x = at.x.round() as usize;
+    let y = at.y.round() as usize;
+    let mut largest_jump = 0;
+    let mut darkest = 255;
+    for above in 3..=12 {
+        let left = frame[((y - above) * 256 + x - 1) * 4];
+        let right = frame[((y - above) * 256 + x) * 4];
+        largest_jump = largest_jump.max(left.abs_diff(right));
+        darkest = darkest.min(left.min(right));
+    }
+    assert!(darkest < 55, "fixture never reached the shadow above the mark: {darkest}");
+    assert!(
+        largest_jump < 8,
+        "hard radial shadow edge: {largest_jump}/255 between adjacent pixels"
+    );
+}
