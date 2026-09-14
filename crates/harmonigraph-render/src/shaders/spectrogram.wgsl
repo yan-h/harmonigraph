@@ -47,9 +47,6 @@ struct Locals {
     /// converts its cents through `bins_per_semitone`, so a stroke zooms with
     /// the pitch axis rather than holding a width in pixels.
     stroke_sigma: f32,
-    /// How far above its own local mean a peak must stand to be drawn, in
-    /// stored steps.
-    prominence_steps: f32,
     /// `vec4`s one slot occupies in `peaks`: the band index, then the entries.
     peak_stride: u32,
     /// Sigma of the time gather, in SLABS — the pane converts a fixed span in
@@ -62,11 +59,6 @@ struct Locals {
     peak_bands: u32,
     /// Buckets one band covers.
     peak_band: f32,
-    /// Scalars, not a `vec3`: a vector here would align to 16 and shift itself
-    /// off the offset the Rust struct writes.
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> locals: Locals;
@@ -273,14 +265,9 @@ fn band_start(base: u32, k: u32) -> u32 {
 /// three sigma plus at most one band of lead-in — about two of a slab's 48
 /// over the analyzer's axis — rather than all of them.
 ///
-/// It is the difference between a gather the picture wants and one the frame
-/// can afford: at the ladder's finest rung the gather is 21 slabs, and
-/// measured at 1600x1300 the whole mode costs 2 to 3 ms a frame over the
-/// heatmap — with a scatter of about 1, so that is the size of the figure
-/// rather than three digits of it (`what_partials_detail_costs_a_frame`). At
-/// a 64 ms slab, where the gather is 7, it is about 1 ms. Visiting all 48
-/// peaks of every slab, as this did before the index, cost more than the
-/// upper figure for THREE of them.
+/// At the finest live rung the gather visits 21 slabs per fragment. Measure
+/// its cost with `what_partials_detail_costs_a_frame`; that probe pairs each
+/// Partials frame cost with the heatmap measured in the same round.
 fn slab_stroke(slot: u32, x: f32, reach: f32, falloff: f32) -> f32 {
     let base = slot * locals.peak_stride;
     let count = band_start(base, locals.peak_bands);
@@ -297,10 +284,8 @@ fn slab_stroke(slot: u32, x: f32, reach: f32, falloff: f32) -> f32 {
         }
         let d = x - peak.x;
         // The lead-in the band start leaves is cut here rather than by the
-        // break, and the prominence gate is per PEAK, against the peak's own
-        // local mean: a partial standing over a busy region is judged against
-        // that region rather than against the column's average level.
-        if abs(d) <= reach && peak.y - peak.z >= locals.prominence_steps {
+        // break. Every retained local maximum contributes its own level.
+        if abs(d) <= reach {
             best = max(best, peak_level(peak) * exp(-d * d * falloff));
         }
         i = i + 1u;
@@ -316,8 +301,7 @@ fn slab_stroke(slot: u32, x: f32, reach: f32, falloff: f32) -> f32 {
 /// brightest line under the pixel is the reading. Across time they are
 /// separate measurements of the same partial, and the mean is what averages
 /// away what is different between them — a column's level noise is about
-/// 4.5 dB at one taper, and the prominence test flickers on and off at its
-/// threshold, so a narrow gather draws a partial as a string of beads.
+/// 4.5 dB at one taper, so a narrow gather draws a partial as a string of beads.
 ///
 /// The width is a fixed span of MUSIC (`gather_sigma_slabs` is a time in
 /// seconds divided by the slab width the pane settled on) for as long as the
@@ -385,6 +369,10 @@ fn shown_level(in: VertexOut) -> f32 {
 
 fn heatmap_color(in: VertexOut) -> vec4<f32> {
     let level = shown_level(in);
+    // Partials uses the same palette even when Cloud=0 bypasses filtering.
+    if locals.detail == 1u {
+        return density_color(level);
+    }
     let levels = textureDimensions(lut).x;
     let i = min(u32(level * f32(levels)), levels - 1u);
     let c = textureLoad(lut, vec2<u32>(i, 0u), 0);

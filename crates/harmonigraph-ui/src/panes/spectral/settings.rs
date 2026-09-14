@@ -113,8 +113,8 @@ pub(crate) fn spectrum_settings_pane(
         );
 
     section(ui, "Softness and glow");
-    // The three Partials numbers sit here rather than beside the Detail
-    // buttons: all three shape the same soft picture the Diffusion bar does,
+    // The two Partials numbers sit here rather than beside the Detail
+    // buttons: both shape the same soft picture the Diffusion bar does,
     // and they are dragged against each other. Drawn disabled rather than
     // hidden in Heatmap, so the page's control inventory does not change with
     // a setting and the reader can see what the other mode offers.
@@ -124,7 +124,7 @@ pub(crate) fn spectrum_settings_pane(
     // Partials never draws the raw heatmap at all — its cloud is the softened
     // field alone, which is what keeps the grain the strokes replace from
     // coming back in behind them. So the bar is dead in that mode and says so,
-    // the same way the three Partials bars are dead in Heatmap.
+    // the same way the two Partials bars are dead in Heatmap.
     ui.add_enabled_ui(!partials, |ui| {
         ValueBar::new(&mut atmosphere.diffusion, 0.0..=1.0, "Diffusion")
             .percent().show(ui).on_hover_text("Smooth fine spectrogram detail at every brightness. 0% restores the detailed heatmap; 100% uses only the softened field. Heatmap detail only: Partials always draws its cloud fully softened.");
@@ -147,14 +147,6 @@ pub(crate) fn spectrum_settings_pane(
             .on_hover_text(
                 "Width of each Partials stroke across frequency, in cents. \
                  100 ¢ is one semitone at any zoom.",
-            );
-        ValueBar::new(&mut cfg.prominence_db, crate::PROMINENCE_DB_RANGE, "Prominence")
-            .unit(1.0, " dB")
-            .decimals(0)
-            .show(ui)
-            .on_hover_text(
-                "How far a peak must stand above its own surroundings to be drawn. \
-                 Raise it to keep only the clear partials; 0 dB draws every local maximum.",
             );
     });
 
@@ -237,7 +229,7 @@ pub(crate) fn spectrum_settings_pane(
                     "Draw every frequency bucket, including the noise between partials."
                 }
                 SpectrumDetail::Partials => {
-                    "Draw each moment's peaks as strokes over a dimmed cloud. Set their width, prominence and cloud under Softness and glow."
+                    "Draw each moment's peaks as strokes over a dimmed cloud. Set their width and cloud under Softness and glow."
                 }
             });
         }

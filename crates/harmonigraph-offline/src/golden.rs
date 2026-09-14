@@ -879,6 +879,11 @@ fn timed_round<const N: usize>(
             frames = n;
         }
     }
+    Some(Round { columns: timing_columns(&runs), frames })
+}
+
+/// Keep samples in round order while calculating every paired difference.
+fn timing_columns<const N: usize>(runs: &[Vec<f64>; N]) -> [Column; N] {
     let mid = |times: &mut Vec<f64>| {
         times.sort_by(f64::total_cmp);
         times[times.len() / 2]
@@ -897,10 +902,23 @@ fn timed_round<const N: usize>(
     for slot in 0..N {
         let mut paired: Vec<f64> =
             runs[0].iter().zip(&runs[slot]).map(|(base, got)| got - base).collect();
-        columns[slot] =
-            Column { median: mid(&mut runs[slot]), cost: (mid(&mut paired), spread(&mut paired)) };
+        columns[slot] = Column {
+            median: mid(&mut runs[slot].clone()),
+            cost: (mid(&mut paired), spread(&mut paired)),
+        };
     }
-    Some(Round { columns, frames })
+    columns
+}
+
+#[test]
+fn timing_costs_preserve_round_pairing_under_shared_drift() {
+    let control = vec![10.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+    let slower = control.iter().map(|v| v + 1.0).collect();
+    let faster = control.iter().map(|v| v - 0.5).collect();
+    let columns = timing_columns(&[control, slower, faster]);
+    assert_eq!(columns[0].cost, (0.0, 0.0));
+    assert_eq!(columns[1].cost, (1.0, 0.0));
+    assert_eq!(columns[2].cost, (-0.5, 0.0));
 }
 
 /// What drawing the heatmap costs a rendered frame, end to end.

@@ -1,16 +1,13 @@
 //! Each slab's local maxima, picked once where the slab is uploaded.
 //!
 //! **A pure function of the slab's bytes.** No setting reaches it — not the
-//! stroke width, not the prominence bar, not the pitch range — so the peak
+//! stroke width, not the pitch range — so the peak
 //! list is keyed on exactly what the grid itself is keyed on and there is no
 //! second cache key to get wrong. A bar the reader drags moves uniforms, and
 //! the fragment shader decides which of these peaks to draw and how wide.
 //!
-//! The two numbers that are NOT config, and so live here: how far a bucket has
-//! to beat its neighbours to be a maximum at all ([`REACH`]), and how wide the
-//! neighbourhood a peak's prominence is measured against is ([`MEAN_REACH`]).
-//! Both are properties of the analyzer's own grid — 32 buckets to a semitone —
-//! rather than of the picture.
+//! [`REACH`] is how far a peak has to beat its neighbours to be a maximum.
+//! It belongs to the analyzer's grid — 32 buckets to a semitone.
 
 /// Buckets either side a bucket must beat to count as a peak.
 ///
@@ -19,14 +16,6 @@
 /// line does not read as a row of them.
 const REACH: usize = 6;
 
-/// Buckets either side of a peak the local mean is taken over.
-///
-/// A whole semitone: wide enough that a partial does not raise its own
-/// baseline out from under itself, narrow enough that the mean is the haze
-/// AROUND this partial rather than the column's average level. That is what
-/// makes the prominence bar read the same over a quiet passage as a loud one.
-const MEAN_REACH: usize = 32;
-
 /// Peaks kept per slab.
 ///
 /// The buffer is a fixed record per slot, so this is a size as well as a
@@ -34,7 +23,7 @@ const MEAN_REACH: usize = 32;
 /// whole-song ring beside the grid's own 15.7 MB. Musically it is far past a
 /// chord's worth of partials — a five-note chord with eight audible partials
 /// each is 40 — and what it cuts off under a dense mix is the quietest of
-/// them, which is what the prominence ordering is for.
+/// them, by ordering their stored levels.
 pub(super) const MAX_PEAKS: usize = 48;
 
 /// Buckets one band of the index below covers: a semitone at the analyzer's
@@ -78,8 +67,7 @@ pub(super) const PEAK_STRIDE: usize = PEAK_HEADER + MAX_PEAKS;
 /// and this is the one place in this crate that has to know it: the centroid
 /// below weighs its taps by POWER, which is a dB ratio. Everything else reads
 /// a byte through the affine the caller hands over. `read_of` on the UI side
-/// converts the prominence bar through this same constant, and asserts the two
-/// definitions agree.
+/// asserts the two definitions agree.
 pub const GRID_DB_PER_STEP: f32 = 0.5;
 
 /// The centroid's weight for a tap `d` steps BELOW the peak it belongs to:
@@ -98,15 +86,14 @@ static CENTROID_WEIGHT: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::n
     std::array::from_fn(|d| 10f32.powf(-(d as f32) * GRID_DB_PER_STEP / 10.0))
 });
 
-/// The peaks `slab` holds: at most [`MAX_PEAKS`] of them, the ones standing
-/// furthest above their own local mean.
+/// The peaks `slab` holds: at most [`MAX_PEAKS`] of them, with the loudest
+/// stored levels.
 ///
-/// Each is `(x, byte, mean, 0)`, where `x` is the peak's position on the
+/// Each is `(x, byte, 0, 0)`, where `x` is the peak's position on the
 /// CONTINUOUS bucket axis the shader's `bucket_x` returns — bucket `b` spans
 /// `[b, b + 1)`, so bucket `b`'s own centre is `b + 0.5` and a peak between
-/// two buckets lands between them. `byte` and `mean` are in stored steps, so
-/// `byte - mean` is the prominence the shader compares against its threshold
-/// and `byte` goes through the same level affine a bucket does.
+/// two buckets lands between them. `byte` goes through the same level affine
+/// a bucket does; the remaining components are unused storage alignment.
 ///
 /// Returned SORTED BY `x` ascending, which is what lets the band index in
 /// [`write_slot`] hand a fragment a starting point and lets the scan stop at
@@ -117,24 +104,14 @@ pub(super) fn peaks_of(slab: &[u8]) -> Vec<[f32; 4]> {
         return Vec::new();
     }
     let mut found: Vec<[f32; 4]> = Vec::new();
-    // The local mean by a running sum over the clamped window, so the whole
-    // scan is linear in the slab rather than `n * MEAN_REACH`. `lo` and `hi`
-    // are the window's inclusive ends and only ever move forward.
-    let mut lo = 0usize;
-    let mut hi = MEAN_REACH.min(n - 1);
-    let mut sum: u32 = slab[lo..=hi].iter().map(|&b| u32::from(b)).sum();
-    for i in 0..n {
-        let want_hi = (i + MEAN_REACH).min(n - 1);
-        while hi < want_hi {
-            hi += 1;
-            sum += u32::from(slab[hi]);
-        }
-        let want_lo = i.saturating_sub(MEAN_REACH);
-        while lo < want_lo {
-            sum -= u32::from(slab[lo]);
-            lo += 1;
-        }
+    let mut next = 0;
+    while next < n {
+        let i = next;
         let byte = slab[i];
+        next += 1;
+        while next < n && slab[next] == byte {
+            next += 1;
+        }
         // Silence is not a peak however flat its surroundings are, and the
         // test is what keeps an empty slab's list empty rather than full of
         // the leftmost zero of every plateau.
@@ -145,29 +122,25 @@ pub(super) fn peaks_of(slab: &[u8]) -> Vec<[f32; 4]> {
         // measured — so the outermost [`REACH`] buckets at each end are not
         // candidates. They are the analyzer's own extremes, under 20 Hz and
         // over 20 kHz, where a partial is not a reading anyone takes.
-        if byte == 0 || i < REACH || i + REACH >= n {
+        if byte == 0 || i < REACH || next + REACH > n {
             continue;
         }
-        let (left, right) = (i - REACH, i + REACH);
-        // A flat top counts ONCE, at its left end: a tie to the left
-        // disqualifies, a tie to the right does not. Without the asymmetry a
-        // plateau spends one of the 48 slots per bucket of itself.
-        if slab[left..i].iter().any(|&b| b >= byte) || slab[i + 1..=right].iter().any(|&b| b > byte)
-        {
+        let (left, right) = (i - REACH, next + REACH);
+        // Compare outside the complete plateau. Among separate equal-height
+        // peaks inside REACH, the left one wins the tie as before.
+        if slab[left..i].iter().any(|&b| b >= byte) || slab[next..right].iter().any(|&b| b > byte) {
             continue;
         }
-        // Power-weighted centroid over the peak's own neighbourhood: steadier
-        // column to column than a three-point parabola on noisy dB, which is
-        // what the prototype measured and what stops a partial's line wobbling
-        // by a bucket a frame.
+        // Include the whole flat top plus six buckets either side. Five-taper A4 at
+        // 8192 samples has a 31-bucket quantized plateau; centering only the
+        // first thirteen buckets put its stroke nearly half a semitone flat.
         let (mut num, mut den) = (0.0f32, 0.0f32);
-        for j in left..=right {
+        for j in left..right {
             let w = CENTROID_WEIGHT[usize::from(byte - slab[j])];
             num += w * (j as f32 + 0.5);
             den += w;
         }
-        let mean = sum as f32 / (hi - lo + 1) as f32;
-        found.push([num / den, f32::from(byte), mean, 0.0]);
+        found.push([num / den, f32::from(byte), 0.0, 0.0]);
     }
     if found.len() > MAX_PEAKS {
         // A SELECT and not a sort: the shader takes a max over the list, so
@@ -176,12 +149,12 @@ pub(super) fn peaks_of(slab: &[u8]) -> Vec<[f32; 4]> {
         // position makes the comparison a strict total order and the surviving
         // SET the same on every run — which is what a golden frame needs.
         found.select_nth_unstable_by(MAX_PEAKS, |a, b| {
-            (b[1] - b[2]).total_cmp(&(a[1] - a[2])).then(a[0].total_cmp(&b[0]))
+            b[1].total_cmp(&a[1]).then(a[0].total_cmp(&b[0]))
         });
         found.truncate(MAX_PEAKS);
         // The scan emitted them in bucket order and the select has just
         // scrambled the survivors. Put them back: the band index and the
-        // shader's early break both read this order, not the prominence one.
+        // shader's early break both read this order, not the level ordering.
         found.sort_unstable_by(|a, b| a[0].total_cmp(&b[0]));
     }
     found
@@ -236,13 +209,13 @@ mod tests {
         }
     }
 
-    fn prominence(peak: [f32; 4]) -> f32 {
-        peak[1] - peak[2]
+    fn level(peak: [f32; 4]) -> f32 {
+        peak[1]
     }
 
-    /// Two partials over a noise floor: both are found, the louder stands
-    /// further above its surroundings, and nothing the bed threw up stands as
-    /// far as either.
+    /// Two partials over a noise floor: both are found, the louder has
+    /// the higher stored level, and nothing the bed threw up is as
+    /// loud as either.
     ///
     /// The bed is what makes it a measurement rather than an assertion about
     /// two isolated spikes: it really does produce local maxima (the count is
@@ -260,32 +233,32 @@ mod tests {
             *found
                 .iter()
                 .filter(|p| (p[0] - x).abs() < 1.0)
-                .max_by(|a, b| prominence(**a).total_cmp(&prominence(**b)))
+                .max_by(|a, b| level(**a).total_cmp(&level(**b)))
                 .unwrap_or_else(|| panic!("no peak within a bucket of {x}"))
         };
         let (loud, quiet) = (near(100.5), near(300.5));
         assert!(
-            prominence(loud) > prominence(quiet),
+            level(loud) > level(quiet),
             "the 30 dB partial ({:.1}) did not outrank the 10 dB one ({:.1})",
-            prominence(loud),
-            prominence(quiet),
+            level(loud),
+            level(quiet),
         );
         let bed_peaks: Vec<_> = found
             .iter()
             .copied()
             .filter(|p| (p[0] - 100.5).abs() >= 1.0 && (p[0] - 300.5).abs() >= 1.0)
             .collect();
-        let worst = bed_peaks.iter().copied().map(prominence).fold(f32::MIN, f32::max);
+        let worst = bed_peaks.iter().copied().map(level).fold(f32::MIN, f32::max);
         assert!(
             bed_peaks.len() >= 8,
             "the bed produced {} local maxima, too few for the ordering to be measured against",
             bed_peaks.len(),
         );
         assert!(
-            worst < prominence(quiet),
-            "a bed maximum ({worst:.1}) stood as far above its surroundings as the quiet partial \
+            worst < level(quiet),
+            "a bed maximum ({worst:.1}) was as loud as the quiet partial \
              ({:.1})",
-            prominence(quiet),
+            level(quiet),
         );
     }
 
@@ -309,29 +282,26 @@ mod tests {
         );
     }
 
-    /// A flat top is one peak, at its left end — and so costs one of the 48
-    /// slots rather than one per bucket of itself.
+    /// A plateau wider than the old centroid window still lands at its centre.
     #[test]
-    fn a_flat_top_yields_one_peak() {
-        let mut slab = vec![20u8; 200];
-        slab[100..105].fill(200);
-        let found = peaks_of(&slab);
-        assert_eq!(found.len(), 1, "a five-bucket plateau was picked {} times", found.len());
-        assert!(
-            (100.0..105.0).contains(&found[0][0]),
-            "the plateau's peak landed at {:.2}, outside it",
-            found[0][0],
-        );
+    fn a_wide_flat_top_yields_one_centered_peak() {
+        for width in [5, 31] {
+            let mut slab = vec![20u8; 200];
+            slab[100..100 + width].fill(200);
+            let found = peaks_of(&slab);
+            assert_eq!(found.len(), 1, "a {width}-bucket plateau was picked {} times", found.len());
+            let centre = 100.0 + width as f32 / 2.0;
+            assert!((found[0][0] - centre).abs() < 0.01, "{width}-bucket plateau: {found:?}");
+        }
     }
 
-    /// Past the cap it is the most prominent that are kept.
+    /// Past the cap it is the loudest stored levels that are kept.
     ///
     /// Sixty peaks, a bucket wide and twenty apart so every one of them really
-    /// is a local maximum, rising in height along the slab — which makes the
-    /// prominence ordering the height ordering (the local mean rises far more
-    /// slowly than the peak does) and the kept set nameable.
+    /// is a local maximum, rising in height along the slab so the kept set is
+    /// nameable.
     #[test]
-    fn the_cap_keeps_the_most_prominent() {
+    fn the_cap_keeps_the_loudest() {
         const PEAKS: usize = 60;
         let mut slab = vec![0u8; 20 * PEAKS + 20];
         for k in 0..PEAKS {

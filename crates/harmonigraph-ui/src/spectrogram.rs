@@ -762,7 +762,6 @@ pub(crate) fn read_of(view: &PaneView, rows: usize, slab_seconds: f64) -> Spectr
         // stroke is a musical width, so it zooms with the pitch axis instead
         // of holding a size in pixels.
         stroke_sigma: view.cfg.stroke_cents / 100.0 * BINS_PER_SEMITONE as f32,
-        prominence_steps: view.cfg.prominence_db / DB_STEP,
         // Seconds to slabs, for the same reason: the stroke's smoothing along
         // time is a stretch of MUSIC, so it covers the same stretch at every
         // rung of the slab ladder and the picture keeps its character when a

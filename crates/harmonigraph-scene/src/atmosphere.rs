@@ -13,8 +13,8 @@ pub struct SpectralAtmosphere {
     /// spectrogram's Partials detail, as a multiple of its own level. Heatmap
     /// detail never reads it: there the diffused material IS the picture.
     ///
-    /// Here rather than beside the other two Partials numbers
-    /// (`SpectrumConfig::stroke_cents` and `prominence_db`) because it is a
+    /// Here rather than beside the Partials stroke width
+    /// (`SpectrumConfig::stroke_cents`) because it is a
     /// property of the same soft field `diffusion` mixes, and the two are
     /// dragged together — the cloud is what is left of the heatmap once the
     /// peaks are drawn over it.

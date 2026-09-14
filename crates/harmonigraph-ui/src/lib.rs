@@ -49,7 +49,7 @@ pub use layout::{Layout, Placement, PRESETS};
 // which nothing outside their own module wanted at all.
 pub use config::{
     SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumDetail, SpectrumTapers,
-    SpectrumWindow, PROMINENCE_DB_RANGE, SCALE_BAR_RANGE, STROKE_CENTS_RANGE, TILT_STEPS,
+    SpectrumWindow, SCALE_BAR_RANGE, STROKE_CENTS_RANGE, TILT_STEPS,
 };
 // The Spiral pane's framing, which is `AppearanceDocument::spiral`'s type. `panes`
 // is private, so a public field of a type from in there is a field nothing

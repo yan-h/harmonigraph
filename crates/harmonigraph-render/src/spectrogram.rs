@@ -130,10 +130,6 @@ pub struct SpectrogramRead {
     /// already converted: this crate is handed the read's arithmetic and never
     /// learns what a bucket is worth. The pane owns the cents.
     pub stroke_sigma: f32,
-    /// How far a peak must stand above its own local mean to be drawn, in
-    /// stored steps — the grid's own unit, so the shader compares two numbers
-    /// it already holds. See [`GRID_DB_PER_STEP`].
-    pub prominence_steps: f32,
     /// Sigma of the stroke's smoothing along TIME, in slabs.
     ///
     /// In slabs because that is what the shader can step; the pane converts a
@@ -151,7 +147,7 @@ pub struct SpectrogramRead {
 /// [`GATHER_SIGMA_MAX_SLABS`] is what bounds that.
 ///
 /// 80 ms is the prototype's: long enough to average away a one-taper column's
-/// 4.5 dB of level noise and the prominence test flickering at its threshold,
+/// 4.5 dB of level noise,
 /// short enough that a note's onset is still an edge.
 pub const GATHER_SIGMA_SECONDS: f64 = 0.08;
 
@@ -294,13 +290,11 @@ struct SpectrogramUniforms {
     run_slabs: u32,
     detail: u32,
     stroke_sigma: f32,
-    prominence_steps: f32,
     peak_stride: u32,
     gather_sigma_slabs: f32,
     peak_header: u32,
     peak_bands: u32,
     peak_band: f32,
-    _pad: [u32; 3],
 }
 
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
@@ -340,8 +334,7 @@ struct GridBuffer {
     /// The peak list is still a pure function of the slab's bytes — nothing
     /// about WHICH peaks a slot holds depends on a setting. This says only
     /// whether the work was done, because a Heatmap pane never reads the
-    /// buffer and picking a run costs 26 microseconds a slab — 27 ms at the
-    /// live ring's 1024 and 107 at the whole-song 4096
+    /// buffer and a full run costs one pick per slab
     /// (`what_picking_a_full_run_costs`). It is not a second
     /// cache key in the dangerous direction: a stale `true` is impossible
     /// (only a write sets it, and a new key clears it by making a new record),
@@ -350,11 +343,11 @@ struct GridBuffer {
     ///
     /// It is DELIBERATELY one-way inside a key: switching back to Heatmap
     /// leaves it standing, so the dirty patches go on picking and writing a
-    /// slot nothing samples. That is a drip — 26 microseconds and 1.3 KB per
+    /// slot nothing samples. That is a drip — one pick and 1.3 KB per
     /// dirty slab, and nothing at all while the transport is parked — and it
     /// buys the absence of the opposite failure, which is not a drip: clearing
-    /// it would make every switch BACK to Partials a whole-run refill, 27 ms
-    /// live and 107 whole-song, landing as a stall on the frame the reader
+    /// it would make every switch BACK to Partials a whole-run refill,
+    /// landing as a stall on the frame the reader
     /// pressed the button on. A reader comparing the two pictures presses it
     /// repeatedly.
     filled: bool,
@@ -607,7 +600,7 @@ impl CallbackTrait for SpectrogramCallback {
         let peak_words = self.grid.capacity as usize * peaks::PEAK_STRIDE;
         let peak_size = (peak_words * std::mem::size_of::<[f32; 4]>()) as u64;
         // Only the detail that READS the peaks pays for picking them. Picking
-        // a whole-song run costs 107 ms of CPU, which a Heatmap pane has no use
+        // a whole-song run costs CPU time, which a Heatmap pane has no use
         // for; what makes skipping it safe rather than a second cache key is
         // [`GridBuffer::filled`] plus the caller handing over the whole run
         // every frame, so the mode coming on refills from data already here.
@@ -811,24 +804,23 @@ impl CallbackTrait for SpectrogramCallback {
             run_slabs: run_slabs as u32,
             detail: u32::from(self.read.partials),
             stroke_sigma: self.read.stroke_sigma,
-            prominence_steps: self.read.prominence_steps,
             peak_stride: peaks::PEAK_STRIDE as u32,
             gather_sigma_slabs: self.read.gather_sigma_slabs,
             peak_header: peaks::PEAK_HEADER as u32,
             peak_bands: peaks::PEAK_BANDS as u32,
             peak_band: peaks::PEAK_BAND_BUCKETS as f32,
-            _pad: [0; 3],
         };
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        // The filtered route is what draws the soft field, and Partials needs
-        // it for the cloud behind its strokes even at zero diffusion — where
-        // the cloud is the raw spectrum dimmed rather than a blur of it. So
-        // the bypass is "neither half of the field is asked for" rather than
-        // "diffusion is off".
+        // Partials only needs the filtered route while its cloud is visible.
+        // Its disabled Diffusion control must affect neither routing nor color.
         if let Some(settings) = self.atmosphere.filter(|a| {
             let settings = a.settings.sanitized();
-            settings.diffusion > 0.0 || (self.read.partials && settings.cloud > 0.0)
+            if self.read.partials {
+                settings.cloud > 0.0
+            } else {
+                settings.diffusion > 0.0
+            }
         }) {
             let viewport = egui::epaint::ViewportInPixels::from_points(
                 &self.rect,
@@ -1115,7 +1107,6 @@ mod tests {
             // have their own picker tests and a golden frame of their own.
             partials: false,
             stroke_sigma: 30.0 / 100.0 * BINS_PER_SEMITONE,
-            prominence_steps: 10.0,
             // The ladder's finest rung, where the gather sits at its cap and
             // a fixture asks a frame for the widest one it can.
             gather_sigma_slabs: GATHER_SIGMA_MAX_SLABS,
@@ -1412,6 +1403,37 @@ mod tests {
             pitch_vertical: true,
         });
         cb
+    }
+
+    #[test]
+    fn partials_draw_low_contrast_peaks_without_a_diffusion_dependency() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = cloud_fixture();
+        cb.read.partials = true;
+        // Only 2 dB above its surroundings: the removed 5 dB gate hid this.
+        let mut bytes = vec![180; cb.grid.run.len()];
+        for slab in bytes.chunks_exact_mut(BINS as usize) {
+            slab[512] = 184;
+        }
+        cb.grid.run = Arc::new(bytes);
+        // A nonblack floor exposes a route that uses lut[0] for no stroke.
+        cb.shades.lut = Arc::new(vec![[128, 128, 128, 255]; 256]);
+        let mut no_cloud = None;
+        for cloud in [0.0, 1e-8, 0.35] {
+            cb.atmosphere.as_mut().unwrap().settings.cloud = cloud;
+            cb.atmosphere.as_mut().unwrap().settings.diffusion = 0.0;
+            let before = fresh_frame(&device, &queue, &cb);
+            cb.atmosphere.as_mut().unwrap().settings.diffusion = 1.0;
+            let after = fresh_frame(&device, &queue, &cb);
+            assert!(before == after, "disabled Diffusion changed Partials at Cloud={cloud}");
+            if cloud == 0.0 {
+                assert!(before.chunks_exact(4).any(|p| p[0] > 100), "low-contrast stroke vanished");
+                assert_eq!(&before[..4], &[0, 0, 0, 255], "empty pitch inherited the LUT floor");
+                no_cloud = Some(before);
+            } else if cloud < 0.01 {
+                assert!(Some(before) == no_cloud, "Cloud has a discontinuity at zero");
+            }
+        }
     }
 
     #[test]
@@ -2093,7 +2115,6 @@ mod tests {
             level_per_midi: 0.0,
             partials: true,
             stroke_sigma: 0.05 * BINS_PER_SEMITONE,
-            prominence_steps: 10.0,
             ..read_of(SPECTRUM_MIN_MIDI, bins as f32 / BINS_PER_SEMITONE, SIZE[1])
         };
         // A row's own width in buckets, and the half-footprint the floor is.
