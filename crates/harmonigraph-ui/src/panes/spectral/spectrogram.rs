@@ -175,9 +175,9 @@ pub(super) fn heatmap_vertices(
 /// bright patches floating on the background.
 ///
 /// The heatmap is opaque and untinted, sharing the spectrum curve's
-/// [`cell_color`] ramp. Diffusion softens its display levels before that ramp
+/// [`cell_color`] ramp. The styles soften its display levels before that ramp
 /// is applied once, keeping the data and its surrounding body on one palette.
-/// At zero diffusion the original per-pixel level read is preserved.
+/// Plain preserves the original per-pixel level read.
 pub(crate) fn draw_spectrogram(
     painter: &egui::Painter,
     axes: &Axes,
@@ -293,6 +293,8 @@ pub(crate) fn draw_spectrogram(
             settings: cfg.atmosphere,
             region: egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0)),
             pitch_vertical: axes.dir_pitch().y.abs() > 0.5,
+            points_per_cent: axes.pitch_len() / (scale.span * 100.0),
+            points_per_ms: time.region_depth_len(axes) / (time.window() as f32 * 1000.0),
         }),
     ));
 }

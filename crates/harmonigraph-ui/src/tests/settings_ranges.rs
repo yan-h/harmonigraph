@@ -60,7 +60,7 @@ fn loaded(edge: Edge) -> SharedState {
     poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
         attack, release, keyline, roll_seconds, roll_thickness, roll_opacity, roll_lead,
         roll_lead_fade, roll_lead_release, note_name_scale, volume_floor_db, volume_ceiling_db);
-    poison!(a.spectrum.atmosphere; diffusion, analyzer_softness, note_glow);
+    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, contours, contour_softness, analyzer_softness, note_glow);
     saved.workspace.interaction.ui_scale = v;
     // These owners have NO ValueBar/RangeBar today. Still pass through their
     // real shared load boundary; zero Video visits below explicitly records

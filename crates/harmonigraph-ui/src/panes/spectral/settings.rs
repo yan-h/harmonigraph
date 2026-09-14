@@ -114,10 +114,34 @@ pub(crate) fn spectrum_settings_pane(
 
     section(ui, "Softness and glow");
     let atmosphere = &mut cfg.atmosphere;
-    ValueBar::new(&mut atmosphere.diffusion, 0.0..=1.0, "Diffusion")
-        .percent().show(ui).on_hover_text("Smooth fine spectrogram detail at every brightness. 0% restores the detailed heatmap; 100% uses only the softened field.");
+    use harmonigraph_scene::SpectrogramStyle;
+    choice_row(
+        ui,
+        "Spectrogram",
+        &mut atmosphere.style,
+        &[
+            (SpectrogramStyle::Plain, "Plain", "Measured power without styling"),
+            (SpectrogramStyle::Blur, "Blur", "Smooth the whole intensity field"),
+            (SpectrogramStyle::Lava, "Lava", "Smooth intensity terraces"),
+        ],
+    );
+    if atmosphere.style != SpectrogramStyle::Plain {
+        ValueBar::new(&mut atmosphere.pitch_softness, 0.0..=300.0, "Pitch softness")
+            .unit(1.0, " ct")
+            .show(ui);
+        ValueBar::new(&mut atmosphere.time_softness, 0.0..=2000.0, "Time softness")
+            .unit(1.0, " ms")
+            .show(ui);
+        ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Spread").percent().show(ui);
+        if atmosphere.style == SpectrogramStyle::Lava {
+            ValueBar::new(&mut atmosphere.contours, 2.0..=16.0, "Contours").integer().show(ui);
+            ValueBar::new(&mut atmosphere.contour_softness, 0.01..=0.5, "Edge softness")
+                .percent()
+                .show(ui);
+        }
+    }
     ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")
-        .percent().show(ui).on_hover_text("Blend the live analyzer from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram diffusion and outline opacity.");
+        .percent().show(ui).on_hover_text("Blend the live analyzer from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram style and outline opacity.");
     ValueBar::new(&mut atmosphere.note_glow, 0.0..=1.0, "Note glow")
         .percent().show(ui).on_hover_text("Additional glow around note ribbons. Adjust their shadows under Display → Lighting → Shadows.");
 

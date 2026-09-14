@@ -1126,7 +1126,7 @@ mod tests {
                 .spectrum
                 .history()
                 .iter()
-                .map(|c| (c.time, c.db.clone()))
+                .map(|c| (c.time, c.db().clone()))
                 .collect::<Vec<_>>()
         };
         let mut reference = None;
@@ -1215,7 +1215,7 @@ mod tests {
                 .spectrum
                 .history()
                 .iter()
-                .map(|c| (c.time, c.db.clone()))
+                .map(|c| (c.time, c.db().clone()))
                 .collect();
             let onsets: Vec<_> =
                 shared.ui.picture.runtime.tracker.roll().notes().map(|n| n.start).collect();
@@ -1271,7 +1271,7 @@ mod tests {
         for column in spectrum.history().iter().skip(before) {
             assert!(column.time > 4.0, "no window may straddle the reset");
             assert!(
-                column.db.iter().all(|v| *v == 0),
+                column.db().iter().all(|v| *v == 0),
                 "no old-format energy may leak into silence"
             );
         }

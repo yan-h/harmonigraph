@@ -237,8 +237,12 @@ struct Cloud {
     origin: vec2<f32>,
     size: vec2<f32>,
     step: vec2<f32>,
-    diffusion: f32,
     ppp: f32,
+    spread: f32,
+    contours: f32,
+    contour_softness: f32,
+    style: u32,
+    _pad: u32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -249,27 +253,42 @@ struct Cloud {
 // the float source target must not take fs_heatmap_linear's RGB conversion.
 @fragment
 fn fs_density_source(in: VertexOut) -> @location(0) vec4<f32> {
-    // Pitch already averages the reduced pixel's bucket footprint. Average
-    // time too: a single center read can turn fine on/off slabs into a solid
-    // bright or dark source depending on the scrolling phase. Four stratified
-    // taps cover this quarter-resolution pixel at a fixed, bounded cost.
+    // Integrate the piecewise-linear time read exactly between slab centers.
+    // A large musical blur reduces the source width, so four fixed samples
+    // would skip columns and alias periodic broadband energy before filtering.
     let width = fwidth(in.slab);
-    var level = 0.0;
-    for (var i = 0u; i < 4u; i += 1u) {
-        var tap = in;
-        tap.slab += (f32(i) * 0.25 - 0.375) * width;
-        level += heatmap_level(tap);
+    if width < 0.0001 { return vec4<f32>(heatmap_level(in), 0.0, 0.0, 1.0); }
+    let high = in.slab + width * 0.5;
+    var at = in.slab - width * 0.5;
+    let covered = high - at;
+    if covered <= 0.0 { return vec4<f32>(heatmap_level(in), 0.0, 0.0, 1.0); }
+    var tap = in;
+    tap.slab = at;
+    var left = heatmap_level(tap);
+    var integral = 0.0;
+    let last_center = f32(locals.run_slabs) - 0.5;
+    // Outside the run the read holds its edge; skip that constant interval in
+    // one step. Inside, each original slab contributes to this footprint.
+    for (var i = 0u; i < locals.run_slabs + 2u; i += 1u) {
+        if at >= high { break; }
+        var next = min(high, max(0.5, floor(at - 0.5) + 1.5));
+        if at >= last_center { next = high; }
+        tap.slab = next;
+        let right = heatmap_level(tap);
+        integral += (left + right) * 0.5 * (next - at);
+        left = right;
+        at = next;
     }
-    return vec4<f32>(level * 0.25, 0.0, 0.0, 1.0);
+    return vec4<f32>(integral / covered, 0.0, 0.0, 1.0);
 }
 @fragment
 fn fs_cloud_light(in: VertexOut) -> @location(0) vec4<f32> {
-    // Combine the two smoothing scales at quarter resolution so the final
+    // Combine the two smoothing scales in the scalar image so the final
     // full-resolution pass needs only one filtered read per pixel.
     let uv = in.position.xy / vec2<f32>(textureDimensions(wide_light));
     let close = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
     let wide = textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r;
-    return vec4<f32>(close * 0.75 + wide * 0.25, 0.0, 0.0, 1.0);
+    return vec4<f32>(mix(close, wide, cloud.spread), 0.0, 0.0, 1.0);
 }
 fn baked_density(position: vec2<f32>) -> f32 {
     let uv = (position / cloud.ppp - cloud.origin) / cloud.size;
@@ -277,15 +296,22 @@ fn baked_density(position: vec2<f32>) -> f32 {
     // after both filters have consumed it. No attachment samples itself.
     return textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
 }
-fn diffused_level(core: f32, material: f32) -> f32 {
-    // Diffusion removes raw detail at every brightness. Its upper endpoint
-    // is entirely filtered; restoring bright peaks here also restores grain.
-    // Ease out the raw contribution: the default 10% keeps 81% of the detail,
-    // and 70% leaves only 9%.
-    let raw = (1.0 - cloud.diffusion) * (1.0 - cloud.diffusion);
-    return mix(material, core, raw);
+fn smoothed_level(core: f32, material: f32) -> f32 {
+    if all(cloud.step == vec2<f32>(0.0)) { return core; }
+    return material;
 }
-fn density_color(level: f32) -> vec4<f32> {
+// Local style transfer. No history, upload, smoothing or palette work is
+// duplicated when adding a display style here. A residual slope preserves
+// quiet fields below the first terrace; the zero input remains exactly zero.
+fn style_level(level: f32) -> f32 {
+    if cloud.style != 2u { return level; }
+    let x = clamp(level, 0.0, 1.0) * cloud.contours;
+    let edge = min(0.5, max(cloud.contour_softness, fwidth(x) * 0.5));
+    let terraces = (floor(x) + smoothstep(0.5 - edge, 0.5 + edge, fract(x))) / cloud.contours;
+    return mix(level, terraces, 0.9 * (1.0 - smoothstep(0.5, 1.5, fwidth(x))));
+}
+fn density_color(raw_level: f32) -> vec4<f32> {
+    let level = style_level(raw_level);
     // Interpolate the authored palette's center samples only after diffusion.
     // The first half-slice joins true black smoothly, even for an edited ramp
     // whose first sample is nonblack; there is no separate halo color curve.
@@ -303,15 +329,15 @@ fn density_color(level: f32) -> vec4<f32> {
 // This quad never samples the grid, so the oldest column cannot be smeared.
 @fragment
 fn fs_cloud_backdrop_gamma(in: VertexOut) -> @location(0) vec4<f32> {
-    return density_color(diffused_level(0.0, baked_density(in.position.xy)));
+    return density_color(smoothed_level(0.0, baked_density(in.position.xy)));
 }
 @fragment
 fn fs_cloud_backdrop_linear(in: VertexOut) -> @location(0) vec4<f32> {
-    let gamma = density_color(diffused_level(0.0, baked_density(in.position.xy)));
+    let gamma = density_color(smoothed_level(0.0, baked_density(in.position.xy)));
     return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), 1.0);
 }
 fn cloud_color(in: VertexOut) -> vec4<f32> {
-    return density_color(diffused_level(heatmap_level(in), baked_density(in.position.xy)));
+    return density_color(smoothed_level(heatmap_level(in), baked_density(in.position.xy)));
 }
 @fragment
 fn fs_cloud_gamma(in: VertexOut) -> @location(0) vec4<f32> {

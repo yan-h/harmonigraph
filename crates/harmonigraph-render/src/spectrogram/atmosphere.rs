@@ -6,7 +6,7 @@ use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex}
 use crate::{create_vertex_buffer, wgpu};
 
 pub(super) const SOURCE: &str = include_str!("../shaders/spectral_atmosphere.wgsl");
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 
 #[derive(Clone, Copy, Debug)]
 pub struct SpectrogramAtmosphere {
@@ -15,6 +15,30 @@ pub struct SpectrogramAtmosphere {
     pub region: egui::Rect,
     /// Axis used to preserve the reduced source image's pitch footprint.
     pub pitch_vertical: bool,
+    /// Physical display points per cent and per millisecond, before clipping.
+    pub points_per_cent: f32,
+    pub points_per_ms: f32,
+}
+
+/// Bound filter work by reducing each axis only as its musical radius grows.
+/// The scalar source averages its whole footprint before these Gaussian passes.
+/// The allocation key is this size alone; no measurement cache is invalidated.
+pub(super) fn source_size(
+    pixels: [u32; 2],
+    ppp: f32,
+    atmosphere: SpectrogramAtmosphere,
+) -> [u32; 2] {
+    let settings = atmosphere.settings.sanitized();
+    if settings.pitch_softness == 0.0 && settings.time_softness == 0.0 {
+        return [1, 1];
+    }
+    let pitch = settings.pitch_softness * atmosphere.points_per_cent * ppp;
+    let time = settings.time_softness * atmosphere.points_per_ms * ppp;
+    let sigma = if atmosphere.pitch_vertical { [time, pitch] } else { [pitch, time] };
+    std::array::from_fn(|axis| {
+        let base = pixels[axis];
+        ((pixels[axis] as f32 / (sigma[axis] * 0.5).max(1.0)).ceil() as u32).max(8).min(base)
+    })
 }
 
 #[repr(C)]
@@ -23,8 +47,12 @@ struct Uniforms {
     origin: [f32; 2],
     size: [f32; 2],
     step: [f32; 2],
-    diffusion: f32,
     ppp: f32,
+    spread: f32,
+    contours: f32,
+    contour_softness: f32,
+    style: u32,
+    _pad: u32,
 }
 
 pub(super) struct Pipelines {
@@ -330,13 +358,23 @@ impl Targets {
             (read.rows as f32 * self.size[axis] as f32 / visible_pixels).round().max(1.0) as u32;
         queue.write_buffer(&self.source_uniform, 0, bytemuck::bytes_of(&read));
         let settings = atmosphere.settings.sanitized();
-        let radius = rect.width().min(rect.height()) * 0.008;
+        let pitch = settings.pitch_softness * atmosphere.points_per_cent;
+        let time = settings.time_softness * atmosphere.points_per_ms;
+        let radius = if pitch_vertical { [time, pitch] } else { [pitch, time] };
         let uniforms = Uniforms {
             origin: rect.min.into(),
             size: rect.size().into(),
-            step: [radius / rect.width(), radius / rect.height()],
-            diffusion: settings.diffusion,
+            step: [radius[0] / rect.width(), radius[1] / rect.height()],
             ppp,
+            spread: settings.spread,
+            contours: settings.contours,
+            contour_softness: settings.contour_softness,
+            _pad: 0,
+            style: match settings.style {
+                harmonigraph_scene::SpectrogramStyle::Plain => 0,
+                harmonigraph_scene::SpectrogramStyle::Blur => 1,
+                harmonigraph_scene::SpectrogramStyle::Lava => 2,
+            },
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }

@@ -671,14 +671,18 @@ impl CallbackTrait for SpectrogramCallback {
         };
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        if let Some(settings) = self.atmosphere.filter(|a| a.settings.sanitized().diffusion > 0.0) {
+        if let Some(settings) = self.atmosphere.filter(|a| {
+            a.settings.style != harmonigraph_scene::SpectrogramStyle::Plain
+                && ((a.settings.pitch_softness > 0.0 || a.settings.time_softness > 0.0)
+                    || a.settings.style == harmonigraph_scene::SpectrogramStyle::Lava)
+        }) {
             let viewport = egui::epaint::ViewportInPixels::from_points(
                 &self.rect,
                 ppp,
                 screen_descriptor.size_in_pixels,
             );
             let pixels = [viewport.width_px.max(0) as u32, viewport.height_px.max(0) as u32];
-            let size = pixels.map(|v| v.div_ceil(4));
+            let size = atmosphere::source_size(pixels, ppp, settings);
             if size.iter().all(|&v| v > 0) {
                 let cloud = cloud.get_or_insert_with(|| {
                     atmosphere::Pipelines::new(device, self.target_format, layout)
@@ -1239,13 +1243,121 @@ mod tests {
             // Pin the visible diffusion used by the pixel probes independently
             // of the fresh appearance's gentler setting.
             settings: harmonigraph_scene::SpectralAtmosphere {
-                diffusion: 0.7,
+                style: harmonigraph_scene::SpectrogramStyle::Blur,
                 ..Default::default()
             },
             region: cb.rect,
             pitch_vertical: true,
+            points_per_cent: 0.03,
+            points_per_ms: 0.01,
         });
         cb
+    }
+
+    #[test]
+    fn lava_preserves_silence_quiet_fields_and_nested_levels() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = cloud_fixture();
+        cb.atmosphere.as_mut().unwrap().settings.style = harmonigraph_scene::SpectrogramStyle::Lava;
+        for smooth in [false, true] {
+            cb.atmosphere.as_mut().unwrap().settings.pitch_softness =
+                if smooth { 35.0 } else { 0.0 };
+            cb.atmosphere.as_mut().unwrap().settings.time_softness =
+                if smooth { 120.0 } else { 0.0 };
+            let mut previous = 0;
+            for value in [0, 20, 64, 96, 128, 160, 192, 224, 255] {
+                cb.grid.run = Arc::new(vec![value; cb.grid.run.len()]);
+                let frame = fresh_frame(&device, &queue, &cb);
+                let blue = frame[(64 * 128 + 64) * 4 + 2];
+                if value == 0 {
+                    assert_eq!(blue, 0);
+                } else {
+                    assert!(blue > previous, "quiet and nested levels survive: {value}");
+                }
+                previous = blue;
+                for y in 0..128 {
+                    for x in 0..128 {
+                        assert!(
+                            frame[(y * 128 + x) * 4 + 2].abs_diff(blue) <= 1,
+                            "flat field gained texture"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn held_newest_slab_and_zero_softness_preserve_the_field() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = cloud_fixture();
+        cb.grid = grid_of(Arc::new(vec![96; 128 * BINS as usize]), BINS, 128, 0);
+        for v in &mut cb.vertices {
+            v.slab = 100.5;
+        }
+        let held = fresh_frame(&device, &queue, &cb);
+        assert!((95..=97).contains(&held[(64 * 128 + 64) * 4 + 2]), "held strip became black");
+        let mut raw = cloud_fixture();
+        let settings = &mut raw.atmosphere.as_mut().unwrap().settings;
+        settings.pitch_softness = 0.0;
+        settings.time_softness = 0.0;
+        let zero = fresh_frame(&device, &queue, &raw);
+        raw.atmosphere = None;
+        assert!(zero == fresh_frame(&device, &queue, &raw), "zero widths added smoothing");
+    }
+
+    #[test]
+    fn wide_musical_blur_integrates_periodic_broadband_without_phase_aliasing() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = cloud_fixture();
+        cb.vertices = full_quad(512);
+        cb.atmosphere.as_mut().unwrap().settings.time_softness = 2000.0;
+        cb.atmosphere.as_mut().unwrap().points_per_ms = 0.128;
+        let mut frames = Vec::new();
+        for phase in 0..2 {
+            let bytes = (0..512)
+                .flat_map(|slab| vec![if (slab + phase) % 2 == 0 { 0 } else { 255 }; BINS as usize])
+                .collect();
+            cb.grid = grid_of(Arc::new(bytes), BINS, 512, 0);
+            frames.push(fresh_frame(&device, &queue, &cb));
+        }
+        assert!(compare(&frames[0], &frames[1]).0 <= 2, "wide source aliased alternating columns");
+        let blue = frames[0][(64 * 128 + 64) * 4 + 2];
+        assert!((126..=130).contains(&blue), "all columns contribute, got {blue}");
+    }
+
+    #[test]
+    fn golden_spectrogram_styles_broadband_quiet_and_silence() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = cloud_fixture();
+        // A broad smooth field, quiet band, granular broadband patch, and black
+        // margins. No peak recognition can explain these shapes.
+        let mut bytes = vec![0; cb.grid.run.len()];
+        for slab in 1..11 {
+            for bin in 80..944 {
+                let y = bin as f32 / 1024.0;
+                let x = slab as f32 / 12.0;
+                let blob = (1.0 - ((x - 0.55).powi(2) * 7.0 + (y - 0.55).powi(2) * 5.0)).max(0.0);
+                let level = if bin < 220 { 0.13 } else { blob * 0.8 };
+                let grain = if slab < 5 && bin > 650 {
+                    ((bin * 17 + slab * 31) % 13) as f32 / 50.0
+                } else {
+                    0.0
+                };
+                bytes[slab * BINS as usize + bin] = ((level + grain).min(1.0) * 255.0) as u8;
+            }
+        }
+        cb.grid.run = Arc::new(bytes);
+        for (style, name) in [
+            (harmonigraph_scene::SpectrogramStyle::Plain, "spectrogram-style-plain"),
+            (harmonigraph_scene::SpectrogramStyle::Blur, "spectrogram-style-blur"),
+            (harmonigraph_scene::SpectrogramStyle::Lava, "spectrogram-style-lava"),
+        ] {
+            let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+            settings.style = style;
+            let frame = fresh_frame(&device, &queue, &cb);
+            harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR")).check(name, SIZE, &frame);
+        }
     }
 
     #[test]
@@ -1302,10 +1414,14 @@ mod tests {
             let mut phases = Vec::new();
             for phase in 0..2 {
                 let mut cb = cloud_fixture();
-                // Four one-pixel stripes per reduced texel, inside a broad
-                // pitch band. The two phases have the same mean intensity.
-                // In time, the old center-only source reads all on or all off;
-                // in pitch, the source already averages each pixel footprint.
+                // A four-pixel stripe period, softened with a four-pixel
+                // Gaussian sigma in either axis. Musical controls explicitly
+                // provide that width; the source has no hidden quarter-res blur.
+                // Isolate the close field: the wide field intentionally carries
+                // the differently phased band edges into these interior probes.
+                cb.atmosphere.as_mut().unwrap().settings.spread = 0.0;
+                cb.atmosphere.as_mut().unwrap().settings.pitch_softness = 140.0;
+                cb.atmosphere.as_mut().unwrap().settings.time_softness = 400.0;
                 let mut bytes = vec![0; 128 * BINS as usize];
                 for slab in 0..128 {
                     for bucket in 256..768 {
@@ -1317,10 +1433,16 @@ mod tests {
                 }
                 cb.grid = grid_of(Arc::new(bytes), BINS, 128, 0);
                 cb.vertices = full_quad(128);
-                phases.push([0.0, 0.7, 1.0].map(|diffusion| {
-                    cb.atmosphere.as_mut().unwrap().settings.diffusion = diffusion;
-                    fresh_frame(&device, &queue, &cb)
-                }));
+                phases.push(
+                    [
+                        harmonigraph_scene::SpectrogramStyle::Plain,
+                        harmonigraph_scene::SpectrogramStyle::Blur,
+                    ]
+                    .map(|style| {
+                        cb.atmosphere.as_mut().unwrap().settings.style = style;
+                        fresh_frame(&device, &queue, &cb)
+                    }),
+                );
             }
             // Stay inside the band, away from the history/filter boundaries.
             let difference = |setting: usize| -> u32 {
@@ -1332,15 +1454,12 @@ mod tests {
             let raw = difference(0);
             assert!(raw > 2048 * 100, "fixture missed bright grain, temporal={temporal}");
             assert!(
-                difference(1) < raw / 6,
-                "70% diffusion kept bright grain, temporal={temporal}"
-            );
-            assert!(
-                difference(2) <= 2048,
-                "100% diffusion retained fine phase, temporal={temporal}"
+                difference(1) <= 2048,
+                "Gaussian retained fine phase, temporal={temporal}, difference={}",
+                difference(1)
             );
             for phase in &phases {
-                let full = &phase[2];
+                let full = &phase[1];
                 assert!(full[(64 * 128 + 64) * 4 + 2] > 80, "diffusion erased the pitch band");
                 assert!(full[(8 * 128 + 64) * 4 + 2] < 5, "diffusion lost the band separation");
             }
@@ -1356,11 +1475,12 @@ mod tests {
         // still reach actual black rather than leave that first slice glowing.
         Arc::make_mut(&mut cb.shades.lut)[0] = [80, 0, 0, 255];
         let soft = fresh_frame(&device, &queue, &cb);
-        cb.atmosphere.as_mut().unwrap().settings.diffusion = 0.0;
+        cb.atmosphere.as_mut().unwrap().settings.style =
+            harmonigraph_scene::SpectrogramStyle::Plain;
         let zero = fresh_frame(&device, &queue, &cb);
         cb.atmosphere = None;
         let plain = fresh_frame(&device, &queue, &cb);
-        assert_eq!(zero, plain, "zero diffusion did not restore the measured heatmap");
+        assert_eq!(zero, plain, "Plain style did not restore the measured heatmap");
         let pixel = |frame: &[u8], y| frame[(y * SIZE[0] as usize + 64) * 4 + 2];
         assert_eq!(pixel(&plain, 63), 102, "fixture missed the faint ridge");
         assert!(pixel(&soft, 63) < 82, "faint grain kept its original contrast");
@@ -1478,7 +1598,7 @@ mod tests {
         assert_eq!(smaller, fresh_frame(&device, &queue, &cb));
         assert_eq!(
             resources.get::<SpectrogramResources>().unwrap().panes[&0].cloud.as_ref().unwrap().size,
-            [32, 16]
+            atmosphere::source_size([128, 64], 1.0, cb.atmosphere.unwrap())
         );
         let mut other = cloud_fixture();
         other.pane_id = 1;
@@ -1488,7 +1608,8 @@ mod tests {
             frame_with(&device, &queue, &mut resources, &cb),
             "unequal pane replaced this cloud target"
         );
-        cb.atmosphere.as_mut().unwrap().settings.diffusion = 0.0;
+        cb.atmosphere.as_mut().unwrap().settings.style =
+            harmonigraph_scene::SpectrogramStyle::Plain;
         // Mode or viewport changes can replace the grid while diffusion is
         // disabled. Re-enabling at the same pane size must use that new grid.
         cb.grid.capacity *= 2;
@@ -1499,13 +1620,13 @@ mod tests {
         assert_eq!(
             disabled,
             fresh_frame(&device, &queue, &cb),
-            "zero diffusion changed the original heatmap"
+            "Plain style changed the original heatmap"
         );
         cb.atmosphere = other.atmosphere;
         assert_eq!(
             frame_with(&device, &queue, &mut resources, &cb),
             fresh_frame(&device, &queue, &cb),
-            "re-enabled diffusion retained the replaced grid"
+            "re-enabled smoothing retained the replaced grid"
         );
         cb.vertices.clear();
         let empty = frame_with(&device, &queue, &mut resources, &cb);

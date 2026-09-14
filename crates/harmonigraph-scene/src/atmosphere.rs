@@ -2,18 +2,41 @@
 
 use harmonigraph_core::LatticePos;
 
+/// Display transfer after shared measurement and optional smoothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpectrogramStyle {
+    Plain,
+    Blur,
+    #[default]
+    Lava,
+}
+
 /// Independent spectrogram diffusion, analyzer shading and note light.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SpectralAtmosphere {
-    pub diffusion: f32,
+    pub style: SpectrogramStyle,
+    pub pitch_softness: f32,
+    pub time_softness: f32,
+    pub spread: f32,
+    pub contours: f32,
+    pub contour_softness: f32,
     pub analyzer_softness: f32,
     pub note_glow: f32,
 }
 
 impl Default for SpectralAtmosphere {
     fn default() -> Self {
-        Self { diffusion: 0.1, analyzer_softness: 0.5, note_glow: 0.5 }
+        Self {
+            style: SpectrogramStyle::Lava,
+            pitch_softness: 35.0,
+            time_softness: 120.0,
+            spread: 0.25,
+            contours: 7.0,
+            contour_softness: 0.15,
+            analyzer_softness: 0.5,
+            note_glow: 0.5,
+        }
     }
 }
 
@@ -27,7 +50,11 @@ impl SpectralAtmosphere {
                 fallback
             }
         };
-        self.diffusion = clamp(self.diffusion, fresh.diffusion, 0.0, 1.0);
+        self.pitch_softness = clamp(self.pitch_softness, fresh.pitch_softness, 0.0, 300.0);
+        self.time_softness = clamp(self.time_softness, fresh.time_softness, 0.0, 2000.0);
+        self.spread = clamp(self.spread, fresh.spread, 0.0, 1.0);
+        self.contours = clamp(self.contours, fresh.contours, 2.0, 16.0).round();
+        self.contour_softness = clamp(self.contour_softness, fresh.contour_softness, 0.01, 0.5);
         self.analyzer_softness = clamp(self.analyzer_softness, fresh.analyzer_softness, 0.0, 1.0);
         self.note_glow = clamp(self.note_glow, fresh.note_glow, 0.0, 1.0);
         self
