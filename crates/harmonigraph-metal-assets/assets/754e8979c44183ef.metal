@@ -63,10 +63,22 @@ float bucket_x(
 ) {
     float _e3 = locals.min_midi;
     float _e6 = locals.span;
-    float midi = _e3 + (t * _e6);
+    float midi_1 = _e3 + (t * _e6);
     float _e11 = locals.spectrum_min_midi;
     float _e15 = locals.bins_per_semitone;
-    return (midi - _e11) * _e15;
+    return (midi_1 - _e11) * _e15;
+}
+
+float level_at(
+    float v,
+    float midi,
+    constant Locals& locals
+) {
+    float _e4 = locals.level0_;
+    float _e7 = locals.level_per_step;
+    float _e12 = locals.level_per_midi;
+    float level_1 = (_e4 + (_e7 * v)) + (_e12 * midi);
+    return metal::clamp(level_1, 0.0, 1.0);
 }
 
 float bucket_level(
@@ -78,14 +90,10 @@ float bucket_level(
 ) {
     float _e4 = locals.spectrum_min_midi;
     float _e10 = locals.bins_per_semitone;
-    float midi_1 = _e4 + ((static_cast<float>(b) + 0.5) / _e10);
+    float midi_2 = _e4 + ((static_cast<float>(b) + 0.5) / _e10);
     uint _e13 = stored(slot_1, b, locals, grid, _buffer_sizes);
-    float v = static_cast<float>(_e13);
-    float _e17 = locals.level0_;
-    float _e20 = locals.level_per_step;
-    float _e25 = locals.level_per_midi;
-    float level_1 = (_e17 + (_e20 * v)) + (_e25 * midi_1);
-    return metal::clamp(level_1, 0.0, 1.0);
+    float _e15 = level_at(static_cast<float>(_e13), midi_2, locals);
+    return _e15;
 }
 
 uint naga_f2u32(float value) {
