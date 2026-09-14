@@ -146,7 +146,6 @@ constant float GLYPH_FADE_LIMIT = 1.3;
 constant float GLOW_BASE = 0.8;
 constant float SHADOW_REACH_SIGMAS = 3.0;
 constant uint INK_STRIP_N = 64u;
-constant uint GLOW_TILE_SIZE = 32u;
 constant bool EARLY_OUT = true;
 constant float INK_FLOOR = 0.01;
 constant uint OCTAVE_SLOTS = 11u;

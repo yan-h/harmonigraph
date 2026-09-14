@@ -163,74 +163,6 @@ fn nebula_textures_the_combined_light_without_creating_or_recoloring_it() {
     }
 }
 
-#[test]
-fn tile_candidates_keep_the_untiled_picture_through_resize_and_reuse() {
-    let Some(mut shooter) = Shooter::new([512, 512]) else { return };
-    let mut scene = scene(&[1.0; 4], 0.75, true);
-    scene.nodes[1].scale = 0.1;
-    scene.nodes[2].scale = 0.15;
-    // At 512px the large halos use the shared list, while the small pair
-    // reaches only a few tiles. Both lists are interleaved in node order.
-    for (size, accumulation) in [([512, 512], 0.0), ([576, 257], 0.5), ([256, 256], 1.0)] {
-        shooter.size = size;
-        scene.glow_accumulation = accumulation;
-        shooter.shot_again(&scene);
-        let tiled = read_glow(&shooter);
-        let extent = egui::vec2(size[0] as f32, size[1] as f32);
-        let cb = LatticeCallback::from_scene(
-            &scene,
-            LatticeLabels::default(),
-            extent,
-            shooter.format,
-            shooter.pane,
-            None,
-        );
-        let nodes = cb.glow_nodes(size);
-        let tiles = crate::lattice_node_glow::tiles::pack(&nodes, size);
-        if size == [512, 512] {
-            let global_count = tiles[2] - tiles[1];
-            assert!(global_count > 0 && global_count < nodes.len() as u32);
-        }
-        let tile_count = size[0].div_ceil(crate::lattice_node_glow::tiles::TILE)
-            * size[1].div_ceil(crate::lattice_node_glow::tiles::TILE);
-        let start = tile_count + 4;
-        let mut reference = vec![start; start as usize];
-        reference[0] = tiles[0];
-        reference[1] = start;
-        reference[2] = start + nodes.len() as u32;
-        reference.extend(0..nodes.len() as u32);
-        let resources = shooter.resources.get::<LatticeResources>().unwrap();
-        let pane = &resources.panes[&shooter.pane];
-        assert!(reference.len() <= pane.glow_tile_capacity);
-        shooter.queue.write_buffer(&pane.glow_tile_buffer, 0, bytemuck::cast_slice(&reference));
-        let glow = pane.offscreen.as_ref().unwrap().glow.as_ref().unwrap();
-        let strip = pane.ink_history.as_ref().unwrap();
-        let mut encoder = shooter.device.create_command_encoder(&Default::default());
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &glow.view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            pass.set_pipeline(&resources.compiled.glow_gather_pipeline);
-            pass.set_bind_group(0, &pane.bind_group, &[]);
-            pass.set_bind_group(1, &strip.blurred_bind_group, &[]);
-            pass.set_bind_group(2, &pane.glow_node_bind_group, &[]);
-            pass.set_bind_group(3, &pane.glow_tile_bind_group, &[]);
-            pass.draw(0..4, 0..1);
-        }
-        shooter.queue.submit([encoder.finish()]);
-        assert_eq!(tiled, read_glow(&shooter), "tile lists changed the picture at {size:?}");
-    }
-}
-
 fn linear(gamma: f64) -> f64 {
     if gamma <= 0.04045 {
         gamma / 12.92
@@ -490,4 +422,43 @@ fn the_color_transition_ends_at_the_ring_even_with_a_wider_halo() {
         high - low
     );
     assert!(worst < 0.025, "a wider footprint averaged directional colors: hue error {worst}");
+}
+
+#[test]
+#[ignore = "manual MRT precision stress measurement"]
+fn dense_faint_overlap_order_precision() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    // Follow-up: https://github.com/yan-h/harmonigraph/issues/878
+    // Coincident halos intentionally exceed ordinary lattice overlap. This
+    // probe measures f16 blend drift rather than asserting exact order parity.
+    for count in [128, 1024, 4096] {
+        let levels: Vec<f32> = (0..count)
+            .map(|i| if i < count * 500 / 4096 { 0.000382 / 0.8 } else { 0.004165 / 0.8 })
+            .collect();
+        let mut scene = scene(&levels, 1.0, false);
+        scene.atmosphere.enabled = false;
+        scene.pitch_lut = std::array::from_fn(|i| {
+            if i * 2 < harmonigraph_scene::PITCH_LUT_N {
+                glam::Vec4::new(1.0, 0.15, 0.1, 1.0)
+            } else {
+                glam::Vec4::new(0.1, 1.0, 0.25, 1.0)
+            }
+        });
+        for (i, node) in scene.nodes.iter_mut().enumerate() {
+            node.cents = if i < count * 500 / 4096 { 0.0 } else { 1100.0 };
+        }
+        for accumulation in [0.0, 0.5, 1.0] {
+            scene.glow_accumulation = accumulation;
+            let forward = glow(&mut shooter, &scene);
+            assert!(
+                forward.chunks_exact(4).any(|pixel| pixel[..3].iter().any(|v| *v > 20)),
+                "the stress fixture must produce visible overlapping light"
+            );
+            scene.nodes.reverse();
+            let backward = glow(&mut shooter, &scene);
+            scene.nodes.reverse();
+            let largest = forward.iter().zip(&backward).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+            eprintln!("precision count={count} accumulation={accumulation}: maximum order difference {largest}/255");
+        }
+    }
 }

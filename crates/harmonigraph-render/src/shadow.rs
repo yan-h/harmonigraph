@@ -810,7 +810,7 @@ pub(crate) fn caster_buffer(
 
 /// The layout every per-frame list the shaders walk binds through: one
 /// read-only storage buffer at binding 0, visible to `stages`. The casters
-/// above and the glow's lit nodes (`glow_node_layout` in lib.rs) are the two.
+/// above use it for the occlusion walk.
 pub(crate) fn storage_list_layout(
     device: &wgpu::Device,
     label: &str,

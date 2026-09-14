@@ -319,13 +319,8 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         let callback_ms = callback_start.elapsed().as_secs_f64() * 1000.0;
         if frame == 0 {
             let target = size.map(|v| (v as f32 * cb.render_scale).round() as u32);
-            let nodes = if cb.glow_draws() { cb.glow_nodes(target) } else { Vec::new() };
-            let tiles = lattice_node_glow::tiles::pack(&nodes, target);
-            let globals = if tiles.is_empty() { 0 } else { tiles[2] - tiles[1] };
-            eprintln!(
-                "{what}: target {target:?}, {} glow candidates, {globals} global",
-                nodes.len()
-            );
+            let lit = cb.instances.iter().filter(|node| node.glow[0] > 0.0).count();
+            eprintln!("{what}: target {target:?}, {lit} lit halo instances");
         }
         cb.uniforms.geometry_shadow.occlusion = occlusion;
         let mut encoder = device.create_command_encoder(&Default::default());

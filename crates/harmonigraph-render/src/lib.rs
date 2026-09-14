@@ -71,9 +71,7 @@ mod glow;
 mod lattice_node_glow;
 pub use dot_shadow::dot_shadow_paint_callback;
 pub use glow::{glow_paint_callback, GlowDot};
-#[cfg(test)]
-use lattice_node_glow::halo_pixels;
-use lattice_node_glow::{glow_node_buffer, glow_node_layout, GpuGlowNode};
+use lattice_node_glow::create_glow_pipelines;
 
 /// Label text, for the same reason the roll has its own callback: what a
 /// label costs is the rim, and the rim was the text drawn again once per
@@ -338,8 +336,8 @@ const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 /// Entry points a (re)loaded shader must provide. The `_scene` pair is the
 /// four-attachment form with bloom; `_split` writes the visible pair; the bare pair is
 /// the single-attachment one the parity test's reference path uses; the
-/// `glow_gather` pair is the light's own pass — one quad over the whole target
-/// and the fold that walks every lit node at each of its pixels; the `ink` four
+/// `glow` entry points rasterize directional halos and resolve overlap statistics;
+/// the `ink` four
 /// are the strip the nodes' light is coloured out of, read and then blurred
 /// ahead of it (see [`InkStrip`]); and the `cell` four rasterize a node's ink
 /// and the Gaussian's one marker cross into the shadow atlas (`shadow.rs`).
@@ -353,8 +351,10 @@ const LATTICE_ENTRY_POINTS: &[&str] = &[
     "fs_plus",
     "fs_plus_scene",
     "fs_plus_split",
-    "vs_glow_gather",
-    "fs_glow_gather",
+    "vs_glow_splat",
+    "fs_glow_splat",
+    "vs_glow_resolve",
+    "fs_glow_resolve",
     "vs_ink_strip",
     "fs_ink_strip",
     "vs_ink_blur",
@@ -603,8 +603,9 @@ struct GpuInstance {
     /// other layer of a node (see `harmonigraph_scene::RingFade`).
     ring: f32,
     /// Carried brightness, stable ink row, and the renderer's color-history
-    /// coefficient. Untimed snapshots seed current ink with coefficient 1.
-    glow: [f32; 3],
+    /// coefficient, followed by display-only breathing. Untimed snapshots
+    /// seed current ink with coefficient 1 and no breathing modulation.
+    glow: [f32; 4],
 }
 
 impl GpuInstance {
@@ -627,7 +628,7 @@ impl GpuInstance {
             0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
             4 => Float32, 6 => Uint32x2,
             7 => Float32x4, 8 => Float32x4, 10 => Float32, 11 => Float32,
-            12 => Float32x3
+            12 => Float32x4
         ],
     };
 }
@@ -759,8 +760,6 @@ struct LatticeCallback {
     /// Row owners in exactly the shipped instance order, after sorting and culling.
     glow_owners: Vec<u64>,
     glow_timing: Option<harmonigraph_scene::GlowTiming>,
-    /// Display-only breathing factors in instance order, keyed by lattice identity.
-    glow_breath: Option<Vec<f32>>,
     /// Every label's glyphs, in the order the pass draws them.
     glyphs: Vec<GlyphInstance>,
     /// Every caster this frame, in the order the pass draws them: the markers'
@@ -892,10 +891,8 @@ impl LatticeCallback {
 /// One world point through `view_proj` onto a pane of `extent` — points or
 /// pixels, whichever the caller measures in — as the rasterizer would place
 /// it: x right, y DOWN from the top-left corner, and wgpu's clip depth (0 near,
-/// 1 far) beside it. The two places the CPU stands in for the rasterizer read
-/// this: the shadow packer's boxes (`from_scene`) and the light's lit-node map
-/// ([`LatticeCallback::glow_nodes`]), which have to agree with each other and
-/// with `node_vertex`.
+/// 1 far) beside it. The shadow packer's boxes use this projection and must
+/// agree with `node_vertex`. Halo quads use the rasterizer directly.
 ///
 /// `None` for a point at or behind the eye, which no pass can place and which
 /// each caller drops on its own terms.
@@ -924,13 +921,9 @@ struct CompiledLatticeResources {
     downsample_pipeline: wgpu::RenderPipeline,
     blur_h_pipeline: wgpu::RenderPipeline,
     blur_v_pipeline: wgpu::RenderPipeline,
-    /// The node glow's own pass: one draw over the whole of a target of the
-    /// glow's own, folding every lit node at each pixel (see
-    /// [`create_glow_gather_pipeline`]).
-    glow_gather_pipeline: wgpu::RenderPipeline,
-    /// The lit-node list that pass walks, at its group 2 (see
-    /// [`glow_node_layout`]).
-    glow_node_layout: wgpu::BindGroupLayout,
+    glow_splat_pipeline: wgpu::RenderPipeline,
+    glow_resolve_pipeline: wgpu::RenderPipeline,
+    glow_statistics_layout: wgpu::BindGroupLayout,
     /// The colour it draws in, settled ahead of it: the ink read round every
     /// node, then blurred (see [`create_ink_strip_pipelines`]).
     ink_strip_pipeline: wgpu::RenderPipeline,
@@ -1304,22 +1297,6 @@ struct PaneBuffers {
     caster_capacity: usize,
     caster_count: usize,
     caster_bind_group: wgpu::BindGroup,
-    /// Every lit node this frame, as the light's own pass reads them
-    /// ([`GpuGlowNode`]), and the bind group naming the buffer at group 2.
-    ///
-    /// Keyed on CAPACITY alone, exactly as the casters above are: the contents
-    /// are rewritten every frame and neither object is, so a frame that lights
-    /// one more node than the last rebuilds nothing (`glow_node_buffer`). How
-    /// many of the entries are this frame's is `u.glow.lit`, and never the
-    /// buffer's own length.
-    glow_node_buffer: wgpu::Buffer,
-    glow_node_capacity: usize,
-    glow_node_bind_group: wgpu::BindGroup,
-    /// Tile offsets and candidate indices, uploaded every frame. Allocation
-    /// depends only on capacity; camera, reach and node changes rewrite it.
-    glow_tile_buffer: wgpu::Buffer,
-    glow_tile_capacity: usize,
-    glow_tile_bind_group: wgpu::BindGroup,
     /// The scene pass's whole order (see [`Draw`]), held to what actually
     /// reached the buffers above.
     draws: Vec<Draw>,
@@ -1405,7 +1382,7 @@ struct LatticeBloom {
 /// A target of its own, rather than the glow drawn straight into the scene
 /// pass, because a node has to sample the finished light to paint its own
 /// picture (`node_paint`), and a pass cannot sample the attachment it writes.
-/// Every node's halo melds here first (`fs_glow_gather`), across every sheet at once,
+/// Every node's halo melds here first (`fs_glow_resolve`), across every sheet at once,
 /// and the scene pass then lays that one layer down at its bottom and reads it
 /// again per node.
 ///
@@ -1414,6 +1391,8 @@ struct LatticeBloom {
 /// each other, and a target left allocated at reach 0 is a scene-sized texture
 /// held for a feature that is off.
 struct GlowTarget {
+    statistics: [wgpu::TextureView; 3],
+    statistics_bind_group: wgpu::BindGroup,
     /// The descriptor format of `view`.
     #[cfg(test)]
     format: wgpu::TextureFormat,
@@ -1493,6 +1472,7 @@ struct OffscreenShared<'a> {
     sampler: &'a wgpu::Sampler,
     /// Transparent stand-in for the composite's bloom binding while off.
     bloom_dummy: &'a wgpu::TextureView,
+    glow_statistics_layout: &'a wgpu::BindGroupLayout,
 }
 
 /// The bloom post-process's targets and bind groups: a soft-knee threshold
@@ -1896,7 +1876,11 @@ impl GlowTarget {
                 },
             ],
         });
+        let (statistics, statistics_bind_group) =
+            lattice_node_glow::statistics(device, shared.glow_statistics_layout, size);
         GlowTarget {
+            statistics,
+            statistics_bind_group,
             #[cfg(test)]
             format,
             view,
@@ -2256,78 +2240,6 @@ fn create_cell_pipelines(
     )
 }
 
-/// The node glow's one pipeline: the light, gathered over the whole of the
-/// glow's own target (see [`GlowTarget`]).
-///
-/// **One quad and no instances.** The nodes arrive as a read-only storage
-/// buffer at group 2 ([`glow_node_buffer`]); group 3 narrows the walk to each
-/// tile's candidates. That is the change #680 is built on: an operator written in
-/// shader code is not confined to what a fixed-function blend can express.
-///
-/// **NO BLEND**, where a billboard per node needed one.
-/// `fs_glow_gather` combines luminance with peak-normalized screen and mixes
-/// colour separately. The fixed full-strength ceiling comes from Glow gain;
-/// notes and their fades never move it. A lone glow keeps its original colour
-/// and coverage. The light remains independent of instance order.
-/// Glow accumulation crossfades to the original per-channel screen in this
-/// same pass, deliberately relaxing the fixed ceiling as its share rises.
-///
-/// **Every sheet at once**, which is what the fold's commutativity buys as it
-/// bought it for the blend. What occludes a node's halo is the scene pass,
-/// which draws every node over the finished light — its SHAPE, at least: what
-/// the node's own ink then takes of the light under it is `node_paint`'s to
-/// say.
-///
-/// **No depth.** The pass this draws into carries none: it is the glow's own,
-/// ahead of the scene's, and one write per pixel has no order to defend.
-fn create_glow_gather_pipeline(
-    device: &wgpu::Device,
-    shader: &wgpu::ShaderModule,
-    target_format: wgpu::TextureFormat,
-    bind_group_layout: &wgpu::BindGroupLayout,
-    strip_layout: &wgpu::BindGroupLayout,
-    node_layout: &wgpu::BindGroupLayout,
-) -> wgpu::RenderPipeline {
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("lattice_glow_pipeline_layout"),
-        bind_group_layouts: &[
-            Some(bind_group_layout),
-            Some(strip_layout),
-            Some(node_layout),
-            Some(node_layout),
-        ],
-        ..Default::default()
-    });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("fs_glow_gather"),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vs_glow_gather"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some("fs_glow_gather"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: target_format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    })
-}
-
 /// The two passes that settle what colour every node's light is, ahead of the
 /// draws that lay it down: the ink read round each node, then blurred.
 ///
@@ -2636,15 +2548,15 @@ impl CompiledLatticeResources {
                 count: None,
             }],
         });
-        let glow_node_layout = glow_node_layout(device);
+        let glow_statistics_layout = lattice_node_glow::statistics_layout(device);
         progress(startup::Stage::Lighting);
-        let glow_gather_pipeline = create_glow_gather_pipeline(
+        let (glow_splat_pipeline, glow_resolve_pipeline) = create_glow_pipelines(
             device,
             &lattice_shader,
             LATTICE_COLOR_FORMAT,
             &bind_group_layout,
             &strip_layout,
-            &glow_node_layout,
+            &glow_statistics_layout,
         );
         let (ink_strip_pipeline, ink_blur_pipeline) =
             create_ink_strip_pipelines(device, &lattice_shader, &bind_group_layout, &strip_layout);
@@ -2805,8 +2717,9 @@ impl CompiledLatticeResources {
             downsample_pipeline,
             blur_h_pipeline,
             blur_v_pipeline,
-            glow_gather_pipeline,
-            glow_node_layout,
+            glow_splat_pipeline,
+            glow_resolve_pipeline,
+            glow_statistics_layout,
             ink_strip_pipeline,
             ink_blur_pipeline,
             bind_group_layout,
@@ -2928,7 +2841,6 @@ impl LatticeResources {
     ) -> &mut PaneBuffers {
         let layout = &self.compiled.bind_group_layout;
         let caster_layout = &self.compiled.caster_layout;
-        let node_layout = &self.compiled.glow_node_layout;
         // Taken before the pane is borrowed: the view is a fresh handle onto
         // this frame's font texture and mark sheet — `prepare` binds them
         // before it gets here.
@@ -2946,9 +2858,9 @@ impl LatticeResources {
             shadow_layout: &self.compiled.shadow_layout,
             sampler: &self.compiled.sampler,
             bloom_dummy: &self.compiled.bloom_dummy,
+            glow_statistics_layout: &self.compiled.glow_statistics_layout,
         };
         let want_casters = wants.casters;
-        let want_glow_nodes = wants.glow_nodes;
         let pane = self.panes.entry(pane_id).or_insert_with(|| {
             let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("lattice_uniforms"),
@@ -2966,10 +2878,6 @@ impl LatticeResources {
             });
             let (caster_buffer, caster_bind_group) =
                 shadow::caster_buffer(device, caster_layout, INITIAL_BOX_CAPACITY);
-            let (glow_node_buffer, glow_node_bind_group) =
-                glow_node_buffer(device, node_layout, INITIAL_GLOW_NODE_CAPACITY);
-            let (glow_tile_buffer, glow_tile_bind_group) =
-                shadow::storage_list::<u32>(device, node_layout, 1, "lattice_glow_tiles");
             PaneBuffers {
                 uniform_buffer,
                 bind_group,
@@ -3017,12 +2925,6 @@ impl LatticeResources {
                 caster_capacity: INITIAL_BOX_CAPACITY,
                 caster_count: 0,
                 caster_bind_group,
-                glow_node_buffer,
-                glow_node_capacity: INITIAL_GLOW_NODE_CAPACITY,
-                glow_node_bind_group,
-                glow_tile_buffer,
-                glow_tile_capacity: 1,
-                glow_tile_bind_group,
                 draws: Vec::new(),
                 glyph_uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("lattice_glyph_uniforms"),
@@ -3093,26 +2995,6 @@ impl LatticeResources {
             pane.caster_buffer = buffer;
             pane.caster_bind_group = bind_group;
         }
-        // The lit nodes, on exactly the same terms: one object in two halves,
-        // grown when a frame lights more of them than the buffer holds and left
-        // alone otherwise. Never shrunk — a chord released is a chord about to
-        // be played again, and the light's own release outlives the notes.
-        if want_glow_nodes > pane.glow_node_capacity {
-            pane.glow_node_capacity = want_glow_nodes.next_power_of_two();
-            let (buffer, bind_group) =
-                glow_node_buffer(device, node_layout, pane.glow_node_capacity);
-            pane.glow_node_buffer = buffer;
-            pane.glow_node_bind_group = bind_group;
-        }
-        if wants.glow_tiles > pane.glow_tile_capacity {
-            pane.glow_tile_capacity = wants.glow_tiles.next_power_of_two();
-            (pane.glow_tile_buffer, pane.glow_tile_bind_group) = shadow::storage_list::<u32>(
-                device,
-                node_layout,
-                pane.glow_tile_capacity,
-                "lattice_glow_tiles",
-            );
-        }
         pane
     }
 }
@@ -3127,10 +3009,6 @@ const INITIAL_GLYPH_CAPACITY: usize = 512;
 
 /// And for the names' shadow boxes: one per named node.
 const INITIAL_BOX_CAPACITY: usize = 64;
-
-/// And for the light's own node list: one per LIT node, which a chord's worth
-/// of release keeps well under the instance count.
-const INITIAL_GLOW_NODE_CAPACITY: usize = 64;
 
 /// Which of a pane's optional targets this frame wants, and how tall the ink
 /// strip has to be — the answers `pane_buffers` acts on that come off the
@@ -3159,11 +3037,6 @@ struct PaneTargets {
     /// buffers below, because a storage buffer's bind group has to be rebuilt
     /// with it and this is where the layout is in scope.
     casters: usize,
-    /// And how many lit nodes the light's own pass walks — the storage buffer
-    /// at its group 2 and the bind group naming it, which grow together
-    /// ([`glow_node_buffer`]), here for the same reason the casters are.
-    glow_nodes: usize,
-    glow_tiles: usize,
 }
 
 /// A `capacity`-element vertex buffer (VERTEX | COPY_DST) sized for `T`.

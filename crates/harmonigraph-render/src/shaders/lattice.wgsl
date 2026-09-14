@@ -178,55 +178,11 @@ const INK_STRIP_N: u32 = 64u;
 // second, empty binding.
 @group(1) @binding(0) var ink_strip: texture_2d<f32>;
 
-// One lit node, as the light's own pass reads it — the CPU's `GpuGlowNode`.
-//
-// The gather has no billboard and no instance stream: it is one quad over the
-// whole target, so what a node IS arrives here instead, and the map back from
-// a pixel to that node's uv arrives with it (see [`fs_glow_gather`]).
-struct GlowNode {
-    // This node's screen frame INVERTED, a row each: a fragment `d` pixels from
-    // `centre` stands at uv `vec2(dot(inv_x, d), dot(inv_y, d))`.
-    //
-    // Exact rather than an approximation of the billboard it replaces. Every
-    // node's quad lies in the camera's own right/up plane, so its plane is
-    // parallel to the image plane and one projection depth covers all of it —
-    // which leaves the projection restricted to that plane a scale and an
-    // offset under perspective as readily as under an orthographic camera, and
-    // a 2x2 inverse is the whole of it. Spent on the CPU, once per node per
-    // frame (`LatticeCallback::glow_nodes`), because the alternative is three
-    // matrix multiplies per node per PIXEL.
-    inv_x: vec2<f32>,
-    inv_y: vec2<f32>,
-    // Where the node's uv origin lands, in the glow target's own pixels — the
-    // space `@builtin(position)` hands the fragment stage.
-    centre: vec2<f32>,
-    // x: the node's carried light level (`Instance::glow` x). y: its ROW of the
-    // ink strip, which is where its colour is (`Instance::glow` y).
-    light: vec2<f32>,
-    // Conservative pixel radius for CPU tiling, followed by storage alignment padding.
-    radius: f32,
-    _padding: f32,
-};
-
-// Every lit node this frame, in the order the instance buffer holds them.
-//
-// Group 2's slot, shared with common.wgsl's `shadow_atlas` on exactly the terms
-// the strip shares group 1 with `glow_tex`: a binding collision is diagnosed
-// per entry point, and the light's own pass reads no atlas while nothing that
-// reads the atlas gathers.
-//
-// The buffer is allocated at a capacity this frame's count may be well under
-// (`PaneTargets::glow_nodes`), so `arrayLength` is NOT the bound to walk —
-// past the count sit entries some earlier frame wrote. The tile lists below
-// reference only this frame's nodes; `u.glow.lit` also guards an empty frame.
-@group(2) @binding(0) var<storage, read> glow_nodes: array<GlowNode>;
-
-// Tile offsets and two sorted node lists: one local to the tile and one for
-// large halos. The latter avoids copying a full-screen glow into every tile.
-// Group 3 shares its slot with shadow_casters in other entry points.
-// Layout and tile width must agree with lattice_node_glow/tiles.rs.
-@group(3) @binding(0) var<storage, read> glow_tiles: array<u32>;
-const GLOW_TILE_SIZE: u32 = 32u;
+// Full-resolution statistics, read only by the resolve entry point.
+// Bindings overlap the ink strip's group in other entry points.
+@group(1) @binding(0) var glow_sum: texture_2d<f32>;
+@group(1) @binding(1) var glow_screen: texture_2d<f32>;
+@group(1) @binding(2) var glow_accumulated: texture_2d<f32>;
 
 // The geometry group's Shadow: how wide a node's shadow is, as a share of its
 // radius. A resting marker takes the same units from `u.marker_shadow`, inherited
@@ -535,7 +491,7 @@ struct Instance {
     @location(11) ring: f32,
     // The node's own light: x how bright it is, y which ROW of the ink strip
     // keeps its colour, z how much of this frame's reading the two of them
-    // take. All three are settled on the CPU, where a node has an identity that
+    // take, and w display-only breathing. They are settled on the CPU, where a node has an identity that
     // outlives a frame (`panes::glow_fade` in harmonigraph-ui).
     //
     // The level is CARRIED and not the largest envelope on the node, which is
@@ -545,12 +501,9 @@ struct Instance {
     // strip just built, or a row just handed over — and there is nothing to
     // carry from.
     //
-    // The MARK the light is still wearing is a fourth of the same set and is
-    // deliberately not here: it sizes the halo alone (`glow_rim`), and the halo
-    // is no longer drawn over a billboard, so the only stage that reads it
-    // takes it off `GlowNode` instead. `GpuInstance::glow` still carries it,
-    // that being where the CPU assembles the light; this stream stops at three.
-    @location(12) glow: vec3<f32>,
+    // Breathing modulates the halo after history interpolation; it must not
+    // alter either the carried brightness or the ink-history coefficient.
+    @location(12) glow: vec4<f32>,
 };
 
 // One node's cell of the shadow atlas, as a second instance-step vertex buffer
@@ -599,9 +552,8 @@ struct VsOut {
     // row already held (see Instance::glow z). The ink strip's reading pass is
     // the one stage that reads it, and nothing else on the node does.
     //
-    // The level and the light's own rim used to ride beside it, for the halo's
-    // billboard. That billboard is gone — the light is gathered over the whole
-    // target off `glow_nodes` — so what is left here is the strip's alone.
+    // Halo geometry uses its own GlowSplatOut; this node output carries only
+    // the coefficient needed by the ink-history pass.
     @location(15) @interpolate(flat) ink_carry: f32,
     // The atlas's two ends in one row, and a draw is only ever at one of them.
     // On a draw that FILLS a cell ([`vs_node_cell`]), that cell's own rect in
@@ -700,9 +652,8 @@ fn vs_node_cell(
 /// replaces this position with the packed cell's corners (`vs_node_cell`).
 ///
 /// The LIGHT is no longer one of them. It had a second entry point and a wider
-/// margin of its own here, and now has neither: it is gathered over the whole
-/// target from `glow_nodes`, so nothing sizes a halo any more and the quad is
-/// back to being the node's.
+/// margin of its own here. Halo quads now use a separate vertex entry point,
+/// leaving this geometry sized only for the node and its shadow.
 fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     var corners = array<vec2<f32>, 4>(
         vec2<f32>(-1.0, -1.0),
@@ -2469,7 +2420,7 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 // the node once per frame and kept as a strip (see The ink strip below), and
 // the light's draw samples it.
 //
-// ONE DRAW over the whole target. At zero accumulation, `fs_glow_gather`
+// Halo quads blend three full-resolution statistics textures. The resolve
 // combines linear luminance using screen normalized to a FIXED full-strength peak. An overlap
 // may rise above either tail, but not above that ceiling. Unlike the p-norm,
 // this does not preserve a narrow valley between neighbouring notes.
@@ -2479,7 +2430,7 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 // The fixed ceiling follows Glow gain, not the active notes or their fades.
 // A lone contribution keeps its original gamma-space RGB and coverage.
 // Accumulation crossfades to the original per-channel screen, restoring its
-// brighter buildup and colour mixing without another pass or target.
+// brighter buildup and colour mixing from the gamma-screen statistics.
 //
 // What hides its SHAPE is the scene pass, which draws every node over the
 // finished light: a ring, a mark and a name are drawn whole there, and what
@@ -2902,19 +2853,11 @@ fn glow_curve_at(d: f32, span: f32) -> f32 {
     return (exp(shape * remaining) - 1.0) / (exp(shape) - 1.0);
 }
 
-/// ONE node's light at this fragment — the gather's loop body
-/// ([`fs_glow_gather`]).
-///
-/// STRAIGHT: `w` is coverage and `xyz` is the gamma-encoded strip colour.
-/// The gather premultiplies them before decoding the displayed contribution
-/// to linear light, so the isolated glow keeps today's falloff and colour.
-///
-/// `uv` is where the fragment stands in THIS node's own uv, which the gather
-/// inverts out of the node's screen frame. Every length below is in that uv, so
-/// the arithmetic is the billboard's unchanged: what moved is where the uv
-/// comes from, not what is done with it.
-fn glow_layer(node: GlowNode, uv: vec2<f32>) -> vec4<f32> {
-    let level = glow_level(node.light.x);
+/// One node's directional light at the interpolated local coordinate.
+/// Returns straight gamma RGB and coverage; the splat premultiplies before
+/// decoding, preserving the original lone-glow falloff and color.
+fn glow_layer(light: vec2<f32>, uv: vec2<f32>) -> vec4<f32> {
+    let level = glow_level(light.x);
     let reach = max(u.glow.reach, 0.0);
     let strength = max(u.glow.strength, 0.0);
     // One view-level rim sizes every halo, independent of active marks.
@@ -2924,12 +2867,8 @@ fn glow_layer(node: GlowNode, uv: vec2<f32>) -> vec4<f32> {
     // so the halo is a field the node sits inside rather than a rim light on
     // its edge, and it is where the curve reaches zero, so the Reach bar says
     // how far the close component goes.
-    //
-    // Not any quad's margin, which was the tempting reading of "window it at
-    // the edge" while there was a quad: `quad_margin` floors at QUAD_MARGIN, so
-    // on a small reach the billboard was wider than the light had any business
-    // being. There is no billboard now — this is the only thing that says where
-    // a node's light stops, and nothing can clip it square at a corner.
+    // The raster quad encloses this circular domain exactly; the node's own
+    // billboard margin does not determine the halo's reach.
     let span = max(lit_rim + reach, 0.1);
     if d >= span {
         return vec4<f32>(0.0);
@@ -2972,7 +2911,7 @@ fn glow_layer(node: GlowNode, uv: vec2<f32>) -> vec4<f32> {
     // The colour: this node's own strip, read in this direction. Not a hue
     // assembled out of the voices — see `ink_at`, which is where a layer states
     // what it is putting on the node and how much of the node that is.
-    let ink = glow_ink(node.light.y, atan2(uv.y, uv.x), mix_out);
+    let ink = glow_ink(light.y, atan2(uv.y, uv.x), mix_out);
     // A node lighting NOTHING gives off nothing, and the level above does not
     // say so: it is the largest envelope on the node, and a view with every
     // layer dialled off leaves a held note a full envelope with no ink under
@@ -2985,12 +2924,34 @@ fn glow_layer(node: GlowNode, uv: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(ink.xyz, alpha);
 }
 
-/// The light's quad: the whole target, once, exactly as the blit pipelines
-/// cover theirs (`vs_blit` in blit.wgsl). Nothing per node reaches the vertex
-/// stage any more — the nodes are a buffer the fragment stage walks.
+struct GlowSplatOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) @interpolate(flat) light: vec2<f32>,
+};
+
 @vertex
-fn vs_glow_gather(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
-    let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
+fn vs_glow_splat(@builtin(vertex_index) vertex: u32, inst: Instance) -> GlowSplatOut {
+    var out: GlowSplatOut;
+    out.position = vec4<f32>(2.0, 2.0, 0.0, 1.0);
+    out.uv = vec2<f32>(0.0);
+    out.light = vec2<f32>(inst.glow.x * inst.glow.w, inst.glow.y);
+    if inst.glow.x <= 0.0 {
+        return out;
+    }
+    let corner = vec2<f32>(f32(vertex & 1u), f32(vertex >> 1u)) * 2.0 - 1.0;
+    let span = max(glow_rim() + max(u.glow.reach, 0.0), 0.1);
+    out.uv = corner * span;
+    let radius = u.node.radius * 1.8 * max(inst.scale, 0.05);
+    let world = inst.world_pos
+        + (u.camera.right.xyz * out.uv.x + u.camera.up.xyz * out.uv.y) * radius;
+    out.position = u.camera.view_proj * vec4<f32>(world, 1.0);
+    return out;
+}
+
+@vertex
+fn vs_glow_resolve(@builtin(vertex_index) vertex: u32) -> @builtin(position) vec4<f32> {
+    let corner = vec2<f32>(f32(vertex & 1u), f32(vertex >> 1u));
     return vec4<f32>(corner * 2.0 - 1.0, 0.0, 1.0);
 }
 
@@ -3015,31 +2976,6 @@ fn glow_gamma(rgb: vec3<f32>) -> vec3<f32> {
     );
 }
 
-/// Screen under a fixed full-strength ceiling, independent of note count,
-/// hue, level and camera. `peak` is the centre coverage of a full-strength
-/// neutral glow at this gain, not a maximum sampled from the active notes.
-/// Its decoded luminance is the brightness ceiling even for mixed hues.
-///
-/// Each incoming luminance y contributes y / peak_luminance to a screen:
-/// `s += (y / peak_luminance) * (1 - s)`. This form retains faint tails that
-/// subtracting a product of nearly-one complements from one could lose.
-/// The output is at most the peak, and one contributor is exactly itself.
-///
-/// Colour comes from summed linear RGB, scaled to that screened luminance.
-/// If that colour cannot fit below the peak in RGB, desaturate toward grey
-/// at the SAME luminance. Per-channel clipping would change brightness and
-/// hue; independent RGB screens would give each hue a different brightness
-/// curve instead of screening luminance itself.
-///
-/// The target's alpha is still coverage, separately screened under the same
-/// gain. Raise it only when needed to contain the resulting gamma RGB, since
-/// every reader expects a valid premultiplied texture. Bloom is downstream
-/// and can add its own light; this ceiling belongs to the node-glow layer.
-///
-/// Accumulation crossfades this result with the original gamma-space RGBA
-/// screen. Both endpoints are premultiplied, so their mix remains valid.
-/// The old endpoint intentionally permits buildup above the fixed peak and
-/// restores its per-channel colour mixing. Skip the unused fold at either end.
 // Integer hashing avoids a per-pixel transcendental and keeps spatial noise
 // repeatable. The field is shared across the pane: overlapping halos reveal
 // one cloud, with no separate cloud stamped onto each note.
@@ -3076,79 +3012,82 @@ fn nebula_light(light: vec4<f32>, pixel: vec2<f32>) -> vec4<f32> {
     let detail = nebula_noise(p * 2.3 - drift + vec2<f32>(3.1, 7.4));
     let density = 0.08 + 0.92 * smoothstep(0.25, 0.70, cloud * 0.75 + detail * 0.25);
     // Attenuate premultiplied RGBA together: preserve note hue, valid alpha,
-    // and the gather's peak bound. No glow means no nebula light at all.
+    // and the overlap rule's peak bound. No glow means no nebula light at all.
     // Applying once after the fold also textures dense saturated chords.
     return light * mix(1.0, density, u.nebula.depth);
 }
 
+/// Screen under a fixed full-strength ceiling, independent of note count,
+/// hue, level and camera. `peak` is the centre coverage of a full-strength
+/// neutral glow at this gain, not a maximum sampled from the active notes.
+/// Its decoded luminance is the brightness ceiling even for mixed hues.
+///
+/// Each incoming luminance y contributes y / peak_luminance to a screen:
+/// `s += (y / peak_luminance) * (1 - s)`. This form retains faint tails that
+/// subtracting a product of nearly-one complements from one could lose.
+/// The output is at most the peak, and one contributor is exactly itself.
+///
+/// Colour comes from summed linear RGB, scaled to that screened luminance.
+/// If that colour cannot fit below the peak in RGB, desaturate toward grey
+/// at the SAME luminance. Per-channel clipping would change brightness and
+/// hue; independent RGB screens would give each hue a different brightness
+/// curve instead of screening luminance itself.
+///
+/// The target's alpha is still coverage, separately screened under the same
+/// gain. Raise it only when needed to contain the resulting gamma RGB, since
+/// every reader expects a valid premultiplied texture. Bloom is downstream
+/// and can add its own light; this ceiling belongs to the node-glow layer.
+///
+/// Accumulation crossfades this result with the original gamma-space RGBA
+/// screen. Both endpoints are premultiplied, so their mix remains valid.
+/// The old endpoint intentionally permits buildup above the fixed peak and
+/// restores its per-channel colour mixing.
+struct GlowStatistics {
+    @location(0) sum: vec4<f32>,
+    @location(1) screen: vec2<f32>,
+    @location(2) accumulated: vec4<f32>,
+};
+
 @fragment
-fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+fn fs_glow_splat(in: GlowSplatOut) -> GlowStatistics {
+    let halo = glow_layer(in.light, in.uv);
+    if halo.w <= 0.0 {
+        discard;
+    }
+    let incoming = vec4<f32>(halo.xyz * halo.w, halo.w);
+    let peak = clamp(GLOW_BASE * u.glow.strength, 0.0, 1.0);
+    let peak_luminance = glow_linear(vec3<f32>(peak)).x;
+    let linear = glow_linear(incoming.xyz);
+    let share = clamp(dot(linear, GLOW_LUMINANCE) / peak_luminance, 0.0, 1.0);
+    // Sum RGB/count; screen normalized luminance/coverage and gamma RGBA.
+    // All three targets clear to zero. Half-float blend rounding is the only
+    // approximation to the original f32 gather equations.
+    return GlowStatistics(vec4<f32>(linear, 1.0), vec2<f32>(share, halo.w / peak), incoming);
+}
+
+@fragment
+fn fs_glow_resolve(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     if u.glow.lit <= 0.0 {
         return vec4<f32>(0.0);
     }
+    let pixel = vec2<i32>(pos.xy);
+    let sum = textureLoad(glow_sum, pixel, 0);
+    let bounded = textureLoad(glow_screen, pixel, 0).xy;
+    let accumulated = textureLoad(glow_accumulated, pixel, 0);
+    // The gamma screen is also the exact sole contribution (up to target
+    // quantization), avoiding a nonlinear round trip for isolated notes.
+    if sum.w <= 1.0 {
+        return nebula_light(accumulated, pos.xy);
+    }
     let accumulation = clamp(u.glow.accumulation, 0.0, 1.0);
-    let peak = clamp(GLOW_BASE * u.glow.strength, 0.0, 1.0);
-    if peak <= 0.0 {
-        return vec4<f32>(0.0);
-    }
-    let peak_luminance = glow_linear(vec3<f32>(peak)).x;
-    if peak_luminance <= 0.0 {
-        return vec4<f32>(0.0);
-    }
-    var screen = 0.0;
-    var coverage = 0.0;
-    var rgb = vec3<f32>(0.0);
-    var accumulated = vec4<f32>(0.0);
-    var sole = vec4<f32>(0.0);
-    var count = 0u;
-    let tile_xy = vec2<u32>(pos.xy) / GLOW_TILE_SIZE;
-    let tile = tile_xy.y * glow_tiles[0] + tile_xy.x;
-    var local = glow_tiles[3u + tile];
-    let local_end = glow_tiles[4u + tile];
-    var global = glow_tiles[1];
-    let global_end = glow_tiles[2];
-    // Merge in original node order: the fold then keeps its original rounding
-    // as a halo crosses a tile boundary or switches between local and global.
-    while local < local_end || global < global_end {
-        var i = 0xffffffffu;
-        if local < local_end {
-            i = glow_tiles[local];
-        }
-        if global < global_end && glow_tiles[global] < i {
-            i = glow_tiles[global];
-            global = global + 1u;
-        } else {
-            local = local + 1u;
-        }
-        let node = glow_nodes[i];
-        let delta = pos.xy - node.centre;
-        let uv = vec2<f32>(dot(node.inv_x, delta), dot(node.inv_y, delta));
-        let halo = glow_layer(node, uv);
-        if halo.w <= 0.0 {
-            continue;
-        }
-        let incoming = vec4<f32>(halo.xyz * halo.w, halo.w);
-        sole = incoming;
-        count = count + 1u;
-        if accumulation > 0.0 {
-            accumulated = incoming + accumulated * (1.0 - incoming);
-        }
-        if accumulation < 1.0 {
-            let linear = glow_linear(incoming.xyz);
-            let share = clamp(dot(linear, GLOW_LUMINANCE) / peak_luminance, 0.0, 1.0);
-            screen = screen + share * (1.0 - screen);
-            coverage = coverage + (halo.w / peak) * (1.0 - coverage);
-            rgb = rgb + linear;
-        }
-    }
-    // Also preserves lone glows byte-for-byte through the nonlinear colour
-    // round trip, including a node whose neighbours have completely faded.
-    if count <= 1u {
-        return nebula_light(sole, pos.xy);
-    }
     if accumulation >= 1.0 {
         return nebula_light(accumulated, pos.xy);
     }
+    let peak = clamp(GLOW_BASE * u.glow.strength, 0.0, 1.0);
+    let peak_luminance = glow_linear(vec3<f32>(peak)).x;
+    let rgb = sum.xyz;
+    let screen = bounded.x;
+    let coverage = bounded.y;
     let total = dot(rgb, GLOW_LUMINANCE);
     let light = min(screen, 1.0) * peak_luminance;
     if total <= 0.0 {
