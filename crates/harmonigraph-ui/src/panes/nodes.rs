@@ -5,9 +5,10 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::AppearanceDocument;
 use harmonigraph_scene::{
-    SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
-    SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
-    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    NoteTransition, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE,
+    PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
+    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
+    SPECTRAL_WIDTH_MIN,
 };
 
 /// Sizes and timing first, then the audio and MIDI layers and their accents.
@@ -352,6 +353,18 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// different moments.
 fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
     section(ui, "Note layers");
+    button_row(ui, |ui| {
+        ui.label("Transition");
+        egui::ComboBox::from_id_salt("note-transition")
+            .selected_text(view.note_transition.label())
+            .show_ui(ui, |ui| {
+                for mode in NoteTransition::ALL {
+                    ui.selectable_value(&mut view.note_transition, mode, mode.label());
+                }
+            })
+            .response
+            .on_hover_text("Arrival and departure prototypes on the Note fade clock. Draw traces the radial bands; Spark travels around the rim. Pitch centres and labels stay fixed. Ripple is arrival-only. Focus uses the existing Glow (enable Reach and Strength on Lighting).");
+    });
     // The note's timing and the curve it runs on, in that order. Fade is an
     // automatable param and Fade curve a view setting, so the two are stored apart
     // (`ViewConfig::envelope` is where they are put back together); the pane

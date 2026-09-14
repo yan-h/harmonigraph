@@ -58,7 +58,7 @@ pub use style::{
     ShadowStyle, REACH_SIGMAS, SHADOW_FALLOFF_FREE, SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN,
     SHADOW_INVISIBLE, SHADOW_STOP, SHADOW_TAIL,
 };
-pub use view::{DrawnWindow, FrameParams, GlowCurve, RingStack, ViewConfig};
+pub use view::{DrawnWindow, FrameParams, GlowCurve, NoteTransition, RingStack, ViewConfig};
 
 use glam::{Vec3, Vec4};
 use harmonigraph_core::{Envelope, LatticePos};
@@ -410,6 +410,12 @@ pub struct NodeInstance {
     /// record that takes over when the release finishes, and reserving that
     /// on the way IN draws a name ahead of the note it names.
     pub departing: bool,
+    /// Linear arrival progress; negative remaining release. Follows the voice
+    /// most recently struck at this pitch class. Another held octave prevents
+    /// a whole-node departure; once all release, the longest remaining release
+    /// owns the phase. Individual octave envelopes remain independent.
+    /// Stateless and evaluated at the same musical time live and offline.
+    pub transition_phase: f32,
     /// Per-octave activation (slot = MIDI octave + 1, clamped into the span
     /// the view shows — see [`octaves`]): each octave's indicator fades on
     /// its own voice's envelope, independent of the node's overall
@@ -720,6 +726,7 @@ pub struct Scene {
     pub camera: Camera,
     /// Base node radius in world units (scales with lattice spacing).
     pub node_radius: f32,
+    pub note_transition: NoteTransition,
     /// The outer octave layer's radial band (quad UV units), already
     /// sanitized: outer is always ahead of inner on a band that draws, and
     /// both are 0 when the layer is off (see [`ViewConfig::band_width`]).

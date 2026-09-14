@@ -81,6 +81,7 @@ pub(super) fn parity_scene() -> Scene {
             // Nothing the shader draws reads this — it is the label layer's,
             // and labels are the UI crate's text pass, not the lattice pass.
             departing: false,
+            transition_phase: 1.0,
             octaves,
             hovered: i == 1,
             on_home: i % 2 == 0,
@@ -133,6 +134,7 @@ pub(super) fn parity_scene() -> Scene {
             harmonigraph_scene::ViewConfig::default().lattice_ground,
         ),
         node_radius: 0.34,
+        note_transition: harmonigraph_scene::NoteTransition::Fade,
         mark_thickness: 0.09,
         outer_inner: 0.545,
         outer_outer: 0.795,
@@ -449,6 +451,7 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         activation: 1.0,
         // Held at full, so neither end of the envelope is running.
         departing: false,
+        transition_phase: 1.0,
         octaves,
         hovered: false,
         on_home: true,

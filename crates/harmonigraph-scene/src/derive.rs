@@ -74,6 +74,7 @@ struct FrameVoice<'a> {
     /// Whether this voice's departure has begun (see
     /// [`NodeInstance::departing`](crate::NodeInstance::departing)).
     departing: bool,
+    transition_phase: f32,
     /// What this voice's melody mark draws at, or `None` where it wears no
     /// melody end. The RELEASE alone under the mark's own ease — see the ease
     /// in [`derive_scene`], and
@@ -303,6 +304,15 @@ pub fn derive_scene(
                 // release holds at 1 until the key comes up AND the arrival
                 // has landed, so this cannot be a note still easing in.
                 departing: release < 1.0,
+                transition_phase: {
+                    let linear = harmonigraph_core::Envelope { shape: 0.0, ..env };
+                    let remaining = voice.release_level(now, &linear);
+                    if remaining < 1.0 {
+                        -remaining
+                    } else {
+                        linear.attack(now, voice.on_time)
+                    }
+                },
                 melody: mark(melody_since),
                 bass: mark(bass_since),
             }
@@ -322,6 +332,11 @@ pub fn derive_scene(
         // the same voice the node is lit and colored by rather than any other
         // one that happens to match this pitch class.
         let mut departing = false;
+        let mut transition_phase = 1.0;
+        let mut latest_transition = None;
+        let mut held_here = false;
+        let mut latest_departing = false;
+        let mut longest_release = 0.0f32;
         let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = node_idle;
         let mut melody = Mark::default();
@@ -332,6 +347,17 @@ pub fn derive_scene(
         for lit in &voices {
             let voice = lit.voice;
             if tuning.matches(voice.pitch_class, node_pc) {
+                let held = matches!(voice.state, harmonigraph_core::VoiceState::Held);
+                held_here |= held;
+                longest_release = longest_release.max(-lit.transition_phase);
+                // New strikes restart even over a brighter release or held octave.
+                // Held wins equal timestamps because voices() visits releases last.
+                let key = (voice.on_time, held);
+                if latest_transition.is_none_or(|old| key > old) {
+                    latest_transition = Some(key);
+                    transition_phase = lit.transition_phase;
+                    latest_departing = lit.departing;
+                }
                 let envelope = lit.activation;
                 if envelope > activation {
                     activation = envelope;
@@ -445,12 +471,22 @@ pub fn derive_scene(
                 LatticePos::new(pos.threes - 2 * centered.sevens, pos.fives, center.sevens);
             (sevens_size.powi(sheets as i32), wrapped_cents(node_pc, tuning.pitch_class(namesake)))
         };
+        // A shared pitch class stays whole while any octave is held. Its
+        // individual octave sectors still release on their own envelopes.
+        if latest_departing {
+            // Once all arrivals have landed, follow the last release to finish.
+            // An older held octave can be released after the newest strike;
+            // using onset order here would shrink then regrow when that newer
+            // voice is pruned. The maximum remaining ramp is continuous.
+            transition_phase = if held_here { 1.0 } else { -longest_release };
+        }
         nodes.push(NodeInstance {
             lattice_pos: pos,
             world_pos,
             color,
             activation,
             departing,
+            transition_phase,
             octaves,
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,
@@ -507,6 +543,7 @@ pub fn derive_scene(
         nodes,
         camera,
         node_radius: view.spacing * NODE_RADIUS_FACTOR,
+        note_transition: view.note_transition,
         outer_inner: rings.band.0,
         outer_outer: rings.band.1,
         rings_outer: rings.outer,

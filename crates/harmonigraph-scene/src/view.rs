@@ -238,6 +238,41 @@ impl DrawnWindow {
     }
 }
 
+/// Selectable lattice arrival/departure prototypes. Fade is the reference picture.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[repr(u8)]
+pub enum NoteTransition {
+    #[default]
+    Fade,
+    PopAndSettle,
+    DrawAndRetract,
+    RippleArrival,
+    FocusAndDissolve,
+    SparkAndTrail,
+}
+
+impl NoteTransition {
+    pub const ALL: [Self; 6] = [
+        Self::Fade,
+        Self::PopAndSettle,
+        Self::DrawAndRetract,
+        Self::RippleArrival,
+        Self::FocusAndDissolve,
+        Self::SparkAndTrail,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fade => "Fade",
+            Self::PopAndSettle => "Pop and settle",
+            Self::DrawAndRetract => "Draw and retract",
+            Self::RippleArrival => "Ripple arrival",
+            Self::FocusAndDissolve => "Focus and dissolve",
+            Self::SparkAndTrail => "Spark and trail",
+        }
+    }
+}
+
 /// Purely-visual settings (not host-automatable parameters). The UI layer
 /// persists these separately from plugin parameters.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -760,6 +795,8 @@ pub struct ViewConfig {
     /// `#[serde(default)]` makes `impl Default` the one fallback, and
     /// `a_view_missing_any_one_key_reloads_at_the_fresh_value` holds it.
     pub fade_shape: f32,
+    /// Appearance of note arrivals and departures, on the shared Note fade clock.
+    pub note_transition: NoteTransition,
     // An unlit node has no mark of its own: the marker standing at a node
     // position is the whole of what says the position is there, and it stands
     // on the home sheet alone (see `derive_pluses`) — off it, a position at
@@ -2334,6 +2371,7 @@ impl Default for ViewConfig {
             // the ear has finished the note. The straight line is still one
             // drag away.
             fade_shape: 0.313_509_55,
+            note_transition: NoteTransition::Fade,
             // Both ends marked: the marks are subtle enough to live with
             // always on, and a chord's outer voices are worth seeing without
             // having to go turn something on first.

@@ -28,7 +28,7 @@ struct NodeParams {
     mark_inner: f32,
     angular_gap: f32,
     mark_thickness: f32,
-    padding: f32,
+    transition: f32,
 };
 
 struct MarkerParams {
@@ -446,6 +446,9 @@ fn paint_reach(in: VsOut, aa: f32) -> f32 {
     if in.marks.x != 0u || in.marks.y != 0u {
         reach = max(reach, QUAD_MARGIN);
     }
+    if u.node.transition != 0.0 {
+        reach = max(reach, max(in.rim, 1.0) * 1.25);
+    }
     return max(reach, max(in.rim, spectral_radii().y) + aa);
 }
 
@@ -456,7 +459,7 @@ struct Instance {
     // follow the marked voice rather than this node's activation — each
     // ring eases in over the scene layer's attack when its note takes that
     // end, and drops to 0 the frame the key comes up.
-    @location(2) params: vec3<f32>,
+    @location(2) params: vec4<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed: how much
     // of that octave is HELD, and nothing else. The analyzer never writes here
     // — its reading is the audio ring's own channel (u.spectrum_color), a
@@ -530,7 +533,7 @@ struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) uv: vec2<f32>, // -1..1 across the quad
     @location(1) color: vec4<f32>,
-    @location(2) params: vec3<f32>,
+    @location(2) params: vec4<f32>,
     @location(3) @interpolate(flat) octaves: vec3<u32>,
     @location(4) @interpolate(flat) cents: f32,
     // Which ROW of the ink strip is this node's — the row the light's own clock
@@ -686,7 +689,8 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     // (`shadow_reach_uv`), and a quad that stopped at the ink would cut that
     // Gaussian off in a straight line. The cell draw writes the packer's
     // one-texel sampling guard too.
-    let margin = quad_margin(rim, shadow_reach_uv(scale));
+    let bounds = select(rim, max(rim, 1.0) * 1.25, u.node.transition != 0.0);
+    let margin = quad_margin(bounds, shadow_reach_uv(scale));
     let radius = u.node.radius * 0.90 * 2.0 * margin * scale;
 
     let world = inst.world_pos
@@ -1622,7 +1626,25 @@ struct NodeGeom {
     paints: bool,
 }
 
-fn node_geom(in: VsOut, analytic: bool) -> NodeGeom {
+// Transform only procedural ink. The billboard, pitch centre, label glyphs,
+// and shadow allocation retain fixed dimensions for the entire gesture.
+fn transition_scale(phase: f32) -> f32 {
+    if u.node.transition != 1.0 { return 1.0; }
+    let p = abs(phase);
+    if phase < 0.0 { return 0.55 + 0.45 * p; }
+    // Cubic back-out: a restrained 8% overshoot, then exactly the original size.
+    let t = p - 1.0;
+    return 1.0 + 2.1 * t * t * t + 1.1 * t * t;
+}
+
+fn transition_input(src: VsOut) -> VsOut {
+    var result = src;
+    result.uv /= max(transition_scale(src.params.w), 0.05);
+    return result;
+}
+
+fn node_geom(src: VsOut, analytic: bool) -> NodeGeom {
+    let in = transition_input(src);
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
 
     // Screen-constant soft-band width: uv units per fragment (uv.x is linear
@@ -1635,7 +1657,7 @@ fn node_geom(in: VsOut, analytic: bool) -> NodeGeom {
     // Outside everything this node can paint. `fwidth` above is taken first
     // and in uniform control flow, as its comment requires; from here on the
     // shader is free to leave.
-    if EARLY_OUT && !analytic && d > paint_reach(in, aa) {
+    if EARLY_OUT && !analytic && u.node.transition == 0.0 && d > paint_reach(in, aa) {
         return NodeGeom(d, aa, OctRing(0, 0.0), false);
     }
 
@@ -1666,8 +1688,8 @@ fn node_geom(in: VsOut, analytic: bool) -> NodeGeom {
     let audio_annulus = spectral_radii();
     let ring_draws = audio_annulus.y > audio_annulus.x;
     let in_audio_ring = ring_draws
-        && d >= audio_annulus.x - aa
-        && d <= audio_annulus.y + aa;
+        && length(src.uv) >= audio_annulus.x - aa
+        && length(src.uv) <= audio_annulus.y + aa;
     if EARLY_OUT
         && !analytic
         && !in_audio_ring
@@ -1730,7 +1752,7 @@ fn mask_level(level: f32) -> f32 {
 /// fragment does with it are two readable pieces rather than one function of
 /// three hundred lines: the ink is decided here, and the node's own shadow is
 /// spent once, at the end, over whatever the layers came to.
-fn node_ink(
+fn base_node_ink(
     in: VsOut,
     d: f32,
     aa: f32,
@@ -1889,26 +1911,30 @@ fn node_ink(
     // overlap the band still shows the measurement: the band's own reading is
     // drawn twice over in that case (its wedge and its ghost), and the
     // spectrum's is not drawn anywhere else.
-    let audio_radii = spectral_radii();
-    let audio = spectral_ring(
-        in,
-        oct,
-        in.uv,
-        glyph_band(d, audio_radii.x, audio_radii.y, 1.0, aa),
-        aa,
-        analytic,
-    );
-    node_sd = layer_distance(node_sd, audio.layer);
-    glyph_rgb = (audio.color * audio.cov + glyph_rgb * glyph * (1.0 - audio.cov))
-        / max(audio.cov + glyph * (1.0 - audio.cov), 1e-4);
-    // The wedge's own reading is its lit share, on the composite the coverage
-    // below takes. A silent wedge is the ramp's pinned end — the rings' ground
-    // exactly — so it weighs nothing here and covers the octave layer's answer
-    // with a zero of its own, which is what the ink does too.
-    glyph_lit = audio.lit * audio.cov + glyph_lit * (1.0 - audio.cov);
-    glyph = audio.cov + glyph * (1.0 - audio.cov);
-    let audio_mask = audio.layer.coverage * mask_level(in.ring);
-    glyph_mask = audio_mask + glyph_mask * (1.0 - audio_mask);
+    // Fade preserves the reference composition exactly. Prototypes compose
+    // the independently gated audio reading after their MIDI-only gesture.
+    if u.node.transition == 0.0 {
+        let audio_radii = spectral_radii();
+        let audio = spectral_ring(
+            in,
+            oct,
+            in.uv,
+            glyph_band(d, audio_radii.x, audio_radii.y, 1.0, aa),
+            aa,
+            analytic,
+        );
+        node_sd = layer_distance(node_sd, audio.layer);
+        glyph_rgb = (audio.color * audio.cov + glyph_rgb * glyph * (1.0 - audio.cov))
+            / max(audio.cov + glyph * (1.0 - audio.cov), 1e-4);
+        // The wedge's own reading is its lit share, on the composite the coverage
+        // below takes. A silent wedge is the ramp's pinned end — the rings' ground
+        // exactly — so it weighs nothing here and covers the octave layer's answer
+        // with a zero of its own, which is what the ink does too.
+        glyph_lit = audio.lit * audio.cov + glyph_lit * (1.0 - audio.cov);
+        glyph = audio.cov + glyph * (1.0 - audio.cov);
+        let audio_mask = audio.layer.coverage * mask_level(in.ring);
+        glyph_mask = audio_mask + glyph_mask * (1.0 - audio_mask);
+    }
 
     // Melody/bass marks: each one its own octave's slice, continued into the
     // strip past the band. Their own layer, composited over the glyphs — a
@@ -1993,6 +2019,83 @@ fn node_ink(
         glyph_mask,
         node_sd,
     );
+}
+
+// One shared evaluation for the scene and both shadow kernels. Decorative
+// rings participate in coverage/distance too, so no stale full-node shadow is
+// left behind a partial gesture. Fade bypasses every operation below.
+fn node_ink(src: VsOut, d: f32, aa: f32, oct: OctRing, analytic: bool) -> NodeInk {
+    let in = transition_input(src);
+    var ink = base_node_ink(in, d, aa, oct, analytic);
+    let mode = u.node.transition;
+    if mode == 0.0 { return ink; }
+    let phase = src.params.w;
+    let p = abs(phase);
+    if mode == 1.0 {
+        ink.sd *= max(transition_scale(phase), 0.05);
+    }
+    if mode == 2.0 && p < 1.0 {
+        // There are no lattice edges: trace the actual radial bands clockwise
+        // from twelve o'clock, and retract toward that same anchor on release.
+        let angle = fract(atan2(in.uv.x, in.uv.y) / TAU + 1.0);
+        let edge = (angle - p) * TAU * max(d, 0.05);
+        let coverage = 1.0 - smoothstep(-aa, aa, edge);
+        ink.rgb *= coverage;
+        ink.alpha *= coverage;
+        ink.mask *= coverage;
+        ink.sd = max(ink.sd, edge);
+    }
+    if mode == 4.0 {
+        // Core resolves out of the existing halo, then gives way to it again.
+        let focus = p * p;
+        ink.rgb *= focus;
+        ink.alpha *= focus;
+        ink.mask *= focus;
+        if focus < 0.5 { ink.sd = EMPTY_DISTANCE; }
+    }
+    var accent = 0.0;
+    var accent_sd = EMPTY_DISTANCE;
+    let rim = max(src.rim, 0.4);
+    if mode == 3.0 && src.params.x > 0.0 && phase >= 0.0 && p < 1.0 {
+        let radius = mix(0.12, max(rim, 1.0) * 1.2, p);
+        accent_sd = abs(length(src.uv) - radius) - 0.018;
+        accent = (1.0 - smoothstep(-aa, aa, accent_sd)) * sin(p * 3.14159265);
+    }
+    if mode == 5.0 && src.params.x > 0.0 && p < 1.0 {
+        // One turn, with a tail limited to 18% of the rim. No particle history,
+        // accumulated geometry, or wall-clock phase survives a retrigger.
+        let travel = select(1.0 - p, p, phase >= 0.0);
+        let angle = fract(atan2(src.uv.x, src.uv.y) / TAU + 1.0);
+        let behind = fract(travel - angle + 1.0);
+        let tail = max(0.0, 1.0 - behind / 0.18);
+        accent_sd = max(abs(length(src.uv) - rim * 0.97) - 0.045, (behind - 0.18) * rim * TAU);
+        accent = (1.0 - smoothstep(-aa, aa, accent_sd)) * tail * tail * sin(p * 3.14159265);
+    }
+    if accent > 0.0 {
+        let rgb = mix(src.color.rgb, vec3<f32>(1.0), 0.5);
+        ink.rgb = rgb * accent + ink.rgb * (1.0 - accent);
+        ink.alpha = accent + ink.alpha * (1.0 - accent);
+        ink.mask = max(ink.mask, accent);
+        if accent >= 0.5 { ink.sd = min(ink.sd, accent_sd); }
+    }
+    // Audio can remain audible and gated on after every MIDI voice is gone.
+    // Sample at the original coordinates, outside all transition masks; its
+    // size and level therefore cannot jump when a released voice is pruned.
+    let audio_radii = spectral_radii();
+    let audio_aa = aa * max(transition_scale(phase), 0.05);
+    let audio = spectral_ring(
+        src, oct, src.uv,
+        glyph_band(length(src.uv), audio_radii.x, audio_radii.y, 1.0, audio_aa),
+        audio_aa, analytic,
+    );
+    let lit = audio.lit * audio.cov + ink.lit * ink.alpha * (1.0 - audio.cov);
+    ink.rgb = audio.color * audio.cov + ink.rgb * (1.0 - audio.cov);
+    ink.alpha = audio.cov + ink.alpha * (1.0 - audio.cov);
+    ink.lit = lit / max(ink.alpha, 1e-4);
+    let mask = audio.layer.coverage * mask_level(src.ring);
+    ink.mask = mask + ink.mask * (1.0 - mask);
+    ink.sd = layer_distance(ink.sd, audio.layer);
+    return ink;
 }
 
 /// What a draw lays down in the scene pass: one ink, and the two alphas that

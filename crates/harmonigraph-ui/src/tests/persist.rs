@@ -2040,3 +2040,14 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
         );
     }
 }
+
+#[test]
+fn persist_round_trips_every_note_transition() {
+    for mode in harmonigraph_scene::NoteTransition::ALL {
+        let mut state = fresh();
+        state.picture.appearance.view.note_transition = mode;
+        let mut restored = fresh();
+        assert!(restored.load_persist(&state.save_persist()));
+        assert_eq!(restored.picture.appearance.view.note_transition, mode);
+    }
+}

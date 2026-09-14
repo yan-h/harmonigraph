@@ -141,7 +141,7 @@ impl LatticeCallback {
         let to_gpu = |n: &harmonigraph_scene::NodeInstance| GpuInstance {
             world_pos: n.world_pos.to_array(),
             color: n.color.to_array(),
-            params: [n.activation, n.melody_level, n.bass_level],
+            params: [n.activation, n.melody_level, n.bass_level, n.transition_phase],
             octaves: pack_octaves(&n.octaves),
             cents: n.cents,
             marks: [n.melody_slots, n.bass_slots],
@@ -285,6 +285,9 @@ impl LatticeCallback {
             if ringing && g.ring > 0.0 {
                 rim = rim.max(scene.spectral.outer);
             }
+            if scene.note_transition != harmonigraph_scene::NoteTransition::Fade {
+                rim = rim.max(1.0) * 1.25;
+            }
             // uv 1 is 1.8 node radii of the node's own sheet (`node_vertex`),
             // which is the one conversion between the bars' unit and the world.
             let reach = rim * scene.node_radius * 1.8 * n.scale.max(0.05);
@@ -397,6 +400,11 @@ impl LatticeCallback {
                     instance.glow[3] = atmosphere
                         .breath(scene.nodes[i].lattice_pos, scene.glow_timing.unwrap().now);
                 }
+                if scene.note_transition == harmonigraph_scene::NoteTransition::FocusAndDissolve {
+                    // Display-only boost: preserve the glow row, history, and atmosphere clock.
+                    let phase = scene.nodes[i].transition_phase.abs();
+                    instance.glow[3] *= 1.0 + 6.0 * phase * (1.0 - phase);
+                }
                 instances.push(instance);
                 if scene.glow_timing.is_some() {
                     glow_owners.push(scene.nodes[i].glow.incarnation);
@@ -456,7 +464,7 @@ impl LatticeCallback {
                     mark_inner: scene.mark_inner,
                     angular_gap: scene.octave_gap,
                     mark_thickness: scene.mark_thickness,
-                    padding: 0.0,
+                    transition: scene.note_transition as u8 as f32,
                 },
                 marker: MarkerParams {
                     half_width: scene.plus_half_width,

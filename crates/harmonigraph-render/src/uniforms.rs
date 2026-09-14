@@ -70,7 +70,7 @@ uniform_group! {
         mark_inner: f32,
         angular_gap: f32,
         mark_thickness: f32,
-        padding: f32,
+        transition: f32,
     }
 }
 uniform_group! {

@@ -567,7 +567,7 @@ struct GpuInstance {
     /// lattice.wgsl). The mark levels ride with the activation rather than in
     /// a vertex attribute of their own: all three are levels the same node
     /// draws at, read together by the layers that draw it.
-    params: [f32; 3],
+    params: [f32; 4],
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
     octaves: [u32; 3],
@@ -626,7 +626,7 @@ impl GpuInstance {
         // lattice.wgsl's `Instance` readable side by side.
         //
         attributes: &wgpu::vertex_attr_array![
-            0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
+            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3,
             4 => Float32, 6 => Uint32x2,
             7 => Float32x4, 8 => Float32x4, 10 => Float32, 11 => Float32,
             12 => Float32x4

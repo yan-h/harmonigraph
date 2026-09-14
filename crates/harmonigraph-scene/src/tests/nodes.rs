@@ -1525,3 +1525,63 @@ fn a_ring_dialled_off_is_gated_by_nothing() {
         "a gate answered on a lattice with no ring to answer about",
     );
 }
+
+#[test]
+fn transition_phase_restarts_on_retriggers_and_preserves_held_octaves() {
+    let mut tracker = NoteTracker::new();
+    let frame = FrameParams { fade_time: 1.0, ..Default::default() };
+    let view = ViewConfig::default(); // Curved ink, but linear motion.
+    let read = |tracker: &NoteTracker, now| {
+        *origin_node(&scene_of(tracker, &Tuning::default(), &view, &frame, now))
+    };
+    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+    tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, 60));
+    tracker.handle_event(NoteEvent::on(2.1, SourceId::DIRECT, 0, 60, 1.0));
+    assert!((read(&tracker, 2.2).transition_phase - 0.1).abs() < 1e-5);
+    // Same-key replacement without a note-off also starts at the new onset.
+    tracker.handle_event(NoteEvent::on(2.3, SourceId::DIRECT, 0, 60, 1.0));
+    assert!((read(&tracker, 2.4).transition_phase - 0.1).abs() < 1e-5);
+    tracker.handle_event(NoteEvent::on(4.0, SourceId::DIRECT, 0, 72, 1.0));
+    let node = read(&tracker, 4.25);
+    assert_eq!(node.activation, 1.0);
+    assert_eq!(node.transition_phase, 0.25);
+    tracker.handle_event(NoteEvent::off(4.3, SourceId::DIRECT, 0, 72));
+    assert_eq!(read(&tracker, 5.5).transition_phase, 1.0, "held C4 keeps the node whole");
+}
+
+#[test]
+fn transition_phase_sequences_short_notes_and_zero_duration() {
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+    tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 60));
+    let frame = FrameParams { fade_time: 1.0, ..Default::default() };
+    for (now, expected) in [(0.25, 0.25), (1.0, 1.0), (1.25, -0.75), (1.75, -0.25)] {
+        let scene = scene_of(&tracker, &Tuning::default(), &plain_view(), &frame, now);
+        assert_eq!(origin_node(&scene).transition_phase, expected);
+    }
+    let scene = scene_of(&tracker, &Tuning::default(), &plain_view(), &plain_frame(), 0.2);
+    assert_eq!(origin_node(&scene).activation, 0.0);
+    assert_eq!(origin_node(&scene).transition_phase, 0.0);
+    let scene = scene_of(&sounding(), &Tuning::default(), &plain_view(), &plain_frame(), 0.0);
+    assert_eq!(origin_node(&scene).transition_phase, 1.0);
+}
+
+#[test]
+fn transition_departure_does_not_regrow_when_newest_octave_prunes() {
+    let mut tracker = NoteTracker::new();
+    let view = plain_view();
+    let frame = FrameParams { fade_time: 1.0, ..Default::default() };
+    for event in [
+        NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0),
+        NoteEvent::on(1.0, SourceId::DIRECT, 0, 72, 1.0),
+        NoteEvent::off(2.0, SourceId::DIRECT, 0, 72),
+        NoteEvent::off(2.8, SourceId::DIRECT, 0, 60),
+    ] {
+        tracker.handle_event(event);
+    }
+    for (now, remaining) in [(2.9, 0.9), (3.1, 0.7), (3.6, 0.2)] {
+        tracker.prune(now, &view.envelope(&frame));
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+        assert!((origin_node(&scene).transition_phase + remaining).abs() < 1e-5);
+    }
+}

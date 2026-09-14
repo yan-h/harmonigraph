@@ -864,6 +864,7 @@ mod tests {
             color: glam::Vec4::ONE,
             activation,
             departing: true,
+            transition_phase: -activation,
             octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
             hovered: false,
             on_home,
