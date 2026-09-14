@@ -15,7 +15,7 @@ the remaining sections record the implementation boundaries, rejected alternativ
 
 The moving, register-aware policy developed from [Adaptive tuning: a moving harmonic neighbourhood](adaptive-tuning-design.md) shipped in [#782](https://github.com/yan-h/harmonigraph/pull/782).
 That design document remains the requirements and discussion record;
-the [policy-v2 implementation record](adaptive-tuning-plugin.md) is authoritative for the shipped scorer, controls, expression handling, resources and persistence.
+the [policy-v3 implementation record](adaptive-tuning-plugin.md) is authoritative for the shipped scorer, controls, expression handling, resources and persistence.
 This document owns the surrounding transport, lifecycle and decision history rather than a second copy of those implementation details.
 
 Built and merged in [#709](https://github.com/yan-h/harmonigraph/issues/709), simplified by the seven-stage [#712](https://github.com/yan-h/harmonigraph/issues/712) stack, and then **replaced from the transport down** by stage 8, [#786](https://github.com/yan-h/harmonigraph/issues/786).
@@ -271,8 +271,8 @@ Explicit Reset, transport Stop, and a membership change are the separate cases, 
 Effective tuning is resolved independently of the editor.
 The `ConfigReducer` owns the semantics and ordering of combined edits, presets, explicit unlocks and mode changes —
 a preset must not become a mixture of old locks and new axes —
-and it publishes one resolved configuration containing the effective tuning, tempered commas and policy-v2 controls.
-Those controls cover neighborhood radius and axes, harmonic, pitch and register weighting, a shared half-life, repetition tolerance, silence timeout and transport resets;
+and it publishes one resolved configuration containing the effective tuning, tempered commas and policy-v3 controls.
+Those controls cover the keyboard tuning, neighborhood radius and axes, pitch flexibility, register weight per octave, a shared half-life, repetition tolerance, silence timeout and transport resets;
 their exact ranges and defaults live in the [implementation record](adaptive-tuning-plugin.md#controls-and-live-neighborhood).
 The UI mirrors that resolved configuration rather than running a competing authority, and restoring state or automating tuning works with the editor never opened.
 
@@ -480,15 +480,16 @@ Cross-process shared memory is not part of the design.
 It adds process discovery, stale participants, crash recovery and system-level synchronization without improving the intended workflow.
 ## The musical policy
 
-The Hub runs the pure, bounded policy-v2 scorer once for each ordered onset and folds each selected predecessor into the next decision, including across sources at the same sample.
-The [policy-v2 implementation record](adaptive-tuning-plugin.md) owns the exact score, controls, reset rules, limits and persistence shape;
+The Hub runs the pure, bounded policy-v3 scorer once for each ordered onset and folds each selected predecessor into the next decision, including across sources at the same sample.
+The [policy-v3 implementation record](adaptive-tuning-plugin.md) owns the exact score, controls, reset rules, limits and persistence shape;
 the summary here records only the system boundary.
 
 Input is absolute pitch, including register, per-note attack expression and the current MIDI channel displacement.
 The previous onset's full output-minus-input correction is the moving reference and is not octave-wrapped, so repeated material can keep traveling through the lattice instead of being pulled back to one fixed origin domain.
 
 Candidates are the union of bounded local Manhattan neighborhoods around the contributing context, restricted by the selected axes.
-The scorer chooses the nearest octave realization by pitch error plus register-weighted harmonic distance, with coordinate order as the final tie-break.
+The scorer takes each candidate's nearest octave realization and picks the lowest net cost, an exponential pitch cost scaled by pitch flexibility minus a register-weighted harmonic benefit, with coordinate order as the final tie-break;
+a node wins only with a strictly negative score, and otherwise the note stays unsnapped at its input pitch plus the existing drift.
 A note sounding in several registers votes once, through whichever of its voices votes most.
 While anything is held the context is the held references alone, so a released note never outranks a held one;
 recently released onset pitches are the context only when nothing is held.
@@ -652,7 +653,7 @@ and the status does not say there is no Harmonigraph in the process or no free r
 raise the multiplier and play again.
 The Hub's **Tuning → Adaptive tuning → Tuning delay** controls can apply one multiplier to every Tune at once;
 each one then requests its own reactivation.
-4. In the Hub's **Tuning** pane, choose the tuning axes and policy-v2 controls for the session.
+4. In the Hub's **Tuning** pane, choose the tuning axes and policy-v3 controls for the session.
 Locked 12-TET produces zero adaptive correction;
 choose **Just** with **Auto** and **Learn** off for a first independent-tuning check.
 The moving-neighborhood defaults match the simulator's baseline profile;
@@ -736,7 +737,7 @@ the second is what keeps Learn from becoming a fixed point.
 ## Open, deferred and not built
 
 **Deferred policy choices.** Pedal-aware harmonic holding, a successor to the deliberately temporary bounded recent-note memory, and explicit anchors or additional root and excluded-pitch controls remain unbuilt.
-The shipped policy-v2 controls do not imply those choices were made.
+The shipped policy-v3 controls do not imply those choices were made.
 
 **Filed and open.**
 

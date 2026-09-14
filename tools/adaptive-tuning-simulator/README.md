@@ -178,8 +178,8 @@ Browser state is not otherwise persisted automatically.
 node --test tools/adaptive-tuning-simulator/model.test.mjs
 ```
 
-The suite checks the fifteen musical fixtures with declared profiles, 101 full major-third cycles with over three octaves of unwrapped drift, octave transposition, release-recency replacement, repeated pitches, frozen corrections and player bends, reset settings, axis eligibility and analytic reachability against direct selection.
-The browser also offers **Musical checks** for running the fifteen fixture outcomes interactively.
+The suite checks the seventeen musical fixtures with declared profiles, 101 full major-third cycles with over three octaves of unwrapped drift, octave transposition, release-recency replacement, repeated pitches, frozen corrections and player bends, reset settings, axis eligibility and analytic reachability against direct selection.
+The browser also offers **Musical checks** for running the seventeen fixture outcomes interactively.
 Changing parameters may produce a different result and the current example reports that difference rather than declaring every run a pass.
 
 This verifies the model's mechanics and the stated fixtures, not perceptual quality or suitability for every progression.

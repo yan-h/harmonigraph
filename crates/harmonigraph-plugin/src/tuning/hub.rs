@@ -112,8 +112,8 @@ impl Voice {
     }
 }
 
-/// The musical half, and nothing else. Everything in here is policy v2 state
-/// as it was; the transport around it is what #786 replaced.
+/// The musical half, and nothing else. Everything in here is policy state; the
+/// transport around it is what #786 replaced.
 struct Sequencer {
     context: Box<[Option<Voice>]>,
     memory: policy::Memory,

@@ -1,5 +1,13 @@
 # Lattice atmosphere performance audit
 
+This is a historical record of a renderer that no longer exists.
+PR #877 replaced the tiled gather it measures with rasterized splats,
+deleting `lattice_node_glow/tiles.rs`, `glow_nodes`, `halo_pixels` and `fs_glow_gather`,
+and PR #879 moved the glow target to half resolution.
+The probe no longer prints candidate counts, so the commands below cannot reproduce the tables' candidate columns,
+and every present-tense sentence and the source map describe the code at `9849a5b9`.
+The current renderer is described in `docs/directional-glow-simplification.md`.
+
 The measurements below record the audit at `9849a5b9`.
 The subsequent change in this PR removes the wide-glow component, its controls, and its persisted fields entirely.
 The historical `no-wide` probe case is therefore no longer present;
@@ -149,7 +157,7 @@ For an ink-blur kernel cache, the key is the sanitized blend setting and strip r
 It must not include note activity, camera, breathing time, or the entire view configuration.
 The kernel is shared, but the ink itself and its carried attack/release state still change per node and frame.
 
-## Source map
+## Source map at `9849a5b9`
 
 - Candidate projection and radius: `crates/harmonigraph-render/src/lattice_node_glow.rs`, `glow_nodes` and `halo_pixels`.
 - Candidate indexing: `crates/harmonigraph-render/src/lattice_node_glow/tiles.rs`, `pack`.
