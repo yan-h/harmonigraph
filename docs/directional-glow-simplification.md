@@ -137,8 +137,9 @@ note turnover and audio processing.
 This trades roughly 600 net lines of renderer and test machinery for three textures and one resolve pass.
 The extra targets consume 11.25 MiB at 768×768 or 45 MiB at 1536×1536,
 per lattice pane.
-It is a promising testable prototype,
-with the visual comparison in the DAW still left to the user.
+The user approved the visual result in the DAW.
+The independent Fable review found no implementation defects;
+its suggested comparison against an f32 reference was declined as unnecessary for the accepted picture.
 
 ### Known prototype precision limit
 
@@ -151,4 +152,7 @@ reversing the color blocks changes the output by up to 2/255 at accumulation zer
 The 128-contributor fixture stays within 1/255;
 this particular 4,096-contributor fixture reaches the same rounded result in both orders.
 This does not yet establish a visible problem in an ordinary lattice scene.
-[Issue #878](https://github.com/yan-h/harmonigraph/issues/878) retains the reproduction and next measurements before promoting the prototype.
+The user accepted this precision tradeoff after visual testing and declined further reference comparisons.
+[Issue #878](https://github.com/yan-h/harmonigraph/issues/878) retains the measurements as a closed,
+not-planned follow-up;
+additional precision work is not a merge prerequisite.
