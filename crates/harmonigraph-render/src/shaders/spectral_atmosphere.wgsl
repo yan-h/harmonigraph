@@ -1,11 +1,17 @@
 // Fixed-cost separable filtering of a quarter-resolution image. The source
 // contains only spectral intensity, never note bodies, labels or grid rulings.
+// The same buffer the composite reads, declared whole so the two shaders'
+// layouts cannot part. The filters use only `step`.
 struct Cloud {
     origin: vec2<f32>,
     size: vec2<f32>,
     step: vec2<f32>,
     diffusion: f32,
     ppp: f32,
+    cloud: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var linear_sampler: sampler;

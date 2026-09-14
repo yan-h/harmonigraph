@@ -1718,15 +1718,23 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
             .unwrap();
     assert_eq!(partial, SpectralAtmosphere { diffusion: 0.23, ..Default::default() });
     let mut state = fresh();
-    state.picture.appearance.spectrum.atmosphere =
-        SpectralAtmosphere { diffusion: f32::NAN, analyzer_softness: 999.0, note_glow: 0.27 };
+    state.picture.appearance.spectrum.atmosphere = SpectralAtmosphere {
+        diffusion: f32::NAN,
+        analyzer_softness: 999.0,
+        note_glow: 0.27,
+        cloud: -3.0,
+    };
     state.picture.appearance.camera.yaw = 1.23;
     let saved = state.save_persist();
     let mut editor = fresh();
     assert!(editor.load_persist(&saved));
     let offline = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
-    let expected =
-        SpectralAtmosphere { analyzer_softness: 1.0, note_glow: 0.27, ..Default::default() };
+    let expected = SpectralAtmosphere {
+        analyzer_softness: 1.0,
+        note_glow: 0.27,
+        cloud: 0.0,
+        ..Default::default()
+    };
     assert_eq!(editor.picture.appearance.spectrum.atmosphere, expected);
     assert_eq!(offline.spectrum.atmosphere, expected);
     assert_eq!(editor.picture.appearance.camera.yaw, 1.23);

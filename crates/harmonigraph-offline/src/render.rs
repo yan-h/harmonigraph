@@ -946,7 +946,19 @@ mod tests {
         settings.layout = Layout::preset("spectral").unwrap();
         settings.layout.background = (24, 25, 29);
         let mut replay = Replay::new(take);
-        let appearance = appearance_for(replay.take(), None);
+        let mut appearance = appearance_for(replay.take(), None);
+        // The shipping Partials mode, set on the parsed appearance so the
+        // frame goes through the real config rather than a rewritten column
+        // set. Its three numbers ride along, since comparing them is the whole
+        // reason to render one of these.
+        if std::env::var("HG_DETAIL").as_deref() == Ok("partials") {
+            let spectrum = &mut appearance.spectrum;
+            spectrum.detail = harmonigraph_ui::SpectrumDetail::Partials;
+            spectrum.stroke_cents = crate::scratch::env_f("HG_STROKE_CENTS", spectrum.stroke_cents);
+            spectrum.prominence_db = crate::scratch::env_f("HG_PROM_DB", spectrum.prominence_db);
+            spectrum.atmosphere.cloud =
+                crate::scratch::env_f("HG_CLOUD", spectrum.atmosphere.cloud);
+        }
         let mut frames = Vec::new();
         render(&mut replay, Some(&mut audio), &settings, appearance, |bytes| {
             frames.push(bytes.to_vec());

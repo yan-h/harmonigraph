@@ -743,6 +743,11 @@ fn level_affine(cfg: &SpectrumConfig) -> (f32, f32, f32) {
 /// the level mapping — for a pane spending `rows` pixels on the pitch axis.
 pub(crate) fn read_of(view: &PaneView, rows: usize) -> SpectrogramRead {
     let (level0, level_per_step, level_per_midi) = level_affine(&view.cfg);
+    // The render crate carries its own copy of the stored unit, because the
+    // peak picker weighs its centroid by POWER and so is the one thing over
+    // there that has to know what a step is worth. One number, asserted here
+    // rather than left to agree by inspection.
+    debug_assert_eq!(harmonigraph_render::GRID_DB_PER_STEP, DB_STEP);
     SpectrogramRead {
         min_midi: view.scale.min_midi,
         span: view.scale.span,
@@ -752,6 +757,12 @@ pub(crate) fn read_of(view: &PaneView, rows: usize) -> SpectrogramRead {
         level0,
         level_per_step,
         level_per_midi,
+        partials: view.cfg.detail == crate::SpectrumDetail::Partials,
+        // Cents to buckets, which is where the pane's own unit stops: a
+        // stroke is a musical width, so it zooms with the pitch axis instead
+        // of holding a size in pixels.
+        stroke_sigma: view.cfg.stroke_cents / 100.0 * BINS_PER_SEMITONE as f32,
+        prominence_steps: view.cfg.prominence_db / DB_STEP,
     }
 }
 

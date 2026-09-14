@@ -9,11 +9,21 @@ pub struct SpectralAtmosphere {
     pub diffusion: f32,
     pub analyzer_softness: f32,
     pub note_glow: f32,
+    /// How much of the diffused spectrum stands behind the strokes in the
+    /// spectrogram's Partials detail, as a multiple of its own level. Heatmap
+    /// detail never reads it: there the diffused material IS the picture.
+    ///
+    /// Here rather than beside the other two Partials numbers
+    /// (`SpectrumConfig::stroke_cents` and `prominence_db`) because it is a
+    /// property of the same soft field `diffusion` mixes, and the two are
+    /// dragged together — the cloud is what is left of the heatmap once the
+    /// peaks are drawn over it.
+    pub cloud: f32,
 }
 
 impl Default for SpectralAtmosphere {
     fn default() -> Self {
-        Self { diffusion: 0.1, analyzer_softness: 0.5, note_glow: 0.5 }
+        Self { diffusion: 0.1, analyzer_softness: 0.5, note_glow: 0.5, cloud: 0.35 }
     }
 }
 
@@ -30,6 +40,7 @@ impl SpectralAtmosphere {
         self.diffusion = clamp(self.diffusion, fresh.diffusion, 0.0, 1.0);
         self.analyzer_softness = clamp(self.analyzer_softness, fresh.analyzer_softness, 0.0, 1.0);
         self.note_glow = clamp(self.note_glow, fresh.note_glow, 0.0, 1.0);
+        self.cloud = clamp(self.cloud, fresh.cloud, 0.0, 1.0);
         self
     }
 }

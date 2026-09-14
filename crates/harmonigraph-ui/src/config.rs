@@ -77,6 +77,30 @@ impl SpectrumTapers {
     }
 }
 
+/// Which picture the spectrogram draws out of the same stored slabs.
+///
+/// A DISPLAY choice and not an analysis one, which is why it sits here rather
+/// than beside [`SpectrumTapers`] in what the analyzer computes: both modes
+/// read the identical grid of 0.5 dB bytes, and switching between them moves
+/// uniforms rather than refolding anything.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpectrumDetail {
+    /// Every bucket, resampled to the fragment's own footprint — the picture
+    /// the pane has always drawn.
+    #[default]
+    Heatmap,
+    /// Each slab's local maxima, drawn as a Gaussian across pitch whose width
+    /// is in CENTS (so it zooms with the axis) and whose level is the peak's
+    /// own, over a dimmed cloud of the diffused spectrum.
+    ///
+    /// What it buys is the grain: a column is a one-taper periodogram with
+    /// about 4.5 dB of noise per bucket, and the slab fold takes a max over
+    /// columns, so the heatmap draws that noise at full contrast. A peak list
+    /// is the same measurement read as "where are the partials", which is the
+    /// reading the pane is looked at for.
+    Partials,
+}
+
 /// Which way the Spectral pane runs, named for the side the NOW-line is on —
 /// which is the spectrum's own edge, the one the roll's notes arrive at and
 /// the heatmap's newest column sits against. Time runs away from it into the
@@ -554,6 +578,32 @@ pub struct SpectrumConfig {
     /// than the `false` a bare `bool` default would mean; one that really did
     /// turn it off carries `false` and still round-trips.
     pub show_spectrogram: bool,
+    /// Which picture the stored slabs are drawn as; see [`SpectrumDetail`].
+    ///
+    /// A blob written before the choice existed has no key for it and loads at
+    /// [`SpectrumDetail::Heatmap`], which is the picture it was saved showing.
+    pub detail: SpectrumDetail,
+    /// Sigma of a Partials stroke's Gaussian across pitch, in CENTS — held to
+    /// [`STROKE_CENTS_RANGE`].
+    ///
+    /// Cents rather than buckets or points, so a stroke is a musical width: it
+    /// grows with the pitch zoom exactly as the interval it covers does, and
+    /// the same setting draws the same picture at any pane size. 30 cents is
+    /// under a third of a semitone, so two neighbouring keys stay apart while a
+    /// partial is still wide enough to read as a line rather than a hairline.
+    pub stroke_cents: f32,
+    /// How far a peak must stand above its own local spectral mean to be
+    /// drawn, in dB — held to [`PROMINENCE_DB_RANGE`].
+    ///
+    /// The bar between "every local wiggle of the noise floor" and "only the
+    /// partials": a one-taper periodogram's per-bucket noise has about 4.5 dB
+    /// of standard deviation, so a few dB of prominence is what separates a
+    /// partial from the haze the estimator draws around it.
+    ///
+    /// The mean is the peak's OWN neighbourhood rather than the column's, so
+    /// this reads the same over a quiet passage as over a loud one, and a
+    /// partial standing over a busy region is judged against that region.
+    pub prominence_db: f32,
     /// The heatmap's color ramp: the same six-knob [`Gradient`] the lattice
     /// colors pitch through, spanning the audio level instead — its bottom is
     /// what reads as silence and its top what reads as a full bucket.
@@ -656,6 +706,22 @@ impl SpectrumConfig {
             *ROLL_THICKNESS_RANGE.end(),
         );
         self.roll_opacity = bounded(self.roll_opacity, fresh.roll_opacity, 0.0, 1.0);
+        // The Partials pair. Both feed uniforms a fragment divides and
+        // exponentiates by — a zero sigma is a division by zero in the
+        // stroke's Gaussian — so the bar's own ends are also the shapes the
+        // shader has an answer for.
+        self.stroke_cents = bounded(
+            self.stroke_cents,
+            fresh.stroke_cents,
+            *STROKE_CENTS_RANGE.start(),
+            *STROKE_CENTS_RANGE.end(),
+        );
+        self.prominence_db = bounded(
+            self.prominence_db,
+            fresh.prominence_db,
+            *PROMINENCE_DB_RANGE.start(),
+            *PROMINENCE_DB_RANGE.end(),
+        );
         // The lead and its fade, which are the same shape of pair on the same
         // shape of bar (the Lead bar), and carry the same trap: a NaN reach
         // becomes the MAX of the fade's clamp, and `f32::clamp` asserts
@@ -858,6 +924,22 @@ pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
 /// MIDI ribbon width in semitones, shared by persistence and its control.
 pub(crate) const ROLL_THICKNESS_RANGE: std::ops::RangeInclusive<f32> = 0.2..=2.0;
 
+/// What the Partials stroke-width bar offers, in cents, and so what a
+/// persisted [`SpectrumConfig::stroke_cents`] is fit to.
+///
+/// The bottom is a hairline at any zoom the pane reaches; the top is most of a
+/// semitone, where neighbouring partials have merged and the picture is the
+/// heatmap's again with less of it.
+pub const STROKE_CENTS_RANGE: std::ops::RangeInclusive<f32> = 5.0..=100.0;
+
+/// What the Partials prominence bar offers, in dB, and so what a persisted
+/// [`SpectrumConfig::prominence_db`] is fit to.
+///
+/// 0 draws every local maximum the picker found, which over noise is most of
+/// them; 24 dB is past any partial worth the name and leaves the loudest few
+/// per column.
+pub const PROMINENCE_DB_RANGE: std::ops::RangeInclusive<f32> = 0.0..=24.0;
+
 impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
@@ -927,6 +1009,15 @@ impl Default for SpectrumConfig {
             note_names_travel: false,
             note_name_scale: 1.415_327_1,
             show_spectrogram: true,
+            // The picture every existing project is dialled against; Partials
+            // is the choice, not the new default.
+            detail: SpectrumDetail::Heatmap,
+            // A third of a semitone, which is where the prototype's strokes
+            // read as lines with two neighbouring keys still apart.
+            stroke_cents: 30.0,
+            // Just above one standard deviation of a one-taper column's noise,
+            // so the haze between partials is not a picture of the estimator.
+            prominence_db: 5.0,
             // Aurora retuned in the DAW on 2026-09-08: a shorter violet-to-
             // green arc, the full lightness axis, and more colour at both ends
             // than the preset button itself writes.

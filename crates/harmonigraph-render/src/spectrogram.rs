@@ -29,7 +29,9 @@ use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 const SPECTROGRAM_SRC: &str = include_str!("shaders/spectrogram.wgsl");
 
 mod atmosphere;
+mod peaks;
 pub use atmosphere::SpectrogramAtmosphere;
+pub use peaks::GRID_DB_PER_STEP;
 
 /// The detailed heatmap, reduced cloud material, and final composite entry
 /// points, including both target color spaces. Validate their names before
@@ -117,6 +119,21 @@ pub struct SpectrogramRead {
     pub level0: f32,
     pub level_per_step: f32,
     pub level_per_midi: f32,
+    /// Draw each slab's PEAKS as strokes over a dimmed cloud, rather than
+    /// every bucket resampled. The grid and the peak list beside it are the
+    /// same either way — this picks which of them a fragment reads, so it is a
+    /// uniform and reaches no cache.
+    pub partials: bool,
+    /// Sigma of a stroke's Gaussian across pitch, in BUCKETS.
+    ///
+    /// In buckets and not in cents, for the reason every other scalar here is
+    /// already converted: this crate is handed the read's arithmetic and never
+    /// learns what a bucket is worth. The pane owns the cents.
+    pub stroke_sigma: f32,
+    /// How far a peak must stand above its own local mean to be drawn, in
+    /// stored steps — the grid's own unit, so the shader compares two numbers
+    /// it already holds. See [`GRID_DB_PER_STEP`].
+    pub prominence_steps: f32,
 }
 
 /// The gradient sampled at equal level slices — `cell_color((i + 0.5) / n)` for
@@ -248,6 +265,10 @@ struct SpectrogramUniforms {
     capacity: u32,
     first_slot: u32,
     run_slabs: u32,
+    detail: u32,
+    stroke_sigma: f32,
+    prominence_steps: f32,
+    peak_stride: u32,
     _pad: [u32; 3],
 }
 
@@ -273,6 +294,14 @@ const PANE_TTL_PASSES: u64 = 120;
 /// the whole run; the same key patches only the dirty slabs.
 struct GridBuffer {
     buffer: wgpu::Buffer,
+    /// Each slot's peak list, [`peaks::PEAK_STRIDE`] `vec4`s per slot on the
+    /// same slot mapping as [`buffer`](Self::buffer).
+    ///
+    /// Held here rather than beside it because the peaks are a pure function
+    /// of the slab's bytes: the two are written by the same scatter, share
+    /// this one [`key`](Self::key), and there is no way for one to be stale
+    /// while the other is not.
+    peaks: wgpu::Buffer,
     key: (u64, u32, u32),
 }
 
@@ -349,6 +378,7 @@ impl SpectrogramResources {
                     },
                     count: None,
                 },
+                buffer_entry(3, fs, storage),
             ],
         });
         SpectrogramResources {
@@ -517,6 +547,10 @@ impl CallbackTrait for SpectrogramCallback {
 
         let key = (self.grid.generation, self.grid.capacity, self.grid.bins);
         let mut remade = false;
+        // `vec4`s the peak buffer holds, and the bytes that is. One record per
+        // slot whatever the run covers, so the slot mapping is the grid's own.
+        let peak_words = self.grid.capacity as usize * peaks::PEAK_STRIDE;
+        let peak_size = (peak_words * std::mem::size_of::<[f32; 4]>()) as u64;
         if pane.grid.as_ref().is_none_or(|g| g.key != key) {
             let size = u64::from(self.grid.capacity) * u64::from(stride);
             // Kept when the shape is unchanged, so a rebuild of the same grid
@@ -526,14 +560,19 @@ impl CallbackTrait for SpectrogramCallback {
             // enough of the run to be uploaded whole.
             let kept = pane.grid.take().filter(|g| g.fits(self.grid.capacity, self.grid.bins));
             remade = kept.is_none();
-            let buffer = match kept {
-                Some(held) => held.buffer,
-                None => device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("spectrogram_grid"),
-                    size,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
+            let (buffer, peak_buffer) = match kept {
+                Some(held) => (held.buffer, held.peaks),
+                None => {
+                    let storage = |label, size| {
+                        device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some(label),
+                            size,
+                            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        })
+                    };
+                    (storage("spectrogram_grid", size), storage("spectrogram_peaks", peak_size))
+                }
             };
             // The whole ring in one write, so the slots the run does not cover
             // are zero rather than whatever the buffer held before — which is
@@ -542,15 +581,25 @@ impl CallbackTrait for SpectrogramCallback {
             // inside wgpu's default 128 MiB storage binding, and this runs
             // only on a refold or a lost buffer.
             let mut staging = vec![0u8; size as usize];
+            // The peaks ride the same scatter: one pass over the run writes a
+            // slab's bytes and the list they imply into the same slot, so
+            // nothing can place one without the other.
+            let mut peak_staging = vec![[0f32; 4]; peak_words];
             for j in 0..run_slabs {
-                let at = slot_of(self.grid.first_key + j as i64, self.grid.capacity) as usize
-                    * stride as usize;
-                staging[at..at + bins].copy_from_slice(&self.grid.run[j * bins..(j + 1) * bins]);
+                let slot = slot_of(self.grid.first_key + j as i64, self.grid.capacity) as usize;
+                let at = slot * stride as usize;
+                let slab = &self.grid.run[j * bins..(j + 1) * bins];
+                staging[at..at + bins].copy_from_slice(slab);
+                let record = slot * peaks::PEAK_STRIDE;
+                peaks::write_slot(slab, &mut peak_staging[record..record + peaks::PEAK_STRIDE]);
             }
             queue.write_buffer(&buffer, 0, &staging);
-            pane.grid = Some(GridBuffer { buffer, key });
+            queue.write_buffer(&peak_buffer, 0, bytemuck::cast_slice(&peak_staging));
+            pane.grid = Some(GridBuffer { buffer, peaks: peak_buffer, key });
         } else if !self.grid.dirty.is_empty() {
-            let buffer = &pane.grid.as_ref().expect("the branch above holds a buffer").buffer;
+            let held = pane.grid.as_ref().expect("the branch above holds a buffer");
+            let (buffer, peak_buffer) = (&held.buffer, &held.peaks);
+            let mut record = [[0f32; 4]; peaks::PEAK_STRIDE];
             // Production slabs are already aligned. Only generic bin counts
             // need padding; an unchanged run needs no staging at all.
             let mut padded = (bins != stride as usize).then(|| vec![0u8; stride as usize]);
@@ -575,6 +624,12 @@ impl CallbackTrait for SpectrogramCallback {
                 };
                 let slot = slot_of(dirty, self.grid.capacity);
                 queue.write_buffer(buffer, u64::from(slot) * u64::from(stride), bytes);
+                peaks::write_slot(slab, &mut record);
+                queue.write_buffer(
+                    peak_buffer,
+                    slot as u64 * (peaks::PEAK_STRIDE * std::mem::size_of::<[f32; 4]>()) as u64,
+                    bytemuck::cast_slice(&record),
+                );
             }
         }
 
@@ -626,12 +681,13 @@ impl CallbackTrait for SpectrogramCallback {
                         binding: 2,
                         resource: wgpu::BindingResource::TextureView(&lut.view),
                     },
+                    wgpu::BindGroupEntry { binding: 3, resource: grid.peaks.as_entire_binding() },
                 ],
             }));
             // A retained filter must follow allocation changes even while
             // diffusion is disabled, before its next frame uses this grid.
             if let Some(target) = pane.cloud.as_mut() {
-                target.rebind(device, layout, &grid.buffer, &lut.view);
+                target.rebind(device, layout, grid, &lut.view);
             }
         }
 
@@ -667,11 +723,23 @@ impl CallbackTrait for SpectrogramCallback {
             capacity: self.grid.capacity,
             first_slot: slot_of(self.grid.first_key, self.grid.capacity),
             run_slabs: run_slabs as u32,
+            detail: u32::from(self.read.partials),
+            stroke_sigma: self.read.stroke_sigma,
+            prominence_steps: self.read.prominence_steps,
+            peak_stride: peaks::PEAK_STRIDE as u32,
             _pad: [0; 3],
         };
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        if let Some(settings) = self.atmosphere.filter(|a| a.settings.sanitized().diffusion > 0.0) {
+        // The filtered route is what draws the soft field, and Partials needs
+        // it for the cloud behind its strokes even at zero diffusion — where
+        // the cloud is the raw spectrum dimmed rather than a blur of it. So
+        // the bypass is "neither half of the field is asked for" rather than
+        // "diffusion is off".
+        if let Some(settings) = self.atmosphere.filter(|a| {
+            let settings = a.settings.sanitized();
+            settings.diffusion > 0.0 || (self.read.partials && settings.cloud > 0.0)
+        }) {
             let viewport = egui::epaint::ViewportInPixels::from_points(
                 &self.rect,
                 ppp,
@@ -687,7 +755,7 @@ impl CallbackTrait for SpectrogramCallback {
                     egui::pos2(viewport.left_px as f32 / ppp, viewport.top_px as f32 / ppp),
                     egui::vec2(pixels[0] as f32 / ppp, pixels[1] as f32 / ppp),
                 );
-                let grid = &pane.grid.as_ref().expect("drawable grid").buffer;
+                let grid = pane.grid.as_ref().expect("drawable grid");
                 let lut = &pane.lut.as_ref().expect("drawable gradient").view;
                 let resize = pane.cloud.as_ref().is_none_or(|c| c.size != size);
                 if resize {
@@ -953,6 +1021,11 @@ mod tests {
             level0: 0.0,
             level_per_step: 0.0035,
             level_per_midi: 0.002,
+            // The heatmap is what this module's fixtures measure; the strokes
+            // have their own picker tests and a golden frame of their own.
+            partials: false,
+            stroke_sigma: 30.0 / 100.0 * BINS_PER_SEMITONE,
+            prominence_steps: 10.0,
         }
     }
 
@@ -1783,13 +1856,21 @@ mod tests {
             return;
         };
         for bins in [256, harmonigraph_core::spectrum::SPECTRUM_BINS, 3827, 3829] {
-            check_delta_upload(&device, &queue, bins);
+            check_delta_upload(&device, &queue, bins, false);
         }
+        // The peak list is written by the same scatter, into the same slot,
+        // under the same key — but nothing above READS it, so the sequence
+        // says nothing about the second buffer until a fragment draws from
+        // it. One more run through the whole sequence in Partials detail is
+        // what holds the peaks' own full upload against their own delta,
+        // wraps, negative keys and capacity change included.
+        check_delta_upload(&device, &queue, harmonigraph_core::spectrum::SPECTRUM_BINS, true);
     }
 
-    fn check_delta_upload(device: &wgpu::Device, queue: &wgpu::Queue, bins: usize) {
+    fn check_delta_upload(device: &wgpu::Device, queue: &wgpu::Queue, bins: usize, partials: bool) {
         let read = SpectrogramRead {
             level_per_midi: 0.0,
+            partials,
             ..read_of(SPECTRUM_MIN_MIDI, bins as f32 / BINS_PER_SEMITONE, 96)
         };
         let mut version: HashMap<i64, u32> = HashMap::new();

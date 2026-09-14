@@ -42,7 +42,7 @@ pub(crate) fn spectrum_settings_pane(
     state: &mut PictureState,
     params: &dyn ParamBackend,
 ) {
-    use crate::{SpectralOrientation, SpectrumTapers, SpectrumWindow};
+    use crate::{SpectralOrientation, SpectrumDetail, SpectrumTapers, SpectrumWindow};
 
     // What the page reaches, said once at the top rather than repeated on the
     // sections: every setting here is the analyzer's, and the Spiral is the
@@ -113,13 +113,43 @@ pub(crate) fn spectrum_settings_pane(
         );
 
     section(ui, "Softness and glow");
+    // The three Partials numbers sit here rather than beside the Detail
+    // buttons: all three shape the same soft picture the Diffusion bar does,
+    // and they are dragged against each other. Drawn disabled rather than
+    // hidden in Heatmap, so the page's control inventory does not change with
+    // a setting and the reader can see what the other mode offers.
+    let partials = cfg.detail == crate::SpectrumDetail::Partials;
     let atmosphere = &mut cfg.atmosphere;
     ValueBar::new(&mut atmosphere.diffusion, 0.0..=1.0, "Diffusion")
-        .percent().show(ui).on_hover_text("Smooth fine spectrogram detail at every brightness. 0% restores the detailed heatmap; 100% uses only the softened field.");
+        .percent().show(ui).on_hover_text("Smooth fine spectrogram detail at every brightness. 0% restores the detailed heatmap; 100% uses only the softened field. In Partials detail it smooths the cloud behind the strokes.");
+    ui.add_enabled_ui(partials, |ui| {
+        ValueBar::new(&mut atmosphere.cloud, 0.0..=1.0, "Cloud").percent().show(ui).on_hover_text(
+            "Brightness of the diffused spectrum behind the Partials strokes. \
+                 0% leaves the strokes alone on the background.",
+        );
+    });
     ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")
         .percent().show(ui).on_hover_text("Blend the live analyzer from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram diffusion and outline opacity.");
     ValueBar::new(&mut atmosphere.note_glow, 0.0..=1.0, "Note glow")
         .percent().show(ui).on_hover_text("Additional glow around note ribbons. Adjust their shadows under Display → Lighting → Shadows.");
+    ui.add_enabled_ui(partials, |ui| {
+        ValueBar::new(&mut cfg.stroke_cents, crate::STROKE_CENTS_RANGE, "Stroke width")
+            .unit(1.0, " ¢")
+            .decimals(0)
+            .show(ui)
+            .on_hover_text(
+                "Width of each Partials stroke across frequency, in cents. \
+                 100 ¢ is one semitone at any zoom.",
+            );
+        ValueBar::new(&mut cfg.prominence_db, crate::PROMINENCE_DB_RANGE, "Prominence")
+            .unit(1.0, " dB")
+            .decimals(0)
+            .show(ui)
+            .on_hover_text(
+                "How far a peak must stand above its own surroundings to be drawn. \
+                 Raise it to keep only the clear partials; 0 dB draws every local maximum.",
+            );
+    });
 
     // ---- Audio spectrum -------------------------------------------------
     // Always analyzed: the pane IS the analyzer, the spectrogram reads the
@@ -182,6 +212,25 @@ pub(crate) fn spectrum_settings_pane(
                 }
                 SpectrumTapers::Five => {
                     "Average five tapers for the steadiest levels, with the softest frequency detail and highest processing cost."
+                }
+            });
+        }
+    });
+    // Beside the two analysis rows because it is the third answer to the same
+    // question — how much of the estimator's own noise reaches the picture —
+    // but it is a DISPLAY choice: both modes read the identical stored slabs,
+    // so switching costs a uniform and nothing is re-analyzed.
+    button_row(ui, |ui| {
+        ui.label("Spectrogram detail");
+        for (detail, label) in
+            [(SpectrumDetail::Heatmap, "Heatmap"), (SpectrumDetail::Partials, "Partials")]
+        {
+            ui.selectable_value(&mut cfg.detail, detail, label).on_hover_text(match detail {
+                SpectrumDetail::Heatmap => {
+                    "Draw every frequency bucket, including the noise between partials."
+                }
+                SpectrumDetail::Partials => {
+                    "Draw each moment's peaks as strokes over a dimmed cloud. Set their width, prominence and cloud under Softness and glow."
                 }
             });
         }

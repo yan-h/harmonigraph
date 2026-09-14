@@ -363,6 +363,47 @@ fn the_whole_song_layout_draws_the_frame_on_record() {
     check("spectrogram-whole-song", Shot { size: TALL, range: whole_axis(), whole: true });
 }
 
+/// The Partials detail draws the frame on record.
+///
+/// A second picture out of the same stored slabs, so it needs a frame of its
+/// own: the four above hold the heatmap's read and say nothing about the peak
+/// list, the stroke's Gaussian, or the cloud behind it. It is drawn on
+/// [`TALL`] at the whole axis, where a row covers about ten buckets and a
+/// 30-cent stroke is about one row wide — the zoom the mode is looked at from,
+/// and the one where a stroke that had lost its width would vanish rather than
+/// merely soften.
+///
+/// The fixture's own reach: the take's atmosphere is the fresh one, so
+/// `diffusion` and `cloud` are both above zero and the frame really does go
+/// through the FILTERED route (`cloud_color` and the backdrop), which is where
+/// the strokes and the cloud are combined. A shot with the cloud at zero would
+/// still draw strokes and would leave that combine unmeasured.
+#[test]
+fn the_partials_detail_draws_the_frame_on_record() {
+    let shot = Shot { size: TALL, range: whole_axis(), whole: false };
+    let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
+    let cfg = &mut state.appearance.spectrum;
+    cfg.show_roll = false;
+    cfg.roll_fraction = 1.0;
+    cfg.roll_seconds = WINDOW;
+    (cfg.low_midi, cfg.high_midi) = shot.range;
+    cfg.detail = harmonigraph_ui::SpectrumDetail::Partials;
+    assert!(
+        cfg.atmosphere.cloud > 0.0 && cfg.atmosphere.diffusion > 0.0,
+        "a shot with no cloud never reaches the composite this frame is for",
+    );
+    state.appearance.render.spectrogram = SpectrogramRender::Scrolling;
+    let take = Take {
+        header: Header { appearance: Some(state.appearance.serialize()), ..Default::default() },
+        events: Vec::new(),
+        params: Vec::new(),
+        configurations: Vec::new(),
+        truncated: false,
+        incomplete: None,
+    };
+    check_take("spectrogram-partials", shot, take);
+}
+
 /// A non-vacuous Step 7 frame: held roll notes use the Gaussian geometry
 /// route while their labels and the axis use the Distance text route. The
 /// pair lands through separate pane compositors, so this is also the frame
@@ -443,6 +484,10 @@ const SLIVER: f32 = 0.02;
 enum Drawn {
     /// The pane's whole depth given to the heatmap.
     Heatmap,
+    /// The same depth, drawn as strokes over the cloud instead — the same
+    /// grid, the same fold and the same pixels, so the difference from
+    /// [`Heatmap`](Self::Heatmap) is the peak gather and nothing else.
+    Partials,
     /// None of it, which leaves the live curve and its rulings — egui shapes
     /// built on the CPU, and the thing the heatmap replaced the compose of.
     Curve,
@@ -456,13 +501,16 @@ enum Drawn {
 }
 
 /// Milliseconds a frame takes end to end, and how many were rendered.
-fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
+fn frame_ms(size: [u32; 2], ppp: f32, drawn: Drawn) -> Option<(f64, u64)> {
     let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
     let cfg = &mut state.appearance.spectrum;
     cfg.show_roll = false;
-    cfg.roll_fraction = if drawn == Drawn::Heatmap { 1.0 } else { 0.0 };
+    cfg.roll_fraction = if matches!(drawn, Drawn::Heatmap | Drawn::Partials) { 1.0 } else { 0.0 };
     cfg.roll_seconds = WINDOW;
     (cfg.low_midi, cfg.high_midi) = whole_axis();
+    if drawn == Drawn::Partials {
+        cfg.detail = harmonigraph_ui::SpectrumDetail::Partials;
+    }
     state.appearance.render.spectrogram = SpectrogramRender::Scrolling;
     let take = Take {
         header: Header { appearance: Some(state.appearance.serialize()), ..Default::default() },
@@ -487,7 +535,7 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
     let settings = Settings {
         layout,
         size,
-        pixels_per_point: 1.0,
+        pixels_per_point: ppp,
         fps: TIMING_FPS,
         start: 0.0,
         end: SECONDS,
@@ -654,6 +702,50 @@ fn what_the_spectral_shadow_routes_cost_a_frame() {
     }
 }
 
+/// What the Partials picture costs a frame beside the heatmap it replaces.
+///
+/// One size, at the shape a video is exported at — a full Retina pane, where
+/// the stroke gather runs on every fragment and the peak list is the widest.
+/// Both rows draw the same grid over the same pixels through the same filtered
+/// route, so the difference is the gather and nothing else; the absolute
+/// numbers belong to the machine that ran them.
+///
+/// `#[ignore]`, and it asserts nothing, for the reason the two measurements
+/// above do not.
+#[test]
+#[ignore]
+fn what_partials_detail_costs_a_frame() {
+    const SIZE: [u32; 2] = [1600, 1300];
+    const PPP: f32 = 2.0;
+    const ROWS: [(&str, Drawn); 2] = [("heatmap", Drawn::Heatmap), ("partials", Drawn::Partials)];
+    const REPS: usize = 5;
+    let mut runs = [const { Vec::new() }; 2];
+    let mut frames = 0;
+    // Interleaved and rotated, for the reason the heatmap table is: this
+    // machine drifts by most of a millisecond over a minute, and a blocked
+    // order turns that drift into the difference being printed.
+    for rep in 0..REPS {
+        for step in 0..ROWS.len() {
+            let slot = (rep + step) % ROWS.len();
+            let Some((ms, n)) = frame_ms(SIZE, PPP, ROWS[slot].1) else {
+                eprintln!("no usable GPU adapter; partials timing skipped");
+                return;
+            };
+            runs[slot].push(ms);
+            frames = n;
+        }
+    }
+    eprintln!(
+        "\n== spectrogram detail cost at {}x{}, {PPP} ppp ({frames} intervals) ==",
+        SIZE[0], SIZE[1]
+    );
+    for (slot, (name, _)) in ROWS.iter().enumerate() {
+        runs[slot].sort_by(f64::total_cmp);
+        eprintln!("{name:>10}: {:.3} ms/frame", runs[slot][REPS / 2]);
+    }
+    eprintln!("     delta: {:.3} ms/frame\n", runs[1][REPS / 2] - runs[0][REPS / 2]);
+}
+
 /// One size's readings: the three configurations' own medians, and the two
 /// costs, which are medians of PER-ROUND differences rather than differences
 /// of the medians above.
@@ -715,12 +807,12 @@ fn what_the_heatmap_costs_a_frame() {
         // Not for pipeline creation: a render builds its own device, so every
         // render pays that, and [`WARMUP`] is what keeps it off the clock.
         for &drawn in &ORDER {
-            frame_ms(size, drawn)?;
+            frame_ms(size, 1.0, drawn)?;
         }
         for rep in 0..REPS {
             for step in 0..ORDER.len() {
                 let slot = (rep + step) % ORDER.len();
-                let (ms, n) = frame_ms(size, ORDER[slot])?;
+                let (ms, n) = frame_ms(size, 1.0, ORDER[slot])?;
                 runs[slot].push(ms);
                 frames = n;
             }

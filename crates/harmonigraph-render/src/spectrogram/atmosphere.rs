@@ -2,7 +2,7 @@
 //! Targets belong to one pane and are keyed only on their size; source pixels and uniforms are refreshed every
 //! draw, including paused zooms and palette edits.
 
-use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex};
+use super::{create_spectrogram_pipeline, GridBuffer, SpectrogramUniforms, SpectrogramVertex};
 use crate::{create_vertex_buffer, wgpu};
 
 pub(super) const SOURCE: &str = include_str!("../shaders/spectral_atmosphere.wgsl");
@@ -25,6 +25,13 @@ struct Uniforms {
     step: [f32; 2],
     diffusion: f32,
     ppp: f32,
+    /// How much of the soft field stands behind the Partials strokes. Read
+    /// only by the composite and backdrop entry points; the four filter passes
+    /// share this buffer and ignore it.
+    cloud: f32,
+    /// A uniform struct is laid out to 16, so the three words are the
+    /// shader's own padding written where bytemuck can see them.
+    _pad: [f32; 3],
 }
 
 pub(super) struct Pipelines {
@@ -183,7 +190,7 @@ impl Targets {
         pipelines: &Pipelines,
         size: [u32; 2],
         source_layout: &wgpu::BindGroupLayout,
-        grid: &wgpu::Buffer,
+        grid: &GridBuffer,
         lut: &wgpu::TextureView,
     ) -> Self {
         let view = |label| {
@@ -287,7 +294,7 @@ impl Targets {
         &mut self,
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        grid: &wgpu::Buffer,
+        grid: &GridBuffer,
         lut: &wgpu::TextureView,
     ) {
         self.source_group = source_group(device, layout, &self.source_uniform, grid, lut);
@@ -337,6 +344,8 @@ impl Targets {
             step: [radius / rect.width(), radius / rect.height()],
             diffusion: settings.diffusion,
             ppp,
+            cloud: settings.cloud,
+            _pad: [0.0; 3],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }
@@ -370,7 +379,7 @@ fn source_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     uniform: &wgpu::Buffer,
-    grid: &wgpu::Buffer,
+    grid: &GridBuffer,
     lut: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -378,8 +387,9 @@ fn source_group(
         layout,
         entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: grid.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: grid.buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(lut) },
+            wgpu::BindGroupEntry { binding: 3, resource: grid.peaks.as_entire_binding() },
         ],
     })
 }
