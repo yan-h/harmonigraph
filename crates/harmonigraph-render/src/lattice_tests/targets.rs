@@ -202,7 +202,7 @@ fn viewport_changes_keep_history_without_allocating_a_strip() {
     let mut preview_parity = history(&shooter).parity;
 
     for (i, (size, scale)) in
-        [([256, 260], 1.0), ([256, 260], 2.0), ([256, 256], 2.0), ([256, 256], 1.0)]
+        [([257, 261], 1.0), ([257, 261], 1.5), ([256, 256], 2.0), ([256, 256], 1.0)]
             .into_iter()
             .enumerate()
     {
@@ -211,6 +211,16 @@ fn viewport_changes_keep_history_without_allocating_a_strip() {
         scene.render_scale = scale;
         let creations = super::INK_STRIP_CREATIONS.get();
         let resized = shooter.shot_again(&scene);
+        let offscreen = target(&shooter);
+        let expected = offscreen.size.map(|n| n.div_ceil(2));
+        let glow = offscreen.glow.as_ref().unwrap();
+        for view in std::iter::once(&glow.view).chain(&glow.statistics) {
+            assert_eq!([view.texture().width(), view.texture().height()], expected);
+        }
+        assert_eq!(
+            [offscreen.color_view.texture().width(), offscreen.color_view.texture().height()],
+            offscreen.size
+        );
         assert_eq!(super::INK_STRIP_CREATIONS.get(), creations, "no temporary strip on resize");
         assert_eq!(history(&shooter).raw_views, raw);
         assert_eq!(history(&shooter).raw_bind_groups, bindings);

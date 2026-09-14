@@ -436,6 +436,7 @@ impl LatticeCallback {
             slide: labels.slide,
             pluses,
             uniforms: Uniforms {
+                ink_kernel: Default::default(),
                 composite: CompositeParams {
                     darkest_pitch: scene.darkest_pitch,
                     brightest_pitch: scene.brightest_pitch,

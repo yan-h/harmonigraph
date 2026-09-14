@@ -1,5 +1,8 @@
 # Directional glow simplification trial
 
+The sections through the precision limit record the merged #877 baseline.
+The half-resolution and kernel-cache trial below builds on that implementation.
+
 The original directional renderer is the visual baseline,
 with wide glow already removed in #873.
 The flat splat experiment remains on `codex/glow-splat-prototype` for reference;
@@ -156,3 +159,45 @@ The user accepted this precision tradeoff after visual testing and declined furt
 [Issue #878](https://github.com/yan-h/harmonigraph/issues/878) retains the measurements as a closed,
 not-planned follow-up;
 additional precision work is not a merge prerequisite.
+
+## Trial: half-resolution glow and cached angular blur
+
+Branch `codex/glow-resolution-and-kernel` tries both follow-up optimizations together.
+All three overlap-statistics textures and the resolved glow texture use half the scene width and height,
+rounded up for odd dimensions.
+Node ink,
+rings,
+labels and shadow targets retain their existing scene resolution.
+The background composite,
+node/marker wash and label wash all reconstruct the same premultiplied glow with normalized linear sampling.
+The nebula maps sample positions back to full-scene coordinates,
+so the cloud retains its scale and position through odd-sized resizes.
+The intended visual tradeoff is slightly softer fine glow detail.
+
+The angular blur still reads 64 samples per node and preserves the existing color model.
+A 64-weight CPU table replaces the repeated cosine/exponential evaluations inside that convolution.
+The table is cached per pane using only sanitized Color Blend;
+its resolution is a compile-time constant.
+Camera,
+note activity,
+breathing,
+viewport size and row capacity do not invalidate it or reset color history.
+Weights use circular distance so mirrored offsets are exactly equal.
+
+At a 768×768 scene,
+the four glow textures together fall from 15.75 MiB to about 3.94 MiB.
+At 1536×1536,
+they fall from 63 MiB to 15.75 MiB.
+The kernel adds a 256-byte table to the per-pane uniforms.
+No persisted settings or new controls are introduced in this trial.
+
+The initial kernel-only renderer run passed all 260 checks with byte-identical golden images.
+With both changes enabled,
+13 lattice reference images differ by at most 2/255 per channel from the merged baseline;
+all contact sheets were visually reviewed.
+The five offline golden images remain unchanged.
+The analytic curve fixture now aligns a node with a shared center texel of odd-sized scene/glow targets;
+the lone-glow equation fixture reads the native glow grid before reconstruction.
+The existing resize test now exercises odd dimensions and checks all four half-sized allocations while retaining full-sized scene targets and release history.
+The existing Color Blend test reuses a pane through multiple settings and back to its original setting,
+checking cache invalidation against a cold frame.

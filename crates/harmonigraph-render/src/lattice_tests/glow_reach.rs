@@ -73,7 +73,7 @@ fn the_glow_reach_says_how_far_a_node_lights_past_its_own_edge() {
 /// rather than a second strength control.
 #[test]
 fn the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge() {
-    const SIZE: [u32; 2] = [256, 256];
+    const SIZE: [u32; 2] = [257, 257];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -82,10 +82,10 @@ fn the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge() {
         scene.glow_reach = 0.8;
         scene.glow_strength = 1.0;
         scene.glow_curve = curve;
-        // Aligned readback rows require an even width, whose geometric centre
-        // lies between fragments. Pan the content onto the centre of one pixel
-        // so the fixed full endpoint is the thing compared below.
-        let pixel_center = glam::Vec2::new(SIZE[0] as f32 * 0.5 + 0.5, SIZE[1] as f32 * 0.5 + 0.5);
+        // An odd scene and odd half-resolution glow share a center texel.
+        // Align the node there so this tests the exact curve endpoint rather
+        // than an interpolation of neighbors with different curve values.
+        let pixel_center = glam::Vec2::new(SIZE[0] as f32 * 0.5, SIZE[1] as f32 * 0.5);
         for _ in 0..12 {
             let error = pixel_center - on_screen(&scene, SIZE, glam::Vec3::ZERO);
             scene.camera.pan(error);
@@ -233,8 +233,11 @@ fn the_glow_blend_says_how_separate_a_node_keeps_its_colours() {
         scene
     };
     let tight = shooter.shot(&at(0.0));
-    let middle = shooter.shot(&at(0.5));
-    let broad = shooter.shot(&at(1.0));
+    let middle = shooter.shot_again(&at(0.5));
+    let broad = shooter.shot_again(&at(1.0));
+    // Reuse one pane: changing the cached kernel and returning to the first
+    // setting must reproduce a cold render, without stale blend weights.
+    assert_eq!(tight, shooter.shot_again(&at(0.0)));
 
     // The annulus, sized off the light itself rather than guessed: the farthest
     // pixel the glow moves is where its window shuts, and the outer half of

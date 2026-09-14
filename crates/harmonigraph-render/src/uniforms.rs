@@ -172,6 +172,8 @@ uniform_group! {
         /// Analyzer levels through the colour dB window, sixteen bytes per row.
         /// Per-pane uniforms avoid an extra texture/upload and cross-view aliasing.
         spectrum_color: [Uint4; super::SPECTRUM_WORDS],
+        /// Circular blur weights by absolute angular sample offset.
+        ink_kernel: [Float4; super::INK_STRIP_N as usize / 4],
     }
 }
 

@@ -1311,6 +1311,7 @@ struct PaneBuffers {
     /// independently of the viewport targets. A release can have no current
     /// ink, so resizing must retain these rows rather than reseeding them.
     ink_history: Option<InkStrip>,
+    ink_kernel: lattice_node_glow::InkKernel,
     offscreen: Option<Offscreen>,
 }
 
@@ -1376,8 +1377,8 @@ struct LatticeBloom {
 }
 
 /// Where a frame's node light is assembled before any of it reaches the
-/// picture: one transparent premultiplied colour texture at the scene's own
-/// size, plus the bind group its readers take it through.
+/// picture: one transparent premultiplied colour texture at half the scene's
+/// width and height, plus the bind group its readers take it through.
 ///
 /// A target of its own, rather than the glow drawn straight into the scene
 /// pass, because a node has to sample the finished light to paint its own
@@ -1388,7 +1389,7 @@ struct LatticeBloom {
 ///
 /// Created and dropped as the Reach bar crosses 0, independently of the resize
 /// that rebuilds everything around it: the two changes have nothing to do with
-/// each other, and a target left allocated at reach 0 is a scene-sized texture
+/// each other, and a target left allocated at reach 0 is a glow-sized texture
 /// held for a feature that is off.
 struct GlowTarget {
     statistics: [wgpu::TextureView; 3],
@@ -1789,7 +1790,7 @@ impl Offscreen {
         );
     }
 
-    /// Make this pane's viewport-sized light target exist while `want` says
+    /// Make this pane's half-resolution light target exist while `want` says
     /// so. The separate pane history is maintained by the caller under the
     /// same guard; recreating this image never allocates or transfers a strip.
     fn ensure_glow(&mut self, device: &wgpu::Device, shared: &OffscreenShared<'_>, want: bool) {
@@ -1841,13 +1842,10 @@ impl Offscreen {
 }
 
 impl GlowTarget {
-    /// `size` is the SCENE's own pixel size, so the light is drawn at exactly
-    /// the resolution the node bodies are and the composite is a texel-aligned
-    /// blit. That is what lets `node_paint` read it back with a `textureLoad`
-    /// at its own fragment's coordinate: a target at any fraction of the scene
-    /// would have to be sampled, and a filtered read of the light a node's ink
-    /// is washed with is a blur nobody asked for.
+    /// Half the scene's width and height, rounded up for odd-sized panes.
+    /// All readers reconstruct the same filtered field in normalized coordinates.
     fn new(device: &wgpu::Device, shared: &OffscreenShared<'_>, size: [u32; 2]) -> Self {
+        let size = size.map(|n| n.div_ceil(2).max(1));
         let OffscreenShared { format, filter_layout, sampler, .. } = *shared;
         let view = device
             .create_texture(&wgpu::TextureDescriptor {
@@ -2935,6 +2933,7 @@ impl LatticeResources {
                 glyph_bind_group: None,
                 glyph_sheet_keys: (u64::MAX, u64::MAX, u64::MAX),
                 ink_history: None,
+                ink_kernel: Default::default(),
                 offscreen: None,
             }
         });
