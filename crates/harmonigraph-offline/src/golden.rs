@@ -144,7 +144,15 @@ fn bed(step: &mut u32) -> f32 {
 
 /// [`SECONDS`] of mono audio: [`TONES`] over a [`BED`].
 fn probe_audio() -> Audio {
-    let frames = (SECONDS * f64::from(SAMPLE_RATE)) as usize;
+    probe_audio_of(SECONDS)
+}
+
+/// The same signal over any length. The tones all enter inside the first
+/// [`SECONDS`] and hold, so a longer take is the same picture scrolling for
+/// longer — which is what the timing fixtures want and what a golden frame
+/// would be wrong to take.
+fn probe_audio_of(seconds: f64) -> Audio {
+    let frames = (seconds * f64::from(SAMPLE_RATE)) as usize;
     let mut rng = 0x5eed_1234;
     let samples = (0..frames)
         .map(|f| {
@@ -500,13 +508,47 @@ enum Drawn {
     Sliver,
 }
 
+/// What a timed render is, apart from its size and what it draws.
+///
+/// A struct rather than five arguments because the two tables below want
+/// different values for all of them, and because the SPAN is not a free
+/// choice: it is what picks the slab width off the live ladder
+/// (`harmonigraph_ui`'s `live_slab`), and the slab width is what the stroke
+/// gather's radius is derived from. A row that wanted a different gather has
+/// to ask for it here.
+#[derive(Clone, Copy)]
+struct Timing {
+    /// Seconds of audio, and the render's own length.
+    seconds: f64,
+    /// Seconds of history the pane's depth spans.
+    window: f32,
+    fps: f64,
+    /// Frames rendered before the clock starts. Past the window above, where
+    /// the strip has grown to fill the pane — a frame drawn before that covers
+    /// only the fraction of it that history has reached.
+    warmup: u64,
+    pixels_per_point: f32,
+}
+
+impl Timing {
+    /// The heatmap table's own: the shared fixture, timed from just past the
+    /// device and pipeline creation rather than from a full window.
+    const HEATMAP: Timing = Timing {
+        seconds: SECONDS,
+        window: WINDOW,
+        fps: TIMING_FPS,
+        warmup: WARMUP,
+        pixels_per_point: 1.0,
+    };
+}
+
 /// Milliseconds a frame takes end to end, and how many were rendered.
-fn frame_ms(size: [u32; 2], ppp: f32, drawn: Drawn) -> Option<(f64, u64)> {
+fn frame_ms(size: [u32; 2], timing: Timing, drawn: Drawn) -> Option<(f64, u64)> {
     let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
     let cfg = &mut state.appearance.spectrum;
     cfg.show_roll = false;
     cfg.roll_fraction = if matches!(drawn, Drawn::Heatmap | Drawn::Partials) { 1.0 } else { 0.0 };
-    cfg.roll_seconds = WINDOW;
+    cfg.roll_seconds = timing.window;
     (cfg.low_midi, cfg.high_midi) = whole_axis();
     if drawn == Drawn::Partials {
         cfg.detail = harmonigraph_ui::SpectrumDetail::Partials;
@@ -535,14 +577,14 @@ fn frame_ms(size: [u32; 2], ppp: f32, drawn: Drawn) -> Option<(f64, u64)> {
     let settings = Settings {
         layout,
         size,
-        pixels_per_point: ppp,
-        fps: TIMING_FPS,
+        pixels_per_point: timing.pixels_per_point,
+        fps: timing.fps,
         start: 0.0,
-        end: SECONDS,
+        end: timing.seconds,
         audio_start: 0.0,
         whole_song_spectrogram: false,
     };
-    let mut audio = probe_audio();
+    let mut audio = probe_audio_of(timing.seconds);
     let mut replay = Replay::new(take);
     // The clock starts past [`WARMUP`] frames and not at the call: standing a
     // renderer up costs a few hundred milliseconds of adapter and pipeline
@@ -556,7 +598,7 @@ fn frame_ms(size: [u32; 2], ppp: f32, drawn: Drawn) -> Option<(f64, u64)> {
     let appearance = crate::render::appearance_for(replay.take(), None);
     match render(&mut replay, Some(&mut audio), &settings, appearance, |_| {
         seen += 1;
-        if seen <= WARMUP {
+        if seen <= timing.warmup {
             return Ok(true);
         }
         let now = std::time::Instant::now();
@@ -576,7 +618,8 @@ fn frame_ms(size: [u32; 2], ppp: f32, drawn: Drawn) -> Option<(f64, u64)> {
     // not a missing GPU — which is what the `None` above is read as.
     assert!(
         frames > 0,
-        "{seen} frames rendered, under the two past the {WARMUP}-frame warm-up an interval needs"
+        "{seen} frames rendered, under the two past the {}-frame warm-up an interval needs",
+        timing.warmup
     );
     let span = last.zip(first).map_or(0.0, |(l, f)| l.duration_since(f).as_secs_f64() * 1000.0);
     Some((span / frames as f64, frames))
@@ -702,48 +745,76 @@ fn what_the_spectral_shadow_routes_cost_a_frame() {
     }
 }
 
-/// What the Partials picture costs a frame beside the heatmap it replaces.
+/// What the Partials picture costs a frame beside the heatmap it replaces, at
+/// both ends of the time gather.
 ///
 /// One size, at the shape a video is exported at — a full Retina pane, where
-/// the stroke gather runs on every fragment and the peak list is the widest.
-/// Both rows draw the same grid over the same pixels through the same filtered
-/// route, so the difference is the gather and nothing else; the absolute
-/// numbers belong to the machine that ran them.
+/// the gather runs on every fragment. What varies between the two rows is the
+/// SPAN, because the span picks the slab width off the live ladder and the
+/// slab width is what the gather's radius is derived from:
 ///
-/// `#[ignore]`, and it asserts nothing, for the reason the two measurements
-/// above do not.
+/// - a 1.5 s span sits on the ladder's finest rung, 16 ms, where the 80 ms
+///   gather is five slabs and the radius its cap of ten either side.
+/// - a 35 s span is two rungs up at 64 ms, where the same 80 ms is 1.25 slabs
+///   and the radius three.
+///
+/// Both rows time only frames past a FULL window, so the strip covers the
+/// whole pane in each and the two are comparable to each other. They render at
+/// different rates to get there in a sane number of frames, which moves the
+/// analyzer's share of an absolute figure — so the DIFFERENCE is the reading
+/// and the columns are context, exactly as in the heatmap table below.
+///
+/// `#[ignore]`, and it asserts nothing: the numbers belong to the Metal device
+/// that ran them.
 #[test]
 #[ignore]
 fn what_partials_detail_costs_a_frame() {
     const SIZE: [u32; 2] = [1600, 1300];
-    const PPP: f32 = 2.0;
-    const ROWS: [(&str, Drawn); 2] = [("heatmap", Drawn::Heatmap), ("partials", Drawn::Partials)];
     const REPS: usize = 5;
-    let mut runs = [const { Vec::new() }; 2];
-    let mut frames = 0;
-    // Interleaved and rotated, for the reason the heatmap table is: this
-    // machine drifts by most of a millisecond over a minute, and a blocked
-    // order turns that drift into the difference being printed.
-    for rep in 0..REPS {
-        for step in 0..ROWS.len() {
-            let slot = (rep + step) % ROWS.len();
-            let Some((ms, n)) = frame_ms(SIZE, PPP, ROWS[slot].1) else {
-                eprintln!("no usable GPU adapter; partials timing skipped");
-                return;
-            };
-            runs[slot].push(ms);
-            frames = n;
+    // (label, span, audio, fps) — the warm-up is the span, so every timed
+    // frame draws a full strip.
+    const ROWS: [(&str, f32, f64, f64); 2] =
+        [("16 ms slab", 1.5, 2.0, 120.0), ("64 ms slab", 35.0, 40.0, 20.0)];
+    const DETAIL: [(&str, Drawn); 2] = [("heatmap", Drawn::Heatmap), ("partials", Drawn::Partials)];
+
+    eprintln!("\n== spectrogram detail cost at {}x{}, 2 ppp ==", SIZE[0], SIZE[1]);
+    for (label, window, seconds, fps) in ROWS {
+        let timing = Timing {
+            seconds,
+            window,
+            fps,
+            warmup: (f64::from(window) * fps) as u64,
+            pixels_per_point: 2.0,
+        };
+        let mut runs = [const { Vec::new() }; 2];
+        let mut frames = 0;
+        // Interleaved and rotated, for the reason the heatmap table is: this
+        // machine drifts by most of a millisecond over a minute, and a blocked
+        // order turns that drift into the difference being printed.
+        for rep in 0..REPS {
+            for step in 0..DETAIL.len() {
+                let slot = (rep + step) % DETAIL.len();
+                let Some((ms, n)) = frame_ms(SIZE, timing, DETAIL[slot].1) else {
+                    eprintln!("no usable GPU adapter; partials timing skipped");
+                    return;
+                };
+                runs[slot].push(ms);
+                frames = n;
+            }
         }
+        for times in &mut runs {
+            times.sort_by(f64::total_cmp);
+        }
+        let (heatmap, partials) = (runs[0][REPS / 2], runs[1][REPS / 2]);
+        eprintln!(
+            "{label} ({window} s span, {fps} fps, {frames} intervals): \
+             {} {heatmap:.3} ms, {} {partials:.3} ms, delta {:.3} ms",
+            DETAIL[0].0,
+            DETAIL[1].0,
+            partials - heatmap,
+        );
     }
-    eprintln!(
-        "\n== spectrogram detail cost at {}x{}, {PPP} ppp ({frames} intervals) ==",
-        SIZE[0], SIZE[1]
-    );
-    for (slot, (name, _)) in ROWS.iter().enumerate() {
-        runs[slot].sort_by(f64::total_cmp);
-        eprintln!("{name:>10}: {:.3} ms/frame", runs[slot][REPS / 2]);
-    }
-    eprintln!("     delta: {:.3} ms/frame\n", runs[1][REPS / 2] - runs[0][REPS / 2]);
+    eprintln!();
 }
 
 /// One size's readings: the three configurations' own medians, and the two
@@ -807,12 +878,12 @@ fn what_the_heatmap_costs_a_frame() {
         // Not for pipeline creation: a render builds its own device, so every
         // render pays that, and [`WARMUP`] is what keeps it off the clock.
         for &drawn in &ORDER {
-            frame_ms(size, 1.0, drawn)?;
+            frame_ms(size, Timing::HEATMAP, drawn)?;
         }
         for rep in 0..REPS {
             for step in 0..ORDER.len() {
                 let slot = (rep + step) % ORDER.len();
-                let (ms, n) = frame_ms(size, 1.0, ORDER[slot])?;
+                let (ms, n) = frame_ms(size, Timing::HEATMAP, ORDER[slot])?;
                 runs[slot].push(ms);
                 frames = n;
             }

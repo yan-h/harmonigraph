@@ -120,8 +120,15 @@ pub(crate) fn spectrum_settings_pane(
     // a setting and the reader can see what the other mode offers.
     let partials = cfg.detail == crate::SpectrumDetail::Partials;
     let atmosphere = &mut cfg.atmosphere;
-    ValueBar::new(&mut atmosphere.diffusion, 0.0..=1.0, "Diffusion")
-        .percent().show(ui).on_hover_text("Smooth fine spectrogram detail at every brightness. 0% restores the detailed heatmap; 100% uses only the softened field. In Partials detail it smooths the cloud behind the strokes.");
+    // Diffusion blends the softened field back toward the RAW heatmap, and
+    // Partials never draws the raw heatmap at all — its cloud is the softened
+    // field alone, which is what keeps the grain the strokes replace from
+    // coming back in behind them. So the bar is dead in that mode and says so,
+    // the same way the three Partials bars are dead in Heatmap.
+    ui.add_enabled_ui(!partials, |ui| {
+        ValueBar::new(&mut atmosphere.diffusion, 0.0..=1.0, "Diffusion")
+            .percent().show(ui).on_hover_text("Smooth fine spectrogram detail at every brightness. 0% restores the detailed heatmap; 100% uses only the softened field. Heatmap detail only: Partials always draws its cloud fully softened.");
+    });
     ui.add_enabled_ui(partials, |ui| {
         ValueBar::new(&mut atmosphere.cloud, 0.0..=1.0, "Cloud").percent().show(ui).on_hover_text(
             "Brightness of the diffused spectrum behind the Partials strokes. \

@@ -61,7 +61,8 @@ pub use roll::{roll_paint_callback, RollAxes, RollInstance};
 mod spectrogram;
 pub use spectrogram::{
     spectrogram_paint_callback, SpectrogramAtmosphere, SpectrogramGrid, SpectrogramHeadless,
-    SpectrogramRead, SpectrogramShades, SpectrogramVertex, GRID_DB_PER_STEP,
+    SpectrogramRead, SpectrogramShades, SpectrogramVertex, GATHER_SIGMA_MAX_SLABS,
+    GATHER_SIGMA_SECONDS, GRID_DB_PER_STEP,
 };
 
 mod dot_shadow;

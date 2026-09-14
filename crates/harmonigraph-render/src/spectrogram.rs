@@ -134,7 +134,34 @@ pub struct SpectrogramRead {
     /// stored steps — the grid's own unit, so the shader compares two numbers
     /// it already holds. See [`GRID_DB_PER_STEP`].
     pub prominence_steps: f32,
+    /// Sigma of the stroke's smoothing along TIME, in slabs.
+    ///
+    /// In slabs because that is what the shader can step; the pane converts a
+    /// fixed span in SECONDS through the slab width it settled on, so the
+    /// smoothing covers the same stretch of music at every rung of the slab
+    /// ladder. See [`GATHER_SIGMA_SECONDS`].
+    pub gather_sigma_slabs: f32,
 }
+
+/// The stretch of music a stroke is smoothed over along time, in seconds —
+/// what [`SpectrogramRead::gather_sigma_slabs`] is a slab count OF.
+///
+/// Here rather than on the pane side because the shader's own reach is written
+/// against it: the gather runs `ceil(2 * sigma)` slabs either side, and
+/// [`GATHER_SIGMA_MAX_SLABS`] is what bounds that.
+///
+/// 80 ms is the prototype's: long enough to average away a one-taper column's
+/// 4.5 dB of level noise and the prominence test flickering at its threshold,
+/// short enough that a note's onset is still an edge.
+pub const GATHER_SIGMA_SECONDS: f64 = 0.08;
+
+/// The most slabs [`GATHER_SIGMA_SECONDS`] may be worth, and so the bound on
+/// the per-fragment gather: `ceil(2 * 5)` is ten slabs either side.
+///
+/// It binds at the ladder's finest rung, where a slab is 16 ms and the span
+/// above is exactly five of them. Finer than that the smoothing stops widening
+/// rather than the cost running away.
+pub const GATHER_SIGMA_MAX_SLABS: f32 = 5.0;
 
 /// The gradient sampled at equal level slices — `cell_color((i + 0.5) / n)` for
 /// each of `n` — as opaque RGBA8 in gamma space, exactly the bytes `Color32`
@@ -269,6 +296,10 @@ struct SpectrogramUniforms {
     stroke_sigma: f32,
     prominence_steps: f32,
     peak_stride: u32,
+    gather_sigma_slabs: f32,
+    peak_header: u32,
+    peak_bands: u32,
+    peak_band: f32,
     _pad: [u32; 3],
 }
 
@@ -303,6 +334,18 @@ struct GridBuffer {
     /// while the other is not.
     peaks: wgpu::Buffer,
     key: (u64, u32, u32),
+    /// Whether [`peaks`](Self::peaks) has been written for this
+    /// [`key`](Self::key).
+    ///
+    /// The peak list is still a pure function of the slab's bytes — nothing
+    /// about WHICH peaks a slot holds depends on a setting. This says only
+    /// whether the work was done, because a Heatmap pane never reads the
+    /// buffer and picking a whole-song run costs 67 ms. It is not a second
+    /// cache key in the dangerous direction: a stale `true` is impossible
+    /// (only a write sets it, and a new key clears it by making a new record),
+    /// and a stale `false` costs one refill from the run the caller hands over
+    /// every frame.
+    filled: bool,
 }
 
 impl GridBuffer {
@@ -551,6 +594,12 @@ impl CallbackTrait for SpectrogramCallback {
         // slot whatever the run covers, so the slot mapping is the grid's own.
         let peak_words = self.grid.capacity as usize * peaks::PEAK_STRIDE;
         let peak_size = (peak_words * std::mem::size_of::<[f32; 4]>()) as u64;
+        // Only the detail that READS the peaks pays for picking them. Picking
+        // a whole-song run costs 67 ms of CPU, which a Heatmap pane has no use
+        // for; what makes skipping it safe rather than a second cache key is
+        // [`GridBuffer::filled`] plus the caller handing over the whole run
+        // every frame, so the mode coming on refills from data already here.
+        let fill_peaks = self.read.partials;
         if pane.grid.as_ref().is_none_or(|g| g.key != key) {
             let size = u64::from(self.grid.capacity) * u64::from(stride);
             // Kept when the shape is unchanged, so a rebuild of the same grid
@@ -581,24 +630,47 @@ impl CallbackTrait for SpectrogramCallback {
             // inside wgpu's default 128 MiB storage binding, and this runs
             // only on a refold or a lost buffer.
             let mut staging = vec![0u8; size as usize];
-            // The peaks ride the same scatter: one pass over the run writes a
-            // slab's bytes and the list they imply into the same slot, so
-            // nothing can place one without the other.
-            let mut peak_staging = vec![[0f32; 4]; peak_words];
+            // The peaks ride the same scatter when they are wanted at all: one
+            // pass over the run writes a slab's bytes and the list they imply
+            // into the same slot, so nothing can place one without the other.
+            let mut peak_staging = fill_peaks.then(|| vec![[0f32; 4]; peak_words]);
             for j in 0..run_slabs {
                 let slot = slot_of(self.grid.first_key + j as i64, self.grid.capacity) as usize;
                 let at = slot * stride as usize;
                 let slab = &self.grid.run[j * bins..(j + 1) * bins];
                 staging[at..at + bins].copy_from_slice(slab);
-                let record = slot * peaks::PEAK_STRIDE;
-                peaks::write_slot(slab, &mut peak_staging[record..record + peaks::PEAK_STRIDE]);
+                if let Some(peak_staging) = peak_staging.as_mut() {
+                    let record = slot * peaks::PEAK_STRIDE;
+                    peaks::write_slot(slab, &mut peak_staging[record..record + peaks::PEAK_STRIDE]);
+                }
             }
             queue.write_buffer(&buffer, 0, &staging);
-            queue.write_buffer(&peak_buffer, 0, bytemuck::cast_slice(&peak_staging));
-            pane.grid = Some(GridBuffer { buffer, peaks: peak_buffer, key });
-        } else if !self.grid.dirty.is_empty() {
+            if let Some(peak_staging) = &peak_staging {
+                queue.write_buffer(&peak_buffer, 0, bytemuck::cast_slice(peak_staging));
+            }
+            pane.grid = Some(GridBuffer { buffer, peaks: peak_buffer, key, filled: fill_peaks });
+        } else {
+            let held = pane.grid.as_mut().expect("the branch above holds a buffer");
+            // The detail has just been switched on over a grid uploaded
+            // without peaks. The caller hands over the WHOLE run every frame,
+            // not only its delta, so one pass fills every slot from what is
+            // already here — no refold, and no second cache key either: the
+            // flag says whether this buffer has been written for the key
+            // beside it, and only the two writes below ever set it.
+            if fill_peaks && !held.filled {
+                let mut peak_staging = vec![[0f32; 4]; peak_words];
+                for j in 0..run_slabs {
+                    let slot = slot_of(self.grid.first_key + j as i64, self.grid.capacity) as usize;
+                    let slab = &self.grid.run[j * bins..(j + 1) * bins];
+                    let record = slot * peaks::PEAK_STRIDE;
+                    peaks::write_slot(slab, &mut peak_staging[record..record + peaks::PEAK_STRIDE]);
+                }
+                queue.write_buffer(&held.peaks, 0, bytemuck::cast_slice(&peak_staging));
+                held.filled = true;
+            }
             let held = pane.grid.as_ref().expect("the branch above holds a buffer");
             let (buffer, peak_buffer) = (&held.buffer, &held.peaks);
+            let patch_peaks = held.filled;
             let mut record = [[0f32; 4]; peaks::PEAK_STRIDE];
             // Production slabs are already aligned. Only generic bin counts
             // need padding; an unchanged run needs no staging at all.
@@ -624,12 +696,14 @@ impl CallbackTrait for SpectrogramCallback {
                 };
                 let slot = slot_of(dirty, self.grid.capacity);
                 queue.write_buffer(buffer, u64::from(slot) * u64::from(stride), bytes);
-                peaks::write_slot(slab, &mut record);
-                queue.write_buffer(
-                    peak_buffer,
-                    slot as u64 * (peaks::PEAK_STRIDE * std::mem::size_of::<[f32; 4]>()) as u64,
-                    bytemuck::cast_slice(&record),
-                );
+                if patch_peaks {
+                    peaks::write_slot(slab, &mut record);
+                    queue.write_buffer(
+                        peak_buffer,
+                        slot as u64 * (peaks::PEAK_STRIDE * std::mem::size_of::<[f32; 4]>()) as u64,
+                        bytemuck::cast_slice(&record),
+                    );
+                }
             }
         }
 
@@ -727,6 +801,10 @@ impl CallbackTrait for SpectrogramCallback {
             stroke_sigma: self.read.stroke_sigma,
             prominence_steps: self.read.prominence_steps,
             peak_stride: peaks::PEAK_STRIDE as u32,
+            gather_sigma_slabs: self.read.gather_sigma_slabs,
+            peak_header: peaks::PEAK_HEADER as u32,
+            peak_bands: peaks::PEAK_BANDS as u32,
+            peak_band: peaks::PEAK_BAND_BUCKETS as f32,
             _pad: [0; 3],
         };
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -1026,6 +1104,9 @@ mod tests {
             partials: false,
             stroke_sigma: 30.0 / 100.0 * BINS_PER_SEMITONE,
             prominence_steps: 10.0,
+            // The ladder's finest rung, where the gather sits at its cap and
+            // a fixture asks a frame for the widest one it can.
+            gather_sigma_slabs: GATHER_SIGMA_MAX_SLABS,
         }
     }
 
@@ -1956,6 +2037,86 @@ mod tests {
             uploaded.load(Ordering::Relaxed),
             standing,
             "a frame that drew nothing acknowledged a run it never wrote",
+        );
+    }
+
+    /// Switching the detail on over a grid uploaded WITHOUT peaks draws the
+    /// frame a grid uploaded with them from the start does.
+    ///
+    /// A Heatmap pane never reads the peak buffer, so it does not pay to fill
+    /// it — which leaves one path with nothing else watching it: the frame the
+    /// reader presses Partials on. Nothing has moved in the grid, so no upload
+    /// is due and the delta is empty; what has to happen instead is a refill
+    /// from the run the caller hands over every frame. Without it the pane
+    /// draws an empty peak buffer, which is a black picture that comes right
+    /// as soon as the next column arrives — the failure a still transport
+    /// shows and a moving one hides.
+    ///
+    /// The sequence reaches that path the way a reader does: a full upload, a
+    /// delta over it, and only then the switch.
+    #[test]
+    fn turning_the_detail_on_fills_the_peaks_a_heatmap_upload_skipped() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let bins = harmonigraph_core::spectrum::SPECTRUM_BINS;
+        let heatmap = SpectrogramRead {
+            level_per_midi: 0.0,
+            ..read_of(SPECTRUM_MIN_MIDI, bins as f32 / BINS_PER_SEMITONE, 96)
+        };
+        let partials = SpectrogramRead { partials: true, ..heatmap.clone() };
+        let slabs = 6usize;
+        let run = |version: u32| {
+            let bytes: Vec<u8> =
+                (0..slabs as i64).flat_map(|j| versioned_slab(j, version, bins)).collect();
+            Arc::new(bytes)
+        };
+        let uploaded: Arc<AtomicU64> = Arc::default();
+        let grid = |serial: u64, run: Arc<Vec<u8>>, dirty: Vec<i64>| SpectrogramGrid {
+            generation: 1,
+            serial,
+            uploaded: uploaded.clone(),
+            capacity: 8,
+            bins: bins as u32,
+            first_key: 0,
+            run,
+            dirty,
+        };
+        let quad = full_quad(slabs as u32);
+
+        let mut resources = CallbackResources::default();
+        frame_with(
+            &device,
+            &queue,
+            &mut resources,
+            &callback(quad.clone(), &grid(1, run(0), vec![]), &heatmap),
+        );
+        let moved = run(1);
+        frame_with(
+            &device,
+            &queue,
+            &mut resources,
+            &callback(quad.clone(), &grid(2, moved.clone(), vec![2]), &heatmap),
+        );
+        // The switch itself: same run, same generation, nothing dirty.
+        let switched = frame_with(
+            &device,
+            &queue,
+            &mut resources,
+            &callback(quad.clone(), &grid(3, moved.clone(), vec![]), &partials),
+        );
+
+        let fresh =
+            fresh_frame(&device, &queue, &callback(quad, &grid(4, moved, vec![]), &partials));
+        assert_eq!(
+            switched, fresh,
+            "the frame the detail was switched on is not the frame a Partials upload draws",
+        );
+        // And it is a picture rather than the empty buffer's black, which is
+        // what the equality above would also hold for if nothing drew at all.
+        assert!(
+            switched.chunks_exact(4).any(|px| px[..3] != [0, 0, 0]),
+            "the switched frame is entirely black, so the comparison measured nothing",
         );
     }
 

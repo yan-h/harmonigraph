@@ -628,7 +628,7 @@ pub(crate) struct Plan {
     /// pixels are the whole of it.
     pub(crate) rows: usize,
     /// A time slab's width, in seconds.
-    bucket: f64,
+    pub(crate) bucket: f64,
     /// Slabs the GPU's copy holds, and so the most the aggregator keeps folded.
     ///
     /// Sized off the PANE rather than off the window, which is what holds it
@@ -741,7 +741,7 @@ fn level_affine(cfg: &SpectrumConfig) -> (f32, f32, f32) {
 
 /// The scalars a fragment reads the grid through — the footprint's width and
 /// the level mapping — for a pane spending `rows` pixels on the pitch axis.
-pub(crate) fn read_of(view: &PaneView, rows: usize) -> SpectrogramRead {
+pub(crate) fn read_of(view: &PaneView, rows: usize, slab_seconds: f64) -> SpectrogramRead {
     let (level0, level_per_step, level_per_midi) = level_affine(&view.cfg);
     // The render crate carries its own copy of the stored unit, because the
     // peak picker weighs its centroid by POWER and so is the one thing over
@@ -763,6 +763,18 @@ pub(crate) fn read_of(view: &PaneView, rows: usize) -> SpectrogramRead {
         // of holding a size in pixels.
         stroke_sigma: view.cfg.stroke_cents / 100.0 * BINS_PER_SEMITONE as f32,
         prominence_steps: view.cfg.prominence_db / DB_STEP,
+        // Seconds to slabs, for the same reason: the stroke's smoothing along
+        // time is a stretch of MUSIC, so it covers the same stretch at every
+        // rung of the slab ladder and the picture keeps its character when a
+        // Span drag crosses one. Floored at one slab — there is nothing to
+        // average below that — and capped so a fragment's gather stays
+        // bounded at the ladder's finest rung.
+        gather_sigma_slabs: if slab_seconds > 0.0 {
+            (harmonigraph_render::GATHER_SIGMA_SECONDS / slab_seconds) as f32
+        } else {
+            1.0
+        }
+        .clamp(1.0, harmonigraph_render::GATHER_SIGMA_MAX_SLABS),
     }
 }
 
@@ -1411,6 +1423,11 @@ mod tests {
     use crate::panes::spectral::DEPTH_ZOOM_PER_DRAG_POINT;
     use egui::Color32;
     use harmonigraph_core::spectrum::SPECTRUM_BINS;
+
+    /// A slab width for the fixtures that build a read without a [`Plan`]: the
+    /// live ladder's finest rung, so the time gather derived from it sits at
+    /// its cap, which is the widest a fixture can ask a frame to gather.
+    const SLAB: f64 = crate::AudioSpectrum::FFT_INTERVAL * 2.0;
 
     #[test]
     fn corrected_source_clock_keeps_history_and_incremental_aggregation_ordered() {
@@ -4023,7 +4040,7 @@ mod tests {
                 level0: 0.5 / 256.0,
                 level_per_step: 1.0 / 256.0,
                 level_per_midi: 0.0,
-                ..read_of(view, rows)
+                ..read_of(view, rows, SLAB)
             }
         }
 
@@ -4185,7 +4202,7 @@ mod tests {
                 );
                 let (grid, shades) = frame_data(surfaces, 0, &cfg).expect("a grid to draw");
                 let slabs = (grid.run.len() / SPECTRUM_BINS) as u32;
-                let read = read_of(view, plan.rows);
+                let read = read_of(view, plan.rows, plan.bucket);
                 let vertices = run_quad(slabs, SIZE);
 
                 if let Some((bucket, first_key)) = t.last {
@@ -4297,7 +4314,7 @@ mod tests {
                 .expect("a run to draw");
             let (moved, shades) = frame_data(&mut surfaces, 0, &cfg).expect("a grid to draw");
             assert!(!moved.dirty.is_empty(), "nothing moved, so nothing could be withheld");
-            let read = read_of(&view, plan.rows);
+            let read = read_of(&view, plan.rows, plan.bucket);
             let slabs = (moved.run.len() / SPECTRUM_BINS) as u32;
             let withheld = headless.frame(
                 0,
@@ -4586,7 +4603,7 @@ mod tests {
                     ..Default::default()
                 };
                 let view = view_of(whole_axis(), cfg);
-                let read = read_of(&view, 1);
+                let read = read_of(&view, 1, SLAB);
                 let frame = headless.frame(
                     0,
                     size,
@@ -4632,7 +4649,7 @@ mod tests {
             let bytes = vec![quiet; W as usize * SPECTRUM_BINS];
             let drawn = |cfg: SpectrumConfig, headless: &mut SpectrogramHeadless| {
                 let view = view_of(whole_axis(), cfg);
-                let read = read_of(&view, 1);
+                let read = read_of(&view, 1, SLAB);
                 let frame = headless.frame(
                     0,
                     size,
@@ -4730,7 +4747,7 @@ mod tests {
                     PitchScale { min_midi: SPECTRUM_MIN_MIDI + 20.0, max_midi: 0.0, span },
                     cfg,
                 );
-                let read = read_of(&view, 1);
+                let read = read_of(&view, 1, SLAB);
                 let run = run_of(&read, 0);
                 lengths.insert(run.len());
                 let foot = foot_of(&read, 0);
@@ -4968,7 +4985,7 @@ mod tests {
                     .expect("a run to draw");
                 let (grid, shades) = frame_data(surfaces, 0, &cfg).expect("a grid to draw");
                 let slabs = (grid.run.len() / SPECTRUM_BINS) as u32;
-                let read = read_of(&view, plan.rows);
+                let read = read_of(&view, plan.rows, plan.bucket);
                 headless.frame(0, SIZE, run_quad(slabs, SIZE), grid, read, shades);
             };
 

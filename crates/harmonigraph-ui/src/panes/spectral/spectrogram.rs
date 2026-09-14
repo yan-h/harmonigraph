@@ -284,7 +284,7 @@ pub(crate) fn draw_spectrogram(
         painter.clip_rect(),
         vertices,
         grid,
-        read_of(&view, plan.rows),
+        read_of(&view, plan.rows, plan.bucket),
         shades,
         target_format,
         crate::panes::lattice::pane_id(surface),
@@ -403,7 +403,7 @@ mod gap_tests {
                 }
                 let vertices = heatmap_vertices(&axes, &time, &layout, 0.0, far);
                 let (grid, shades) = frame_data(&mut state.surfaces.spectrogram, 0, &cfg).unwrap();
-                let read = read_of(&view, plan.rows);
+                let read = read_of(&view, plan.rows, plan.bucket);
                 let delta = gpu.frame(
                     0,
                     SIZE,

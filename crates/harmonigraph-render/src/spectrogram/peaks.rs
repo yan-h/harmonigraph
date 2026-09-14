@@ -30,16 +30,47 @@ const MEAN_REACH: usize = 32;
 /// Peaks kept per slab.
 ///
 /// The buffer is a fixed record per slot, so this is a size as well as a
-/// policy: 48 of them is 784 bytes a slot, 3.2 MB for a whole-song ring beside
-/// the grid's own 15.7 MB. Musically it is far past a chord's worth of
-/// partials — a five-note chord with eight audible partials each is 40 — and
-/// what it cuts off under a dense mix is the quietest of them, which is what
-/// the prominence ordering is for.
+/// policy: with the band index below a slot is 1280 bytes, 5.2 MB for a
+/// whole-song ring beside the grid's own 15.7 MB. Musically it is far past a
+/// chord's worth of partials — a five-note chord with eight audible partials
+/// each is 40 — and what it cuts off under a dense mix is the quietest of
+/// them, which is what the prominence ordering is for.
 pub(super) const MAX_PEAKS: usize = 48;
 
-/// `vec4`s one slot occupies in the peaks buffer: a header holding the count,
-/// then [`MAX_PEAKS`] entries. The shader indexes `slot * PEAK_STRIDE`.
-pub(super) const PEAK_STRIDE: usize = MAX_PEAKS + 1;
+/// Buckets one band of the index below covers: a semitone at the analyzer's
+/// own 32 buckets to one.
+pub(super) const PEAK_BAND_BUCKETS: usize = 32;
+
+/// Bands the index carries, covering buckets `0 .. PEAK_BANDS *
+/// PEAK_BAND_BUCKETS` — 4064, past the 3828 the analyzer's axis holds.
+///
+/// A slab longer than that is still drawn correctly: its top buckets fall in
+/// the last band and are reached by scanning forward from it, which costs more
+/// loads and answers the same picture.
+pub(super) const PEAK_BANDS: usize = 127;
+
+/// `vec4`s the header occupies: `PEAK_BANDS + 1` entries packed four to a
+/// `vec4`, which is 128 entries in exactly 32 of them.
+///
+/// **The layout.** Entry `k` lives at `vec4` `k >> 2`, component `k & 3`, and
+/// holds the INDEX of the first stored peak with `x >= k * PEAK_BAND_BUCKETS`
+/// — so it is non-decreasing in `k`, and entry [`PEAK_BANDS`] is the peak
+/// COUNT (there being no peak past the last band). Peaks follow from `vec4`
+/// [`PEAK_HEADER`], sorted by `x` ascending.
+///
+/// Exact in an `f32` because every value is an integer under 49.
+///
+/// What it buys is the whole reason the time gather can be wide: a fragment
+/// covers one pitch, so all but a peak or two of a slab's 48 are nowhere near
+/// it. Without the index every gathered slab costs 48 loads and 48 Gaussians
+/// per fragment, and a five-slab gather is 240 of them; with it a slab costs
+/// the peaks inside `[x - 3 sigma, x + 3 sigma]` plus at most one band of
+/// lead-in, which over a 3828-bucket slab holding 48 peaks is about two.
+pub(super) const PEAK_HEADER: usize = PEAK_BANDS.div_ceil(4) + 1;
+
+/// `vec4`s one slot occupies: the header, then [`MAX_PEAKS`] entries. The
+/// shader indexes `slot * PEAK_STRIDE`.
+pub(super) const PEAK_STRIDE: usize = PEAK_HEADER + MAX_PEAKS;
 
 /// dB one stored step of the grid carries.
 ///
@@ -77,7 +108,9 @@ static CENTROID_WEIGHT: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::n
 /// `byte - mean` is the prominence the shader compares against its threshold
 /// and `byte` goes through the same level affine a bucket does.
 ///
-/// Returned in no particular order: the shader takes a max over the list.
+/// Returned SORTED BY `x` ascending, which is what lets the band index in
+/// [`write_slot`] hand a fragment a starting point and lets the scan stop at
+/// the first peak past its reach.
 pub(super) fn peaks_of(slab: &[u8]) -> Vec<[f32; 4]> {
     let n = slab.len();
     if n == 0 {
@@ -146,21 +179,35 @@ pub(super) fn peaks_of(slab: &[u8]) -> Vec<[f32; 4]> {
             (b[1] - b[2]).total_cmp(&(a[1] - a[2])).then(a[0].total_cmp(&b[0]))
         });
         found.truncate(MAX_PEAKS);
+        // The scan emitted them in bucket order and the select has just
+        // scrambled the survivors. Put them back: the band index and the
+        // shader's early break both read this order, not the prominence one.
+        found.sort_unstable_by(|a, b| a[0].total_cmp(&b[0]));
     }
     found
 }
 
 /// Write `slab`'s peaks into `out`, one slot's [`PEAK_STRIDE`] `vec4`s: the
-/// count in the header's first lane, then the entries, then zeros.
+/// band index described at [`PEAK_HEADER`], then the entries, then zeros.
 ///
 /// The tail is cleared rather than left: a slot reused by a later key must not
 /// answer with the peaks of the slab it held a lap ago.
 pub(super) fn write_slot(slab: &[u8], out: &mut [[f32; 4]]) {
     debug_assert_eq!(out.len(), PEAK_STRIDE, "a slot is exactly one peak record");
     let found = peaks_of(slab);
-    out[0] = [found.len() as f32, 0.0, 0.0, 0.0];
-    out[1..1 + found.len()].copy_from_slice(&found);
-    out[1 + found.len()..].fill([0.0; 4]);
+    out.fill([0.0; 4]);
+    out[PEAK_HEADER..PEAK_HEADER + found.len()].copy_from_slice(&found);
+    // One pass up the sorted list: `at` only ever moves forward, so the whole
+    // index costs the peaks themselves plus the bands.
+    let mut at = 0usize;
+    for k in 0..PEAK_BANDS {
+        let edge = (k * PEAK_BAND_BUCKETS) as f32;
+        while at < found.len() && found[at][0] < edge {
+            at += 1;
+        }
+        out[k >> 2][k & 3] = at as f32;
+    }
+    out[PEAK_BANDS >> 2][PEAK_BANDS & 3] = found.len() as f32;
 }
 
 #[cfg(test)]
@@ -299,21 +346,66 @@ mod tests {
             (60 + PEAKS - MAX_PEAKS) as f32,
             "the kept set is not the tallest {MAX_PEAKS}",
         );
+        // The cap is also where the ascending order is easiest to lose: the
+        // select that answers the question above leaves its survivors
+        // scrambled, and the band index and the shader's early break both
+        // read the order rather than re-deriving it.
+        assert!(
+            found.windows(2).all(|pair| pair[0][0] < pair[1][0]),
+            "the kept peaks came back out of bucket order",
+        );
     }
 
-    /// A slot's record is the count and then the peaks, with the tail cleared
-    /// — a slot the ring reuses must not answer with a lap-old list.
+    /// A slot's record is the band index and then the peaks, with the tail
+    /// cleared — a slot the ring reuses must not answer with a lap-old list.
     #[test]
     fn a_written_slot_clears_the_peaks_it_used_to_hold() {
         let mut slot = vec![[1.0f32; 4]; PEAK_STRIDE];
         let mut slab = vec![0u8; 200];
         slab[100] = 200;
         write_slot(&slab, &mut slot);
-        assert_eq!(slot[0][0], 1.0, "one peak, and the header says so");
-        assert!((slot[1][0] - 100.5).abs() < 0.01);
+        assert_eq!(band(&slot, PEAK_BANDS), 1, "one peak, and the header says so");
+        assert!((slot[PEAK_HEADER][0] - 100.5).abs() < 0.01);
         assert!(
-            slot[2..].iter().all(|entry| *entry == [0.0; 4]),
+            slot[PEAK_HEADER + 1..].iter().all(|entry| *entry == [0.0; 4]),
             "the tail still holds what the slot did before",
         );
+    }
+
+    /// Header entry `k`, read the way the shader reads it.
+    fn band(slot: &[[f32; 4]], k: usize) -> usize {
+        slot[k >> 2][k & 3] as usize
+    }
+
+    /// The band index lands a scan at the right peak.
+    ///
+    /// The claim is the one the shader depends on: entry `k` is the first
+    /// stored peak at or past bucket `32k`, so a fragment that starts there
+    /// cannot step over a peak that covers it. Checked against a linear search
+    /// over EVERY band rather than at a couple of hand-picked ones — the ways
+    /// this goes wrong (an off-by-one at a band edge, a peak landing exactly
+    /// on one, an empty band inheriting the wrong index) are all at edges, and
+    /// naming three of them by hand is how the fourth survives.
+    ///
+    /// The fixture reaches past one band: peaks are spread over 1500 buckets,
+    /// which is 47 of them, with runs of empty bands between.
+    #[test]
+    fn the_band_index_lands_a_scan_at_the_first_peak_of_its_band() {
+        let mut slab = vec![0u8; 1500];
+        // Deliberately uneven spacing, including two peaks inside one band and
+        // one sitting on a band edge (bucket 640 = 32 * 20).
+        for at in [7, 200, 210, 640, 641 + 16, 900, 1400] {
+            slab[at] = 180;
+        }
+        let found = peaks_of(&slab);
+        assert!(found.len() >= 6, "the fixture lost its peaks: {}", found.len());
+        let mut slot = vec![[0.0f32; 4]; PEAK_STRIDE];
+        write_slot(&slab, &mut slot);
+        assert_eq!(band(&slot, PEAK_BANDS), found.len(), "the sentinel is not the count");
+        for k in 0..PEAK_BANDS {
+            let edge = (k * PEAK_BAND_BUCKETS) as f32;
+            let want = found.iter().take_while(|peak| peak[0] < edge).count();
+            assert_eq!(band(&slot, k), want, "band {k} starts at the wrong peak");
+        }
     }
 }

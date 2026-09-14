@@ -50,8 +50,18 @@ struct Locals {
     /// How far above its own local mean a peak must stand to be drawn, in
     /// stored steps.
     prominence_steps: f32,
-    /// `vec4`s one slot occupies in `peaks`: a header, then the entries.
+    /// `vec4`s one slot occupies in `peaks`: the band index, then the entries.
     peak_stride: u32,
+    /// Sigma of the time gather, in SLABS — the pane converts a fixed span in
+    /// seconds through the slab width it settled on, so the smoothing covers
+    /// the same stretch of music however finely time is cut.
+    gather_sigma_slabs: f32,
+    /// `vec4`s the band index occupies, and so where a slot's peaks start.
+    peak_header: u32,
+    /// Bands the index carries. Entry `peak_bands` is the peak count.
+    peak_bands: u32,
+    /// Buckets one band covers.
+    peak_band: f32,
     /// Scalars, not a `vec3`: a vector here would align to 16 and shift itself
     /// off the offset the Rust struct writes.
     _pad0: u32,
@@ -68,8 +78,12 @@ struct Locals {
 @group(0) @binding(2) var lut: texture_2d<f32>;
 /// Each slot's peak list, `peak_stride` entries apart on the SAME slot mapping
 /// as `grid` — written by the same scatter, out of the same bytes, so a slot's
-/// peaks and its slab can never disagree. Slot `s` holds its count in
-/// `peaks[s * peak_stride].x` and its entries from `s * peak_stride + 1`, each
+/// peaks and its slab can never disagree.
+///
+/// Slot `s` opens with a BAND INDEX of `peak_bands + 1` integers packed four
+/// to a `vec4`: entry `k` is the index of the first peak with
+/// `x >= k * peak_band`, and entry `peak_bands` is the count. Its entries
+/// follow from `s * peak_stride + peak_header`, sorted by `x` ascending, each
 /// `(x on the bucket axis, stored byte, local mean, 0)`.
 @group(0) @binding(3) var<storage, read> peaks: array<vec4<f32>>;
 
@@ -234,71 +248,107 @@ fn peak_level(peak: vec4<f32>) -> f32 {
     return clamp(level, 0.0, 1.0);
 }
 
+/// Band index entry `k` of the record at `base`, out of the four packed into
+/// one `vec4`. Every entry is a small integer held exactly in an `f32`.
+fn band_start(base: u32, k: u32) -> u32 {
+    return u32(peaks[base + (k >> 2u)][k & 3u]);
+}
+
 /// The brightest stroke slab `slot` lays down at bucket position `x`.
 ///
 /// A MAX over the slab's peaks, because two partials a stroke's width apart
 /// are two lines that overlap, not one line twice as bright — the same reason
 /// the slab fold takes a max over its columns.
-fn slab_stroke(slot: u32, x: f32) -> f32 {
+///
+/// Only the peaks that could REACH `x` are visited, and that is what pays for
+/// the time gather above. The band index says where to start and the ascending
+/// order says where to stop, so a fragment loads the peaks inside its own
+/// three sigma plus at most one band of lead-in — about two of a slab's 48
+/// over the analyzer's axis — rather than all of them.
+///
+/// It is the difference between a gather the picture wants and one the frame
+/// can afford: at the ladder's finest rung the gather is 21 slabs, and
+/// measured at 1600x1300 it costs 2.7 ms a frame over the heatmap
+/// (`what_partials_detail_costs_a_frame`). Visiting all 48 peaks of each, as
+/// this did before the index, cost more than that for THREE.
+fn slab_stroke(slot: u32, x: f32, reach: f32, falloff: f32) -> f32 {
     let base = slot * locals.peak_stride;
-    let count = u32(peaks[base].x);
-    // Three sigma either side: past it the Gaussian is under 1.1%, which is
-    // below one slice of a 4096-entry gradient at any level the ramp reaches.
-    let reach = 3.0 * locals.stroke_sigma;
-    let falloff = 1.0 / (2.0 * locals.stroke_sigma * locals.stroke_sigma);
+    let count = band_start(base, locals.peak_bands);
+    let hi = x + reach;
+    let band = u32(clamp(floor((x - reach) / locals.peak_band), 0.0, f32(locals.peak_bands - 1u)));
+    let first = base + locals.peak_header;
+    var i = band_start(base, band);
     var best = 0.0;
-    for (var i = 0u; i < count; i = i + 1u) {
-        let peak = peaks[base + 1u + i];
-        let d = x - peak.x;
-        // The prominence gate is per PEAK, against the peak's own local mean:
-        // a partial standing over a busy region is judged against that region
-        // rather than against the column's average level.
-        if abs(d) > reach || peak.y - peak.z < locals.prominence_steps {
-            continue;
+    while i < count {
+        let peak = peaks[first + i];
+        // Sorted, so the first peak past this fragment's reach ends the scan.
+        if peak.x > hi {
+            break;
         }
-        best = max(best, peak_level(peak) * exp(-d * d * falloff));
+        let d = x - peak.x;
+        // The lead-in the band start leaves is cut here rather than by the
+        // break, and the prominence gate is per PEAK, against the peak's own
+        // local mean: a partial standing over a busy region is judged against
+        // that region rather than against the column's average level.
+        if abs(d) <= reach && peak.y - peak.z >= locals.prominence_steps {
+            best = max(best, peak_level(peak) * exp(-d * d * falloff));
+        }
+        i = i + 1u;
     }
     return best;
 }
 
-/// The stroke picture at this fragment: a MAX within each slab, a weighted
-/// MEAN across the three slabs around it.
+/// The stroke picture at this fragment: a MAX within each slab, a GAUSSIAN
+/// weighted mean across the slabs around it.
 ///
 /// The two operators are not interchangeable and the asymmetry is the point.
 /// Within a column the peaks are one measurement of one moment, so the
 /// brightest line under the pixel is the reading. Across time they are
-/// separate measurements, and a mean is what keeps a vibrato from aliasing
-/// into a ragged edge at a coarse zoom — a max along time would draw the
-/// envelope of the wobble instead of the wobble.
+/// separate measurements of the same partial, and the mean is what averages
+/// away what is different between them — a column's level noise is about
+/// 4.5 dB at one taper, and the prominence test flickers on and off at its
+/// threshold, so a narrow gather draws a partial as a string of beads.
 ///
-/// THREE taps and not five. The gather is the whole cost of this mode — up to
-/// 48 peaks per tap per fragment — and five of them measured 4.1 to 4.6 ms a
-/// frame over the heatmap at 1600x1300, where three measure 2.3 to 2.5 (see
-/// `what_partials_detail_costs_a_frame`). What the outer pair bought was the
-/// tail of the time smoothing, and a slab is already a fold over several
-/// overlapping columns, so the mean across three of them is a wider window
-/// than the count suggests.
+/// The width is a fixed span of MUSIC (`gather_sigma_slabs` is a time in
+/// seconds divided by the slab width the pane settled on), so the smoothing
+/// covers the same stretch whether time is cut at 16 ms or at 128, and the
+/// picture does not change character when the Span crosses a ladder rung.
 ///
-/// Clamped into the run at both ends, the same `ClampToEdge` [`heatmap_level`]
-/// takes past the newest slab, and off the same run-index-to-slot rule.
+/// Slabs outside the run are SKIPPED rather than clamped into it. Clamping
+/// would let the run's edge slab stand in for every tap past the end and drag
+/// the newest column's own strokes toward it; skipping renormalizes over the
+/// taps that exist, which is what the interior already does.
 fn stroke_level(in: VertexOut) -> f32 {
     let n = i32(locals.run_slabs);
     // `in.slab` runs 0..n across the run, so the slab under this fragment is
     // its floor — slab j covering [j, j + 1) with its centre at j + 0.5.
     let jc = i32(clamp(floor(in.slab), 0.0, f32(n) - 1.0));
     let x = bucket_x(in.t);
+    // Three sigma either side: past it the Gaussian is under 1.1%, which is
+    // below one slice of a 4096-entry gradient at any level the ramp reaches.
+    let reach = 3.0 * locals.stroke_sigma;
+    let falloff = 1.0 / (2.0 * locals.stroke_sigma * locals.stroke_sigma);
+    let sigma = max(locals.gather_sigma_slabs, 0.001);
+    // Two sigma along time rather than three: the tail past it is under 14%
+    // of the centre tap and every one of those taps is a banded scan, so it
+    // is the one place where widening costs per fragment.
+    let radius = i32(ceil(2.0 * sigma));
+    let time_falloff = 1.0 / (2.0 * sigma * sigma);
     var sum = 0.0;
     var total = 0.0;
-    for (var k = -1; k <= 1; k = k + 1) {
-        // 1, 2, 1 as arithmetic: WGSL has no const array a loop variable may
-        // index, and a three-tap triangle is one subtraction.
-        let weight = 2.0 - abs(f32(k));
-        let j = clamp(jc + k, 0, n - 1);
+    for (var k = -radius; k <= radius; k = k + 1) {
+        let j = jc + k;
+        if j < 0 || j >= n {
+            continue;
+        }
+        let weight = exp(-f32(k * k) * time_falloff);
         let slot = (locals.first_slot + u32(j)) % locals.capacity;
-        sum = sum + weight * slab_stroke(slot, x);
+        sum = sum + weight * slab_stroke(slot, x, reach, falloff);
         total = total + weight;
     }
-    return sum / total;
+    // `jc` is always inside the run, so the centre tap alone makes this
+    // positive; the guard is for a run the degenerate checks let through.
+    return select(0.0, sum / total, total > 0.0);
 }
 
 /// The level this fragment draws, whichever picture the pane is set to.
@@ -413,23 +463,13 @@ fn density_color(level: f32) -> vec4<f32> {
     let b = textureLoad(lut, vec2<u32>(min(i + 1u, levels - 1u), 0u), 0).rgb;
     return vec4<f32>(mix(a, b, fract(x)), 1.0);
 }
-/// The soft field Partials draws BEHIND its strokes: the same diffused
-/// spectrum the heatmap's filtered path composes, dimmed by the Cloud bar.
-///
-/// It goes through `diffused_level` rather than straight to the material so
-/// the Diffusion bar keeps its meaning here — at 100% the cloud is the blurred
-/// field alone, and at 0% it is the raw spectrum simply turned down, which is
-/// the setting to reach for when the strokes should stand on a dark bed.
-fn cloud_bed(core: f32, material: f32) -> f32 {
-    return cloud.cloud * diffused_level(core, material);
-}
 /// Empty history uses the same field and palette with a zero measured core.
 /// This quad never samples the grid, so the oldest column cannot be smeared —
 /// and, in Partials, nothing strokes over it either.
 fn backdrop_level(in: VertexOut) -> f32 {
     let material = baked_density(in.position.xy);
     if locals.detail == 1u {
-        return cloud_bed(0.0, material);
+        return cloud.cloud * material;
     }
     return diffused_level(0.0, material);
 }
@@ -445,10 +485,17 @@ fn fs_cloud_backdrop_linear(in: VertexOut) -> @location(0) vec4<f32> {
 fn cloud_color(in: VertexOut) -> vec4<f32> {
     let material = baked_density(in.position.xy);
     if locals.detail == 1u {
+        // The FILTERED material alone, with no raw core mixed back in. That
+        // is what makes the cloud a cloud: `diffused_level` at the default
+        // 10% diffusion is four fifths raw heatmap, and putting that behind
+        // the strokes puts the grain they exist to replace straight back into
+        // the bass. Diffusion is therefore dead in this mode and its bar is
+        // drawn disabled.
+        //
         // A max and not a sum: the cloud is what the strokes are seen
         // against, so a stroke over a lit region is drawn at its own level
         // rather than added to whatever is behind it.
-        return density_color(max(stroke_level(in), cloud_bed(heatmap_level(in), material)));
+        return density_color(max(stroke_level(in), cloud.cloud * material));
     }
     return density_color(diffused_level(heatmap_level(in), material));
 }
