@@ -76,8 +76,12 @@ cache or upload machinery.
 
 The measurement cache is keyed by column identity/range and slab width.
 None of the style controls belong in it.
-The scalar target allocation is keyed by its derived size;
-its contents and uniforms refresh each draw.
+The scalar targets retain their dimensions while each stays within 10% of the requested size,
+so small zoom and Span changes do not continually allocate textures.
+Full-resolution axes must match the visible pixel dimensions exactly,
+and retained dimensions never exceed those dimensions after a resize.
+The filters and source footprint use the actual retained size;
+contents and uniforms refresh each draw.
 The palette keeps its existing independent key.
 
 ## Saved appearance

@@ -41,6 +41,29 @@ pub(super) fn source_size(
     })
 }
 
+/// Small zoom and Span changes refresh pixels, not GPU allocations. Keep the
+/// retained resolution within 10% of the requested one to bound the change
+/// in kernel sampling density and truncation as the musical radius moves.
+/// Full-resolution axes (including zero softness) must match the viewport.
+pub(super) fn retained_size(
+    requested: [u32; 2],
+    pixels: [u32; 2],
+    retained: Option<[u32; 2]>,
+) -> [u32; 2] {
+    retained
+        .filter(|size| {
+            (0..2).all(|axis| {
+                let held = u64::from(size[axis]);
+                let wanted = u64::from(requested[axis]);
+                held <= u64::from(pixels[axis])
+                    && (requested[axis] != pixels[axis] || held == wanted)
+                    && held * 10 >= wanted * 9
+                    && held * 10 <= wanted * 11
+            })
+        })
+        .unwrap_or(requested)
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -420,4 +443,33 @@ fn source_group(
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(lut) },
         ],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retained_size;
+
+    #[test]
+    fn retained_targets_bound_resolution_and_preserve_full_axes() {
+        let choose = |held| retained_size([100, 100], [128, 128], Some(held));
+        assert_eq!(choose([90, 110]), [90, 110]);
+        assert_eq!(choose([89, 100]), [100, 100]);
+        assert_eq!(choose([100, 111]), [100, 100]);
+        assert_eq!(retained_size([100, 100], [105, 128], Some([110, 100])), [100, 100]);
+        for axis in 0..2 {
+            let mut full = [100, 100];
+            full[axis] = 128;
+            let mut held = full;
+            held[axis] = 120;
+            assert_eq!(retained_size(full, [128, 128], Some(held)), full);
+        }
+        assert_eq!(retained_size([1, 1], [128, 128], Some([8, 8])), [1, 1]);
+        // After crossing a resize boundary, reversing over that boundary
+        // must retain the new allocation, not oscillate between two sizes.
+        let mut held = [100, 100];
+        for desired in [112, 111, 112, 111, 112, 111] {
+            held = retained_size([desired, 100], [128, 128], Some(held));
+            assert_eq!(held, [112, 100]);
+        }
+    }
 }

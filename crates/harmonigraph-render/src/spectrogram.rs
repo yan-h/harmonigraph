@@ -682,7 +682,11 @@ impl CallbackTrait for SpectrogramCallback {
                 screen_descriptor.size_in_pixels,
             );
             let pixels = [viewport.width_px.max(0) as u32, viewport.height_px.max(0) as u32];
-            let size = atmosphere::source_size(pixels, ppp, settings);
+            let size = atmosphere::retained_size(
+                atmosphere::source_size(pixels, ppp, settings),
+                pixels,
+                pane.cloud.as_ref().map(|c| c.size),
+            );
             if size.iter().all(|&v| v > 0) {
                 let cloud = cloud.get_or_insert_with(|| {
                     atmosphere::Pipelines::new(device, self.target_format, layout)
@@ -1575,6 +1579,49 @@ mod tests {
         cb.atmosphere.as_mut().unwrap().settings.analyzer_softness = 0.0;
         cb.atmosphere.as_mut().unwrap().settings.note_glow = 0.0;
         assert_eq!(smooth, fresh_frame(&device, &queue, &cb));
+    }
+
+    #[test]
+    fn spectral_cloud_targets_survive_pitch_zoom_and_span_drags() {
+        let Some((device, queue)) = headless_device() else { return };
+        for pitch in [false, true] {
+            let mut resources = CallbackResources::default();
+            let mut cb = cloud_fixture();
+            let settings = cb.atmosphere.as_mut().unwrap();
+            settings.points_per_cent = 0.128;
+            settings.points_per_ms = 0.04;
+            let mut previous = None;
+            let mut previous_requested = None;
+            let mut allocations = 0;
+            let mut exact_allocations = 0;
+            // Two-second drags at 60 Hz in each direction, moving 0.3% per
+            // frame. Reversing also traverses every prior resize boundary.
+            for step in (0..120).chain((0..120).rev()) {
+                let scale = 1.003_f32.powi(step);
+                let settings = cb.atmosphere.as_mut().unwrap();
+                if pitch {
+                    settings.points_per_cent = 0.128 * scale;
+                } else {
+                    settings.points_per_ms = 0.04 / scale;
+                }
+                let requested = atmosphere::source_size(SIZE, 1.0, *settings);
+                exact_allocations += usize::from(previous_requested != Some(requested));
+                previous_requested = Some(requested);
+                frame_with(&device, &queue, &mut resources, &cb);
+                let target = resources.get::<SpectrogramResources>().unwrap().panes[&0]
+                    .cloud
+                    .as_ref()
+                    .unwrap();
+                allocations += usize::from(previous.as_ref() != Some(&target.source_view));
+                previous = Some(target.source_view.clone());
+                for (held, requested) in target.size.into_iter().zip(requested) {
+                    assert!(held * 10 >= requested * 9 && held * 10 <= requested * 11);
+                }
+            }
+            eprintln!("pitch={pitch}: {allocations} target allocations vs {exact_allocations} exact-size allocations over 240 drag frames");
+            assert!(exact_allocations > 25, "fixture did not exercise size churn");
+            assert!(allocations <= 8 && allocations * 5 < exact_allocations);
+        }
     }
 
     #[test]

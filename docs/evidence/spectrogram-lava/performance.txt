@@ -21,3 +21,13 @@ LAVA GPU [3840, 2160] Lava wide=false span=1.5: 5.807 ms/frame incl replay/analy
 LAVA GPU [3840, 2160] Lava wide=true span=1.5: 7.404 ms/frame incl replay/analyzer/UI/readback
 LAVA GPU [3840, 2160] Lava wide=false span=180: 6.145 ms/frame incl replay/analyzer/UI/readback
 LAVA CPU: mixed-tier refold 5.803 ms; per fresh column including allocation/readout 0.0089 ms; history 125435904 bytes; accumulator 30624 bytes
+
+Scratch allocation follow-up (GPU identity counts, not frame timings):
+- 240 frames per axis: 120 successive 0.3% scale steps and their reversal.
+- Actual source texture-view identity changes counted after prepare/paint/readback.
+- Exact requested-size changes counted for the previous allocation policy.
+- Span drag: 7 allocations versus 47 exact-size allocations.
+- Pitch zoom: 6 allocations versus 35 exact-size allocations.
+- Every frame remains within 90–110% of requested source dimensions.
+- Fixture: spectral_cloud_targets_survive_pitch_zoom_and_span_drags,
+  128x128 pane, initial 0.128 points/cent and 0.04 points/ms.
