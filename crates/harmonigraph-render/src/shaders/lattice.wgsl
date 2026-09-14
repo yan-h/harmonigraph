@@ -179,7 +179,7 @@ const INK_STRIP_N: u32 = 64u;
 // second, empty binding.
 @group(1) @binding(0) var ink_strip: texture_2d<f32>;
 
-// Full-resolution statistics, read only by the resolve entry point.
+// Half-resolution statistics, read only by the resolve entry point.
 // Bindings overlap the ink strip's group in other entry points.
 @group(1) @binding(0) var glow_sum: texture_2d<f32>;
 @group(1) @binding(1) var glow_screen: texture_2d<f32>;

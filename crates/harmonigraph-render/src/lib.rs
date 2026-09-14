@@ -934,12 +934,11 @@ struct CompiledLatticeResources {
     /// One texture + the shared sampler, which is what every single-texture
     /// reader here binds: each pass of the bloom chain, and the glow target —
     /// taken at group 0 by the composite that lays the light down and at group
-    /// 1 by the node and marker pipelines, whose washes read the same field.
+    /// 1 by the node, marker and label pipelines, whose washes read the same field.
     ///
-    /// The glow reads its texture with `textureLoad` and the bloom samples
-    /// its own, so the sampler at 1 is bound by both and spent by one. One
-    /// layout rather than two of the same shape: a second would have to be
-    /// kept in step with this for nothing.
+    /// Glow and bloom share linear filtering with ClampToEdge. Every glow
+    /// reader uses normalized coordinates to reconstruct the half-resolution
+    /// field, so changing this sampler also changes the washes and their edges.
     filter_layout: wgpu::BindGroupLayout,
     /// A 1x1 transparent texture in [`filter_layout`](Self::filter_layout),
     /// standing in for the glow target at group 1 wherever there is not one.
@@ -2645,13 +2644,9 @@ impl CompiledLatticeResources {
         progress(startup::Stage::Interface);
 
         // The stand-in light: one transparent texel. It is the format the real
-        // target is in so that one bind group layout serves both, and ONE texel
-        // because `node_paint` clamps its read into the texture's bounds — so
-        // every fragment on screen reads this same nothing, whatever its
-        // coordinate, which is exactly what "no light here" means. The clamp
-        // is the shader's and not the backend's: WGSL lets an out-of-bounds
-        // `textureLoad` answer (0,0,0,1) as readily as zero, and an alpha of
-        // 1 here is every wash laid over black.
+        // target is in so that one bind group layout serves both. The shared
+        // linear sampler uses ClampToEdge, keeping every normalized-coordinate
+        // read on this single transparent texel wherever the fragment stands.
         //
         // RENDER_ATTACHMENT alongside the binding though nothing ever draws
         // into it: that usage is what gives wgpu a way to zero-initialize the
