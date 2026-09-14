@@ -1,6 +1,6 @@
 //! Peak-normalized screen is bounded by the fixed full-strength glow, not by
-//! either tail at the pixel where notes meet. Read the production glow target
-//! directly so rings, shadows, bloom and the background cannot hide a failure.
+//! either tail at the pixel where notes meet. Read the production glow field
+//! with linear reconstruction, excluding rings, shadows, bloom and background.
 
 use super::fixtures::*;
 use crate::gpu_harness::{readback, render_to_texture};
@@ -39,8 +39,8 @@ fn scene(levels: &[f32], gain: f32, separated: bool) -> Scene {
     scene
 }
 
-/// Copy the actual half-float glow to bytes with the production plain blit.
-/// No scene ink or dither is involved; only the final byte quantization remains.
+/// Reconstruct the half-float glow at the requested output size using the
+/// production linear blit. No scene ink or dither hides the sampled field.
 fn glow(shooter: &mut Shooter, scene: &Scene) -> Vec<u8> {
     shooter.shot(scene);
     read_glow(shooter)
@@ -184,6 +184,9 @@ fn a_lone_glow_keeps_its_colour_profile_and_fade() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     for (gain, level) in [(0.15, 1.0), (1.0, 0.25), (2.0, 1.0)] {
         let mut scene = scene(&[level], gain, false);
+        // Read a 256-square glow directly: the scene stays at twice that
+        // resolution. This checks the analytic profile before reconstruction.
+        scene.render_scale = 2.0;
         let colour = [0.8, 0.4, 0.1];
         scene.pitch_lut = [glam::Vec4::new(colour[0], colour[1], colour[2], 1.0);
             harmonigraph_scene::PITCH_LUT_N];

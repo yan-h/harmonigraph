@@ -109,6 +109,7 @@ struct Uniforms {
     pitch_lut: array<vec4<f32>, 64>,
     spectral_lut: array<vec4<f32>, 64>,
     spectrum_color: array<vec4<u32>, 240>,
+    ink_kernel: array<vec4<f32>, 16>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -145,7 +146,7 @@ const SHADOW_REACH_SIGMAS: f32 = 3.0;
 // reading is kept in (`fs_ink_strip`), and the only rate at which anything
 // about the colour of that node's light is resolved.
 //
-// Set against the TIGHTEST lobe the blur is ever asked for, GLOW_LOBE_KAPPA,
+// Set against the TIGHTEST lobe the blur is ever asked for, the CPU ink kernel,
 // whose angular spread is 1/sqrt(kappa): half a radian, near thirty degrees.
 // One texel is 5.6 degrees, five of them to that spread, and a von Mises at
 // that concentration has nothing left past the eighth harmonic — under a
@@ -178,7 +179,7 @@ const INK_STRIP_N: u32 = 64u;
 // second, empty binding.
 @group(1) @binding(0) var ink_strip: texture_2d<f32>;
 
-// Full-resolution statistics, read only by the resolve entry point.
+// Half-resolution statistics, read only by the resolve entry point.
 // Bindings overlap the ink strip's group in other entry points.
 @group(1) @binding(0) var glow_sum: texture_2d<f32>;
 @group(1) @binding(1) var glow_screen: texture_2d<f32>;
@@ -1396,16 +1397,6 @@ fn spectral_ring(
 // ground exactly — weigh nothing (`ink_at`, `fs_ink_strip`, then `glow_ink`).
 // What is left here is the angular tightness that blend is laid out at.
 
-// The TIGHTEST each octave's angular color lobe is drawn at (a von Mises-like
-// falloff): higher is tighter, more separated arcs. Tuned so neighbouring
-// octaves blend softly rather than banding at the widest span, where they sit
-// closest together. A ceiling rather than the concentration itself — the seams
-// are fixed in ANGLE and so converge to a cusp at the node's centre, and a
-// caller holding them to one width asks for less there (`glow_layer`, which
-// eases to the blend's mean instead; the rim width is 1/sqrt of this, so the
-// two move together).
-const GLOW_LOBE_KAPPA: f32 = 4.0;
-
 // An unlit node's own billboard paints no disc, no trail mark and no
 // placeholder. What says the position is there is the MARKER standing at it,
 // which is a separate instance drawn under the home sheet (`fs_plus`) rather
@@ -2420,7 +2411,7 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 // the node once per frame and kept as a strip (see The ink strip below), and
 // the light's draw samples it.
 //
-// Halo quads blend three full-resolution statistics textures. The resolve
+// Halo quads blend three half-resolution statistics textures. The resolve
 // combines linear luminance using screen normalized to a FIXED full-strength peak. An overlap
 // may rise above either tail, but not above that ceiling. Unlike the p-norm,
 // this does not preserve a narrow valley between neighbouring notes.
@@ -2458,34 +2449,10 @@ fn glow_level(carried: f32) -> f32 {
     return clamp(carried, 0.0, 1.0);
 }
 
-/// Where in the glow's target one fragment of the scene pass stands: the pixel
-/// under it, clamped into the texture.
-///
-/// Shared by the draws that read the target back rather than write it — a
-/// node's ink (`node_paint`) and a resting marker's (`plus_paint`). The
-/// COORDINATE and not the light, because the two layers written beside each
-/// other are read at the same pixel and one clamp answers for both.
-///
-/// Clamped rather than trusted to the backend's out-of-bounds rule: WGSL lets a
-/// load past the edge answer (0,0,0,1) as readily as zero, and an alpha of 1
-/// from the 1x1 stand-in would clear every node to black. On the real target it
-/// is a no-op, the target being the attachment's own size.
-///
-/// At reach 0, and on the single-attachment path that has no glow pass at all,
-/// both of those bindings ARE that 1x1 texture and it holds nothing, so each
-/// reader gets no light with no branch to take.
-fn light_coord(frag_pos: vec2<f32>) -> vec2<i32> {
-    let edge = vec2<i32>(textureDimensions(glow_tex)) - vec2<i32>(1, 1);
-    return min(vec2<i32>(frag_pos), edge);
-}
-
-/// How widely a node's own ink is averaged into the colour of its light, as the
-/// concentration that average is taken at (`u.glow.blend`): the bar's bottom is
-/// GLOW_LOBE_KAPPA, where each layer's sectors stay distinct, and its top is no
-/// concentration at all, one tint over the halo. Read by [`fs_ink_blur`], which
-/// is where the average is taken.
-fn glow_blend_kappa() -> f32 {
-    return GLOW_LOBE_KAPPA * (1.0 - clamp(u.glow.blend, 0.0, 1.0));
+/// Normalized scene position, shared by ring and marker wash. The sampler
+/// clamps edges and the transparent 1x1 stand-in answers zero with glow off.
+fn light_coord(frag_pos: vec2<f32>) -> vec2<f32> {
+    return frag_pos / max(u.nebula.target_size, vec2<f32>(1.0));
 }
 
 /// One layer's angular soft-band width at radius `r`, in the node's uv: the arc
@@ -2763,19 +2730,18 @@ fn vs_ink_blur(
 /// of itself to keep by not.
 ///
 /// One column PAST the strip is the mean — the same accumulation with the lobe
-/// left flat, which is what `kappa = 0` makes of it, so the two are one loop
+/// left flat with weight 1, so the two are one loop
 /// rather than a second pass over the same texels.
 @fragment
 fn fs_ink_blur(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let col = i32(pos.x);
     let row = i32(pos.y);
-    let kappa = select(glow_blend_kappa(), 0.0, col >= i32(INK_STRIP_N));
     var rgb = vec3<f32>(0.0);
     var wsum = 0.0;
     var lobes = 0.0;
     for (var i = 0u; i < INK_STRIP_N; i = i + 1u) {
-        let off = (f32(i) - f32(col)) * (TAU / f32(INK_STRIP_N));
-        let lobe = exp(kappa * (cos(off) - 1.0));
+        let offset = u32(abs(i32(i) - min(col, i32(INK_STRIP_N) - 1)));
+        let lobe = select(u.ink_kernel[offset / 4u][offset % 4u], 1.0, col >= i32(INK_STRIP_N));
         let ink = textureLoad(ink_strip, vec2<i32>(i32(i), row), 0);
         rgb = rgb + ink.xyz * lobe;
         wsum = wsum + ink.w * lobe;
@@ -3071,17 +3037,18 @@ fn fs_glow_resolve(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> 
         return vec4<f32>(0.0);
     }
     let pixel = vec2<i32>(pos.xy);
+    let scene_pixel = pos.xy * u.nebula.target_size / vec2<f32>(textureDimensions(glow_sum));
     let sum = textureLoad(glow_sum, pixel, 0);
     let bounded = textureLoad(glow_screen, pixel, 0).xy;
     let accumulated = textureLoad(glow_accumulated, pixel, 0);
     // The gamma screen is also the exact sole contribution (up to target
     // quantization), avoiding a nonlinear round trip for isolated notes.
     if sum.w <= 1.0 {
-        return nebula_light(accumulated, pos.xy);
+        return nebula_light(accumulated, scene_pixel);
     }
     let accumulation = clamp(u.glow.accumulation, 0.0, 1.0);
     if accumulation >= 1.0 {
-        return nebula_light(accumulated, pos.xy);
+        return nebula_light(accumulated, scene_pixel);
     }
     let peak = clamp(GLOW_BASE * u.glow.strength, 0.0, 1.0);
     let peak_luminance = glow_linear(vec3<f32>(peak)).x;
@@ -3091,7 +3058,7 @@ fn fs_glow_resolve(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> 
     let total = dot(rgb, GLOW_LUMINANCE);
     let light = min(screen, 1.0) * peak_luminance;
     if total <= 0.0 {
-        return nebula_light(mix(vec4<f32>(0.0, 0.0, 0.0, peak * coverage), accumulated, accumulation), pos.xy);
+        return nebula_light(mix(vec4<f32>(0.0, 0.0, 0.0, peak * coverage), accumulated, accumulation), scene_pixel);
     }
     var linear = rgb * (light / total);
     let largest = max(max(linear.x, linear.y), linear.z);
@@ -3101,7 +3068,7 @@ fn fs_glow_resolve(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> 
     }
     let colour = min(glow_gamma(max(linear, vec3<f32>(0.0))), vec3<f32>(peak));
     let alpha = max(peak * coverage, max(max(colour.x, colour.y), colour.z));
-    return nebula_light(mix(vec4<f32>(colour, min(alpha, peak)), accumulated, accumulation), pos.xy);
+    return nebula_light(mix(vec4<f32>(colour, min(alpha, peak)), accumulated, accumulation), scene_pixel);
 }
 
 /// What a resting marker paints; see [`node_paint`] for why the entry points

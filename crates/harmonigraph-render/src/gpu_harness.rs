@@ -95,8 +95,8 @@ pub(crate) fn readback(
     texture: &wgpu::Texture,
     size: [u32; 2],
 ) -> Vec<u8> {
-    let bytes_per_row = size[0] * 4; // 256-wide RGBA rows are aligned
-    assert_eq!(bytes_per_row % 256, 0, "test sizes keep rows aligned");
+    let row_bytes = size[0] * 4;
+    let bytes_per_row = row_bytes.div_ceil(256) * 256;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("parity_readback"),
         size: (bytes_per_row * size[1]) as u64,
@@ -120,7 +120,15 @@ pub(crate) fn readback(
     let slice = buffer.slice(..);
     slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
     device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-    slice.get_mapped_range().to_vec()
+    let mapped = slice.get_mapped_range();
+    if row_bytes == bytes_per_row {
+        return mapped.to_vec();
+    }
+    let mut pixels = Vec::with_capacity((row_bytes * size[1]) as usize);
+    for row in mapped.chunks_exact(bytes_per_row as usize) {
+        pixels.extend_from_slice(&row[..row_bytes as usize]);
+    }
+    pixels
 }
 
 /// Read an `R16Float` texture without row padding in the returned bytes.

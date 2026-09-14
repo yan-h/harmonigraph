@@ -1,4 +1,4 @@
-//! Full-resolution directional halo quads and hardware-blended overlap statistics.
+//! Half-resolution directional halo quads and hardware-blended overlap statistics.
 
 use super::*;
 
@@ -188,5 +188,32 @@ impl GlowTarget {
 impl LatticeCallback {
     pub(super) fn glow_draws(&self) -> bool {
         self.uniforms.glow.reach > 0.0
+    }
+}
+
+/// Shared angular weights, keyed only by sanitized Color Blend. The strip
+/// resolution is a compile-time constant; camera, notes, time, target size,
+/// and row capacity do not affect this table or invalidate color history.
+#[derive(Default)]
+pub(super) struct InkKernel {
+    blend: Option<f32>,
+    weights: [Float4; INK_STRIP_N as usize / 4],
+}
+
+impl InkKernel {
+    pub(super) fn weights(&mut self, blend: f32) -> [Float4; INK_STRIP_N as usize / 4] {
+        let blend = blend.clamp(0.0, 1.0);
+        if self.blend != Some(blend) {
+            // Color Blend runs from a von Mises concentration of 4 (roughly
+            // half a radian wide) to the uniform circular mean.
+            let kappa = 4.0 * (1.0 - blend);
+            for i in 0..INK_STRIP_N as usize {
+                let distance = i.min(INK_STRIP_N as usize - i);
+                let off = distance as f32 * (std::f32::consts::TAU / INK_STRIP_N as f32);
+                self.weights[i / 4].0[i % 4] = (kappa * (off.cos() - 1.0)).exp();
+            }
+            self.blend = Some(blend);
+        }
+        self.weights
     }
 }

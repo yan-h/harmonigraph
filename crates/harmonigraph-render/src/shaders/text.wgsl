@@ -495,15 +495,10 @@ fn fs_fill(in: VertexOut) -> @location(0) vec4<f32> {
     return in.fill * cov;
 }
 
-/// The light at a glyph's own pixel: [`glow_light`] with the coordinate held
-/// inside the texture.
-///
-/// The glow target is the scene target's size, so a fragment of this pass
-/// stands at one of its texels, and the clamp is what keeps a rounding at the
-/// last row from reading nothing.
-fn glyph_light(coord: vec2<i32>) -> vec4<f32> {
-    let edge = vec2<i32>(textureDimensions(glow_tex)) - vec2<i32>(1, 1);
-    return glow_light(clamp(coord, vec2<i32>(0, 0), edge));
+/// Glyph positions use pane points, so this normalized coordinate agrees
+/// with the scene and composite independently of DPI and glow resolution.
+fn glyph_light(points: vec2<f32>) -> vec4<f32> {
+    return glow_light(points / locals.screen_points);
 }
 
 /// The lattice's own glyphs: [`fs_fill`]'s ink, washed by the light it stands
@@ -541,8 +536,7 @@ fn fs_fill_lit(in: VertexOut) -> SplitOut {
     let visibility = node_visibility(in.who, in.points, locals.node_occlusion);
     let ink = in.fill * cov;
     let alpha = ink.a * visibility;
-    let coord = vec2<i32>(in.position.xy);
-    let light = glyph_light(coord);
+    let light = glyph_light(in.points);
     return SplitOut(
         vec4<f32>(0.0, 0.0, 0.0, alpha),
         vec4<f32>(wash_over(ink.rgb, ink.a, light.rgb, 1.0) * visibility, alpha),

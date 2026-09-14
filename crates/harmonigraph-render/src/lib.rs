@@ -934,12 +934,11 @@ struct CompiledLatticeResources {
     /// One texture + the shared sampler, which is what every single-texture
     /// reader here binds: each pass of the bloom chain, and the glow target —
     /// taken at group 0 by the composite that lays the light down and at group
-    /// 1 by the node and marker pipelines, whose washes read the same field.
+    /// 1 by the node, marker and label pipelines, whose washes read the same field.
     ///
-    /// The glow reads its texture with `textureLoad` and the bloom samples
-    /// its own, so the sampler at 1 is bound by both and spent by one. One
-    /// layout rather than two of the same shape: a second would have to be
-    /// kept in step with this for nothing.
+    /// Glow and bloom share linear filtering with ClampToEdge. Every glow
+    /// reader uses normalized coordinates to reconstruct the half-resolution
+    /// field, so changing this sampler also changes the washes and their edges.
     filter_layout: wgpu::BindGroupLayout,
     /// A 1x1 transparent texture in [`filter_layout`](Self::filter_layout),
     /// standing in for the glow target at group 1 wherever there is not one.
@@ -1311,6 +1310,7 @@ struct PaneBuffers {
     /// independently of the viewport targets. A release can have no current
     /// ink, so resizing must retain these rows rather than reseeding them.
     ink_history: Option<InkStrip>,
+    ink_kernel: lattice_node_glow::InkKernel,
     offscreen: Option<Offscreen>,
 }
 
@@ -1376,8 +1376,8 @@ struct LatticeBloom {
 }
 
 /// Where a frame's node light is assembled before any of it reaches the
-/// picture: one transparent premultiplied colour texture at the scene's own
-/// size, plus the bind group its readers take it through.
+/// picture: one transparent premultiplied colour texture at half the scene's
+/// width and height, plus the bind group its readers take it through.
 ///
 /// A target of its own, rather than the glow drawn straight into the scene
 /// pass, because a node has to sample the finished light to paint its own
@@ -1388,7 +1388,7 @@ struct LatticeBloom {
 ///
 /// Created and dropped as the Reach bar crosses 0, independently of the resize
 /// that rebuilds everything around it: the two changes have nothing to do with
-/// each other, and a target left allocated at reach 0 is a scene-sized texture
+/// each other, and a target left allocated at reach 0 is a glow-sized texture
 /// held for a feature that is off.
 struct GlowTarget {
     statistics: [wgpu::TextureView; 3],
@@ -1789,7 +1789,7 @@ impl Offscreen {
         );
     }
 
-    /// Make this pane's viewport-sized light target exist while `want` says
+    /// Make this pane's half-resolution light target exist while `want` says
     /// so. The separate pane history is maintained by the caller under the
     /// same guard; recreating this image never allocates or transfers a strip.
     fn ensure_glow(&mut self, device: &wgpu::Device, shared: &OffscreenShared<'_>, want: bool) {
@@ -1841,13 +1841,10 @@ impl Offscreen {
 }
 
 impl GlowTarget {
-    /// `size` is the SCENE's own pixel size, so the light is drawn at exactly
-    /// the resolution the node bodies are and the composite is a texel-aligned
-    /// blit. That is what lets `node_paint` read it back with a `textureLoad`
-    /// at its own fragment's coordinate: a target at any fraction of the scene
-    /// would have to be sampled, and a filtered read of the light a node's ink
-    /// is washed with is a blur nobody asked for.
+    /// Half the scene's width and height, rounded up for odd-sized panes.
+    /// All readers reconstruct the same filtered field in normalized coordinates.
     fn new(device: &wgpu::Device, shared: &OffscreenShared<'_>, size: [u32; 2]) -> Self {
+        let size = size.map(|n| n.div_ceil(2).max(1));
         let OffscreenShared { format, filter_layout, sampler, .. } = *shared;
         let view = device
             .create_texture(&wgpu::TextureDescriptor {
@@ -2647,13 +2644,9 @@ impl CompiledLatticeResources {
         progress(startup::Stage::Interface);
 
         // The stand-in light: one transparent texel. It is the format the real
-        // target is in so that one bind group layout serves both, and ONE texel
-        // because `node_paint` clamps its read into the texture's bounds — so
-        // every fragment on screen reads this same nothing, whatever its
-        // coordinate, which is exactly what "no light here" means. The clamp
-        // is the shader's and not the backend's: WGSL lets an out-of-bounds
-        // `textureLoad` answer (0,0,0,1) as readily as zero, and an alpha of
-        // 1 here is every wash laid over black.
+        // target is in so that one bind group layout serves both. The shared
+        // linear sampler uses ClampToEdge, keeping every normalized-coordinate
+        // read on this single transparent texel wherever the fragment stands.
         //
         // RENDER_ATTACHMENT alongside the binding though nothing ever draws
         // into it: that usage is what gives wgpu a way to zero-initialize the
@@ -2935,6 +2928,7 @@ impl LatticeResources {
                 glyph_bind_group: None,
                 glyph_sheet_keys: (u64::MAX, u64::MAX, u64::MAX),
                 ink_history: None,
+                ink_kernel: Default::default(),
                 offscreen: None,
             }
         });

@@ -510,6 +510,7 @@ impl LatticeCallback {
         // is what maps a fragment's place on a cross into a cell no cross
         // placed (`vs_plus`).
         let mut uniforms = self.uniforms;
+        uniforms.ink_kernel = pane.ink_kernel.weights(uniforms.glow.blend);
         // Whether this frame contributes any light to the statistics targets.
         uniforms.glow.lit = f32::from(*has_light);
         if let Some(target) = &pane.offscreen {

@@ -28,33 +28,15 @@
 // The finished light: every node's halo screened together into one field
 // ([`glow_light`] is how it is read).
 //
-// Read with `textureLoad` and never a sampler: the target is created at the
-// scene's own pixel size, so it is 1:1 with the attachment being written and any
-// filtering would be a blur nobody asked for. It also takes no derivative, which
-// is what keeps it out of the early-out parity test's way.
-//
-// An including module may declare a SECOND texture at group 1 binding 0 for an
-// entry point that reads that one instead (lattice.wgsl's `ink_strip`): a
-// binding collision is diagnosed per entry point, so the two share the slot for
-// as long as no entry point reads both, and one that ever wanted both would fail
-// to compile, loudly, at pipeline creation.
+// Readers use normalized pane coordinates and explicit-level linear filtering,
+// matching the background composite even when glow has a smaller resolution.
+// Explicit level zero also keeps sampling valid inside divergent ink branches.
+// Other entry points may share these slots if they never read both resources.
 @group(1) @binding(0) var glow_tex: texture_2d<f32>;
+@group(1) @binding(1) var glow_sampler: sampler;
 
-// The finished light at a pixel of the glow's target, premultiplied as the
-// pass wrote it.
-//
-// Every reader of the target takes it through here, so that ink and the
-// picture it stands in cannot come to read the light differently. The
-// composite that lays the field down keeps its own copy (blit.wgsl's
-// `fs_glow_over`) and is the one exception, that pass SAMPLING the target
-// where this loads it.
-//
-// `coord` is taken as given. Where the pixel comes from is the caller's — a
-// scene fragment's own position (lattice.wgsl's `light_coord`), a glyph's
-// rounded one (text.wgsl's `glyph_light`) — and the two hold it inside the
-// texture on their own terms.
-fn glow_light(coord: vec2<i32>) -> vec4<f32> {
-    return textureLoad(glow_tex, coord, 0);
+fn glow_light(uv: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(glow_tex, glow_sampler, uv, 0.0);
 }
 
 // `share` of `light`, laid over ink already premultiplied by `alpha`. Every
