@@ -189,7 +189,6 @@ pub fn render(
         // whole piece at once, not filling in as the playhead passes over it.
         if let Some(ws) = state.runtime.whole_song.as_mut() {
             ws.roll = replay.full_roll();
-            crate::scratch::apply(ws, &mut state.appearance.spectrum);
         }
         if let (Some(ws), Some(audio)) = (state.runtime.whole_song.as_ref(), audio.as_deref()) {
             if let Some(warning) = empty_window_warning(
@@ -919,54 +918,5 @@ mod tests {
             assert!(a == b, "whole-song frame {i} differs between runs");
         }
         assert!(first[0] != first[first.len() / 2], "the playhead should sweep across the frame");
-    }
-
-    /// SCRATCH: one frame of a real take to a PNG. `HG_TAKE` names the take
-    /// (its .wav sits beside it), `HG_OUT` the PNG; see `scratch.rs` for the
-    /// prototype's own variables. `HG_START`/`HG_SPAN` pick the window.
-    #[test]
-    #[ignore]
-    fn scratch_peaks_png() {
-        let take_path = std::env::var("HG_TAKE").unwrap();
-        let out = std::env::var("HG_OUT").unwrap();
-        let take = Take::read(&take_path).unwrap();
-        let mut audio = crate::wav::read(take_path.replace(".take", ".wav")).unwrap();
-        let start = crate::scratch::env_f("HG_START", 0.0) as f64;
-        let span = crate::scratch::env_f("HG_SPAN", audio.seconds() as f32) as f64;
-        let mut settings = settings();
-        settings.size = [
-            crate::scratch::env_f("HG_W", 1600.0) as u32,
-            crate::scratch::env_f("HG_H", 1300.0) as u32,
-        ];
-        settings.pixels_per_point = 2.0;
-        settings.start = start;
-        settings.end = start + span;
-        settings.fps = 1.0 / span;
-        settings.whole_song_spectrogram = true;
-        settings.layout = Layout::preset("spectral").unwrap();
-        settings.layout.background = (24, 25, 29);
-        let mut replay = Replay::new(take);
-        let mut appearance = appearance_for(replay.take(), None);
-        // The shipping Partials mode, set on the parsed appearance so the
-        // frame goes through the real config rather than a rewritten column
-        // set. Its three numbers ride along, since comparing them is the whole
-        // reason to render one of these.
-        if std::env::var("HG_DETAIL").as_deref() == Ok("partials") {
-            let spectrum = &mut appearance.spectrum;
-            spectrum.detail = harmonigraph_ui::SpectrumDetail::Partials;
-            spectrum.stroke_cents = crate::scratch::env_f("HG_STROKE_CENTS", spectrum.stroke_cents);
-            spectrum.prominence_db = crate::scratch::env_f("HG_PROM_DB", spectrum.prominence_db);
-            spectrum.atmosphere.cloud =
-                crate::scratch::env_f("HG_CLOUD", spectrum.atmosphere.cloud);
-        }
-        let mut frames = Vec::new();
-        render(&mut replay, Some(&mut audio), &settings, appearance, |bytes| {
-            frames.push(bytes.to_vec());
-            Ok(true)
-        })
-        .unwrap();
-        let [w, h] = settings.size;
-        image::save_buffer(&out, &frames[0], w, h, image::ColorType::Rgba8).unwrap();
-        eprintln!("wrote {out} ({} frames)", frames.len());
     }
 }
