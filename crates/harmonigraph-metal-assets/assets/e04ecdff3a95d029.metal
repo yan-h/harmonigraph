@@ -24,6 +24,14 @@ struct Locals {
     uint capacity;
     uint first_slot;
     uint run_slabs;
+    uint detail;
+    float stroke_sigma;
+    float prominence_steps;
+    uint peak_stride;
+    float gather_sigma_slabs;
+    uint peak_header;
+    uint peak_bands;
+    float peak_band;
     uint _pad0_;
     uint _pad1_;
     uint _pad2_;

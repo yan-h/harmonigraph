@@ -24,6 +24,14 @@ struct Locals {
     uint capacity;
     uint first_slot;
     uint run_slabs;
+    uint detail;
+    float stroke_sigma;
+    float prominence_steps;
+    uint peak_stride;
+    float gather_sigma_slabs;
+    uint peak_header;
+    uint peak_bands;
+    float peak_band;
     uint _pad0_;
     uint _pad1_;
     uint _pad2_;
@@ -44,9 +52,9 @@ uint stored(
     constant _mslBufferSizes& _buffer_sizes
 ) {
     uint _e4 = locals.stride;
-    uint i = (slot * _e4) + bucket;
-    uint _e11 = grid[metal::min(unsigned(i >> 2u), (_buffer_sizes.size1 - 0 - 4) / 4)];
-    return (_e11 >> ((i & 3u) * 8u)) & 255u;
+    uint i_1 = (slot * _e4) + bucket;
+    uint _e11 = grid[metal::min(unsigned(i_1 >> 2u), (_buffer_sizes.size1 - 0 - 4) / 4)];
+    return (_e11 >> ((i_1 & 3u) * 8u)) & 255u;
 }
 
 float bucket_x(
@@ -76,8 +84,8 @@ float bucket_level(
     float _e17 = locals.level0_;
     float _e20 = locals.level_per_step;
     float _e25 = locals.level_per_midi;
-    float level = (_e17 + (_e20 * v)) + (_e25 * midi_1);
-    return metal::clamp(level, 0.0, 1.0);
+    float level_1 = (_e17 + (_e20 * v)) + (_e25 * midi_1);
+    return metal::clamp(level_1, 0.0, 1.0);
 }
 
 uint naga_f2u32(float value) {
@@ -182,37 +190,51 @@ float heatmap_level(
     return metal::mix(_e46, _e48, fx);
 }
 
-metal::float4 heatmap_color(
-    VertexOut in_2,
-    constant Locals& locals,
-    device type_3 const& grid,
-    metal::texture2d<float, metal::access::sample> lut,
-    constant _mslBufferSizes& _buffer_sizes
-) {
-    float _e1 = heatmap_level(in_2, locals, grid, _buffer_sizes);
-    uint levels = metal::uint2(lut.get_width(), lut.get_height()).x;
-    uint i_1 = metal::min(naga_f2u32(_e1 * static_cast<float>(levels)), levels - 1u);
-    uint clamped_lod_e15 = metal::min(uint(0), lut.get_num_mip_levels() - 1);
-    metal::float4 c = lut.read(metal::min(metal::uint2(metal::uint2(i_1, 0u)), metal::uint2(lut.get_width(clamped_lod_e15), lut.get_height(clamped_lod_e15)) - 1), clamped_lod_e15);
-    return metal::float4(c.xyz, 1.0);
-}
-
-struct fs_heatmap_gammaInput {
+struct fs_density_sourceInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_heatmap_gammaOutput {
+struct fs_density_sourceOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_heatmap_gammaOutput fs_heatmap_gamma(
-  fs_heatmap_gammaInput varyings [[stage_in]]
+fragment fs_density_sourceOutput fs_density_source(
+  fs_density_sourceInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , constant Locals& locals [[buffer(0)]]
 , device type_3 const& grid [[buffer(1)]]
-, metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
-, constant _mslBufferSizes& _buffer_sizes [[buffer(2)]]
+, constant _mslBufferSizes& _buffer_sizes [[buffer(3)]]
 ) {
     const VertexOut in = { position, varyings.slab, varyings.t };
-    metal::float4 _e1 = heatmap_color(in, locals, grid, lut, _buffer_sizes);
-    return fs_heatmap_gammaOutput { _e1 };
+    float level = 0.0;
+    uint i = 0u;
+    VertexOut tap = {};
+    float width = metal::fwidth(in.slab);
+    uint2 loop_bound_1 = uint2(4294967295u);
+    bool loop_init_1 = true;
+    while(true) {
+        if (metal::all(loop_bound_1 == uint2(0u))) { break; }
+        loop_bound_1 -= uint2(loop_bound_1.y == 0u, 1u);
+        if (!loop_init_1) {
+            uint _e25 = i;
+            i = _e25 + 1u;
+        }
+        loop_init_1 = false;
+        uint _e7 = i;
+        if (_e7 < 4u) {
+        } else {
+            break;
+        }
+        {
+            tap = in;
+            float _e12 = tap.slab;
+            uint _e13 = i;
+            tap.slab = _e12 + (((static_cast<float>(_e13) * 0.25) - 0.375) * width);
+            float _e21 = level;
+            VertexOut _e22 = tap;
+            float _e23 = heatmap_level(_e22, locals, grid, _buffer_sizes);
+            level = _e21 + _e23;
+        }
+    }
+    float _e28 = level;
+    return fs_density_sourceOutput { metal::float4(_e28 * 0.25, 0.0, 0.0, 1.0) };
 }

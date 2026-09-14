@@ -4,6 +4,34 @@
 
 using metal::uint;
 
+struct Locals {
+    metal::float2 origin_points;
+    metal::float2 viewport_points;
+    float min_midi;
+    float span;
+    float spectrum_min_midi;
+    float bins_per_semitone;
+    float level0_;
+    float level_per_step;
+    float level_per_midi;
+    uint rows;
+    uint bins;
+    uint stride;
+    uint capacity;
+    uint first_slot;
+    uint run_slabs;
+    uint detail;
+    float stroke_sigma;
+    float prominence_steps;
+    uint peak_stride;
+    float gather_sigma_slabs;
+    uint peak_header;
+    uint peak_bands;
+    float peak_band;
+    uint _pad0_;
+    uint _pad1_;
+    uint _pad2_;
+};
 struct VertexOut {
     metal::float4 position;
     float slab;
@@ -16,6 +44,10 @@ struct Cloud {
     metal::float2 step;
     float diffusion;
     float ppp;
+    float cloud;
+    float _pad0_;
+    float _pad1_;
+    float _pad2_;
 };
 
 float baked_density(
@@ -66,6 +98,23 @@ metal::float4 density_color(
     return metal::float4(metal::mix(a, b, metal::fract(x)), 1.0);
 }
 
+float backdrop_level(
+    VertexOut in_1,
+    constant Locals& locals,
+    metal::texture2d<float, metal::access::sample> close_light,
+    metal::sampler cloud_sampler,
+    constant Cloud& cloud
+) {
+    float _e3 = baked_density(in_1.position.xy, close_light, cloud_sampler, cloud);
+    uint _e6 = locals.detail;
+    if (_e6 == 1u) {
+        float _e11 = cloud.cloud;
+        return _e11 * _e3;
+    }
+    float _e14 = diffused_level(0.0, _e3, cloud);
+    return _e14;
+}
+
 struct fs_cloud_backdrop_gammaInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
@@ -76,14 +125,14 @@ struct fs_cloud_backdrop_gammaOutput {
 fragment fs_cloud_backdrop_gammaOutput fs_cloud_backdrop_gamma(
   fs_cloud_backdrop_gammaInput varyings [[stage_in]]
 , metal::float4 position_1 [[position]]
+, constant Locals& locals [[buffer(0)]]
 , metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
 , metal::texture2d<float, metal::access::sample> close_light [[texture(1)]]
 , metal::sampler cloud_sampler [[sampler(0)]]
-, constant Cloud& cloud [[buffer(2)]]
+, constant Cloud& cloud [[buffer(3)]]
 ) {
     const VertexOut in = { position_1, varyings.slab, varyings.t };
-    float _e4 = baked_density(in.position.xy, close_light, cloud_sampler, cloud);
-    float _e5 = diffused_level(0.0, _e4, cloud);
-    metal::float4 _e6 = density_color(_e5, lut);
-    return fs_cloud_backdrop_gammaOutput { _e6 };
+    float _e1 = backdrop_level(in, locals, close_light, cloud_sampler, cloud);
+    metal::float4 _e2 = density_color(_e1, lut);
+    return fs_cloud_backdrop_gammaOutput { _e2 };
 }
