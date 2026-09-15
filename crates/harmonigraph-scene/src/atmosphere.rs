@@ -10,6 +10,15 @@ pub enum SpectrogramStyle {
     #[default]
     Lava,
     Clouds,
+    Puffy,
+}
+
+impl SpectrogramStyle {
+    /// Cloud materials transport a full scalar field and animate independently
+    /// of new audio columns, including when the diffusion controls are zero.
+    pub fn is_cloud(self) -> bool {
+        matches!(self, Self::Clouds | Self::Puffy)
+    }
 }
 
 /// Independent spectrogram diffusion, analyzer shading and note light.

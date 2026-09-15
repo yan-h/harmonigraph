@@ -397,6 +397,38 @@ fn cloud_density(position: vec2<f32>) -> f32 {
     return mix(body, filament, 0.35 * cloud.motion.w)
         * mix(1.0, density, cloud.motion.w) * breath;
 }
+// A hierarchy of connected billows, with broad weather underneath smaller
+// irregular folds. Unlike isolated radial kernels, this has no repeated
+// circular boundary or common puff size for the eye to pick out.
+fn puffy_noise(p: vec2<f32>) -> f32 {
+    return nebula_noise(p) * 0.55
+        + nebula_noise(p * 2.03 + vec2<f32>(5.2, 1.7)) * 0.30
+        + nebula_noise(p * 4.13 + vec2<f32>(1.3, 9.1)) * 0.15;
+}
+
+fn puffy_density(position: vec2<f32>) -> f32 {
+    let point = position / cloud.ppp;
+    let cell_size = max(cloud.field.w, 1.0) * cloud.motion.z / 5.0;
+    let p = (point - cloud.field.xy - cloud.field.zw * 0.5) / cell_size;
+    let drift = cloud.motion.xy * 0.6;
+    let broad = nebula_noise(p * 0.37 + drift * 0.45);
+    let shoulder = vec2<f32>(
+        nebula_noise(p * 0.65 + drift),
+        nebula_noise(p * 0.65 + vec2<f32>(8.3, 2.7) - drift),
+    ) - 0.5;
+    let phase = p.x * 0.43 + p.y * 0.37 + broad;
+    let wave = 0.5 + sin(cloud.breath.x + phase) / 3.0
+        + sin(cloud.breath.y + phase * 1.7) / 6.0;
+    let swell = cloud.breath.z * (wave - 0.5);
+    let inflated = p * (1.0 - swell * 0.22) + shoulder * 0.9 + drift;
+    let billow = puffy_noise(inflated * (0.65 + broad * 0.25));
+    let density = 0.15 + 1.55 * smoothstep(0.28, 0.69, broad * 0.27 + billow * 0.73);
+    let carried = point + shoulder * cell_size * cloud.motion.w * (0.95 + swell * 0.4);
+    // The large soft body stays connected while its interior grows folds of
+    // different sizes. Breathing expands those folds and changes their color.
+    return cloud_sample(carried) * mix(1.0, density, cloud.motion.w) * (1.0 + swell * 0.45);
+}
+
 fn density_color(raw_level: f32) -> vec4<f32> {
     let level = style_level(raw_level);
     // Interpolate the authored palette's center samples only after diffusion.
@@ -414,6 +446,7 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 }
 fn backdrop_color(position: vec2<f32>) -> vec4<f32> {
     if cloud.style == 3u { return density_color(cloud_density(position)); }
+    if cloud.style == 4u { return density_color(puffy_density(position)); }
     return density_color(smoothed_level(0.0, baked_density(position)));
 }
 // The full region shares one scalar material. Clouds may carry measured
@@ -430,6 +463,7 @@ fn fs_cloud_backdrop_linear(in: VertexOut) -> @location(0) vec4<f32> {
 }
 fn cloud_color(in: VertexOut) -> vec4<f32> {
     if cloud.style == 3u { return density_color(cloud_density(in.position.xy)); }
+    if cloud.style == 4u { return density_color(puffy_density(in.position.xy)); }
     return density_color(smoothed_level(heatmap_level(in), baked_density(in.position.xy)));
 }
 @fragment

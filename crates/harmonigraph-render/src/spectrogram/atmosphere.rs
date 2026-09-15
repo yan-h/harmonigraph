@@ -22,17 +22,33 @@ pub struct SpectrogramAtmosphere {
     pub points_per_ms: f32,
 }
 
-/// Clouds transports an artistic intensity image. Bound its four R16 targets
+/// Cloud styles transport an artistic intensity image. Bound the four R16 targets
 /// to 8 MiB per pane, including zero-softness Retina and 4K views. The source
 /// integrates the entire covered FFT footprint when reduced to this limit.
 pub(super) fn source_limits(
     pixels: [u32; 2],
     style: harmonigraph_scene::SpectrogramStyle,
 ) -> [u32; 2] {
-    if style == harmonigraph_scene::SpectrogramStyle::Clouds {
+    if style.is_cloud() {
         pixels.map(|axis| axis.min(1024))
     } else {
         pixels
+    }
+}
+
+/// Puffy starts with an isotropic soft body at the size of its broad billows. Both
+/// allocation and sampling use this same radius so changing size cannot
+/// leave the filter undersampled. Authored softness can broaden it further.
+fn radius_points(atmosphere: SpectrogramAtmosphere) -> [f32; 2] {
+    let settings = atmosphere.settings.sanitized();
+    let pitch = settings.pitch_softness * atmosphere.points_per_cent;
+    let time = settings.time_softness * atmosphere.points_per_ms;
+    let radius = if atmosphere.pitch_vertical { [time, pitch] } else { [pitch, time] };
+    if settings.style == harmonigraph_scene::SpectrogramStyle::Puffy {
+        let body = atmosphere.region.height() * settings.cloud_scale * settings.cloud_depth * 0.032;
+        radius.map(|axis| axis.max(body))
+    } else {
+        radius
     }
 }
 
@@ -45,15 +61,11 @@ pub(super) fn source_size(
     atmosphere: SpectrogramAtmosphere,
 ) -> [u32; 2] {
     let settings = atmosphere.settings.sanitized();
-    if settings.style != harmonigraph_scene::SpectrogramStyle::Clouds
-        && settings.pitch_softness == 0.0
-        && settings.time_softness == 0.0
+    if !settings.style.is_cloud() && settings.pitch_softness == 0.0 && settings.time_softness == 0.0
     {
         return [1, 1];
     }
-    let pitch = settings.pitch_softness * atmosphere.points_per_cent * ppp;
-    let time = settings.time_softness * atmosphere.points_per_ms * ppp;
-    let sigma = if atmosphere.pitch_vertical { [time, pitch] } else { [pitch, time] };
+    let sigma = radius_points(atmosphere).map(|axis| axis * ppp);
     let limits = source_limits(pixels, settings.style);
     std::array::from_fn(|axis| {
         let base = limits[axis];
@@ -408,9 +420,7 @@ impl Targets {
             (read.rows as f32 * self.size[axis] as f32 / visible_pixels).round().max(1.0) as u32;
         queue.write_buffer(&self.source_uniform, 0, bytemuck::bytes_of(&read));
         let settings = atmosphere.settings.sanitized();
-        let pitch = settings.pitch_softness * atmosphere.points_per_cent;
-        let time = settings.time_softness * atmosphere.points_per_ms;
-        let radius = if pitch_vertical { [time, pitch] } else { [pitch, time] };
+        let radius = radius_points(atmosphere);
         let drift_time = atmosphere.now * f64::from(settings.cloud_speed);
         let breath_time = atmosphere.now * f64::from(settings.breath_speed);
         let uniforms = Uniforms {
@@ -447,6 +457,7 @@ impl Targets {
                 harmonigraph_scene::SpectrogramStyle::Blur => 1,
                 harmonigraph_scene::SpectrogramStyle::Lava => 2,
                 harmonigraph_scene::SpectrogramStyle::Clouds => 3,
+                harmonigraph_scene::SpectrogramStyle::Puffy => 4,
             },
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));

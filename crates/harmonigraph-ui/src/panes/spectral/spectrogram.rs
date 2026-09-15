@@ -280,7 +280,7 @@ pub(crate) fn draw_spectrogram(
     let region = egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
     state.surfaces.clouds_animating |= d_far > d_near
         && region.intersect(painter.clip_rect()).is_positive()
-        && atmosphere.style == harmonigraph_scene::SpectrogramStyle::Clouds
+        && atmosphere.style.is_cloud()
         && ((atmosphere.cloud_depth > 0.0 && atmosphere.cloud_speed > 0.0)
             || (atmosphere.breath_amount > 0.0 && atmosphere.breath_speed > 0.0));
     // The painter's own clip is what bounds the heatmap: the quads reach past

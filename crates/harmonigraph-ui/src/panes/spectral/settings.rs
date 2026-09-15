@@ -123,11 +123,8 @@ pub(crate) fn spectrum_settings_pane(
             (SpectrogramStyle::Plain, "Plain", "Measured power without styling"),
             (SpectrogramStyle::Blur, "Blur", "Smooth the whole intensity field"),
             (SpectrogramStyle::Lava, "Lava", "Smooth intensity terraces"),
-            (
-                SpectrogramStyle::Clouds,
-                "Clouds",
-                "Drifting, breathing clouds across the whole field",
-            ),
+            (SpectrogramStyle::Clouds, "Clouds", "Flowing, wispy clouds with morphing colors"),
+            (SpectrogramStyle::Puffy, "Puffy", "Rounded cloud masses that swell and breathe"),
         ],
     );
     if atmosphere.style != SpectrogramStyle::Plain {
@@ -138,7 +135,7 @@ pub(crate) fn spectrum_settings_pane(
             .unit(1.0, " ms")
             .show(ui);
         ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Spread").percent().show(ui);
-        if atmosphere.style == SpectrogramStyle::Clouds {
+        if atmosphere.style.is_cloud() {
             ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Cloud shaping")
                 .percent()
                 .show(ui);

@@ -680,11 +680,8 @@ impl CallbackTrait for SpectrogramCallback {
             .filter(|a| {
                 a.settings.style != harmonigraph_scene::SpectrogramStyle::Plain
                     && ((a.settings.pitch_softness > 0.0 || a.settings.time_softness > 0.0)
-                        || matches!(
-                            a.settings.style,
-                            harmonigraph_scene::SpectrogramStyle::Lava
-                                | harmonigraph_scene::SpectrogramStyle::Clouds
-                        ))
+                        || a.settings.style == harmonigraph_scene::SpectrogramStyle::Lava
+                        || a.settings.style.is_cloud())
             })
         {
             let viewport = egui::epaint::ViewportInPixels::from_points(
@@ -719,7 +716,7 @@ impl CallbackTrait for SpectrogramCallback {
                 // Lava can still use the measured core without an image then.
                 if settings.settings.pitch_softness > 0.0
                     || settings.settings.time_softness > 0.0
-                    || settings.settings.style == harmonigraph_scene::SpectrogramStyle::Clouds
+                    || settings.settings.style.is_cloud()
                 {
                     {
                         #[cfg(test)]
@@ -834,10 +831,7 @@ impl CallbackTrait for SpectrogramCallback {
             // Clouds is entirely the carried scalar field. Its full-region
             // pass already contains the history, so shading that mesh again
             // would evaluate the same noise and samples twice per pixel.
-            if self
-                .atmosphere
-                .is_some_and(|a| a.settings.style == harmonigraph_scene::SpectrogramStyle::Clouds)
-            {
+            if self.atmosphere.is_some_and(|a| a.settings.style.is_cloud()) {
                 return;
             }
             render_pass.set_pipeline(&pipelines.composite);
@@ -1364,6 +1358,73 @@ mod tests {
     }
 
     #[test]
+    fn puffy_is_softer_than_wisps_and_its_billows_breathe() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = cloud_fixture();
+        cb.grid.run = Arc::new(vec![255; cb.grid.run.len()]);
+        cb.shades.lut = Arc::new(
+            (0..256).map(|v| [((v * v) as f32 / 255.0).round() as u8, v as u8, 0, 255]).collect(),
+        );
+        let a = cb.atmosphere.as_mut().unwrap();
+        a.settings.style = harmonigraph_scene::SpectrogramStyle::Clouds;
+        a.settings.cloud_speed = 0.0;
+        a.settings.breath_amount = 0.0;
+        let mut resources = CallbackResources::default();
+        let wisps = frame_with(&device, &queue, &mut resources, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.style =
+            harmonigraph_scene::SpectrogramStyle::Puffy;
+        let puffy = frame_with(&device, &queue, &mut resources, &cb);
+        assert_eq!(puffy, fresh_frame(&device, &queue, &cb));
+        let roughness = |frame: &[u8]| {
+            let mut slope = 0.0;
+            let mut light = 0.0;
+            for y in 8..119 {
+                for x in 8..119 {
+                    let i = (y * 128 + x) * 4 + 1;
+                    slope += f32::from(frame[i].abs_diff(frame[i + 4]))
+                        + f32::from(frame[i].abs_diff(frame[i + 512]));
+                    light += f32::from(frame[i]);
+                }
+            }
+            slope / light
+        };
+        assert!(
+            roughness(&puffy) < roughness(&wisps) * 0.8,
+            "Puffy retained wispy detail: {} vs {}",
+            roughness(&puffy),
+            roughness(&wisps)
+        );
+        for pixel in puffy.chunks_exact(4) {
+            let level = f32::from(pixel[1]);
+            assert!((f32::from(pixel[0]) - level * level / 255.0).abs() < 2.0);
+        }
+        cb.atmosphere.as_mut().unwrap().settings.style =
+            harmonigraph_scene::SpectrogramStyle::Clouds;
+        assert_eq!(
+            wisps,
+            frame_with(&device, &queue, &mut resources, &cb),
+            "switching Puffy restyled Clouds"
+        );
+        let a = cb.atmosphere.as_mut().unwrap();
+        a.settings.style = harmonigraph_scene::SpectrogramStyle::Puffy;
+        a.settings.breath_amount = 1.0;
+        let swell = frame_with(&device, &queue, &mut resources, &cb);
+        cb.atmosphere.as_mut().unwrap().now = 4.0;
+        let settle = frame_with(&device, &queue, &mut resources, &cb);
+        let changed = swell
+            .chunks_exact(4)
+            .zip(settle.chunks_exact(4))
+            .filter(|(a, b)| (a[1] > 180) != (b[1] > 180))
+            .count();
+        assert!(changed > 400, "held puffs never changed their bright contour: {changed}");
+        assert_eq!(settle, fresh_frame(&device, &queue, &cb));
+        cb.atmosphere.as_mut().unwrap().settings.breath_speed = 0.0;
+        assert_eq!(puffy, frame_with(&device, &queue, &mut resources, &cb));
+        cb.grid.run = Arc::new(vec![0; cb.grid.run.len()]);
+        assert!(fresh_frame(&device, &queue, &cb).chunks_exact(4).all(|p| p[..3] == [0, 0, 0]));
+    }
+
+    #[test]
     fn clouds_bound_scalar_targets_at_4k_even_after_an_uncapped_style() {
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = cloud_fixture();
@@ -1373,6 +1434,7 @@ mod tests {
         for (style, size, softness) in [
             (harmonigraph_scene::SpectrogramStyle::Blur, [1100, 1100], 0.01),
             (harmonigraph_scene::SpectrogramStyle::Clouds, [3840, 2160], 0.0),
+            (harmonigraph_scene::SpectrogramStyle::Puffy, [3840, 2160], 0.0),
         ] {
             cb.rect = egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -1387,6 +1449,9 @@ mod tests {
             let a = cb.atmosphere.as_mut().unwrap();
             a.region = cb.rect;
             a.settings.style = style;
+            // No shaping means no intrinsic Puffy blur: exercise its largest
+            // possible allocation too, not only its normally reduced image.
+            a.settings.cloud_depth = 0.0;
             a.settings.pitch_softness = softness;
             a.settings.time_softness = softness;
             let mut encoder = device.create_command_encoder(&Default::default());
@@ -1523,6 +1588,7 @@ mod tests {
             harmonigraph_scene::SpectrogramStyle::Blur,
             harmonigraph_scene::SpectrogramStyle::Lava,
             harmonigraph_scene::SpectrogramStyle::Clouds,
+            harmonigraph_scene::SpectrogramStyle::Puffy,
         ] {
             let mut cb = cloud_fixture();
             cb.target_format = wgpu::TextureFormat::Rgba16Float;
@@ -1732,6 +1798,7 @@ mod tests {
             (harmonigraph_scene::SpectrogramStyle::Blur, "spectrogram-style-blur"),
             (harmonigraph_scene::SpectrogramStyle::Lava, "spectrogram-style-lava"),
             (harmonigraph_scene::SpectrogramStyle::Clouds, "spectrogram-style-clouds"),
+            (harmonigraph_scene::SpectrogramStyle::Puffy, "spectrogram-style-puffy"),
         ] {
             let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
             settings.style = style;
