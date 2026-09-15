@@ -1527,29 +1527,6 @@ fn a_ring_dialled_off_is_gated_by_nothing() {
 }
 
 #[test]
-fn transition_phase_restarts_on_retriggers_and_preserves_held_octaves() {
-    let mut tracker = NoteTracker::new();
-    let frame = FrameParams { fade_time: 1.0, ..Default::default() };
-    let view = ViewConfig::default(); // Curved ink, but linear motion.
-    let read = |tracker: &NoteTracker, now| {
-        *origin_node(&scene_of(tracker, &Tuning::default(), &view, &frame, now))
-    };
-    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
-    tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, 60));
-    tracker.handle_event(NoteEvent::on(2.1, SourceId::DIRECT, 0, 60, 1.0));
-    assert!((read(&tracker, 2.2).transition_phase - 0.1).abs() < 1e-5);
-    // Same-key replacement without a note-off also starts at the new onset.
-    tracker.handle_event(NoteEvent::on(2.3, SourceId::DIRECT, 0, 60, 1.0));
-    assert!((read(&tracker, 2.4).transition_phase - 0.1).abs() < 1e-5);
-    tracker.handle_event(NoteEvent::on(4.0, SourceId::DIRECT, 0, 72, 1.0));
-    let node = read(&tracker, 4.25);
-    assert_eq!(node.activation, 1.0);
-    assert_eq!(node.transition_phase, 0.25);
-    tracker.handle_event(NoteEvent::off(4.3, SourceId::DIRECT, 0, 72));
-    assert_eq!(read(&tracker, 5.5).transition_phase, 1.0, "held C4 keeps the node whole");
-}
-
-#[test]
 fn transition_phase_sequences_short_notes_and_zero_duration() {
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));

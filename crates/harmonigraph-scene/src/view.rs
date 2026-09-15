@@ -249,12 +249,16 @@ pub enum NoteTransition {
     RippleArrival,
     FocusAndDissolve,
     SparkAndTrail,
+    StaggeredPop,
+    ClockwisePop,
 }
 
 impl NoteTransition {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Fade,
         Self::PopAndSettle,
+        Self::StaggeredPop,
+        Self::ClockwisePop,
         Self::DrawAndRetract,
         Self::RippleArrival,
         Self::FocusAndDissolve,
@@ -269,6 +273,8 @@ impl NoteTransition {
             Self::RippleArrival => "Ripple arrival",
             Self::FocusAndDissolve => "Focus and dissolve",
             Self::SparkAndTrail => "Spark and trail",
+            Self::StaggeredPop => "Staggered pop",
+            Self::ClockwisePop => "Clockwise pop",
         }
     }
 }

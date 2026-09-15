@@ -82,6 +82,7 @@ pub(super) fn parity_scene() -> Scene {
             // and labels are the UI crate's text pass, not the lattice pass.
             departing: false,
             transition_phase: 1.0,
+            transition_live: true,
             octaves,
             hovered: i == 1,
             on_home: i % 2 == 0,
@@ -452,6 +453,7 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // Held at full, so neither end of the envelope is running.
         departing: false,
         transition_phase: 1.0,
+        transition_live: true,
         octaves,
         hovered: false,
         on_home: true,

@@ -410,12 +410,12 @@ pub struct NodeInstance {
     /// record that takes over when the release finishes, and reserving that
     /// on the way IN draws a name ahead of the note it names.
     pub departing: bool,
-    /// Linear arrival progress; negative remaining release. Follows the voice
-    /// most recently struck at this pitch class. Another held octave prevents
-    /// a whole-node departure; once all release, the longest remaining release
-    /// owns the phase. Individual octave envelopes remain independent.
-    /// Stateless and evaluated at the same musical time live and offline.
+    /// Linear arrival progress, or negative remaining release. The scene seeds
+    /// it from surviving voices; the UI carries the entrance across voice churn.
     pub transition_phase: f32,
+    /// A MIDI voice exists even at its zero-opacity onset. Keeps a same-key
+    /// replacement from falsely ending a visible node's motion episode.
+    pub transition_live: bool,
     /// Per-octave activation (slot = MIDI octave + 1, clamped into the span
     /// the view shows — see [`octaves`]): each octave's indicator fades on
     /// its own voice's envelope, independent of the node's overall

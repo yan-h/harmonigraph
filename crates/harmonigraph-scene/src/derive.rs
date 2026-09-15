@@ -332,10 +332,10 @@ pub fn derive_scene(
         // the same voice the node is lit and colored by rather than any other
         // one that happens to match this pitch class.
         let mut departing = false;
-        let mut transition_phase = 1.0;
-        let mut latest_transition = None;
-        let mut held_here = false;
-        let mut latest_departing = false;
+        let mut transition_phase = 0.0;
+        let mut first_transition = None;
+        let mut arrival_here = false;
+        let mut transition_live = false;
         let mut longest_release = 0.0f32;
         let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = node_idle;
@@ -347,16 +347,19 @@ pub fn derive_scene(
         for lit in &voices {
             let voice = lit.voice;
             if tuning.matches(voice.pitch_class, node_pc) {
-                let held = matches!(voice.state, harmonigraph_core::VoiceState::Held);
-                held_here |= held;
+                // A staccato voice can be key-up while still arriving. It
+                // holds the geometry just as a held key does until its own
+                // delayed departure actually begins.
+                arrival_here |= !lit.departing;
                 longest_release = longest_release.max(-lit.transition_phase);
-                // New strikes restart even over a brighter release or held octave.
-                // Held wins equal timestamps because voices() visits releases last.
-                let key = (voice.on_time, held);
-                if latest_transition.is_none_or(|old| key > old) {
-                    latest_transition = Some(key);
+                let live = !lit.departing || lit.activation > 0.0;
+                transition_live |= live;
+                // Seed a newly visible node from its earliest surviving voice.
+                // The UI's per-surface NodeMotion retains this entrance across
+                // retriggers and pruning; voice ownership is not its lifetime.
+                if live && first_transition.is_none_or(|old| voice.on_time < old) {
+                    first_transition = Some(voice.on_time);
                     transition_phase = lit.transition_phase;
-                    latest_departing = lit.departing;
                 }
                 let envelope = lit.activation;
                 if envelope > activation {
@@ -473,12 +476,10 @@ pub fn derive_scene(
         };
         // A shared pitch class stays whole while any octave is held. Its
         // individual octave sectors still release on their own envelopes.
-        if latest_departing {
-            // Once all arrivals have landed, follow the last release to finish.
-            // An older held octave can be released after the newest strike;
-            // using onset order here would shrink then regrow when that newer
-            // voice is pruned. The maximum remaining ramp is continuous.
-            transition_phase = if held_here { 1.0 } else { -longest_release };
+        if arrival_here && transition_phase < 0.0 {
+            transition_phase = 1.0;
+        } else if !arrival_here && transition_phase < 0.0 {
+            transition_phase = -longest_release;
         }
         nodes.push(NodeInstance {
             lattice_pos: pos,
@@ -487,6 +488,7 @@ pub fn derive_scene(
             activation,
             departing,
             transition_phase,
+            transition_live,
             octaves,
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,

@@ -143,3 +143,73 @@ fn draw_transition_distance_shadow_softens_across_its_start_seam() {
         "hard radial shadow edge: {largest_jump}/255 between adjacent pixels"
     );
 }
+
+#[test]
+fn slice_pops_move_complete_pieces_in_distinct_orders_and_settle() {
+    let Some(mut shooter) = Shooter::new([384, 384]) else { return };
+    let mut scene = single_marked_node(0, 0);
+    scene.node_radius = 1.6;
+    scene.glow_strength = 0.0;
+    scene.octave_layout = harmonigraph_scene::octave_layout(4, 60.0, 1, 0.3, 0.7);
+    scene.nodes[0].cents = 350.0;
+    scene.nodes[0].octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
+    let (low, high) = scene.octave_layout.slots(350.0);
+    scene.nodes[0].melody_slots = 1 << high;
+    scene.nodes[0].bass_slots = 1 << low;
+    scene.nodes[0].melody_level = 1.0;
+    scene.nodes[0].bass_level = 1.0;
+    let mut previews = Vec::new();
+    for kernel in
+        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
+    {
+        scene.shadow = one_shadow(0.6, 0.8, kernel);
+        scene.background = glam::Vec4::splat(0.2);
+        scene.background.w = 1.0;
+        shooter.clear = crate::wgpu::Color { r: 0.2, g: 0.2, b: 0.2, a: 1.0 };
+        scene.note_transition = NoteTransition::PopAndSettle;
+        scene.nodes[0].transition_phase = 1.0;
+        let reference = shooter.shot(&scene);
+        for mode in [
+            NoteTransition::PopAndSettle,
+            NoteTransition::StaggeredPop,
+            NoteTransition::ClockwisePop,
+        ] {
+            scene.note_transition = mode;
+            for (step, phase) in
+                [0.08, 0.2, 0.3, 0.5, 0.72, 0.99, 1.0, -0.7, -0.3].into_iter().enumerate()
+            {
+                scene.nodes[0].transition_phase = phase;
+                let shot = shooter.shot(&scene);
+                if phase == 1.0 {
+                    assert!(shot == reference, "{mode:?} did not settle under {kernel:?}");
+                }
+                if phase == 0.99 {
+                    let (mean, _) = harmonigraph_golden::drift(&reference, &shot);
+                    assert!(mean < 0.5, "{mode:?} stepped at the end under {kernel:?}: {mean}/255");
+                }
+                if phase == 0.2 && mode != NoteTransition::PopAndSettle {
+                    previews.push(shot.clone());
+                }
+                if let Some(root) = std::env::var_os("HARMONIGRAPH_TRANSITION_FRAMES") {
+                    let root = std::path::PathBuf::from(root);
+                    std::fs::create_dir_all(&root).unwrap();
+                    let mut ppm = b"P6\n384 384\n255\n".to_vec();
+                    for pixel in shot.chunks_exact(4) {
+                        ppm.extend_from_slice(&pixel[..3]);
+                    }
+                    std::fs::write(
+                        root.join(format!("slices-{kernel:?}-{mode:?}-{step}.ppm")),
+                        ppm,
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
+    for pair in previews.chunks_exact(2) {
+        assert!(
+            differing_pixels(&pair[0], &pair[1]) > 100,
+            "the two slice orders drew one picture"
+        );
+    }
+}

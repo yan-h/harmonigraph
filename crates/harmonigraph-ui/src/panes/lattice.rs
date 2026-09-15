@@ -148,6 +148,7 @@ pub(crate) fn draw_lattice(
     // reading that reached into `derive_scene` would be a second path through
     // all of it.
     super::spectral_fold::apply(&mut scene, state, now);
+    super::node_motion::apply(&mut scene, state, surface, now);
     // And the node glow's own clock, last: a filter can only step a level the
     // derivation has already written, and the light is stepped against what a
     // node's MIDI layers say. Per surface, because what this hands out is rows
@@ -865,6 +866,7 @@ mod tests {
             activation,
             departing: true,
             transition_phase: -activation,
+            transition_live: activation > 0.0,
             octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
             hovered: false,
             on_home,
