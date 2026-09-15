@@ -353,18 +353,19 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// different moments.
 fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
     section(ui, "Note layers");
-    button_row(ui, |ui| {
-        ui.label("Transition");
-        egui::ComboBox::from_id_salt("note-transition")
-            .selected_text(view.note_transition.label())
-            .show_ui(ui, |ui| {
-                for mode in NoteTransition::ALL {
-                    ui.selectable_value(&mut view.note_transition, mode, mode.label());
-                }
-            })
-            .response
-            .on_hover_text("Arrival and departure prototypes on the Note fade clock. Draw traces the radial bands; Spark travels around the rim. Pitch centres and labels stay fixed. Ripple is arrival-only. Focus uses the existing Glow (enable Reach and Strength on Lighting).");
-    });
+    let transition_width = ui.available_width().min(180.0);
+    ui.label("Transition");
+    egui::ComboBox::from_id_salt("note-transition")
+        .width(transition_width)
+        .truncate()
+        .selected_text(view.note_transition.label())
+        .show_ui(ui, |ui| {
+            for mode in NoteTransition::ALL {
+                ui.selectable_value(&mut view.note_transition, mode, mode.label());
+            }
+        })
+        .response
+        .on_hover_text("Arrival and departure prototypes on the Note fade clock. Draw traces the radial bands; Spark travels around the rim. Pitch centres and labels stay fixed. Ripple is arrival-only. Focus uses the existing Glow (enable Reach and Strength on Lighting).");
     // The note's timing and the curve it runs on, in that order. Fade is an
     // automatable param and Fade curve a view setting, so the two are stored apart
     // (`ViewConfig::envelope` is where they are put back together); the pane
