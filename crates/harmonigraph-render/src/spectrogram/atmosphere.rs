@@ -185,7 +185,7 @@ impl Pipelines {
                 format,
                 source_layout,
                 Some(&composite_layout),
-                if format.is_srgb() || format == FORMAT {
+                if format.is_srgb() || format == wgpu::TextureFormat::Rgba16Float {
                     "fs_cloud_linear"
                 } else {
                     "fs_cloud_gamma"
@@ -196,7 +196,7 @@ impl Pipelines {
                 format,
                 source_layout,
                 Some(&composite_layout),
-                if format.is_srgb() || format == FORMAT {
+                if format.is_srgb() || format == wgpu::TextureFormat::Rgba16Float {
                     "fs_cloud_backdrop_linear"
                 } else {
                     "fs_cloud_backdrop_gamma"
@@ -216,6 +216,8 @@ impl Pipelines {
 }
 
 pub(super) struct Targets {
+    #[cfg(test)]
+    pub encoded_passes: std::sync::atomic::AtomicU32,
     pub size: [u32; 2],
     pub source_view: wgpu::TextureView,
     pub coverage_vertices: wgpu::Buffer,
@@ -317,6 +319,8 @@ impl Targets {
         let composite_group = cloud_group(&source_view);
         let source_group = source_group(device, source_layout, &source_uniform, grid, lut);
         Self {
+            #[cfg(test)]
+            encoded_passes: std::sync::atomic::AtomicU32::new(0),
             size,
             source_view,
             coverage_vertices: create_vertex_buffer::<SpectrogramVertex>(
@@ -407,6 +411,8 @@ impl Targets {
         // already softened image to the wide kernel closes its sampling gaps.
         // Every pass reads a different texture from the attachment it writes.
         for (i, (input, output)) in [(0, 0), (1, 1), (2, 0), (1, 2)].into_iter().enumerate() {
+            #[cfg(test)]
+            self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("spectral_cloud_blur"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

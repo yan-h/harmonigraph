@@ -136,8 +136,9 @@ not measurements of the current shader at 4K:
 | --- | ---: |
 | Maximum history bin storage | 119.625 MiB |
 | Active slab accumulator | 29.9 KiB |
-| Mixed-tier refold after 8,192 arrivals | 5.80 ms |
-| Fresh column including allocation and readout | 0.0089 ms |
+| Sparse refold: 2 active bins, 256 slabs, 8,192 arrivals | 5.80 ms |
+| Dense full-cap refold: 3,828 active bins, 1,024 slabs, 65,536 arrivals | 60.12 ms |
+| Sparse fresh column including allocation and readout | 0.0089 ms |
 | Complete frame fixtures at 1024 × 768 | 2.4–4.3 ms |
 | Complete frame fixtures at 3840 × 2160 | 5.8–7.4 ms |
 
@@ -146,9 +147,43 @@ completed display slabs and GPU uploads retain their old byte representation.
 Scalar filtering uses four two-byte-per-pixel targets,
 whose dimensions follow the two musical widths.
 An axis with zero softness retains display resolution;
-when both widths are zero the renderer uses the detailed field directly.
+when both widths are zero the renderer uses the detailed field directly,
+skipping source integration,
+all four filters and the material bake while retaining Lava contours.
 
-The CPU probe has two active bins and measures a median of eleven refolds.
+The earlier sparse CPU probe has two active bins and 256 slabs;
+its 5.80 ms median is not a full-cap or dense-spectrum bound.
+A dense probe feeds 65,536 real arrivals at 8 ms intervals through history coarsening,
+leaving 7,168 stored columns across six tiers representing counts of 1–32.
+All 3,828 bins contain power `1e-10`,
+above the logarithm floor.
+At 512 ms per slab,
+the requested 524.288-second window contains 1,024 completed slabs.
+Timing includes a fresh aggregator's full `window` call,
+final quantization and returned grid readout;
+validation outside the timer checks all 3,919,872 output bytes are nonzero and no slab is held.
+After two warmups,
+eleven measurements gave median 60.12 ms,
+range 26.98–94.69 ms in an isolated rerun.
+The initial run gave median 80.51 ms,
+range 32.17–195.47 ms.
+This spread does not establish production tail latency,
+but both runs expose a synchronous interaction hitch:
+a full fold can run when Span or resize crosses a slab-width rung,
+on first display of existing history,
+or when requested coverage reaches behind retained slabs.
+Stable-rung arrivals remain incremental.
+Style and palette edits do not trigger the full refold.
+A separate stage probe measured rebuild plus finalization at 29.54 ms median,
+versus 0.142 ms for grid readout.
+Isolated existing accumulator operations took 10.11 ms for adding all stored columns and 14.85 ms for quantizing 1,024 dense slabs;
+these microprobes identify substantial folding and logarithm costs,
+not additive shares of the end-to-end samples.
+Across 128 subsequent dense arrivals with no second rebuild,
+allocation,
+history push and full incremental readout took median 0.178 ms,
+p95 0.756 ms and maximum 3.143 ms.
+[Issue #886](https://github.com/yan-h/harmonigraph/issues/886) records the measured synchronous hitch and reproduction.
 The frame figures are medians of three runs of the existing two-second audio fixture,
 including replay,
 analysis,
