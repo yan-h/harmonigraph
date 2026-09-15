@@ -139,7 +139,7 @@ pub(crate) fn spectrum_settings_pane(
             .show(ui);
         ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Spread").percent().show(ui);
         if atmosphere.style == SpectrogramStyle::Clouds {
-            ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Cloud texture")
+            ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Cloud shaping")
                 .percent()
                 .show(ui);
             ValueBar::new(&mut atmosphere.cloud_scale, 0.25..=4.0, "Cloud size")

@@ -695,7 +695,7 @@ impl CallbackTrait for SpectrogramCallback {
             let pixels = [viewport.width_px.max(0) as u32, viewport.height_px.max(0) as u32];
             let size = atmosphere::retained_size(
                 atmosphere::source_size(pixels, ppp, settings),
-                pixels,
+                atmosphere::source_limits(pixels, settings.settings.style),
                 pane.cloud.as_ref().map(|c| c.size),
             );
             if size.iter().all(|&v| v > 0) {
@@ -715,10 +715,12 @@ impl CallbackTrait for SpectrogramCallback {
                 }
                 let target = pane.cloud.as_mut().expect("allocated above");
                 target.update(queue, uniforms, rect, ppp, settings);
-                // Styled fields still need their composite at zero widths,
-                // but the one-pixel source would integrate the whole history
-                // only for smoothed_level to discard that expensive result.
-                if settings.settings.pitch_softness > 0.0 || settings.settings.time_softness > 0.0 {
+                // Clouds advects the scalar image even at zero softness;
+                // Lava can still use the measured core without an image then.
+                if settings.settings.pitch_softness > 0.0
+                    || settings.settings.time_softness > 0.0
+                    || settings.settings.style == harmonigraph_scene::SpectrogramStyle::Clouds
+                {
                     {
                         #[cfg(test)]
                         target.encoded_passes.fetch_add(1, Ordering::Relaxed);
@@ -746,7 +748,8 @@ impl CallbackTrait for SpectrogramCallback {
                         // Once filtering is finished, the raw source texture is
                         // free to hold the soft intensity. Bake across the whole
                         // spectrogram region so the Gaussian tail survives past
-                        // the moving history edge. The raw detail keeps its measured mesh.
+                        // the moving history edge. Clouds carries this image
+                        // across that edge too; other styles retain their core mesh.
                         #[cfg(test)]
                         target.encoded_passes.fetch_add(1, Ordering::Relaxed);
                         let mut pass =
@@ -828,6 +831,15 @@ impl CallbackTrait for SpectrogramCallback {
             render_pass.set_bind_group(1, &cloud.composite_group, &[]);
             render_pass.set_vertex_buffer(0, cloud.coverage_vertices.slice(..));
             render_pass.draw(0..6, 0..1);
+            // Clouds is entirely the carried scalar field. Its full-region
+            // pass already contains the history, so shading that mesh again
+            // would evaluate the same noise and samples twice per pixel.
+            if self
+                .atmosphere
+                .is_some_and(|a| a.settings.style == harmonigraph_scene::SpectrogramStyle::Clouds)
+            {
+                return;
+            }
             render_pass.set_pipeline(&pipelines.composite);
         } else {
             render_pass.set_pipeline(&resources.pipeline);
@@ -1349,6 +1361,116 @@ mod tests {
         cb.grid.run = Arc::new(vec![0; cb.grid.run.len()]);
         let silence = fresh_frame(&device, &queue, &cb);
         assert!(silence.chunks_exact(4).all(|pixel| pixel[..3] == [0, 0, 0]));
+    }
+
+    #[test]
+    fn clouds_bound_scalar_targets_at_4k_even_after_an_uncapped_style() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = cloud_fixture();
+        let mut resources = CallbackResources::default();
+        // First retain a Blur target just within the 10% size hysteresis of
+        // the cloud cap. Reusing it for Clouds would quietly exceed the cap.
+        for (style, size, softness) in [
+            (harmonigraph_scene::SpectrogramStyle::Blur, [1100, 1100], 0.01),
+            (harmonigraph_scene::SpectrogramStyle::Clouds, [3840, 2160], 0.0),
+        ] {
+            cb.rect = egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(size[0] as f32, size[1] as f32),
+            );
+            cb.vertices = full_quad(12);
+            for vertex in &mut cb.vertices {
+                vertex.pos[0] *= size[0] as f32 / 128.0;
+                vertex.pos[1] *= size[1] as f32 / 128.0;
+            }
+            cb.read.rows = size[1];
+            let a = cb.atmosphere.as_mut().unwrap();
+            a.region = cb.rect;
+            a.settings.style = style;
+            a.settings.pitch_softness = softness;
+            a.settings.time_softness = softness;
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let commands = cb.prepare(
+                &device,
+                &queue,
+                &ScreenDescriptor { size_in_pixels: size, pixels_per_point: 1.0 },
+                &mut encoder,
+                &mut resources,
+            );
+            queue.submit(commands.into_iter().chain([encoder.finish()]));
+            let held = resources.get::<SpectrogramResources>().unwrap().panes[&0]
+                .cloud
+                .as_ref()
+                .unwrap()
+                .size;
+            assert_eq!(held, if softness == 0.0 { [1024, 1024] } else { [1100, 1100] });
+        }
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    }
+
+    #[test]
+    fn clouds_carry_pitch_bands_and_recolor_the_moving_density() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = cloud_fixture();
+        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+        settings.style = harmonigraph_scene::SpectrogramStyle::Clouds;
+        settings.pitch_softness = 0.0;
+        settings.time_softness = 0.0;
+        settings.cloud_depth = 1.0;
+        settings.breath_amount = 0.0;
+        // A thin, straight band across the whole time axis. The old RGB
+        // overlay can only darken this support; advection must bend it out.
+        let mut bytes = vec![0; cb.grid.run.len()];
+        for slab in 0..12 {
+            bytes[slab * BINS as usize + 492..slab * BINS as usize + 532].fill(255);
+        }
+        cb.grid.run = Arc::new(bytes);
+        cb.shades.lut = Arc::new(
+            (0..256).map(|v| [((v * v) as f32 / 255.0).round() as u8, v as u8, 0, 255]).collect(),
+        );
+        let atmosphere = cb.atmosphere.take();
+        let reference = fresh_frame(&device, &queue, &cb);
+        cb.atmosphere = atmosphere;
+        let mut resources = CallbackResources::default();
+        cb.atmosphere.as_mut().unwrap().settings.style = harmonigraph_scene::SpectrogramStyle::Lava;
+        frame_with(&device, &queue, &mut resources, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.style =
+            harmonigraph_scene::SpectrogramStyle::Clouds;
+        let first = frame_with(&device, &queue, &mut resources, &cb);
+        assert_eq!(
+            first,
+            fresh_frame(&device, &queue, &cb),
+            "zero-softness Clouds reused Lava's empty scalar image"
+        );
+        let carried = first
+            .chunks_exact(4)
+            .zip(reference.chunks_exact(4))
+            .filter(|(a, b)| a[1] > 20 && b[1] == 0)
+            .count();
+        assert!(
+            carried > 100,
+            "the pitch band never moved outside its original support: {carried}"
+        );
+        cb.atmosphere.as_mut().unwrap().now = 8.0;
+        let later = fresh_frame(&device, &queue, &cb);
+        let reshaped = first
+            .chunks_exact(4)
+            .zip(later.chunks_exact(4))
+            .filter(|(a, b)| (a[1] > 20) != (b[1] > 20))
+            .count();
+        assert!(reshaped > 100, "only brightness moved; the band stayed fixed: {reshaped}");
+        for frame in [&first, &later] {
+            let mut midtones = 0;
+            for px in frame.chunks_exact(4) {
+                let green = f32::from(px[1]);
+                assert!(
+                    (f32::from(px[0]) - green * green / 255.0).abs() < 2.0,
+                    "cloud color fell off the authored palette: {px:?}"
+                );
+                midtones += usize::from((40..200).contains(&px[1]));
+            }
+            assert!(midtones > 100, "fixture never reaches the curved part of the palette");
+        }
     }
 
     #[test]

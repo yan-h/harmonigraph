@@ -357,23 +357,45 @@ fn nebula_noise(p: vec2<f32>) -> f32 {
     );
 }
 
-// The lattice's domain-warped cloud field, applied to every lit pixel.
-// It modulates the completed color so saturated fields retain their texture
-// and palette hues survive. Silence cannot create its own light.
-fn cloud_transmission(position: vec2<f32>) -> f32 {
-    let p = (position / cloud.ppp - cloud.field.xy - cloud.field.zw * 0.5)
-        / max(cloud.field.w, 1.0) * (5.0 / cloud.motion.z);
+// Read the audio field through a moving, folded coordinate map. Sampling
+// beyond its real region returns silence rather than stretching an edge texel.
+fn cloud_sample(point: vec2<f32>) -> f32 {
+    let uv = (point - cloud.origin) / cloud.size;
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))
+        || any(point < cloud.field.xy) || any(point > cloud.field.xy + cloud.field.zw) {
+        return 0.0;
+    }
+    return textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
+}
+
+fn cloud_density(position: vec2<f32>) -> f32 {
+    let point = position / cloud.ppp;
+    let cell_size = max(cloud.field.w, 1.0) * cloud.motion.z / 5.0;
+    let p = (point - cloud.field.xy - cloud.field.zw * 0.5) / cell_size;
     let drift = cloud.motion.xy;
-    let warp = vec2<f32>(nebula_noise(p + drift), nebula_noise(p + vec2<f32>(8.3, 2.7) - drift));
-    let billow = nebula_noise(p + warp * 1.2 + drift);
-    let detail = nebula_noise(p * 2.3 - drift + vec2<f32>(3.1, 7.4));
-    let density = 0.08 + 0.92 * smoothstep(0.25, 0.70, billow * 0.75 + detail * 0.25);
-    // Different parts of the field breathe out of phase, avoiding a uniform
-    // brightness pulse. Two slow waves keep the movement from feeling rigid.
+    let bend = vec2<f32>(nebula_noise(p + drift), nebula_noise(p + vec2<f32>(8.3, 2.7) - drift)) - 0.5;
+    let folded = p + bend * 2.4;
+    let curl = vec2<f32>(
+        nebula_noise(folded * 2.3 - drift + vec2<f32>(3.1, 7.4)),
+        nebula_noise(folded * 2.3 + drift + vec2<f32>(6.7, 1.2)),
+    ) - 0.5;
     let phase = p.x * 0.8 + p.y * 0.5;
     let wave = 0.5 + sin(cloud.breath.x + phase) / 3.0
         + sin(cloud.breath.y + phase * 1.7) / 6.0;
-    return mix(1.0, density, cloud.motion.w) * (1.0 - cloud.breath.z * (1.0 - wave));
+    let breath = 1.0 - cloud.breath.z * (1.0 - wave);
+    // The broad bend carries whole bands; the smaller fold pulls their edges
+    // into tendrils. Breathing changes their reach as well as their intensity.
+    let reach = cell_size * cloud.motion.w * (0.65 + 0.35 * breath);
+    let carried = point + (bend * 1.5 + curl * 0.65) * reach;
+    let strand = vec2<f32>(curl.y, -curl.x) * reach * 0.35;
+    let body = cloud_sample(carried);
+    let filament = (cloud_sample(carried + strand) + cloud_sample(carried - strand)) * 0.5;
+    let billow = nebula_noise(folded + drift);
+    let density = 0.22 + 0.96 * smoothstep(0.20, 0.78, billow * 0.7 + (curl.x + 0.5) * 0.3);
+    // Shape intensity BEFORE the palette lookup: colors migrate through the
+    // authored ramp as the material folds and breathes. No RGB veil remains.
+    return mix(body, filament, 0.35 * cloud.motion.w)
+        * mix(1.0, density, cloud.motion.w) * breath;
 }
 fn density_color(raw_level: f32) -> vec4<f32> {
     let level = style_level(raw_level);
@@ -390,24 +412,25 @@ fn density_color(raw_level: f32) -> vec4<f32> {
     let b = textureLoad(lut, vec2<u32>(min(i + 1u, levels - 1u), 0u), 0).rgb;
     return vec4<f32>(mix(a, b, fract(x)), 1.0);
 }
-fn styled_color(level: f32, position: vec2<f32>) -> vec4<f32> {
-    let color = density_color(level);
-    if cloud.style != 3u { return color; }
-    return vec4<f32>(color.rgb * cloud_transmission(position), color.a);
+fn backdrop_color(position: vec2<f32>) -> vec4<f32> {
+    if cloud.style == 3u { return density_color(cloud_density(position)); }
+    return density_color(smoothed_level(0.0, baked_density(position)));
 }
-// Empty history uses the same field and palette with a zero measured core.
-// This quad never samples the grid, so the oldest column cannot be smeared.
+// The full region shares one scalar material. Clouds may carry measured
+// color into neighboring empty history; zero beyond the source bounds keeps
+// this from becoming an indefinitely held oldest/newest column.
 @fragment
 fn fs_cloud_backdrop_gamma(in: VertexOut) -> @location(0) vec4<f32> {
-    return styled_color(smoothed_level(0.0, baked_density(in.position.xy)), in.position.xy);
+    return backdrop_color(in.position.xy);
 }
 @fragment
 fn fs_cloud_backdrop_linear(in: VertexOut) -> @location(0) vec4<f32> {
-    let gamma = styled_color(smoothed_level(0.0, baked_density(in.position.xy)), in.position.xy);
+    let gamma = backdrop_color(in.position.xy);
     return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), 1.0);
 }
 fn cloud_color(in: VertexOut) -> vec4<f32> {
-    return styled_color(smoothed_level(heatmap_level(in), baked_density(in.position.xy)), in.position.xy);
+    if cloud.style == 3u { return density_color(cloud_density(in.position.xy)); }
+    return density_color(smoothed_level(heatmap_level(in), baked_density(in.position.xy)));
 }
 @fragment
 fn fs_cloud_gamma(in: VertexOut) -> @location(0) vec4<f32> {

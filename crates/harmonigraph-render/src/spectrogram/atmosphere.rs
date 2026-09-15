@@ -22,6 +22,20 @@ pub struct SpectrogramAtmosphere {
     pub points_per_ms: f32,
 }
 
+/// Clouds transports an artistic intensity image. Bound its four R16 targets
+/// to 8 MiB per pane, including zero-softness Retina and 4K views. The source
+/// integrates the entire covered FFT footprint when reduced to this limit.
+pub(super) fn source_limits(
+    pixels: [u32; 2],
+    style: harmonigraph_scene::SpectrogramStyle,
+) -> [u32; 2] {
+    if style == harmonigraph_scene::SpectrogramStyle::Clouds {
+        pixels.map(|axis| axis.min(1024))
+    } else {
+        pixels
+    }
+}
+
 /// Bound filter work by reducing each axis only as its musical radius grows.
 /// The scalar source averages its whole footprint before these Gaussian passes.
 /// The allocation key is this size alone; no measurement cache is invalidated.
@@ -31,14 +45,18 @@ pub(super) fn source_size(
     atmosphere: SpectrogramAtmosphere,
 ) -> [u32; 2] {
     let settings = atmosphere.settings.sanitized();
-    if settings.pitch_softness == 0.0 && settings.time_softness == 0.0 {
+    if settings.style != harmonigraph_scene::SpectrogramStyle::Clouds
+        && settings.pitch_softness == 0.0
+        && settings.time_softness == 0.0
+    {
         return [1, 1];
     }
     let pitch = settings.pitch_softness * atmosphere.points_per_cent * ppp;
     let time = settings.time_softness * atmosphere.points_per_ms * ppp;
     let sigma = if atmosphere.pitch_vertical { [time, pitch] } else { [pitch, time] };
+    let limits = source_limits(pixels, settings.style);
     std::array::from_fn(|axis| {
-        let base = pixels[axis];
+        let base = limits[axis];
         ((pixels[axis] as f32 / (sigma[axis] * 0.5).max(1.0)).ceil() as u32).max(8).min(base)
     })
 }
