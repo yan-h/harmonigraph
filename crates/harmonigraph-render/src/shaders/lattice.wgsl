@@ -1011,7 +1011,7 @@ fn layer_coverage(layer: NodeLayer) -> f32 {
 }
 
 fn layer_distance(field: f32, layer: NodeLayer, in: VsOut) -> f32 {
-    if in.params.w == DISTANCE_COVERAGE_KIND {
+    if in.params.w > 1.5 {
         let coverage = clamp(layer.level, 0.0, 1.0) * standoff_coverage(
             layer.sd * abs(in.shadow_at.z), 2.0 * in.strip_row, in.ink_carry,
         );
@@ -2254,7 +2254,7 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
     let ink = node_ink(in, g.d, g.aa, g.oct, analytic);
-    if in.params.w == DISTANCE_COVERAGE_KIND {
+    if in.params.w > 1.5 {
         return vec4<f32>(clamp(-ink.sd, 0.0, 1.0), 0.0, 0.0, 0.0);
     }
     if analytic {
