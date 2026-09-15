@@ -687,7 +687,7 @@ float layer_distance(
     NodeLayer layer_1,
     VsOut in_2
 ) {
-    if (in_2.params.w == DISTANCE_COVERAGE_KIND) {
+    if (in_2.params.w > 1.5) {
         float _e20 = standoff_coverage(layer_1.sd * metal::abs(in_2.shadow_at.z), 2.0 * in_2.strip_row, in_2.ink_carry);
         float coverage_2 = metal::clamp(layer_1.level, 0.0, 1.0) * _e20;
         return metal::min(field, -(coverage_2));
