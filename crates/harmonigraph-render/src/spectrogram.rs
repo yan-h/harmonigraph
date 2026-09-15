@@ -1266,12 +1266,16 @@ mod tests {
             // of the fresh appearance's gentler setting.
             settings: harmonigraph_scene::SpectralAtmosphere {
                 style: harmonigraph_scene::SpectrogramStyle::Blur,
+                // The probes read the diffusion transfer; a cloud over them
+                // would move the very pixels they measure.
+                cloud_depth: 0.0,
                 ..Default::default()
             },
             region: cb.rect,
             pitch_vertical: true,
             points_per_cent: 0.03,
             points_per_ms: 0.01,
+            now: 0.0,
         });
         cb
     }

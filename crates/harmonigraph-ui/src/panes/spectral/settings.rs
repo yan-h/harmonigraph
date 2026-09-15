@@ -139,6 +139,38 @@ pub(crate) fn spectrum_settings_pane(
                 .percent()
                 .show(ui);
         }
+        ui.label(egui::RichText::new("Scale clouds (prototype)").strong());
+        ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Cloud depth")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "Drifting clouds over the spectrogram, lit by the sound under them through a \
+                 sheet of reflective scales. 0% removes them. They need some softness above: \
+                 the softened field is what lights them.",
+            );
+        ValueBar::new(&mut atmosphere.cloud_scale, 0.25..=4.0, "Cloud size")
+            .unit(1.0, "×")
+            .show(ui);
+        ValueBar::new(&mut atmosphere.cloud_speed, 0.0..=20.0, "Cloud speed")
+            .unit(1.0, "×")
+            .show(ui)
+            .on_hover_text("1× crosses the pane in about two minutes. 0 holds the clouds still.");
+        ValueBar::new(&mut atmosphere.cloud_cover, 0.0..=1.0, "Cloud cover").percent().show(ui);
+        ValueBar::new(&mut atmosphere.scale_size, 0.25..=4.0, "Scale size")
+            .unit(1.0, "×")
+            .show(ui)
+            .on_hover_text("Size of the reflective scales; the light is read once per scale.");
+        ValueBar::new(&mut atmosphere.scale_glint, 0.0..=1.0, "Glint")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "How much of a scale's light is the angle-dependent glint rather than a \
+                 diffuse share. Glints move as the sound and the clouds move past each other.",
+            );
+        ValueBar::new(&mut atmosphere.cloud_ambient, 0.0..=1.0, "Cloud ambient")
+            .percent()
+            .show(ui)
+            .on_hover_text("Light a cloud shows with nothing sounding under it.");
     }
     ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")
         .percent().show(ui).on_hover_text("Blend the live analyzer from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram style and outline opacity.");
