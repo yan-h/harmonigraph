@@ -20,6 +20,8 @@ It keeps quiet frequencies visible while their fill retains the palette's dark c
 At 0% the outline disappears.
 
 The spectrogram now averages linear power and uses the smoothed field directly in Blur and Lava.
+A fixed brightness weighting before source reduction gives narrow bright content more influence,
+and Lava fades contour strength in across its first band to preserve quiet detail.
 The former Diffusion amount is removed.
 See [spectrogram averaging and Lava](spectrogram-lava.md) for the scalar filtering,
 allocation policy,

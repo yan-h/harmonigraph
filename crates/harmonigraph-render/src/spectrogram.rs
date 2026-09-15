@@ -1269,14 +1269,22 @@ mod tests {
             cb.atmosphere.as_mut().unwrap().settings.time_softness =
                 if smooth { 120.0 } else { 0.0 };
             let mut previous = 0;
-            for value in [0, 20, 64, 96, 128, 160, 192, 224, 255] {
+            for value in [0, 1, 3, 8, 13, 20, 64, 96, 128, 160, 192, 224, 255] {
                 cb.grid.run = Arc::new(vec![value; cb.grid.run.len()]);
                 let frame = fresh_frame(&device, &queue, &cb);
                 let blue = frame[(64 * 128 + 64) * 4 + 2];
                 if value == 0 {
                     assert_eq!(blue, 0);
-                } else {
+                } else if value > 1 {
                     assert!(blue > previous, "quiet and nested levels survive: {value}");
+                }
+                // The first byte can round to black after the palette's
+                // half-sample interpolation; allow one output byte of slack.
+                if value <= 13 {
+                    assert!(
+                        f32::from(blue) + 1.0 >= f32::from(value) * 0.7,
+                        "first contour collapsed quiet intensity: {value} -> {blue}"
+                    );
                 }
                 previous = blue;
                 for y in 0..128 {
@@ -1327,7 +1335,36 @@ mod tests {
         }
         assert!(compare(&frames[0], &frames[1]).0 <= 2, "wide source aliased alternating columns");
         let blue = frames[0][(64 * 128 + 64) * 4 + 2];
-        assert!((126..=130).contains(&blue), "all columns contribute, got {blue}");
+        // Half zero and half one average to 0.5 in the encoded domain.
+        // Encoding after source reduction would incorrectly remain at 0.5
+        // display intensity instead of this brighter decoded result.
+        let expected = (255.0_f32 / (0.1 + 1.81_f32.sqrt())).round() as u8;
+        assert!(blue.abs_diff(expected) <= 2, "all encoded columns contribute, got {blue}");
+    }
+
+    #[test]
+    fn density_weights_bright_buckets_before_pitch_source_reduction() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = cloud_fixture();
+        // One bright bucket per period: both equal mixtures and narrow
+        // bright bands must survive averaging over many source buckets.
+        for period in [2, 8] {
+            let bytes =
+                (0..12 * BINS as usize).map(|i| if i % period == 0 { 255 } else { 0 }).collect();
+            cb.grid.run = Arc::new(bytes);
+            let encoded_mean = 1.0 / period as f32;
+            let expected = (255.0 * 2.0 * encoded_mean / (0.1 + (0.01 + 3.6 * encoded_mean).sqrt()))
+                .round() as u8;
+            for width in [140.0, 280.0] {
+                cb.atmosphere.as_mut().unwrap().settings.pitch_softness = width;
+                let frame = fresh_frame(&device, &queue, &cb);
+                let blue = frame[(64 * 128 + 64) * 4 + 2];
+                assert!(
+                    blue.abs_diff(expected) <= 2,
+                    "pitch source averaged before encoding: {blue}, expected {expected}"
+                );
+            }
+        }
     }
 
     #[test]

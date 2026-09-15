@@ -43,6 +43,15 @@ The shared fold agrees when given the same measurements.
 ## Smoothing and style
 
 The renderer maps measured power to scalar display intensity before smoothing.
+Blur and Lava weight each mapped bucket with the fixed display transform `x * (0.1 + 0.9 * x)` before pitch or time resampling,
+so narrow bright content contributes before the reduced source footprint averages it.
+The 10% linear toe preserves quiet values in `R16Float`.
+This is an artistic brightness weighting,
+not RGB gamma correction or another audio-power average.
+Both Gaussian scales and their Spread combination remain in that encoded domain.
+The reduced material bake applies the stable inverse `2*y / (0.1 + sqrt(0.01 + 3.6*y))` once per reduced pixel.
+The final composite linearly upsamples decoded intensity,
+accepting a small interpolation approximation on the smooth field to avoid a square root per full-resolution pixel.
 Pitch and time softness are Gaussian widths in cents and milliseconds,
 converted using the full unclipped axes.
 Rotation transposes those widths;
@@ -68,7 +77,9 @@ A localized shader style dispatcher transforms the smoothed scalar before the ex
 Lava uses several nested terraces,
 softens their boundaries,
 and fades the terrace contrast when a pixel spans multiple levels.
-A small residual slope preserves quiet values below the first terrace.
+Contour strength fades in across the first band,
+so quiet values approach their input brightness rather than collapsing to the bottom terrace.
+Higher bands keep their existing contour treatment.
 Zero stays zero.
 Additional styles belong in this transfer stage and its selector,
 without copying history,

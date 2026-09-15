@@ -107,11 +107,23 @@ fn bucket_x(t: f32) -> f32 {
 /// whatever covers it, and a floor below the window contributes black, so a
 /// feature narrower than a pixel dims in proportion to its share of that pixel
 /// instead of being dragged off the ramp by its neighbours.
-fn bucket_level(slot: u32, b: u32) -> f32 {
+// Artistic brightness weighting of display intensity, not audio power or
+// an RGB gamma transfer. The linear toe keeps quiet values representable in
+// R16Float. Apply before either source footprint can average away a ridge.
+fn density_encode(level: f32) -> f32 {
+    return level * (0.1 + 0.9 * level);
+}
+fn density_decode(value: f32) -> f32 {
+    let y = max(value, 0.0);
+    return 2.0 * y / (0.1 + sqrt(0.01 + 3.6 * y));
+}
+fn bucket_level(slot: u32, b: u32, density: bool) -> f32 {
     let midi = locals.spectrum_min_midi + (f32(b) + 0.5) / locals.bins_per_semitone;
     let v = f32(stored(slot, b));
     let level = locals.level0 + locals.level_per_step * v + locals.level_per_midi * midi;
-    return clamp(level, 0.0, 1.0);
+    let mapped = clamp(level, 0.0, 1.0);
+    if density { return density_encode(mapped); }
+    return mapped;
 }
 
 /// The level one fragment reads out of the slab in slot `slot`: an image
@@ -121,7 +133,7 @@ fn bucket_level(slot: u32, b: u32) -> f32 {
 /// axis, so the footprints TILE it — and which of it and the bucket grid is
 /// finer picks the arm.
 ///
-/// MINIFYING (a pixel wider than a bucket) it is the AREA-WEIGHTED MEAN of the
+/// For Plain, MINIFYING (a pixel wider than a bucket) is the AREA-WEIGHTED MEAN of the
 /// levels under `[x0, x1)`: fractional weights where the footprint cuts its
 /// first and last bucket, unit weights between. That is what a GPU does to a
 /// texture it draws small, and it is the whole of why the pane's pixel height
@@ -133,12 +145,14 @@ fn bucket_level(slot: u32, b: u32) -> f32 {
 /// than a pixel is attenuated as the pixel widens while its share of the pane
 /// grows, and the two do not cancel.
 ///
+/// The density source uses the same footprint in the encoded display domain.
+///
 /// MAGNIFYING (a pixel narrower than a bucket) the grid is being asked for
 /// more than it holds, so it is read BETWEEN the two bucket centres this
 /// fragment sits between. A bucket's centre is half a bucket above where the
 /// floor divides them, which is the 0.5; the clamp keeps the upper tap inside
 /// the spectrum.
-fn read_level(slot: u32, t: f32) -> f32 {
+fn read_level(slot: u32, t: f32, density: bool) -> f32 {
     let half = 0.5 / f32(locals.rows);
     let x0 = bucket_x(t - half);
     let x1 = bucket_x(t + half);
@@ -152,20 +166,20 @@ fn read_level(slot: u32, t: f32) -> f32 {
         var total = 0.0;
         for (var b = idx; b <= last; b = b + 1u) {
             let w = max(min(hi, f32(b) + 1.0) - max(lo, f32(b)), 0.0);
-            sum = sum + w * bucket_level(slot, b);
+            sum = sum + w * bucket_level(slot, b, density);
             total = total + w;
         }
         // A run of two or more whose overlap has been clamped to nothing — the
         // degenerate answered rather than one the picture arrives at.
         if total <= 0.0 {
-            return bucket_level(slot, idx);
+            return bucket_level(slot, idx, density);
         }
         return sum / total;
     }
     let x = bucket_x(t) - 0.5;
     let b = u32(clamp(floor(x), 0.0, f32(locals.bins) - 2.0));
     let f = clamp(x - f32(b), 0.0, 1.0);
-    return mix(bucket_level(slot, b), bucket_level(slot, b + 1u), f);
+    return mix(bucket_level(slot, b, density), bucket_level(slot, b + 1u, density), f);
 }
 
 /// The heatmap's colour at this fragment: the two slabs either side of it read
@@ -185,7 +199,7 @@ fn read_level(slot: u32, t: f32) -> f32 {
 /// The lookup TRUNCATES into the table, matching the level's own quantization
 /// — the table is sampled at the centre of each slice, so the entry a level
 /// falls into is the one nearest it.
-fn heatmap_level(in: VertexOut) -> f32 {
+fn field_level(in: VertexOut, density: bool) -> f32 {
     // Slab centres sit at half-integers, so the taps straddle `slab - 0.5`.
     let n = f32(locals.run_slabs);
     let jx = clamp(floor(in.slab - 0.5), 0.0, n - 1.0);
@@ -199,7 +213,13 @@ fn heatmap_level(in: VertexOut) -> f32 {
     let s0 = (locals.first_slot + j0) % locals.capacity;
     let s1 = (locals.first_slot + j1) % locals.capacity;
 
-    return mix(read_level(s0, in.t), read_level(s1, in.t), fx);
+    return mix(read_level(s0, in.t, density), read_level(s1, in.t, density), fx);
+}
+
+// Literal domain arguments specialize the shared resampler for each entry
+// point; Plain keeps its original display-level area mean exactly.
+fn heatmap_level(in: VertexOut) -> f32 {
+    return field_level(in, false);
 }
 
 fn heatmap_color(in: VertexOut) -> vec4<f32> {
@@ -253,18 +273,18 @@ struct Cloud {
 // the float source target must not take fs_heatmap_linear's RGB conversion.
 @fragment
 fn fs_density_source(in: VertexOut) -> @location(0) vec4<f32> {
-    // Integrate the piecewise-linear time read exactly between slab centers.
+    // Integrate the piecewise-linear encoded field exactly between slab centers.
     // A large musical blur reduces the source width, so four fixed samples
     // would skip columns and alias periodic broadband energy before filtering.
     let width = fwidth(in.slab);
-    if width < 0.0001 { return vec4<f32>(heatmap_level(in), 0.0, 0.0, 1.0); }
+    if width < 0.0001 { return vec4<f32>(field_level(in, true), 0.0, 0.0, 1.0); }
     let high = in.slab + width * 0.5;
     var at = in.slab - width * 0.5;
     let covered = high - at;
-    if covered <= 0.0 { return vec4<f32>(heatmap_level(in), 0.0, 0.0, 1.0); }
+    if covered <= 0.0 { return vec4<f32>(field_level(in, true), 0.0, 0.0, 1.0); }
     var tap = in;
     tap.slab = at;
-    var left = heatmap_level(tap);
+    var left = field_level(tap, true);
     var integral = 0.0;
     let last_center = f32(locals.run_slabs) - 0.5;
     // Outside the run the read holds its edge; skip that constant interval in
@@ -274,7 +294,7 @@ fn fs_density_source(in: VertexOut) -> @location(0) vec4<f32> {
         var next = min(high, max(0.5, floor(at - 0.5) + 1.5));
         if at >= last_center { next = high; }
         tap.slab = next;
-        let right = heatmap_level(tap);
+        let right = field_level(tap, true);
         integral += (left + right) * 0.5 * (next - at);
         left = right;
         at = next;
@@ -288,7 +308,10 @@ fn fs_cloud_light(in: VertexOut) -> @location(0) vec4<f32> {
     let uv = in.position.xy / vec2<f32>(textureDimensions(wide_light));
     let close = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
     let wide = textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r;
-    return vec4<f32>(mix(close, wide, cloud.spread), 0.0, 0.0, 1.0);
+    // Both scales stay in the encoded domain until their final combination.
+    // Decode here once per reduced pixel; the composite linearly upsamples
+    // this display-intensity field without another full-resolution sqrt.
+    return vec4<f32>(density_decode(mix(close, wide, cloud.spread)), 0.0, 0.0, 1.0);
 }
 fn baked_density(position: vec2<f32>) -> f32 {
     let uv = (position / cloud.ppp - cloud.origin) / cloud.size;
@@ -308,7 +331,9 @@ fn style_level(level: f32) -> f32 {
     let x = clamp(level, 0.0, 1.0) * cloud.contours;
     let edge = min(0.5, max(cloud.contour_softness, fwidth(x) * 0.5));
     let terraces = (floor(x) + smoothstep(0.5 - edge, 0.5 + edge, fract(x))) / cloud.contours;
-    return mix(level, terraces, 0.9 * (1.0 - smoothstep(0.5, 1.5, fwidth(x))));
+    let strength = 0.9 * smoothstep(0.0, 1.0, x)
+        * (1.0 - smoothstep(0.5, 1.5, fwidth(x)));
+    return mix(level, terraces, strength);
 }
 fn density_color(raw_level: f32) -> vec4<f32> {
     let level = style_level(raw_level);
