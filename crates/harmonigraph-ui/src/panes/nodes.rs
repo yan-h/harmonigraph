@@ -374,6 +374,12 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
                 ui.selectable_value(&mut view.note_animation.order, order, order.label());
             }
         });
+    ui.add_enabled_ui(view.note_animation.order != AnimationOrder::Simultaneous, |ui| {
+        ValueBar::new(&mut view.note_animation.stagger_spread, 0.0..=0.9, "Stagger spread")
+            .unit(100.0, "%")
+            .show(ui)
+            .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Zero starts every slice together; Simultaneous ignores this setting.");
+    });
     ValueBar::new(&mut view.note_animation.radial_start, -1.0..=1.0, "Starting position")
         .unit(100.0, "%").show(ui)
         .on_hover_text("Radial offset of each slice. -100% starts at the node centre; positive values start outward.");

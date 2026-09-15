@@ -27,9 +27,18 @@ Bidirectional sends two fronts from twelve toward six.
 Random stagger uses a stable seed from the node and appearance onset;
 interruptions preserve its ordering.
 Odd/even stagger uses two alternating groups.
-Starts occupy the first 28% of Note fade,
-and every piece finishes within the duration.
+Stagger spread sets the time between the first and last slice starts as a percentage of Note fade,
+from 0% to 90%,
+with 28% as the default.
+Zero starts every piece together;
+Simultaneous ignores the control.
+Each piece moves during the remaining duration,
+so every piece finishes within Note fade.
+All orders use the full selected spread,
+including Random stagger and Bidirectional.
 A normal departure from a settled node uses the same order.
+Changing spread while held applies to the next normal departure;
+interruptions retain their current movement speed and cancel pending waits.
 
 A factual note-off immediately reverses an unfinished pose and its MIDI opacity.
 Pending pieces cancel;

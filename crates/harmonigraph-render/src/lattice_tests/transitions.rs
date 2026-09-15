@@ -24,6 +24,16 @@ fn transition_prototypes_draw_distinct_arrivals_and_settle() {
             let frame = shooter.shot(&scene);
             if mode == NoteAnimation::Fade {
                 reference.push(frame.clone());
+                for order in AnimationOrder::ALL {
+                    scene.note_animation.order = order;
+                    scene.note_animation.stagger_spread = 0.0;
+                    assert_eq!(
+                        shooter.shot(&scene),
+                        frame,
+                        "zero spread changed Fade for {order:?}"
+                    );
+                }
+                scene.note_animation = NoteAnimationConfig::default();
             } else if step < 3 {
                 arrival_diff += differing_pixels(&frame, &reference[step]);
             } else if step == 3 {
@@ -219,10 +229,15 @@ fn all_orders_draw_complete_rotated_pieces_at_their_shared_delays() {
         for animation in NoteAnimation::ALL {
             let mut arrivals = Vec::new();
             for order in AnimationOrder::ALL {
-                scene.note_animation =
-                    NoteAnimationConfig { animation, order, radial_start: -1.0, start_size: 0.0 };
+                scene.note_animation = NoteAnimationConfig {
+                    animation,
+                    order,
+                    radial_start: -1.0,
+                    start_size: 0.0,
+                    ..Default::default()
+                };
                 let delays = scene.note_animation.delays(&scene.octave_layout, 350.0, 42, 1.0);
-                let duration = if order == AnimationOrder::Simultaneous { 1.0 } else { 0.72 };
+                let duration = scene.note_animation.movement_duration(1.0);
                 for (step, time) in
                     [0.1f32, 0.25, 0.5, 0.8, 1.0, -0.1, -0.25, -0.5, -1.0].into_iter().enumerate()
                 {

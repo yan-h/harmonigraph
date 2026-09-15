@@ -475,10 +475,7 @@ impl LatticeCallback {
                     mark_inner: scene.mark_inner,
                     angular_gap: scene.octave_gap,
                     mark_thickness: scene.mark_thickness,
-                    animation: if scene.note_animation.moves()
-                        || scene.note_animation.order
-                            != harmonigraph_scene::AnimationOrder::Simultaneous
-                    {
+                    animation: if scene.note_animation.moves() || scene.note_animation.staggers() {
                         1.0
                     } else {
                         0.0

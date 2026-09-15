@@ -49,7 +49,7 @@ fn loaded(edge: Edge) -> SharedState {
         plus_arm, plus_taper, plus_width, glow_reach, glow_strength, glow_accumulation,
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
-    poison!(a.view.note_animation; radial_start, start_size);
+    poison!(a.view.note_animation; radial_start, start_size, stagger_spread);
     poison!(a.view.atmosphere; nebula_depth, nebula_scale, nebula_speed,
         breath_amount, breath_speed);
     a.view.extent_sevens = edge.integer();
@@ -161,7 +161,7 @@ fn scenarios() -> Vec<Scenario> {
         let visits = match pane {
             SettingsPane::Tab(panes::Tab::Tuning) => 7,
             SettingsPane::Page(DisplayPage::Colors) => 2,
-            SettingsPane::Page(DisplayPage::Lattice) => 27,
+            SettingsPane::Page(DisplayPage::Lattice) => 28,
             SettingsPane::Page(DisplayPage::Analyzer) => 15,
             SettingsPane::Page(DisplayPage::Lighting) => 26,
             SettingsPane::Page(DisplayPage::System) => 2,
@@ -178,7 +178,7 @@ fn scenarios() -> Vec<Scenario> {
             pane: SettingsPane::Page(DisplayPage::Lattice),
             projection,
             enabled: true,
-            visits: 27,
+            visits: 28,
             ..base
         });
     }

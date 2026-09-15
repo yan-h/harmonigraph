@@ -40,6 +40,8 @@ struct Motion {
     melody: MarkMotion,
     bass: MarkMotion,
     order_delay: [f32; 11],
+    order_seed: u32,
+    movement_fraction: f32,
     audio_waiting: bool,
 }
 impl Default for Motion {
@@ -53,6 +55,8 @@ impl Default for Motion {
             melody: MarkMotion::default(),
             bass: MarkMotion::default(),
             order_delay: [0.0; 11],
+            order_seed: 0,
+            movement_fraction: 1.0,
             audio_waiting: false,
         }
     }
@@ -200,16 +204,26 @@ impl NodeMotion {
                     .map(|(id, _)| id.1)
                     .min()
                     .hash(&mut hash);
+                motion.order_seed = hash.finish() as u32;
                 motion.order_delay = delays(
                     &scene.octave_layout,
                     node.cents,
                     view.note_animation,
-                    hash.finish() as u32,
+                    motion.order_seed,
                     duration,
                 );
                 motion.delay = motion.order_delay;
+                motion.movement_fraction = view.note_animation.movement_duration(1.0);
             } else if !gate && motion.gate && motion.progress.iter().all(|&p| p == 1.0) {
+                motion.order_delay = delays(
+                    &scene.octave_layout,
+                    node.cents,
+                    view.note_animation,
+                    motion.order_seed,
+                    duration,
+                );
                 motion.delay = motion.order_delay;
+                motion.movement_fraction = view.note_animation.movement_duration(1.0);
             } else if gate != motion.gate {
                 // A reversal never schedules new waiting: pending pieces cancel
                 // on off and every piece reverses its current pose immediately.
@@ -229,11 +243,7 @@ impl NodeMotion {
     }
     fn advance(&mut self, dt: f64, duration: f32, env: &Envelope) {
         for motion in self.nodes.values_mut() {
-            let moving_time = if motion.order_delay.iter().any(|&d| d > 0.0) {
-                duration * 0.72
-            } else {
-                duration
-            };
+            let moving_time = duration * motion.movement_fraction;
             motion.advance(dt.max(0.0), moving_time, env);
         }
     }
@@ -532,6 +542,54 @@ mod tests {
         assert_eq!(origin(&scene).melody_level, 0.0);
         tracker.handle_event(off(1.8, 60));
         assert_eq!(origin(&draw(&mut motion, &mut tracker, &view, 2.1, true)).melody_level, 0.0);
+    }
+    #[test]
+    fn stagger_spread_spans_starts_finishes_on_time_and_reverses_without_waiting() {
+        let layout = harmonigraph_scene::octave_layout(4, 60.0, 1, 0.3, 0.7);
+        for order in AnimationOrder::ALL {
+            for spread in [0.0, NoteAnimationConfig::default().stagger_spread, 0.9] {
+                let mut view = ViewConfig { fade_shape: 0.0, ..Default::default() };
+                view.note_animation.order = order;
+                view.note_animation.stagger_spread = spread;
+                let ds = view.note_animation.delays(&layout, 350.0, 42, 1.0);
+                let active = &ds[..layout.span as usize];
+                assert_eq!(active.iter().copied().fold(f32::INFINITY, f32::min), 0.0);
+                let expected = if order == AnimationOrder::Simultaneous { 0.0 } else { spread };
+                assert!((active.iter().copied().fold(0.0, f32::max) - expected).abs() < 1e-6);
+                let mut tracker = NoteTracker::new();
+                let mut motion = NodeMotion::default();
+                tracker.handle_event(on(0.0, 60));
+                draw(&mut motion, &mut tracker, &view, 0.0, false);
+                draw(&mut motion, &mut tracker, &view, 0.04, false);
+                let before = motion.nodes[&LatticePos::ORIGIN].progress;
+                tracker.handle_event(off(0.04, 60));
+                draw(&mut motion, &mut tracker, &view, 0.05, false);
+                let m = &motion.nodes[&LatticePos::ORIGIN];
+                assert_eq!(m.delay, [0.0; 11]);
+                for (a, b) in before.into_iter().zip(m.progress) {
+                    assert!(if a > 0.0 { b < a } else { b == 0.0 });
+                }
+                tracker.handle_event(on(0.05, 60));
+                draw(&mut motion, &mut tracker, &view, 0.06, false);
+                assert_eq!(motion.nodes[&LatticePos::ORIGIN].delay, [0.0; 11]);
+                draw(&mut motion, &mut tracker, &view, 1.1, false);
+                assert_eq!(motion.nodes[&LatticePos::ORIGIN].progress, [1.0; 11]);
+                // A held control edit governs the next settled departure.
+                view.note_animation.stagger_spread = 0.9 - spread;
+                tracker.handle_event(off(1.1, 60));
+                draw(&mut motion, &mut tracker, &view, 1.1, false);
+                let expected =
+                    if order == AnimationOrder::Simultaneous { 0.0 } else { 0.9 - spread };
+                assert!(
+                    (motion.nodes[&LatticePos::ORIGIN].delay.into_iter().fold(0.0, f32::max)
+                        - expected)
+                        .abs()
+                        < 1e-6
+                );
+                draw(&mut motion, &mut tracker, &view, 2.10001, false);
+                assert_eq!(motion.nodes[&LatticePos::ORIGIN].progress, [0.0; 11]);
+            }
+        }
     }
     #[test]
     fn random_order_and_grow_bounds_are_stable() {

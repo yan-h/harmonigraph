@@ -287,6 +287,7 @@ impl AnimationOrder {
 pub struct NoteAnimationConfig {
     pub animation: NoteAnimation,
     pub order: AnimationOrder,
+    pub stagger_spread: f32,
     pub radial_start: f32,
     pub start_size: f32,
 }
@@ -295,12 +296,19 @@ impl Default for NoteAnimationConfig {
         Self {
             animation: NoteAnimation::Fade,
             order: AnimationOrder::Simultaneous,
+            stagger_spread: 0.28,
             radial_start: 0.0,
             start_size: 1.0,
         }
     }
 }
 impl NoteAnimationConfig {
+    pub fn staggers(self) -> bool {
+        self.order != AnimationOrder::Simultaneous && self.stagger_spread > 0.0
+    }
+    pub fn movement_duration(self, duration: f32) -> f32 {
+        duration * if self.staggers() { 1.0 - self.stagger_spread } else { 1.0 }
+    }
     /// Fixed delays of complete displayed sectors; shared by live/export and
     /// renderer fixtures, including wheels with unequal outer sectors.
     pub fn delays(
@@ -340,7 +348,15 @@ impl NoteAnimationConfig {
                     (x & 65535) as f32 / 65535.0
                 }
             };
-            *rank *= 0.28 * duration;
+        }
+        let min = ranks[..span].iter().copied().fold(f32::INFINITY, f32::min);
+        let max = ranks[..span].iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        for rank in &mut ranks[..span] {
+            *rank = if max > min {
+                (*rank - min) / (max - min) * self.stagger_spread * duration
+            } else {
+                0.0
+            };
         }
         ranks
     }
@@ -2105,6 +2121,11 @@ impl ViewConfig {
             finite_or(self.note_animation.radial_start, 0.0).clamp(-1.0, 1.0);
         self.note_animation.start_size =
             finite_or(self.note_animation.start_size, 1.0).clamp(0.0, 2.0);
+        self.note_animation.stagger_spread = finite_or(
+            self.note_animation.stagger_spread,
+            NoteAnimationConfig::default().stagger_spread,
+        )
+        .clamp(0.0, 0.9);
         self.fade_shape = finite_or(self.fade_shape, 0.0).clamp(0.0, 1.0);
 
         // The spectral kernel's width, against that same hole and one more: it

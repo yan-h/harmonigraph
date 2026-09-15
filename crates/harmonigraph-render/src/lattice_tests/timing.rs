@@ -215,6 +215,7 @@ fn animation_costs_by_pose_and_density() {
                         order: AnimationOrder::Circular,
                         radial_start: -1.0,
                         start_size: 0.0,
+                        ..Default::default()
                     },
                 ),
                 (
