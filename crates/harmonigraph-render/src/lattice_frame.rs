@@ -141,8 +141,19 @@ impl LatticeCallback {
         let to_gpu = |n: &harmonigraph_scene::NodeInstance| GpuInstance {
             world_pos: n.world_pos.to_array(),
             color: n.color.to_array(),
-            params: [n.activation, n.melody_level, n.bass_level, n.transition_phase],
+            params: [n.activation, n.melody_level, n.bass_level, 0.0],
             octaves: pack_octaves(&n.octaves),
+            motion: {
+                let mut packed = [0u32; 4];
+                for (i, p) in n.slice_progress.iter().enumerate() {
+                    packed[i / 3] |=
+                        (p.clamp(0.0, 1.0).mul_add(1023.0, 0.5) as u32) << ((i % 3) * 10);
+                }
+                if n.slice_progress.iter().all(|&p| p >= 1.0) {
+                    packed[3] |= 1 << 31;
+                }
+                packed
+            },
             cents: n.cents,
             marks: [n.melody_slots, n.bass_slots],
             melody_color: n.melody_color.to_array(),
@@ -282,11 +293,16 @@ impl LatticeCallback {
             if (g.marks[0] | g.marks[1]) != 0 && scene.mark_thickness > 0.0 {
                 rim = rim.max(scene.mark_inner + scene.mark_thickness);
             }
+            let midi_rim =
+                if scene.outer_outer > scene.outer_inner { scene.outer_outer } else { 0.0 };
+            let midi_rim = if (g.marks[0] | g.marks[1]) != 0 && scene.mark_thickness > 0.0 {
+                midi_rim.max(scene.mark_inner + scene.mark_thickness)
+            } else {
+                midi_rim
+            };
+            rim = rim.max(scene.note_animation.reach(midi_rim));
             if ringing && g.ring > 0.0 {
                 rim = rim.max(scene.spectral.outer);
-            }
-            if scene.note_transition != harmonigraph_scene::NoteTransition::Fade {
-                rim = rim.max(1.0) * 1.25;
             }
             // uv 1 is 1.8 node radii of the node's own sheet (`node_vertex`),
             // which is the one conversion between the bars' unit and the world.
@@ -400,11 +416,6 @@ impl LatticeCallback {
                     instance.glow[3] = atmosphere
                         .breath(scene.nodes[i].lattice_pos, scene.glow_timing.unwrap().now);
                 }
-                if scene.note_transition == harmonigraph_scene::NoteTransition::FocusAndDissolve {
-                    // Display-only boost: preserve the glow row, history, and atmosphere clock.
-                    let phase = scene.nodes[i].transition_phase.abs();
-                    instance.glow[3] *= 1.0 + 6.0 * phase * (1.0 - phase);
-                }
                 instances.push(instance);
                 if scene.glow_timing.is_some() {
                     glow_owners.push(scene.nodes[i].glow.incarnation);
@@ -464,7 +475,23 @@ impl LatticeCallback {
                     mark_inner: scene.mark_inner,
                     angular_gap: scene.octave_gap,
                     mark_thickness: scene.mark_thickness,
-                    transition: scene.note_transition as u8 as f32,
+                    animation: if scene.note_animation.moves()
+                        || scene.note_animation.order
+                            != harmonigraph_scene::AnimationOrder::Simultaneous
+                    {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    pose: Float4([
+                        f32::from(
+                            scene.note_animation.animation
+                                == harmonigraph_scene::NoteAnimation::Pop,
+                        ),
+                        scene.note_animation.start_size,
+                        scene.note_animation.radial_start,
+                        scene.note_animation.reach(1.0),
+                    ]),
                 },
                 marker: MarkerParams {
                     half_width: scene.plus_half_width,

@@ -565,13 +565,15 @@ struct GpuInstance {
     color: [f32; 4],
     /// x: activation, y: melody mark level, z: bass mark level (see
     /// lattice.wgsl). The mark levels ride with the activation rather than in
-    /// a vertex attribute of their own. w: signed linear transition phase.
+    /// a vertex attribute of their own. w: reserved, always zero.
     /// The first three are levels the same node
     /// draws at, read together by the layers that draw it.
     params: [f32; 4],
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
     octaves: [u32; 3],
+    /// Three 10-bit poses per word, indexed by displayed slice (one spare).
+    motion: [u32; 4],
     /// The node's pitch class in cents (0..1200). It both PLACES the octave
     /// indicators and COLORS them, off the one quantity: an indicator's
     /// octave has a pitch, that octave's C plus this, and the indicator sits
@@ -627,7 +629,7 @@ impl GpuInstance {
         // lattice.wgsl's `Instance` readable side by side.
         //
         attributes: &wgpu::vertex_attr_array![
-            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3,
+            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 15 => Uint32x4,
             4 => Float32, 6 => Uint32x2,
             7 => Float32x4, 8 => Float32x4, 10 => Float32, 11 => Float32,
             12 => Float32x4

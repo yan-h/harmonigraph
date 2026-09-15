@@ -74,7 +74,6 @@ struct FrameVoice<'a> {
     /// Whether this voice's departure has begun (see
     /// [`NodeInstance::departing`](crate::NodeInstance::departing)).
     departing: bool,
-    transition_phase: f32,
     /// What this voice's melody mark draws at, or `None` where it wears no
     /// melody end. The RELEASE alone under the mark's own ease — see the ease
     /// in [`derive_scene`], and
@@ -304,15 +303,6 @@ pub fn derive_scene(
                 // release holds at 1 until the key comes up AND the arrival
                 // has landed, so this cannot be a note still easing in.
                 departing: release < 1.0,
-                transition_phase: {
-                    let linear = harmonigraph_core::Envelope { shape: 0.0, ..env };
-                    let remaining = voice.release_level(now, &linear);
-                    if remaining < 1.0 {
-                        -remaining
-                    } else {
-                        linear.attack(now, voice.on_time)
-                    }
-                },
                 melody: mark(melody_since),
                 bass: mark(bass_since),
             }
@@ -332,11 +322,6 @@ pub fn derive_scene(
         // the same voice the node is lit and colored by rather than any other
         // one that happens to match this pitch class.
         let mut departing = false;
-        let mut transition_phase = 0.0;
-        let mut first_transition = None;
-        let mut arrival_here = false;
-        let mut transition_live = false;
-        let mut longest_release = 0.0f32;
         let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = node_idle;
         let mut melody = Mark::default();
@@ -347,20 +332,6 @@ pub fn derive_scene(
         for lit in &voices {
             let voice = lit.voice;
             if tuning.matches(voice.pitch_class, node_pc) {
-                // A staccato voice can be key-up while still arriving. It
-                // holds the geometry just as a held key does until its own
-                // delayed departure actually begins.
-                arrival_here |= !lit.departing;
-                longest_release = longest_release.max(-lit.transition_phase);
-                let live = !lit.departing || lit.activation > 0.0;
-                transition_live |= live;
-                // Seed a newly visible node from its earliest surviving voice.
-                // The UI's per-surface NodeMotion retains this entrance across
-                // retriggers and pruning; voice ownership is not its lifetime.
-                if live && first_transition.is_none_or(|old| voice.on_time < old) {
-                    first_transition = Some(voice.on_time);
-                    transition_phase = lit.transition_phase;
-                }
                 let envelope = lit.activation;
                 if envelope > activation {
                     activation = envelope;
@@ -474,21 +445,13 @@ pub fn derive_scene(
                 LatticePos::new(pos.threes - 2 * centered.sevens, pos.fives, center.sevens);
             (sevens_size.powi(sheets as i32), wrapped_cents(node_pc, tuning.pitch_class(namesake)))
         };
-        // A shared pitch class stays whole while any octave is held. Its
-        // individual octave sectors still release on their own envelopes.
-        if arrival_here && transition_phase < 0.0 {
-            transition_phase = 1.0;
-        } else if !arrival_here && transition_phase < 0.0 {
-            transition_phase = -longest_release;
-        }
         nodes.push(NodeInstance {
             lattice_pos: pos,
             world_pos,
             color,
             activation,
             departing,
-            transition_phase,
-            transition_live,
+            slice_progress: [1.0; OCTAVE_SLOTS],
             octaves,
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,
@@ -545,7 +508,7 @@ pub fn derive_scene(
         nodes,
         camera,
         node_radius: view.spacing * NODE_RADIUS_FACTOR,
-        note_transition: view.note_transition,
+        note_animation: view.note_animation,
         outer_inner: rings.band.0,
         outer_outer: rings.band.1,
         rings_outer: rings.outer,

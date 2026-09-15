@@ -2042,12 +2042,33 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
 }
 
 #[test]
-fn persist_round_trips_every_note_transition() {
-    for mode in harmonigraph_scene::NoteTransition::ALL {
-        let mut state = fresh();
-        state.picture.appearance.view.note_transition = mode;
-        let mut restored = fresh();
-        assert!(restored.load_persist(&state.save_persist()));
-        assert_eq!(restored.picture.appearance.view.note_transition, mode);
+fn animation_controls_round_trip_and_retired_choice_does_not_discard_appearance() {
+    for animation in harmonigraph_scene::NoteAnimation::ALL {
+        for order in harmonigraph_scene::AnimationOrder::ALL {
+            let mut state = fresh();
+            state.picture.appearance.view.note_animation =
+                harmonigraph_scene::NoteAnimationConfig {
+                    animation,
+                    order,
+                    radial_start: -0.5,
+                    start_size: 0.2,
+                };
+            let mut restored = fresh();
+            assert!(restored.load_persist(&state.save_persist()));
+            assert_eq!(
+                restored.picture.appearance.view.note_animation,
+                state.picture.appearance.view.note_animation
+            );
+        }
     }
+    let mut state = fresh();
+    state.picture.appearance.view.spacing = 3.0;
+    let saved = state
+        .save_persist()
+        .replace("note_animation:", "retired_animation_config:")
+        .replacen("view:(", "view:(note_transition:DrawAndRetract,", 1);
+    assert!(saved.contains("note_transition:DrawAndRetract"));
+    assert!(state.load_persist(&saved));
+    assert_eq!(state.picture.appearance.view.note_animation, Default::default());
+    assert_eq!(state.picture.appearance.view.spacing, 3.0);
 }

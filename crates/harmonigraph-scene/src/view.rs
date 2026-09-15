@@ -238,44 +238,129 @@ impl DrawnWindow {
     }
 }
 
-/// Selectable lattice arrival/departure prototypes. Fade is the reference picture.
+/// Easing of the existing lattice pieces, independent of their ordering.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[repr(u8)]
-pub enum NoteTransition {
+pub enum NoteAnimation {
     #[default]
     Fade,
-    PopAndSettle,
-    DrawAndRetract,
-    RippleArrival,
-    FocusAndDissolve,
-    SparkAndTrail,
-    StaggeredPop,
-    ClockwisePop,
+    Pop,
 }
-
-impl NoteTransition {
-    pub const ALL: [Self; 8] = [
-        Self::Fade,
-        Self::PopAndSettle,
-        Self::StaggeredPop,
-        Self::ClockwisePop,
-        Self::DrawAndRetract,
-        Self::RippleArrival,
-        Self::FocusAndDissolve,
-        Self::SparkAndTrail,
-    ];
-
+impl NoteAnimation {
+    pub const ALL: [Self; 2] = [Self::Fade, Self::Pop];
     pub fn label(self) -> &'static str {
         match self {
             Self::Fade => "Fade",
-            Self::PopAndSettle => "Pop and settle",
-            Self::DrawAndRetract => "Draw and retract",
-            Self::RippleArrival => "Ripple arrival",
-            Self::FocusAndDissolve => "Focus and dissolve",
-            Self::SparkAndTrail => "Spark and trail",
-            Self::StaggeredPop => "Staggered pop",
-            Self::ClockwisePop => "Clockwise pop",
+            Self::Pop => "Pop",
         }
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AnimationOrder {
+    #[default]
+    Simultaneous,
+    Circular,
+    Bidirectional,
+    RandomStagger,
+    OddEvenStagger,
+}
+impl AnimationOrder {
+    pub const ALL: [Self; 5] = [
+        Self::Simultaneous,
+        Self::Circular,
+        Self::Bidirectional,
+        Self::RandomStagger,
+        Self::OddEvenStagger,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Simultaneous => "Simultaneous",
+            Self::Circular => "Circular",
+            Self::Bidirectional => "Bidirectional",
+            Self::RandomStagger => "Random stagger",
+            Self::OddEvenStagger => "Odd/even stagger",
+        }
+    }
+}
+/// Starting pose of complete slices. Radial -1 places each anchor at the node centre.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct NoteAnimationConfig {
+    pub animation: NoteAnimation,
+    pub order: AnimationOrder,
+    pub radial_start: f32,
+    pub start_size: f32,
+}
+impl Default for NoteAnimationConfig {
+    fn default() -> Self {
+        Self {
+            animation: NoteAnimation::Fade,
+            order: AnimationOrder::Simultaneous,
+            radial_start: 0.0,
+            start_size: 1.0,
+        }
+    }
+}
+impl NoteAnimationConfig {
+    /// Fixed delays of complete displayed sectors; shared by live/export and
+    /// renderer fixtures, including wheels with unequal outer sectors.
+    pub fn delays(
+        self,
+        layout: &crate::OctaveLayout,
+        cents: f32,
+        seed: u32,
+        duration: f32,
+    ) -> [f32; 11] {
+        let span = layout.span as usize;
+        let ring = layout.ring(cents);
+        let start = (((layout.center - layout.slot_pitch(ring.base, cents)) / 12.0 + 0.5).floor()
+            as usize)
+            .min(span - 1);
+        let mut ranks = [0.0f32; 11];
+        for (i, rank) in ranks.iter_mut().enumerate().take(span) {
+            let clockwise = (i + span - start) % span;
+            *rank = match self.order {
+                AnimationOrder::Simultaneous => 0.0,
+                AnimationOrder::Circular => clockwise as f32 / (span - 1).max(1) as f32,
+                AnimationOrder::Bidirectional => {
+                    let (a, b) = layout.sector(ring.base + i as i32, cents);
+                    let angle = (std::f32::consts::FRAC_PI_2 - (a + b) * 0.5)
+                        .rem_euclid(std::f32::consts::TAU);
+                    if i == start {
+                        0.0
+                    } else {
+                        angle.min(std::f32::consts::TAU - angle) / std::f32::consts::PI
+                    }
+                }
+                AnimationOrder::OddEvenStagger => (clockwise % 2) as f32,
+                AnimationOrder::RandomStagger => {
+                    let mut x = seed.wrapping_add((clockwise as u32 + 1).wrapping_mul(0x9e3779b9));
+                    x ^= x >> 16;
+                    x = x.wrapping_mul(0x7feb352d);
+                    x ^= x >> 15;
+                    (x & 65535) as f32 / 65535.0
+                }
+            };
+            *rank *= 0.28 * duration;
+        }
+        ranks
+    }
+    pub fn moves(self) -> bool {
+        self.animation == NoteAnimation::Pop || self.radial_start != 0.0 || self.start_size != 1.0
+    }
+    /// Fixed across animation frames: only settings change allocation bounds.
+    pub fn reach(self, rim: f32) -> f32 {
+        if !self.moves() {
+            return rim;
+        }
+        let extent = |ease: f32| {
+            let scale = self.start_size + (1.0 - self.start_size) * ease;
+            scale.abs() + (1.0 + self.radial_start * (1.0 - ease) - scale).abs()
+        };
+        let pop = self.animation == NoteAnimation::Pop;
+        // Coupled anchor/scale bounds keep Grow (-1,0) at the ordinary
+        // radius, plus only the Pop curve's small actual overshoot.
+        rim * extent(0.0).max(extent(if pop { 1.046 } else { 1.0 }))
+            + if pop { rim * 0.09 * self.start_size } else { 0.0 }
     }
 }
 
@@ -802,7 +887,7 @@ pub struct ViewConfig {
     /// `a_view_missing_any_one_key_reloads_at_the_fresh_value` holds it.
     pub fade_shape: f32,
     /// Appearance of note arrivals and departures, on the shared Note fade clock.
-    pub note_transition: NoteTransition,
+    pub note_animation: NoteAnimationConfig,
     // An unlit node has no mark of its own: the marker standing at a node
     // position is the whole of what says the position is there, and it stands
     // on the home sheet alone (see `derive_pluses`) — off it, a position at
@@ -2016,6 +2101,10 @@ impl ViewConfig {
         // the bar reads out, which is exactly what this door is for. The
         // duration beside it is the Fade param rather than a blob field, and
         // has no door here to need.
+        self.note_animation.radial_start =
+            finite_or(self.note_animation.radial_start, 0.0).clamp(-1.0, 1.0);
+        self.note_animation.start_size =
+            finite_or(self.note_animation.start_size, 1.0).clamp(0.0, 2.0);
         self.fade_shape = finite_or(self.fade_shape, 0.0).clamp(0.0, 1.0);
 
         // The spectral kernel's width, against that same hole and one more: it
@@ -2377,7 +2466,7 @@ impl Default for ViewConfig {
             // the ear has finished the note. The straight line is still one
             // drag away.
             fade_shape: 0.313_509_55,
-            note_transition: NoteTransition::Fade,
+            note_animation: NoteAnimationConfig::default(),
             // Both ends marked: the marks are subtle enough to live with
             // always on, and a chord's outer voices are worth seeing without
             // having to go turn something on first.

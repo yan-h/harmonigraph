@@ -1,6 +1,6 @@
 //! Render the selectable gestures, including an audio ring surviving MIDI release.
 use super::fixtures::*;
-use harmonigraph_scene::NoteTransition;
+use harmonigraph_scene::{AnimationOrder, NoteAnimation, NoteAnimationConfig};
 
 #[test]
 fn transition_prototypes_draw_distinct_arrivals_and_settle() {
@@ -9,20 +9,20 @@ fn transition_prototypes_draw_distinct_arrivals_and_settle() {
     scene.glow_reach = 1.5;
     scene.glow_strength = 0.8;
     scene.shadow = one_shadow(0.0, 0.0, harmonigraph_scene::ShadowKernel::Gaussian);
-    let phases = [0.15, 0.4, 0.7, 1.0, -0.7, -0.4, -0.15];
+    let phases = [0.15f32, 0.4, 0.7, 1.0, -0.7, -0.4, -0.15];
     let mut reference = Vec::new();
-    for mode in NoteTransition::ALL {
-        scene.note_transition = mode;
+    for mode in NoteAnimation::ALL {
+        scene.note_animation.animation = mode;
         let mut arrival_diff = 0;
         for (step, phase) in phases.into_iter().enumerate() {
             let node = &mut scene.nodes[0];
-            node.transition_phase = phase;
+            node.slice_progress = [phase.abs(); 11];
             node.activation = phase.abs();
             node.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = phase.abs();
             node.melody_level = phase.abs();
             node.glow.level = phase.abs();
             let frame = shooter.shot(&scene);
-            if mode == NoteTransition::Fade {
+            if mode == NoteAnimation::Fade {
                 reference.push(frame.clone());
             } else if step < 3 {
                 arrival_diff += differing_pixels(&frame, &reference[step]);
@@ -40,7 +40,7 @@ fn transition_prototypes_draw_distinct_arrivals_and_settle() {
                 std::fs::write(root.join(format!("{mode:?}-{step}.ppm")), ppm).unwrap();
             }
         }
-        if mode != NoteTransition::Fade {
+        if mode != NoteAnimation::Fade {
             assert!(arrival_diff > 100, "{mode:?} did not visibly animate: {arrival_diff}");
         }
     }
@@ -51,11 +51,19 @@ fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
     use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
     use harmonigraph_scene::{derive_scene, Camera, FrameParams, ViewConfig};
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
-    for mode in NoteTransition::ALL {
+    for mode in NoteAnimation::ALL {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
-        let view = ViewConfig { note_transition: mode, ..Default::default() };
+        let view = ViewConfig {
+            note_animation: NoteAnimationConfig {
+                animation: mode,
+                radial_start: 1.0,
+                start_size: 2.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let frame = FrameParams { fade_time: 1.0, ..Default::default() };
         for now in [1.1, 1.5, 1.9, 2.1] {
             tracker.prune(now, &view.envelope(&frame));
@@ -87,8 +95,9 @@ fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
             scene.spectral.lut =
                 [glam::Vec4::new(0.9, 0.4, 0.2, 1.0); harmonigraph_scene::PITCH_LUT_N];
             scene.nodes[0].audio_ring = 1.0;
+            scene.nodes[0].slice_progress = [((2.0 - now) as f32).clamp(0.0, 1.0); 11];
             let shot = shooter.shot(&scene);
-            scene.note_transition = NoteTransition::Fade;
+            scene.note_animation = NoteAnimationConfig::default();
             let reference = shooter.shot(&scene);
             // The spark can move outside this independently opaque annulus;
             // measure the audio pixels, not the empty space around the ring.
@@ -111,41 +120,7 @@ fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
 }
 
 #[test]
-fn draw_transition_distance_shadow_softens_across_its_start_seam() {
-    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
-    let mut scene = single_marked_node(MIDDLE_C, 0);
-    scene.note_transition = NoteTransition::DrawAndRetract;
-    scene.nodes[0].transition_phase = 0.65;
-    scene.mark_inner = 1.1;
-    scene.mark_thickness = 0.4;
-    scene.glow_strength = 0.0;
-    scene.shadow = one_shadow(0.85, 0.8, harmonigraph_scene::ShadowKernel::Distance);
-    scene.background = glam::Vec4::new(0.24, 0.24, 0.24, 1.0);
-    shooter.clear = crate::wgpu::Color { r: 0.24, g: 0.24, b: 0.24, a: 1.0 };
-    let (_, up) = scene.camera.right_up();
-    let top = up * (scene.node_radius * 1.8 * (scene.mark_inner + scene.mark_thickness));
-    let (at, _) =
-        crate::project_onto(&scene.camera.view_proj(1.0), glam::Vec2::splat(256.0), top).unwrap();
-    let frame = shooter.shot(&scene);
-    let x = at.x.round() as usize;
-    let y = at.y.round() as usize;
-    let mut largest_jump = 0;
-    let mut darkest = 255;
-    for above in 3..=12 {
-        let left = frame[((y - above) * 256 + x - 1) * 4];
-        let right = frame[((y - above) * 256 + x) * 4];
-        largest_jump = largest_jump.max(left.abs_diff(right));
-        darkest = darkest.min(left.min(right));
-    }
-    assert!(darkest < 55, "fixture never reached the shadow above the mark: {darkest}");
-    assert!(
-        largest_jump < 8,
-        "hard radial shadow edge: {largest_jump}/255 between adjacent pixels"
-    );
-}
-
-#[test]
-fn slice_pops_move_complete_pieces_in_distinct_orders_and_settle() {
+fn fade_and_pop_grow_complete_pieces_and_settle() {
     let Some(mut shooter) = Shooter::new([384, 384]) else { return };
     let mut scene = single_marked_node(0, 0);
     scene.node_radius = 1.6;
@@ -166,28 +141,35 @@ fn slice_pops_move_complete_pieces_in_distinct_orders_and_settle() {
         scene.background = glam::Vec4::splat(0.2);
         scene.background.w = 1.0;
         shooter.clear = crate::wgpu::Color { r: 0.2, g: 0.2, b: 0.2, a: 1.0 };
-        scene.note_transition = NoteTransition::PopAndSettle;
-        scene.nodes[0].transition_phase = 1.0;
+        scene.note_animation = NoteAnimationConfig::default();
+        scene.nodes[0].slice_progress = [1.0; 11];
         let reference = shooter.shot(&scene);
-        for mode in [
-            NoteTransition::PopAndSettle,
-            NoteTransition::StaggeredPop,
-            NoteTransition::ClockwisePop,
-        ] {
-            scene.note_transition = mode;
+        for mode in NoteAnimation::ALL {
+            scene.note_animation = NoteAnimationConfig {
+                animation: mode,
+                radial_start: -1.0,
+                start_size: 0.0,
+                ..Default::default()
+            };
             for (step, phase) in
-                [0.08, 0.2, 0.3, 0.5, 0.72, 0.99, 1.0, -0.7, -0.3].into_iter().enumerate()
+                [0.08f32, 0.2, 0.3, 0.5, 0.72, 0.99, 1.0, -0.7, -0.3].into_iter().enumerate()
             {
-                scene.nodes[0].transition_phase = phase;
+                scene.nodes[0].slice_progress = [phase.abs(); 11];
                 let shot = shooter.shot(&scene);
                 if phase == 1.0 {
-                    assert!(shot == reference, "{mode:?} did not settle under {kernel:?}");
+                    let (mean, worst) = harmonigraph_golden::drift(&reference, &shot);
+                    // Fixed config bounds may round raster/atlas sampling by
+                    // one level; resizing them at settlement would churn cells.
+                    assert!(
+                        mean < 0.05 && worst <= 1,
+                        "{mode:?}/{kernel:?}: settled mean {mean}, worst {worst}"
+                    );
                 }
                 if phase == 0.99 {
                     let (mean, _) = harmonigraph_golden::drift(&reference, &shot);
                     assert!(mean < 0.5, "{mode:?} stepped at the end under {kernel:?}: {mean}/255");
                 }
-                if phase == 0.2 && mode != NoteTransition::PopAndSettle {
+                if phase == 0.2 {
                     previews.push(shot.clone());
                 }
                 if let Some(root) = std::env::var_os("HARMONIGRAPH_TRANSITION_FRAMES") {
@@ -211,5 +193,71 @@ fn slice_pops_move_complete_pieces_in_distinct_orders_and_settle() {
             differing_pixels(&pair[0], &pair[1]) > 100,
             "the two slice orders drew one picture"
         );
+    }
+}
+
+#[test]
+fn all_orders_draw_complete_rotated_pieces_at_their_shared_delays() {
+    let Some(mut shooter) = Shooter::new([384, 384]) else { return };
+    let mut scene = single_marked_node(0, 0);
+    scene.node_radius = 1.6;
+    scene.glow_strength = 0.0;
+    scene.octave_layout = harmonigraph_scene::octave_layout(4, 60.0, 1, 0.3, 0.7);
+    scene.nodes[0].cents = 350.0;
+    scene.nodes[0].octaves = [1.0; 11];
+    let (low, high) = scene.octave_layout.slots(350.0);
+    scene.nodes[0].melody_slots = 1 << high;
+    scene.nodes[0].bass_slots = 1 << low;
+    scene.nodes[0].melody_level = 1.0;
+    scene.nodes[0].bass_level = 1.0;
+    for kernel in
+        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
+    {
+        scene.shadow = one_shadow(0.6, 0.8, kernel);
+        scene.background = glam::Vec4::new(0.2, 0.2, 0.2, 1.0);
+        shooter.clear = crate::wgpu::Color { r: 0.2, g: 0.2, b: 0.2, a: 1.0 };
+        for animation in NoteAnimation::ALL {
+            let mut arrivals = Vec::new();
+            for order in AnimationOrder::ALL {
+                scene.note_animation =
+                    NoteAnimationConfig { animation, order, radial_start: -1.0, start_size: 0.0 };
+                let delays = scene.note_animation.delays(&scene.octave_layout, 350.0, 42, 1.0);
+                let duration = if order == AnimationOrder::Simultaneous { 1.0 } else { 0.72 };
+                for (step, time) in
+                    [0.1f32, 0.25, 0.5, 0.8, 1.0, -0.1, -0.25, -0.5, -1.0].into_iter().enumerate()
+                {
+                    scene.nodes[0].slice_progress = std::array::from_fn(|i| {
+                        let p = ((time.abs() - delays[i]) / duration).clamp(0.0, 1.0);
+                        if time < 0.0 {
+                            1.0 - p
+                        } else {
+                            p
+                        }
+                    });
+                    let shot = shooter.shot(&scene);
+                    if time == 0.25 {
+                        arrivals.push(shot.clone());
+                    }
+                    if let Some(root) = std::env::var_os("HARMONIGRAPH_TRANSITION_FRAMES") {
+                        let root = std::path::PathBuf::from(root);
+                        std::fs::create_dir_all(&root).unwrap();
+                        let mut ppm = b"P6\n384 384\n255\n".to_vec();
+                        for pixel in shot.chunks_exact(4) {
+                            ppm.extend_from_slice(&pixel[..3]);
+                        }
+                        std::fs::write(
+                            root.join(format!(
+                                "orders-{kernel:?}-{animation:?}-{order:?}-{step}.ppm"
+                            )),
+                            ppm,
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+            for pair in arrivals.windows(2) {
+                assert!(differing_pixels(&pair[0], &pair[1]) > 40, "orders drew the same picture");
+            }
+        }
     }
 }

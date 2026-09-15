@@ -5,10 +5,10 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::AppearanceDocument;
 use harmonigraph_scene::{
-    NoteTransition, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE,
-    PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
-    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
-    SPECTRAL_WIDTH_MIN,
+    AnimationOrder, NoteAnimation, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX,
+    MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX,
+    SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
+    SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 /// Sizes and timing first, then the audio and MIDI layers and their accents.
@@ -353,26 +353,44 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// different moments.
 fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
     section(ui, "Note layers");
-    let transition_width = ui.available_width().min(180.0);
-    ui.label("Transition");
-    egui::ComboBox::from_id_salt("note-transition")
-        .width(transition_width)
+    let width = ui.available_width().min(180.0);
+    ui.label("Animation");
+    egui::ComboBox::from_id_salt("note-animation")
+        .width(width)
         .truncate()
-        .selected_text(view.note_transition.label())
+        .selected_text(view.note_animation.animation.label())
         .show_ui(ui, |ui| {
-            for mode in NoteTransition::ALL {
-                ui.selectable_value(&mut view.note_transition, mode, mode.label());
+            for mode in NoteAnimation::ALL {
+                ui.selectable_value(&mut view.note_animation.animation, mode, mode.label());
             }
-        })
-        .response
-        .on_hover_text("Arrival and departure prototypes on the Note fade clock. Draw traces the radial bands; Spark travels around the rim. Pitch centres and labels stay fixed. Ripple is arrival-only. Focus uses the existing Glow (enable Reach and Strength on Lighting).");
+        });
+    ui.label("Order");
+    egui::ComboBox::from_id_salt("animation-order")
+        .width(width)
+        .truncate()
+        .selected_text(view.note_animation.order.label())
+        .show_ui(ui, |ui| {
+            for order in AnimationOrder::ALL {
+                ui.selectable_value(&mut view.note_animation.order, order, order.label());
+            }
+        });
+    ValueBar::new(&mut view.note_animation.radial_start, -1.0..=1.0, "Starting position")
+        .unit(100.0, "%").show(ui)
+        .on_hover_text("Radial offset of each slice. -100% starts at the node centre; positive values start outward.");
+    ValueBar::new(&mut view.note_animation.start_size, 0.0..=2.0, "Starting size")
+        .unit(100.0, "%")
+        .show(ui);
+    if ui.button("Grow from centre").clicked() {
+        view.note_animation.radial_start = -1.0;
+        view.note_animation.start_size = 0.0;
+    }
     // The note's timing and the curve it runs on, in that order. Fade is an
     // automatable param and Fade curve a view setting, so the two are stored apart
     // (`ViewConfig::envelope` is where they are put back together); the pane
     // is where they have to LOOK like the one setting they are.
     param_bar(ui, params, ParamKey::Fade).on_hover_text(
         "Fade-in and fade-out time for the whole node, including audio-ring visibility. \
-                 Short notes still reach full brightness. \
+                 Release immediately reverses the current pose and opacity. \
                  0 ms switches immediately.",
     );
     // Linear like every bar around it, and for the same reason: the whole

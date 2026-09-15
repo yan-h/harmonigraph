@@ -177,6 +177,108 @@ fn atmosphere_costs_by_polyphony() {
     }
 }
 
+/// Reusable cost comparison for the animation controls: real polyphony and
+/// a dense lattice, with both shadow kernels and fixed transient poses.
+#[test]
+#[ignore = "a probe: prints animation timing and asserts nothing"]
+fn animation_costs_by_pose_and_density() {
+    use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
+    use harmonigraph_scene::{
+        AnimationOrder, Camera, FrameParams, NoteAnimation, NoteAnimationConfig, ShadowKernel,
+        ViewConfig,
+    };
+    let mut tracker = NoteTracker::new();
+    for note in 48..72 {
+        tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 0.8));
+    }
+    let view = ViewConfig::default();
+    for dense in [false, true] {
+        for kernel in [ShadowKernel::Gaussian, ShadowKernel::Distance] {
+            for (name, config) in [
+                ("Fade", NoteAnimationConfig::default()),
+                (
+                    "Pop",
+                    NoteAnimationConfig { animation: NoteAnimation::Pop, ..Default::default() },
+                ),
+                (
+                    "Grow",
+                    NoteAnimationConfig {
+                        radial_start: -1.0,
+                        start_size: 0.0,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "Circular",
+                    NoteAnimationConfig {
+                        animation: NoteAnimation::Pop,
+                        order: AnimationOrder::Circular,
+                        radial_start: -1.0,
+                        start_size: 0.0,
+                    },
+                ),
+                (
+                    "Maximum",
+                    NoteAnimationConfig {
+                        animation: NoteAnimation::Pop,
+                        radial_start: 1.0,
+                        start_size: 2.0,
+                        ..Default::default()
+                    },
+                ),
+            ] {
+                let mut scene = harmonigraph_scene::derive_scene(
+                    &tracker,
+                    &Tuning::default(),
+                    &view,
+                    &view.reach(),
+                    &FrameParams { fade_time: 0.0, ..Default::default() },
+                    Camera::default(),
+                    None,
+                    1.0,
+                );
+                scene.note_animation = config;
+                scene.shadow.lattice_geometry.kernel = kernel;
+                scene.shadow.lattice_geometry.width = 0.6;
+                scene.shadow.lattice_geometry.depth = 0.8;
+                if dense {
+                    let mut node =
+                        scene.nodes.iter().find(|n| n.activation > 0.0).copied().unwrap();
+                    node.activation = 0.0;
+                    node.octaves = [1.0; 11];
+                    node.melody_level = 0.0;
+                    node.bass_level = 0.0;
+                    node.melody_slots = 0;
+                    node.bass_slots = 0;
+                    node.glow = Default::default();
+                    scene.nodes = (-7..=7)
+                        .flat_map(|y| {
+                            (-7..=7).map(move |x| {
+                                let mut n = node;
+                                n.world_pos = glam::vec3(x as f32 * 0.9, y as f32 * 0.9, 0.0);
+                                n
+                            })
+                        })
+                        .collect();
+                    scene.node_radius = 0.34;
+                }
+                for node in &mut scene.nodes {
+                    let delays = config.delays(&scene.octave_layout, node.cents, 42, 1.0);
+                    node.slice_progress =
+                        std::array::from_fn(|i| ((0.4 - delays[i]) / 0.72).clamp(0.0, 1.0));
+                }
+                time_a_frame_of_names(
+                    scene,
+                    &format!(
+                        "animation {} {kernel:?} {name}",
+                        if dense { "225 nodes" } else { "24 notes" }
+                    ),
+                );
+            }
+        }
+    }
+}
+
 fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     let size = std::env::var("PROBE_SIZE")
         .map(|v| [v.parse::<u32>().expect("PROBE_SIZE is pixels"); 2])

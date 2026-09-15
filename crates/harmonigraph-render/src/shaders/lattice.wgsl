@@ -28,7 +28,8 @@ struct NodeParams {
     mark_inner: f32,
     angular_gap: f32,
     mark_thickness: f32,
-    transition: f32,
+    animation: f32,
+    pose: vec4<f32>,
 };
 
 struct MarkerParams {
@@ -446,8 +447,8 @@ fn paint_reach(in: VsOut, aa: f32) -> f32 {
     if in.marks.x != 0u || in.marks.y != 0u {
         reach = max(reach, QUAD_MARGIN);
     }
-    if u.node.transition != 0.0 {
-        reach = max(reach, max(in.rim, 1.0) * 1.25);
+    if u.node.animation != 0.0 {
+        reach = max(reach, in.rim * u.node.pose.w + aa);
     }
     return max(reach, max(in.rim, spectral_radii().y) + aa);
 }
@@ -467,6 +468,7 @@ struct Instance {
     // node — so
     // this is the MIDI picture whole and is painted off pitch_lut throughout.
     @location(3) octaves: vec3<u32>,
+    @location(15) motion: vec4<u32>,
     // The node's pitch class in cents (0..1200). It both PLACES the octave
     // indicators and COLORS them, off the one quantity: each indicator's
     // octave has a pitch, that octave's C plus this, and the indicator sits
@@ -535,6 +537,7 @@ struct VsOut {
     @location(1) color: vec4<f32>,
     @location(2) params: vec4<f32>,
     @location(3) @interpolate(flat) octaves: vec3<u32>,
+    @location(9) @interpolate(flat) motion: vec4<u32>,
     @location(4) @interpolate(flat) cents: f32,
     // Which ROW of the ink strip is this node's — the row the light's own clock
     // handed it, which it keeps for as long as its light lasts. NOT the index
@@ -689,7 +692,8 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     // (`shadow_reach_uv`), and a quad that stopped at the ink would cut that
     // Gaussian off in a straight line. The cell draw writes the packer's
     // one-texel sampling guard too.
-    let bounds = select(rim, max(rim, 1.0) * 1.25, u.node.transition != 0.0);
+    let midi_rim = select(0.0, rim, u.node.band_outer > u.node.band_inner || ((inst.marks.x | inst.marks.y) != 0u && u.node.mark_thickness > 0.0));
+    let bounds = select(rim, max(rim, max(midi_rim * u.node.pose.w, spectral_radii().y)), u.node.animation != 0.0);
     let margin = quad_margin(bounds, shadow_reach_uv(scale));
     let radius = u.node.radius * 0.90 * 2.0 * margin * scale;
 
@@ -702,6 +706,7 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     out.color = inst.color;
     out.params = inst.params;
     out.octaves = inst.octaves;
+    out.motion = inst.motion;
     out.cents = inst.cents;
     out.strip_row = inst.glow.y;
     out.ink_carry = inst.glow.z;
@@ -1626,25 +1631,8 @@ struct NodeGeom {
     paints: bool,
 }
 
-// Transform only procedural ink. The billboard, pitch centre, label glyphs,
-// and shadow allocation retain fixed dimensions for the entire gesture.
-fn transition_scale(phase: f32) -> f32 {
-    if u.node.transition != 1.0 { return 1.0; }
-    let p = abs(phase);
-    if phase < 0.0 { return 0.55 + 0.45 * p; }
-    // Cubic back-out: about 4.5% overshoot, then exactly the original size.
-    let t = p - 1.0;
-    return 1.0 + 2.1 * t * t * t + 1.1 * t * t;
-}
-
-fn transition_input(src: VsOut) -> VsOut {
-    var result = src;
-    result.uv /= max(transition_scale(src.params.w), 0.05);
-    return result;
-}
-
 fn node_geom(src: VsOut, analytic: bool) -> NodeGeom {
-    let in = transition_input(src);
+    let in = src;
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
 
     // Screen-constant soft-band width: uv units per fragment (uv.x is linear
@@ -1657,7 +1645,7 @@ fn node_geom(src: VsOut, analytic: bool) -> NodeGeom {
     // Outside everything this node can paint. `fwidth` above is taken first
     // and in uniform control flow, as its comment requires; from here on the
     // shader is free to leave.
-    if EARLY_OUT && !analytic && u.node.transition == 0.0 && d > paint_reach(in, aa) {
+    if EARLY_OUT && !analytic && d > paint_reach(in, aa) {
         return NodeGeom(d, aa, OctRing(0, 0.0), false);
     }
 
@@ -1760,7 +1748,7 @@ fn base_node_ink(
     analytic: bool,
 ) -> NodeInk {
     let activation = in.params.x;
-    let focus = select(1.0, in.params.w * in.params.w, u.node.transition == 4.0);
+
 
     // A node is its RINGS and nothing else: the stack starts at the node's own
     // centre, so the innermost layer left on fills the middle with its own
@@ -1868,7 +1856,7 @@ fn base_node_ink(
         // slot is that ghost with its pitch painted OVER it — never one in
         // place of the other.
         let ink = oct_slot_ink(in, slot);
-        let opacity = ink.w * focus;
+        let opacity = ink.w;
         node_sd = layer_distance(
             node_sd,
             NodeLayer(shape_layer.sd, opacity, shape_layer.coverage),
@@ -1893,7 +1881,7 @@ fn base_node_ink(
             // Follow this slot's own level, even while a mark still holds
             // its extension: a released slice fades to the ground and keeps
             // the full wash field as its ink becomes grey.
-            glyph_lit = shape * level * focus;
+            glyph_lit = shape * level;
         }
     }
     // Ease the glyph layer off across the billboard's margin instead of
@@ -1914,7 +1902,7 @@ fn base_node_ink(
     // spectrum's is not drawn anywhere else.
     // Fade preserves the reference composition exactly. Prototypes compose
     // the independently gated audio reading after their MIDI-only gesture.
-    if u.node.transition == 0.0 {
+    {
         let audio_radii = spectral_radii();
         let audio = spectral_ring(
             in,
@@ -1956,7 +1944,7 @@ fn base_node_ink(
         in.marks.x,
         oct,
         in.uv,
-        NodeLayer(mark_strip.sd, in.params.y * focus, mark_strip.coverage),
+        NodeLayer(mark_strip.sd, in.params.y, mark_strip.coverage),
         mark_in,
         mark_out,
         aa,
@@ -1966,7 +1954,7 @@ fn base_node_ink(
         in.marks.y,
         oct,
         in.uv,
-        NodeLayer(mark_strip.sd, in.params.z * focus, mark_strip.coverage),
+        NodeLayer(mark_strip.sd, in.params.z, mark_strip.coverage),
         mark_in,
         mark_out,
         aa,
@@ -2022,37 +2010,21 @@ fn base_node_ink(
     );
 }
 
-// A slice is a rigidly scaled annular sector, never an angular wipe. Its
-// extension uses the same anchor, progress and inverse transform. Fixed
-// billboard/caster headroom already covers the small local overshoot.
-fn slice_pop_order(i: u32, oct: OctRing, cents: f32) -> f32 {
-    // Same coordinate as oct_ring: this identifies the complete slice that
-    // contains twelve o'clock, including rotated wheels and unequal extras.
-    let along = (oct_center() - oct_slot_pitch(oct.base, cents)) / 12.0 + 0.5;
-    let start = u32(clamp(floor(along), 0.0, f32(oct_span() - 1u)));
-    let clockwise = (i + oct_span() - start) % oct_span();
-    if u.node.transition == 7.0 { return f32(clockwise); }
-    // Rank a deterministic interleaving within this actual span, so every
-    // wheel has contiguous ranks and never waits on nonexistent slices.
-    let key = ((clockwise + 1u) * 7u) % 11u;
-    var rank = 0u;
-    for (var j = 0u; j < oct_span(); j += 1u) {
-        if ((j + 1u) * 7u) % 11u < key { rank += 1u; }
-    }
-    return f32(rank);
+// Orders are computed on the CPU, never ranked per pixel. One inverse
+// transform moves a complete slice and its extension through both shadows.
+fn slice_progress(in: VsOut, i: u32) -> f32 {
+    return f32((in.motion[i / 3u] >> ((i % 3u) * 10u)) & 1023u) / 1023.0;
 }
-
-fn slice_pop_scale(phase: f32, order: f32) -> f32 {
-    let delay = 0.28 * order / max(f32(oct_span()) - 1.0, 1.0);
-    let elapsed = select(1.0 + phase, phase, phase >= 0.0);
-    let p = clamp((elapsed - delay) / 0.72, 0.0, 1.0);
-    if phase < 0.0 { return 1.0 - p * p * (3.0 - 2.0 * p); }
+fn motion_ease(p: f32) -> f32 {
+    if u.node.pose.x == 0.0 { return p * p * (3.0 - 2.0 * p); }
     let t = p - 1.0;
-    return 1.0 + 2.1 * t * t * t + 1.1 * t * t;
+    return 1.0 + 2.1*t*t*t + 1.1*t*t;
 }
 
-fn slice_pop_ink(in: VsOut, aa: f32, oct: OctRing) -> NodeInk {
+struct AnimatedInk { body: NodeInk, marks: NodeInk, }
+fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
     var result = NodeInk(vec3<f32>(0.0), 0.0, 0.0, 0.0, EMPTY_DISTANCE);
+    var marks = result;
     let band_in = u.node.band_inner;
     let band_out = u.node.band_outer;
     let mark_in = min(u.node.mark_inner, QUAD_MARGIN - 0.02);
@@ -2060,119 +2032,67 @@ fn slice_pop_ink(in: VsOut, aa: f32, oct: OctRing) -> NodeInk {
     let anchor_radius = select(0.5 * (mark_in + mark_out), 0.5 * (band_in + band_out), band_out > band_in);
     for (var i = 0u; i < oct_span(); i += 1u) {
         let slot = oct.base + i32(i);
-        let scale = slice_pop_scale(in.params.w, slice_pop_order(i, oct, in.cents));
+        let p = slice_progress(in, i);
+        if p <= 0.0 { continue; }
+        let ease = motion_ease(p);
+        let intrinsic = u.node.pose.x * 0.045 * u.node.pose.y * sin(p * 3.14159265);
+        let scale = mix(u.node.pose.y, 1.0, ease) + intrinsic;
+        let opacity = p*p*(3.0-2.0*p);
+        if opacity < INK_FLOOR { continue; }
         if scale <= 0.001 { continue; }
         let angle = oct_mid(slot, oct);
         let anchor = anchor_radius * vec2<f32>(cos(angle), sin(angle));
-        let uv = anchor + (in.uv - anchor) / scale;
+        let start = anchor * (1.0 + u.node.pose.z * (1.0 - ease));
+        let uv = anchor + (in.uv - start) / scale;
         let d = length(uv);
         let soft = aa / scale;
         if band_out > band_in {
             let shape = outer_glyph(slot, oct, uv, glyph_band(d, band_in, band_out, 1.0, soft), band_in, band_out, soft);
             let ink = oct_slot_ink(in, slot);
             let taper = 1.0 - smoothstep(1.0, GLYPH_FADE_LIMIT, d);
-            let coverage = shape.coverage * taper * ink.w;
+            let coverage = shape.coverage * taper * ink.w * opacity;
             if coverage > result.alpha {
                 result.rgb = ink.rgb * coverage;
                 result.alpha = coverage;
                 result.lit = oct_slot_level(in.octaves, slot) / max(ink.w, 1e-4);
             }
-            result.mask = max(result.mask, shape.coverage * taper * mask_level(ink.w));
-            result.sd = layer_distance(result.sd, NodeLayer(shape.sd * scale, ink.w, shape.coverage));
+            result.mask = max(result.mask, shape.coverage * taper * mask_level(ink.w * opacity));
+            result.sd = layer_distance(result.sd, NodeLayer(shape.sd * scale, ink.w * opacity, shape.coverage));
         }
         if slot >= 0 && slot < i32(OCTAVE_SLOTS) && mark_out > mark_in {
             let bit = 1u << u32(slot);
             let melody = select(0.0, in.params.y, (in.marks.x & bit) != 0u);
             let bass = select(0.0, in.params.z, (in.marks.y & bit) != 0u);
-            let level = max(melody, bass);
+            let level = max(melody, bass) * opacity;
             let color = select(in.bass_color.rgb, in.melody_color.rgb, melody > bass);
             let shape = outer_glyph(slot, oct, uv, glyph_band(d, mark_in, mark_out, level, soft), mark_in, mark_out, soft);
             let taper = 1.0 - smoothstep(QUAD_MARGIN - 0.04, QUAD_MARGIN, d);
             let coverage = layer_coverage(shape) * taper;
-            if coverage > result.alpha {
-                result.rgb = color * coverage;
-                result.alpha = coverage;
-                result.lit = 1.0;
+            if coverage > marks.alpha {
+                marks.rgb = color * coverage;
+                marks.alpha = coverage;
+                marks.lit = 1.0;
             }
-            result.mask = max(result.mask, shape.coverage * taper * mask_level(level));
-            result.sd = layer_distance(result.sd, NodeLayer(shape.sd * scale, level, shape.coverage));
+            marks.mask = max(marks.mask, shape.coverage * taper * mask_level(level));
+            marks.sd = layer_distance(marks.sd, NodeLayer(shape.sd * scale, level, shape.coverage));
         }
     }
-    return result;
+    return AnimatedInk(result, marks);
 }
 
-// One shared evaluation for the scene and both shadow kernels. Decorative
-// rings participate in coverage/distance too, so no stale full-node shadow is
-// left behind a partial gesture. Fade bypasses every operation below.
+// Plain Fade keeps the reference composition; settled pieces bypass the loop.
 fn node_ink(src: VsOut, d: f32, aa: f32, oct: OctRing, analytic: bool) -> NodeInk {
-    let in = transition_input(src);
-    let mode = u.node.transition;
-    var ink: NodeInk;
-    if mode >= 6.0 && abs(src.params.w) != 1.0 {
-        ink = slice_pop_ink(in, aa, oct);
-    } else {
-        // Settled slices use the reference composition byte-for-byte.
-        ink = base_node_ink(in, d, aa, oct, analytic);
-    }
-    if mode == 0.0 { return ink; }
-    let phase = src.params.w;
-    let p = abs(phase);
-    if mode == 1.0 {
-        ink.sd *= max(transition_scale(phase), 0.05);
-    }
-    if mode == 2.0 && p < 1.0 {
-        // There are no lattice edges: trace the actual radial bands clockwise
-        // from twelve o'clock, and retract toward that same anchor on release.
-        let angle = fract(atan2(in.uv.x, in.uv.y) / TAU + 1.0);
-        let end_delta = abs(angle - p);
-        let nearest = min(min(angle, 1.0 - angle), min(end_delta, 1.0 - end_delta));
-        // Distance to the nearest radial boundary, including the wrapped
-        // start seam. An unwrapped (angle - p) makes Distance shadows end in
-        // a hard ray on the other side of twelve o'clock.
-        let edge = select(1.0, -1.0, angle <= p)
-            * d * sin(min(nearest * TAU, 1.57079633));
-        let coverage = select(0.0, 1.0 - smoothstep(-aa, aa, edge), p > 0.0);
-        ink.rgb *= coverage;
-        ink.alpha *= coverage;
-        ink.mask *= coverage;
-        ink.sd = max(ink.sd, edge);
-    }
-    if mode == 4.0 {
-        // Core resolves out of the existing halo, then gives way to it again.
-        // Opacity is spent per layer in base_node_ink, so the Distance
-        // shadow's half-level contour follows the actual faded layer too.
-        ink.mask *= p * p;
-    }
-    var accent = 0.0;
-    var accent_sd = EMPTY_DISTANCE;
-    let rim = max(src.rim, 0.4);
-    if mode == 3.0 && src.params.x > 0.0 && phase >= 0.0 && p < 1.0 {
-        let radius = mix(0.12, max(rim, 1.0) * 1.2, p);
-        accent_sd = abs(length(src.uv) - radius) - 0.018;
-        accent = (1.0 - smoothstep(-aa, aa, accent_sd)) * sin(p * 3.14159265);
-    }
-    if mode == 5.0 && src.params.x > 0.0 && p < 1.0 {
-        // One turn, with a tail limited to 18% of the rim. No particle history,
-        // accumulated geometry, or wall-clock phase survives a retrigger.
-        let travel = select(1.0 - p, p, phase >= 0.0);
-        let angle = fract(atan2(src.uv.x, src.uv.y) / TAU + 1.0);
-        let behind = fract(travel - angle + 1.0);
-        let tail = max(0.0, 1.0 - behind / 0.18);
-        accent_sd = max(abs(length(src.uv) - rim * 0.97) - 0.045, (behind - 0.18) * rim * TAU);
-        accent = (1.0 - smoothstep(-aa, aa, accent_sd)) * tail * tail * sin(p * 3.14159265);
-    }
-    if accent > 0.0 {
-        let rgb = mix(src.color.rgb, vec3<f32>(1.0), 0.5);
-        ink.rgb = rgb * accent + ink.rgb * (1.0 - accent);
-        ink.alpha = accent + ink.alpha * (1.0 - accent);
-        ink.mask = max(ink.mask, accent);
-        if accent >= 0.5 { ink.sd = min(ink.sd, accent_sd); }
-    }
+    if u.node.animation == 0.0 { return base_node_ink(src, d, aa, oct, analytic); }
+    let settled = (src.motion.w & 0x80000000u) != 0u;
+    let only_audio = u.node.band_outer <= u.node.band_inner && u.node.mark_thickness <= 0.0;
+    if settled || only_audio { return base_node_ink(src, d, aa, oct, analytic); }
+    let animated = animated_slice_ink(src, aa, oct);
+    var ink = animated.body;
     // Audio can remain audible and gated on after every MIDI voice is gone.
     // Sample at the original coordinates, outside all transition masks; its
     // size and level therefore cannot jump when a released voice is pruned.
     let audio_radii = spectral_radii();
-    let audio_aa = aa * max(transition_scale(phase), 0.05);
+    let audio_aa = aa;
     let audio = spectral_ring(
         src, oct, src.uv,
         glyph_band(length(src.uv), audio_radii.x, audio_radii.y, 1.0, audio_aa),
@@ -2185,6 +2105,13 @@ fn node_ink(src: VsOut, d: f32, aa: f32, oct: OctRing, analytic: bool) -> NodeIn
     let mask = audio.layer.coverage * mask_level(src.ring);
     ink.mask = mask + ink.mask * (1.0 - mask);
     ink.sd = layer_distance(ink.sd, audio.layer);
+    // Marks keep their reference place above the independently sampled audio.
+    let mark_lit = animated.marks.alpha + ink.lit * ink.alpha * (1.0 - animated.marks.alpha);
+    ink.rgb = animated.marks.rgb + ink.rgb * (1.0 - animated.marks.alpha);
+    ink.alpha = animated.marks.alpha + ink.alpha * (1.0 - animated.marks.alpha);
+    ink.lit = mark_lit / max(ink.alpha, 1e-4);
+    ink.mask = animated.marks.mask + ink.mask * (1.0 - animated.marks.mask);
+    ink.sd = min(ink.sd, animated.marks.sd);
     return ink;
 }
 
