@@ -61,23 +61,35 @@ float bucket_x(
     return (midi - _e11) * _e15;
 }
 
+float density_encode(
+    float level
+) {
+    return level * (0.1 + (0.9 * level));
+}
+
 float bucket_level(
     uint slot_1,
     uint b,
+    bool density,
     constant Locals& locals,
     device type_3 const& grid,
     constant _mslBufferSizes& _buffer_sizes
 ) {
-    float _e4 = locals.spectrum_min_midi;
-    float _e10 = locals.bins_per_semitone;
-    float midi_1 = _e4 + ((static_cast<float>(b) + 0.5) / _e10);
-    uint _e13 = stored(slot_1, b, locals, grid, _buffer_sizes);
-    float v = static_cast<float>(_e13);
-    float _e17 = locals.level0_;
-    float _e20 = locals.level_per_step;
-    float _e25 = locals.level_per_midi;
-    float level = (_e17 + (_e20 * v)) + (_e25 * midi_1);
-    return metal::clamp(level, 0.0, 1.0);
+    float _e5 = locals.spectrum_min_midi;
+    float _e11 = locals.bins_per_semitone;
+    float midi_1 = _e5 + ((static_cast<float>(b) + 0.5) / _e11);
+    uint _e14 = stored(slot_1, b, locals, grid, _buffer_sizes);
+    float v = static_cast<float>(_e14);
+    float _e18 = locals.level0_;
+    float _e21 = locals.level_per_step;
+    float _e26 = locals.level_per_midi;
+    float level_1 = (_e18 + (_e21 * v)) + (_e26 * midi_1);
+    float mapped = metal::clamp(level_1, 0.0, 1.0);
+    if (density) {
+        float _e32 = density_encode(mapped);
+        return _e32;
+    }
+    return mapped;
 }
 
 uint naga_f2u32(float value) {
@@ -87,6 +99,7 @@ uint naga_f2u32(float value) {
 float read_level(
     uint slot_2,
     float t_1,
+    bool density_1,
     constant Locals& locals,
     device type_3 const& grid,
     constant _mslBufferSizes& _buffer_sizes
@@ -94,19 +107,19 @@ float read_level(
     float sum = 0.0;
     float total = 0.0;
     uint b_1 = {};
-    uint _e4 = locals.rows;
-    float half_ = 0.5 / static_cast<float>(_e4);
-    float _e9 = bucket_x(t_1 - half_, locals);
-    float _e11 = bucket_x(t_1 + half_, locals);
-    uint _e14 = locals.bins;
-    float top = static_cast<float>(_e14) - 1.0;
-    uint idx = naga_f2u32(metal::clamp(metal::floor(_e9), 0.0, top));
-    uint last = naga_f2u32(metal::clamp(metal::floor(_e11), 0.0, top));
+    uint _e5 = locals.rows;
+    float half_ = 0.5 / static_cast<float>(_e5);
+    float _e10 = bucket_x(t_1 - half_, locals);
+    float _e12 = bucket_x(t_1 + half_, locals);
+    uint _e15 = locals.bins;
+    float top = static_cast<float>(_e15) - 1.0;
+    uint idx = naga_f2u32(metal::clamp(metal::floor(_e10), 0.0, top));
+    uint last = naga_f2u32(metal::clamp(metal::floor(_e12), 0.0, top));
     if (last > idx) {
-        uint _e29 = locals.bins;
-        float lo = metal::clamp(_e9, 0.0, static_cast<float>(_e29));
-        uint _e35 = locals.bins;
-        float hi = metal::clamp(_e11, 0.0, static_cast<float>(_e35));
+        uint _e30 = locals.bins;
+        float lo = metal::clamp(_e10, 0.0, static_cast<float>(_e30));
+        uint _e36 = locals.bins;
+        float hi = metal::clamp(_e12, 0.0, static_cast<float>(_e36));
         b_1 = idx;
         uint2 loop_bound = uint2(4294967295u);
         bool loop_init = true;
@@ -114,82 +127,93 @@ float read_level(
             if (metal::all(loop_bound == uint2(0u))) { break; }
             loop_bound -= uint2(loop_bound.y == 0u, 1u);
             if (!loop_init) {
-                uint _e64 = b_1;
-                b_1 = _e64 + 1u;
+                uint _e65 = b_1;
+                b_1 = _e65 + 1u;
             }
             loop_init = false;
-            uint _e44 = b_1;
-            if (_e44 <= last) {
+            uint _e45 = b_1;
+            if (_e45 <= last) {
             } else {
                 break;
             }
             {
-                uint _e46 = b_1;
-                uint _e51 = b_1;
-                float w = metal::max(metal::min(hi, static_cast<float>(_e46) + 1.0) - metal::max(lo, static_cast<float>(_e51)), 0.0);
-                float _e57 = sum;
-                uint _e58 = b_1;
-                float _e59 = bucket_level(slot_2, _e58, locals, grid, _buffer_sizes);
-                sum = _e57 + (w * _e59);
-                float _e62 = total;
-                total = _e62 + w;
+                uint _e47 = b_1;
+                uint _e52 = b_1;
+                float w = metal::max(metal::min(hi, static_cast<float>(_e47) + 1.0) - metal::max(lo, static_cast<float>(_e52)), 0.0);
+                float _e58 = sum;
+                uint _e59 = b_1;
+                float _e60 = bucket_level(slot_2, _e59, density_1, locals, grid, _buffer_sizes);
+                sum = _e58 + (w * _e60);
+                float _e63 = total;
+                total = _e63 + w;
             }
         }
-        float _e67 = total;
-        if (_e67 <= 0.0) {
-            float _e70 = bucket_level(slot_2, idx, locals, grid, _buffer_sizes);
-            return _e70;
+        float _e68 = total;
+        if (_e68 <= 0.0) {
+            float _e71 = bucket_level(slot_2, idx, density_1, locals, grid, _buffer_sizes);
+            return _e71;
         }
-        float _e71 = sum;
-        float _e72 = total;
-        return _e71 / _e72;
+        float _e72 = sum;
+        float _e73 = total;
+        return _e72 / _e73;
     }
-    float _e74 = bucket_x(t_1, locals);
-    float x = _e74 - 0.5;
-    uint _e80 = locals.bins;
-    uint b_2 = naga_f2u32(metal::clamp(metal::floor(x), 0.0, static_cast<float>(_e80) - 2.0));
+    float _e75 = bucket_x(t_1, locals);
+    float x = _e75 - 0.5;
+    uint _e81 = locals.bins;
+    uint b_2 = naga_f2u32(metal::clamp(metal::floor(x), 0.0, static_cast<float>(_e81) - 2.0));
     float f = metal::clamp(x - static_cast<float>(b_2), 0.0, 1.0);
-    float _e92 = bucket_level(slot_2, b_2, locals, grid, _buffer_sizes);
-    float _e95 = bucket_level(slot_2, b_2 + 1u, locals, grid, _buffer_sizes);
-    return metal::mix(_e92, _e95, f);
+    float _e93 = bucket_level(slot_2, b_2, density_1, locals, grid, _buffer_sizes);
+    float _e96 = bucket_level(slot_2, b_2 + 1u, density_1, locals, grid, _buffer_sizes);
+    return metal::mix(_e93, _e96, f);
 }
 
 uint naga_mod(uint lhs, uint rhs) {
     return lhs % metal::select(rhs, 1u, rhs == 0u);
 }
 
-float heatmap_level(
+float field_level(
     VertexOut in_1,
+    bool density_2,
     constant Locals& locals,
     device type_3 const& grid,
     constant _mslBufferSizes& _buffer_sizes
 ) {
-    uint _e3 = locals.run_slabs;
-    float n = static_cast<float>(_e3);
+    uint _e4 = locals.run_slabs;
+    float n = static_cast<float>(_e4);
     float jx = metal::clamp(metal::floor(in_1.slab - 0.5), 0.0, n - 1.0);
     uint j0_ = naga_f2u32(jx);
-    uint _e18 = locals.run_slabs;
-    uint j1_ = metal::min(j0_ + 1u, _e18 - 1u);
+    uint _e19 = locals.run_slabs;
+    uint j1_ = metal::min(j0_ + 1u, _e19 - 1u);
     float fx = metal::clamp((in_1.slab - 0.5) - jx, 0.0, 1.0);
-    uint _e31 = locals.first_slot;
-    uint _e35 = locals.capacity;
-    uint s0_ = naga_mod(_e31 + j0_, _e35);
-    uint _e39 = locals.first_slot;
-    uint _e43 = locals.capacity;
-    uint s1_ = naga_mod(_e39 + j1_, _e43);
-    float _e46 = read_level(s0_, in_1.t, locals, grid, _buffer_sizes);
-    float _e48 = read_level(s1_, in_1.t, locals, grid, _buffer_sizes);
-    return metal::mix(_e46, _e48, fx);
+    uint _e32 = locals.first_slot;
+    uint _e36 = locals.capacity;
+    uint s0_ = naga_mod(_e32 + j0_, _e36);
+    uint _e40 = locals.first_slot;
+    uint _e44 = locals.capacity;
+    uint s1_ = naga_mod(_e40 + j1_, _e44);
+    float _e47 = read_level(s0_, in_1.t, density_2, locals, grid, _buffer_sizes);
+    float _e49 = read_level(s1_, in_1.t, density_2, locals, grid, _buffer_sizes);
+    return metal::mix(_e47, _e49, fx);
+}
+
+float heatmap_level(
+    VertexOut in_2,
+    constant Locals& locals,
+    device type_3 const& grid,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    float _e2 = field_level(in_2, false, locals, grid, _buffer_sizes);
+    return _e2;
 }
 
 metal::float4 heatmap_color(
-    VertexOut in_2,
+    VertexOut in_3,
     constant Locals& locals,
     device type_3 const& grid,
     metal::texture2d<float, metal::access::sample> lut,
     constant _mslBufferSizes& _buffer_sizes
 ) {
-    float _e1 = heatmap_level(in_2, locals, grid, _buffer_sizes);
+    float _e1 = heatmap_level(in_3, locals, grid, _buffer_sizes);
     uint levels = metal::uint2(lut.get_width(), lut.get_height()).x;
     uint i_1 = metal::min(naga_f2u32(_e1 * static_cast<float>(levels)), levels - 1u);
     uint clamped_lod_e15 = metal::min(uint(0), lut.get_num_mip_levels() - 1);

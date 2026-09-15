@@ -36,7 +36,7 @@ pub mod style;
 pub mod trail;
 pub mod view;
 
-pub use atmosphere::{AtmosphereSettings, SpectralAtmosphere};
+pub use atmosphere::{AtmosphereSettings, SpectralAtmosphere, SpectrogramStyle};
 pub use camera::{Camera, Projection, Projector, VisibleSheet};
 pub use color::{
     gradient_color, grey_of_lightness, hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N,

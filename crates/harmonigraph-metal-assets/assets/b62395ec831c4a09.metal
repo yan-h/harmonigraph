@@ -14,8 +14,12 @@ struct Cloud {
     metal::float2 origin;
     metal::float2 size;
     metal::float2 step;
-    float diffusion;
     float ppp;
+    float spread;
+    float contours;
+    float contour_softness;
+    uint style;
+    uint _pad;
 };
 
 metal::float3 linear_from_gamma_rgb(
@@ -41,15 +45,36 @@ float baked_density(
     return _e17.x;
 }
 
-float diffused_level(
+float smoothed_level(
     float core,
     float material,
     constant Cloud& cloud
 ) {
-    float _e4 = cloud.diffusion;
-    float _e9 = cloud.diffusion;
-    float raw = (1.0 - _e4) * (1.0 - _e9);
-    return metal::mix(material, core, raw);
+    metal::float2 _e4 = cloud.step;
+    if (metal::all(_e4 == metal::float2(0.0))) {
+        return core;
+    }
+    return material;
+}
+
+float style_level(
+    float level,
+    constant Cloud& cloud
+) {
+    uint _e3 = cloud.style;
+    if (_e3 != 2u) {
+        return level;
+    }
+    float _e11 = cloud.contours;
+    float x = metal::clamp(level, 0.0, 1.0) * _e11;
+    float _e15 = cloud.contour_softness;
+    float _e16 = metal::fwidth(x);
+    float edge = metal::min(0.5, metal::max(_e15, _e16 * 0.5));
+    float _e32 = cloud.contours;
+    float terraces = (metal::floor(x) + metal::smoothstep(0.5 - edge, 0.5 + edge, metal::fract(x))) / _e32;
+    float _e39 = metal::fwidth(x);
+    float strength = (0.9 * metal::smoothstep(0.0, 1.0, x)) * (1.0 - metal::smoothstep(0.5, 1.5, _e39));
+    return metal::mix(level, terraces, strength);
 }
 
 uint naga_f2u32(float value) {
@@ -57,22 +82,24 @@ uint naga_f2u32(float value) {
 }
 
 metal::float4 density_color(
-    float level,
-    metal::texture2d<float, metal::access::sample> lut
+    float raw_level,
+    metal::texture2d<float, metal::access::sample> lut,
+    constant Cloud& cloud
 ) {
+    float _e1 = style_level(raw_level, cloud);
     uint levels = metal::uint2(lut.get_width(), lut.get_height()).x;
-    float x = (metal::clamp(level, 0.0, 1.0) * static_cast<float>(levels)) - 0.5;
-    uint i = naga_f2u32(metal::clamp(metal::floor(x), 0.0, static_cast<float>(levels - 1u)));
-    uint clamped_lod_e22 = metal::min(uint(0), lut.get_num_mip_levels() - 1);
-    metal::float4 _e22 = lut.read(metal::min(metal::uint2(metal::uint2(i, 0u)), metal::uint2(lut.get_width(clamped_lod_e22), lut.get_height(clamped_lod_e22)) - 1), clamped_lod_e22);
-    metal::float3 a = _e22.xyz;
-    if (x < 0.0) {
-        return metal::float4((a * (x + 0.5)) * 2.0, 1.0);
+    float x_1 = (metal::clamp(_e1, 0.0, 1.0) * static_cast<float>(levels)) - 0.5;
+    uint i = naga_f2u32(metal::clamp(metal::floor(x_1), 0.0, static_cast<float>(levels - 1u)));
+    uint clamped_lod_e23 = metal::min(uint(0), lut.get_num_mip_levels() - 1);
+    metal::float4 _e23 = lut.read(metal::min(metal::uint2(metal::uint2(i, 0u)), metal::uint2(lut.get_width(clamped_lod_e23), lut.get_height(clamped_lod_e23)) - 1), clamped_lod_e23);
+    metal::float3 a = _e23.xyz;
+    if (x_1 < 0.0) {
+        return metal::float4((a * (x_1 + 0.5)) * 2.0, 1.0);
     }
-    uint clamped_lod_e42 = metal::min(uint(0), lut.get_num_mip_levels() - 1);
-    metal::float4 _e42 = lut.read(metal::min(metal::uint2(metal::uint2(metal::min(i + 1u, levels - 1u), 0u)), metal::uint2(lut.get_width(clamped_lod_e42), lut.get_height(clamped_lod_e42)) - 1), clamped_lod_e42);
-    metal::float3 b = _e42.xyz;
-    return metal::float4(metal::mix(a, b, metal::fract(x)), 1.0);
+    uint clamped_lod_e43 = metal::min(uint(0), lut.get_num_mip_levels() - 1);
+    metal::float4 _e43 = lut.read(metal::min(metal::uint2(metal::uint2(metal::min(i + 1u, levels - 1u), 0u)), metal::uint2(lut.get_width(clamped_lod_e43), lut.get_height(clamped_lod_e43)) - 1), clamped_lod_e43);
+    metal::float3 b = _e43.xyz;
+    return metal::float4(metal::mix(a, b, metal::fract(x_1)), 1.0);
 }
 
 struct fs_cloud_backdrop_linearInput {
@@ -92,8 +119,8 @@ fragment fs_cloud_backdrop_linearOutput fs_cloud_backdrop_linear(
 ) {
     const VertexOut in = { position_1, varyings.slab, varyings.t };
     float _e4 = baked_density(in.position.xy, close_light, cloud_sampler, cloud);
-    float _e5 = diffused_level(0.0, _e4, cloud);
-    metal::float4 _e6 = density_color(_e5, lut);
+    float _e5 = smoothed_level(0.0, _e4, cloud);
+    metal::float4 _e6 = density_color(_e5, lut, cloud);
     metal::float3 _e8 = linear_from_gamma_rgb(_e6.xyz);
     return fs_cloud_backdrop_linearOutput { metal::float4(_e8, 1.0) };
 }

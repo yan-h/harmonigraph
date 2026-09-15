@@ -445,7 +445,7 @@ mod tests {
                     );
                 }
                 assert!((state.runtime.spectrum.column_lag() - lag).abs() < 1e-12);
-                let bins: Vec<_> = history.iter().map(|c| c.db.to_vec()).collect();
+                let bins: Vec<_> = history.iter().map(|c| c.db().to_vec()).collect();
                 if let Some(previous) = &previous_bins {
                     assert_eq!(&bins, previous, "batching changed spectrum bytes at {fps} fps");
                 }
@@ -457,7 +457,7 @@ mod tests {
                     .expect("the MIDI event reached the replayed roll");
                 assert_eq!(note.start, origin + 0.8);
                 let energy = |c: &harmonigraph_ui::SpectrogramColumn| {
-                    c.db.iter().map(|&v| u64::from(v)).sum::<u64>()
+                    c.db().iter().map(|&v| u64::from(v)).sum::<u64>()
                 };
                 let peak = history.iter().map(energy).max().unwrap();
                 assert!(peak > 0, "anti-phase transient reached the analyzer");

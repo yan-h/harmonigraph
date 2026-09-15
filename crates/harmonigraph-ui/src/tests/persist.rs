@@ -1713,20 +1713,30 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
 #[test]
 fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     use harmonigraph_scene::SpectralAtmosphere;
-    let partial: SpectralAtmosphere =
-        ron::from_str("(diffusion:0.23, enabled:false, glow:0.4, spread:2.0, texture:0.8)")
-            .unwrap();
-    assert_eq!(partial, SpectralAtmosphere { diffusion: 0.23, ..Default::default() });
+    let partial: SpectralAtmosphere = ron::from_str(
+        "(diffusion:0.23, blur_mix:0.6, enabled:false, glow:0.4, spread:2.0, texture:0.8)",
+    )
+    .unwrap();
+    assert_eq!(partial, SpectralAtmosphere { spread: 2.0, ..Default::default() });
     let mut state = fresh();
-    state.picture.appearance.spectrum.atmosphere =
-        SpectralAtmosphere { diffusion: f32::NAN, analyzer_softness: 999.0, note_glow: 0.27 };
+    state.picture.appearance.spectrum.atmosphere = SpectralAtmosphere {
+        pitch_softness: f32::NAN,
+        contours: 64.0,
+        analyzer_softness: 999.0,
+        note_glow: 0.27,
+        ..Default::default()
+    };
     state.picture.appearance.camera.yaw = 1.23;
     let saved = state.save_persist();
     let mut editor = fresh();
     assert!(editor.load_persist(&saved));
     let offline = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
-    let expected =
-        SpectralAtmosphere { analyzer_softness: 1.0, note_glow: 0.27, ..Default::default() };
+    let expected = SpectralAtmosphere {
+        contours: 64.0,
+        analyzer_softness: 1.0,
+        note_glow: 0.27,
+        ..Default::default()
+    };
     assert_eq!(editor.picture.appearance.spectrum.atmosphere, expected);
     assert_eq!(offline.spectrum.atmosphere, expected);
     assert_eq!(editor.picture.appearance.camera.yaw, 1.23);

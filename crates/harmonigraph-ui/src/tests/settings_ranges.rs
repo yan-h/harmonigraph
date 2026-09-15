@@ -60,7 +60,7 @@ fn loaded(edge: Edge) -> SharedState {
     poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
         attack, release, keyline, roll_seconds, roll_thickness, roll_opacity, roll_lead,
         roll_lead_fade, roll_lead_release, note_name_scale, volume_floor_db, volume_ceiling_db);
-    poison!(a.spectrum.atmosphere; diffusion, analyzer_softness, note_glow);
+    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, contours, contour_softness, analyzer_softness, note_glow);
     saved.workspace.interaction.ui_scale = v;
     // These owners have NO ValueBar/RangeBar today. Still pass through their
     // real shared load boundary; zero Video visits below explicitly records
@@ -161,7 +161,7 @@ fn scenarios() -> Vec<Scenario> {
             SettingsPane::Tab(panes::Tab::Tuning) => 7,
             SettingsPane::Page(DisplayPage::Colors) => 2,
             SettingsPane::Page(DisplayPage::Lattice) => 25,
-            SettingsPane::Page(DisplayPage::Analyzer) => 15,
+            SettingsPane::Page(DisplayPage::Analyzer) => 19,
             SettingsPane::Page(DisplayPage::Lighting) => 26,
             SettingsPane::Page(DisplayPage::System) => 2,
             SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console | panes::Tab::Notes) => 0,
@@ -260,6 +260,16 @@ fn check(edge: Edge) {
             assert_eq!(saw("Fifth") && saw("Half-life"), scenario.expanded);
         }
         for visit in visits {
+            if visit.label == "Contours" {
+                assert_eq!(visit.range, 2.0..=64.0);
+                assert_eq!(
+                    visit.values,
+                    vec![match edge {
+                        Edge::Low => 2.0,
+                        Edge::High => 64.0,
+                    }]
+                );
+            }
             for value in &visit.values {
                 if !visit.range.contains(value) {
                     violations.push(format!("{edge:?} {scenario:?}: {visit:?}"));

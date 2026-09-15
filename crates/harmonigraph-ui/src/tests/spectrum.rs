@@ -320,11 +320,11 @@ fn the_live_path_and_the_offline_precompute_agree_on_stereo() {
     // Live: one batch, dated so the newest frame sits at the end of the second.
     let mut spectrum = AudioSpectrum::default();
     spectrum.push_samples(&samples, 2, sr, span, &cfg);
-    let live: Vec<_> = spectrum.history().iter().map(|c| (c.time, c.db.clone())).collect();
+    let live: Vec<_> = spectrum.history().iter().map(|c| (c.time, c.db().clone())).collect();
 
     // Offline: the same buffer, the whole-song build.
     let ws = precompute(&samples, 2, sr, 0.0, 0.0, span, &cfg);
-    let offline: Vec<_> = ws.columns.iter().map(|c| (c.time, c.db.clone())).collect();
+    let offline: Vec<_> = ws.columns.iter().map(|c| (c.time, c.db().clone())).collect();
 
     assert!(live.len() > 50, "only {} live columns for a second of audio", live.len());
     assert_eq!(live.len(), offline.len(), "different column counts");
@@ -391,7 +391,7 @@ fn a_tones_energy_lands_at_the_time_the_tone_started() {
     let a4 = ((69.0 - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
         * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32)
         .round() as usize;
-    let loudest = ws.columns.iter().map(|c| c.db[a4]).max().expect("columns");
+    let loudest = ws.columns.iter().map(|c| c.db()[a4]).max().expect("columns");
     assert!(db_of(loudest) > -10.0, "the tone should read loudly at its own bin");
 
     // Where the ridge reaches half power is what the eye reads as the onset:
@@ -401,7 +401,7 @@ fn a_tones_energy_lands_at_the_time_the_tone_started() {
     let half = ws
         .columns
         .iter()
-        .find(|c| c.db[a4] >= half_power)
+        .find(|c| c.db()[a4] >= half_power)
         .expect("the tone must reach half power somewhere");
     let window = f64::from(cfg.window.samples() as u32) / f64::from(sr);
     assert!(
@@ -425,16 +425,10 @@ fn spectrum_history_reaches_the_retention_cap() {
         "history reaches {reach:.0} s, retention asks for {:.0} s — add a tier",
         AudioSpectrum::HISTORY_MAX_SECONDS,
     );
-    // And it fits in a budget worth calling an optimization: the fixed-rate
-    // f32 ring needed 160 MB to reach a third as far.
-    //
-    // The 30 MB is bought by the DISPLAY rather than by reach: `LIVE_SLAB_CAP`
-    // is 1024 so that a close-up span is cut into slabs as fine as the data,
-    // and the tiers have to keep up with the cap (see COARSE_COLUMNS) — so the
-    // cap, the tier size, and this number are one decision. Reach comes along
-    // for free.
+    // Preserve linear sums through coarsening: four bytes per bin, without
+    // a redundant quantized history. The GPU and finalized slabs remain bytes.
     let megabytes = SpectrumHistory::max_bytes() as f64 / (1024.0 * 1024.0);
-    assert!(megabytes < 32.0, "the full store is {megabytes:.1} MB");
+    assert!(megabytes < 128.0, "the full store is {megabytes:.1} MiB");
 }
 
 /// The bargain the tiers are struck on: a column of age `a` is only ever drawn
@@ -512,7 +506,7 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
     // A steady tone lands its energy at A4's bin.
     let a4 = ((69.0 - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32).round() as usize;
     let mid = &ws.columns[ws.columns.len() / 2];
-    let peak = (0..SPECTRUM_BINS).max_by_key(|&b| mid.db[b]).unwrap();
+    let peak = (0..SPECTRUM_BINS).max_by_key(|&b| mid.db()[b]).unwrap();
     assert!(peak.abs_diff(a4) <= 1, "peak bin {peak} should be A4 (bin {a4})");
 
     // `time_origin` shifts every column onto the take's timeline.
@@ -528,7 +522,7 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
     assert_eq!(ws.columns.len(), again.columns.len());
     for (a, b) in ws.columns.iter().zip(&again.columns) {
         assert_eq!(a.time, b.time);
-        assert_eq!(a.db, b.db, "precompute is deterministic");
+        assert_eq!(a.db(), b.db(), "precompute is deterministic");
     }
 }
 
@@ -612,7 +606,8 @@ fn a_late_window_precomputes_only_its_audio_on_the_take_grid() {
             .find(|candidate| candidate.time == column.time)
             .unwrap_or_else(|| panic!("{} is not on the full take's hop grid", column.time));
         assert_eq!(
-            column.db, reference.db,
+            column.db(),
+            reference.db(),
             "the sliced analyzer lost the history behind column {}",
             column.time,
         );
@@ -978,7 +973,7 @@ fn physical_chunks_preserve_the_complete_logical_batch() {
                     assert_eq!(whole.frames_seen, chunked.frames_seen);
                     assert_eq!(whole.last_samples, chunked.last_samples);
                     let columns = |s: &AudioSpectrum| {
-                        s.history().iter().map(|c| (c.time, c.db.clone())).collect::<Vec<_>>()
+                        s.history().iter().map(|c| (c.time, c.db().clone())).collect::<Vec<_>>()
                     };
                     assert_eq!(columns(&whole), columns(&chunked));
                 }
@@ -1008,8 +1003,9 @@ fn whole_song_feeding_preserves_margins_grid_and_large_logical_hops() {
                 Ok::<_, ()>(())
             })
             .unwrap();
-        let columns =
-            |ws: &WholeSong| ws.columns.iter().map(|c| (c.time, c.db.clone())).collect::<Vec<_>>();
+        let columns = |ws: &WholeSong| {
+            ws.columns.iter().map(|c| (c.time, c.db().clone())).collect::<Vec<_>>()
+        };
         assert_eq!(columns(&whole), columns(&chunked));
         if start == 20.0 {
             assert!(ranges.is_empty());

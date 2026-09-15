@@ -35,8 +35,8 @@ use harmonigraph_scene::Gradient;
 ///
 /// Raising this is not free: the store's tiers have to keep up with it (see
 /// [`SpectrumHistory::COARSE_COLUMNS`](harmonigraph_core::SpectrumHistory::COARSE_COLUMNS),
-/// which must be at least as large), so this is what puts the store at 30 MB
-/// where half the cap would cost 17. What the larger one buys is the SHORT
+/// which must be at least as large), so this puts linear-power history at
+/// about 120 MiB, four times the former byte store. What the larger one buys is the SHORT
 /// spans, which is where a halving still lands somewhere the data can tell
 /// apart: a 12 s close-up is cut into 16 ms slabs here and 32 ms ones at half
 /// this, against an 8 ms column rate. At the three-minute Span a fresh view
@@ -768,8 +768,7 @@ pub(crate) fn build(
 ) -> Option<TexLayout> {
     let bucket = plan.bucket;
     // Aggregate the in-window columns into one slab per depth pixel by a FIXED
-    // time grid, MAX within each slab (which keeps a short note's peak and pins
-    // it against the scroll — see `aggregate_slabs`). Slabs stay in BUCKET
+    // time grid, mean linear power within each slab. Slabs stay in BUCKET
     // space: the rows read them in the fragment shader, so the fold is blind to
     // the pitch axis and a zoom or pan of it re-reads this grid instead of
     // re-walking the store.
@@ -848,41 +847,10 @@ pub(crate) fn frame_data(
     Some((grid, gpu.shades(cfg)))
 }
 
-/// Group `columns` (oldest first) into time-slabs of `bucket` seconds, taking
-/// each bucket's MAX over the columns that landed in the slab. Returns each
-/// slab's center time and a flat slab-major grid of whole spectra
-/// (`slabs * SPECTRUM_BINS`).
-///
-/// The slabs stay in BUCKET space — the display rows read them in the fragment
-/// shader, not here. That order is what makes the grid a thing worth keeping: it
-/// depends on nothing but the slab width, so the pitch axis can zoom, pan or
-/// change its row count and the fold is untouched. The two axes still aggregate
-/// DIFFERENTLY, and the asymmetry is still the point.
-/// Time takes a plain max, because a spectrogram cell answers "was there
-/// anything here" and averaging a brief loud column with the silence either
-/// side answers "not much" — a slab spans a few columns of a heavily
-/// OVERLAPPED stream (95% at the live rate, and 84% even where
-/// [`WholeSong`](crate::WholeSong) stretches the hop for a three-minute take),
-/// so the max is over near-copies of one measurement rather than over a
-/// distribution. Pitch is RESAMPLED instead
-/// ([`footprint_mean_db`](crate::panes::spectral::spectrogram::footprint_mean_db)),
-/// because a pixel zoomed out spans a dozen INDEPENDENT buckets and the max of
-/// a dozen samples of a noise floor is a function of how many were drawn.
-///
-/// Maxing the buckets FIRST and reading the rows from the result is not the
-/// same picture as reading each column and maxing the answers — a mean over a
-/// slab's maxed buckets can only come out at or above the max of the per-column
-/// resamples, and a lerp across a maxed pair is not the max of the lerps. The
-/// difference lives entirely inside one slab, between columns that are
-/// near-copies of one measurement (the same overlap argument as the max
-/// itself), where it is a fraction of a dB; what it buys is the fold's
-/// independence from the rows, which is the whole cost of a pitch gesture.
-///
-/// The slab a column lands in is `floor(time / bucket)` — a function of
-/// absolute time alone, so it doesn't move as columns scroll off the far end
-/// of the run. That, plus MAX (rather than dropping samples), is what stops a
-/// short, bright note from flickering: its peak is kept and stays in one
-/// slowly-scrolling slab instead of blinking in and out with the sampling.
+/// Group FFT-center point samples into fixed time slabs. Add linear power
+/// and represented counts, then divide once before quantizing. Coarse history
+/// contributes the same weight as the raw measurements it replaced.
+/// Pitch, level, style and palette remain independent downstream reads.
 fn aggregate_slabs<'a>(
     columns: impl Iterator<Item = &'a crate::SpectrogramColumn>,
     bucket: f64,
@@ -891,33 +859,63 @@ fn aggregate_slabs<'a>(
     for col in columns {
         grid.fold(col, bucket, None);
     }
+    grid.finish();
     (grid.centers, grid.power)
 }
 
-/// The growing slab grid the spectrogram is read out of: `centers[i]` is
-/// slab `i`'s center time and `power` is the flat slab-major
-/// `[slab][source bucket]` MAX grid (`slab * SPECTRUM_BINS + bucket`).
-/// [`fold`](SlabGrid::fold) is the single per-column step both
-/// [`aggregate_slabs`] (batch, from scratch) and [`SpectrogramAgg`]
-/// (incremental, live) drive — so the two can never disagree.
-///
-/// A slab is a whole SPECTRUM, not a column of display rows. The rows read the
-/// grid in the fragment shader, so nothing here knows the pitch scale or the
-/// row count — which is what lets a pitch drag re-read a grid that is already
-/// folded instead of re-walking the store on every frame of itself.
-///
-/// Held in the same dB bytes the columns are stored in: MAX is order-preserving
-/// under the encoding, so aggregating in it is exact, and folding a column is
-/// an elementwise byte max the compiler vectorizes.
+/// The same accumulator serves live, offline and partial first-slab repair.
+/// f64 summation avoids accumulating rounding error during a long live slab.
+/// History sums remain f32 (at most 64 samples per group), so regrouping can
+/// still differ by a final byte right at a quantization boundary.
+#[derive(Clone)]
+struct PowerMean {
+    sum: Box<[f64; SPECTRUM_BINS]>,
+    count: u64,
+}
+
+impl Default for PowerMean {
+    fn default() -> Self {
+        Self { sum: Box::new([0.0; SPECTRUM_BINS]), count: 0 }
+    }
+}
+
+impl PowerMean {
+    fn add(&mut self, col: &crate::SpectrogramColumn) {
+        for (sum, &fresh) in self.sum.iter_mut().zip(col.power_sum.iter()) {
+            *sum += fresh as f64;
+        }
+        self.count += col.count as u64;
+    }
+
+    fn write(&self, out: &mut [BucketDb]) {
+        for (out, &sum) in out.iter_mut().zip(self.sum.iter()) {
+            *out = harmonigraph_core::spectrogram::quantize(if self.count == 0 {
+                0.0
+            } else {
+                (sum / self.count as f64) as f32
+            });
+        }
+    }
+
+    fn clear(&mut self) {
+        self.sum.fill(0.0);
+        self.count = 0;
+    }
+}
+
+/// Completed slabs stay byte-sized. Only the active slab retains sums/counts;
+/// continuing it after a display read never averages its quantized output.
 #[derive(Default, Clone)]
 struct SlabGrid {
+    mean: PowerMean,
+    dirty: bool,
     centers: Vec<f64>,
     power: Vec<BucketDb>,
     /// `held[i]` marks slab `i` as a COPY of slab `i - 1` — an empty slab the
     /// jitter hold filled — rather than a slab of its own columns. It is what
     /// lets [`SpectrogramAgg::view`] carry its pruning of the window's first
     /// slab into the copies behind it; without it a held slab keeps energy from
-    /// columns that have since left the window. A held slab is never MAXed
+    /// columns that have since left the window. A held slab is never accumulated into
     /// afterwards (columns arrive in time order, so it is already behind the
     /// front when it is created), so the mark stays true for its whole life.
     held: Vec<bool>,
@@ -926,7 +924,7 @@ struct SlabGrid {
 
 impl SlabGrid {
     /// Fold one column (columns arrive oldest-first) into the grid, appending
-    /// slabs and MAXing the column into the current one. Returns `false` iff
+    /// slabs and adding the column to the current power mean. Returns `false` iff
     /// the column ran BACKWARDS in time relative to the current slab — batch
     /// ignores the result (it just starts a fresh row, as before), while the
     /// incremental aggregator treats it as a broken invariant and rebuilds.
@@ -935,6 +933,10 @@ impl SlabGrid {
     fn fold(&mut self, col: &crate::SpectrogramColumn, bucket: f64, min_key: Option<i64>) -> bool {
         let nb = SPECTRUM_BINS;
         let key = (col.time / bucket).floor() as i64;
+        if self.cur_key != Some(key) {
+            self.finish();
+            self.mean.clear();
+        }
         let forward = match self.cur_key {
             Some(k) if k == key => true,
             // A slab with no columns in it STILL gets a row, so the grid stays
@@ -981,16 +983,20 @@ impl SlabGrid {
                 other.is_none()
             }
         };
-        let base = self.power.len() - nb;
-        // Branchless, so the loop vectorizes: with the compare written as a
-        // branch this is the whole cost of a refold, byte by byte.
-        for (kept, &fresh) in self.power[base..].iter_mut().zip(col.db.iter()) {
-            *kept = (*kept).max(fresh);
-        }
+        self.mean.add(col);
+        self.dirty = true;
         if let Some(min_key) = min_key {
             self.retain_from(min_key, bucket);
         }
         forward
+    }
+
+    fn finish(&mut self) {
+        if self.dirty {
+            let base = self.power.len() - SPECTRUM_BINS;
+            self.mean.write(&mut self.power[base..]);
+            self.dirty = false;
+        }
     }
 
     /// Keep one predecessor when the whole grid is older than the interval.
@@ -1044,15 +1050,14 @@ impl SlabGrid {
 /// crossing a ladder rung), a backward transport jump, or a window that jumped
 /// outside the kept grid falls back to a full rebuild — each of which is just
 /// `aggregate_slabs` again, so correctness never rides on the fast path alone;
-/// and the refold is an elementwise byte max per column, a few milliseconds
-/// even over the whole store. The offline whole-song path does NOT use this
+/// and the refold adds linear powers, then quantizes once per slab. The offline whole-song path does NOT use this
 /// (its column set is fixed and already cached after the first frame).
 ///
 /// **A folded slab is never recomputed, even when the store re-writes the
 /// columns behind it.** Columns arrive in time order, so no future column can
 /// land in a slab the newest one has already passed: the slab is FINAL the
 /// moment it is behind the front. What is not final is the STORE — past
-/// `SpectrumHistory`'s finest tier, columns are MAX-merged in pairs and re-timed
+/// `SpectrumHistory`'s finest tier, columns are power-summed in pairs and re-timed
 /// to their midpoint as they age. Re-deriving an old slab from the merged store
 /// therefore answers a slightly different question than folding the raw columns
 /// did — a merged pair lands in one slab rather than straddling two, smearing
@@ -1185,6 +1190,7 @@ impl SpectrogramAgg {
                 self.rebuild(history, bucket, min_key);
             }
         }
+        self.grid.finish();
         self.view(history, first, bucket, target)
     }
 
@@ -1195,7 +1201,7 @@ impl SpectrogramAgg {
     ///
     /// The recompute is what keeps this equal to batch at the far edge. Batch
     /// folds only columns from `first` onward, so an earlier column sharing that
-    /// slab must not count, and the grid MAXed one in while it was still in
+    /// slab must not count, and the grid included one while it was still in
     /// window. It is a handful of columns, so still O(1) per frame.
     ///
     /// The grid keeps what the GPU's COPY keeps — `keep` slabs, sized off the pane —
@@ -1250,17 +1256,14 @@ impl SpectrogramAgg {
         if t != (centers[0] / bucket).floor() as i64 {
             return (centers, power);
         }
-        for v in &mut power[0..nb] {
-            *v = 0;
-        }
+        let mut mean = PowerMean::default();
         for c in history.iter_from(first) {
             if (c.time / bucket).floor() as i64 != t {
                 break;
             }
-            for (kept, &fresh) in power[..nb].iter_mut().zip(c.db.iter()) {
-                *kept = (*kept).max(fresh);
-            }
+            mean.add(c);
         }
+        mean.write(&mut power[..nb]);
         // A HELD slab is a copy of the one before it, so pruning the first slab
         // has to reach the run of copies standing behind it — they were filled
         // with what the grid held, columns now out of window included, and only
@@ -1545,7 +1548,7 @@ mod tests {
                     let newest_max = history
                         .iter_from(first)
                         .filter(|c| (c.time / bucket).floor() as i64 == newest_key)
-                        .map(|c| c.db[5])
+                        .map(|c| c.db()[5])
                         .max()
                         .unwrap();
                     assert_eq!(power[power.len() - SPECTRUM_BINS + 5], newest_max);
@@ -1593,14 +1596,14 @@ mod tests {
     #[test]
     fn bounded_retention_preserves_clipped_holds_and_releases_old_capacity() {
         let mut history = crate::SpectrumHistory::default();
-        // Two columns in the predecessor slab: its full MAX seeds the hold.
+        // Two columns in the predecessor slab: its full mean seeds the hold.
         for (t, p) in [(0.1, 1.0), (0.8, 0.25), (2.1, 0.5)] {
             history.push(col(t, &[(5, p)]));
         }
         let mut agg = SpectrogramAgg::new();
         let (centers, power) = agg.window(&history, 0, 1.0, 2);
         assert_eq!(centers, [1.5, 2.5]);
-        assert_eq!([power[5], power[SPECTRUM_BINS + 5]], [q(1.0), q(0.5)]);
+        assert_eq!([power[5], power[SPECTRUM_BINS + 5]], [q(0.625), q(0.5)]);
 
         // A larger retained budget cannot invent the missing older coverage.
         for key in 3..=10 {
@@ -1623,10 +1626,9 @@ mod tests {
     }
 
     #[test]
-    fn a_short_loud_column_keeps_its_peak_through_aggregation() {
-        // A brief loud note between two quiet columns, all in one slab. MAX
-        // must keep the peak — the flicker came from dropping this thin, bright
-        // sample.
+    fn a_short_loud_column_contributes_its_linear_power_mean() {
+        // A brief loud note between quiet columns: each contributes once,
+        // including the quiet measurements. Mean dB would give a different result.
         let cols = [
             col(0.00, &[(5, 0.001)]),
             col(0.02, &[(5, 1.0)]), // the short note
@@ -1634,7 +1636,7 @@ mod tests {
         ];
         let (centers, power) = aggregate_slabs(cols.iter(), 1.0);
         assert_eq!(centers.len(), 1, "one slab of width 1.0 s holds all three");
-        assert_eq!(power[5], q(1.0), "the short note's peak survives");
+        assert_eq!(power[5], q((0.001 + 1.0 + 0.002) / 3.0), "mean power, not max or mean dB");
     }
 
     /// A stall in the analyzer leaves a hole in the column stream — switching
@@ -2042,7 +2044,7 @@ mod tests {
     /// never does, because it pushes 14 columns and tier 0 holds
     /// [`crate::SpectrumHistory::FINE_COLUMNS`] of them.
     ///
-    /// Once tier 0 overflows, its two oldest columns are MAX-merged into one at
+    /// Once tier 0 overflows, its two oldest columns are power-summed into one at
     /// their MIDPOINT time (`SpectrogramColumn::absorb`), which rewrites history
     /// the grid has ALREADY folded. Batch over the store AS IT NOW STANDS can
     /// therefore see something else entirely — the merged column falls in a slab
@@ -2104,6 +2106,25 @@ mod tests {
         // And it did it WITHOUT falling back: the merging behind the window is
         // exactly what used to force a rescan on every frame at long Spans.
         assert_eq!(agg.rebuilds, 1, "a merge behind the window forced a rebuild");
+    }
+
+    #[test]
+    fn a_full_refold_weights_mixed_tiers_by_original_sample_count() {
+        let mut history = crate::SpectrumHistory::default();
+        let n = crate::SpectrumHistory::FINE_COLUMNS * 4;
+        let mut sum = 0.0f64;
+        for i in 0..n {
+            let p = if i < n / 2 { 0.01 } else { 1.0 };
+            sum += p as f64;
+            history.push(col(i as f64 * 0.008, &[(5, p), (6, 1e-7)]));
+        }
+        assert!(history.front().unwrap().count >= 4);
+        assert_eq!(history.back().unwrap().count, 1);
+        let (centers, power) = aggregate_slabs(history.iter(), 100.0);
+        assert_eq!(centers.len(), 1);
+        assert_eq!(power[5], q((sum / n as f64) as f32));
+        assert_eq!(power[6], q(1e-7), "quiet content uses the same count");
+        assert_eq!(power[7], 0);
     }
 
     /// The bug this guards: a Span LONGER than the finest tier's ~16 s reach
@@ -2694,15 +2715,9 @@ mod tests {
     /// discards the grid and refolds the retention out of history
     /// ([`SpectrogramAgg::rebuild`]).
     ///
-    /// The COUNT is the claim here, because the cost of one is small and known:
-    /// a refold is an elementwise byte max per column, half a millisecond to
-    /// three across the whole Span range, which fits inside a 144 Hz frame —
-    /// once. What would not fit is the cascade the slack in
-    /// [`SpectrogramAgg::rebuild`] exists to prevent, where a widening drag
-    /// rebuilds flush to its window and is asked for something older on the
-    /// very next frame. That costs the same 0.5-3 ms EVERY frame for the
-    /// length of the drag, draws the identical picture, and is invisible to
-    /// everything except this counter.
+    /// The count is the claim here: a rung crossing should refold once.
+    /// A widening drag must not repeatedly rebuild flush to its window and
+    /// request discarded history again on the very next frame.
     ///
     /// Driven as the pane drives it. The Span is exponential in drag distance
     /// (`roll_seconds * (-along * DEPTH_ZOOM_PER_DRAG_POINT).exp()`) and the
@@ -3537,6 +3552,14 @@ mod tests {
             |c: &mut SpectrumConfig| c.tilt += 1.0,
             |c: &mut SpectrumConfig| c.roll_seconds *= 1.01,
             |c: &mut SpectrumConfig| c.roll_fraction += 0.01,
+            |c: &mut SpectrumConfig| {
+                c.atmosphere.style = harmonigraph_scene::SpectrogramStyle::Plain
+            },
+            |c: &mut SpectrumConfig| c.atmosphere.pitch_softness = 250.0,
+            |c: &mut SpectrumConfig| c.atmosphere.time_softness = 1800.0,
+            |c: &mut SpectrumConfig| c.atmosphere.spread = 1.0,
+            |c: &mut SpectrumConfig| c.atmosphere.contours = 12.0,
+            |c: &mut SpectrumConfig| c.atmosphere.contour_softness = 0.4,
         ] {
             let mut moved = cfg;
             edit(&mut moved);
