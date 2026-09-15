@@ -361,16 +361,20 @@ fn nebula_noise(p: vec2<f32>) -> f32 {
 // sampled at its original position; neither style transports pitch bands.
 fn wispy_light(p: vec2<f32>, drift: vec2<f32>) -> f32 {
     let bend = vec2<f32>(nebula_noise(p + drift), nebula_noise(p + vec2<f32>(8.3, 2.7) - drift)) - 0.5;
-    let folded = p + bend * 2.4;
-    let filament = nebula_noise(folded * vec2<f32>(1.2, 3.8) - drift);
-    return smoothstep(0.15, 0.85, filament);
+    let folded = p + bend * 0.6;
+    let q = folded * vec2<f32>(0.9, 2.8) - drift;
+    let filament = nebula_noise(q) * 0.56
+        + nebula_noise(q * 2.07 + vec2<f32>(3.1, 7.4)) * 0.29
+        + nebula_noise(q * 4.13 + vec2<f32>(6.7, 1.2)) * 0.15;
+    return smoothstep(0.27, 0.73, filament);
 }
 
 // Continuous billows at several scales, without repeated circular kernels.
 fn puffy_noise(p: vec2<f32>) -> f32 {
-    return nebula_noise(p) * 0.55
-        + nebula_noise(p * 2.03 + vec2<f32>(5.2, 1.7)) * 0.30
-        + nebula_noise(p * 4.13 + vec2<f32>(1.3, 9.1)) * 0.15;
+    return nebula_noise(p) * 0.50
+        + nebula_noise(p * 2.03 + vec2<f32>(5.2, 1.7)) * 0.27
+        + nebula_noise(p * 4.13 + vec2<f32>(1.3, 9.1)) * 0.15
+        + nebula_noise(p * 8.17 + vec2<f32>(7.8, 3.2)) * 0.08;
 }
 
 fn puffy_light(p: vec2<f32>, drift: vec2<f32>, swell: f32) -> f32 {
@@ -381,7 +385,7 @@ fn puffy_light(p: vec2<f32>, drift: vec2<f32>, swell: f32) -> f32 {
     ) - 0.5;
     let inflated = p * (1.0 - swell * 0.22) + shoulder * 0.9 + drift;
     let billow = puffy_noise(inflated * (0.65 + broad * 0.25));
-    return smoothstep(0.20, 0.80, broad * 0.27 + billow * 0.73);
+    return smoothstep(0.28, 0.70, broad * 0.20 + billow * 0.80);
 }
 
 fn density_color(raw_level: f32) -> vec4<f32> {
@@ -399,33 +403,54 @@ fn density_color(raw_level: f32) -> vec4<f32> {
     let b = textureLoad(lut, vec2<u32>(min(i + 1u, levels - 1u), 0u), 0).rgb;
     return vec4<f32>(mix(a, b, fract(x)), 1.0);
 }
-// Mix nearby palette colors as scattered light, then restore the source's
-// value before applying gentle transmission. This keeps the measured shape
-// and contrast: the light cannot move a ridge, fill silence, or erase a band.
+// Cloud thickness belongs to the drifting medium, never to the audio. The
+// spectrogram supplies incident light from a separate, broadly diffused image.
+fn cloud_thickness(p: vec2<f32>, swell: f32) -> f32 {
+    if cloud.style == 4u {
+        return puffy_light(p * 1.6, cloud.motion.xy * 0.6, swell);
+    }
+    return wispy_light(p * (1.0 - swell * 0.08), cloud.motion.xy);
+}
+
 fn illuminated_color(level: f32, position: vec2<f32>) -> vec4<f32> {
     let base = density_color(level);
     let strength = cloud.motion.w;
-    let value = max(base.r, max(base.g, base.b));
-    if value <= 0.0 || strength <= 0.0 { return base; }
+    if strength <= 0.0 { return base; }
     let point = position / cloud.ppp;
+    let uv = (point - cloud.origin) / cloud.size;
+    let incident = textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r;
+    let presence = smoothstep(0.0, 0.5, strength);
+    if incident <= 0.00001 { return vec4<f32>(base.rgb * (1.0 - presence), 1.0); }
     let cell_size = max(cloud.field.w, 1.0) * cloud.motion.z / 5.0;
     let p = (point - cloud.field.xy - cloud.field.zw * 0.5) / cell_size;
     let phase = p.x * 0.43 + p.y * 0.37;
     let wave = 0.5 + sin(cloud.breath.x + phase) / 3.0
         + sin(cloud.breath.y + phase * 1.7) / 6.0;
-    var veil: f32;
-    if cloud.style == 4u {
-        veil = puffy_light(p, cloud.motion.xy * 0.6, cloud.breath.z * (wave - 0.5));
-    } else {
-        veil = wispy_light(p, cloud.motion.xy);
-    }
-    let lower = density_color(level - 0.14).rgb;
-    let upper = density_color(level + 0.14).rgb;
-    let scattered = mix(lower, upper, veil);
-    let tint = mix(base.rgb, scattered, strength * 0.65);
-    let tint_value = max(tint.r, max(tint.g, tint.b));
-    let transmission = 1.0 - strength * (0.16 * veil + 0.10 * cloud.breath.z * (1.0 - wave));
-    return vec4<f32>(tint * (value / max(tint_value, 0.000001)) * transmission, 1.0);
+    let swell = cloud.breath.z * (wave - 0.5);
+    let thickness = cloud_thickness(p, swell);
+    // The brighter neighboring audio determines which side catches light.
+    // As an emitter crosses a cloud, the luminous face changes sides.
+    let reach = vec2<f32>(cell_size * 0.4) / cloud.size;
+    let left = textureSampleLevel(wide_light, cloud_sampler, uv - vec2<f32>(reach.x, 0.0), 0.0).r;
+    let right = textureSampleLevel(wide_light, cloud_sampler, uv + vec2<f32>(reach.x, 0.0), 0.0).r;
+    let above = textureSampleLevel(wide_light, cloud_sampler, uv - vec2<f32>(0.0, reach.y), 0.0).r;
+    let below = textureSampleLevel(wide_light, cloud_sampler, uv + vec2<f32>(0.0, reach.y), 0.0).r;
+    let gradient = vec2<f32>(right - left, below - above);
+    let toward_light = gradient / max(length(gradient), 0.00001) * 0.25;
+    let near = cloud_thickness(p + toward_light, swell);
+    let far = cloud_thickness(p + toward_light * 2.7, swell);
+    let face = clamp(0.4 + (thickness - near) * 2.6, 0.08, 1.3);
+    // Like the lattice nebula, this is a luminous scattering medium. Keep
+    // colored fill throughout the body; dense cloud catches more light instead
+    // of absorbing it into black cavities. Relief supplies gentle highlights.
+    let shelter = 1.0 - max(far - thickness, 0.0) * 0.25;
+    let density = mix(1.0, 0.30 + 0.70 * thickness, strength);
+    let lighting = density * (1.05 + 0.65 * face * shelter);
+    let light = density_color(incident * 1.45).rgb;
+    let body = light * lighting * (1.15 + swell * 0.12);
+    // At normal opacity the source plane is invisible: only light scattered
+    // inside the cloud reaches the viewer. Low opacity fades back to the raw view.
+    return vec4<f32>(mix(base.rgb, body, presence), 1.0);
 }
 
 fn material_color(level: f32, position: vec2<f32>) -> vec4<f32> {
