@@ -712,12 +712,8 @@ impl CallbackTrait for SpectrogramCallback {
                 }
                 let target = pane.cloud.as_mut().expect("allocated above");
                 target.update(queue, uniforms, rect, ppp, settings);
-                // Clouds advects the scalar image even at zero softness;
-                // Lava can still use the measured core without an image then.
-                if settings.settings.pitch_softness > 0.0
-                    || settings.settings.time_softness > 0.0
-                    || settings.settings.style.is_cloud()
-                {
+                // At zero softness every style reads the exact measured core.
+                if atmosphere::has_diffusion(settings) {
                     {
                         #[cfg(test)]
                         target.encoded_passes.fetch_add(1, Ordering::Relaxed);
@@ -745,8 +741,7 @@ impl CallbackTrait for SpectrogramCallback {
                         // Once filtering is finished, the raw source texture is
                         // free to hold the soft intensity. Bake across the whole
                         // spectrogram region so the Gaussian tail survives past
-                        // the moving history edge. Clouds carries this image
-                        // across that edge too; other styles retain their core mesh.
+                        // the moving history edge. Lighting leaves its shape intact.
                         #[cfg(test)]
                         target.encoded_passes.fetch_add(1, Ordering::Relaxed);
                         let mut pass =
@@ -828,10 +823,13 @@ impl CallbackTrait for SpectrogramCallback {
             render_pass.set_bind_group(1, &cloud.composite_group, &[]);
             render_pass.set_vertex_buffer(0, cloud.coverage_vertices.slice(..));
             render_pass.draw(0..6, 0..1);
-            // Clouds is entirely the carried scalar field. Its full-region
-            // pass already contains the history, so shading that mesh again
-            // would evaluate the same noise and samples twice per pixel.
-            if self.atmosphere.is_some_and(|a| a.settings.style.is_cloud()) {
+            // With diffusion the full-region pass already has the complete
+            // stationary field. Without it the measured mesh supplies the
+            // exact full-resolution core, never a reduced texture's footprint.
+            if self
+                .atmosphere
+                .is_some_and(|a| a.settings.style.is_cloud() && atmosphere::has_diffusion(a))
+            {
                 return;
             }
             render_pass.set_pipeline(&pipelines.composite);
@@ -1320,7 +1318,7 @@ mod tests {
                         );
                     }
                 }
-                assert!(high - low > 40, "a full quadrant has no cloud texture");
+                assert!(high - low > 8, "a full quadrant has no cloud texture");
             }
             assert_eq!(first, frame_with(&device, &queue, &mut resources, &cb));
             cb.target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -1358,7 +1356,7 @@ mod tests {
     }
 
     #[test]
-    fn puffy_is_softer_than_wisps_and_its_billows_breathe() {
+    fn puffy_light_is_broader_than_wisps_and_breathes() {
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = cloud_fixture();
         cb.grid.run = Arc::new(vec![255; cb.grid.run.len()]);
@@ -1394,10 +1392,6 @@ mod tests {
             roughness(&puffy),
             roughness(&wisps)
         );
-        for pixel in puffy.chunks_exact(4) {
-            let level = f32::from(pixel[1]);
-            assert!((f32::from(pixel[0]) - level * level / 255.0).abs() < 2.0);
-        }
         cb.atmosphere.as_mut().unwrap().settings.style =
             harmonigraph_scene::SpectrogramStyle::Clouds;
         assert_eq!(
@@ -1414,9 +1408,9 @@ mod tests {
         let changed = swell
             .chunks_exact(4)
             .zip(settle.chunks_exact(4))
-            .filter(|(a, b)| (a[1] > 180) != (b[1] > 180))
+            .filter(|(a, b)| a[1].abs_diff(b[1]) > 2)
             .count();
-        assert!(changed > 400, "held puffs never changed their bright contour: {changed}");
+        assert!(changed > 400, "held puffs never changed their lighting: {changed}");
         assert_eq!(settle, fresh_frame(&device, &queue, &cb));
         cb.atmosphere.as_mut().unwrap().settings.breath_speed = 0.0;
         assert_eq!(puffy, frame_with(&device, &queue, &mut resources, &cb));
@@ -1433,7 +1427,8 @@ mod tests {
         // the cloud cap. Reusing it for Clouds would quietly exceed the cap.
         for (style, size, softness) in [
             (harmonigraph_scene::SpectrogramStyle::Blur, [1100, 1100], 0.01),
-            (harmonigraph_scene::SpectrogramStyle::Clouds, [3840, 2160], 0.0),
+            (harmonigraph_scene::SpectrogramStyle::Clouds, [3840, 2160], 0.01),
+            (harmonigraph_scene::SpectrogramStyle::Puffy, [3840, 2160], 0.01),
             (harmonigraph_scene::SpectrogramStyle::Puffy, [3840, 2160], 0.0),
         ] {
             cb.rect = egui::Rect::from_min_size(
@@ -1449,9 +1444,7 @@ mod tests {
             let a = cb.atmosphere.as_mut().unwrap();
             a.region = cb.rect;
             a.settings.style = style;
-            // No shaping means no intrinsic Puffy blur: exercise its largest
-            // possible allocation too, not only its normally reduced image.
-            a.settings.cloud_depth = 0.0;
+            a.settings.cloud_depth = 1.0;
             a.settings.pitch_softness = softness;
             a.settings.time_softness = softness;
             let mut encoder = device.create_command_encoder(&Default::default());
@@ -1468,73 +1461,84 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .size;
-            assert_eq!(held, if softness == 0.0 { [1024, 1024] } else { [1100, 1100] });
+            assert_eq!(
+                held,
+                if softness == 0.0 {
+                    [1, 1]
+                } else if style.is_cloud() {
+                    [1024, 1024]
+                } else {
+                    [1100, 1100]
+                }
+            );
         }
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     }
 
     #[test]
-    fn clouds_carry_pitch_bands_and_recolor_the_moving_density() {
+    fn cloud_light_preserves_bands_while_mixing_colors() {
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = cloud_fixture();
-        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
-        settings.style = harmonigraph_scene::SpectrogramStyle::Clouds;
-        settings.pitch_softness = 0.0;
-        settings.time_softness = 0.0;
-        settings.cloud_depth = 1.0;
-        settings.breath_amount = 0.0;
-        // A thin, straight band across the whole time axis. The old RGB
-        // overlay can only darken this support; advection must bend it out.
+        // Two narrow bands and a vertical transient, separated by silence.
+        // Midtones on a curved palette distinguish color mixing from a gray veil.
         let mut bytes = vec![0; cb.grid.run.len()];
         for slab in 0..12 {
-            bytes[slab * BINS as usize + 492..slab * BINS as usize + 532].fill(255);
+            bytes[slab * BINS as usize + 300..slab * BINS as usize + 324].fill(160);
+            bytes[slab * BINS as usize + 700..slab * BINS as usize + 724].fill(220);
         }
+        bytes[5 * BINS as usize..6 * BINS as usize].fill(120);
         cb.grid.run = Arc::new(bytes);
         cb.shades.lut = Arc::new(
             (0..256).map(|v| [((v * v) as f32 / 255.0).round() as u8, v as u8, 0, 255]).collect(),
         );
-        let atmosphere = cb.atmosphere.take();
-        let reference = fresh_frame(&device, &queue, &cb);
-        cb.atmosphere = atmosphere;
         let mut resources = CallbackResources::default();
-        cb.atmosphere.as_mut().unwrap().settings.style = harmonigraph_scene::SpectrogramStyle::Lava;
-        frame_with(&device, &queue, &mut resources, &cb);
-        cb.atmosphere.as_mut().unwrap().settings.style =
-            harmonigraph_scene::SpectrogramStyle::Clouds;
-        let first = frame_with(&device, &queue, &mut resources, &cb);
-        assert_eq!(
-            first,
-            fresh_frame(&device, &queue, &cb),
-            "zero-softness Clouds reused Lava's empty scalar image"
-        );
-        let carried = first
-            .chunks_exact(4)
-            .zip(reference.chunks_exact(4))
-            .filter(|(a, b)| a[1] > 20 && b[1] == 0)
-            .count();
-        assert!(
-            carried > 100,
-            "the pitch band never moved outside its original support: {carried}"
-        );
-        cb.atmosphere.as_mut().unwrap().now = 8.0;
-        let later = fresh_frame(&device, &queue, &cb);
-        let reshaped = first
-            .chunks_exact(4)
-            .zip(later.chunks_exact(4))
-            .filter(|(a, b)| (a[1] > 20) != (b[1] > 20))
-            .count();
-        assert!(reshaped > 100, "only brightness moved; the band stayed fixed: {reshaped}");
-        for frame in [&first, &later] {
-            let mut midtones = 0;
-            for px in frame.chunks_exact(4) {
-                let green = f32::from(px[1]);
+        for softness in [0.0, 60.0] {
+            let a = cb.atmosphere.as_mut().unwrap();
+            a.settings.pitch_softness = softness;
+            a.settings.time_softness = softness;
+            a.settings.style = harmonigraph_scene::SpectrogramStyle::Blur;
+            let reference = fresh_frame(&device, &queue, &cb);
+            for style in [
+                harmonigraph_scene::SpectrogramStyle::Clouds,
+                harmonigraph_scene::SpectrogramStyle::Puffy,
+            ] {
+                let a = cb.atmosphere.as_mut().unwrap();
+                a.settings.style = style;
+                a.settings.cloud_depth = 1.0;
+                a.settings.breath_amount = 1.0;
+                let mut frames = Vec::new();
+                for now in [0.0, 8.0] {
+                    cb.atmosphere.as_mut().unwrap().now = now;
+                    let frame = frame_with(&device, &queue, &mut resources, &cb);
+                    assert_eq!(frame, fresh_frame(&device, &queue, &cb));
+                    let mut recolored = 0;
+                    for (lit, original) in frame.chunks_exact(4).zip(reference.chunks_exact(4)) {
+                        let value = original[1] as f32;
+                        assert!(lit[1] as f32 >= value * 0.74 - 2.0 && lit[1] as f32 <= value + 2.0,
+                            "lighting moved or erased source detail: {lit:?} vs {original:?}, {style:?}");
+                        if value == 0.0 {
+                            assert_eq!(&lit[..3], &[0, 0, 0]);
+                        }
+                        if value > 40.0 && lit[1] > 0 {
+                            let before = original[0] as f32 / value;
+                            let after = lit[0] as f32 / lit[1] as f32;
+                            recolored += usize::from((before - after).abs() > 0.008);
+                        }
+                    }
+                    assert!(
+                        recolored > 100,
+                        "lighting only added a gray veil: {recolored}, {style:?}"
+                    );
+                    frames.push(frame);
+                }
+                assert_ne!(frames[0], frames[1], "lighting did not animate");
+                cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+                let disabled = frame_with(&device, &queue, &mut resources, &cb);
                 assert!(
-                    (f32::from(px[0]) - green * green / 255.0).abs() < 2.0,
-                    "cloud color fell off the authored palette: {px:?}"
+                    compare(&disabled, &reference).0 <= 1,
+                    "zero texture changed the base shape"
                 );
-                midtones += usize::from((40..200).contains(&px[1]));
             }
-            assert!(midtones > 100, "fixture never reaches the curved part of the palette");
         }
     }
 

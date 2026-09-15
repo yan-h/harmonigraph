@@ -14,7 +14,7 @@ pub enum SpectrogramStyle {
 }
 
 impl SpectrogramStyle {
-    /// Cloud materials transport a full scalar field and animate independently
+    /// Cloud lighting textures the stationary field and animates independently
     /// of new audio columns, including when the diffusion controls are zero.
     pub fn is_cloud(self) -> bool {
         matches!(self, Self::Clouds | Self::Puffy)

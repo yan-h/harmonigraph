@@ -1,4 +1,4 @@
-//! A small scalar image diffuses the heatmap before its single palette lookup.
+//! A small scalar image diffuses the heatmap; cloud lighting colors that stationary field.
 //! Targets belong to one pane and are keyed only on their size; source pixels and uniforms are refreshed every
 //! draw, including paused zooms and palette edits.
 
@@ -22,9 +22,9 @@ pub struct SpectrogramAtmosphere {
     pub points_per_ms: f32,
 }
 
-/// Cloud styles transport an artistic intensity image. Bound the four R16 targets
-/// to 8 MiB per pane, including zero-softness Retina and 4K views. The source
-/// integrates the entire covered FFT footprint when reduced to this limit.
+/// Cloud lighting uses the same optional intensity diffusion as Blur. Bound the four R16 targets
+/// to 8 MiB per pane in Retina and 4K views; zero softness uses 1×1 targets.
+/// The source integrates the entire covered FFT footprint when reduced.
 pub(super) fn source_limits(
     pixels: [u32; 2],
     style: harmonigraph_scene::SpectrogramStyle,
@@ -36,20 +36,20 @@ pub(super) fn source_limits(
     }
 }
 
-/// Puffy starts with an isotropic soft body at the size of its broad billows. Both
-/// allocation and sampling use this same radius so changing size cannot
-/// leave the filter undersampled. Authored softness can broaden it further.
+/// Only authored pitch/time softness determines the source footprint.
 fn radius_points(atmosphere: SpectrogramAtmosphere) -> [f32; 2] {
     let settings = atmosphere.settings.sanitized();
     let pitch = settings.pitch_softness * atmosphere.points_per_cent;
     let time = settings.time_softness * atmosphere.points_per_ms;
-    let radius = if atmosphere.pitch_vertical { [time, pitch] } else { [pitch, time] };
-    if settings.style == harmonigraph_scene::SpectrogramStyle::Puffy {
-        let body = atmosphere.region.height() * settings.cloud_scale * settings.cloud_depth * 0.032;
-        radius.map(|axis| axis.max(body))
+    if atmosphere.pitch_vertical {
+        [time, pitch]
     } else {
-        radius
+        [pitch, time]
     }
+}
+
+pub(super) fn has_diffusion(atmosphere: SpectrogramAtmosphere) -> bool {
+    radius_points(atmosphere).iter().any(|&radius| radius > 0.0)
 }
 
 /// Bound filter work by reducing each axis only as its musical radius grows.
@@ -61,8 +61,7 @@ pub(super) fn source_size(
     atmosphere: SpectrogramAtmosphere,
 ) -> [u32; 2] {
     let settings = atmosphere.settings.sanitized();
-    if !settings.style.is_cloud() && settings.pitch_softness == 0.0 && settings.time_softness == 0.0
-    {
+    if !has_diffusion(atmosphere) {
         return [1, 1];
     }
     let sigma = radius_points(atmosphere).map(|axis| axis * ppp);

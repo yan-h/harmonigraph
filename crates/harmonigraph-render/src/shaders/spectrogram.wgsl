@@ -357,76 +357,31 @@ fn nebula_noise(p: vec2<f32>) -> f32 {
     );
 }
 
-// Read the audio field through a moving, folded coordinate map. Sampling
-// beyond its real region returns silence rather than stretching an edge texel.
-fn cloud_sample(point: vec2<f32>) -> f32 {
-    let uv = (point - cloud.origin) / cloud.size;
-    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))
-        || any(point < cloud.field.xy) || any(point > cloud.field.xy + cloud.field.zw) {
-        return 0.0;
-    }
-    return textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
-}
-
-fn cloud_density(position: vec2<f32>) -> f32 {
-    let point = position / cloud.ppp;
-    let cell_size = max(cloud.field.w, 1.0) * cloud.motion.z / 5.0;
-    let p = (point - cloud.field.xy - cloud.field.zw * 0.5) / cell_size;
-    let drift = cloud.motion.xy;
+// Only the lighting texture uses a folded coordinate map. Audio is always
+// sampled at its original position; neither style transports pitch bands.
+fn wispy_light(p: vec2<f32>, drift: vec2<f32>) -> f32 {
     let bend = vec2<f32>(nebula_noise(p + drift), nebula_noise(p + vec2<f32>(8.3, 2.7) - drift)) - 0.5;
     let folded = p + bend * 2.4;
-    let curl = vec2<f32>(
-        nebula_noise(folded * 2.3 - drift + vec2<f32>(3.1, 7.4)),
-        nebula_noise(folded * 2.3 + drift + vec2<f32>(6.7, 1.2)),
-    ) - 0.5;
-    let phase = p.x * 0.8 + p.y * 0.5;
-    let wave = 0.5 + sin(cloud.breath.x + phase) / 3.0
-        + sin(cloud.breath.y + phase * 1.7) / 6.0;
-    let breath = 1.0 - cloud.breath.z * (1.0 - wave);
-    // The broad bend carries whole bands; the smaller fold pulls their edges
-    // into tendrils. Breathing changes their reach as well as their intensity.
-    let reach = cell_size * cloud.motion.w * (0.65 + 0.35 * breath);
-    let carried = point + (bend * 1.5 + curl * 0.65) * reach;
-    let strand = vec2<f32>(curl.y, -curl.x) * reach * 0.35;
-    let body = cloud_sample(carried);
-    let filament = (cloud_sample(carried + strand) + cloud_sample(carried - strand)) * 0.5;
-    let billow = nebula_noise(folded + drift);
-    let density = 0.22 + 0.96 * smoothstep(0.20, 0.78, billow * 0.7 + (curl.x + 0.5) * 0.3);
-    // Shape intensity BEFORE the palette lookup: colors migrate through the
-    // authored ramp as the material folds and breathes. No RGB veil remains.
-    return mix(body, filament, 0.35 * cloud.motion.w)
-        * mix(1.0, density, cloud.motion.w) * breath;
+    let filament = nebula_noise(folded * vec2<f32>(1.2, 3.8) - drift);
+    return smoothstep(0.15, 0.85, filament);
 }
-// A hierarchy of connected billows, with broad weather underneath smaller
-// irregular folds. Unlike isolated radial kernels, this has no repeated
-// circular boundary or common puff size for the eye to pick out.
+
+// Continuous billows at several scales, without repeated circular kernels.
 fn puffy_noise(p: vec2<f32>) -> f32 {
     return nebula_noise(p) * 0.55
         + nebula_noise(p * 2.03 + vec2<f32>(5.2, 1.7)) * 0.30
         + nebula_noise(p * 4.13 + vec2<f32>(1.3, 9.1)) * 0.15;
 }
 
-fn puffy_density(position: vec2<f32>) -> f32 {
-    let point = position / cloud.ppp;
-    let cell_size = max(cloud.field.w, 1.0) * cloud.motion.z / 5.0;
-    let p = (point - cloud.field.xy - cloud.field.zw * 0.5) / cell_size;
-    let drift = cloud.motion.xy * 0.6;
+fn puffy_light(p: vec2<f32>, drift: vec2<f32>, swell: f32) -> f32 {
     let broad = nebula_noise(p * 0.37 + drift * 0.45);
     let shoulder = vec2<f32>(
         nebula_noise(p * 0.65 + drift),
         nebula_noise(p * 0.65 + vec2<f32>(8.3, 2.7) - drift),
     ) - 0.5;
-    let phase = p.x * 0.43 + p.y * 0.37 + broad;
-    let wave = 0.5 + sin(cloud.breath.x + phase) / 3.0
-        + sin(cloud.breath.y + phase * 1.7) / 6.0;
-    let swell = cloud.breath.z * (wave - 0.5);
     let inflated = p * (1.0 - swell * 0.22) + shoulder * 0.9 + drift;
     let billow = puffy_noise(inflated * (0.65 + broad * 0.25));
-    let density = 0.15 + 1.55 * smoothstep(0.28, 0.69, broad * 0.27 + billow * 0.73);
-    let carried = point + shoulder * cell_size * cloud.motion.w * (0.95 + swell * 0.4);
-    // The large soft body stays connected while its interior grows folds of
-    // different sizes. Breathing expands those folds and changes their color.
-    return cloud_sample(carried) * mix(1.0, density, cloud.motion.w) * (1.0 + swell * 0.45);
+    return smoothstep(0.20, 0.80, broad * 0.27 + billow * 0.73);
 }
 
 fn density_color(raw_level: f32) -> vec4<f32> {
@@ -444,14 +399,43 @@ fn density_color(raw_level: f32) -> vec4<f32> {
     let b = textureLoad(lut, vec2<u32>(min(i + 1u, levels - 1u), 0u), 0).rgb;
     return vec4<f32>(mix(a, b, fract(x)), 1.0);
 }
-fn backdrop_color(position: vec2<f32>) -> vec4<f32> {
-    if cloud.style == 3u { return density_color(cloud_density(position)); }
-    if cloud.style == 4u { return density_color(puffy_density(position)); }
-    return density_color(smoothed_level(0.0, baked_density(position)));
+// Mix nearby palette colors as scattered light, then restore the source's
+// value before applying gentle transmission. This keeps the measured shape
+// and contrast: the light cannot move a ridge, fill silence, or erase a band.
+fn illuminated_color(level: f32, position: vec2<f32>) -> vec4<f32> {
+    let base = density_color(level);
+    let strength = cloud.motion.w;
+    let value = max(base.r, max(base.g, base.b));
+    if value <= 0.0 || strength <= 0.0 { return base; }
+    let point = position / cloud.ppp;
+    let cell_size = max(cloud.field.w, 1.0) * cloud.motion.z / 5.0;
+    let p = (point - cloud.field.xy - cloud.field.zw * 0.5) / cell_size;
+    let phase = p.x * 0.43 + p.y * 0.37;
+    let wave = 0.5 + sin(cloud.breath.x + phase) / 3.0
+        + sin(cloud.breath.y + phase * 1.7) / 6.0;
+    var veil: f32;
+    if cloud.style == 4u {
+        veil = puffy_light(p, cloud.motion.xy * 0.6, cloud.breath.z * (wave - 0.5));
+    } else {
+        veil = wispy_light(p, cloud.motion.xy);
+    }
+    let lower = density_color(level - 0.14).rgb;
+    let upper = density_color(level + 0.14).rgb;
+    let scattered = mix(lower, upper, veil);
+    let tint = mix(base.rgb, scattered, strength * 0.65);
+    let tint_value = max(tint.r, max(tint.g, tint.b));
+    let transmission = 1.0 - strength * (0.16 * veil + 0.10 * cloud.breath.z * (1.0 - wave));
+    return vec4<f32>(tint * (value / max(tint_value, 0.000001)) * transmission, 1.0);
 }
-// The full region shares one scalar material. Clouds may carry measured
-// color into neighboring empty history; zero beyond the source bounds keeps
-// this from becoming an indefinitely held oldest/newest column.
+
+fn material_color(level: f32, position: vec2<f32>) -> vec4<f32> {
+    if cloud.style == 3u || cloud.style == 4u { return illuminated_color(level, position); }
+    return density_color(level);
+}
+fn backdrop_color(position: vec2<f32>) -> vec4<f32> {
+    return material_color(smoothed_level(0.0, baked_density(position)), position);
+}
+// The same lighting covers measured history and any authored diffusion tail.
 @fragment
 fn fs_cloud_backdrop_gamma(in: VertexOut) -> @location(0) vec4<f32> {
     return backdrop_color(in.position.xy);
@@ -462,9 +446,7 @@ fn fs_cloud_backdrop_linear(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), 1.0);
 }
 fn cloud_color(in: VertexOut) -> vec4<f32> {
-    if cloud.style == 3u { return density_color(cloud_density(in.position.xy)); }
-    if cloud.style == 4u { return density_color(puffy_density(in.position.xy)); }
-    return density_color(smoothed_level(heatmap_level(in), baked_density(in.position.xy)));
+    return material_color(smoothed_level(heatmap_level(in), baked_density(in.position.xy)), in.position.xy);
 }
 @fragment
 fn fs_cloud_gamma(in: VertexOut) -> @location(0) vec4<f32> {

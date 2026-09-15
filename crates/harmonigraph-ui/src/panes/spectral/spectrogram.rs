@@ -281,7 +281,8 @@ pub(crate) fn draw_spectrogram(
     state.surfaces.clouds_animating |= d_far > d_near
         && region.intersect(painter.clip_rect()).is_positive()
         && atmosphere.style.is_cloud()
-        && ((atmosphere.cloud_depth > 0.0 && atmosphere.cloud_speed > 0.0)
+        && atmosphere.cloud_depth > 0.0
+        && (atmosphere.cloud_speed > 0.0
             || (atmosphere.breath_amount > 0.0 && atmosphere.breath_speed > 0.0));
     // The painter's own clip is what bounds the heatmap: the quads reach past
     // the pane wherever the strip does (the whole-song build's oldest slab

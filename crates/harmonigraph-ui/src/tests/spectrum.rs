@@ -1051,6 +1051,10 @@ fn cloud_motion_repaints_only_drawn_fields_with_active_motion() {
         }
         h.frame(&mut state, vec![]);
         assert!(state.picture.surfaces.clouds_animating);
+        state.picture.appearance.spectrum.atmosphere.cloud_depth = 0.0;
+        h.frame(&mut state, vec![]);
+        assert!(!state.picture.surfaces.clouds_animating, "disabled texture should idle");
+        state.picture.appearance.spectrum.atmosphere.cloud_depth = 0.85;
         state.picture.appearance.spectrum.atmosphere.cloud_speed = 0.0;
         h.frame(&mut state, vec![]);
         assert!(state.picture.surfaces.clouds_animating, "breathing alone animates");
