@@ -45,6 +45,9 @@ struct Cloud {
     float contour_softness;
     uint style;
     uint _pad;
+    metal::float4 motion;
+    metal::float4 breath;
+    metal::float4 field;
 };
 
 uint stored(
@@ -190,8 +193,8 @@ float field_level(
     constant _mslBufferSizes& _buffer_sizes
 ) {
     uint _e4 = locals.run_slabs;
-    float n = static_cast<float>(_e4);
-    float jx = metal::clamp(metal::floor(in_1.slab - 0.5), 0.0, n - 1.0);
+    float n_1 = static_cast<float>(_e4);
+    float jx = metal::clamp(metal::floor(in_1.slab - 0.5), 0.0, n_1 - 1.0);
     uint j0_ = naga_f2u32(jx);
     uint _e19 = locals.run_slabs;
     uint j1_ = metal::min(j0_ + 1u, _e19 - 1u);
@@ -215,6 +218,15 @@ float heatmap_level(
 ) {
     float _e2 = field_level(in_2, false, locals, grid, _buffer_sizes);
     return _e2;
+}
+
+metal::float3 linear_from_gamma_rgb(
+    metal::float3 srgb
+) {
+    metal::bool3 cutoff = srgb < metal::float3(0.04045);
+    metal::float3 lower = srgb / metal::float3(12.92);
+    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
+    return metal::select(higher, lower, cutoff);
 }
 
 float baked_density(
@@ -263,6 +275,170 @@ float style_level(
     return metal::mix(level_1, terraces, strength);
 }
 
+float nebula_hash(
+    metal::int2 cell
+) {
+    uint n = {};
+    n = (as_type<uint>(cell.x) * 2654435769u) ^ as_type<uint>(cell.y);
+    uint _e9 = n;
+    uint _e10 = n;
+    n = (_e9 ^ (_e10 >> 16u)) * 2146121005u;
+    uint _e16 = n;
+    uint _e17 = n;
+    n = (_e16 ^ (_e17 >> 15u)) * 2221713035u;
+    uint _e23 = n;
+    uint _e24 = n;
+    n = _e23 ^ (_e24 >> 16u);
+    uint _e28 = n;
+    return static_cast<float>(_e28 >> 8u) / 16777216.0;
+}
+
+metal::int2 naga_f2i32(metal::float2 value) {
+    return static_cast<metal::int2>(metal::clamp(value, -2147483600.0, 2147483500.0));
+}
+
+float nebula_noise(
+    metal::float2 p
+) {
+    metal::int2 cell_1 = naga_f2i32(metal::floor(p));
+    metal::float2 f_1 = metal::fract(p);
+    metal::float2 w_1 = (f_1 * f_1) * (metal::float2(3.0) - (2.0 * f_1));
+    float _e11 = nebula_hash(cell_1);
+    float _e16 = nebula_hash(as_type<metal::int2>(as_type<metal::uint2>(cell_1) + as_type<metal::uint2>(metal::int2(1, 0))));
+    float _e23 = nebula_hash(as_type<metal::int2>(as_type<metal::uint2>(cell_1) + as_type<metal::uint2>(metal::int2(0, 1))));
+    float _e28 = nebula_hash(as_type<metal::int2>(as_type<metal::uint2>(cell_1) + as_type<metal::uint2>(metal::int2(1, 1))));
+    return metal::mix(metal::mix(_e11, _e16, w_1.x), metal::mix(_e23, _e28, w_1.x), w_1.y);
+}
+
+float cloud_sample(
+    metal::float2 point,
+    metal::texture2d<float, metal::access::sample> close_light,
+    metal::sampler cloud_sampler,
+    constant Cloud& cloud
+) {
+    bool local = {};
+    bool local_1 = {};
+    bool local_2 = {};
+    metal::float2 _e3 = cloud.origin;
+    metal::float2 _e7 = cloud.size;
+    metal::float2 uv_1 = (point - _e3) / _e7;
+    if (!(metal::any(uv_1 < metal::float2(0.0)))) {
+        local = metal::any(uv_1 > metal::float2(1.0));
+    } else {
+        local = true;
+    }
+    bool _e21 = local;
+    if (!(_e21)) {
+        metal::float4 _e27 = cloud.field;
+        local_1 = metal::any(point < _e27.xy);
+    } else {
+        local_1 = true;
+    }
+    bool _e32 = local_1;
+    if (!(_e32)) {
+        metal::float4 _e38 = cloud.field;
+        metal::float4 _e42 = cloud.field;
+        local_2 = metal::any(point > (_e38.xy + _e42.zw));
+    } else {
+        local_2 = true;
+    }
+    bool _e48 = local_2;
+    if (_e48) {
+        return 0.0;
+    }
+    metal::float4 _e53 = close_light.sample(cloud_sampler, uv_1, metal::level(0.0));
+    return _e53.x;
+}
+
+float cloud_density(
+    metal::float2 position_1,
+    metal::texture2d<float, metal::access::sample> close_light,
+    metal::sampler cloud_sampler,
+    constant Cloud& cloud
+) {
+    float _e3 = cloud.ppp;
+    metal::float2 point_1 = position_1 / metal::float2(_e3);
+    float _e9 = cloud.field.w;
+    float _e15 = cloud.motion.z;
+    float cell_size = (metal::max(_e9, 1.0) * _e15) / 5.0;
+    metal::float4 _e21 = cloud.field;
+    metal::float4 _e26 = cloud.field;
+    metal::float2 p_2 = ((point_1 - _e21.xy) - (_e26.zw * 0.5)) / metal::float2(cell_size);
+    metal::float4 _e35 = cloud.motion;
+    metal::float2 drift = _e35.xy;
+    float _e38 = nebula_noise(p_2 + drift);
+    float _e44 = nebula_noise((p_2 + metal::float2(8.3, 2.7)) - drift);
+    metal::float2 bend = metal::float2(_e38, _e44) - metal::float2(0.5);
+    metal::float2 folded = p_2 + (bend * 2.4);
+    float _e59 = nebula_noise(((folded * 2.3) - drift) + metal::float2(3.1, 7.4));
+    float _e67 = nebula_noise(((folded * 2.3) + drift) + metal::float2(6.7, 1.2));
+    metal::float2 curl = metal::float2(_e59, _e67) - metal::float2(0.5);
+    float phase = (p_2.x * 0.8) + (p_2.y * 0.5);
+    float _e82 = cloud.breath.x;
+    float _e92 = cloud.breath.y;
+    float wave = (0.5 + (metal::sin(_e82 + phase) / 3.0)) + (metal::sin(_e92 + (phase * 1.7)) / 6.0);
+    float _e103 = cloud.breath.z;
+    float breath = 1.0 - (_e103 * (1.0 - wave));
+    float _e112 = cloud.motion.w;
+    float reach = (cell_size * _e112) * (0.65 + (0.35 * breath));
+    metal::float2 carried = point_1 + (((bend * 1.5) + (curl * 0.65)) * reach);
+    metal::float2 strand = (metal::float2(curl.y, -(curl.x)) * reach) * 0.35;
+    float _e133 = cloud_sample(carried, close_light, cloud_sampler, cloud);
+    float _e135 = cloud_sample(carried + strand, close_light, cloud_sampler, cloud);
+    float _e137 = cloud_sample(carried - strand, close_light, cloud_sampler, cloud);
+    float filament = (_e135 + _e137) * 0.5;
+    float _e142 = nebula_noise(folded + drift);
+    float density_3 = 0.22 + (0.96 * metal::smoothstep(0.2, 0.78, (_e142 * 0.7) + ((curl.x + 0.5) * 0.3)));
+    float _e161 = cloud.motion.w;
+    float _e168 = cloud.motion.w;
+    return (metal::mix(_e133, filament, 0.35 * _e161) * metal::mix(1.0, density_3, _e168)) * breath;
+}
+
+float puffy_noise(
+    metal::float2 p_1
+) {
+    float _e1 = nebula_noise(p_1);
+    float _e10 = nebula_noise((p_1 * 2.03) + metal::float2(5.2, 1.7));
+    float _e20 = nebula_noise((p_1 * 4.13) + metal::float2(1.3, 9.1));
+    return ((_e1 * 0.55) + (_e10 * 0.3)) + (_e20 * 0.15);
+}
+
+float puffy_density(
+    metal::float2 position_2,
+    metal::texture2d<float, metal::access::sample> close_light,
+    metal::sampler cloud_sampler,
+    constant Cloud& cloud
+) {
+    float _e3 = cloud.ppp;
+    metal::float2 point_2 = position_2 / metal::float2(_e3);
+    float _e9 = cloud.field.w;
+    float _e15 = cloud.motion.z;
+    float cell_size_1 = (metal::max(_e9, 1.0) * _e15) / 5.0;
+    metal::float4 _e21 = cloud.field;
+    metal::float4 _e26 = cloud.field;
+    metal::float2 p_3 = ((point_2 - _e21.xy) - (_e26.zw * 0.5)) / metal::float2(cell_size_1);
+    metal::float4 _e35 = cloud.motion;
+    metal::float2 drift_1 = _e35.xy * 0.6;
+    float _e44 = nebula_noise((p_3 * 0.37) + (drift_1 * 0.45));
+    float _e48 = nebula_noise((p_3 * 0.65) + drift_1);
+    float _e56 = nebula_noise(((p_3 * 0.65) + metal::float2(8.3, 2.7)) - drift_1);
+    metal::float2 shoulder = metal::float2(_e48, _e56) - metal::float2(0.5);
+    float phase_1 = ((p_3.x * 0.43) + (p_3.y * 0.37)) + _e44;
+    float _e72 = cloud.breath.x;
+    float _e82 = cloud.breath.y;
+    float wave_1 = (0.5 + (metal::sin(_e72 + phase_1) / 3.0)) + (metal::sin(_e82 + (phase_1 * 1.7)) / 6.0);
+    float _e93 = cloud.breath.z;
+    float swell = _e93 * (wave_1 - 0.5);
+    metal::float2 inflated = ((p_3 * (1.0 - (swell * 0.22))) + (shoulder * 0.9)) + drift_1;
+    float _e111 = puffy_noise(inflated * (0.65 + (_e44 * 0.25)));
+    float density_4 = 0.15 + (1.55 * metal::smoothstep(0.28, 0.69, (_e44 * 0.27) + (_e111 * 0.73)));
+    float _e128 = cloud.motion.w;
+    metal::float2 carried_1 = point_2 + (((shoulder * cell_size_1) * _e128) * (0.95 + (swell * 0.4)));
+    float _e136 = cloud_sample(carried_1, close_light, cloud_sampler, cloud);
+    float _e140 = cloud.motion.w;
+    return (_e136 * metal::mix(1.0, density_4, _e140)) * (1.0 + (swell * 0.45));
+}
+
 metal::float4 density_color(
     float raw_level,
     metal::texture2d<float, metal::access::sample> lut,
@@ -294,23 +470,35 @@ metal::float4 cloud_color(
     constant Cloud& cloud,
     constant _mslBufferSizes& _buffer_sizes
 ) {
-    float _e1 = heatmap_level(in_3, locals, grid, _buffer_sizes);
-    float _e4 = baked_density(in_3.position.xy, close_light, cloud_sampler, cloud);
-    float _e5 = smoothed_level(_e1, _e4, cloud);
-    metal::float4 _e6 = density_color(_e5, lut, cloud);
-    return _e6;
+    uint _e3 = cloud.style;
+    if (_e3 == 3u) {
+        float _e8 = cloud_density(in_3.position.xy, close_light, cloud_sampler, cloud);
+        metal::float4 _e9 = density_color(_e8, lut, cloud);
+        return _e9;
+    }
+    uint _e12 = cloud.style;
+    if (_e12 == 4u) {
+        float _e17 = puffy_density(in_3.position.xy, close_light, cloud_sampler, cloud);
+        metal::float4 _e18 = density_color(_e17, lut, cloud);
+        return _e18;
+    }
+    float _e19 = heatmap_level(in_3, locals, grid, _buffer_sizes);
+    float _e22 = baked_density(in_3.position.xy, close_light, cloud_sampler, cloud);
+    float _e23 = smoothed_level(_e19, _e22, cloud);
+    metal::float4 _e24 = density_color(_e23, lut, cloud);
+    return _e24;
 }
 
-struct fs_cloud_gammaInput {
+struct fs_cloud_linearInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_gammaOutput {
+struct fs_cloud_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_gammaOutput fs_cloud_gamma(
-  fs_cloud_gammaInput varyings [[stage_in]]
-, metal::float4 position_1 [[position]]
+fragment fs_cloud_linearOutput fs_cloud_linear(
+  fs_cloud_linearInput varyings [[stage_in]]
+, metal::float4 position_3 [[position]]
 , constant Locals& locals [[buffer(0)]]
 , device type_3 const& grid [[buffer(1)]]
 , metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
@@ -319,7 +507,8 @@ fragment fs_cloud_gammaOutput fs_cloud_gamma(
 , constant Cloud& cloud [[buffer(2)]]
 , constant _mslBufferSizes& _buffer_sizes [[buffer(3)]]
 ) {
-    const VertexOut in = { position_1, varyings.slab, varyings.t };
+    const VertexOut in = { position_3, varyings.slab, varyings.t };
     metal::float4 _e1 = cloud_color(in, locals, grid, lut, close_light, cloud_sampler, cloud, _buffer_sizes);
-    return fs_cloud_gammaOutput { _e1 };
+    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
+    return fs_cloud_linearOutput { metal::float4(_e3, _e1.w) };
 }

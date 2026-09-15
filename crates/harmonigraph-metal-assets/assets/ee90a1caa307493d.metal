@@ -20,6 +20,9 @@ struct Cloud {
     float contour_softness;
     uint style;
     uint _pad;
+    metal::float4 motion;
+    metal::float4 breath;
+    metal::float4 field;
 };
 
 float density_decode(

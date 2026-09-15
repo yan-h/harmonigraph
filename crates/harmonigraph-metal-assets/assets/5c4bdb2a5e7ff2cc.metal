@@ -14,6 +14,9 @@ struct Cloud {
     float contour_softness;
     uint style;
     uint _pad;
+    metal::float4 motion;
+    metal::float4 breath;
+    metal::float4 field;
 };
 struct Vertex {
     metal::float4 position;
@@ -94,14 +97,14 @@ metal::float4 filtered(
     return metal::float4(_e99 / _e100, 0.0, 0.0, 1.0);
 }
 
-struct fs_close_vInput {
+struct fs_wide_vInput {
     metal::float2 uv [[user(loc0), center_perspective]];
 };
-struct fs_close_vOutput {
+struct fs_wide_vOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_close_vOutput fs_close_v(
-  fs_close_vInput varyings [[stage_in]]
+fragment fs_wide_vOutput fs_wide_v(
+  fs_wide_vInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , metal::texture2d<float, metal::access::sample> source [[texture(0)]]
 , metal::sampler linear_sampler [[sampler(0)]]
@@ -109,6 +112,6 @@ fragment fs_close_vOutput fs_close_v(
 ) {
     const Vertex in = { position, varyings.uv };
     float _e5 = cloud.step.y;
-    metal::float4 _e9 = filtered(in.uv, metal::float2(0.0, _e5), true, source, linear_sampler);
-    return fs_close_vOutput { _e9 };
+    metal::float4 _e11 = filtered(in.uv, metal::float2(0.0, _e5 * 5.0), false, source, linear_sampler);
+    return fs_wide_vOutput { _e11 };
 }
