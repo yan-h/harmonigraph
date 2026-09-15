@@ -1,70 +1,106 @@
-# Lattice transition prototypes
+# Lattice animation controls
 
-Display tab → Lattice page → Note layers → Transition selects the prototype.
-Fade is the default and reference.
-The adjacent Note fade bar sets the arrival and departure duration;
-0 ms switches immediately.
-For slower comparison,
-try 300–600 ms.
+Display tab → Lattice page → Note layers has independent Animation and Order controls.
+Animation is Fade or Pop;
+Order is Simultaneous,
+Circular,
+Bidirectional,
+Random stagger,
+or Odd/even stagger.
+The existing Note fade duration drives arrival and departure.
+Fade curve continues shaping MIDI opacity.
+Zero duration switches immediately.
 
-| Choice | Arrival | Departure |
+Starting position moves each complete slice radially relative to its normal anchor:
+-100% places its anchor at the node centre,
+0% leaves it at its usual position,
+and +100% starts at twice its normal radius.
+Starting size ranges from zero to 200% of the settled size.
+Both controls work with either animation.
+Grow from centre sets Starting position to -100% and Starting size to zero;
+it does not change Animation or Order.
+Pop adds a small overshoot to the existing geometry.
+No extra particles or render passes are added.
+
+Circular starts with the complete slice containing twelve o'clock and proceeds clockwise.
+Bidirectional sends two fronts from twelve toward six.
+Random stagger uses a stable seed from the node and appearance onset;
+interruptions preserve its ordering.
+Odd/even stagger uses two alternating groups.
+Starts occupy the first 28% of Note fade,
+and every piece finishes within the duration.
+A normal departure from a settled node uses the same order.
+
+A factual note-off immediately reverses an unfinished pose and its MIDI opacity.
+Pending pieces cancel;
+a quick repress reverses from the current state without restarting.
+Another octave or a same-time key replacement does not replay the existing node's entrance.
+The whole node departs after its last held contribution ends.
+MIDI octave levels and delayed melody/bass marks carry their own reversible opacity.
+An existing audio-only node acquires MIDI without a second entrance;
+the audio ring keeps its independent level and fixed coordinates.
+
+This is a lattice-only presentation clock.
+Core envelopes,
+tuning,
+audio processing,
+and other panes keep their existing sequencing.
+The shared live/offline pane replays factual roll edges since a per-surface checkpoint,
+including short presses between rendered frames and same-time tuning.
+Current voices reconcile pitch and source state when history is incomplete;
+an observation gap is not invented as a timestamped note-off.
+The checkpoint does not replay old history after pruning.
+The roll retains its existing bounded history,
+so events never observed or already lost from that history cannot be reconstructed.
+
+Persistence replaces the old `note_transition` key with `note_animation`.
+Old choices reset to Fade + Simultaneous with zero offset and 100% size;
+the rest of the saved appearance remains intact.
+There are no compatibility aliases or retained old effect variants.
+
+Each GPU node adds sixteen bytes containing eleven 10-bit poses and a settled flag.
+Order computation happens on the CPU,
+not per pixel.
+Settled nodes take the reference drawing path.
+Moving pieces use the existing scene and shadow passes;
+allocation bounds depend on configuration rather than animation progress.
+The Grow preset retains the usual bound for Fade and about 4.6% headroom for Pop.
+Larger starting sizes and outward offsets can expand the area shaded and shadowed.
+
+`HARMONIGRAPH_TRANSITION_FRAMES=/tmp/animations cargo test -p harmonigraph-render transitions` emits comparison frames with rotated unequal slices,
+matching marks,
+all five orders,
+and Gaussian/Distance shadows.
+`cargo test -p harmonigraph-render animation_costs_by_pose_and_density -- --ignored --nocapture` compares realistic 24-note and dense 225-node workloads.
+One default Distance golden changed by a single channel level in three pixels after shader restructuring;
+its expected/actual/difference sheet was inspected before updating the baseline.
+
+Measured on an Apple M1 Pro at 768×768 over 120 warmed frames,
+the 24-note fixture lights 1,025 lattice nodes and draws 81 names.
+GPU timestamps cover the preparation encoder,
+including shadows,
+ink,
+light,
+scene,
+and bloom;
+they exclude the final egui composite.
+These are medians from an interactive host with wide timing spreads,
+not an isolated throughput guarantee.
+
+| Starting pose / order | Gaussian | Distance |
 | --- | --- | --- |
-| Fade | Existing opacity envelope | Existing opacity envelope |
-| Pop and settle | Scale up with a small overshoot | Contract while fading |
-| Staggered pop | Whole slices pop around their own centres in a fixed shuffled order | Whole slices contract in that order |
-| Clockwise pop | Whole slices pop clockwise starting at twelve o'clock | Whole slices contract clockwise |
-| Draw and retract | Draw the radial bands clockwise from twelve o'clock | Retract toward the same anchor |
-| Ripple arrival | One expanding ring | Existing fade |
-| Focus and dissolve | Resolve MIDI ink out of the existing halo | Dissolve MIDI ink back into the halo |
-| Spark and trail | One pulse around the rim with an 18%-of-circumference tail | One departure pulse with the same bounded tail |
+| Plain Fade | 1.21 ms | 2.44 ms |
+| Pop at normal pose | 1.65 ms | 3.52 ms |
+| Fade Grow from centre | 1.87 ms | 4.01 ms |
+| Pop Grow + Circular | 2.04 ms | 3.75 ms |
+| Pop at +100% offset / 200% size | 3.60 ms | 11.30 ms |
 
-The lattice has no connecting edges,
-so Draw traces its existing radial bands and Spark follows its rim.
-The effects apply to MIDI geometry;
-the independently gated audio ring continues reading audio at its original size and position.
-Pitch centres and note-name labels stay fixed.
-Focus uses the existing Glow on the Lighting page:
-Reach and Strength must be above zero to see its halo.
-No atmosphere or cloud setting is changed.
-
-Motion uses linear progress on the same note timestamps and duration as the existing envelope,
-while Fade curve continues to shape opacity.
-A short note completes its arrival before departing.
-An entrance belongs to the node's continuous visible presence.
-Lighting another slice or octave,
-retriggering a key,
-or pruning the original voice does not replay it.
-An existing audio ring also counts as an existing node.
-Only disappearance rearms the entrance.
-A pitch class stays whole while another octave remains held;
-once all octaves depart,
-the longest remaining release owns the contraction so pruning a newer voice cannot make the node grow back.
-The scene builder supplies envelope progress;
-transient per-surface history retains the entrance in the shared editor and offline drawing path.
-Changing Note fade affects an unfinished entrance without winding it backward or replaying a settled one.
-
-Staggered pop and Clockwise pop scale each complete slice and its matching mark extensions around the slice's centre.
-Their starts occupy the first 28% of Note fade,
-and every slice finishes within that duration.
-Clockwise pop orders whole pieces spatially rather than wiping their angles.
-
-The selector is persisted in the appearance as `note_transition`.
-Missing keys default to Fade;
-no existing persisted field or variant is removed.
-
-The existing GPU scene and shadow passes draw the gestures.
-Fixed per-mode headroom reserves their maximum extent;
-animated sizes do not enter label glyph or shadow allocation keys.
-The normal audio and glow history remain in place.
-
-For a rendered comparison sheet,
-run `HARMONIGRAPH_TRANSITION_FRAMES=/tmp/transitions cargo test -p harmonigraph-render transition_prototypes_draw_distinct_arrivals_and_settle`.
-The optional PPM frames cover three arrival points,
-held,
-and three departure points for every mode.
-The test requires distinct arrivals and identical held pictures with the fixed comparison fixture.
-Existing Fade golden images remain unchanged.
-The `slice_pops_move_complete_pieces_in_distinct_orders_and_settle` test emits additional `slices-` frames with six rotated slices,
-matching mark extensions,
-Gaussian and Distance shadows,
-and near-settled continuity checks.
+A separate 225-node fixture with every octave sector lit and no names measured 1.12–3.30 ms for Gaussian and 0.63–0.99 ms for Distance across these settings.
+That workload suppresses whole-node activation to omit labels,
+while nonzero octave levels still draw and cast shadows.
+The per-surface CPU state alone measured 0.137 ms per frame for 225 nodes and 24 held notes,
+and 0.160 ms with 4,096 additional retained completed notes.
+The CPU measurement followed compilation and averaged 2,000 updates;
+its scratch test was removed after recording the result.
+Order lookup and state updates are small relative to drawing;
+large starting poses with Distance shadows are the expensive case.

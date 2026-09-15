@@ -3,7 +3,7 @@
 use harmonigraph_core::{
     Envelope, LatticePos, NoteTracker, PitchClass, Tuning, VoiceKey, VoiceState,
 };
-use harmonigraph_scene::{AnimationOrder, NoteAnimationConfig, OctaveLayout, Scene, ViewConfig};
+use harmonigraph_scene::{NoteAnimationConfig, OctaveLayout, Scene, ViewConfig};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
@@ -189,7 +189,17 @@ impl NodeMotion {
             if gate && !motion.gate && motion.progress.iter().all(|&p| p == 0.0) {
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
                 node.lattice_pos.hash(&mut hash);
-                self.held.keys().map(|id| id.1).min().hash(&mut hash);
+                self.held
+                    .iter()
+                    .filter(|(_, held)| {
+                        tuning.matches(
+                            PitchClass::from_cents(held.pitch * 100.0),
+                            PitchClass::from_cents(node.cents),
+                        )
+                    })
+                    .map(|(id, _)| id.1)
+                    .min()
+                    .hash(&mut hash);
                 motion.order_delay = delays(
                     &scene.octave_layout,
                     node.cents,
@@ -288,7 +298,11 @@ impl NodeMotion {
             // Current voices reconcile it below without inventing an off time.
         }
         let env = Envelope { attack_time: duration, fade_time: duration, shape: view.fade_shape };
-        self.gates(scene, tuning, view, duration, initial);
+        // The checkpoint already has the previous frame's targets. Recompute
+        // them only for initial seeding, an event, or current-state reconciliation.
+        if initial {
+            self.gates(scene, tuning, view, duration, true);
+        }
         // Each ended lifetime finishes absent, including an equal-time bend.
         // A replacement has a different identity and remains in the held union.
         edges.sort_by(|a, b| {
@@ -361,7 +375,8 @@ impl NodeMotion {
 mod tests {
     use super::*;
     use harmonigraph_core::{NoteEvent, SourceId};
-    use harmonigraph_scene::{derive_scene, Camera, FrameParams};
+    use harmonigraph_scene::{derive_scene, AnimationOrder, Camera, FrameParams};
+
     fn draw(
         motion: &mut NodeMotion,
         tracker: &mut NoteTracker,
