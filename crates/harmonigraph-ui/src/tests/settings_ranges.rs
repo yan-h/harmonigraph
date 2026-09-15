@@ -260,6 +260,16 @@ fn check(edge: Edge) {
             assert_eq!(saw("Fifth") && saw("Half-life"), scenario.expanded);
         }
         for visit in visits {
+            if visit.label == "Contours" {
+                assert_eq!(visit.range, 2.0..=64.0);
+                assert_eq!(
+                    visit.values,
+                    vec![match edge {
+                        Edge::Low => 2.0,
+                        Edge::High => 64.0,
+                    }]
+                );
+            }
             for value in &visit.values {
                 if !visit.range.contains(value) {
                     violations.push(format!("{edge:?} {scenario:?}: {visit:?}"));

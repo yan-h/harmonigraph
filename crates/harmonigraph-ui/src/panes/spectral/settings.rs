@@ -134,7 +134,7 @@ pub(crate) fn spectrum_settings_pane(
             .show(ui);
         ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Spread").percent().show(ui);
         if atmosphere.style == SpectrogramStyle::Lava {
-            ValueBar::new(&mut atmosphere.contours, 2.0..=16.0, "Contours").integer().show(ui);
+            ValueBar::new(&mut atmosphere.contours, 2.0..=64.0, "Contours").integer().show(ui);
             ValueBar::new(&mut atmosphere.contour_softness, 0.01..=0.5, "Edge softness")
                 .percent()
                 .show(ui);

@@ -1263,7 +1263,8 @@ mod tests {
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = cloud_fixture();
         cb.atmosphere.as_mut().unwrap().settings.style = harmonigraph_scene::SpectrogramStyle::Lava;
-        for smooth in [false, true] {
+        for (smooth, contours) in [(false, 7.0), (true, 7.0), (false, 64.0), (true, 64.0)] {
+            cb.atmosphere.as_mut().unwrap().settings.contours = contours;
             cb.atmosphere.as_mut().unwrap().settings.pitch_softness =
                 if smooth { 35.0 } else { 0.0 };
             cb.atmosphere.as_mut().unwrap().settings.time_softness =

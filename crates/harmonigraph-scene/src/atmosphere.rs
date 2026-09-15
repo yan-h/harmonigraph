@@ -53,7 +53,7 @@ impl SpectralAtmosphere {
         self.pitch_softness = clamp(self.pitch_softness, fresh.pitch_softness, 0.0, 300.0);
         self.time_softness = clamp(self.time_softness, fresh.time_softness, 0.0, 2000.0);
         self.spread = clamp(self.spread, fresh.spread, 0.0, 1.0);
-        self.contours = clamp(self.contours, fresh.contours, 2.0, 16.0).round();
+        self.contours = clamp(self.contours, fresh.contours, 2.0, 64.0).round();
         self.contour_softness = clamp(self.contour_softness, fresh.contour_softness, 0.01, 0.5);
         self.analyzer_softness = clamp(self.analyzer_softness, fresh.analyzer_softness, 0.0, 1.0);
         self.note_glow = clamp(self.note_glow, fresh.note_glow, 0.0, 1.0);

@@ -1721,6 +1721,7 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     let mut state = fresh();
     state.picture.appearance.spectrum.atmosphere = SpectralAtmosphere {
         pitch_softness: f32::NAN,
+        contours: 64.0,
         analyzer_softness: 999.0,
         note_glow: 0.27,
         ..Default::default()
@@ -1730,8 +1731,12 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     let mut editor = fresh();
     assert!(editor.load_persist(&saved));
     let offline = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
-    let expected =
-        SpectralAtmosphere { analyzer_softness: 1.0, note_glow: 0.27, ..Default::default() };
+    let expected = SpectralAtmosphere {
+        contours: 64.0,
+        analyzer_softness: 1.0,
+        note_glow: 0.27,
+        ..Default::default()
+    };
     assert_eq!(editor.picture.appearance.spectrum.atmosphere, expected);
     assert_eq!(offline.spectrum.atmosphere, expected);
     assert_eq!(editor.picture.appearance.camera.yaw, 1.23);
