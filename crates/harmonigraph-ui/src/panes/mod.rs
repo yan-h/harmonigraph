@@ -14,6 +14,7 @@ pub mod labels;
 pub mod lattice;
 mod lattice_atmosphere;
 pub mod lighting;
+pub(crate) mod node_motion;
 pub mod nodes;
 pub mod notes;
 /// The offline video frame, composed live so you can preview and adjust it

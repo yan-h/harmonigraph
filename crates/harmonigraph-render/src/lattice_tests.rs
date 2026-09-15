@@ -27,6 +27,7 @@ mod shadows;
 mod ships;
 mod targets;
 mod timing;
+mod transitions;
 
 // Thread-local so concurrent GPU fixtures count only their own creations,
 // including strips discarded before any frame can observe their handles.

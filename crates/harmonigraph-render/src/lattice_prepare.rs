@@ -576,6 +576,16 @@ impl LatticeCallback {
         // from the field's reach.
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let mut packed = shadow::pack(&self.casters, ppp * self.render_scale, max_dim);
+        // Node cells keep one representation throughout a fade, including its
+        // opaque endpoint: each layer's opacity-weighted Distance profile.
+        if self.shadow.lattice_geometry.kernel.is_distance() {
+            for &cell in &self.node_cells {
+                packed.boxes[cell as usize].who[1] = shadow::DISTANCE_COVERAGE_KIND;
+                packed.boxes[cell as usize].who[3] = self.casters[cell as usize].falloff;
+                packed.boxes[cell as usize].cell_map[1] = self.casters[cell as usize].sigma_points;
+                packed.casters[cell as usize].shade[1] = shadow::DISTANCE_COVERAGE_KIND;
+            }
+        }
         // Every receiver, including a label with its own shadow disabled,
         // starts at the next node caster in painter order. Names immediately
         // follow their owner, so that owner can never occlude its own text.

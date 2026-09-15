@@ -2050,3 +2050,52 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
         );
     }
 }
+
+#[test]
+fn animation_controls_round_trip_and_retired_choice_does_not_discard_appearance() {
+    for animation in harmonigraph_scene::NoteAnimation::ALL {
+        for order in harmonigraph_scene::AnimationOrder::ALL {
+            let mut state = fresh();
+            state.picture.appearance.view.note_animation =
+                harmonigraph_scene::NoteAnimationConfig {
+                    animation,
+                    order,
+                    stagger_spread: 0.63,
+                    radial_start: -0.5,
+                    start_size: 0.2,
+                };
+            let mut restored = fresh();
+            assert!(restored.load_persist(&state.save_persist()));
+            assert_eq!(
+                restored.picture.appearance.view.note_animation,
+                state.picture.appearance.view.note_animation
+            );
+        }
+    }
+    let mut state = fresh();
+    state.picture.appearance.view.spacing = 3.0;
+    state.picture.appearance.view.note_animation.order =
+        harmonigraph_scene::AnimationOrder::Circular;
+    state.picture.appearance.view.note_animation.stagger_spread = 0.63;
+    let old = state.save_persist();
+    let missing_spread = old.replace("stagger_spread:0.63,", "");
+    assert_ne!(old, missing_spread);
+    assert!(state.load_persist(&missing_spread));
+    assert_eq!(
+        state.picture.appearance.view.note_animation.stagger_spread,
+        harmonigraph_scene::NoteAnimationConfig::default().stagger_spread
+    );
+    assert_eq!(state.picture.appearance.view.spacing, 3.0);
+    assert_eq!(
+        state.picture.appearance.view.note_animation.order,
+        harmonigraph_scene::AnimationOrder::Circular
+    );
+    let saved = state
+        .save_persist()
+        .replace("note_animation:", "retired_animation_config:")
+        .replacen("view:(", "view:(note_transition:DrawAndRetract,", 1);
+    assert!(saved.contains("note_transition:DrawAndRetract"));
+    assert!(state.load_persist(&saved));
+    assert_eq!(state.picture.appearance.view.note_animation, Default::default());
+    assert_eq!(state.picture.appearance.view.spacing, 3.0);
+}

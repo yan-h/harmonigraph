@@ -179,6 +179,8 @@ pub struct SurfaceState {
     /// each lattice pane claims, because the strip it describes is that pane's
     /// own texture.
     pub(crate) glow_fade: std::collections::HashMap<usize, crate::panes::glow_fade::GlowFade>,
+    /// One entrance per visible node, independent of optional Glow. Runtime only.
+    pub(crate) node_motion: std::collections::HashMap<usize, crate::panes::node_motion::NodeMotion>,
     /// Where the analyzer's divider stands on the DOCKED pane as that pane is
     /// resized — the spectrum keeps its size and the spectrogram takes the
     /// difference. See [`panes::spectral::SpectrumHold`].
@@ -811,6 +813,7 @@ impl SurfaceState {
             lattice_pipelines: Default::default(),
             background: harmonigraph_scene::skin::picture_color(),
             glow_fade: std::collections::HashMap::new(),
+            node_motion: std::collections::HashMap::new(),
             spectrum_hold: panes::spectral::SpectrumHold::default(),
         }
     }

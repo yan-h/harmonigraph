@@ -5,9 +5,10 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::AppearanceDocument;
 use harmonigraph_scene::{
-    SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
-    SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
-    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    AnimationOrder, NoteAnimation, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX,
+    MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX,
+    SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
+    SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 /// Sizes and timing first, then the audio and MIDI layers and their accents.
@@ -352,13 +353,50 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// different moments.
 fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
     section(ui, "Note layers");
+    let width = ui.available_width().min(180.0);
+    ui.label("Animation");
+    egui::ComboBox::from_id_salt("note-animation")
+        .width(width)
+        .truncate()
+        .selected_text(view.note_animation.animation.label())
+        .show_ui(ui, |ui| {
+            for mode in NoteAnimation::ALL {
+                ui.selectable_value(&mut view.note_animation.animation, mode, mode.label());
+            }
+        });
+    ui.label("Order");
+    egui::ComboBox::from_id_salt("animation-order")
+        .width(width)
+        .truncate()
+        .selected_text(view.note_animation.order.label())
+        .show_ui(ui, |ui| {
+            for order in AnimationOrder::ALL {
+                ui.selectable_value(&mut view.note_animation.order, order, order.label());
+            }
+        });
+    ui.add_enabled_ui(view.note_animation.order != AnimationOrder::Simultaneous, |ui| {
+        ValueBar::new(&mut view.note_animation.stagger_spread, 0.0..=0.9, "Stagger spread")
+            .unit(100.0, "%")
+            .show(ui)
+            .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Zero starts every slice together; Simultaneous ignores this setting.");
+    });
+    ValueBar::new(&mut view.note_animation.radial_start, -1.0..=1.0, "Starting position")
+        .unit(100.0, "%").show(ui)
+        .on_hover_text("Radial offset of each slice. -100% starts at the node centre; positive values start outward.");
+    ValueBar::new(&mut view.note_animation.start_size, 0.0..=2.0, "Starting size")
+        .unit(100.0, "%")
+        .show(ui);
+    if ui.button("Grow from centre").clicked() {
+        view.note_animation.radial_start = -1.0;
+        view.note_animation.start_size = 0.0;
+    }
     // The note's timing and the curve it runs on, in that order. Fade is an
     // automatable param and Fade curve a view setting, so the two are stored apart
     // (`ViewConfig::envelope` is where they are put back together); the pane
     // is where they have to LOOK like the one setting they are.
     param_bar(ui, params, ParamKey::Fade).on_hover_text(
         "Fade-in and fade-out time for the whole node, including audio-ring visibility. \
-                 Short notes still reach full brightness. \
+                 Release immediately reverses the current pose and opacity. \
                  0 ms switches immediately.",
     );
     // Linear like every bar around it, and for the same reason: the whole
