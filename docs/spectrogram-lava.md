@@ -126,7 +126,10 @@ Existing offline goldens exercise the shared live and whole-song drawing paths.
 ## Measured cost
 
 Release probes on the local Apple Silicon machine,
-2026-09-14:
+2026-09-14.
+The complete-frame figures below precede the brightness-weighting revision;
+they are a baseline,
+not measurements of the current shader at 4K:
 
 | Quantity | Result |
 | --- | ---: |
@@ -154,3 +157,32 @@ it is not a worst-case full-history timing.
 Sequential runs have warmup and scheduling scatter,
 so Plain being slower than a style in some rows is not evidence of a shader speedup.
 [The retained measurements](evidence/spectrogram-lava/performance.txt) give every case and its method.
+
+The brightness revision raised a matched 3.2-pixel Lava ridge from 56 to 109/255 at its peak.
+A focused 1024 × 768 zoom comparison used the old and new shaders in one release executable,
+four alternating-order repeats,
+48 warmup frames and 240 measured frames per run,
+in both orientations and zoom directions.
+One isolated repeat followed the initial run.
+Median times stayed close:
+3.25–3.38 ms initially and 3.22–4.64 ms on the repeat.
+Tail timings were noisy,
+including substantially more new-shader stalls in one repeat case;
+these measurements do not establish unchanged frame-drop behavior.
+They include GPU completion and full readback,
+exclude analysis and UI layout,
+and do not measure Bitwig presentation.
+The evidence file retains both runs rather than selecting the cleaner result.
+
+A targeted diagnosis then interleaved old and new renders at the same pitch zoom,
+reversing their order each pair and retaining both warmed resource sets.
+Across 600 measured pairs,
+total medians were 3.250/3.243 ms and 95th percentiles were 4.106/4.116 ms (old/new),
+with neither version exceeding 16.7 ms.
+The new 99th percentile remained higher (7.734 versus 4.622 ms),
+primarily in the readback/wait stage.
+CPU preparation and render submission medians were essentially unchanged.
+The earlier long stalls did not reproduce in the paired comparison,
+but this remains a headless completion/readback result rather than a live frame-drop guarantee.
+GPU timestamp instrumentation stalled Metal's wait and was removed from the successful diagnosis,
+so the wait stage is not an isolated GPU execution measurement.

@@ -22,6 +22,15 @@ struct Cloud {
     uint _pad;
 };
 
+metal::float3 linear_from_gamma_rgb(
+    metal::float3 srgb
+) {
+    metal::bool3 cutoff = srgb < metal::float3(0.04045);
+    metal::float3 lower = srgb / metal::float3(12.92);
+    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
+    return metal::select(higher, lower, cutoff);
+}
+
 float baked_density(
     metal::float2 position,
     metal::texture2d<float, metal::access::sample> close_light,
@@ -63,8 +72,9 @@ float style_level(
     float edge = metal::min(0.5, metal::max(_e15, _e16 * 0.5));
     float _e32 = cloud.contours;
     float terraces = (metal::floor(x) + metal::smoothstep(0.5 - edge, 0.5 + edge, metal::fract(x))) / _e32;
-    float _e34 = metal::fwidth(x);
-    return metal::mix(level, terraces, 0.9 * (1.0 - metal::smoothstep(0.5, 1.5, _e34)));
+    float _e39 = metal::fwidth(x);
+    float strength = (0.9 * metal::smoothstep(0.0, 1.0, x)) * (1.0 - metal::smoothstep(0.5, 1.5, _e39));
+    return metal::mix(level, terraces, strength);
 }
 
 uint naga_f2u32(float value) {
@@ -92,15 +102,15 @@ metal::float4 density_color(
     return metal::float4(metal::mix(a, b, metal::fract(x_1)), 1.0);
 }
 
-struct fs_cloud_backdrop_gammaInput {
+struct fs_cloud_backdrop_linearInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_backdrop_gammaOutput {
+struct fs_cloud_backdrop_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_backdrop_gammaOutput fs_cloud_backdrop_gamma(
-  fs_cloud_backdrop_gammaInput varyings [[stage_in]]
+fragment fs_cloud_backdrop_linearOutput fs_cloud_backdrop_linear(
+  fs_cloud_backdrop_linearInput varyings [[stage_in]]
 , metal::float4 position_1 [[position]]
 , metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
 , metal::texture2d<float, metal::access::sample> close_light [[texture(1)]]
@@ -111,5 +121,6 @@ fragment fs_cloud_backdrop_gammaOutput fs_cloud_backdrop_gamma(
     float _e4 = baked_density(in.position.xy, close_light, cloud_sampler, cloud);
     float _e5 = smoothed_level(0.0, _e4, cloud);
     metal::float4 _e6 = density_color(_e5, lut, cloud);
-    return fs_cloud_backdrop_gammaOutput { _e6 };
+    metal::float3 _e8 = linear_from_gamma_rgb(_e6.xyz);
+    return fs_cloud_backdrop_linearOutput { metal::float4(_e8, 1.0) };
 }
