@@ -11,6 +11,8 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 #[derive(Clone, Copy, Debug)]
 pub struct SpectrogramAtmosphere {
     pub settings: harmonigraph_scene::SpectralAtmosphere,
+    /// Picture clock, shared by editor and deterministic offline frames.
+    pub now: f64,
     /// The whole spectrogram region, including history that has no data yet.
     pub region: egui::Rect,
     /// Axis used to preserve the reduced source image's pitch footprint.
@@ -76,6 +78,9 @@ struct Uniforms {
     contour_softness: f32,
     style: u32,
     _pad: u32,
+    motion: [f32; 4],
+    breath: [f32; 4],
+    field: [f32; 4],
 }
 
 pub(super) struct Pipelines {
@@ -388,6 +393,8 @@ impl Targets {
         let pitch = settings.pitch_softness * atmosphere.points_per_cent;
         let time = settings.time_softness * atmosphere.points_per_ms;
         let radius = if pitch_vertical { [time, pitch] } else { [pitch, time] };
+        let drift_time = atmosphere.now * f64::from(settings.cloud_speed);
+        let breath_time = atmosphere.now * f64::from(settings.breath_speed);
         let uniforms = Uniforms {
             origin: rect.min.into(),
             size: rect.size().into(),
@@ -397,10 +404,31 @@ impl Targets {
             contours: settings.contours,
             contour_softness: settings.contour_softness,
             _pad: 0,
+            motion: [
+                (drift_time * 0.071).sin() as f32 * 0.9,
+                (drift_time * 0.053).cos() as f32 * 0.9,
+                settings.cloud_scale,
+                settings.cloud_depth,
+            ],
+            breath: [
+                (breath_time * 0.73).rem_euclid(std::f64::consts::TAU) as f32,
+                (breath_time * 1.13).rem_euclid(std::f64::consts::TAU) as f32,
+                if settings.breath_speed > 0.0 { settings.breath_amount } else { 0.0 },
+                0.0,
+            ],
+            // Use the full region, not the clipped allocation, to anchor one
+            // aspect-correct field across the backdrop and measured history.
+            field: [
+                atmosphere.region.min.x,
+                atmosphere.region.min.y,
+                atmosphere.region.width(),
+                atmosphere.region.height(),
+            ],
             style: match settings.style {
                 harmonigraph_scene::SpectrogramStyle::Plain => 0,
                 harmonigraph_scene::SpectrogramStyle::Blur => 1,
                 harmonigraph_scene::SpectrogramStyle::Lava => 2,
+                harmonigraph_scene::SpectrogramStyle::Clouds => 3,
             },
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));

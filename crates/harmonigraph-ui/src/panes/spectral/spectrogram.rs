@@ -276,6 +276,13 @@ pub(crate) fn draw_spectrogram(
     let Some((grid, shades)) = frame_data(surfaces, surface, &cfg) else {
         return;
     };
+    let atmosphere = cfg.atmosphere;
+    let region = egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
+    state.surfaces.clouds_animating |= d_far > d_near
+        && region.intersect(painter.clip_rect()).is_positive()
+        && atmosphere.style == harmonigraph_scene::SpectrogramStyle::Clouds
+        && ((atmosphere.cloud_depth > 0.0 && atmosphere.cloud_speed > 0.0)
+            || (atmosphere.breath_amount > 0.0 && atmosphere.breath_speed > 0.0));
     // The painter's own clip is what bounds the heatmap: the quads reach past
     // the pane wherever the strip does (the whole-song build's oldest slab
     // starts before the region), and the callback draws against the whole
@@ -291,7 +298,8 @@ pub(crate) fn draw_spectrogram(
         painter.ctx().cumulative_pass_nr(),
         Some(harmonigraph_render::SpectrogramAtmosphere {
             settings: cfg.atmosphere,
-            region: egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0)),
+            now,
+            region,
             pitch_vertical: axes.dir_pitch().y.abs() > 0.5,
             points_per_cent: axes.pitch_len() / (scale.span * 100.0),
             points_per_ms: time.region_depth_len(axes) / (time.window() as f32 * 1000.0),

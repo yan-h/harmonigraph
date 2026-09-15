@@ -382,6 +382,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     let animating = state.picture.runtime.tracker.voices().next().is_some()
         || state.picture.runtime.learn_active
         || roll_scrolling(state, now)
+        || state.picture.surfaces.clouds_animating
         || state.picture.runtime.spectrum.is_flowing(now);
     if animating {
         // Uncapped means "as fast as the shell offers"; a cap turns that into
@@ -449,6 +450,7 @@ pub fn begin_frame(state: &mut PictureState, params: &dyn ParamBackend, now: f64
     // one that was. A diagnostic that holds its last good reading is the one
     // that misleads.
     state.surfaces.drawn = state.surfaces.drawn_this_frame.take();
+    state.surfaces.clouds_animating = false;
 }
 
 /// A pane that stands on its own, outside the dock.

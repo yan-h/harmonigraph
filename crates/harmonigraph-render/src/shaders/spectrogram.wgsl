@@ -263,6 +263,9 @@ struct Cloud {
     contour_softness: f32,
     style: u32,
     _pad: u32,
+    motion: vec4<f32>,
+    breath: vec4<f32>,
+    field: vec4<f32>,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -335,6 +338,43 @@ fn style_level(level: f32) -> f32 {
         * (1.0 - smoothstep(0.5, 1.5, fwidth(x)));
     return mix(level, terraces, strength);
 }
+fn nebula_hash(cell: vec2<i32>) -> f32 {
+    var n = bitcast<u32>(cell.x) * 0x9e3779b9u ^ bitcast<u32>(cell.y);
+    n = (n ^ (n >> 16u)) * 0x7feb352du;
+    n = (n ^ (n >> 15u)) * 0x846ca68bu;
+    n = n ^ (n >> 16u);
+    return f32(n >> 8u) / 16777216.0;
+}
+
+fn nebula_noise(p: vec2<f32>) -> f32 {
+    let cell = vec2<i32>(floor(p));
+    let f = fract(p);
+    let w = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(nebula_hash(cell), nebula_hash(cell + vec2<i32>(1, 0)), w.x),
+        mix(nebula_hash(cell + vec2<i32>(0, 1)), nebula_hash(cell + vec2<i32>(1, 1)), w.x),
+        w.y,
+    );
+}
+
+// The lattice's domain-warped cloud field, applied to every lit pixel.
+// It modulates the completed color so saturated fields retain their texture
+// and palette hues survive. Silence cannot create its own light.
+fn cloud_transmission(position: vec2<f32>) -> f32 {
+    let p = (position / cloud.ppp - cloud.field.xy - cloud.field.zw * 0.5)
+        / max(cloud.field.w, 1.0) * (5.0 / cloud.motion.z);
+    let drift = cloud.motion.xy;
+    let warp = vec2<f32>(nebula_noise(p + drift), nebula_noise(p + vec2<f32>(8.3, 2.7) - drift));
+    let billow = nebula_noise(p + warp * 1.2 + drift);
+    let detail = nebula_noise(p * 2.3 - drift + vec2<f32>(3.1, 7.4));
+    let density = 0.08 + 0.92 * smoothstep(0.25, 0.70, billow * 0.75 + detail * 0.25);
+    // Different parts of the field breathe out of phase, avoiding a uniform
+    // brightness pulse. Two slow waves keep the movement from feeling rigid.
+    let phase = p.x * 0.8 + p.y * 0.5;
+    let wave = 0.5 + sin(cloud.breath.x + phase) / 3.0
+        + sin(cloud.breath.y + phase * 1.7) / 6.0;
+    return mix(1.0, density, cloud.motion.w) * (1.0 - cloud.breath.z * (1.0 - wave));
+}
 fn density_color(raw_level: f32) -> vec4<f32> {
     let level = style_level(raw_level);
     // Interpolate the authored palette's center samples only after diffusion.
@@ -350,19 +390,24 @@ fn density_color(raw_level: f32) -> vec4<f32> {
     let b = textureLoad(lut, vec2<u32>(min(i + 1u, levels - 1u), 0u), 0).rgb;
     return vec4<f32>(mix(a, b, fract(x)), 1.0);
 }
+fn styled_color(level: f32, position: vec2<f32>) -> vec4<f32> {
+    let color = density_color(level);
+    if cloud.style != 3u { return color; }
+    return vec4<f32>(color.rgb * cloud_transmission(position), color.a);
+}
 // Empty history uses the same field and palette with a zero measured core.
 // This quad never samples the grid, so the oldest column cannot be smeared.
 @fragment
 fn fs_cloud_backdrop_gamma(in: VertexOut) -> @location(0) vec4<f32> {
-    return density_color(smoothed_level(0.0, baked_density(in.position.xy)));
+    return styled_color(smoothed_level(0.0, baked_density(in.position.xy)), in.position.xy);
 }
 @fragment
 fn fs_cloud_backdrop_linear(in: VertexOut) -> @location(0) vec4<f32> {
-    let gamma = density_color(smoothed_level(0.0, baked_density(in.position.xy)));
+    let gamma = styled_color(smoothed_level(0.0, baked_density(in.position.xy)), in.position.xy);
     return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), 1.0);
 }
 fn cloud_color(in: VertexOut) -> vec4<f32> {
-    return density_color(smoothed_level(heatmap_level(in), baked_density(in.position.xy)));
+    return styled_color(smoothed_level(heatmap_level(in), baked_density(in.position.xy)), in.position.xy);
 }
 @fragment
 fn fs_cloud_gamma(in: VertexOut) -> @location(0) vec4<f32> {

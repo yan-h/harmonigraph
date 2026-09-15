@@ -1720,6 +1720,12 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     assert_eq!(partial, SpectralAtmosphere { spread: 2.0, ..Default::default() });
     let mut state = fresh();
     state.picture.appearance.spectrum.atmosphere = SpectralAtmosphere {
+        style: harmonigraph_scene::SpectrogramStyle::Clouds,
+        cloud_depth: 0.73,
+        cloud_scale: 99.0,
+        cloud_speed: f32::NAN,
+        breath_amount: 0.6,
+        breath_speed: -1.0,
         pitch_softness: f32::NAN,
         contours: 64.0,
         analyzer_softness: 999.0,
@@ -1732,6 +1738,11 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     assert!(editor.load_persist(&saved));
     let offline = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
     let expected = SpectralAtmosphere {
+        style: harmonigraph_scene::SpectrogramStyle::Clouds,
+        cloud_depth: 0.73,
+        cloud_scale: 4.0,
+        breath_amount: 0.6,
+        breath_speed: 0.0,
         contours: 64.0,
         analyzer_softness: 1.0,
         note_glow: 0.27,

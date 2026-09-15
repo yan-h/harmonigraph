@@ -123,6 +123,11 @@ pub(crate) fn spectrum_settings_pane(
             (SpectrogramStyle::Plain, "Plain", "Measured power without styling"),
             (SpectrogramStyle::Blur, "Blur", "Smooth the whole intensity field"),
             (SpectrogramStyle::Lava, "Lava", "Smooth intensity terraces"),
+            (
+                SpectrogramStyle::Clouds,
+                "Clouds",
+                "Drifting, breathing clouds across the whole field",
+            ),
         ],
     );
     if atmosphere.style != SpectrogramStyle::Plain {
@@ -133,6 +138,21 @@ pub(crate) fn spectrum_settings_pane(
             .unit(1.0, " ms")
             .show(ui);
         ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Spread").percent().show(ui);
+        if atmosphere.style == SpectrogramStyle::Clouds {
+            ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Cloud texture")
+                .percent()
+                .show(ui);
+            ValueBar::new(&mut atmosphere.cloud_scale, 0.25..=4.0, "Cloud size")
+                .unit(1.0, "×")
+                .show(ui);
+            ValueBar::new(&mut atmosphere.cloud_speed, 0.0..=20.0, "Drift speed")
+                .unit(1.0, "×")
+                .show(ui);
+            ValueBar::new(&mut atmosphere.breath_amount, 0.0..=1.0, "Breathing").percent().show(ui);
+            ValueBar::new(&mut atmosphere.breath_speed, 0.0..=4.0, "Breath speed")
+                .unit(1.0, "×")
+                .show(ui);
+        }
         if atmosphere.style == SpectrogramStyle::Lava {
             ValueBar::new(&mut atmosphere.contours, 2.0..=64.0, "Contours").integer().show(ui);
             ValueBar::new(&mut atmosphere.contour_softness, 0.01..=0.5, "Edge softness")

@@ -9,6 +9,7 @@ pub enum SpectrogramStyle {
     Blur,
     #[default]
     Lava,
+    Clouds,
 }
 
 /// Independent spectrogram diffusion, analyzer shading and note light.
@@ -21,6 +22,11 @@ pub struct SpectralAtmosphere {
     pub spread: f32,
     pub contours: f32,
     pub contour_softness: f32,
+    pub cloud_depth: f32,
+    pub cloud_scale: f32,
+    pub cloud_speed: f32,
+    pub breath_amount: f32,
+    pub breath_speed: f32,
     pub analyzer_softness: f32,
     pub note_glow: f32,
 }
@@ -34,6 +40,11 @@ impl Default for SpectralAtmosphere {
             spread: 0.25,
             contours: 7.0,
             contour_softness: 0.15,
+            cloud_depth: 0.85,
+            cloud_scale: 1.0,
+            cloud_speed: 1.0,
+            breath_amount: 0.35,
+            breath_speed: 1.0,
             analyzer_softness: 0.5,
             note_glow: 0.5,
         }
@@ -55,6 +66,11 @@ impl SpectralAtmosphere {
         self.spread = clamp(self.spread, fresh.spread, 0.0, 1.0);
         self.contours = clamp(self.contours, fresh.contours, 2.0, 64.0).round();
         self.contour_softness = clamp(self.contour_softness, fresh.contour_softness, 0.01, 0.5);
+        self.cloud_depth = clamp(self.cloud_depth, fresh.cloud_depth, 0.0, 1.0);
+        self.cloud_scale = clamp(self.cloud_scale, fresh.cloud_scale, 0.25, 4.0);
+        self.cloud_speed = clamp(self.cloud_speed, fresh.cloud_speed, 0.0, 20.0);
+        self.breath_amount = clamp(self.breath_amount, fresh.breath_amount, 0.0, 1.0);
+        self.breath_speed = clamp(self.breath_speed, fresh.breath_speed, 0.0, 4.0);
         self.analyzer_softness = clamp(self.analyzer_softness, fresh.analyzer_softness, 0.0, 1.0);
         self.note_glow = clamp(self.note_glow, fresh.note_glow, 0.0, 1.0);
         self
