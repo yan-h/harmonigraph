@@ -9,6 +9,11 @@ use std::hash::{Hash, Hasher};
 
 type Identity = (VoiceKey, u64);
 #[derive(Clone, Copy)]
+struct FactualTip {
+    bend: (u64, u32),
+    end: Option<u64>,
+}
+#[derive(Clone, Copy)]
 struct Held {
     pitch: f32,
 }
@@ -29,6 +34,9 @@ pub(crate) struct NodeMotion {
     held: HashMap<Identity, Held>,
     at: Option<f64>,
     boundary: HashSet<(Identity, u64, u32)>,
+    seen: HashMap<Identity, FactualTip>,
+    #[cfg(test)]
+    replayed_edges: usize,
 }
 #[derive(Clone)]
 struct Motion {
@@ -152,18 +160,21 @@ impl NodeMotion {
         let high = self.held.values().map(|v| v.pitch).max_by(f32::total_cmp);
         let low = self.held.values().map(|v| v.pitch).min_by(f32::total_cmp);
         for node in &scene.nodes {
+            let newly_visible = !self.nodes.contains_key(&node.lattice_pos);
             let motion = self.nodes.entry(node.lattice_pos).or_default();
             let (lo, hi) = scene.octave_layout.slots(node.cents);
             motion.targets = [0.0; 11];
             let mut melody = None;
             let mut bass = None;
-            for held in self.held.values() {
+            let mut preexisting = false;
+            for (id, held) in &self.held {
                 if !tuning.matches(
                     PitchClass::from_cents(held.pitch * 100.0),
                     PitchClass::from_cents(node.cents),
                 ) {
                     continue;
                 }
+                preexisting |= self.at.is_some_and(|at| f64::from_bits(id.1) < at);
                 let slot = (((held.pitch - node.cents / 100.0) / 12.0).round() as i32)
                     .clamp(lo, hi)
                     .clamp(0, 10) as usize;
@@ -230,7 +241,7 @@ impl NodeMotion {
                 motion.delay = [0.0; 11];
             }
             motion.gate = gate;
-            if seed_settled && gate {
+            if (seed_settled || (newly_visible && preexisting)) && gate {
                 motion.progress = [1.0; 11];
                 motion.delay = [0.0; 11];
                 motion.levels = motion.targets;
@@ -259,18 +270,54 @@ impl NodeMotion {
         if !now.is_finite() {
             return;
         }
-        if self.at.is_some_and(|at| now < at) {
+        let horizon = f64::from(duration.max(0.0)) * 2.0 + f64::from(view.mark_delay) + 0.001;
+        // A hidden surface cannot benefit from replaying minutes of settled
+        // history. Seed current state and replay only the visible horizon.
+        if self.at.is_some_and(|at| now < at || now - at > horizon) {
             *self = Self::default();
         }
+        let floor = now - horizon;
+        let notes: Vec<_> = tracker.roll().notes().collect();
+        let mut seen = HashMap::new();
+        let mut late = false;
+        for note in &notes {
+            let id = (note.key(), note.start.to_bits());
+            let old = self.seen.get(&id);
+            let end = note.end.map(f64::to_bits);
+            // Completed old lifetimes cannot acquire more bends. Retain their
+            // cursor even outside today's horizon so a longer fade setting
+            // cannot mistake them for newly delivered notes.
+            let tip = if note.end.is_some_and(|at| at < floor) && old.is_some_and(|v| v.end == end)
+            {
+                *old.unwrap()
+            } else {
+                let ((at, pitch), _) = note.segments(now).last().unwrap_or((
+                    (note.start, note.start_pitch()),
+                    (note.start, note.start_pitch()),
+                ));
+                FactualTip { bend: (at.to_bits(), pitch.to_bits()), end }
+            };
+            let behind = |at| self.at.is_some_and(|begin| at < begin) && at >= floor && at <= now;
+            late |= old.is_none() && behind(note.start);
+            late |= old.is_none_or(|v| v.bend != tip.bend) && behind(f64::from_bits(tip.bend.0));
+            late |= old.is_none_or(|v| v.end != tip.end) && note.end.is_some_and(behind);
+            seen.insert(id, tip);
+        }
+        // The display clock can run ahead of a newly delivered audio block.
+        // Reconstruct the bounded factual timeline when an unseen edge arrives
+        // behind the checkpoint, rather than losing a complete short lifetime
+        // or inventing a delayed key-down that current-state reconciliation ends.
+        if late {
+            *self = Self::default();
+        }
+        self.seen = seen;
         let initial = self.at.is_none();
-        let begin = self.at.unwrap_or(
-            now - f64::from(duration.max(0.0)) * 2.0 - f64::from(view.mark_delay) - 0.001,
-        );
+        let begin = self.at.unwrap_or(now - horizon);
         let mut edges = Vec::new();
         // One bounded roll scan per surface, never one scan per node. Only
         // edges since the checkpoint are replayed; retained old notes cannot
         // restart a finished animation when history is trimmed.
-        for note in tracker.roll().notes() {
+        for note in notes {
             if note.end.is_some_and(|at| at < begin) {
                 continue;
             }
@@ -318,6 +365,10 @@ impl NodeMotion {
         edges.sort_by(|a, b| {
             a.at.total_cmp(&b.at).then_with(|| b.value.is_some().cmp(&a.value.is_some()))
         });
+        #[cfg(test)]
+        {
+            self.replayed_edges = edges.len();
+        }
         let mut at = begin;
         let mut index = 0;
         if now != begin {
@@ -434,6 +485,69 @@ mod tests {
     }
     fn off(t: f64, note: u8) -> NoteEvent {
         NoteEvent::off(t, SourceId::DIRECT, 0, note)
+    }
+    #[test]
+    fn late_delivered_short_notes_recover_the_factual_timeline_once() {
+        let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..Default::default() };
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        draw(&mut motion, &mut tracker, &view, 0.21, false);
+        tracker.handle_event(on(0.15, 60));
+        tracker.handle_event(off(0.20, 60));
+        let late = draw(&mut motion, &mut tracker, &view, 0.22, false);
+        assert!((origin(&late).activation - 0.03).abs() < 1e-5);
+        let mut timely_tracker = NoteTracker::new();
+        let mut timely = NodeMotion::default();
+        timely_tracker.handle_event(on(0.15, 60));
+        draw(&mut timely, &mut timely_tracker, &view, 0.15, false);
+        timely_tracker.handle_event(off(0.20, 60));
+        let reference = draw(&mut timely, &mut timely_tracker, &view, 0.22, false);
+        assert_eq!(origin(&late).slice_progress, origin(&reference).slice_progress);
+        let repeated = draw(&mut motion, &mut tracker, &view, 0.22, false);
+        assert_eq!(origin(&late).slice_progress, origin(&repeated).slice_progress);
+        assert_eq!(motion.replayed_edges, 0, "late edges replayed twice");
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        tracker.handle_event(on(0.15, 60));
+        draw(&mut motion, &mut tracker, &view, 0.21, false);
+        tracker.handle_event(off(0.20, 60));
+        let late_off = draw(&mut motion, &mut tracker, &view, 0.22, false);
+        assert_eq!(origin(&late_off).slice_progress, origin(&reference).slice_progress);
+        assert!((origin(&late_off).activation - 0.03).abs() < 1e-5);
+        draw_duration(&mut motion, &mut tracker, &view, 0.5, false, 0.05);
+        let longer = draw_duration(&mut motion, &mut tracker, &view, 0.6, false, 1.0);
+        assert_eq!(origin(&longer).activation, 0.0, "a longer horizon replayed an old note");
+    }
+    #[test]
+    fn reopening_a_hidden_surface_bounds_replay_to_the_settle_horizon() {
+        let view = ViewConfig::default();
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        draw(&mut motion, &mut tracker, &view, 0.0, false);
+        for i in 0..4096 {
+            let at = 1.0 + f64::from(i) * 0.05;
+            tracker.handle_event(on(at, 60));
+            tracker.handle_event(off(at + 0.03, 60));
+        }
+        let now = 206.0;
+        tracker.handle_event(on(now - 0.1, 60));
+        draw(&mut motion, &mut tracker, &view, now, false);
+        assert!(motion.replayed_edges < 200, "replayed {} old edges", motion.replayed_edges);
+        assert!(motion.nodes[&LatticePos::ORIGIN].gate);
+    }
+    #[test]
+    fn held_nodes_reentering_the_visible_window_do_not_replay_an_entrance() {
+        let view = ViewConfig::default();
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        tracker.handle_event(on(0.0, 60));
+        let mut scene = draw(&mut motion, &mut tracker, &view, 1.1, false);
+        scene.nodes.retain(|node| node.lattice_pos != LatticePos::ORIGIN);
+        motion.step(&mut scene, &tracker, &Tuning::default(), &view, 1.0, 1.2);
+        assert!(!motion.nodes.contains_key(&LatticePos::ORIGIN));
+        let returned = draw(&mut motion, &mut tracker, &view, 1.3, false);
+        assert_eq!(origin(&returned).slice_progress, [1.0; 11]);
+        assert_eq!(origin(&returned).activation, 1.0);
     }
     #[test]
     fn short_stabs_reverse_pose_and_opacity_at_event_time_across_frame_cadences() {

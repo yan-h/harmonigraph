@@ -59,6 +59,11 @@ including short presses between rendered frames and same-time tuning.
 Current voices reconcile pitch and source state when history is incomplete;
 an observation gap is not invented as a timestamped note-off.
 The checkpoint does not replay old history after pruning.
+If an audio block delivers an unseen event behind the display checkpoint,
+the surface reconstructs its recent factual timeline without shifting the note's timestamps.
+A per-lifetime cursor distinguishes new events from old history when the fade horizon changes.
+Returning after a long hidden interval replays only the settle horizon;
+held nodes entering the visible window appear settled rather than replaying an entrance.
 The roll retains its existing bounded history,
 so events never observed or already lost from that history cannot be reconstructed.
 
