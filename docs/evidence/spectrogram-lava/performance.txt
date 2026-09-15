@@ -1,0 +1,113 @@
+Release measurements, local Apple Silicon, 2026-09-14.
+Temporary probes removed after measurement.
+
+CPU: 8,192 raw arrivals, then a mixed-tier refold at 256 ms/slab; median of 11 runs.
+Two active bins (varying power and a quiet 1e-7 bin), all others zero.
+Fresh-column figure includes allocation, summation and quantized readout.
+
+PRE-BRIGHTNESS-REVISION BASELINE (not current-shader 4K timings):
+Frames: existing two-second offline golden audio, 120 fps, first 16 frames excluded.
+Median of three runs per case; includes replay, analysis, UI, GPU and readback.
+Wide = 300 cents / 2,000 ms. Long span = same two-second clip in a 180-second window.
+These sequential fixture readings are not isolated GPU times or a speedup comparison.
+
+LAVA GPU [1024, 768] Plain wide=false span=1.5: 2.403 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [1024, 768] Blur wide=false span=1.5: 2.799 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [1024, 768] Lava wide=false span=1.5: 3.328 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [1024, 768] Lava wide=true span=1.5: 3.959 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [1024, 768] Lava wide=false span=180: 4.287 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [3840, 2160] Plain wide=false span=1.5: 7.026 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [3840, 2160] Blur wide=false span=1.5: 6.261 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [3840, 2160] Lava wide=false span=1.5: 5.807 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [3840, 2160] Lava wide=true span=1.5: 7.404 ms/frame incl replay/analyzer/UI/readback
+LAVA GPU [3840, 2160] Lava wide=false span=180: 6.145 ms/frame incl replay/analyzer/UI/readback
+LAVA CPU: mixed-tier refold 5.803 ms; per fresh column including allocation/readout 0.0089 ms; history 125435904 bytes; accumulator 30624 bytes
+
+Scratch allocation follow-up (GPU identity counts, not frame timings):
+- 240 frames per axis: 120 successive 0.3% scale steps and their reversal.
+- Actual source texture-view identity changes counted after prepare/paint/readback.
+- Exact requested-size changes counted for the previous allocation policy.
+- Span drag: 7 allocations versus 47 exact-size allocations.
+- Pitch zoom: 6 allocations versus 35 exact-size allocations.
+- Every frame remains within 90–110% of requested source dimensions.
+- Fixture: spectral_cloud_targets_survive_pitch_zoom_and_span_drags,
+  128x128 pane, initial 0.128 points/cent and 0.04 points/ms.
+
+Brightness revision: old 7312656e shader vs fixed lifted-quadratic weighting and first-band fade.
+Same release executable and allocation policy; shader selected at pipeline construction.
+1024x768, default Lava, 3828 bins x 512 slabs at 8ms, matching pitch/time geometry.
+4 alternating-order repeats; 48 warmup + 240 measured frames each (960/policy/case).
+Includes encode/submit/composite/full readback; excludes FFT, UI layout and presentation.
+One isolated repeat, no further repeats. Scratch harness removed.
+Matched 3.2px pitch ridge, 10 semitones / 128px: Lava peak 56 -> 109/255.
+Columns: pitch_vertical zoom_horizontal before n median p95 p99 max over16.7ms
+
+lava-bright-benchmark.log:
+BRIGHT pitch_vertical=true zoom_horizontal=true before=true n=960 median=3.342 p95=7.242 p99=8.536 max=61.668 over16.7=2
+BRIGHT pitch_vertical=true zoom_horizontal=true before=false n=960 median=3.356 p95=5.607 p99=10.254 max=14.792 over16.7=0
+BRIGHT pitch_vertical=true zoom_horizontal=false before=true n=960 median=3.343 p95=5.557 p99=7.107 max=12.864 over16.7=0
+BRIGHT pitch_vertical=true zoom_horizontal=false before=false n=960 median=3.303 p95=5.371 p99=6.506 max=11.950 over16.7=0
+BRIGHT pitch_vertical=false zoom_horizontal=true before=true n=960 median=3.251 p95=4.979 p99=6.733 max=8.567 over16.7=0
+BRIGHT pitch_vertical=false zoom_horizontal=true before=false n=960 median=3.309 p95=5.369 p99=7.881 max=131.304 over16.7=6
+BRIGHT pitch_vertical=false zoom_horizontal=false before=true n=960 median=3.269 p95=9.705 p99=22.717 max=131.913 over16.7=13
+BRIGHT pitch_vertical=false zoom_horizontal=false before=false n=960 median=3.380 p95=8.212 p99=20.684 max=157.297 over16.7=12
+
+lava-bright-benchmark-repeat.log:
+BRIGHT pitch_vertical=true zoom_horizontal=true before=true n=960 median=3.322 p95=5.829 p99=8.257 max=25.275 over16.7=1
+BRIGHT pitch_vertical=true zoom_horizontal=true before=false n=960 median=3.215 p95=4.991 p99=6.279 max=18.630 over16.7=1
+BRIGHT pitch_vertical=true zoom_horizontal=false before=true n=960 median=3.676 p95=7.775 p99=9.559 max=21.569 over16.7=2
+BRIGHT pitch_vertical=true zoom_horizontal=false before=false n=960 median=3.615 p95=14.395 p99=50.354 max=218.204 over16.7=36
+BRIGHT pitch_vertical=false zoom_horizontal=true before=true n=960 median=4.642 p95=8.252 p99=9.620 max=21.205 over16.7=2
+BRIGHT pitch_vertical=false zoom_horizontal=true before=false n=960 median=4.546 p95=8.470 p99=10.873 max=193.705 over16.7=3
+BRIGHT pitch_vertical=false zoom_horizontal=false before=true n=960 median=3.317 p95=6.396 p99=12.580 max=86.390 over16.7=3
+BRIGHT pitch_vertical=false zoom_horizontal=false before=false n=960 median=3.331 p95=5.964 p99=11.653 max=129.356 over16.7=6
+
+Medians are similar; tails are mixed and one new-shader repeat case is substantially worse.
+This headless result cannot establish unchanged real-time frame-drop behavior in Bitwig.
+The earlier 4K frame figures are a pre-brightness baseline, not a measurement of this revision.
+
+Targeted paired diagnosis, Apple M1 Pro / Metal:
+- Same problematic pitch-vertical / vertical-pitch-zoom case.
+- Both shipping shaders and resource sets warm concurrently for 48 pairs.
+- 600 measured pairs; same scale per pair, old/new order reverses each pair.
+- Source target dimensions equal throughout; no local builds running.
+- CPU prepare, render+submit, and full-readback/wait timed separately.
+- Timestamp-query-inside-encoders instrumentation stalled Metal Device::wait;
+  own scratch process stopped after sampled wait stack; successful run disables it.
+- Readback/wait includes completion, scheduling, copy and mapping, not pure GPU time.
+- Statistics below: median,p95,p99,max in milliseconds.
+PAIRED adapter=AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true } GPU timestamps=false
+PAIRED total old [3.250208, 4.105875, 4.621708000000001, 6.607667] new [3.24325, 4.116416, 7.7335, 15.54325] delta [-0.009958000000000133, 1.3751249999999997, 2.5317079999999996, 11.991875] (median,p95,p99,max ms)
+PAIRED prepare_cpu old [0.08370899999999999, 0.191208, 0.318583, 0.715541] new [0.083292, 0.19216599999999998, 0.40725, 3.334041] delta [-0.0010419999999999874, 0.10570800000000001, 0.31341600000000003, 3.225208] (median,p95,p99,max ms)
+PAIRED render_submit_cpu old [0.21858300000000003, 0.441125, 0.7544580000000001, 2.9670829999999997] new [0.21516600000000002, 0.44679099999999994, 0.728375, 5.907792] delta [-0.00216700000000003, 0.22704200000000002, 0.46074999999999994, 5.496792] (median,p95,p99,max ms)
+PAIRED readback_wait old [2.945125, 3.4655, 4.224666999999999, 5.593083] new [2.941167, 3.5283339999999996, 7.196709, 15.056208] delta [4.2999999999793204e-5, 1.392042, 2.5863750000000003, 11.95625] (median,p95,p99,max ms)
+PAIRED stalls neither=600 old_only=0 new_only=0 both=0 /600
+The long stalls did not reproduce when old/new were contemporaneously paired.
+Median and p95 are similar; new p99 remains higher. No live presentation guarantee.
+
+REVIEW: DENSE LIVE-CAP CPU REFOLD (2026-09-14)
+The original 5.803ms refold is a sparse 2-active-bin, 256-slab baseline, not a dense/full-cap bound.
+Fixture: real SpectrumHistory push/coarsening, 65536 arrivals at (i+.5)*.008s; 7168 stored columns, six occupied tiers with counts {1,2,4,8,16,32}, total represented count65536.
+All3828 power bins=1e-10f32 (-100dB, above quantize's1e-12 floor). 512ms/slab, 1024 completed slabs spanning524.288s, ring_slots(1024)=1032.
+End-to-end timer: fresh SpectrogramAgg::new(); black_box(agg.window(history,0,.512,ring_slots(1024))); includes finish/quantization and returned owned readout. Fixture setup/validation excluded.
+Outside timer: assert1024centers,3919872nonzero bytes all equal quantize(1e-10), noheld slabs, !dirty. Two warmups, eleven measured refolds.
+
+lava-dense-refold.log:
+DENSE_REFOLD counts={1, 2, 4, 8, 16, 32} stored=7168 raw=65536 bins=3828 completed_slabs=1024 window_seconds=524.288 samples=11 median_ms=80.510 p95_ms=195.465 min_ms=32.168 max_ms=195.465 times=[32.167625, 37.715416000000005, 49.48325, 49.516458, 69.68033299999999, 80.509708, 87.835958, 99.213458, 100.34754099999999, 105.387833, 195.465125]
+
+lava-dense-refold-isolated.log:
+DENSE_REFOLD counts={1, 2, 4, 8, 16, 32} stored=7168 raw=65536 bins=3828 completed_slabs=1024 window_seconds=524.288 samples=11 median_ms=60.120 p95_ms=94.688 min_ms=26.982 max_ms=94.688 times=[26.981834, 36.699000000000005, 39.54925, 55.026667, 55.820834, 60.120208, 67.473833, 74.602125, 91.226917, 94.109917, 94.688416]
+
+lava-dense-stages.log:
+DENSE_STAGE rebuild_finish median=29.542 min=22.475 max=48.641 ms
+DENSE_STAGE view median=0.142 min=0.106 max=0.610 ms
+DENSE_STAGE add_only_7168_columns median=10.110 min=8.057 max=16.835 ms
+DENSE_STAGE write_only_1024_slabs median=14.852 min=11.693 max=27.871 ms
+DENSE_INCREMENT n=128 median=0.178 p95=0.756 max=3.143 ms
+
+The isolated repeat used the built release test executable with no concurrent local compilation or GPU probe. Variable scheduling means these small samples do not establish production tail latency.
+Stage probe: rebuild(history,.512,Some(-8))+grid.finish(), then actual view(history,0,.512,Some(0)); same1024-slab result.
+Add-only probe invokes existing PowerMean::add over all7168columns; write-only invokes existing PowerMean::write1024times with dense representative sums and black-boxed output. These are separate microprobes, not additive phase shares.
+Incremental probe:128newdensearrivals, each timed from from_power/history.push through full window readout; asserted agg.rebuilds==1.
+Disposition: synchronous dense full refold can hitch on Span/resize slab-rung changes, fresh pane with history, expanding retained coverage, or backward time. Stable-rung arrivals remain incremental. No math/quantizer optimization attempted; probes removed after measurement.
+Follow-up issue: https://github.com/yan-h/harmonigraph/issues/886 (reproduction, eliminated causes, measured stage costs).

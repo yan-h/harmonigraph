@@ -1,40 +1,8 @@
-//! The spectrogram's stored history: what the analyzer measured, kept over
-//! time in the form the heatmap reads it back.
-//!
-//! `harmonigraph-analysis` answers "what is sounding now"; this answers
-//! "what has been sounding", which is a memory question — one column is a whole
-//! pitch spectrum, and they arrive at the analyzer's rate for as long as the
-//! plugin is open. Two decisions do the work, and both come from what the
-//! display can actually show:
-//!
-//! - **A bucket is stored as a byte of dB, not a float of power.** The heatmap
-//!   maps a bucket through `10*log10` into a colour ramp, so dB is the domain it
-//!   is read in, and a byte resolves it to half a dB.
-//!
-//!   The encoding therefore owes the readers two things rather than one. It is
-//!   MONOTONE, so the aggregation along TIME — a MAX, here and in the display's
-//!   slabs alike — is order-preserving and needs no decode. And it is AFFINE in
-//!   dB, so the aggregation across PITCH — a mean of dB, which is what stops a
-//!   pane's pixel height deciding how bright the picture is — is a mean of the
-//!   BYTES and needs no decode either. Neither reader ever converts a byte back
-//!   to a float of power.
-//!
-//!   Half a dB was checked by eye before it was settled on: the store was
-//!   briefly sixteen bits with a toggle that drew either grid, and the two
-//!   pictures were indistinguishable, so the byte stays and the toggle went.
-//! - **Old columns are merged as they age.** The heatmap draws a window ending
-//!   at `now`, so a column of age `a` is only ever on screen when the window is
-//!   at least `a` long — and the window is cut into at most a thousand-odd time
-//!   slabs, which puts a floor of roughly `a / 1024` on the slab a column of
-//!   that age can land in. Keeping 8 ms columns from ten minutes ago is therefore
-//!   paying to store detail that no window can ever resolve. [`SpectrumHistory`]
-//!   keeps the recent stretch at full rate and MAX-merges pairs as they fall
-//!   past each tier, so resolution decays with age exactly as fast as the
-//!   display's ability to show it.
-//!
-//! Together they turn the reach/memory trade from linear into logarithmic:
-//! every extra tier doubles how far back the heatmap reaches for a fixed
-//! [`SpectrumHistory::COARSE_COLUMNS`] more columns.
+//! Linear-power spectrogram history with geometrically coarsened retention.
+//! Each FFT-center point sample contributes equally. Coarsening adds powers
+//! and represented sample counts without quantization; a display slab divides
+//! once and only then encodes dB. A coarse column loses within-group timing,
+//! so a later refold can differ at slab boundaries from the raw-arrival grid.
 
 use std::collections::VecDeque;
 
@@ -78,41 +46,35 @@ pub fn db_of(bucket: BucketDb) -> f32 {
     DB_FLOOR + bucket as f32 * DB_STEP
 }
 
-/// One column of the spectrogram: the raw spectrum at a moment, on the shell
-/// clock, so it can be placed on the roll's time axis.
-///
-/// Stored as quantized dB (see the module docs), which is also the domain the
-/// heatmap colours from — so a column is read straight through without a decode
-/// step, and a merge is an element-wise MAX.
+/// A raw FFT-center point sample or a group of them. The count is essential:
+/// a coarse mean must not receive the same weight as one fine measurement.
 pub struct SpectrogramColumn {
     pub time: f64,
-    pub db: Box<ColumnDb>,
+    pub power_sum: Box<[f32; SPECTRUM_BINS]>,
+    pub count: u32,
 }
 
 impl SpectrogramColumn {
-    /// Quantize a freshly analyzed power spectrum into a stored column.
-    pub fn from_power(time: f64, power: &[f32; SPECTRUM_BINS]) -> SpectrogramColumn {
-        let mut db = Box::new([0; SPECTRUM_BINS]);
-        for (out, &p) in db.iter_mut().zip(power.iter()) {
-            *out = quantize(p);
+    pub fn from_power(time: f64, power: &[f32; SPECTRUM_BINS]) -> Self {
+        Self {
+            time,
+            power_sum: Box::new(power.map(|p| if p.is_finite() { p.max(0.0) } else { 0.0 })),
+            count: 1,
         }
-        SpectrogramColumn { time, db }
     }
 
-    /// Absorb an OLDER column: the pair becomes one column standing for the
-    /// whole interval, holding the loudest each bucket reached across it.
-    ///
-    /// MAX, not a mean, for the same reason the display aggregates ALONG TIME by
-    /// MAX — a spectrogram cell answers "was there anything here", and averaging
-    /// a bright thin partial with its quiet neighbour answers "not much". This
-    /// merges two columns, so it is that axis and not the pitch one, where the
-    /// display resamples a run of INDEPENDENT buckets instead. The
-    /// timestamp lands at the midpoint, the least any peak inside can be moved.
-    fn absorb(&mut self, older: &SpectrogramColumn) {
-        for (mine, &theirs) in self.db.iter_mut().zip(older.db.iter()) {
-            *mine = (*mine).max(theirs);
+    /// Diagnostic dB readout; aggregation never reads these quantized bytes.
+    pub fn db(&self) -> Box<ColumnDb> {
+        Box::new(self.power_sum.map(|p| quantize(p / self.count as f32)))
+    }
+
+    fn absorb(&mut self, older: &Self) {
+        for (mine, &theirs) in self.power_sum.iter_mut().zip(older.power_sum.iter()) {
+            *mine += theirs;
         }
-        self.time = 0.5 * (self.time + older.time);
+        self.time = (self.time * self.count as f64 + older.time * older.count as f64)
+            / (self.count + older.count) as f64;
+        self.count += older.count;
     }
 }
 
@@ -120,7 +82,7 @@ impl SpectrogramColumn {
 /// resolution that decays with age.
 ///
 /// Columns enter tier 0 as they are analyzed. When a tier is full its two
-/// oldest columns are MAX-merged into one and handed to the next tier, so tier
+/// oldest columns are power-summed into one and handed to the next tier, so tier
 /// `k` holds columns spaced `2^k` analysis intervals apart and the whole
 /// structure reaches back geometrically far for a linear number of columns. The
 /// last tier's overflow is simply forgotten.
@@ -171,7 +133,7 @@ impl SpectrumHistory {
     /// Total tiers, the fine one included.
     pub const TIERS: usize = 7;
     /// The most columns ever held. At 8 ms per column this reaches ~17 minutes
-    /// (see [`reach`](Self::reach)) for about 30 MB.
+    /// (see [`reach`](Self::reach)) for about 120 MB.
     pub const MAX_COLUMNS: usize = Self::FINE_COLUMNS + (Self::TIERS - 1) * Self::COARSE_COLUMNS;
 
     /// How many columns tier `k` holds before it merges into the next.
@@ -198,7 +160,7 @@ impl SpectrumHistory {
     /// Bytes the columns themselves occupy when full (the per-column bookkeeping
     /// on top is a timestamp and a pointer).
     pub const fn max_bytes() -> usize {
-        Self::MAX_COLUMNS * SPECTRUM_BINS * std::mem::size_of::<BucketDb>()
+        Self::MAX_COLUMNS * SPECTRUM_BINS * std::mem::size_of::<f32>()
     }
 
     /// Append a column (callers push in time order).
@@ -212,7 +174,7 @@ impl SpectrumHistory {
     /// into the next tier, and out of the structure entirely at the last one.
     ///
     /// Amortized O(1) per push — a column is merged at most once per tier over
-    /// its whole life, and a merge is a byte-wise MAX over one spectrum.
+    /// its whole life, and a merge is a linear-power addition over one spectrum.
     fn cascade(&mut self) {
         for k in 0..Self::TIERS {
             while self.tiers[k].len() > Self::cap(k) {
@@ -335,12 +297,7 @@ mod tests {
         SpectrogramColumn::from_power(time, &power)
     }
 
-    /// Half of what the byte encoding owes its readers: it must be monotone in
-    /// power, so a MAX over stored bytes is a MAX over the powers they stand
-    /// for. Anything else would let the time-axis aggregation pick the quieter
-    /// of two buckets. (The other half is that it is affine in dB, which is what
-    /// makes the pitch axis' mean of dB a mean of the BYTES — the display's own
-    /// `the_curve_and_the_heatmap_read_a_run_of_buckets_alike` holds that end.)
+    /// Final display quantization must preserve level ordering.
     #[test]
     fn quantizing_preserves_order() {
         let powers = [0.0, 1e-11, 1e-9, 1e-6, 1e-3, 0.01, 0.1, 0.5, 1.0, 2.0, 10.0];
@@ -444,27 +401,21 @@ mod tests {
         assert!((held - want).abs() < want * 0.05, "reaches back {held} s, advertised {want} s",);
     }
 
-    /// Merging is MAX, so a brief loud moment survives into the coarse tiers
-    /// instead of being averaged away by the silence around it — the same
-    /// promise the display's own slab aggregation makes.
     #[test]
-    fn a_peak_survives_being_merged_into_the_coarse_tiers() {
+    fn coarse_tiers_conserve_linear_power_and_sample_count() {
         let mut history = SpectrumHistory::default();
-        let loud_at = 7.0;
-        for i in 0..(SpectrumHistory::FINE_COLUMNS * 4) {
-            let t = i as f64 * 0.02;
-            let level = if (t - loud_at).abs() < 1e-9 { 1.0 } else { 1e-6 };
-            history.push(col(t, level));
+        let n = SpectrumHistory::FINE_COLUMNS * 4;
+        let mut expected = 0.0f64;
+        for i in 0..n {
+            let p = if i % 7 == 0 { 1.0 } else { 1e-6 };
+            expected += p as f64;
+            history.push(col(i as f64 * 0.008, p));
         }
-        // The loud column is long past the fine tier by now.
-        assert!(history.front().unwrap().time < loud_at, "the peak should still be held");
-        let peak = history
-            .iter()
-            .filter(|c| (c.time - loud_at).abs() < 1.0)
-            .map(|c| c.db[0])
-            .max()
-            .expect("columns around the peak");
-        assert_eq!(peak, quantize(1.0), "the peak was lost to merging");
+        assert!(history.front().unwrap().count >= 4, "fixture reaches coarse tiers");
+        assert_eq!(history.iter().map(|c| c.count as usize).sum::<usize>(), n);
+        let actual: f64 = history.iter().map(|c| c.power_sum[0] as f64).sum();
+        assert!((actual - expected).abs() < expected * 1e-6);
+        assert_eq!(history.iter().map(|c| c.power_sum[1]).sum::<f32>(), 0.0);
     }
 
     /// A merged column stands for the interval it covers, so its timestamp must

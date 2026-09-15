@@ -179,8 +179,8 @@ impl WholeSong {
     /// The hop is the live one, EXCEPT that a long render window stretches it:
     /// this build is laid out statically rather than in a scrolling window, so its time axis is
     /// cut into `span / WHOLE_SONG_SLAB_CAP` slabs at best, and columns finer
-    /// than that are aggregated away by the MAX the moment they are drawn. A
-    /// three-minute render at the live rate would hold 22 500 columns (86 MB) to
+    /// than that are averaged within time slabs the moment they are drawn. A
+    /// three-minute render at the live rate would hold 22 500 columns (329 MiB) to
     /// display 4096 of them. Scaling the hop to the slab keeps the same
     /// [`COLUMNS_PER_SLAB`](crate::spectrogram::COLUMNS_PER_SLAB) margin
     /// the live path has — every slab still gets a column, none goes empty — for
@@ -630,14 +630,14 @@ impl AudioSpectrum {
     /// retained even at the maximum span.
     ///
     /// This is the ONLY thing that decides reach — no memory backstop binds
-    /// first. Storing a bucket as a byte of dB and coarsening old columns
-    /// (see [`SpectrumHistory`]) puts the full span at about 30 MB, so the
+    /// first. Storing linear-power sums and coarsening old columns
+    /// (see [`SpectrumHistory`]) puts the full span at about 120 MiB, so the
     /// cap can simply be the span. Keeping every column at full rate forever
     /// would instead cost 160 MB to reach only ~3.5 minutes at 50 Hz, drawing
     /// a heatmap over the recent stretch and bare roll beyond it.
     ///
     /// Raising it is cheap and sub-linear: another
-    /// [`SpectrumHistory::COARSE_COLUMNS`] (~4 MB) doubles the reach. The unit
+    /// [`SpectrumHistory::COARSE_COLUMNS`] (~15 MiB) doubles the reach. The unit
     /// test `spectrum_history_reaches_the_retention_cap` is what keeps the
     /// structure sized for whatever this says.
     pub(crate) const HISTORY_MAX_SECONDS: f64 = 610.0;

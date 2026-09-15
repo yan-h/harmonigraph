@@ -6,7 +6,7 @@ use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex}
 use crate::{create_vertex_buffer, wgpu};
 
 pub(super) const SOURCE: &str = include_str!("../shaders/spectral_atmosphere.wgsl");
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 
 #[derive(Clone, Copy, Debug)]
 pub struct SpectrogramAtmosphere {
@@ -15,6 +15,53 @@ pub struct SpectrogramAtmosphere {
     pub region: egui::Rect,
     /// Axis used to preserve the reduced source image's pitch footprint.
     pub pitch_vertical: bool,
+    /// Physical display points per cent and per millisecond, before clipping.
+    pub points_per_cent: f32,
+    pub points_per_ms: f32,
+}
+
+/// Bound filter work by reducing each axis only as its musical radius grows.
+/// The scalar source averages its whole footprint before these Gaussian passes.
+/// The allocation key is this size alone; no measurement cache is invalidated.
+pub(super) fn source_size(
+    pixels: [u32; 2],
+    ppp: f32,
+    atmosphere: SpectrogramAtmosphere,
+) -> [u32; 2] {
+    let settings = atmosphere.settings.sanitized();
+    if settings.pitch_softness == 0.0 && settings.time_softness == 0.0 {
+        return [1, 1];
+    }
+    let pitch = settings.pitch_softness * atmosphere.points_per_cent * ppp;
+    let time = settings.time_softness * atmosphere.points_per_ms * ppp;
+    let sigma = if atmosphere.pitch_vertical { [time, pitch] } else { [pitch, time] };
+    std::array::from_fn(|axis| {
+        let base = pixels[axis];
+        ((pixels[axis] as f32 / (sigma[axis] * 0.5).max(1.0)).ceil() as u32).max(8).min(base)
+    })
+}
+
+/// Small zoom and Span changes refresh pixels, not GPU allocations. Keep the
+/// retained resolution within 10% of the requested one to bound the change
+/// in kernel sampling density and truncation as the musical radius moves.
+/// Full-resolution axes (including zero softness) must match the viewport.
+pub(super) fn retained_size(
+    requested: [u32; 2],
+    pixels: [u32; 2],
+    retained: Option<[u32; 2]>,
+) -> [u32; 2] {
+    retained
+        .filter(|size| {
+            (0..2).all(|axis| {
+                let held = u64::from(size[axis]);
+                let wanted = u64::from(requested[axis]);
+                held <= u64::from(pixels[axis])
+                    && (requested[axis] != pixels[axis] || held == wanted)
+                    && held * 10 >= wanted * 9
+                    && held * 10 <= wanted * 11
+            })
+        })
+        .unwrap_or(requested)
 }
 
 #[repr(C)]
@@ -23,8 +70,12 @@ struct Uniforms {
     origin: [f32; 2],
     size: [f32; 2],
     step: [f32; 2],
-    diffusion: f32,
     ppp: f32,
+    spread: f32,
+    contours: f32,
+    contour_softness: f32,
+    style: u32,
+    _pad: u32,
 }
 
 pub(super) struct Pipelines {
@@ -134,7 +185,7 @@ impl Pipelines {
                 format,
                 source_layout,
                 Some(&composite_layout),
-                if format.is_srgb() || format == FORMAT {
+                if format.is_srgb() || format == wgpu::TextureFormat::Rgba16Float {
                     "fs_cloud_linear"
                 } else {
                     "fs_cloud_gamma"
@@ -145,7 +196,7 @@ impl Pipelines {
                 format,
                 source_layout,
                 Some(&composite_layout),
-                if format.is_srgb() || format == FORMAT {
+                if format.is_srgb() || format == wgpu::TextureFormat::Rgba16Float {
                     "fs_cloud_backdrop_linear"
                 } else {
                     "fs_cloud_backdrop_gamma"
@@ -165,6 +216,8 @@ impl Pipelines {
 }
 
 pub(super) struct Targets {
+    #[cfg(test)]
+    pub encoded_passes: std::sync::atomic::AtomicU32,
     pub size: [u32; 2],
     pub source_view: wgpu::TextureView,
     pub coverage_vertices: wgpu::Buffer,
@@ -266,6 +319,8 @@ impl Targets {
         let composite_group = cloud_group(&source_view);
         let source_group = source_group(device, source_layout, &source_uniform, grid, lut);
         Self {
+            #[cfg(test)]
+            encoded_passes: std::sync::atomic::AtomicU32::new(0),
             size,
             source_view,
             coverage_vertices: create_vertex_buffer::<SpectrogramVertex>(
@@ -330,13 +385,23 @@ impl Targets {
             (read.rows as f32 * self.size[axis] as f32 / visible_pixels).round().max(1.0) as u32;
         queue.write_buffer(&self.source_uniform, 0, bytemuck::bytes_of(&read));
         let settings = atmosphere.settings.sanitized();
-        let radius = rect.width().min(rect.height()) * 0.008;
+        let pitch = settings.pitch_softness * atmosphere.points_per_cent;
+        let time = settings.time_softness * atmosphere.points_per_ms;
+        let radius = if pitch_vertical { [time, pitch] } else { [pitch, time] };
         let uniforms = Uniforms {
             origin: rect.min.into(),
             size: rect.size().into(),
-            step: [radius / rect.width(), radius / rect.height()],
-            diffusion: settings.diffusion,
+            step: [radius[0] / rect.width(), radius[1] / rect.height()],
             ppp,
+            spread: settings.spread,
+            contours: settings.contours,
+            contour_softness: settings.contour_softness,
+            _pad: 0,
+            style: match settings.style {
+                harmonigraph_scene::SpectrogramStyle::Plain => 0,
+                harmonigraph_scene::SpectrogramStyle::Blur => 1,
+                harmonigraph_scene::SpectrogramStyle::Lava => 2,
+            },
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }
@@ -346,6 +411,8 @@ impl Targets {
         // already softened image to the wide kernel closes its sampling gaps.
         // Every pass reads a different texture from the attachment it writes.
         for (i, (input, output)) in [(0, 0), (1, 1), (2, 0), (1, 2)].into_iter().enumerate() {
+            #[cfg(test)]
+            self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("spectral_cloud_blur"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -382,4 +449,33 @@ fn source_group(
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(lut) },
         ],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retained_size;
+
+    #[test]
+    fn retained_targets_bound_resolution_and_preserve_full_axes() {
+        let choose = |held| retained_size([100, 100], [128, 128], Some(held));
+        assert_eq!(choose([90, 110]), [90, 110]);
+        assert_eq!(choose([89, 100]), [100, 100]);
+        assert_eq!(choose([100, 111]), [100, 100]);
+        assert_eq!(retained_size([100, 100], [105, 128], Some([110, 100])), [100, 100]);
+        for axis in 0..2 {
+            let mut full = [100, 100];
+            full[axis] = 128;
+            let mut held = full;
+            held[axis] = 120;
+            assert_eq!(retained_size(full, [128, 128], Some(held)), full);
+        }
+        assert_eq!(retained_size([1, 1], [128, 128], Some([8, 8])), [1, 1]);
+        // After crossing a resize boundary, reversing over that boundary
+        // must retain the new allocation, not oscillate between two sizes.
+        let mut held = [100, 100];
+        for desired in [112, 111, 112, 111, 112, 111] {
+            held = retained_size([desired, 100], [128, 128], Some(held));
+            assert_eq!(held, [112, 100]);
+        }
+    }
 }
