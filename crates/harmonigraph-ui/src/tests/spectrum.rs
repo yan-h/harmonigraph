@@ -1027,3 +1027,50 @@ fn whole_song_feeding_preserves_margins_grid_and_large_logical_hops() {
         WholeSong::precompute(frames, 1, sr, 10.0, 10.0, 1.0, &cfg, |_, _| Err("read failed"));
     assert!(matches!(failed, Err("read failed")));
 }
+
+#[test]
+fn cloud_motion_repaints_only_drawn_fields_with_active_motion() {
+    for style in
+        [harmonigraph_scene::SpectrogramStyle::Clouds, harmonigraph_scene::SpectrogramStyle::Puffy]
+    {
+        let mut state = fresh();
+        state.picture.appearance.spectrum.atmosphere.style = style;
+        let mut h = super::harness::DockHarness::new();
+        h.settle(&mut state);
+        assert!(!state.picture.surfaces.clouds_animating, "empty history should idle");
+        let bins = [0.1; harmonigraph_core::spectrum::SPECTRUM_BINS];
+        // Span several aggregation slabs: two near-contemporaneous FFT columns
+        // fold into one slab and never reach the drawable heatmap path.
+        state.picture.appearance.spectrum.roll_seconds = 4.0;
+        for i in 0..=120 {
+            state
+                .picture
+                .runtime
+                .spectrum
+                .push_history(h.next_time() - 3.0 + f64::from(i) / 40.0, &bins);
+        }
+        h.frame(&mut state, vec![]);
+        assert!(state.picture.surfaces.clouds_animating);
+        state.picture.appearance.spectrum.atmosphere.cloud_depth = 0.0;
+        h.frame(&mut state, vec![]);
+        assert!(!state.picture.surfaces.clouds_animating, "disabled texture should idle");
+        state.picture.appearance.spectrum.atmosphere.cloud_depth = 0.85;
+        state.picture.appearance.spectrum.atmosphere.cloud_speed = 0.0;
+        h.frame(&mut state, vec![]);
+        assert!(state.picture.surfaces.clouds_animating, "breathing alone animates");
+        state.picture.appearance.spectrum.atmosphere.breath_speed = 0.0;
+        h.frame(&mut state, vec![]);
+        assert!(!state.picture.surfaces.clouds_animating, "frozen clouds should idle");
+        state.picture.appearance.spectrum.atmosphere.cloud_speed = 1.0;
+        // The preview is a second spectral surface: its material must keep the
+        // editor repainting even with no docked Analyzer at all.
+        state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Video]);
+        state.picture.appearance.render.spectrogram = SpectrogramRender::Scrolling;
+        h.screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 2000.0));
+        h.settle(&mut state);
+        assert!(state.picture.surfaces.clouds_animating, "preview clouds animate independently");
+        state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Notes]);
+        h.settle(&mut state);
+        assert!(!state.picture.surfaces.clouds_animating, "hidden clouds should idle");
+    }
+}

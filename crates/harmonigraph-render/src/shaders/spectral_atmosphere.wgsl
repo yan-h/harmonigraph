@@ -10,6 +10,9 @@ struct Cloud {
     contour_softness: f32,
     style: u32,
     _pad: u32,
+    motion: vec4<f32>,
+    breath: vec4<f32>,
+    field: vec4<f32>,
 };
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var linear_sampler: sampler;

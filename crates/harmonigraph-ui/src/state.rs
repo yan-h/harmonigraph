@@ -104,6 +104,8 @@ pub struct PictureState {
 /// Viewport geometry and temporal graphics, separate from input history.
 pub struct SurfaceState {
     pub(crate) spectrogram: crate::spectrum::SpectrogramSurfaces,
+    /// Set by any visible cloud field this frame, including the Video preview.
+    pub(crate) clouds_animating: bool,
     /// The lattice node the pointer is over, if any.
     ///
     /// Shared state that one pane writes and one pane reads: the lattice
@@ -806,6 +808,7 @@ impl SurfaceState {
     fn new(target_format: TextureFormat) -> Self {
         Self {
             spectrogram: Default::default(),
+            clouds_animating: false,
             hovered: None,
             drawn: None,
             drawn_this_frame: None,

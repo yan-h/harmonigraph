@@ -263,6 +263,9 @@ struct Cloud {
     contour_softness: f32,
     style: u32,
     _pad: u32,
+    motion: vec4<f32>,
+    breath: vec4<f32>,
+    field: vec4<f32>,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -335,6 +338,56 @@ fn style_level(level: f32) -> f32 {
         * (1.0 - smoothstep(0.5, 1.5, fwidth(x)));
     return mix(level, terraces, strength);
 }
+fn nebula_hash(cell: vec2<i32>) -> f32 {
+    var n = bitcast<u32>(cell.x) * 0x9e3779b9u ^ bitcast<u32>(cell.y);
+    n = (n ^ (n >> 16u)) * 0x7feb352du;
+    n = (n ^ (n >> 15u)) * 0x846ca68bu;
+    n = n ^ (n >> 16u);
+    return f32(n >> 8u) / 16777216.0;
+}
+
+fn nebula_noise(p: vec2<f32>) -> f32 {
+    let cell = vec2<i32>(floor(p));
+    let f = fract(p);
+    let w = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(nebula_hash(cell), nebula_hash(cell + vec2<i32>(1, 0)), w.x),
+        mix(nebula_hash(cell + vec2<i32>(0, 1)), nebula_hash(cell + vec2<i32>(1, 1)), w.x),
+        w.y,
+    );
+}
+
+// Only the lighting texture uses a folded coordinate map. Audio is always
+// sampled at its original position; neither style transports pitch bands.
+fn wispy_light(p: vec2<f32>, drift: vec2<f32>) -> f32 {
+    let bend = vec2<f32>(nebula_noise(p + drift), nebula_noise(p + vec2<f32>(8.3, 2.7) - drift)) - 0.5;
+    let folded = p + bend * 0.6;
+    let q = folded * vec2<f32>(0.9, 2.8) - drift;
+    let filament = nebula_noise(q) * 0.56
+        + nebula_noise(q * 2.07 + vec2<f32>(3.1, 7.4)) * 0.29
+        + nebula_noise(q * 4.13 + vec2<f32>(6.7, 1.2)) * 0.15;
+    return smoothstep(0.27, 0.73, filament);
+}
+
+// Continuous billows at several scales, without repeated circular kernels.
+fn puffy_noise(p: vec2<f32>) -> f32 {
+    return nebula_noise(p) * 0.50
+        + nebula_noise(p * 2.03 + vec2<f32>(5.2, 1.7)) * 0.27
+        + nebula_noise(p * 4.13 + vec2<f32>(1.3, 9.1)) * 0.15
+        + nebula_noise(p * 8.17 + vec2<f32>(7.8, 3.2)) * 0.08;
+}
+
+fn puffy_light(p: vec2<f32>, drift: vec2<f32>, swell: f32) -> f32 {
+    let broad = nebula_noise(p * 0.37 + drift * 0.45);
+    let shoulder = vec2<f32>(
+        nebula_noise(p * 0.65 + drift),
+        nebula_noise(p * 0.65 + vec2<f32>(8.3, 2.7) - drift),
+    ) - 0.5;
+    let inflated = p * (1.0 - swell * 0.22) + shoulder * 0.9 + drift;
+    let billow = puffy_noise(inflated * (0.65 + broad * 0.25));
+    return smoothstep(0.28, 0.70, broad * 0.20 + billow * 0.80);
+}
+
 fn density_color(raw_level: f32) -> vec4<f32> {
     let level = style_level(raw_level);
     // Interpolate the authored palette's center samples only after diffusion.
@@ -350,19 +403,75 @@ fn density_color(raw_level: f32) -> vec4<f32> {
     let b = textureLoad(lut, vec2<u32>(min(i + 1u, levels - 1u), 0u), 0).rgb;
     return vec4<f32>(mix(a, b, fract(x)), 1.0);
 }
-// Empty history uses the same field and palette with a zero measured core.
-// This quad never samples the grid, so the oldest column cannot be smeared.
+// Cloud thickness belongs to the drifting medium, never to the audio. The
+// spectrogram supplies incident light from a separate, broadly diffused image.
+fn cloud_thickness(p: vec2<f32>, swell: f32) -> f32 {
+    if cloud.style == 4u {
+        return puffy_light(p * 1.6, cloud.motion.xy * 0.6, swell);
+    }
+    return wispy_light(p * (1.0 - swell * 0.08), cloud.motion.xy);
+}
+
+fn illuminated_color(level: f32, position: vec2<f32>) -> vec4<f32> {
+    let base = density_color(level);
+    let strength = cloud.motion.w;
+    if strength <= 0.0 { return base; }
+    let point = position / cloud.ppp;
+    let uv = (point - cloud.origin) / cloud.size;
+    let incident = textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r;
+    let presence = smoothstep(0.0, 0.5, strength);
+    if incident <= 0.00001 { return vec4<f32>(base.rgb * (1.0 - presence), 1.0); }
+    let cell_size = max(cloud.field.w, 1.0) * cloud.motion.z / 5.0;
+    let p = (point - cloud.field.xy - cloud.field.zw * 0.5) / cell_size;
+    let phase = p.x * 0.43 + p.y * 0.37;
+    let wave = 0.5 + sin(cloud.breath.x + phase) / 3.0
+        + sin(cloud.breath.y + phase * 1.7) / 6.0;
+    let swell = cloud.breath.z * (wave - 0.5);
+    let thickness = cloud_thickness(p, swell);
+    // The brighter neighboring audio determines which side catches light.
+    // As an emitter crosses a cloud, the luminous face changes sides.
+    let reach = vec2<f32>(cell_size * 0.4) / cloud.size;
+    let left = textureSampleLevel(wide_light, cloud_sampler, uv - vec2<f32>(reach.x, 0.0), 0.0).r;
+    let right = textureSampleLevel(wide_light, cloud_sampler, uv + vec2<f32>(reach.x, 0.0), 0.0).r;
+    let above = textureSampleLevel(wide_light, cloud_sampler, uv - vec2<f32>(0.0, reach.y), 0.0).r;
+    let below = textureSampleLevel(wide_light, cloud_sampler, uv + vec2<f32>(0.0, reach.y), 0.0).r;
+    let gradient = vec2<f32>(right - left, below - above);
+    let toward_light = gradient / max(length(gradient), 0.00001) * 0.25;
+    let near = cloud_thickness(p + toward_light, swell);
+    let far = cloud_thickness(p + toward_light * 2.7, swell);
+    let face = clamp(0.4 + (thickness - near) * 2.6, 0.08, 1.3);
+    // Like the lattice nebula, this is a luminous scattering medium. Keep
+    // colored fill throughout the body; dense cloud catches more light instead
+    // of absorbing it into black cavities. Relief supplies gentle highlights.
+    let shelter = 1.0 - max(far - thickness, 0.0) * 0.25;
+    let density = mix(1.0, 0.30 + 0.70 * thickness, strength);
+    let lighting = density * (1.05 + 0.65 * face * shelter);
+    let light = density_color(incident * 1.45).rgb;
+    let body = light * lighting * (1.15 + swell * 0.12);
+    // At normal opacity the source plane is invisible: only light scattered
+    // inside the cloud reaches the viewer. Low opacity fades back to the raw view.
+    return vec4<f32>(mix(base.rgb, body, presence), 1.0);
+}
+
+fn material_color(level: f32, position: vec2<f32>) -> vec4<f32> {
+    if cloud.style == 3u || cloud.style == 4u { return illuminated_color(level, position); }
+    return density_color(level);
+}
+fn backdrop_color(position: vec2<f32>) -> vec4<f32> {
+    return material_color(smoothed_level(0.0, baked_density(position)), position);
+}
+// The same lighting covers measured history and any authored diffusion tail.
 @fragment
 fn fs_cloud_backdrop_gamma(in: VertexOut) -> @location(0) vec4<f32> {
-    return density_color(smoothed_level(0.0, baked_density(in.position.xy)));
+    return backdrop_color(in.position.xy);
 }
 @fragment
 fn fs_cloud_backdrop_linear(in: VertexOut) -> @location(0) vec4<f32> {
-    let gamma = density_color(smoothed_level(0.0, baked_density(in.position.xy)));
+    let gamma = backdrop_color(in.position.xy);
     return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), 1.0);
 }
 fn cloud_color(in: VertexOut) -> vec4<f32> {
-    return density_color(smoothed_level(heatmap_level(in), baked_density(in.position.xy)));
+    return material_color(smoothed_level(heatmap_level(in), baked_density(in.position.xy)), in.position.xy);
 }
 @fragment
 fn fs_cloud_gamma(in: VertexOut) -> @location(0) vec4<f32> {

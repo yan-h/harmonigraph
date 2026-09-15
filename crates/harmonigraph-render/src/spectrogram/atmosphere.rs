@@ -1,4 +1,4 @@
-//! A small scalar image diffuses the heatmap before its single palette lookup.
+//! Small scalar images diffuse the heatmap and illuminate independently drifting cloud bodies.
 //! Targets belong to one pane and are keyed only on their size; source pixels and uniforms are refreshed every
 //! draw, including paused zooms and palette edits.
 
@@ -11,6 +11,8 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 #[derive(Clone, Copy, Debug)]
 pub struct SpectrogramAtmosphere {
     pub settings: harmonigraph_scene::SpectralAtmosphere,
+    /// Picture clock, shared by editor and deterministic offline frames.
+    pub now: f64,
     /// The whole spectrogram region, including history that has no data yet.
     pub region: egui::Rect,
     /// Axis used to preserve the reduced source image's pitch footprint.
@@ -18,6 +20,56 @@ pub struct SpectrogramAtmosphere {
     /// Physical display points per cent and per millisecond, before clipping.
     pub points_per_cent: f32,
     pub points_per_ms: f32,
+}
+
+/// Bound the optional underlying field to four R16 targets totaling 8 MiB per pane.
+/// Zero softness or a fully present cloud layer uses 1×1 targets for that field.
+/// The separate cloud lamp is capped at 256² (another 512 KiB).
+/// The source integrates the entire covered FFT footprint when reduced.
+pub(super) fn source_limits(
+    pixels: [u32; 2],
+    style: harmonigraph_scene::SpectrogramStyle,
+) -> [u32; 2] {
+    if style.is_cloud() {
+        pixels.map(|axis| axis.min(1024))
+    } else {
+        pixels
+    }
+}
+
+/// Only authored pitch/time softness determines the source footprint.
+fn radius_points(atmosphere: SpectrogramAtmosphere) -> [f32; 2] {
+    let settings = atmosphere.settings.sanitized();
+    let pitch = settings.pitch_softness * atmosphere.points_per_cent;
+    let time = settings.time_softness * atmosphere.points_per_ms;
+    if atmosphere.pitch_vertical {
+        [time, pitch]
+    } else {
+        [pitch, time]
+    }
+}
+
+pub(super) fn has_diffusion(atmosphere: SpectrogramAtmosphere) -> bool {
+    radius_points(atmosphere).iter().any(|&radius| radius > 0.0)
+}
+
+/// The lamp has its own uniforms and integrated source footprint. This is
+/// incident light only; these radii never reach the underlying spectrogram.
+pub(super) fn lamp_settings(mut atmosphere: SpectrogramAtmosphere) -> SpectrogramAtmosphere {
+    let sigma = atmosphere.region.height() * atmosphere.settings.sanitized().cloud_scale * 0.036;
+    let settings = atmosphere.settings.sanitized();
+    atmosphere.points_per_cent = sigma.hypot(settings.pitch_softness * atmosphere.points_per_cent);
+    atmosphere.points_per_ms = sigma.hypot(settings.time_softness * atmosphere.points_per_ms);
+    atmosphere.settings.pitch_softness = 1.0;
+    atmosphere.settings.time_softness = 1.0;
+    atmosphere.settings.style = harmonigraph_scene::SpectrogramStyle::Blur;
+    atmosphere
+}
+
+/// Match the shader's transition to seeing only scattered light.
+pub(super) fn shows_source(atmosphere: SpectrogramAtmosphere) -> bool {
+    let settings = atmosphere.settings.sanitized();
+    !settings.style.is_cloud() || settings.cloud_depth < 0.5
 }
 
 /// Bound filter work by reducing each axis only as its musical radius grows.
@@ -29,14 +81,13 @@ pub(super) fn source_size(
     atmosphere: SpectrogramAtmosphere,
 ) -> [u32; 2] {
     let settings = atmosphere.settings.sanitized();
-    if settings.pitch_softness == 0.0 && settings.time_softness == 0.0 {
+    if !shows_source(atmosphere) || !has_diffusion(atmosphere) {
         return [1, 1];
     }
-    let pitch = settings.pitch_softness * atmosphere.points_per_cent * ppp;
-    let time = settings.time_softness * atmosphere.points_per_ms * ppp;
-    let sigma = if atmosphere.pitch_vertical { [time, pitch] } else { [pitch, time] };
+    let sigma = radius_points(atmosphere).map(|axis| axis * ppp);
+    let limits = source_limits(pixels, settings.style);
     std::array::from_fn(|axis| {
-        let base = pixels[axis];
+        let base = limits[axis];
         ((pixels[axis] as f32 / (sigma[axis] * 0.5).max(1.0)).ceil() as u32).max(8).min(base)
     })
 }
@@ -76,6 +127,9 @@ struct Uniforms {
     contour_softness: f32,
     style: u32,
     _pad: u32,
+    motion: [f32; 4],
+    breath: [f32; 4],
+    field: [f32; 4],
 }
 
 pub(super) struct Pipelines {
@@ -228,6 +282,7 @@ pub(super) struct Targets {
     filter_groups: [wgpu::BindGroup; 3],
     pub bake_group: wgpu::BindGroup,
     pub composite_group: wgpu::BindGroup,
+    pub lamp_bound: bool,
 }
 
 impl Targets {
@@ -294,29 +349,8 @@ impl Targets {
                 ],
             })
         });
-        let cloud_group = |front| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("spectral_cloud_composite_group"),
-                layout: &pipelines.composite_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(front),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&views[2]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
-                    },
-                    wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
-                ],
-            })
-        };
-        let bake_group = cloud_group(&views[1]);
-        let composite_group = cloud_group(&source_view);
+        let bake_group = composite_group(device, pipelines, &views[1], &views[2], &uniform);
+        let composite_group = composite_group(device, pipelines, &source_view, &views[2], &uniform);
         let source_group = source_group(device, source_layout, &source_uniform, grid, lut);
         Self {
             #[cfg(test)]
@@ -335,6 +369,7 @@ impl Targets {
             filter_groups,
             bake_group,
             composite_group,
+            lamp_bound: false,
         }
     }
 
@@ -385,9 +420,9 @@ impl Targets {
             (read.rows as f32 * self.size[axis] as f32 / visible_pixels).round().max(1.0) as u32;
         queue.write_buffer(&self.source_uniform, 0, bytemuck::bytes_of(&read));
         let settings = atmosphere.settings.sanitized();
-        let pitch = settings.pitch_softness * atmosphere.points_per_cent;
-        let time = settings.time_softness * atmosphere.points_per_ms;
-        let radius = if pitch_vertical { [time, pitch] } else { [pitch, time] };
+        let radius = radius_points(atmosphere);
+        let drift_time = atmosphere.now * f64::from(settings.cloud_speed);
+        let breath_time = atmosphere.now * f64::from(settings.breath_speed);
         let uniforms = Uniforms {
             origin: rect.min.into(),
             size: rect.size().into(),
@@ -397,13 +432,103 @@ impl Targets {
             contours: settings.contours,
             contour_softness: settings.contour_softness,
             _pad: 0,
+            motion: [
+                (drift_time * 0.071).sin() as f32 * 0.9,
+                (drift_time * 0.053).cos() as f32 * 0.9,
+                settings.cloud_scale,
+                settings.cloud_depth,
+            ],
+            breath: [
+                (breath_time * 0.73).rem_euclid(std::f64::consts::TAU) as f32,
+                (breath_time * 1.13).rem_euclid(std::f64::consts::TAU) as f32,
+                if settings.breath_speed > 0.0 { settings.breath_amount } else { 0.0 },
+                0.0,
+            ],
+            // Use the full region, not the clipped allocation, to anchor one
+            // aspect-correct field across the backdrop and measured history.
+            field: [
+                atmosphere.region.min.x,
+                atmosphere.region.min.y,
+                atmosphere.region.width(),
+                atmosphere.region.height(),
+            ],
             style: match settings.style {
                 harmonigraph_scene::SpectrogramStyle::Plain => 0,
                 harmonigraph_scene::SpectrogramStyle::Blur => 1,
                 harmonigraph_scene::SpectrogramStyle::Lava => 2,
+                harmonigraph_scene::SpectrogramStyle::Clouds => 3,
+                harmonigraph_scene::SpectrogramStyle::Puffy => 4,
             },
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
+    }
+
+    pub fn bind_lamp(
+        &mut self,
+        device: &wgpu::Device,
+        pipelines: &Pipelines,
+        lamp: &wgpu::TextureView,
+    ) {
+        self.composite_group =
+            composite_group(device, pipelines, &self.source_view, lamp, &self.uniform);
+        self.lamp_bound = true;
+    }
+
+    pub fn render(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &Pipelines,
+        vertices: &wgpu::Buffer,
+        count: u32,
+    ) {
+        {
+            #[cfg(test)]
+            self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("spectral_cloud_source"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.source_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&pipelines.source);
+            pass.set_bind_group(0, &self.source_group, &[]);
+            pass.set_vertex_buffer(0, vertices.slice(..));
+            pass.draw(0..count, 0..1);
+        }
+        self.blur(encoder, pipelines);
+        {
+            // Once filtering is finished, the raw source texture is
+            // free to hold the soft intensity. Bake across the whole
+            // spectrogram region so the Gaussian tail survives past
+            // the moving history edge. Lighting leaves its shape intact.
+            #[cfg(test)]
+            self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("spectral_cloud_material"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.source_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&pipelines.bake);
+            pass.set_bind_group(0, &self.source_group, &[]);
+            pass.set_bind_group(1, &self.bake_group, &[]);
+            pass.set_vertex_buffer(0, self.coverage_vertices.slice(..));
+            pass.draw(0..6, 0..1);
+        }
     }
 
     pub fn blur(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
@@ -431,6 +556,31 @@ impl Targets {
             pass.draw(0..3, 0..1);
         }
     }
+}
+
+fn composite_group(
+    device: &wgpu::Device,
+    pipelines: &Pipelines,
+    front: &wgpu::TextureView,
+    back: &wgpu::TextureView,
+    uniform: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("spectral_cloud_composite_group"),
+        layout: &pipelines.composite_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(front),
+            },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(back) },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
+            },
+            wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
+        ],
+    })
 }
 
 fn source_group(
