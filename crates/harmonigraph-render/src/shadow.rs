@@ -184,7 +184,8 @@ pub(crate) struct ShadowBox {
     pub rect: [f32; 4],
     /// The cell in atlas texels: origin, then size, all whole numbers.
     pub cell: [f32; 4],
-    /// x: the scale from points to cell texels; y: σ in cell texels; z: the
+    /// x: the scale from points to cell texels; y: σ in cell texels for blur,
+    /// or in pane points for [`DISTANCE_COVERAGE_KIND`]; z: the
     /// caster's level, 0..=1; w: the cell's share of the TARGET's pixels,
     /// `min(1, SIGMA_CELL_MAX / σ)`.
     ///
@@ -195,10 +196,11 @@ pub(crate) struct ShadowBox {
     pub cell_map: [f32; 4],
     /// x: which caster this box belongs to, as an index into
     /// [`Packed::casters`]; y: what this cell HOLDS, 0 blurred ink and 1 a
-    /// distance ([`DISTANCE_KIND`]); z: how far past the caster's ink this cell
+    /// distance ([`DISTANCE_KIND`]), or 2 evaluated Distance coverage
+    /// ([`DISTANCE_COVERAGE_KIND`]); z: how far past the caster's ink this cell
     /// reaches, in the pane's points — the pad the rect was grown by, which is
     /// where the standoff's curve is windowed to nothing and so the value a
-    /// texel past its encoded reach holds; w: unused.
+    /// texel past its encoded reach holds; w: falloff for evaluated coverage.
     ///
     /// x is read by the node's SCENE draw, which needs the caster's whole entry
     /// and so reaches the array rather than the box; y and z by the passes that
@@ -219,6 +221,8 @@ pub(crate) struct ShadowBox {
 /// array that are floats already; compared with a `> 0.5` wherever it is read,
 /// so nothing turns on the exact bits surviving an interpolator.
 pub(crate) const DISTANCE_KIND: f32 = 1.0;
+/// The Distance profile already evaluated and weighted by each node layer.
+pub(crate) const DISTANCE_COVERAGE_KIND: f32 = 2.0;
 
 impl ShadowBox {
     pub(crate) const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {

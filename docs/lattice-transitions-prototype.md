@@ -113,3 +113,41 @@ The CPU measurement followed compilation and averaged 2,000 updates;
 its scratch test was removed after recording the result.
 Order lookup and state updates are small relative to drawing;
 large starting poses with Distance shadows are the expensive case.
+
+## Distance shadows during a fade
+
+Distance previously admitted a complete layer into its shadow contour at 50% opacity.
+That made a fading slice's shadow appear or disappear in one frame:
+the measured plain Fade jump was 135/255 in a pixel and 9/255 averaged across the frame.
+Staggered pieces crossed the threshold separately,
+causing repeated jumps.
+
+Node Distance cells now store the maximum of each layer's Distance profile weighted by its opacity.
+The same representation continues through fully opaque frames,
+so the endpoint cannot switch between coverage interpolation and distance interpolation.
+Audio and marks keep independent opacity;
+Gaussian shadows and text/marker Distance fields retain their existing paths.
+No extra texture,
+render pass,
+or shader binding is added.
+
+The temporal regression samples 1% steps through Fade,
+Pop,
+Grow,
+28% and 90% Circular spread,
+independent marks,
+and audio-only fades with nondefault falloff.
+Reversing these same frames checks departure continuity.
+The final 0.99999-to-1 step changes by at most 1/255 in every case.
+`HARMONIGRAPH_SHADOW_FRAMES=/tmp/shadow-frames cargo test -p harmonigraph-render distance_shadows_fade_continuously` writes the sequences and shadow-only measurements.
+
+Three settled Distance baselines were inspected and updated:
+live view averaged 0.083/255 difference with maximum 9/255,
+the top view 0.038/255 with maximum 3/255,
+and the zoomed-out view 0.293/255 with maximum 9/255.
+Their contours and composition are unchanged.
+The stable representation measured 2.19/3.51/3.14/3.27/8.64 ms for the realistic Distance Fade/Pop/Grow/Circular/Maximum cases above;
+the dense Distance cases ranged from 0.43 to 1.01 ms.
+Host timing varied across runs,
+including the unchanged Gaussian control,
+so these measurements establish no gross regression rather than a speedup.

@@ -521,12 +521,14 @@ struct Instance {
 struct ShadowCell {
     @location(5) rect: vec4<f32>,
     @location(9) cell: vec4<f32>,
-    // x: points to cell texels; y: σ in those texels; z: the caster's level;
+    // x: points to cell texels; y: σ in those texels for blur, in pane points
+    // for evaluated Distance coverage; z: the caster's level;
     // w: the cell's share of the target's pixels, which is what a draw INTO
     // the cell is antialiased against (`aa_width`, `vs_node_cell`).
     @location(14) cell_map: vec4<f32>,
-    // x: this box's caster index in `shadow_casters`; y: whether this is a
-    // distance cell; z: its padding in pane points; w: unused. The scene draw
+    // x: this box's caster index in `shadow_casters`; y: 0 blur, 1 distance,
+    // 2 evaluated Distance coverage; z: padding in pane points; w: falloff
+    // for evaluated coverage. The scene draw
     // reads x, while the cell and atlas passes read the rest.
     @location(13) who: vec4<f32>,
 };
@@ -650,6 +652,11 @@ fn vs_node_cell(
     // The negative sign carries the distance kind without consuming another
     // interpolator; coverage cells return above with the positive scale.
     out.shadow_at = vec4<f32>(texel, -max(uv_points, 1e-6), box.cell_map.w);
+    // Cell-only readers: the ink strip is unused, so its fields carry the
+    // Distance profile's width and falloff without another buffer binding.
+    out.params.w = box.who.y;
+    out.strip_row = box.cell_map.y;
+    out.ink_carry = box.who.w;
     return out;
 }
 
@@ -1003,7 +1010,14 @@ fn layer_coverage(layer: NodeLayer) -> f32 {
     return layer.coverage * layer.level;
 }
 
-fn layer_distance(field: f32, layer: NodeLayer) -> f32 {
+fn layer_distance(field: f32, layer: NodeLayer, in: VsOut) -> f32 {
+    if in.params.w == DISTANCE_COVERAGE_KIND {
+        let coverage = clamp(layer.level, 0.0, 1.0) * standoff_coverage(
+            layer.sd * abs(in.shadow_at.z), 2.0 * in.strip_row, in.ink_carry,
+        );
+        // Negative coverage retains the distance union's min operation.
+        return min(field, -coverage);
+    }
     return select(field, min(field, layer.sd), layer.level >= DISTANCE_LEVEL_FLOOR);
 }
 
@@ -1720,7 +1734,8 @@ struct NodeInk {
     // ink appears. A Gaussian uses it to keep the caster's blurred alpha from
     // showing through that same caster during a release.
     mask: f32,
-    // The nearest layer whose level reaches the distance contour.
+    // The nearest opaque distance contour, or negative weighted coverage
+    // while filling a node's Distance coverage cell.
     sd: f32,
 };
 
@@ -1860,6 +1875,7 @@ fn base_node_ink(
         node_sd = layer_distance(
             node_sd,
             NodeLayer(shape_layer.sd, opacity, shape_layer.coverage),
+            in,
         );
         let slot_rgb = ink.xyz;
         // The wedge enters ONCE, after the two layers are resolved: they are
@@ -1912,7 +1928,7 @@ fn base_node_ink(
             aa,
             analytic,
         );
-        node_sd = layer_distance(node_sd, audio.layer);
+        node_sd = layer_distance(node_sd, audio.layer, in);
         glyph_rgb = (audio.color * audio.cov + glyph_rgb * glyph * (1.0 - audio.cov))
             / max(audio.cov + glyph * (1.0 - audio.cov), 1e-4);
         // The wedge's own reading is its lit share, on the composite the coverage
@@ -1964,8 +1980,8 @@ fn base_node_ink(
     let bass_cov = layer_coverage(bass_layer);
     let melody_mask = melody_layer.coverage * mask_level(melody_layer.level);
     let bass_mask = bass_layer.coverage * mask_level(bass_layer.level);
-    node_sd = layer_distance(node_sd, melody_layer);
-    node_sd = layer_distance(node_sd, bass_layer);
+    node_sd = layer_distance(node_sd, melody_layer, in);
+    node_sd = layer_distance(node_sd, bass_layer, in);
     // The two ends share the strip, so where they name DIFFERENT slices they
     // are angularly disjoint and where they name the same one they are the
     // same wedge in the same color — either way the stronger owns the pixel,
@@ -2057,7 +2073,7 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
                 result.lit = oct_slot_level(in.octaves, slot) / max(ink.w, 1e-4);
             }
             result.mask = max(result.mask, shape.coverage * taper * mask_level(ink.w * opacity));
-            result.sd = layer_distance(result.sd, NodeLayer(shape.sd * scale, ink.w * opacity, shape.coverage));
+            result.sd = layer_distance(result.sd, NodeLayer(shape.sd * scale, ink.w * opacity, shape.coverage), in);
         }
         if slot >= 0 && slot < i32(OCTAVE_SLOTS) && mark_out > mark_in {
             let bit = 1u << u32(slot);
@@ -2074,7 +2090,7 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
                 marks.lit = 1.0;
             }
             marks.mask = max(marks.mask, shape.coverage * taper * mask_level(level));
-            marks.sd = layer_distance(marks.sd, NodeLayer(shape.sd * scale, level, shape.coverage));
+            marks.sd = layer_distance(marks.sd, NodeLayer(shape.sd * scale, level, shape.coverage), in);
         }
     }
     return AnimatedInk(result, marks);
@@ -2104,7 +2120,7 @@ fn node_ink(src: VsOut, d: f32, aa: f32, oct: OctRing, analytic: bool) -> NodeIn
     ink.lit = lit / max(ink.alpha, 1e-4);
     let mask = audio.layer.coverage * mask_level(src.ring);
     ink.mask = mask + ink.mask * (1.0 - mask);
-    ink.sd = layer_distance(ink.sd, audio.layer);
+    ink.sd = layer_distance(ink.sd, audio.layer, src);
     // Marks keep their reference place above the independently sampled audio.
     let mark_lit = animated.marks.alpha + ink.lit * ink.alpha * (1.0 - animated.marks.alpha);
     ink.rgb = animated.marks.rgb + ink.rgb * (1.0 - animated.marks.alpha);
@@ -2212,8 +2228,8 @@ fn node_paint(in: VsOut) -> Painted {
 
 /// A node's shadow source, into its own cell of the atlas (`shadow.rs`). Under
 /// the Gaussian the cell stores the byte-identical coverage the blur convolves;
-/// under Distance it stores the exact union in pane points, with only layers at
-/// the half-level contour included.
+/// under Distance nodes store the union of each layer's opacity-weighted
+/// Distance profile, retaining that representation through the opaque endpoint.
 ///
 /// Drawn through [`vs_node_cell`], at the cell's own transform rather than the
 /// pane's; nothing here knows or cares which, every length it is cut with being
@@ -2238,6 +2254,9 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
     let ink = node_ink(in, g.d, g.aa, g.oct, analytic);
+    if in.params.w == DISTANCE_COVERAGE_KIND {
+        return vec4<f32>(clamp(-ink.sd, 0.0, 1.0), 0.0, 0.0, 0.0);
+    }
     if analytic {
         // Stabilize the value before the R16 attachment rounds it. The fast
         // and reference builds carry different dead coverage branches and a

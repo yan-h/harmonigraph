@@ -104,7 +104,8 @@ struct ShadowCaster {
     map: vec4<f32>,
     // What this caster SPENDS, none of it a coordinate. x: how much of its
     // shadow lands, 0..=1; y: what its cell HOLDS, 0 blurred ink and
-    // `DISTANCE_KIND` a distance; z: its σ in the pane's POINTS, which is what
+    // `DISTANCE_KIND` a distance, or `DISTANCE_COVERAGE_KIND` an evaluated
+    // opacity-weighted Distance profile; z: its σ in the pane's POINTS, which is what
     // a distance read out of the cell is measured against, one Shadow width
     // being 2σ; w: its group's Shadow falloff, the exponent the standoff's
     // decay is bent by (`standoff_coverage`), which a Gaussian row carries
@@ -116,6 +117,7 @@ struct ShadowCaster {
 // `shadow::DISTANCE_KIND`, and spelled again in shadow.wgsl because there is no
 // linkage between shader modules here.
 const DISTANCE_KIND: f32 = 1.0;
+const DISTANCE_COVERAGE_KIND: f32 = 2.0;
 
 // Every caster's shadow, indexed by the caster's own index in the frame
 // (`pack`'s order).
@@ -172,6 +174,9 @@ fn shadow_kernel(who: u32, points: vec2<f32>) -> f32 {
     // that cell's own empty border rather than the neighbour packed beside it.
     let texel = clamp(map.xy + points * map.z, cell.xy + 0.5, cell.xy + cell.zw - 0.5);
     let held = textureSampleLevel(shadow_atlas, shadow_sampler, texel / atlas, 0.0).r;
+    if shadow_casters[who].shade.y == DISTANCE_COVERAGE_KIND {
+        return clamp(held, 0.0, 1.0);
+    }
     if shadow_casters[who].shade.y >= 0.5 * DISTANCE_KIND {
         return clamp(
             standoff_coverage(

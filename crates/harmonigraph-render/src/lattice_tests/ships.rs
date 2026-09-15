@@ -303,9 +303,9 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             assert!(
                 cell_slow.chunks_exact(2).any(|p| {
                     let bits = u16::from_le_bytes([p[0], p[1]]);
-                    bits & 0x8000 != 0 && bits != 0x8000
+                    shadow::tests::half(bits) >= 0.99
                 }),
-                "the distance fixture wrote no negative node interior",
+                "the Distance fixture wrote no opaque node interior",
             );
             let differing = cell_fast
                 .chunks_exact(2)
