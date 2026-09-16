@@ -25,15 +25,20 @@ struct Cloud {
     float cloud_depth;
     float cloud_scale;
     float cloud_cover;
-    float cloud_billow;
-    float cloud_fringe;
-    float cloud_grain;
-    float cloud_wash;
-    float cloud_tide;
+    float scale_size;
+    float scale_refract;
+    float scale_relief;
+    float scale_glint;
+    float cloud_ambient;
     float _pad2_;
 };
 constant metal::float2x2 CLOUD_TURN = metal::float2x2(metal::float2(0.8, 0.6), metal::float2(-0.6, 0.8));
-constant float CLOUD_FLOOR = 0.05;
+constant float DOME_RADIUS = 1.15;
+constant float DOME_JITTER = 0.75;
+constant float DOME_UNION = 9.0;
+constant float DOME_PEAK_SLOPE = 1.5;
+constant float DOME_LACUNARITY = 2.1;
+constant float DOME_FINE_GAIN = 0.22;
 
 float density_decode(
     float value

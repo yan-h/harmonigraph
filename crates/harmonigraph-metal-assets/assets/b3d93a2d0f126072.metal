@@ -35,7 +35,12 @@ struct VertexOut {
     char _pad3[8];
 };
 constant metal::float2x2 CLOUD_TURN = metal::float2x2(metal::float2(0.8, 0.6), metal::float2(-0.6, 0.8));
-constant float CLOUD_FLOOR = 0.05;
+constant float DOME_RADIUS = 1.15;
+constant float DOME_JITTER = 0.75;
+constant float DOME_UNION = 9.0;
+constant float DOME_PEAK_SLOPE = 1.5;
+constant float DOME_LACUNARITY = 2.1;
+constant float DOME_FINE_GAIN = 0.22;
 metal::float2 unpackFloat32x2_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint b6, uint b7) {
     return metal::float2(as_type<float>(b3 << 24 | b2 << 16 | b1 << 8 | b0), as_type<float>(b7 << 24 | b6 << 16 | b5 << 8 | b4));
 }
