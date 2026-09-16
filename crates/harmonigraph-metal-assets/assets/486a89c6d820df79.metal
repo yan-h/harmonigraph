@@ -32,8 +32,13 @@ struct Cloud {
     float _pad2_;
     float _pad3_;
 };
-constant float PUFF_JITTER = 0.6;
+constant float PUFF_JITTER = 0.7;
+constant float PUFF_RADIUS_MAX = 1.1;
 constant int PUFF_OCTAVES = 3;
+constant float PUFF_LIFT = 0.35;
+constant float PUFF_UNION = 8.0;
+constant uint PUFF_SALT_B = 3266489909u;
+constant uint PUFF_SALT_C = 668265263u;
 
 float density_decode(
     float value
