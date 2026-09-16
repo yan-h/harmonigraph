@@ -451,6 +451,7 @@ fn puff_field(p: vec2<f32>, lacunarity: f32, radius: f32) -> Puffs {
     let inv_r2 = 1.0 / (radius * radius);
     var freq = 1.0;
     var amp = 1.0;
+    var broad = 1.0;
     var lit_acc = vec2<f32>(0.0);
     for (var octave = 0; octave < PUFF_OCTAVES; octave += 1) {
         // Each octave's grid is displaced as well as finer, so two of them
@@ -484,11 +485,19 @@ fn puff_field(p: vec2<f32>, lacunarity: f32, radius: f32) -> Puffs {
                 // close together the pile is a body, and elsewhere a veil.
                 let pick = cloud_slice(a, 20u);
                 let weight = pick * pick * amp;
-                let lump = u * u * weight;
+                // Cubed and not squared: the softer a scale's own rim is, the
+                // less the pile has anything an eye can call an edge, and the
+                // more its weight sits in the middle where the lumps are.
+                let lump = u * u * u * weight;
                 // The same puff differentiated, which is the relief's slope.
-                let lump_slope = (-4.0 * u * weight * freq * inv_r2) * x;
+                let lump_slope = (-6.0 * u * u * weight * freq * inv_r2) * x;
                 out.depth += lump;
-                out.slope += lump_slope;
+                // Weighted down as the scales get smaller, which the true
+                // slope of the pile is not. The smallest scales belong in the
+                // pile's DEPTH, where they are soft; carried into its shading
+                // at full strength they are a crisp ripple across the surface,
+                // and a crisp ripple lit from the side is water.
+                out.slope += lump_slope * broad;
                 if octave == 0 {
                     out.body += lump;
                     out.body_slope += lump_slope;
@@ -510,6 +519,7 @@ fn puff_field(p: vec2<f32>, lacunarity: f32, radius: f32) -> Puffs {
         }
         freq *= lacunarity;
         amp *= 0.5;
+        broad *= 0.5;
     }
     if out.lit_weight > 0.0 {
         out.lit_centre = lit_acc / out.lit_weight;
@@ -517,18 +527,22 @@ fn puff_field(p: vec2<f32>, lacunarity: f32, radius: f32) -> Puffs {
     return out;
 }
 
-// The light under a pane point, display intensity 0..1: the wide blur, which
-// is what reaches a cloud beside a ridge, floored by most of the finished
-// material so a cloud over a ridge is nearly as bright as the ridge. The wide
-// blur alone spreads a narrow ridge's energy so thin that the cloud over it
-// would read as a shadow.
+// The light under a pane point, display intensity 0..1: mostly the wide blur,
+// which is what reaches a cloud beside a ridge, lifted so a lit cloud glows
+// brighter than the halo it sits in.
+//
+// Mostly, and not floored by the finished material as it was, because the
+// material is SHARP: taking it at full weight printed the spectrogram's own
+// band edges inside the cloud body, and a cloud showing a crisp edge that
+// belongs to what is behind it is a film over the picture rather than
+// something in front of it. What that cost is a cloud over a narrow ridge,
+// which the wide blur spreads too thin to light, so a quarter of the material
+// is added back — enough to brighten the cloud there, too little to draw with.
 fn cloud_light(pt: vec2<f32>) -> f32 {
     let uv = pt / cloud.size;
     let wide = density_decode(textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r);
     let material = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
-    // Lifted so a lit cloud glows brighter than the halo it sits in; the
-    // palette clamps at 1, so a cloud over a ridge tops out at the ridge.
-    return 1.4 * max(wide, 0.85 * material);
+    return 1.3 * wide + 0.25 * material;
 }
 
 fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
@@ -545,11 +559,17 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     let lacunarity = max(1.2, sqrt(4.0 / cloud.scale_size));
     let field = puff_field(q, lacunarity, cloud.scale_overlap);
 
-    // Cover slides the threshold across the pile's own range rather than
-    // sharpening it: the ramp stays wide, so a thinning cloud fades out
-    // instead of drawing an edge, and at full cover the thinnest veil reads.
-    let sill = mix(0.9, -0.35, cloud.cloud_cover);
-    let alpha = smoothstep(sill, sill + 0.8, field.depth);
+    // Opacity is absorption through the pile rather than a threshold on it. A
+    // threshold is an EDGE however wide its ramp — it has a place where the
+    // cloud starts — and an edge is the one thing a fuzzy shape does not have.
+    // This has none: every scale fades in from nothing over its own width, and
+    // cover is only how much of the light one scale's depth takes.
+    // Against the SQUARE of the depth, so a pile twice as deep is much more
+    // than twice as opaque: absorption straight off the depth is so nearly
+    // uniform over the pane that the clouds stop having shapes and the whole
+    // thing is one haze.
+    let take = mix(0.5, 6.5, cloud.cloud_cover);
+    let alpha = 1.0 - exp(-take * field.depth * field.depth);
     if alpha <= 0.002 {
         return base;
     }
@@ -563,10 +583,16 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
         cloud_light(pt + reach.yx) - cloud_light(pt - reach.yx),
     );
     let magnitude = length(grad);
-    let directed = smoothstep(0.0, 0.03, magnitude);
-    // A fixed fill light fills in where the field is flat, so a cloud always
-    // has a lit face; the sound's own gradient takes over wherever it has one,
-    // and that is what moves the glints as the picture scrolls.
+    // Capped, so the sound LEANS the light rather than aiming it. A
+    // spectrogram of bands has a gradient that reverses between every pair of
+    // them, and a light that follows it turns over as often: neighbouring
+    // clouds end up lit from opposite sides, their shading cancels across the
+    // pane and every one of them reads flat. One light everywhere is what
+    // makes them bodies.
+    let directed = 0.55 * smoothstep(0.0, 0.03, magnitude);
+    // A fixed fill light carries it, so a cloud always has a lit face; the
+    // sound's own gradient leans it wherever it has one, and that is what
+    // moves the sheen as the picture scrolls.
     let toward =
         normalize(mix(vec2<f32>(0.55, -0.83), grad / max(magnitude, 0.00001), directed));
     let aimed = 0.5 + 0.5 * directed;
@@ -578,7 +604,12 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     let centre_pt = (field.lit_centre - cloud.drift) / units * cloud.size.y + cloud.size * 0.5;
     // Faded out where barely any puff covers the point, which is the only
     // place the average of their centres says nothing.
-    let quantized = 0.6 * smoothstep(0.0, 0.1, field.lit_weight);
+    // Held down deliberately. Reading the light a scale away is what quantizes
+    // it, and it is also what slides the picture under the cloud sideways —
+    // much of it at all stops reading as a scale catching its own light and
+    // starts reading as refraction through water, which is what it took to
+    // keep out of the picture.
+    let quantized = 0.2 * smoothstep(0.0, 0.1, field.lit_weight);
     let light = mix(cloud_light(pt), cloud_light(centre_pt), quantized);
 
     // The pile's slope is the relief, at every octave at once and at the same
@@ -586,15 +617,18 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     // relief of 0 leaves the light alone, and the glint is the lobe's excess
     // over what a flat scale returns. The light stands 45 degrees over the
     // plane, on the side it grows toward.
-    let normal = normalize(vec3<f32>(-field.slope * (1.6 * cloud.scale_glint), 1.0));
+    let normal = normalize(vec3<f32>(-field.slope * (3.2 * cloud.scale_glint), 1.0));
     let sun = normalize(vec3<f32>(toward * 0.7, 0.7));
     // Wrapped rather than clamped at the terminator: light crosses a cloud
     // instead of stopping at its surface, and a hard clamp at zero draws the
     // steep side of a scale as a black edge with a visible boundary.
     let diffuse = wrapped_light(dot(normal, sun)) / wrapped_light(sun.z);
+    // A broad sheen and not a specular highlight: a tight lobe puts hard
+    // bright specks on the scales, which is exactly what light on water looks
+    // like. Wide enough that what it adds is a sheen across a whole scale.
     let half = normalize(sun + vec3<f32>(0.0, 0.0, 1.0));
-    let flat_glint = pow(half.z, 24.0);
-    let glint = max(pow(max(dot(normal, half), 0.0), 24.0) - flat_glint, 0.0)
+    let flat_glint = pow(half.z, 6.0);
+    let glint = max(pow(max(dot(normal, half), 0.0), 6.0) - flat_glint, 0.0)
         / (1.0 - flat_glint) * aimed;
 
     // The largest puffs shade the body under the grain: the face they turn
@@ -604,15 +638,23 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     // pane the opacity barely varies, so the shapes have to be in the shading.
     let rim = clamp(dot(-field.body_slope, toward) * 0.8, 0.0, 1.0) * aimed;
     let thickness = clamp(field.depth * 1.1, 0.0, 1.4);
-    let shading = diffuse * (0.35 + 0.75 * thickness) * (0.8 + 0.5 * rim);
+    let shading = diffuse * (0.3 + 0.8 * thickness) * (0.85 + 0.45 * rim);
     // The sound picks the colour and the cloud's own shape scales it, rather
     // than the shape being folded into the palette's level: a lit body over a
     // ridge would otherwise clip flat white at the top of the ramp and lose
     // exactly the form this layer is for. Ambient is a floor under the level,
     // so a cloud over silence still has a colour to be shaded.
-    let level = clamp(light * 0.9 + cloud.cloud_ambient, 0.0, 1.0);
+    // Compressed hard before it becomes a colour. The "wide" blur is wide in
+    // CENTS and milliseconds, not in pixels, so it still carries the
+    // spectrogram's bands at nearly full contrast — and a cloud whose own
+    // colour steps at every band edge is a sheet of water with the picture
+    // showing through it, whatever its shape is doing. Under a root the gaps
+    // between bands come up nearly to the bands, the sound stays a tint, and
+    // what is left to vary across the cloud is the cloud.
+    let tint = pow(clamp(light, 0.0, 1.0), 0.55);
+    let level = clamp(tint * 0.8 + cloud.cloud_ambient, 0.0, 1.0);
     let body = palette_color(level) * shading
-        + vec3<f32>(glint * cloud.scale_glint * level * 0.5);
+        + vec3<f32>(glint * cloud.scale_glint * level * 0.25);
     return mix(base, body, cloud.cloud_depth * alpha);
 }
 

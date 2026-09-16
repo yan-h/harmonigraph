@@ -161,8 +161,9 @@ pub(crate) fn spectrum_settings_pane(
             .percent()
             .show(ui)
             .on_hover_text(
-                "Where the pile counts as cloud. Low leaves only the deepest piles standing; \
-                 high keeps even a one-scale veil, so the whole pane carries the grain.",
+                "How much light one scale's depth of cloud takes. There is no threshold \
+                 anywhere, so a cloud has no edge to find: low leaves a haze the deepest \
+                 piles show through, high closes the pane over.",
             );
         ValueBar::new(&mut atmosphere.scale_size, 0.25..=4.0, "Scale size")
             .unit(1.0, "×")

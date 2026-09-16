@@ -53,7 +53,7 @@ impl Default for SpectralAtmosphere {
             contour_softness: 0.15,
             analyzer_softness: 0.5,
             note_glow: 0.5,
-            cloud_depth: 0.7,
+            cloud_depth: 0.85,
             cloud_scale: 1.0,
             cloud_speed: 1.0,
             cloud_cover: 0.55,
