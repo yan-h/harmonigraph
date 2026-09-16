@@ -79,18 +79,19 @@ struct Uniforms {
     contour_softness: f32,
     style: u32,
     _pad: u32,
-    /// Cloud-space offset of the scale clouds and a bounded clock for the
-    /// scales' slow turning. Both are reduced from f64 on the CPU.
+    /// Cloud-space offset of the watercolour clouds and a bounded clock. Both
+    /// are reduced from f64 on the CPU.
     drift: [f32; 2],
     time: f32,
     cloud_depth: f32,
     cloud_scale: f32,
     cloud_cover: f32,
-    scale_size: f32,
-    scale_overlap: f32,
-    scale_glint: f32,
-    cloud_ambient: f32,
-    _pad2: [f32; 2],
+    cloud_billow: f32,
+    cloud_fringe: f32,
+    cloud_grain: f32,
+    cloud_wash: f32,
+    cloud_tide: f32,
+    _pad2: f32,
 }
 
 pub(super) struct Pipelines {
@@ -430,11 +431,12 @@ impl Targets {
             cloud_depth: settings.cloud_depth,
             cloud_scale: settings.cloud_scale,
             cloud_cover: settings.cloud_cover,
-            scale_size: settings.scale_size,
-            scale_overlap: settings.scale_overlap,
-            scale_glint: settings.scale_glint,
-            cloud_ambient: settings.cloud_ambient,
-            _pad2: [0.0; 2],
+            cloud_billow: settings.cloud_billow,
+            cloud_fringe: settings.cloud_fringe,
+            cloud_grain: settings.cloud_grain,
+            cloud_wash: settings.cloud_wash,
+            cloud_tide: settings.cloud_tide,
+            _pad2: 0.0,
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }

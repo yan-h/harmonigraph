@@ -23,27 +23,31 @@ pub struct SpectralAtmosphere {
     pub contour_softness: f32,
     pub analyzer_softness: f32,
     pub note_glow: f32,
-    /// Scale clouds (prototype): how much of the picture the drifting cloud
-    /// layer takes over where it is dense, 0 for no clouds at all.
+    /// Watercolour clouds (prototype): how much of the picture the wash takes
+    /// over where it is thick, 0 for no clouds at all.
     pub cloud_depth: f32,
     /// Cloud size and drift speed, as multipliers of a reference size and a
     /// slow drift, like the lattice nebula's.
     pub cloud_scale: f32,
     pub cloud_speed: f32,
-    /// How many of the pile's places hold a puff at all — the only thing
-    /// that opens sky between the clouds, since one puff per place on a
-    /// jittered grid covers the pane by construction.
+    /// How much sky the washes leave. The threshold both of them stand on, so
+    /// the range runs from a clear pane to an overcast whose thin places the
+    /// picture still shows through.
     pub cloud_cover: f32,
-    /// Size of the smallest scales the cloud is piled out of, how far each
-    /// one reaches past its own cell into its neighbours' (which also spreads
-    /// the sizes inside one scale), and how hard the side light picks the
-    /// lobes out of the pile rather than leaving it a flat backlit sheet.
-    pub scale_size: f32,
-    pub scale_overlap: f32,
-    pub scale_glint: f32,
-    /// Light a cloud shows with nothing sounding under it, and the floor
-    /// under its own shadowed side.
-    pub cloud_ambient: f32,
+    /// How far the lookup is sheared, which is what bends the sound's own
+    /// contour into a mass with lobes, and how much noise is added to the
+    /// field, which is the bumps-on-bumps a cloud edge has and a smooth
+    /// contour does not.
+    pub cloud_billow: f32,
+    pub cloud_fringe: f32,
+    /// How hard the pigment settles into the paper's tooth — the dial from a
+    /// flat wash to a dry brush — and how much water is in it, which is what
+    /// makes a wash pale and transparent rather than loaded.
+    pub cloud_grain: f32,
+    pub cloud_wash: f32,
+    /// The tide line each wash leaves where it dried. The one cue that says
+    /// watercolour rather than airbrush.
+    pub cloud_tide: f32,
 }
 
 impl Default for SpectralAtmosphere {
@@ -61,10 +65,11 @@ impl Default for SpectralAtmosphere {
             cloud_scale: 0.5,
             cloud_speed: 1.0,
             cloud_cover: 0.7,
-            scale_size: 0.8,
-            scale_overlap: 1.1,
-            scale_glint: 0.6,
-            cloud_ambient: 0.15,
+            cloud_billow: 0.55,
+            cloud_fringe: 0.6,
+            cloud_grain: 0.35,
+            cloud_wash: 0.45,
+            cloud_tide: 0.6,
         }
     }
 }
@@ -90,10 +95,11 @@ impl SpectralAtmosphere {
         self.cloud_scale = clamp(self.cloud_scale, fresh.cloud_scale, 0.25, 4.0);
         self.cloud_speed = clamp(self.cloud_speed, fresh.cloud_speed, 0.0, 20.0);
         self.cloud_cover = clamp(self.cloud_cover, fresh.cloud_cover, 0.0, 1.0);
-        self.scale_size = clamp(self.scale_size, fresh.scale_size, 0.25, 4.0);
-        self.scale_overlap = clamp(self.scale_overlap, fresh.scale_overlap, 0.6, 1.1);
-        self.scale_glint = clamp(self.scale_glint, fresh.scale_glint, 0.0, 1.0);
-        self.cloud_ambient = clamp(self.cloud_ambient, fresh.cloud_ambient, 0.0, 1.0);
+        self.cloud_billow = clamp(self.cloud_billow, fresh.cloud_billow, 0.0, 1.0);
+        self.cloud_fringe = clamp(self.cloud_fringe, fresh.cloud_fringe, 0.0, 1.0);
+        self.cloud_grain = clamp(self.cloud_grain, fresh.cloud_grain, 0.0, 1.0);
+        self.cloud_wash = clamp(self.cloud_wash, fresh.cloud_wash, 0.0, 1.0);
+        self.cloud_tide = clamp(self.cloud_tide, fresh.cloud_tide, 0.0, 1.0);
         self
     }
 }

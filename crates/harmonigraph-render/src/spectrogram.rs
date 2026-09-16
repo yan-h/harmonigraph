@@ -2340,276 +2340,188 @@ mod tests {
         assert_eq!(through_entry, through_callback);
     }
 
-    /// A pane whose light is the same everywhere, so what the cloud layer
-    /// draws over it is the layer and nothing else.
+    /// A pane carrying plenty of energy with no CONCENTRATION anywhere in it:
+    /// the same level in every bin of every slab.
+    ///
+    /// It used to be the fixture the cloud layer was measured over, because a
+    /// pile of puffs draws its own texture against a flat picture as readily
+    /// as against any other. It is the negative control now, and the inversion
+    /// is the change: a layer cut out of the sound has nothing to cut here.
     fn flat_cloud_fixture() -> SpectrogramCallback {
         let mut cb = cloud_fixture();
         cb.grid.run = Arc::new(vec![150; cb.grid.run.len()]);
-        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.7;
         cb
     }
 
-    /// The scale clouds carry the same grain over every part of the pane.
+    /// The clouds are cut out of the SOUND, not out of a field of their own.
     ///
-    /// #888's first cut cut the clouds out of a separate noise field and
-    /// flattened the scales' relief toward its edges, so the grain was in some
-    /// places and not others. There is no such field now — the clouds are the
-    /// scales piled up — and what that buys is measured per TILE, as the
-    /// spread the layer adds to each: a layer with the grain in three quarters
-    /// of the pane matches this one over the whole frame and is exactly the
-    /// inconsistent texture it is not.
+    /// This is the whole point of the layer and the correction five earlier
+    /// rounds did not make. The pile of puffs this replaces drew the same
+    /// shapes over silence as over a chord — the spectrogram only tinted them
+    /// — so however it was lit it read as an effect laid over a static
+    /// picture, which is exactly what it was. The silhouette is now an
+    /// iso-surface of where the spectrogram is locally concentrated, so a
+    /// picture with no concentration in it has no cloud over it at all.
     ///
-    /// The pile is SPARSE now, so a tile may hold open sky as well as cloud,
-    /// and that is the reason the tile has to be wider than one of the largest
-    /// scales: a gap between two puffs is the layer working, and only a hole
-    /// the size of several is it failing.
-    ///
-    /// Over a flat picture, so the spread is the layer's own rather than the
-    /// sound's: a lit tile and a silent one differ under any cloud at all.
+    /// Measured both ways round, because either half alone passes for the
+    /// wrong reason: a layer that drew nothing ever would satisfy the flat
+    /// case, and a layer with a field of its own would satisfy the ridge case.
+    /// The two fixtures differ ONLY in whether the picture's energy is
+    /// gathered into a ridge or spread flat, and both carry the same total.
     #[test]
-    fn scale_clouds_carry_the_same_grain_over_the_whole_pane() {
+    fn clouds_are_cut_from_the_sound_and_not_from_a_field_of_their_own() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let mut cb = flat_cloud_fixture();
-        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
-        let bare = fresh_frame(&device, &queue, &cb);
-        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.7;
-        let clouded = fresh_frame(&device, &queue, &cb);
-        // Tiles a quarter of the pane across, which is wider than one of the
-        // largest scales here — five of those cross the pane's height — so a
-        // tile short of grain is a hole in the layer and not one gap between
-        // two puffs.
-        let tile = SIZE[0] as usize / 4;
-        let mut spread = Vec::new();
-        for ty in 0..4 {
-            for tx in 0..4 {
-                let of = |frame: &[u8]| {
-                    let mut v = Vec::new();
-                    for y in ty * tile..(ty + 1) * tile {
-                        for x in tx * tile..(tx + 1) * tile {
-                            v.push(f64::from(frame[(y * SIZE[0] as usize + x) * 4 + 2]));
-                        }
-                    }
-                    let mean = v.iter().sum::<f64>() / v.len() as f64;
-                    (v.iter().map(|b| (b - mean).powi(2)).sum::<f64>() / v.len() as f64).sqrt()
-                };
-                assert!(of(&bare) < 0.01, "the fixture's own picture is not flat");
-                spread.push(of(&clouded));
-            }
-        }
-        let least = spread.iter().copied().fold(f64::INFINITY, f64::min);
-        let most = spread.iter().copied().fold(0.0, f64::max);
-        assert!(least > 3.0, "a tile of the pane carries no cloud grain at all: {spread:?}");
-        // And no tile carries much MORE grain than another, which is the
-        // correction this layer exists to answer: one material at one size
-        // everywhere, so a tile inside a cloud body and a tile over open sky
-        // differ in WHAT they draw and not in how much grain they have.
-        //
-        // This bound used to be its opposite — tiles had to differ by 3x or
-        // the test declared its own fixture too flat to have measured
-        // anything. That guard was reading the old layer's uneven grain as
-        // evidence the measurement worked, so the sparse pile that fixed the
-        // unevenness tripped it. What actually says the measurement can tell
-        // grain from none is the `bare` frame asserted inside the loop: 0.01
-        // against 25 is a factor of two thousand, and no bound here has to
-        // stand in for it. So this one is free to state the property.
-        assert!(most < 2.0 * least, "the grain is uneven across the pane: {spread:?}");
-    }
-
-    /// Scales reaching further into their neighbours pile deeper, so more of
-    /// the pane is cloud: the overlap is what the cloud is made of rather than
-    /// a texture detail laid over a shape decided elsewhere.
-    #[test]
-    fn scales_that_overlap_further_make_more_cloud() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let mut cb = flat_cloud_fixture();
-        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
-        let bare = fresh_frame(&device, &queue, &cb);
-        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.7;
-        let mut drawn = Vec::new();
-        for overlap in [0.6, 0.85, 1.1] {
-            cb.atmosphere.as_mut().unwrap().settings.scale_overlap = overlap;
-            let frame = fresh_frame(&device, &queue, &cb);
-            let sum: u64 = frame
+        let change = |cb: &mut SpectrogramCallback| {
+            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+            let bare = fresh_frame(&device, &queue, cb);
+            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.9;
+            let clouded = fresh_frame(&device, &queue, cb);
+            let n = bare.len() / 4;
+            let hit: Vec<bool> = bare
                 .chunks_exact(4)
-                .zip(bare.chunks_exact(4))
-                .map(|(a, b)| u64::from(a[2].abs_diff(b[2])))
-                .sum();
-            drawn.push(sum as f64 / (SIZE[0] * SIZE[1]) as f64);
-        }
+                .zip(clouded.chunks_exact(4))
+                .map(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 3))
+                .collect();
+            hit.iter().filter(|&&h| h).count() as f32 / n as f32
+        };
+        // A picture whose energy is spread evenly: loud, but with nothing
+        // anywhere for a cloud to condense on.
+        let over_flat = change(&mut flat_cloud_fixture());
+        // The same pane with its energy gathered into one ridge.
+        let over_ridge = change(&mut cloud_fixture());
         assert!(
-            drawn[0] < drawn[1] && drawn[1] < drawn[2],
-            "reaching further did not deepen the pile: {drawn:?}"
+            over_ridge > 0.05,
+            "the layer drew nothing over a real concentration either, so this fixture never \
+             reached the cloud path: {over_ridge}"
+        );
+        assert!(
+            over_flat < over_ridge / 8.0,
+            "a picture with no concentration in it still grew cloud, so the silhouette has a \
+             field of its own: {over_flat} of the pane flat against {over_ridge} over a ridge"
         );
     }
 
-    /// The light a cloud shows steps nowhere the picture under it does not.
+    /// Cover is the knob that opens the sky, over its whole range.
     ///
-    /// The mosaic #888 was sent back for was a straight edge drawn through a
-    /// cloud, from a light read at the NEAREST scale's centre: that steps
-    /// across the bisector between two of them. The mechanism is gone — the
-    /// light is read at the pixel now and there is nothing left to quantize it
-    /// — so what this measures is the general property the mechanism broke:
-    /// over a picture that steps by a level or two per pixel, the layer adds
-    /// no step of its own.
-    ///
-    /// Be honest about its reach, because two things it looks like it should
-    /// cover it does NOT, both checked by sabotage rather than assumed. The
-    /// soft union is invisible here: `scale_glint` 0 is what turns the relief
-    /// off, and the union reaches the picture only through the normal, so
-    /// hardening it to a near-max (`PUFF_UNION` 90) leaves this passing. And
-    /// the radius ceiling that keeps a puff inside its 3x3 ring is not
-    /// reachable from the dials at all — `scale_overlap` is clamped to 1.1 in
-    /// `sanitized`, which is the ceiling — so raising `PUFF_RADIUS_MAX` alone
-    /// changes nothing and cannot be caught from here.
-    ///
-    /// The one live mechanism this does not reach is the light march printing
-    /// the picture's BANDS back into the clouds, since it takes a banded
-    /// picture to turn the light's lean over and this fixture is a ramp on
-    /// purpose. That one is held by `followed` in `backlight` being a quarter
-    /// rather than the two thirds it was, and it is checked by eye.
-    ///
-    /// The picture under the clouds is a ramp over the whole pitch axis, so it
-    /// steps by a level or two between neighbouring pixels and anything larger
-    /// is the layer's. It must be a ramp and not a flat field: under a flat
-    /// one every scale reads the same light however it picks it and the seam
-    /// is invisible by construction. The relief is off, for the same reason in
-    /// the other direction — a lit bump is a legitimate fast edge at this pane
-    /// size, and it would bury the one being measured.
+    /// It is a threshold on the band-passed field, so this also says the band
+    /// pass is wired up: a threshold on a plain blur would move with the
+    /// picture's level rather than with this dial.
     #[test]
-    fn scale_clouds_step_the_light_nowhere_the_picture_does_not() {
+    fn cloud_cover_opens_the_sky() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let mut cb = cloud_fixture();
-        let bins = BINS as usize;
-        let mut bytes = vec![0u8; 12 * bins];
-        for slab in 0..12 {
-            for bin in 0..bins {
-                bytes[slab * bins + bin] = (bin * 255 / (bins - 1)) as u8;
-            }
-        }
-        cb.grid.run = Arc::new(bytes);
-        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
-        // Sculpt 0 is the flat backlit sheet: no side light, so no lit lobe.
-        settings.scale_glint = 0.0;
-        // The largest scales the dials reach, so the layer's own field varies
-        // over tens of pixels rather than over eight. A smooth field sampled
-        // near its own period steps by a tenth of its range per pixel however
-        // smooth it is, and at the fresh size that is larger than the seam.
-        settings.cloud_scale = 4.0;
-        settings.scale_size = 4.0;
-        let step = |frame: &[u8]| {
-            let mut worst = 0u8;
-            let w = SIZE[0] as usize;
-            for y in 1..SIZE[1] as usize {
-                for x in 1..w {
-                    let i = (y * w + x) * 4;
-                    for c in 0..3 {
-                        worst = worst.max(frame[i + c].abs_diff(frame[i - 4 + c]));
-                        worst = worst.max(frame[i + c].abs_diff(frame[i - w * 4 + c]));
-                    }
-                }
-            }
-            worst
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+        let bare = fresh_frame(&device, &queue, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.9;
+        let mut painted = |cover: f32| {
+            cb.atmosphere.as_mut().unwrap().settings.cloud_cover = cover;
+            let frame = fresh_frame(&device, &queue, &cb);
+            bare.chunks_exact(4)
+                .zip(frame.chunks_exact(4))
+                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 3))
+                .count()
         };
-        let bare = step(&fresh_frame(&device, &queue, &cb));
-        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.7;
-        let clouded = step(&fresh_frame(&device, &queue, &cb));
-        assert!(bare <= 4, "the picture under the clouds is not smooth: {bare}");
-        assert!(clouded <= 12, "the cloud layer drew an edge of its own: {clouded} over {bare}");
+        let clear = painted(0.0);
+        let mid = painted(0.5);
+        let overcast = painted(1.0);
+        assert!(
+            clear < mid && mid < overcast,
+            "cover did not open the sky monotonically: {clear} then {mid} then {overcast}"
+        );
+        // A factor rather than a doubling, and the ceiling here is the
+        // FIXTURE's and not the knob's: this pane holds one narrow ridge in a
+        // mostly dark field, so there is only so much concentration for any
+        // threshold to find. That is the layer working — cover decides how
+        // much of the sound's structure is drawn as cloud, not how much of the
+        // pane is painted regardless. Over a pane of real music the same knob
+        // runs from a scatter of billows to a near overcast.
+        assert!(
+            overcast > (clear as f32 * 1.4) as usize,
+            "the whole range of the knob barely moved the cloud: {clear} to {overcast}"
+        );
     }
 
     /// The layer saturates no channel the picture had not saturated already.
     ///
-    /// A channel that clips is a flat patch with a hard edge on it, and it
-    /// shifts the colour as well as flattening it, which is what made the
-    /// bright patches look metallic rather than like bright cloud. They got
-    /// worse as the sheen was raised because the sheen is what pushed the
-    /// shading over, so this runs at the deepest cover and the most sheen the
-    /// dials reach — where the product of transmission, relief and sheen runs
-    /// furthest past what the palette can hold.
+    /// A clipped channel is a flat patch with a hard edge in a shifted hue —
+    /// the metallic patches of round (4), which needed a tone map to hold back
+    /// because the shading was a PRODUCT of transmission, relief and sheen and
+    /// ran past what the palette could hold. There is no such product now:
+    /// every wash is a `mix` between the picture and a palette colour, both
+    /// already inside the ramp, so this cannot clip by construction. The test
+    /// stays as the guard on that construction — an additive term
+    /// reintroduced anywhere in the paint would trip it.
+    ///
+    /// Run at the deepest cover and the most pigment the dials reach, which is
+    /// where the old one went over.
     #[test]
-    fn scale_clouds_clip_no_channel_the_picture_had_not_clipped() {
+    fn the_layer_saturates_no_channel_the_picture_had_not() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let mut cb = flat_cloud_fixture();
+        let mut cb = cloud_fixture();
         cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
         let bare = fresh_frame(&device, &queue, &cb);
         let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
         settings.cloud_depth = 1.0;
         settings.cloud_cover = 1.0;
-        settings.scale_glint = 1.0;
-        settings.scale_overlap = 1.1;
+        settings.cloud_tide = 1.0;
+        settings.cloud_grain = 1.0;
+        // Undiluted: the most pigment there is, and the least water to pale it.
+        settings.cloud_wash = 0.0;
         let clouded = fresh_frame(&device, &queue, &cb);
         let clipped = |frame: &[u8]| {
             frame.chunks_exact(4).filter(|p| p[..3].iter().any(|&c| c >= 254)).count()
         };
-        // The fixture's own picture is nowhere near the top of the ramp, so
-        // anything saturated in the clouded frame is the layer's doing.
         assert_eq!(clipped(&bare), 0, "the fixture clips on its own and measures nothing");
         assert_eq!(clipped(&clouded), 0, "the cloud layer clipped a channel flat");
     }
 
-    /// A bright place in the picture lights cloud that is nowhere near it.
+    /// The tide line is a RIM, not another wash.
     ///
-    /// This is the difference between clouds LIT by the sound and clouds
-    /// passing over it: the light is gathered over a ring a cloud wide, so one
-    /// loud partial glows through whatever cloud is around it and fades away
-    /// with distance. Read per pixel, the layer only ever repeats the picture
-    /// underneath and the clouds read as a texture sliding over a static one.
+    /// Edge darkening is the cue that says watercolour rather than airbrush,
+    /// and what makes it that cue is that the pigment goes to the wash's
+    /// boundary rather than over its whole area. So the knob has to move a
+    /// small part of the pane a long way, and a version that moved the whole
+    /// mass a little would be a second body and not a tide line — it would
+    /// raise the painted fraction rather than the size of the change.
     ///
-    /// Measured over the dark rows well away from the fixture's ridge, where
-    /// the picture itself is black: what the layer draws there can only have
-    /// come from somewhere else. The falloff is the other half — a layer that
-    /// lit the whole pane evenly would pass a "reaches the dark" check and
-    /// would not be a light at all.
+    /// The fringe is off, because a rough silhouette moves the boundary itself
+    /// and would be measured here as rim.
     #[test]
-    fn a_bright_place_lights_the_cloud_around_it() {
+    fn the_tide_line_draws_a_rim_rather_than_another_wash() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let mut cb = cloud_fixture();
-        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
-        // No relief and no sheen, so what is measured is the light reaching
-        // the cloud and not a lit bump that happens to face the right way.
-        cb.atmosphere.as_mut().unwrap().settings.scale_glint = 0.0;
-        // And no ambient, which is a floor the same everywhere: it would hold
-        // the far rows up and cap the falloff this measures.
-        cb.atmosphere.as_mut().unwrap().settings.cloud_ambient = 0.0;
-        let clouded = fresh_frame(&device, &queue, &cb);
-        let mut plain = cloud_fixture();
-        plain.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
-        let bare = fresh_frame(&device, &queue, &plain);
-        // The fixture's ridge sits at row 63 of 128, and its own diffusion dies
-        // out by row 80; rows are pitch, so a band of them below that is a
-        // distance from the ridge across black picture.
-        let row_light = |frame: &[u8], row: usize| {
-            let w = SIZE[0] as usize;
-            (0..w).map(|x| u32::from(frame[(row * w + x) * 4 + 2])).sum::<u32>() as f32 / w as f32
-        };
-        let band = |frame: &[u8], rows: std::ops::Range<usize>| {
-            let n = rows.len() as f32;
-            rows.map(|r| row_light(frame, r)).sum::<f32>() / n
-        };
-        let near = band(&clouded, 80..87);
-        let far = band(&clouded, 90..97);
-        let near_bare = band(&bare, 80..87);
-        let far_bare = band(&bare, 90..97);
+        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+        settings.cloud_depth = 1.0;
+        settings.cloud_fringe = 0.0;
+        settings.cloud_tide = 0.0;
+        let plain = fresh_frame(&device, &queue, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.cloud_tide = 1.0;
+        let rimmed = fresh_frame(&device, &queue, &cb);
+        let deltas: Vec<u8> = plain
+            .chunks_exact(4)
+            .zip(rimmed.chunks_exact(4))
+            .map(|(a, b)| (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap())
+            .collect();
+        let moved = deltas.iter().filter(|&&d| d > 6).count();
+        let worst = deltas.iter().copied().max().unwrap();
+        let fraction = moved as f32 / deltas.len() as f32;
         assert!(
-            near_bare == 0.0 && far_bare == 0.0,
-            "the fixture's own picture reaches these rows, so they measure it and not the \
-             cloud: {near_bare} and {far_bare}"
+            worst > 24,
+            "the tide line's whole range barely changed any pixel, so it is not drawing: \
+             {worst}"
         );
-        assert!(far > 0.5, "no light reached the cloud over the dark rows at all: {far}");
         assert!(
-            near > far * 2.0,
-            "the light did not fall off with distance from the ridge, so it is an even wash \
-             over the pane rather than a light: {near} near against {far} far"
+            fraction < 0.25,
+            "the tide line moved {fraction} of the pane, which is a wash over the mass \
+             rather than a rim at its edge"
         );
     }
 }
