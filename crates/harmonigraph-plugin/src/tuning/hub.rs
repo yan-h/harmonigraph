@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
+use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
 use nice_plug::wrapper::clap::configuration::OwnedInput;
@@ -115,6 +116,9 @@ impl Voice {
 /// The musical half, and nothing else. Everything in here is policy state; the
 /// transport around it is what #786 replaced.
 struct Sequencer {
+    engine: TuningEngine,
+    engine_revision: u64,
+    map: Option<LatticeMap>,
     context: Box<[Option<Voice>]>,
     memory: policy::Memory,
     config: policy::MusicalConfig,
@@ -134,6 +138,9 @@ struct Sequencer {
 impl Default for Sequencer {
     fn default() -> Self {
         Self {
+            engine: Default::default(),
+            engine_revision: 0,
+            map: None,
             context: vec![None; HELD_SESSION].into_boxed_slice(),
             memory: policy::Memory::default(),
             config: harmonigraph_core::configuration::ConfigReducer::default().resolved().into(),
@@ -542,8 +549,34 @@ impl Hub {
             while end < self.batch.len() && self.batch[end].sample == sample {
                 end += 1;
             }
-            for position in index..end {
-                self.apply(position, index, end, config);
+            if let Some(attack) = owner.maps.at(sample) {
+                let timed_config = if attack.playback.engine == TuningEngine::LatticeMap {
+                    attack.config
+                } else {
+                    config
+                };
+                if self.sequencer.engine_revision != attack.engine_revision {
+                    self.sequencer.memory.clear();
+                    self.sequencer.context.fill(None);
+                    self.sequencer.last_release = None;
+                    self.sequencer.engine = attack.playback.engine;
+                    self.sequencer.engine_revision = attack.engine_revision;
+                }
+                self.sequencer.map = attack.playback.map;
+                self.sequencer.config = timed_config.into();
+                for position in index..end {
+                    self.apply(position, index, end, timed_config);
+                }
+            } else {
+                // Outside retained/known configuration: refuse correction visibly.
+                // Keep controller/release processing and publication truthful.
+                self.status |= session::POLICY;
+                let engine = self.sequencer.engine;
+                self.sequencer.engine = TuningEngine::Off;
+                for position in index..end {
+                    self.apply(position, index, end, config);
+                }
+                self.sequencer.engine = engine;
             }
             index = end;
         }
@@ -711,6 +744,29 @@ impl Hub {
                 correction: 0,
                 node: None,
                 decision: 0,
+                player,
+                channel_pitch,
+                configuration: config,
+            });
+        }
+        if self.sequencer.engine != TuningEngine::Adaptive {
+            let mapped = (self.sequencer.engine == TuningEngine::LatticeMap)
+                .then_some(self.sequencer.map)
+                .flatten();
+            let correction = mapped.map_or(0, |map| map.correction(key, config.tuning));
+            let node = mapped.map(|map| map.node(key));
+            let decision = if mapped.is_some() {
+                self.sequencer.decision += 1;
+                self.decisions += 1;
+                self.sequencer.decision
+            } else {
+                0
+            };
+            self.reply(record, correction);
+            return Some(Assigned {
+                correction,
+                node,
+                decision,
                 player,
                 channel_pitch,
                 configuration: config,

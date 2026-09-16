@@ -18,6 +18,8 @@ use event::Event;
 
 #[path = "control_tests.rs"]
 mod control_tests;
+#[path = "map_tests.rs"]
+mod map_tests;
 #[path = "musical_tests.rs"]
 mod musical_tests;
 use std::ffi::{c_char, c_void, CStr};

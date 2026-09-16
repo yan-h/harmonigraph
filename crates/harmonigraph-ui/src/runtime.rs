@@ -8,6 +8,8 @@ use harmonigraph_scene::FrameParams;
 
 /// Synchronous input, analysis and history, independent of any viewport.
 pub struct VisualRuntime {
+    pub lattice_maps: Option<crate::lattice_maps::MapView>,
+    pub map_destination: Option<harmonigraph_core::LatticePos>,
     pub console: Console,
     pub tracker: NoteTracker,
     /// Snapshot of the tuning parameters, refreshed each frame in
@@ -71,6 +73,8 @@ pub struct VisualRuntime {
 impl Default for VisualRuntime {
     fn default() -> Self {
         Self {
+            lattice_maps: None,
+            map_destination: None,
             console: Console::default(),
             tracker: NoteTracker::new(),
             tuning: Tuning::default(),

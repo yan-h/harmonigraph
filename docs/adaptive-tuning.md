@@ -13,6 +13,12 @@ the remaining sections record the implementation boundaries, rejected alternativ
 
 ## Status
 
+For explicit passage tuning with saved maps,
+see [Lattice Map tuning](lattice-maps.md).
+The shared Tuning mode selector chooses Off,
+Adaptive or Lattice Map for subsequent attacks.
+
+
 The moving, register-aware policy developed from [Adaptive tuning: a moving harmonic neighbourhood](adaptive-tuning-design.md) shipped in [#782](https://github.com/yan-h/harmonigraph/pull/782).
 That design document remains the requirements and discussion record;
 the [policy-v3 implementation record](adaptive-tuning-plugin.md) is authoritative for the shipped scorer, controls, expression handling, resources and persistence.

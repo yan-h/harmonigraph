@@ -16,6 +16,7 @@ mod audio_ingress;
 mod background;
 mod configuration;
 mod editor;
+mod lattice_maps;
 #[cfg(all(feature = "startup-probe", target_os = "macos"))]
 pub use editor::startup_probe::run as editor_startup_probe;
 // The allocator that makes `configuration::tests`' `assert_no_alloc` blocks
@@ -142,6 +143,14 @@ impl std::ops::DerefMut for RecorderSlot {
 
 #[derive(Params)]
 pub struct HarmonigraphParams {
+    #[persist = "lattice-maps"]
+    pub maps: Arc<parking_lot::RwLock<harmonigraph_ui::lattice_maps::MapDocument>>,
+    pub map_editor: Arc<parking_lot::Mutex<harmonigraph_ui::lattice_maps::MapEditor>>,
+    pub map_playback: Arc<parking_lot::Mutex<harmonigraph_ui::lattice_maps::MapPlayback>>,
+    #[id = "lattice-map"]
+    pub map: IntParam,
+    #[id = "tuning-engine"]
+    pub tuning_engine: IntParam,
     session: std::sync::OnceLock<Arc<tuning::setup::Shared>>,
     configuration:
         std::sync::OnceLock<Arc<nice_plug::wrapper::clap::configuration::ConfigurationMailbox>>,
@@ -230,7 +239,27 @@ fn param_for_key(key: ParamKey) -> FloatParam {
 
 impl Default for HarmonigraphParams {
     fn default() -> Self {
+        let maps = Arc::new(parking_lot::RwLock::new(
+            harmonigraph_ui::lattice_maps::MapDocument::default(),
+        ));
+        let names = maps.clone();
         HarmonigraphParams {
+            maps,
+            map_editor: Default::default(),
+            map_playback: Default::default(),
+            map: IntParam::new("Map", 0, IntRange::Linear { min: 0, max: 127 })
+                .with_value_to_string(Arc::new(move |id| {
+                    let doc = names.read();
+                    match doc.slots.get(id as usize).filter(|m| !m.deleted) {
+                        Some(map) => format!("{} · {}", id + 1, map.name),
+                        None => format!("{} · unavailable", id + 1),
+                    }
+                })),
+            tuning_engine: IntParam::new("Tuning mode", 1, IntRange::Linear { min: 0, max: 2 })
+                .with_value_to_string(Arc::new(|value| {
+                    ["Off", "Adaptive", "Lattice Map"][value.clamp(0, 2) as usize].into()
+                }))
+                .non_automatable(),
             session: std::sync::OnceLock::new(),
             configuration: std::sync::OnceLock::new(),
             editor_state: editor::EguiState::from_size(
@@ -281,6 +310,13 @@ pub(crate) struct PluginParamBackend<'a> {
 }
 
 impl ParamBackend for PluginParamBackend<'_> {
+    fn lattice_maps(&self) -> Option<harmonigraph_ui::lattice_maps::MapView> {
+        self.params.configuration.get()?;
+        Some(lattice_maps::view(self.params))
+    }
+    fn edit_lattice_map(&self, edit: harmonigraph_ui::lattice_maps::MapEdit) {
+        lattice_maps::edit(self.params, self.setter, edit);
+    }
     fn tuning_instances(&self) -> Vec<harmonigraph_ui::params::TuningInstance> {
         if self.params.configuration.get().is_some() {
             tuning::instances::snapshots()
@@ -901,6 +937,7 @@ impl ClapPlugin for Harmonigraph {
         }
     }
     const CLAP_CONFIGURATION: bool = true;
+    const CLAP_NON_MODULATABLE_PARAMS: &'static [&'static str] = &["lattice-map"];
     const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] =
         &["tuning-c-offset", "tuning-three", "tuning-five", "tuning-seven", "tuning-tolerance"];
     const CLAP_CONFIGURATION_FIELDS: &'static [&'static str] = &[configuration::MUSICAL_SETTINGS];
@@ -942,7 +979,13 @@ impl ClapPlugin for Harmonigraph {
         &mut self,
         boundary: nice_plug::wrapper::clap::configuration::ConfigurationBoundary,
     ) {
-        self.configuration.as_mut().unwrap().begin(boundary, &self.take, self.presentation_seconds);
+        let owner = self.configuration.as_mut().unwrap();
+        owner.maps.seed(
+            self.params.tuning_engine.value(),
+            self.params.map.unmodulated_plain_value(),
+            self.params.configuration.get().unwrap().accepted_restore.load(Ordering::Acquire),
+        );
+        owner.begin(boundary, &self.take, self.presentation_seconds);
     }
     fn clap_configuration_adopt(&mut self) {
         self.configuration.as_mut().unwrap().adopt();
@@ -967,8 +1010,10 @@ impl ClapPlugin for Harmonigraph {
     /// second observation of the same input to add.
     fn clap_configuration_observe(
         &mut self,
-        _event: nice_plug::wrapper::clap::configuration::OwnedInput,
+        event: nice_plug::wrapper::clap::configuration::OwnedInput,
     ) {
+        let owner = self.configuration.as_mut().unwrap();
+        owner.maps.observe(event, owner.reducer.resolved());
     }
     fn clap_configuration_group_end(
         &mut self,
@@ -1293,13 +1338,13 @@ mod tests {
                 key.id(),
             );
         }
-        assert!(
-            host_ids.iter().any(|id| id == "analysis-input"),
-            "the source selector has no host-persisted parameter: {host_ids:?}",
-        );
+        let operational = ["analysis-input", "lattice-map", "tuning-engine"];
+        for id in operational {
+            assert!(host_ids.iter().any(|host| host == id), "missing operational parameter {id}");
+        }
         assert_eq!(
             host_ids.len(),
-            ParamKey::ALL.len() + 1,
+            ParamKey::ALL.len() + operational.len(),
             "the plugin exposes an unnamed operational parameter: {host_ids:?}"
         );
     }
