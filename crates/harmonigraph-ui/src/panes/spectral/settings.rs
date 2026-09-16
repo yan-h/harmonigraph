@@ -139,78 +139,72 @@ pub(crate) fn spectrum_settings_pane(
                 .percent()
                 .show(ui);
         }
-        ui.label(egui::RichText::new("Watercolour clouds (prototype)").strong());
+        ui.label(egui::RichText::new("Refracting scale clouds (prototype)").strong());
         ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Cloud depth")
             .percent()
             .show(ui)
             .on_hover_text(
-                "Clouds cut out of the sound itself: the silhouette is a contour of where \
-                 the spectrogram is locally concentrated, so a cloud is made of what is \
-                 sounding under it and silence draws none at all. Painted as transparent \
-                 washes rather than lit as a surface. 0% removes them. They need some \
-                 softness above: the softened field is what they are cut from.",
+                "Drifting clouds made of reflective scales, each scale bending the sound's \
+                 light behind it so the picture is seen THROUGH the cloud rather than under \
+                 something painted over it. 0% removes them. They need some softness above: \
+                 the softened field is the light they bend.",
             );
         ValueBar::new(&mut atmosphere.cloud_scale, 0.25..=4.0, "Cloud size")
-            .unit(1.0, "×")
+            .unit(1.0, "\u{d7}")
+            .show(ui)
+            .on_hover_text("Size of one cloud. Five of them cross the pane's height at 1\u{d7}.");
+        ValueBar::new(&mut atmosphere.cloud_speed, 0.0..=20.0, "Cloud speed")
+            .unit(1.0, "\u{d7}")
             .show(ui)
             .on_hover_text(
-                "How wide a concentration of sound has to be to read as one cloud, which \
-                 is the size of a cloud.",
+                "1\u{d7} crosses the pane in about two minutes. 0 holds the clouds still.",
             );
-        ValueBar::new(&mut atmosphere.cloud_speed, 0.0..=20.0, "Cloud speed")
-            .unit(1.0, "×")
-            .show(ui)
-            .on_hover_text("1× crosses the pane in about two minutes. 0 holds the clouds still.");
         ValueBar::new(&mut atmosphere.cloud_cover, 0.0..=1.0, "Cloud cover")
             .percent()
             .show(ui)
             .on_hover_text(
-                "How much sky the washes leave. The threshold the sound has to pass to be \
-                 drawn as cloud, so low is a scatter of separate billows over a clear pane \
-                 and high an overcast with the picture showing through its thin places. It \
-                 is a threshold on a CONTRAST, not on a level, so the cover holds through a \
-                 loud passage and a quiet one alike.",
+                "How much sky is left between the clouds. Low is a scatter of separate \
+                 billows over a clear pane, high an overcast with the picture showing \
+                 through its thin places.",
             );
-        ValueBar::new(&mut atmosphere.cloud_billow, 0.0..=1.0, "Billow")
+        ValueBar::new(&mut atmosphere.scale_size, 0.25..=4.0, "Scale size")
+            .unit(1.0, "\u{d7}")
+            .show(ui)
+            .on_hover_text(
+                "Size of one scale, as a share of a cloud. Small is a fine grain over the \
+                 whole cloud; large is a few broad faces. Changing it does not change how \
+                 far the light bends \u{2014} Refraction is measured in scale widths.",
+            );
+        ValueBar::new(&mut atmosphere.scale_refract, 0.0..=1.0, "Refraction")
             .percent()
             .show(ui)
             .on_hover_text(
-                "How far the wash is sheared off the sound's own contour. 0 draws the \
-                 spectrogram's concentrations as they are, which reads as a map; winding it \
-                 up bends them into masses with lobes. Too far and the shear reads as smoke \
-                 rather than as cloud.",
+                "How far a scale bends the light behind it, as a share of its own width. \
+                 This is the dial that makes the layer a LENS: the spectrogram is read \
+                 where each scale's face points, so the bands break and bend through the \
+                 cloud. 0 leaves the light where it is and the cloud is just a lit body.",
             );
-        ValueBar::new(&mut atmosphere.cloud_fringe, 0.0..=1.0, "Fringe")
+        ValueBar::new(&mut atmosphere.scale_relief, 0.0..=1.0, "Scale relief")
             .percent()
             .show(ui)
             .on_hover_text(
-                "Bumps on bumps along the outline. Added to the field rather than to the \
-                 lookup, so it roughens the inside of a mass as well as its edge. 0 leaves \
-                 a smooth contour, which is the one thing a cloud edge never is.",
+                "How domed the scales are, which is what gives them faces to catch the \
+                 light with. 0 is a smooth body with no scales in it; high picks each face \
+                 out separately.",
             );
-        ValueBar::new(&mut atmosphere.cloud_tide, 0.0..=1.0, "Tide line")
+        ValueBar::new(&mut atmosphere.scale_glint, 0.0..=1.0, "Glint")
             .percent()
             .show(ui)
             .on_hover_text(
-                "The rim of pigment a wash leaves where it dried, weighted to the side the \
-                 mass falls away on. This is the cue that says watercolour rather than \
-                 airbrush; 0 leaves a soft-edged wash with no edge of its own.",
+                "The sparkle on a scale's face. The light leans with the sound's own \
+                 gradient, so the glints travel across the clouds as the picture scrolls.",
             );
-        ValueBar::new(&mut atmosphere.cloud_grain, 0.0..=1.0, "Granulation")
+        ValueBar::new(&mut atmosphere.cloud_ambient, 0.0..=1.0, "Cloud ambient")
             .percent()
             .show(ui)
             .on_hover_text(
-                "How hard the pigment settles into the paper's tooth. The dial from a flat \
-                 wash to a dry brush. The paper is fixed to the pane and never drifts with \
-                 the clouds — it is the sheet they dried on.",
-            );
-        ValueBar::new(&mut atmosphere.cloud_wash, 0.0..=1.0, "Dilution")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "Water in the pigment. High is a pale transparent wash that tints the \
-                 picture; low is paint loaded with colour that covers it. Being a pigment \
-                 dial rather than a brightness one, it cannot blow a channel out.",
+                "Light a cloud shows with nothing sounding under it, so a cloud over \
+                 silence is visible rather than black.",
             );
     }
     ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")

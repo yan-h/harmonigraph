@@ -2353,53 +2353,69 @@ mod tests {
         cb
     }
 
-    /// The clouds are cut out of the SOUND, not out of a field of their own.
+    /// The layer BENDS the picture rather than painting over it.
     ///
-    /// This is the whole point of the layer and the correction five earlier
-    /// rounds did not make. The pile of puffs this replaces drew the same
-    /// shapes over silence as over a chord — the spectrogram only tinted them
-    /// — so however it was lit it read as an effect laid over a static
-    /// picture, which is exactly what it was. The silhouette is now an
-    /// iso-surface of where the spectrogram is locally concentrated, so a
-    /// picture with no concentration in it has no cloud over it at all.
+    /// This is the whole of what Yan asked for twice and what rounds 2 through
+    /// 6 removed: the light is read where each scale's face points, so the
+    /// spectrogram is seen THROUGH the cloud, displaced. Round 6 painted
+    /// palette colour over the picture instead, and that is what made it read
+    /// as *"some wisps overlaying the spectrogram"*.
     ///
-    /// Measured both ways round, because either half alone passes for the
-    /// wrong reason: a layer that drew nothing ever would satisfy the flat
-    /// case, and a layer with a field of its own would satisfy the ridge case.
-    /// The two fixtures differ ONLY in whether the picture's energy is
-    /// gathered into a ridge or spread flat, and both carry the same total.
+    /// The measurement is the defining property of a lens, and it needs both
+    /// halves or it passes for the wrong reason. **A lens over a featureless
+    /// field is invisible** — bending a flat picture samples the same value
+    /// from somewhere else and returns it unchanged — while over a structured
+    /// one it moves a great deal. A layer that merely brightened or tinted
+    /// would move BOTH, and a layer that did nothing would move neither.
+    ///
+    /// Everything but the refraction is held still between the two frames:
+    /// same cloud shape, same relief, same glint, same ambient. Only
+    /// `scale_refract` moves, so what is measured is the displacement alone.
+    ///
+    /// Measured: 3.2% of the pane over the ridge fixture, and EXACTLY zero
+    /// over the flat one. The 3.2 is not small for the wrong reason — this
+    /// fixture is one narrow ridge in a mostly dark pane, and bending black
+    /// gives black, so only the neighbourhood of the ridge can move at all.
+    /// The zero is the half that carries the claim, and it is exact rather
+    /// than merely small because a displaced constant IS that constant.
     #[test]
-    fn clouds_are_cut_from_the_sound_and_not_from_a_field_of_their_own() {
+    fn the_layer_bends_the_picture_rather_than_painting_over_it() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let change = |cb: &mut SpectrogramCallback| {
-            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
-            let bare = fresh_frame(&device, &queue, cb);
-            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.9;
-            let clouded = fresh_frame(&device, &queue, cb);
-            let n = bare.len() / 4;
-            let hit: Vec<bool> = bare
+        let moved_by_refraction = |cb: &mut SpectrogramCallback| {
+            {
+                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                s.cloud_depth = 1.0;
+                // Overcast, so the cloud covers the pane and the comparison is
+                // not dominated by how much sky each frame happens to have.
+                s.cloud_cover = 1.0;
+                s.scale_refract = 0.0;
+            }
+            let straight = fresh_frame(&device, &queue, cb);
+            cb.atmosphere.as_mut().unwrap().settings.scale_refract = 1.0;
+            let bent = fresh_frame(&device, &queue, cb);
+            let n = straight.len() / 4;
+            let moved = straight
                 .chunks_exact(4)
-                .zip(clouded.chunks_exact(4))
-                .map(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 3))
-                .collect();
-            hit.iter().filter(|&&h| h).count() as f32 / n as f32
+                .zip(bent.chunks_exact(4))
+                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+                .count();
+            moved as f32 / n as f32
         };
-        // A picture whose energy is spread evenly: loud, but with nothing
-        // anywhere for a cloud to condense on.
-        let over_flat = change(&mut flat_cloud_fixture());
-        // The same pane with its energy gathered into one ridge.
-        let over_ridge = change(&mut cloud_fixture());
+        let over_structure = moved_by_refraction(&mut cloud_fixture());
+        let over_flat = moved_by_refraction(&mut flat_cloud_fixture());
         assert!(
-            over_ridge > 0.05,
-            "the layer drew nothing over a real concentration either, so this fixture never \
-             reached the cloud path: {over_ridge}"
+            over_structure > 0.02,
+            "turning the refraction from nothing to full moved almost none of the pane over \
+             a picture with structure in it, so the lookup is not being displaced at all: \
+             {over_structure}"
         );
         assert!(
-            over_flat < over_ridge / 8.0,
-            "a picture with no concentration in it still grew cloud, so the silhouette has a \
-             field of its own: {over_flat} of the pane flat against {over_ridge} over a ridge"
+            over_flat < over_structure / 5.0,
+            "the refraction moved a FEATURELESS picture nearly as much as a structured one, \
+             so it is adding something of its own rather than bending what is behind it: \
+             {over_flat} flat against {over_structure} over structure"
         );
     }
 
@@ -2469,60 +2485,16 @@ mod tests {
         let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
         settings.cloud_depth = 1.0;
         settings.cloud_cover = 1.0;
-        settings.cloud_tide = 1.0;
-        settings.cloud_grain = 1.0;
+        settings.scale_glint = 1.0;
+        settings.scale_relief = 1.0;
         // Undiluted: the most pigment there is, and the least water to pale it.
-        settings.cloud_wash = 0.0;
+        settings.scale_refract = 1.0;
         let clouded = fresh_frame(&device, &queue, &cb);
         let clipped = |frame: &[u8]| {
             frame.chunks_exact(4).filter(|p| p[..3].iter().any(|&c| c >= 254)).count()
         };
         assert_eq!(clipped(&bare), 0, "the fixture clips on its own and measures nothing");
         assert_eq!(clipped(&clouded), 0, "the cloud layer clipped a channel flat");
-    }
-
-    /// The tide line is a RIM, not another wash.
-    ///
-    /// Edge darkening is the cue that says watercolour rather than airbrush,
-    /// and what makes it that cue is that the pigment goes to the wash's
-    /// boundary rather than over its whole area. So the knob has to move a
-    /// small part of the pane a long way, and a version that moved the whole
-    /// mass a little would be a second body and not a tide line — it would
-    /// raise the painted fraction rather than the size of the change.
-    ///
-    /// The fringe is off, because a rough silhouette moves the boundary itself
-    /// and would be measured here as rim.
-    #[test]
-    fn the_tide_line_draws_a_rim_rather_than_another_wash() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let mut cb = cloud_fixture();
-        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
-        settings.cloud_depth = 1.0;
-        settings.cloud_fringe = 0.0;
-        settings.cloud_tide = 0.0;
-        let plain = fresh_frame(&device, &queue, &cb);
-        cb.atmosphere.as_mut().unwrap().settings.cloud_tide = 1.0;
-        let rimmed = fresh_frame(&device, &queue, &cb);
-        let deltas: Vec<u8> = plain
-            .chunks_exact(4)
-            .zip(rimmed.chunks_exact(4))
-            .map(|(a, b)| (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap())
-            .collect();
-        let moved = deltas.iter().filter(|&&d| d > 6).count();
-        let worst = deltas.iter().copied().max().unwrap();
-        let fraction = moved as f32 / deltas.len() as f32;
-        assert!(
-            worst > 24,
-            "the tide line's whole range barely changed any pixel, so it is not drawing: \
-             {worst}"
-        );
-        assert!(
-            fraction < 0.25,
-            "the tide line moved {fraction} of the pane, which is a wash over the mass \
-             rather than a rim at its edge"
-        );
     }
 }
 

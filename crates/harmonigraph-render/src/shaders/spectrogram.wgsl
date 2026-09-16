@@ -272,11 +272,11 @@ struct Cloud {
     cloud_depth: f32,
     cloud_scale: f32,
     cloud_cover: f32,
-    cloud_billow: f32,
-    cloud_fringe: f32,
-    cloud_grain: f32,
-    cloud_wash: f32,
-    cloud_tide: f32,
+    scale_size: f32,
+    scale_refract: f32,
+    scale_relief: f32,
+    scale_glint: f32,
+    cloud_ambient: f32,
     _pad2: f32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
@@ -368,66 +368,52 @@ fn density_color(raw_level: f32) -> vec4<f32> {
     return vec4<f32>(palette_color(style_level(raw_level)), 1.0);
 }
 
-// Watercolour clouds (prototype).
+// Refracting scale clouds (prototype).
 //
-// The clouds ARE the spectrogram. Nothing here has a shape of its own: the
-// silhouette is an iso-surface of the sound, so with silence under the pane
-// the layer draws nothing at all, and a cloud cannot slide independently of
-// what it is made of. That is the whole difference from the pile of puffs this
-// replaces, which drew the same shapes in silence and only took its COLOUR
-// from the sound — a procedural layer over a static picture, which is exactly
-// what it looked like.
+// Round 1 of #888 read the light at the nearest DOME'S CENTRE instead of under
+// the pixel, so every scale showed the spectrogram sampled from somewhere else
+// and the picture came apart into bent facets. That is the one thing Yan has
+// asked for twice — *"it actually looked like the scales were refracting the
+// light"* — and rounds 2 through 6 removed it, each for a locally good reason.
+// Round 5's notes call it a defect in as many words: "the light was read at the
+// NEAREST scale's centre; that steps the reading across the bisector between
+// two scales — a straight edge through a cloud", and replaced it with an
+// average over the covering scales. The SEAM was the bug. The DISPLACEMENT was
+// the feature. They went out together, and everything after was paint laid over
+// the picture rather than a lens in front of it.
 //
-// There is also no lighting model. Diffuse, terminator, specular and a shadow
-// march were four rounds of trying to make a lit body out of a field that had
-// no body, and each of them read as gel or as metal. Watercolour has no light
-// source: what makes a wash read as paint is where the PIGMENT went, and the
-// three cues are all pigment cues. None of them can clip a channel or throw a
-// highlight, because none of them is a highlight.
+// So the displaced lookup is back, and the cell pick is not. The relief is a
+// pile of soft round domes joined by a soft union, and the light is bent by its
+// SLOPE. A nearest-cell pick steps across a bisector; a slope turns
+// continuously, so the picture bends where it used to break and there is no
+// boundary left anywhere to draw. That is the whole of "keep the refraction,
+// just make it softer" — the softness is a property of the construction rather
+// than a blur applied to a hard thing afterwards.
 //
-// **The field is BAND-PASSED, not blurred.** A blurred spectrogram is high
-// wherever the music is loud, so a threshold on it gives overcast in a loud
-// passage and clear sky in a quiet one — the layer would track the volume
-// knob instead of the music. A difference of two blurs is high only where
-// sound is locally CONCENTRATED. It dissolves over a flat wash of energy
-// however loud that wash is, it needs no normalisation against the level, and
-// it leaves sky between the masses at every loudness.
+// What is kept from round 1, deliberately and verbatim in structure, because it
+// is what Yan liked: the light is LIFTED so a cloud over a ridge glows nearly as
+// bright as the ridge rather than reading as a shadow on it; the sun leans with
+// the picture's own gradient, which is what moves the glints as the sound
+// scrolls; there is a specular glint, a rim on the edge facing the light, and an
+// ambient floor so a cloud is visible over dark sky.
 //
-// **The wash is a BODY, not a coverage.** Painting a flat alpha wherever the
-// field passes a threshold gives a stain: an outline with nothing inside. The
-// opacity runs off how far PAST the threshold the field is, so a mass is thick
-// in the middle and thin at the rim.
+// Two things that are NOT round 1:
 //
-// **Each wash leaves a tide line where it dried.** That is the one cue that
-// says watercolour rather than airbrush, and it is free: it is the delta at
-// the contour, which `a * (1 - a)` already is. It is weighted toward the side
-// the field falls away on, because pigment settles to the low side of a wash —
-// an evenly weighted rim around a closed contour is a contour LINE, and a
-// stack of them is a topographic map, which is what an early cut drew.
+// **The union is a union, not a sum.** Adding two overlapping domes makes one
+// taller smooth mound and cancels the slopes exactly where the near dome's face
+// should be — no faces, and the faces are the scales. `log(sum exp(k*h))/k`
+// keeps both, and its gradient is the same weights against each dome's own
+// slope, so one pass gives the height and the normal together.
 //
-// **The warp is a SHEAR field and the fringe is not a warp.** The billow comes
-// from displacing the lookup by two noise fields. The bumps on it come from
-// adding noise to the FIELD instead, where they roughen the interior as well
-// as the outline and cannot chop the silhouette into fragments. Displacing by
-// the gradient of one scalar was tried — it is curl-free, so in principle it
-// inflates where a shear field shears — and it fails in practice for a reason
-// worth writing down: differentiating an fbm multiplies every octave by its
-// own frequency, so the gradient is dominated by the FINEST octave however
-// small its amplitude, and the contour comes apart into confetti.
-//
-// **The paper never moves.** Granulation is pigment settling into the tooth of
-// the sheet, so it is fixed in pane space while the wash drifts over it. That
-// inversion is the point: the old layer was a moving texture over a static
-// picture, and this is a moving picture over a static substrate.
+// **The slope is normalised before it bends anything.** A dome's slope goes as
+// one over its radius, so a raw slope would make Scale size silently a second
+// refraction knob — halve the scale and the picture bends twice as far. Divided
+// by a dome's own peak slope, `scale_refract` is an offset in SCALE WIDTHS and
+// means one thing at every size.
 //
 // Cloud space is the pane's, aspect-corrected and independent of DPI: five
 // cloud units across the pane's height at size 1, like the lattice nebula.
-// Scrolling never moves the clouds; they are in front of the picture.
 
-// A unit gradient for one lattice corner. Gradient noise rather than value
-// noise because value noise is zero-mean only ACROSS a cell, not at its
-// corners, so its lattice prints as brightness — visible rectangles at the low
-// cell counts a cloud warp runs at.
 fn cloud_gradient(cell: vec2<i32>) -> vec2<f32> {
     var n = (bitcast<u32>(cell.x) * 0x9e3779b9u) ^ (bitcast<u32>(cell.y) * 0x85ebca6bu);
     n = (n ^ (n >> 16u)) * 0x7feb352du;
@@ -478,184 +464,218 @@ fn cloud_fbm(point: vec2<f32>, octaves: i32, gain: f32) -> f32 {
 // The light under the layer, decoded, at the two scales the filter chain
 // already produced. `close` is the analyser's own softening and `wide` is that
 // softened again, so the pair is a ready-made band-pass at no cost.
-fn cloud_close(uv: vec2<f32>) -> f32 {
-    // NOT decoded. This attachment holds the finished scalar material that
-    // `fs_cloud_light` already decoded on its way out, not an encoded blur —
-    // which is why `baked_density` reads it raw too, and why the old
-    // `cloud_light` decoded only its wide tap. Decoding it a second time lifts
-    // a flat 0.59 to 0.75 and hands the band-pass a contrast of a quarter out
-    // of a picture with no structure in it at all, which is cloud over
-    // silence. `clouds_are_cut_from_the_sound_and_not_from_a_field_of_their_own`
-    // is what caught it.
-    return textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
-}
-fn cloud_wide(uv: vec2<f32>) -> f32 {
-    return density_decode(textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r);
-}
 
-// Six taps over a DISC and not a ring, on the golden-angle spiral that spaces
-// them evenly at every radius: a ring gathers from one distance, so its own
-// shape prints into a smooth field. This is the band-pass's SURROUND — the
-// blur the centre is measured against — and it is the only gather the layer
-// takes.
-fn cloud_surround(uv: vec2<f32>, reach: vec2<f32>) -> f32 {
-    let d0 = vec2<f32>(0.2887, 0.0000);
-    let d1 = vec2<f32>(-0.3687, 0.3377);
-    let d2 = vec2<f32>(0.0564, -0.6430);
-    let d3 = vec2<f32>(0.4647, 0.6061);
-    let d4 = vec2<f32>(-0.8528, -0.1508);
-    let d5 = vec2<f32>(0.8078, -0.5139);
-    return (cloud_wide(uv + d0 * reach) + cloud_wide(uv + d1 * reach)
-        + cloud_wide(uv + d2 * reach) + cloud_wide(uv + d3 * reach)
-        + cloud_wide(uv + d4 * reach) + cloud_wide(uv + d5 * reach)) / 6.0;
+// Jitter and a liveness draw for one cell, as three 10-bit fractions.
+fn cloud_hash3(cell: vec2<i32>) -> vec3<f32> {
+    var n = (bitcast<u32>(cell.x) * 0x9e3779b9u) ^ (bitcast<u32>(cell.y) * 0x85ebca6bu);
+    n = (n ^ (n >> 16u)) * 0x7feb352du;
+    n = (n ^ (n >> 15u)) * 0x846ca68bu;
+    n = n ^ (n >> 16u);
+    return vec3<f32>(
+        f32(n & 0x3ffu) / 1023.0,
+        f32((n >> 10u) & 0x3ffu) / 1023.0,
+        f32((n >> 20u) & 0x3ffu) / 1023.0,
+    );
 }
 
-// A contrast, not a difference. Dividing by the surround is what makes the
-// layer independent of how loud the passage is: the same shape of
-// concentration draws the same cloud whether it stands at a tenth of the
-// ramp or at the top of it. The floor is what stops near-silence dividing a
-// noise floor by itself and drawing weather out of nothing.
-const CLOUD_FLOOR: f32 = 0.05;
+// How far a dome reaches past its own cell, and how far its centre may wander
+// inside it. Both are the round-5 values: a dome that reaches its neighbours is
+// what makes the pile continuous, and the jitter is what stops the grid reading
+// as a grid.
+const DOME_RADIUS: f32 = 1.15;
+const DOME_JITTER: f32 = 0.75;
+// Hardness of the soft union. Low is putty, high is a crease; this is where a
+// pile of domes still has faces and does not yet have edges.
+const DOME_UNION: f32 = 9.0;
+// The steepest a unit dome gets, which is what `scale_refract` is measured
+// against. h = (1 - d^2)^1.5, so |dh/dd| peaks at d = 1/sqrt(2) and equals 1.5.
+const DOME_PEAK_SLOPE: f32 = 1.5;
 
-fn cloud_contrast(centre: f32, around: f32) -> f32 {
-    return (centre - around) / max(around, CLOUD_FLOOR);
-}
-
-struct Wash {
-    // How much pigment this wash laid down here, 0 outside it.
-    body: f32,
-    // The tide line: the delta at the wash's own contour, weighted to the side
-    // the field falls away on.
-    tide: f32,
+struct Pile {
+    // Soft-union height of the domes covering this point, 0 where none do.
+    height: f32,
+    // Its slope, in cell units: the face the scales here present to the light.
+    slope: vec2<f32>,
 };
 
-// `soft` is in FIELD units, so the edge's width on screen is `soft` over the
-// field's own slope — narrow where a mass rises fast and wide where it fades,
-// which is what a wash does and what one fixed screen width is not.
-fn cloud_wash(field: f32, threshold: f32, soft: f32, tide_width: f32,
-              thickness: f32, fall: f32, pool: f32) -> Wash {
-    let past = field - threshold;
-    let a = smoothstep(-1.0, 1.0, past / max(soft, 0.0001));
-    var out: Wash;
-    // Depth past the threshold, not coverage of it: thick in the middle, thin
-    // at the rim, which is a body rather than a stain.
-    out.body = a * (1.0 - exp(-thickness * max(past, 0.0)));
-    let edge = smoothstep(-1.0, 1.0, past / max(tide_width, 0.0001));
-    // `fall` is +1 where the field falls toward the bottom of the pane, so a
-    // mass deposits along its lower edge the way a wash on a tilted board does.
-    let weight = 1.0 - pool + pool * clamp(0.5 + 0.5 * fall, 0.0, 1.0);
-    out.tide = 4.0 * edge * (1.0 - edge) * weight;
-    // No concentration, no pigment — at ANY setting of the dials. Wound to the
-    // top, cover pulls the threshold down far enough that the tide line's own
-    // width reaches past zero, and a band centred on nothing draws a wash over
-    // a pane with no sound in it. The body cannot do this because it runs off
-    // `past` directly; the tide can, because it is a band rather than a step.
-    let present = smoothstep(0.0, 0.35 * max(threshold, 0.0001), field);
-    out.body *= present;
-    out.tide *= present;
+// One octave of domes: a soft union over the 3x3 ring, with the union's own
+// weights carrying each dome's analytic slope out alongside its height.
+//
+// `occupancy` is what opens sky. One dome per cell on a jittered grid is a
+// blue-noise point set — the most UNIFORM arrangement there is — so with each
+// dome reaching past its cell the layer covers the pane by construction and can
+// never open a gap. Cells are empty at a rate instead.
+fn dome_octave(r: vec2<f32>, occupancy: f32) -> Pile {
+    let base = floor(r);
+    var weight = 0.0;
+    var slope = vec2<f32>(0.0);
+    for (var j = -1; j <= 1; j += 1) {
+        for (var i = -1; i <= 1; i += 1) {
+            let cell = vec2<i32>(base) + vec2<i32>(i, j);
+            let h3 = cloud_hash3(cell);
+            if h3.z >= occupancy {
+                continue;
+            }
+            let centre = base + vec2<f32>(f32(i), f32(j)) + 0.5
+                + (h3.xy - 0.5) * DOME_JITTER;
+            let d = (r - centre) / DOME_RADIUS;
+            let q = 1.0 - dot(d, d);
+            if q <= 0.0 {
+                continue;
+            }
+            // h = q^1.5, so dh/dr = 1.5 * q^0.5 * (-2 d) / DOME_RADIUS
+            let root = sqrt(q);
+            let h = q * root;
+            let w = exp(DOME_UNION * h);
+            weight += w;
+            slope += w * (-3.0 * root * d / DOME_RADIUS);
+        }
+    }
+    var out: Pile;
+    if weight <= 0.0 {
+        out.height = 0.0;
+        out.slope = vec2<f32>(0.0);
+        return out;
+    }
+    out.height = log(weight) / DOME_UNION;
+    out.slope = slope / weight;
     return out;
 }
 
-// Water in the pigment: paler, and it carries less of its own colour. The one
-// dial that runs the layer from a flat tinted wash to a dry brush loaded with
-// pigment, and it is a pigment dial rather than a brightness one, so it cannot
-// push a channel over the top the way the old sheen did.
-fn cloud_dilute(colour: vec3<f32>, water: f32) -> vec3<f32> {
-    return mix(colour, colour * 0.30 + 0.70, water);
+// Two octaves, the finer one damped hard.
+//
+// Not a taste setting: a finer octave's SLOPE is larger than a coarser one's at
+// equal amplitude, by exactly the lacunarity, so an fbm that halves amplitude
+// per octave still hands the gradient to its finest octave — and the gradient is
+// what bends the light here. Carried at full strength the small scales are a
+// crinkled terrain, which is round 3's "more like water with light cast on it
+// than clouds" and Yan's "a bit too jagged" in one. Damped by the square of the
+// lacunarity, each octave contributes about equally to the slope, which is what
+// puts big faces carrying small ones into the same picture.
+const DOME_LACUNARITY: f32 = 2.1;
+const DOME_FINE_GAIN: f32 = 0.22;
+
+fn cloud_domes(r: vec2<f32>, occupancy: f32) -> Pile {
+    let coarse = dome_octave(r, occupancy);
+    let fine = dome_octave(r * DOME_LACUNARITY + vec2<f32>(17.3, 5.9), occupancy);
+    var out: Pile;
+    let norm = 1.0 + DOME_FINE_GAIN;
+    out.height = (coarse.height + DOME_FINE_GAIN * fine.height) / norm;
+    // the finer octave's slope arrives in ITS cell units, so it carries the
+    // lacunarity back out with it
+    out.slope = (coarse.slope + DOME_FINE_GAIN * DOME_LACUNARITY * fine.slope) / norm;
+    return out;
+}
+
+// The light under a pane point, display intensity 0..1: the wide blur, floored
+// by most of the finished material so a cloud over a ridge is nearly as bright
+// as the ridge. The wide blur alone spreads a narrow ridge's energy so thin
+// that a cloud over it reads as a shadow, which is what makes the layer look
+// like something laid ON the picture rather than lit BY it.
+//
+// `close_light` is NOT decoded: that attachment holds the finished scalar
+// material `fs_cloud_light` already decoded on its way out, which is why
+// `baked_density` reads it raw too. Decoding it twice lifts a flat 0.59 to 0.75
+// and invents structure out of a picture that has none.
+fn cloud_light(pt: vec2<f32>) -> f32 {
+    let uv = pt / cloud.size;
+    let wide = density_decode(textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r);
+    let material = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
+    return 1.4 * max(wide, 0.85 * material);
+}
+
+// Compress rather than clip, keeping the hue. See where it is applied.
+fn softened(colour: vec3<f32>) -> vec3<f32> {
+    let m = max(max(colour.r, colour.g), colour.b);
+    if m <= 0.75 {
+        return max(colour, vec3<f32>(0.0));
+    }
+    return max(colour, vec3<f32>(0.0))
+        * ((0.75 + 0.25 * (1.0 - exp((0.75 - m) * 4.0))) / m);
+}
+
+// A drifting cloud field with a flat interior behind a soft edge, so cover
+// moves the threshold rather than the contrast.
+fn cloud_billow(q: vec2<f32>) -> f32 {
+    let warp = 0.7 * vec2<f32>(
+        cloud_fbm(q * 0.7, 2, 0.5),
+        cloud_fbm(q * 0.7 + vec2<f32>(8.3, 2.7), 2, 0.5),
+    );
+    return 0.5 + 0.5 * cloud_fbm(q + warp, 4, 0.5);
 }
 
 fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
-    // No blur means no field to cut the clouds out of.
+    // No blur means no light field for the scales to bend.
     if cloud.cloud_depth <= 0.0 || all(cloud.step == vec2<f32>(0.0)) {
         return base;
     }
     let pt = position / cloud.ppp - cloud.origin;
     let units = 5.0 / cloud.cloud_scale;
     let q = (pt - cloud.size * 0.5) / cloud.size.y * units + cloud.drift;
-    // One cloud unit, in the uv the light textures are sampled by.
-    let unit = vec2<f32>(cloud.size.y / units) / cloud.size;
 
-    // The billow. Two independent fields, so the displacement shears — which
-    // is what bends a smooth contour into a mass with lobes. Three octaves:
-    // the fine detail belongs on the field, not on the displacement.
-    let billow = 1.6 * cloud.cloud_billow;
-    let warp = billow * vec2<f32>(
-        cloud_fbm(q * 0.62, 3, 0.5),
-        cloud_fbm(q * 0.62 + vec2<f32>(19.3, 7.1), 3, 0.5),
-    );
-    let uv = (pt / cloud.size) + warp * unit;
-
-    // Bumps on bumps, MULTIPLIED into the field rather than added to it. Four
-    // octaves at a steep gain, so the silhouette carries detail at every scale
-    // down to a pixel or two — a cloud edge has that and a smooth contour does
-    // not.
-    //
-    // Multiplied because an added fringe is a field of its own and draws cloud
-    // out of nothing: where the sound is flat the contrast is zero, and noise
-    // added to zero still crosses the threshold wherever it happens to peak.
-    // That is the exact defect this layer exists to remove, reintroduced one
-    // line lower down, and it is what
-    // `clouds_are_cut_from_the_sound_and_not_from_a_field_of_their_own`
-    // caught. A factor cannot do it: no field, no fringe, and near the contour
-    // it still displaces the outline by a share of the threshold.
-    let fringe = 1.0 + 1.1 * cloud.cloud_fringe
-        * cloud_fbm(q * 2.6 + vec2<f32>(5.7, 12.9), 4, 0.55);
-
-    // The two washes. The coarse one is the cloud-scale concentration, its
-    // surround gathered a cloud and a half out; the fine one is the analyser's
-    // own two blur scales against each other, which costs nothing because both
-    // are already sampled.
-    let close = cloud_close(uv);
-    let wide = cloud_wide(uv);
-    let around = cloud_surround(uv, unit * 1.5);
-    let coarse = cloud_contrast(wide, around) * fringe;
-    let fine = cloud_contrast(close, wide) * fringe;
-
-    // Which way the field falls, for the tide line's pooling. One extra tap of
-    // the wide blur rather than a screen-space derivative: `scale_clouds`
-    // returns early above, so a derivative here would sit in non-uniform
-    // control flow.
-    let below = cloud_wide(uv + vec2<f32>(0.0, unit.y * 0.35));
-    let fall = clamp((wide - below) * 8.0, -1.0, 1.0);
-
-    // Cover opens the sky. It is the THRESHOLD both washes stand on, so the
-    // knob's whole range runs from a clear pane to an overcast whose thin
-    // places the picture still shows through.
-    let sky = 0.62 - 0.52 * cloud.cloud_cover;
-    let pool = 0.75;
-    let coarse_wash = cloud_wash(coarse, sky, 0.05, 0.16, 3.4, fall, pool);
-    let fine_wash = cloud_wash(fine, sky * 1.25, 0.035, 0.11, 4.0, fall, pool);
-
-    // The paper. Fixed in PANE space, never in cloud space: it is the sheet
-    // the wash dried on, and a substrate that drifted with the paint would be
-    // one more moving texture over a static picture.
-    let sheet = pt / cloud.size.y;
-    let tooth = 0.5 + 0.5 * (0.55 * cloud_fbm(sheet * 170.0, 2, 0.5)
-        + 0.45 * cloud_fbm(sheet * 48.0 + vec2<f32>(31.7, 3.3), 3, 0.5));
-    let grain = 1.0 - cloud.cloud_grain + cloud.cloud_grain * 2.0 * tooth;
-
-    // The pigment's colour is the sound under the wash, read where the wash
-    // was displaced from, so a mass carries the colour of what it is made of
-    // rather than of whatever it happens to be over.
-    let tint = pow(clamp(wide * 1.3, 0.0, 1.0), 0.7);
-    let pigment = palette_color(clamp(tint * 0.80 + 0.18, 0.0, 1.0));
-
-    // Paint back to front. Each wash lays its body down and then its own tide
-    // line on top of it, undiluted, because a tide line is where the water
-    // left and the pigment stayed.
-    var out = base;
-    let depth = cloud.cloud_depth;
-    let water = cloud.cloud_wash;
-    let bodies = array<f32, 2>(coarse_wash.body * 0.88, fine_wash.body * 0.74);
-    let tides = array<f32, 2>(coarse_wash.tide, fine_wash.tide);
-    let waters = array<f32, 2>(water, water * 0.62);
-    for (var i = 0; i < 2; i += 1) {
-        let a = clamp(bodies[i] * grain, 0.0, 1.0) * depth;
-        out = mix(out, cloud_dilute(pigment, waters[i]), a);
-        let t = clamp(tides[i] * cloud.cloud_tide * grain, 0.0, 1.0) * depth;
-        out = mix(out, pigment, t);
+    // The cloud's own shape, and the sky between. Cover moves the threshold.
+    let low = 0.62 - 0.40 * cloud.cloud_cover;
+    let density = smoothstep(low, low + 0.30, cloud_billow(q));
+    if density <= 0.003 {
+        return base;
     }
-    return out;
+
+    // The scales. `scale_size` is how many of them cross one cloud, so the knob
+    // reads as a size rather than as a frequency.
+    let scale_units = 6.0 / cloud.scale_size;
+    let scale_points = cloud.size.y / units / scale_units;
+    let pile = cloud_domes(q * scale_units, 0.78);
+
+    // THE REFRACTION. Normalised to a dome's own peak slope, so the offset is in
+    // scale widths whatever the scale size is, and scaled by the cloud's density
+    // so a wisp bends the light less than a body does.
+    let face = pile.slope / DOME_PEAK_SLOPE;
+    let bend = cloud.scale_refract * scale_points * density;
+    let bent = cloud_light(pt - face * bend);
+
+    // Which way the picture's light grows, from taps about a scale apart, so the
+    // sun leans with the sound and the glints travel as it scrolls. A flat field
+    // has no direction and the terms that need one fade out there.
+    let reach = vec2<f32>(scale_points * 0.75, 0.0);
+    let grad = vec2<f32>(
+        cloud_light(pt + reach.xy) - cloud_light(pt - reach.xy),
+        cloud_light(pt + reach.yx) - cloud_light(pt - reach.yx),
+    );
+    let magnitude = length(grad);
+    let directed = smoothstep(0.0, 0.03, magnitude);
+    let toward =
+        normalize(mix(vec2<f32>(0.55, -0.83), grad / max(magnitude, 0.00001), directed));
+    let aimed = 0.5 + 0.5 * directed;
+
+    // The scales' normal, from the same slope that bent the light, flattened by
+    // `scale_relief` so 0 is a smooth body with no faces at all.
+    let relief = cloud.scale_relief * density;
+    let normal = normalize(vec3<f32>(-face * relief, 1.0));
+    // The light stands 45 degrees over the plane, on the side it grows toward.
+    // Diffuse is 1 on a flat face, so a relief of 0 leaves the light alone.
+    let sun = normalize(vec3<f32>(toward * 0.7, 0.7));
+    let diffuse = max(dot(normal, sun), 0.0) / sun.z;
+    let half = normalize(sun + vec3<f32>(0.0, 0.0, 1.0));
+    let flat_glint = pow(half.z, 14.0);
+    let glint = max(pow(max(dot(normal, half), 0.0), 14.0) - flat_glint, 0.0)
+        / (1.0 - flat_glint) * aimed;
+
+    // The edge facing the light is the bright rim and the thick core is dimmer,
+    // which is what makes a body of it rather than a flat patch.
+    let ahead = smoothstep(low, low + 0.30, cloud_billow(q + toward * 0.18));
+    let rim = clamp((density - ahead) * 2.5, 0.0, 1.0) * aimed;
+    let shade = 1.2 - 0.4 * density;
+    let lit = bent * diffuse * shade * (0.8 + 0.6 * rim) + cloud.cloud_ambient;
+    let body = palette_color(clamp(lit, 0.0, 1.0))
+        + vec3<f32>(glint * cloud.scale_glint * bent * 0.5);
+    // The glint is ADDITIVE, so at a deep cover it runs past what the palette
+    // can hold — which is round (4)'s bright metallic patches, and they got
+    // worse as the glint was raised because the glint is what pushed it over.
+    // Compressing the MAGNITUDE and keeping the direction keeps the hue: a
+    // clipped channel shifts the colour as well as flattening it, and that
+    // shift is what reads as metal rather than as a bright cloud. Kept from
+    // round 6, which is the one thing in it that this round should not undo.
+    return mix(base, softened(body), cloud.cloud_depth * density);
 }
 fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
     let base = density_color(level);

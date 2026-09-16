@@ -79,18 +79,23 @@ struct Uniforms {
     contour_softness: f32,
     style: u32,
     _pad: u32,
-    /// Cloud-space offset of the watercolour clouds and a bounded clock. Both
-    /// are reduced from f64 on the CPU.
+    /// Cloud-space offset of the scale clouds and a bounded clock. Both are
+    /// reduced from f64 on the CPU.
+    ///
+    /// The order below is the WGSL `Cloud` struct's order and has to stay that
+    /// way: these are read by OFFSET, not by name, so transposing two `f32`
+    /// fields swaps their values silently and nothing in the type system
+    /// notices.
     drift: [f32; 2],
     time: f32,
     cloud_depth: f32,
     cloud_scale: f32,
     cloud_cover: f32,
-    cloud_billow: f32,
-    cloud_fringe: f32,
-    cloud_grain: f32,
-    cloud_wash: f32,
-    cloud_tide: f32,
+    scale_size: f32,
+    scale_refract: f32,
+    scale_relief: f32,
+    scale_glint: f32,
+    cloud_ambient: f32,
     _pad2: f32,
 }
 
@@ -431,11 +436,11 @@ impl Targets {
             cloud_depth: settings.cloud_depth,
             cloud_scale: settings.cloud_scale,
             cloud_cover: settings.cloud_cover,
-            cloud_billow: settings.cloud_billow,
-            cloud_fringe: settings.cloud_fringe,
-            cloud_grain: settings.cloud_grain,
-            cloud_wash: settings.cloud_wash,
-            cloud_tide: settings.cloud_tide,
+            scale_size: settings.scale_size,
+            scale_refract: settings.scale_refract,
+            scale_relief: settings.scale_relief,
+            cloud_ambient: settings.cloud_ambient,
+            scale_glint: settings.scale_glint,
             _pad2: 0.0,
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
