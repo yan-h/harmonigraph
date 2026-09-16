@@ -25,20 +25,15 @@ struct Cloud {
     float cloud_depth;
     float cloud_scale;
     float cloud_cover;
-    float scale_size;
-    float scale_overlap;
-    float scale_glint;
-    float cloud_ambient;
+    float cloud_billow;
+    float cloud_fringe;
+    float cloud_grain;
+    float cloud_wash;
+    float cloud_tide;
     float _pad2_;
-    float _pad3_;
 };
-constant float PUFF_JITTER = 0.7;
-constant float PUFF_RADIUS_MAX = 1.1;
-constant int PUFF_OCTAVES = 3;
-constant float PUFF_LIFT = 0.35;
-constant float PUFF_UNION = 8.0;
-constant uint PUFF_SALT_B = 3266489909u;
-constant uint PUFF_SALT_C = 668265263u;
+constant metal::float2x2 CLOUD_TURN = metal::float2x2(metal::float2(0.8, 0.6), metal::float2(-0.6, 0.8));
+constant float CLOUD_FLOOR = 0.05;
 
 float density_decode(
     float value

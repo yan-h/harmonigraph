@@ -34,13 +34,8 @@ struct VertexOut {
     float t;
     char _pad3[8];
 };
-constant float PUFF_JITTER = 0.7;
-constant float PUFF_RADIUS_MAX = 1.1;
-constant int PUFF_OCTAVES = 3;
-constant float PUFF_LIFT = 0.35;
-constant float PUFF_UNION = 8.0;
-constant uint PUFF_SALT_B = 3266489909u;
-constant uint PUFF_SALT_C = 668265263u;
+constant metal::float2x2 CLOUD_TURN = metal::float2x2(metal::float2(0.8, 0.6), metal::float2(-0.6, 0.8));
+constant float CLOUD_FLOOR = 0.05;
 metal::float2 unpackFloat32x2_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint b6, uint b7) {
     return metal::float2(as_type<float>(b3 << 24 | b2 << 16 | b1 << 8 | b0), as_type<float>(b7 << 24 | b6 << 16 | b5 << 8 | b4));
 }
