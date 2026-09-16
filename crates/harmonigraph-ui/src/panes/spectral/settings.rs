@@ -161,36 +161,42 @@ pub(crate) fn spectrum_settings_pane(
             .percent()
             .show(ui)
             .on_hover_text(
-                "How much light one scale's depth of cloud takes. There is no threshold \
-                 anywhere, so a cloud has no edge to find: low leaves a haze the deepest \
-                 piles show through, high closes the pane over.",
+                "How many of the pile's places hold a puff at all, which is the only \
+                 thing that opens sky between the clouds. Low is a scatter of separate \
+                 billows over a clear pane, high an overcast with the picture showing \
+                 through its thin places.",
             );
         ValueBar::new(&mut atmosphere.scale_size, 0.25..=4.0, "Scale size")
             .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
                 "Size of the smallest scales. Three sizes run geometrically from the cloud \
-                 size down to this one, and the light is read once per smallest scale.",
+                 size down to this one, and all three are in the clouds' outline — the \
+                 finer ones are the fringe of bumps on the coarse ones' edges.",
             );
         ValueBar::new(&mut atmosphere.scale_overlap, 0.6..=1.1, "Scale overlap")
             .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
-                "How far a scale reaches past its own place into its neighbours'. Low is a \
-                 scatter of separate puffs, high a continuous overcast; the pile is what \
-                 makes the cloud, so this moves how much of the pane is covered as well.",
+                "How far a scale reaches past its own place into its neighbours'. Also \
+                 spreads the sizes inside one scale: puffs run from about half this to all \
+                 of it, because a pile of equal circles reads as a pile of equal circles.",
             );
-        ValueBar::new(&mut atmosphere.scale_glint, 0.0..=1.0, "Glint")
+        ValueBar::new(&mut atmosphere.scale_glint, 0.0..=1.0, "Sculpt")
             .percent()
             .show(ui)
             .on_hover_text(
-                "How much of a scale's light is the angle-dependent glint rather than a \
-                 diffuse share. Glints move as the sound and the clouds move past each other.",
+                "How hard the light picks out the lobes — how much of a cloud's brightness \
+                 is which way its surface faces rather than how thin it is. 0 is a flat \
+                 backlit sheet, which is what a cloud looks like with no side light at all.",
             );
         ValueBar::new(&mut atmosphere.cloud_ambient, 0.0..=1.0, "Cloud ambient")
             .percent()
             .show(ui)
-            .on_hover_text("Light a cloud shows with nothing sounding under it.");
+            .on_hover_text(
+                "Light a cloud shows with nothing sounding under it, and the floor under \
+                 its own shadowed side so a deep crevice is dark rather than black.",
+            );
     }
     ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")
         .percent().show(ui).on_hover_text("Blend the live analyzer from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram style and outline opacity.");

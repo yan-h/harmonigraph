@@ -30,15 +30,19 @@ pub struct SpectralAtmosphere {
     /// slow drift, like the lattice nebula's.
     pub cloud_scale: f32,
     pub cloud_speed: f32,
-    /// How much of the pane is cloud rather than clear.
+    /// How many of the pile's places hold a puff at all — the only thing
+    /// that opens sky between the clouds, since one puff per place on a
+    /// jittered grid covers the pane by construction.
     pub cloud_cover: f32,
     /// Size of the smallest scales the cloud is piled out of, how far each
-    /// one reaches past its own cell into its neighbours', and how much of a
-    /// scale's light is the angle-dependent glint rather than diffuse.
+    /// one reaches past its own cell into its neighbours' (which also spreads
+    /// the sizes inside one scale), and how hard the side light picks the
+    /// lobes out of the pile rather than leaving it a flat backlit sheet.
     pub scale_size: f32,
     pub scale_overlap: f32,
     pub scale_glint: f32,
-    /// Light a cloud shows with nothing sounding under it.
+    /// Light a cloud shows with nothing sounding under it, and the floor
+    /// under its own shadowed side.
     pub cloud_ambient: f32,
 }
 
@@ -57,7 +61,7 @@ impl Default for SpectralAtmosphere {
             cloud_scale: 0.5,
             cloud_speed: 1.0,
             cloud_cover: 0.7,
-            scale_size: 0.45,
+            scale_size: 0.8,
             scale_overlap: 1.1,
             scale_glint: 0.6,
             cloud_ambient: 0.15,

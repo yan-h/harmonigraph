@@ -2359,6 +2359,11 @@ mod tests {
     /// of the pane matches this one over the whole frame and is exactly the
     /// inconsistent texture it is not.
     ///
+    /// The pile is SPARSE now, so a tile may hold open sky as well as cloud,
+    /// and that is the reason the tile has to be wider than one of the largest
+    /// scales: a gap between two puffs is the layer working, and only a hole
+    /// the size of several is it failing.
+    ///
     /// Over a flat picture, so the spread is the layer's own rather than the
     /// sound's: a lit tile and a silent one differ under any cloud at all.
     #[test]
@@ -2396,10 +2401,20 @@ mod tests {
         let least = spread.iter().copied().fold(f64::INFINITY, f64::min);
         let most = spread.iter().copied().fold(0.0, f64::max);
         assert!(least > 3.0, "a tile of the pane carries no cloud grain at all: {spread:?}");
-        // Not that every tile carries the SAME spread: the clouds have shape,
-        // and a tile holding a cloud's edge swings further than one inside its
-        // body. What the layer owes is that no tile is bare.
-        assert!(most > 3.0 * least, "the fixture's tiles are too alike to have measured this");
+        // And no tile carries much MORE grain than another, which is the
+        // correction this layer exists to answer: one material at one size
+        // everywhere, so a tile inside a cloud body and a tile over open sky
+        // differ in WHAT they draw and not in how much grain they have.
+        //
+        // This bound used to be its opposite — tiles had to differ by 3x or
+        // the test declared its own fixture too flat to have measured
+        // anything. That guard was reading the old layer's uneven grain as
+        // evidence the measurement worked, so the sparse pile that fixed the
+        // unevenness tripped it. What actually says the measurement can tell
+        // grain from none is the `bare` frame asserted inside the loop: 0.01
+        // against 25 is a factor of two thousand, and no bound here has to
+        // stand in for it. So this one is free to state the property.
+        assert!(most < 2.0 * least, "the grain is uneven across the pane: {spread:?}");
     }
 
     /// Scales reaching further into their neighbours pile deeper, so more of
@@ -2433,12 +2448,29 @@ mod tests {
 
     /// The light a cloud shows steps nowhere the picture under it does not.
     ///
-    /// Each scale reads the light at its own place rather than at the pixel's,
-    /// which is what quantizes it; picking the NEAREST scale to read it from
-    /// steps that reading across the bisector between two of them, which draws
-    /// a straight edge through a cloud — the mosaic #888 was sent back for.
-    /// The reading is a weighted average over the scales covering the point
-    /// instead, and an average has no boundary to step across.
+    /// The mosaic #888 was sent back for was a straight edge drawn through a
+    /// cloud, from a light read at the NEAREST scale's centre: that steps
+    /// across the bisector between two of them. The mechanism is gone — the
+    /// light is read at the pixel now and there is nothing left to quantize it
+    /// — so what this measures is the general property the mechanism broke:
+    /// over a picture that steps by a level or two per pixel, the layer adds
+    /// no step of its own.
+    ///
+    /// Be honest about its reach, because two things it looks like it should
+    /// cover it does NOT, both checked by sabotage rather than assumed. The
+    /// soft union is invisible here: `scale_glint` 0 is what turns the relief
+    /// off, and the union reaches the picture only through the normal, so
+    /// hardening it to a near-max (`PUFF_UNION` 90) leaves this passing. And
+    /// the radius ceiling that keeps a puff inside its 3x3 ring is not
+    /// reachable from the dials at all — `scale_overlap` is clamped to 1.1 in
+    /// `sanitized`, which is the ceiling — so raising `PUFF_RADIUS_MAX` alone
+    /// changes nothing and cannot be caught from here.
+    ///
+    /// The one live mechanism this does not reach is the light march printing
+    /// the picture's BANDS back into the clouds, since it takes a banded
+    /// picture to turn the light's lean over and this fixture is a ramp on
+    /// purpose. That one is held by `followed` in `backlight` being a quarter
+    /// rather than the two thirds it was, and it is checked by eye.
     ///
     /// The picture under the clouds is a ramp over the whole pitch axis, so it
     /// steps by a level or two between neighbouring pixels and anything larger
@@ -2462,6 +2494,7 @@ mod tests {
         }
         cb.grid.run = Arc::new(bytes);
         let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+        // Sculpt 0 is the flat backlit sheet: no side light, so no lit lobe.
         settings.scale_glint = 0.0;
         // The largest scales the dials reach, so the layer's own field varies
         // over tens of pixels rather than over eight. A smooth field sampled
