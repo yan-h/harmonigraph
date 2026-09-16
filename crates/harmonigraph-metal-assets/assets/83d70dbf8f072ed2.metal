@@ -26,12 +26,14 @@ struct Cloud {
     float cloud_scale;
     float cloud_cover;
     float scale_size;
+    float scale_overlap;
     float scale_glint;
     float cloud_ambient;
     float _pad2_;
     float _pad3_;
-    float _pad4_;
 };
+constant float PUFF_JITTER = 0.6;
+constant int PUFF_OCTAVES = 3;
 
 float density_decode(
     float value
