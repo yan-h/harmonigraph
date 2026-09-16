@@ -32,9 +32,11 @@ pub struct SpectralAtmosphere {
     pub cloud_speed: f32,
     /// How much of the pane is cloud rather than clear.
     pub cloud_cover: f32,
-    /// Size of the reflective scales the cloud is made of, and how much of a
+    /// Size of the smallest scales the cloud is piled out of, how far each
+    /// one reaches past its own cell into its neighbours', and how much of a
     /// scale's light is the angle-dependent glint rather than diffuse.
     pub scale_size: f32,
+    pub scale_overlap: f32,
     pub scale_glint: f32,
     /// Light a cloud shows with nothing sounding under it.
     pub cloud_ambient: f32,
@@ -54,10 +56,11 @@ impl Default for SpectralAtmosphere {
             cloud_depth: 0.7,
             cloud_scale: 1.0,
             cloud_speed: 1.0,
-            cloud_cover: 0.5,
+            cloud_cover: 0.55,
             scale_size: 1.3,
+            scale_overlap: 1.0,
             scale_glint: 0.6,
-            cloud_ambient: 0.1,
+            cloud_ambient: 0.15,
         }
     }
 }
@@ -84,6 +87,7 @@ impl SpectralAtmosphere {
         self.cloud_speed = clamp(self.cloud_speed, fresh.cloud_speed, 0.0, 20.0);
         self.cloud_cover = clamp(self.cloud_cover, fresh.cloud_cover, 0.0, 1.0);
         self.scale_size = clamp(self.scale_size, fresh.scale_size, 0.25, 4.0);
+        self.scale_overlap = clamp(self.scale_overlap, fresh.scale_overlap, 0.6, 1.1);
         self.scale_glint = clamp(self.scale_glint, fresh.scale_glint, 0.0, 1.0);
         self.cloud_ambient = clamp(self.cloud_ambient, fresh.cloud_ambient, 0.0, 1.0);
         self

@@ -2339,6 +2339,156 @@ mod tests {
             .frame(0, SIZE, full_quad(6), grid.clone(), read.clone(), shades());
         assert_eq!(through_entry, through_callback);
     }
+
+    /// A pane whose light is the same everywhere, so what the cloud layer
+    /// draws over it is the layer and nothing else.
+    fn flat_cloud_fixture() -> SpectrogramCallback {
+        let mut cb = cloud_fixture();
+        cb.grid.run = Arc::new(vec![150; cb.grid.run.len()]);
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.7;
+        cb
+    }
+
+    /// The scale clouds carry the same grain over every part of the pane.
+    ///
+    /// #888's first cut cut the clouds out of a separate noise field and
+    /// flattened the scales' relief toward its edges, so the grain was in some
+    /// places and not others. There is no such field now — the clouds are the
+    /// scales piled up — and what that buys is measured per TILE, as the
+    /// spread the layer adds to each: a layer with the grain in three quarters
+    /// of the pane matches this one over the whole frame and is exactly the
+    /// inconsistent texture it is not.
+    ///
+    /// Over a flat picture, so the spread is the layer's own rather than the
+    /// sound's: a lit tile and a silent one differ under any cloud at all.
+    #[test]
+    fn scale_clouds_carry_the_same_grain_over_the_whole_pane() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let mut cb = flat_cloud_fixture();
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+        let bare = fresh_frame(&device, &queue, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.7;
+        let clouded = fresh_frame(&device, &queue, &cb);
+        // Tiles a quarter of the pane across, which is wider than one of the
+        // largest scales here — five of those cross the pane's height — so a
+        // tile short of grain is a hole in the layer and not one gap between
+        // two puffs.
+        let tile = SIZE[0] as usize / 4;
+        let mut spread = Vec::new();
+        for ty in 0..4 {
+            for tx in 0..4 {
+                let of = |frame: &[u8]| {
+                    let mut v = Vec::new();
+                    for y in ty * tile..(ty + 1) * tile {
+                        for x in tx * tile..(tx + 1) * tile {
+                            v.push(f64::from(frame[(y * SIZE[0] as usize + x) * 4 + 2]));
+                        }
+                    }
+                    let mean = v.iter().sum::<f64>() / v.len() as f64;
+                    (v.iter().map(|b| (b - mean).powi(2)).sum::<f64>() / v.len() as f64).sqrt()
+                };
+                assert!(of(&bare) < 0.01, "the fixture's own picture is not flat");
+                spread.push(of(&clouded));
+            }
+        }
+        let least = spread.iter().copied().fold(f64::INFINITY, f64::min);
+        let most = spread.iter().copied().fold(0.0, f64::max);
+        assert!(least > 3.0, "a tile of the pane carries no cloud grain at all: {spread:?}");
+        // Not that every tile carries the SAME spread: the clouds have shape,
+        // and a tile holding a cloud's edge swings further than one inside its
+        // body. What the layer owes is that no tile is bare.
+        assert!(most > 3.0 * least, "the fixture's tiles are too alike to have measured this");
+    }
+
+    /// Scales reaching further into their neighbours pile deeper, so more of
+    /// the pane is cloud: the overlap is what the cloud is made of rather than
+    /// a texture detail laid over a shape decided elsewhere.
+    #[test]
+    fn scales_that_overlap_further_make_more_cloud() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let mut cb = flat_cloud_fixture();
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+        let bare = fresh_frame(&device, &queue, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.7;
+        let mut drawn = Vec::new();
+        for overlap in [0.6, 0.85, 1.1] {
+            cb.atmosphere.as_mut().unwrap().settings.scale_overlap = overlap;
+            let frame = fresh_frame(&device, &queue, &cb);
+            let sum: u64 = frame
+                .chunks_exact(4)
+                .zip(bare.chunks_exact(4))
+                .map(|(a, b)| u64::from(a[2].abs_diff(b[2])))
+                .sum();
+            drawn.push(sum as f64 / (SIZE[0] * SIZE[1]) as f64);
+        }
+        assert!(
+            drawn[0] < drawn[1] && drawn[1] < drawn[2],
+            "reaching further did not deepen the pile: {drawn:?}"
+        );
+    }
+
+    /// The light a cloud shows steps nowhere the picture under it does not.
+    ///
+    /// Each scale reads the light at its own place rather than at the pixel's,
+    /// which is what quantizes it; picking the NEAREST scale to read it from
+    /// steps that reading across the bisector between two of them, which draws
+    /// a straight edge through a cloud — the mosaic #888 was sent back for.
+    /// The reading is a weighted average over the scales covering the point
+    /// instead, and an average has no boundary to step across.
+    ///
+    /// The picture under the clouds is a ramp over the whole pitch axis, so it
+    /// steps by a level or two between neighbouring pixels and anything larger
+    /// is the layer's. It must be a ramp and not a flat field: under a flat
+    /// one every scale reads the same light however it picks it and the seam
+    /// is invisible by construction. The relief is off, for the same reason in
+    /// the other direction — a lit bump is a legitimate fast edge at this pane
+    /// size, and it would bury the one being measured.
+    #[test]
+    fn scale_clouds_step_the_light_nowhere_the_picture_does_not() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let mut cb = cloud_fixture();
+        let bins = BINS as usize;
+        let mut bytes = vec![0u8; 12 * bins];
+        for slab in 0..12 {
+            for bin in 0..bins {
+                bytes[slab * bins + bin] = (bin * 255 / (bins - 1)) as u8;
+            }
+        }
+        cb.grid.run = Arc::new(bytes);
+        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+        settings.scale_glint = 0.0;
+        // The largest scales the dials reach, so the layer's own field varies
+        // over tens of pixels rather than over eight. A smooth field sampled
+        // near its own period steps by a tenth of its range per pixel however
+        // smooth it is, and at the fresh size that is larger than the seam.
+        settings.cloud_scale = 4.0;
+        settings.scale_size = 4.0;
+        let step = |frame: &[u8]| {
+            let mut worst = 0u8;
+            let w = SIZE[0] as usize;
+            for y in 1..SIZE[1] as usize {
+                for x in 1..w {
+                    let i = (y * w + x) * 4;
+                    for c in 0..3 {
+                        worst = worst.max(frame[i + c].abs_diff(frame[i - 4 + c]));
+                        worst = worst.max(frame[i + c].abs_diff(frame[i - w * 4 + c]));
+                    }
+                }
+            }
+            worst
+        };
+        let bare = step(&fresh_frame(&device, &queue, &cb));
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.7;
+        let clouded = step(&fresh_frame(&device, &queue, &cb));
+        assert!(bare <= 4, "the picture under the clouds is not smooth: {bare}");
+        assert!(clouded <= 12, "the cloud layer drew an edge of its own: {clouded} over {bare}");
+    }
 }
 
 #[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]

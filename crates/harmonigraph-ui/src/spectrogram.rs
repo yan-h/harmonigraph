@@ -3562,6 +3562,7 @@ mod tests {
             |c: &mut SpectrumConfig| c.atmosphere.contour_softness = 0.4,
             |c: &mut SpectrumConfig| c.atmosphere.cloud_depth = 0.9,
             |c: &mut SpectrumConfig| c.atmosphere.scale_glint = 0.1,
+            |c: &mut SpectrumConfig| c.atmosphere.scale_overlap = 1.05,
         ] {
             let mut moved = cfg;
             edit(&mut moved);

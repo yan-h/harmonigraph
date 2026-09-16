@@ -87,9 +87,10 @@ struct Uniforms {
     cloud_scale: f32,
     cloud_cover: f32,
     scale_size: f32,
+    scale_overlap: f32,
     scale_glint: f32,
     cloud_ambient: f32,
-    _pad2: [f32; 3],
+    _pad2: [f32; 2],
 }
 
 pub(super) struct Pipelines {
@@ -430,9 +431,10 @@ impl Targets {
             cloud_scale: settings.cloud_scale,
             cloud_cover: settings.cloud_cover,
             scale_size: settings.scale_size,
+            scale_overlap: settings.scale_overlap,
             scale_glint: settings.scale_glint,
             cloud_ambient: settings.cloud_ambient,
-            _pad2: [0.0; 3],
+            _pad2: [0.0; 2],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }
