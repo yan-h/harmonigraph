@@ -253,7 +253,14 @@ impl egui_dock::TabViewer for Viewer<'_> {
         let right = ui.max_rect().right();
         ui.data_mut(|d| d.insert_temp(pane_content_right(), right));
         match tab {
-            Tab::Lattice => lattice_pane(ui, self.state, self.now, DOCKED_SURFACE),
+            Tab::Lattice => {
+                self.state.runtime.lattice_maps = self.params.lattice_maps();
+                lattice_pane(ui, self.state, self.now, DOCKED_SURFACE);
+                if let Some(destination) = self.state.runtime.map_destination.take() {
+                    self.params
+                        .edit_lattice_map(crate::lattice_maps::MapEdit::Replace(destination));
+                }
+            }
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
             Tab::Display => display_pane(ui, self.state, self.interaction, self.params),
             Tab::Console => console_pane(ui, &mut self.state.runtime),

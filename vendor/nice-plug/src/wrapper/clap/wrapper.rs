@@ -1059,6 +1059,9 @@ impl<P: ClapPlugin> Wrapper<P> {
                         true
                     }
                     ClapParamUpdate::PlainValueMod(clap_plain_delta) => {
+                        if P::CLAP_NON_MODULATABLE_PARAMS.iter().any(|id| hash_param_id(id) == hash) {
+                            return false;
+                        }
                         let normalized_delta = clap_plain_delta as f32
                             / unsafe { param_ptr.step_count() }.unwrap_or(1) as f32;
 
@@ -3359,9 +3362,12 @@ impl<P: ClapPlugin> Wrapper<P> {
         // TODO: Somehow expose per note/channel/port modulation
         param_info.flags = 0;
         if automatable && !hidden {
-            param_info.flags |= CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_IS_MODULATABLE;
-            if wrapper.poly_mod_ids_by_hash.contains_key(param_hash) {
-                param_info.flags |= CLAP_PARAM_IS_MODULATABLE_PER_NOTE_ID;
+            param_info.flags |= CLAP_PARAM_IS_AUTOMATABLE;
+            if !P::CLAP_NON_MODULATABLE_PARAMS.iter().any(|id| hash_param_id(id) == *param_hash) {
+                param_info.flags |= CLAP_PARAM_IS_MODULATABLE;
+                if wrapper.poly_mod_ids_by_hash.contains_key(param_hash) {
+                    param_info.flags |= CLAP_PARAM_IS_MODULATABLE_PER_NOTE_ID;
+                }
             }
         }
         if hidden {

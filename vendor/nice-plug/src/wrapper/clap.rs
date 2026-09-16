@@ -66,6 +66,9 @@ pub trait ClapPlugin: Plugin {
     /// Default-disabled semantic configuration ownership. The parameter list
     /// names up to five float parameters; other plugins retain the legacy path.
     const CLAP_CONFIGURATION: bool = false;
+    /// Discrete state selectors may support automation without additive modulation.
+    /// These parameter IDs omit the modulation capability and refuse mod events.
+    const CLAP_NON_MODULATABLE_PARAMS: &'static [&'static str] = &[];
     const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] = &[];
     const CLAP_CONFIGURATION_FIELDS: &'static [&'static str] = &[];
 

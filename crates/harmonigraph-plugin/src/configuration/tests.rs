@@ -1589,3 +1589,82 @@ fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
         serde_json::from_str(r#"{"adaptive":{"pitch_flexibility":65535}}"#).unwrap();
     assert_eq!(PolicyConfig::from(clamped.adaptive).pitch_flexibility, 100);
 }
+
+#[test]
+fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
+    use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
+    use harmonigraph_ui::lattice_maps::MapDocument;
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    let mut map =
+        LatticeMap { position: harmonigraph_core::LatticePos::new(50, 0, 0), ..Default::default() };
+    map.replace(harmonigraph_core::LatticePos::new(54, 0, 0));
+    let mut document = MapDocument::default();
+    document.capture(map, "Distant passage".into());
+    let mut state = restored(&device, 696.5);
+    state.fields.insert("lattice-maps".into(), serde_json::to_string(&document).unwrap());
+    state.params.insert("lattice-map".into(), nice_plug::plugin::ParamValue::I32(1));
+    state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(2));
+    device.load(state, false);
+    device.wrapper().test_inspect_plugin(|plugin| {
+        let preview = crate::lattice_maps::view(&plugin.params);
+        assert_eq!(preview.playback.engine, TuningEngine::LatticeMap);
+        assert_eq!(preview.playback.map, Some(map));
+        assert!(preview.pending, "restored intent must be visible before audio adoption");
+    });
+    let saved = device.save();
+    let recalled: MapDocument = serde_json::from_str(&saved.fields["lattice-maps"]).unwrap();
+    assert_eq!(recalled.map(1), Some(map));
+    device.run(0, vec![], false);
+    device.wrapper().test_inspect_plugin(|plugin| {
+        let playback = *plugin.params.map_playback.lock();
+        assert_eq!(playback.engine, TuningEngine::LatticeMap);
+        assert_eq!(playback.selected, 1);
+        assert_eq!(playback.map, Some(map));
+        assert!(!playback.audition);
+        assert_eq!(
+            plugin.configuration.as_ref().unwrap().reducer.resolved().tuning.three,
+            696_500_000
+        );
+        plugin.params.map_editor.lock().working = Some(LatticeMap::default());
+    });
+    device.run(64, vec![], false);
+    device.load(saved, false);
+    device.wrapper().test_inspect_plugin(|plugin| {
+        let preview = crate::lattice_maps::view(&plugin.params);
+        assert!(!preview.playback.audition, "restore exits audition before audio resumes");
+        assert_eq!(preview.playback.map, Some(map));
+    });
+    device.run(128, vec![], false);
+    device.wrapper().test_inspect_plugin(|plugin| {
+        assert!(!plugin.params.map_playback.lock().audition, "restore exits transient audition");
+        assert_eq!(plugin.params.map_playback.lock().map, Some(map));
+    });
+}
+
+#[test]
+fn lattice_map_records_shared_tuning_at_its_actual_sample_boundary() {
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    let mut state = restored(&device, 696.0);
+    state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(2));
+    device.load(state, false);
+    device.run(0, vec![], false);
+    capture.arm();
+    device.run(64, vec![device.param(ParamKey::Three, 690.0, 16)], false);
+    let configs: Vec<_> = capture
+        .drain_entries()
+        .into_iter()
+        .filter_map(|entry| match entry {
+            harmonigraph_record::Entry::ConfigurationAt { config, .. } => Some(config),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(configs.len(), 2);
+    assert_eq!(configs[0].axes[1], 696_000_000);
+    assert_eq!(configs[1].axes[1], 690_000_000);
+    assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
+    assert!((configs[1].t - 80.0 / 48000.0).abs() < 1e-9);
+}

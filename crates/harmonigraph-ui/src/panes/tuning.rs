@@ -398,7 +398,12 @@ pub(super) fn tuning_pane(
         false
     };
 
-    adaptive_controls(ui, state, params);
+    section(ui, "Sources");
+    instance_controls(ui, params);
+    let mode = map_controls(ui, state, params);
+    if mode == harmonigraph_core::lattice_map::TuningEngine::Adaptive {
+        adaptive_controls(ui, state, params);
+    }
 
     // After every control: `configuration_pending` can come and go between
     // consecutive frames while a drag submits policy edits and the audio
@@ -460,7 +465,6 @@ fn fifths(steps: i32) -> String {
 
 fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
     section(ui, "Adaptive tuning");
-    instance_controls(ui, params);
     let mut p = state.runtime.adaptive_policy;
     let before = p;
     ui.checkbox(
@@ -617,7 +621,7 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
             let mut retune = row.retune;
             if ui
                 .checkbox(&mut retune, "")
-                .on_hover_text("Retune notes and contribute to adaptive tuning")
+                .on_hover_text("Tune new notes with the selected engine")
                 .changed()
             {
                 params.edit_tuning_instance(row.id, InstanceEdit::Retune(retune));
@@ -761,4 +765,162 @@ fn adaptive_value(
     } else {
         raw
     }
+}
+
+fn map_controls(
+    ui: &mut egui::Ui,
+    state: &mut PictureState,
+    params: &dyn ParamBackend,
+) -> harmonigraph_core::lattice_map::TuningEngine {
+    use crate::lattice_maps::{MapEdit, MIDI_LABELS};
+    use harmonigraph_core::lattice_map::{TuningEngine, COORDINATE_LIMIT};
+    let Some(view) = params.lattice_maps() else {
+        return TuningEngine::Adaptive;
+    };
+    state.runtime.lattice_maps = Some(view.clone());
+    section(ui, "Tuning mode");
+    let mut mode = view.playback.engine;
+    ui.horizontal_wrapped(|ui| {
+        for (value, name) in [
+            (TuningEngine::Off, "Off"),
+            (TuningEngine::Adaptive, "Adaptive"),
+            (TuningEngine::LatticeMap, "Lattice Map"),
+        ] {
+            if ui.selectable_value(&mut mode, value, name).changed() {
+                params.edit_lattice_map(MapEdit::Engine(mode));
+            }
+        }
+    });
+    if view.pending {
+        ui.weak("Map state pending audio adoption");
+    }
+    if mode != TuningEngine::LatticeMap {
+        return mode;
+    }
+    ui.weak("Map changes affect new attacks. Held notes keep their onset tuning.");
+    if state.runtime.learn_active {
+        ui.colored_label(theme::armed(), "Learn is suspended in Lattice Map.");
+    }
+    let selected = view.playback.selected;
+    let name = view
+        .names
+        .iter()
+        .find(|(id, _)| *id == selected)
+        .map(|(_, name)| name.as_str())
+        .unwrap_or("unavailable");
+    egui::ComboBox::from_id_salt("saved-lattice-map")
+        .selected_text(format!("{} · {name}", selected + 1))
+        .show_ui(ui, |ui| {
+            for (id, name) in &view.names {
+                if ui.selectable_label(selected == *id, format!("{} · {name}", id + 1)).clicked() {
+                    params.edit_lattice_map(MapEdit::Select(*id));
+                }
+            }
+        });
+    if view.playback.map.is_none() {
+        ui.colored_label(theme::armed(), "Map unavailable: new attacks pass through.");
+    }
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Audition working copy").clicked() {
+            params.edit_lattice_map(MapEdit::Audition);
+        }
+        if ui
+            .add_enabled(view.working.is_some(), egui::Button::new("Return to arrangement"))
+            .clicked()
+        {
+            params.edit_lattice_map(MapEdit::Return);
+        }
+    });
+    if let Some(map) = view.working {
+        ui.colored_label(
+            theme::armed(),
+            "Audition · ignores Map automation until Return to arrangement",
+        );
+        let mut editing = view.edit_shape;
+        if ui.checkbox(&mut editing, "Edit shape · click destination on lattice").changed() {
+            params.edit_lattice_map(MapEdit::EditShape(editing));
+        }
+        let mut pos = map.position;
+        ui.horizontal_wrapped(|ui| {
+            for (label, value) in [
+                ("Fifths", &mut pos.threes),
+                ("Thirds", &mut pos.fives),
+                ("Sevenths", &mut pos.sevens),
+            ] {
+                ui.label(label);
+                ui.add(
+                    egui::DragValue::new(value)
+                        .range(-COORDINATE_LIMIT..=COORDINATE_LIMIT)
+                        .speed(0.1),
+                );
+            }
+        });
+        if pos != map.position {
+            params.edit_lattice_map(MapEdit::Position(pos));
+        }
+        if ui.add_enabled(view.can_undo, egui::Button::new("Undo map edit")).clicked() {
+            params.edit_lattice_map(MapEdit::Undo);
+        }
+        let key = ui.id().with("capture-map-name");
+        let mut name =
+            ui.data(|data| data.get_temp::<String>(key)).unwrap_or_else(|| "Passage".into());
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut name).desired_width(140.0));
+            if ui.add_enabled(!view.full, egui::Button::new("Capture new map")).clicked() {
+                params.edit_lattice_map(MapEdit::Capture(name.clone()));
+            }
+        });
+        ui.data_mut(|data| data.insert_temp(key, name));
+        ui.weak(
+            "Capture saves a map. Place its Map value in Bitwig with a held automation segment.",
+        );
+        if view.full {
+            ui.colored_label(theme::armed(), "All 128 stable map identities have been used.");
+        }
+    }
+    egui::CollapsingHeader::new("Manage selected saved map").show(ui, |ui| {
+        let key = ui.id().with(("rename-map", selected));
+        let mut renamed = ui.data(|data| data.get_temp::<String>(key)).unwrap_or_else(|| name.into());
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut renamed).desired_width(140.0));
+            if ui.button("Rename").clicked() { params.edit_lattice_map(MapEdit::Rename(selected, renamed.clone())); }
+        });
+        ui.data_mut(|data| data.insert_temp(key, renamed));
+        ui.horizontal(|ui| {
+            if ui.button("Move earlier in list").clicked() { params.edit_lattice_map(MapEdit::MoveEarlier(selected)); }
+            if ui.button("Delete saved map").on_hover_text("Automation for this identity will pass through without correction. The identity is never reused.").clicked() { params.edit_lattice_map(MapEdit::Delete(selected)); }
+        });
+    });
+    egui::CollapsingHeader::new("Assignments and sounding intervals").show(ui, |ui| {
+        if let Some(map) = view.playback.map {
+            for (midi, name) in MIDI_LABELS.iter().enumerate() {
+                let p = map.node(midi as u8);
+                ui.monospace(format!(
+                    "{name:2} · {:+.2}¢ · ({}, {}, {})",
+                    map.correction(midi as u8, state.runtime.tuning) as f64 / 1e6,
+                    p.threes,
+                    p.fives,
+                    p.sevens
+                ));
+            }
+        }
+        let mut voices: Vec<_> = state
+            .runtime
+            .tracker
+            .voices()
+            .filter(|v| v.state == harmonigraph_core::VoiceState::Held)
+            .collect();
+        voices.sort_by(|a, b| a.pitch.total_cmp(&b.pitch));
+        if let Some(lowest) = voices.first() {
+            for voice in &voices[1..] {
+                ui.label(format!(
+                    "{}–{} · {:.2}¢",
+                    MIDI_LABELS[lowest.note as usize % 12],
+                    MIDI_LABELS[voice.note as usize % 12],
+                    (voice.pitch - lowest.pitch) * 100.0
+                ));
+            }
+        }
+    });
+    mode
 }

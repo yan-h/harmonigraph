@@ -47,7 +47,9 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
             state.appearance.camera.zoom_by(zoom);
         }
     }
-    if response.double_clicked() {
+    if response.double_clicked()
+        && !state.runtime.lattice_maps.as_ref().is_some_and(|m| m.editing())
+    {
         // Reset orbit/zoom, but keep the chosen projection: that's a view
         // preference, not a navigation state. Home is the ORIGIN of the
         // lattice, so the window's center goes back with the camera —
@@ -175,6 +177,12 @@ pub(crate) fn draw_lattice(
         }
     }
 
+    if response.is_some_and(|r| r.clicked())
+        && state.runtime.lattice_maps.as_ref().is_some_and(|m| m.editing())
+    {
+        state.runtime.map_destination = state.surfaces.hovered;
+    }
+
     // The lattice's own place in the shape list, claimed before the labels are
     // laid out and filled in after. The names go INTO that callback — they are
     // drawn inside its scene pass, so that a node in front covers the name of
@@ -202,8 +210,11 @@ pub(crate) fn draw_lattice(
     // Only the interactive copy shows it at all: the badge is chrome about
     // the working view being in learn mode, and the preview is a picture of
     // the render, not a place to work.
-    let badge =
-        (response.is_some() && state.runtime.learn_active).then(|| learn_badge(ui, rect, now));
+    let map_mode = state.runtime.lattice_maps.as_ref().is_some_and(|maps| {
+        maps.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
+    });
+    let badge = (response.is_some() && state.runtime.learn_active && !map_mode)
+        .then(|| learn_badge(ui, rect, now));
     ui.painter().set(
         lattice,
         lattice_paint_callback(
@@ -216,43 +227,100 @@ pub(crate) fn draw_lattice(
             state.surfaces.lattice_pipelines.clone(),
         ),
     );
-    if response.is_some()
-        && state.runtime.neighbourhood.visible
-        && state.runtime.neighbourhood.has_context()
-    {
-        // Selection-style outlines are live UI annotations, like hover. They
-        // describe next input over C2–C7, not a recorded video ornament.
+    if response.is_some() {
         let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
         let painter = ui.painter().with_clip_rect(rect);
+        let maps = state.runtime.lattice_maps.as_ref();
+        let engine = maps
+            .map_or(harmonigraph_core::lattice_map::TuningEngine::Adaptive, |m| m.playback.engine);
+        let active_map = maps
+            .filter(|_| engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap)
+            .and_then(|m| m.playback.map);
+        let adaptive = engine == harmonigraph_core::lattice_map::TuningEngine::Adaptive
+            && state.runtime.neighbourhood.visible
+            && state.runtime.neighbourhood.has_context();
         for node in &scene.nodes {
-            if !state.runtime.neighbourhood.nodes.contains(&node.lattice_pos) {
+            let assigned = active_map
+                .and_then(|map| (0..12u8).find(|&midi| map.node(midi) == node.lattice_pos));
+            let outlined = assigned.is_some()
+                || adaptive && state.runtime.neighbourhood.nodes.contains(&node.lattice_pos);
+            let candidate = maps.is_some_and(|m| m.editing())
+                && state.surfaces.hovered == Some(node.lattice_pos);
+            if !outlined && !candidate {
                 continue;
             }
             if let Some(p) = projector.project(node.world_pos) {
-                painter.circle_stroke(
-                    egui::pos2(rect.min.x + p.x, rect.min.y + p.y),
-                    8.0,
-                    egui::Stroke::new(
-                        1.0,
-                        egui::Color32::from_rgba_unmultiplied(115, 190, 225, 160),
-                    ),
-                );
+                let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
+                if outlined {
+                    draw_assignment_outline(&painter, center);
+                }
+                if let Some(midi) = assigned {
+                    painter.text(
+                        center + egui::vec2(10.0, -10.0),
+                        egui::Align2::LEFT_BOTTOM,
+                        crate::lattice_maps::MIDI_LABELS[midi as usize],
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::LIGHT_BLUE,
+                    );
+                }
+                if maps.is_some_and(|m| m.editing())
+                    && state.surfaces.hovered == Some(node.lattice_pos)
+                {
+                    painter.circle_stroke(
+                        center,
+                        12.0,
+                        egui::Stroke::new(2.0, egui::Color32::GOLD),
+                    );
+                }
             }
         }
-        let label = if state.runtime.neighbourhood.computing {
-            "Reachable C2–C7 · computing".to_owned()
-        } else if let Some(error) = &state.runtime.neighbourhood.error {
-            format!("Neighbourhood unavailable: {error}")
+        let label = if let Some(maps) =
+            maps.filter(|_| engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap)
+        {
+            if let Some(destination) = state.surfaces.hovered.filter(|_| maps.edit_shape) {
+                let midi =
+                    harmonigraph_core::lattice_map::LatticeMap::midi_class(destination) as u8;
+                let mut map = maps.working.unwrap_or_default();
+                let old = map.correction(midi, state.runtime.tuning);
+                map.replace(destination);
+                let cents = map.correction(midi, state.runtime.tuning) as f64 / 1e6;
+                format!(
+                    "{} · {cents:+.2}¢ · change {:+.2}¢ · click destination",
+                    crate::lattice_maps::MIDI_LABELS[midi as usize],
+                    cents - old as f64 / 1e6
+                )
+            } else if maps.playback.map.is_none() {
+                "Map unavailable · new attacks pass through".into()
+            } else if maps.playback.audition {
+                "Audition · next attacks use working map".into()
+            } else {
+                format!("Map {} · next attacks", maps.playback.selected + 1)
+            }
+        } else if adaptive {
+            if state.runtime.neighbourhood.computing {
+                "Reachable C2–C7 · computing".to_owned()
+            } else if let Some(error) = &state.runtime.neighbourhood.error {
+                format!("Neighbourhood unavailable: {error}")
+            } else {
+                format!("Reachable C2–C7 · {} nodes", state.runtime.neighbourhood.nodes.len())
+            }
         } else {
-            format!("Reachable C2–C7 · {} nodes", state.runtime.neighbourhood.nodes.len())
+            String::new()
         };
-        painter.text(
-            rect.left_bottom() + egui::vec2(10.0, -10.0),
-            egui::Align2::LEFT_BOTTOM,
-            label,
-            egui::FontId::proportional(11.0),
-            egui::Color32::LIGHT_BLUE,
-        );
+        let label = if maps.is_some_and(|maps| maps.pending) {
+            format!("{label} · pending audio adoption")
+        } else {
+            label
+        };
+        if !label.is_empty() {
+            painter.text(
+                rect.left_bottom() + egui::vec2(10.0, -10.0),
+                egui::Align2::LEFT_BOTTOM,
+                label,
+                egui::FontId::proportional(11.0),
+                egui::Color32::LIGHT_BLUE,
+            );
+        }
     }
     if let Some(mut badge) = badge {
         draw_learn_overlay(ui, rect, state, now, surface, &mut badge);
@@ -637,6 +705,15 @@ pub(crate) fn draw_node_labels(
     }
 }
 
+/// Both assignment engines use this one editor annotation style.
+fn draw_assignment_outline(painter: &egui::Painter, center: egui::Pos2) {
+    painter.circle_stroke(
+        center,
+        8.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(115, 190, 225, 160)),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,6 +721,83 @@ mod tests {
         frame_full, fresh_picture as fresh, painted_full, painted_into, themed,
     };
     use harmonigraph_core::{NoteEvent, SourceId};
+
+    #[test]
+    fn lattice_map_destination_click_excludes_camera_drags_other_modes_and_export() {
+        use crate::lattice_maps::{MapPlayback, MapView};
+        use crate::tests::probe::{events_into, press};
+        use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
+        let mut state = fresh();
+        let map = LatticeMap::default();
+        state.runtime.lattice_maps = Some(MapView {
+            playback: MapPlayback {
+                engine: TuningEngine::LatticeMap,
+                map: Some(map),
+                audition: true,
+                selected: 0,
+            },
+            pending: false,
+            names: vec![],
+            working: Some(map),
+            edit_shape: true,
+            can_undo: false,
+            full: false,
+        });
+        let ctx = themed();
+        let screen = egui::vec2(400.0, 400.0);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen);
+        let at = rect.center();
+        let frame = |state: &mut PictureState, events| {
+            events_into(&ctx, screen, rect, events, |ui| lattice_pane(ui, state, 0.0, 0))
+        };
+        frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+        frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+        let picked = state.surfaces.hovered.expect("fixture must hit a visible destination");
+        frame(&mut state, vec![press(at, true)]);
+        frame(&mut state, vec![press(at, false)]);
+        assert_eq!(state.runtime.map_destination.take(), Some(picked));
+        frame(&mut state, vec![press(at, true)]);
+        let moved = at + egui::vec2(40.0, 0.0);
+        frame(&mut state, vec![egui::Event::PointerMoved(moved)]);
+        frame(&mut state, vec![press(moved, false)]);
+        assert_eq!(state.runtime.map_destination.take(), None, "camera drag must not replace");
+        state.runtime.lattice_maps.as_mut().unwrap().playback.engine = TuningEngine::Adaptive;
+        frame(&mut state, vec![press(moved, true)]);
+        frame(&mut state, vec![press(moved, false)]);
+        assert_eq!(
+            state.runtime.map_destination.take(),
+            None,
+            "hidden edit mode must be suspended"
+        );
+        state.runtime.lattice_maps.as_mut().unwrap().playback.engine = TuningEngine::LatticeMap;
+        let count = |state: &mut PictureState, interactive: bool| {
+            frame_full(&ctx, screen, |ui| {
+                let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
+                draw_lattice(
+                    ui,
+                    rect,
+                    state,
+                    0.0,
+                    0,
+                    glam::Vec4::ZERO,
+                    interactive.then_some(&response),
+                    None,
+                );
+            })
+            .shapes
+            .iter()
+            .filter(
+                |shape| matches!(&shape.shape, egui::Shape::Circle(circle) if circle.radius == 8.0),
+            )
+            .count()
+        };
+        assert!(count(&mut state, true) > 0, "the fixture must actually draw map outlines");
+        assert_eq!(
+            count(&mut state, false),
+            0,
+            "preview/export must omit the persisted map annotation"
+        );
+    }
 
     /// Draw the labels for a chord, with the camera at `distance`, and
     /// report the pieces of text that were laid out.
