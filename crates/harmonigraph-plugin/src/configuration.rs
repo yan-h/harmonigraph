@@ -180,12 +180,12 @@ pub fn save(snapshot: ConfigurationSnapshot, state: &mut PluginState) {
 mod recording;
 
 pub struct Owner {
+    pub(crate) maps: crate::lattice_maps::AudioMaps,
     /// Every edit reduces here the moment it arrives, in arrival order, so the
     /// reducer's own combined-edit/preset/unlock semantics are untouched.
     pub(crate) reducer: ConfigReducer,
-    /// What the reducer held at this callback's boundary. One value for every
-    /// assignment group the Hub starts inside the block; edits that land during
-    /// the block are adopted by the next `begin`.
+    /// Adaptive's callback-boundary configuration. Lattice Map instead uses
+    /// `maps`' timestamped history, including shared tuning at each attack.
     block: ResolvedConfig,
     pub(crate) confirmed: ConfirmedPitches,
     learning: LearningState,
@@ -208,6 +208,7 @@ impl Owner {
         };
 
         Self {
+            maps: crate::lattice_maps::AudioMaps::new(params),
             block: reducer.resolved(),
             reducer,
             recording: recording::Recording::default(),
@@ -231,6 +232,7 @@ impl Owner {
         _presentation_time: f64,
     ) {
         self.boundary = boundary;
+        self.maps.begin(boundary);
         self.recording.captured_intent = recorder.capture_recording_intent();
         self.recording.block_start = boundary.steady_time;
         self.recording.block_frames = boundary.frames;
@@ -241,11 +243,11 @@ impl Owner {
         self.recording.prefix = boundary.steady_time.saturating_add(i64::from(boundary.frames));
     }
 
-    /// THE block boundary. Every command accepted before this callback has
-    /// reduced by now; this is where the whole of it becomes effective, and
-    /// nothing later in the callback moves the value again.
+    /// Seed the callback after all queued commands reduce. Adaptive keeps this
+    /// value for the block; Map history records later timestamped changes.
     pub fn adopt(&mut self) {
         self.block = self.reducer.resolved();
+        self.maps.adopt(self.block);
     }
 
     /// The one configuration for assignment groups started in this block. A
@@ -258,6 +260,7 @@ impl Owner {
     }
 
     pub fn reset(&mut self, recorder: &harmonigraph_record::Recorder) {
+        self.maps.reset();
         self.confirmed.reset();
         self.learning = LearningState::default();
         self.learned = None;
@@ -274,6 +277,9 @@ impl Owner {
     ) -> Option<ConfigurationSnapshot> {
         if self.snapshot.status & 2 != 0 {
             return None;
+        }
+        if command.edit.payload[0] == RESTORE {
+            self.maps.restored();
         }
         let raw = tuning(commit.raw);
         let mutation = match command.edit.payload[0] {
@@ -305,13 +311,16 @@ impl Owner {
                 }),
             }),
         };
-        // Reduce in arrival order; the value only becomes the block's at the
-        // next boundary, so the effective sample is where this callback ends.
+        // Reduce in arrival order. The legacy block snapshot remains Adaptive's
+        // authority; Map records the same resolved value at the commit sample.
         if !self.reducer.apply(mutation) {
             self.fault();
             return None;
         }
         let resolved = self.reducer.resolved();
+        if command.edit.payload[0] != LEARN {
+            self.maps.tuning_changed(commit.sample, resolved);
+        }
         if command.edit.payload[0] == LEARN {
             self.learned = None;
         }
@@ -362,13 +371,53 @@ impl Owner {
         if self.snapshot.status & 2 != 0 && recorder.recording_epoch() != 0 {
             recorder.fail_configuration();
         }
-        self.recording.segment(recorder, origin, f64::from(self.boundary.sample_rate), self.block);
+        let start = self.recording.block_start;
+        let frames = self.recording.block_frames;
+        let end = start + i64::from(frames);
+        let rate = f64::from(self.boundary.sample_rate);
+        let effective = |state: crate::lattice_maps::AttackState| {
+            if state.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap {
+                state.config
+            } else {
+                self.block
+            }
+        };
+        let mut config = self.maps.at(start).map_or(self.block, effective);
+        let mut cursor = start;
+        for (sample, state) in self.maps.changes(start, end) {
+            let next = effective(state);
+            if next == config {
+                continue;
+            }
+            self.recording.block_start = cursor;
+            self.recording.block_frames = (sample - cursor) as u32;
+            self.recording.segment(
+                recorder,
+                origin.map(|t| t + (cursor - start) as f64 / rate),
+                rate,
+                config,
+            );
+            cursor = sample;
+            config = next;
+        }
+        self.recording.block_start = cursor;
+        self.recording.block_frames = (end - cursor) as u32;
+        self.recording.segment(
+            recorder,
+            origin.map(|t| t + (cursor - start) as f64 / rate),
+            rate,
+            config,
+        );
+        self.recording.block_start = start;
+        self.recording.block_frames = frames;
     }
 
     /// `retuning`: some source has Retune on, so the lattice is the target
     /// and Learn moves only the C offset there, besides the keyboard tuning.
     pub fn group_end(&mut self, retuning: bool) -> Option<ConfigurationEdit> {
-        if self.snapshot.status != 0 {
+        if self.snapshot.status != 0
+            || self.maps.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
+        {
             return None;
         }
         match self.learning.infer(&self.confirmed, self.reducer.resolved().modes.learning) {

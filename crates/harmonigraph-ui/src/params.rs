@@ -34,6 +34,10 @@ pub enum AnalysisInput {
 /// one-shot changes (preset buttons, typed values) — backends wrap those in
 /// an implicit gesture.
 pub trait ParamBackend {
+    fn lattice_maps(&self) -> Option<crate::lattice_maps::MapView> {
+        None
+    }
+    fn edit_lattice_map(&self, _edit: crate::lattice_maps::MapEdit) {}
     /// Live plugin instances; absent in offline and standalone pictures.
     fn tuning_instances(&self) -> Vec<TuningInstance> {
         Vec::new()

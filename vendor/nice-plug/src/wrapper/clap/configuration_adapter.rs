@@ -3,6 +3,7 @@
 //! edit reduces in arrival order; the plugin decides when a reduced value
 //! becomes effective, which is the next callback boundary.
 use super::*;
+use clap_sys::ext::params::CLAP_PARAM_RESCAN_TEXT;
 use crate::wrapper::clap::configuration::*;
 
 pub(super) struct Runtime {
@@ -332,7 +333,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             let host_state =
                 self.host_state.borrow().as_ref().map(|p| &**p as *const clap_host_state);
             if let Some(host_params) = host_params {
-                unsafe_clap_call! { host_params=>rescan(&*self.host_callback, CLAP_PARAM_RESCAN_VALUES) };
+                unsafe_clap_call! { host_params=>rescan(&*self.host_callback, CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT) };
                 if self
                     .configuration_mailbox
                     .get()
