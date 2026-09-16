@@ -1602,9 +1602,13 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     map.replace(harmonigraph_core::LatticePos::new(54, 0, 0));
     let mut document = MapDocument::default();
     document.capture(map, "Distant passage".into());
+    map.position = harmonigraph_core::LatticePos::new(50, -2, 1);
     let mut state = restored(&device, 696.5);
     state.fields.insert("lattice-maps".into(), serde_json::to_string(&document).unwrap());
     state.params.insert("lattice-map".into(), nice_plug::plugin::ParamValue::I32(1));
+    for (id, value) in [("map-fifths", 50), ("map-thirds", -2), ("map-sevenths", 1)] {
+        state.params.insert(id.into(), nice_plug::plugin::ParamValue::I32(value));
+    }
     state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(2));
     device.load(state, false);
     device.wrapper().test_inspect_plugin(|plugin| {
@@ -1615,7 +1619,15 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     });
     let saved = device.save();
     let recalled: MapDocument = serde_json::from_str(&saved.fields["lattice-maps"]).unwrap();
-    assert_eq!(recalled.map(1), Some(map));
+    assert_eq!(
+        recalled.map(1),
+        Some(LatticeMap { position: harmonigraph_core::LatticePos::ORIGIN, ..map })
+    );
+    for (id, value) in [("map-fifths", 50), ("map-thirds", -2), ("map-sevenths", 1)] {
+        assert!(
+            matches!(saved.params[id], nice_plug::plugin::ParamValue::I32(actual) if actual == value)
+        );
+    }
     device.run(0, vec![], false);
     device.wrapper().test_inspect_plugin(|plugin| {
         let playback = *plugin.params.map_playback.lock();

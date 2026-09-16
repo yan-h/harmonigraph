@@ -12,7 +12,6 @@ pub const MIDI_LABELS: [&str; 12] =
 #[serde(default)]
 pub struct MapRecord {
     pub nodes: [[i32; 3]; 12],
-    pub position: [i32; 3],
 }
 impl Default for MapRecord {
     fn default() -> Self {
@@ -27,12 +26,12 @@ fn position(p: [i32; 3]) -> LatticePos {
 }
 impl From<LatticeMap> for MapRecord {
     fn from(map: LatticeMap) -> Self {
-        Self { nodes: map.nodes.map(coordinates), position: coordinates(map.position) }
+        Self { nodes: map.nodes.map(coordinates) }
     }
 }
 impl MapRecord {
     pub fn resolve(&self) -> Option<LatticeMap> {
-        let map = LatticeMap { nodes: self.nodes.map(position), position: position(self.position) };
+        let map = LatticeMap { nodes: self.nodes.map(position), position: LatticePos::ORIGIN };
         map.valid().then_some(map)
     }
 }
@@ -127,12 +126,25 @@ impl MapEditor {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MapPlayback {
     pub engine: TuningEngine,
     pub selected: usize,
+    pub offset: LatticePos,
     pub map: Option<LatticeMap>,
     pub audition: bool,
+}
+
+impl Default for MapPlayback {
+    fn default() -> Self {
+        Self {
+            engine: TuningEngine::default(),
+            selected: 0,
+            offset: LatticePos::ORIGIN,
+            map: None,
+            audition: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -153,6 +165,13 @@ impl MapView {
             && self.working.is_some()
     }
 }
+#[derive(Clone, Copy, Debug)]
+pub enum MapAxis {
+    Fifths,
+    Thirds,
+    Sevenths,
+}
+
 #[derive(Clone, Debug)]
 pub enum MapEdit {
     Engine(TuningEngine),
@@ -161,7 +180,9 @@ pub enum MapEdit {
     Return,
     EditShape(bool),
     Replace(LatticePos),
-    Position(LatticePos),
+    BeginOffset(MapAxis),
+    Offset(MapAxis, i32),
+    EndOffset(MapAxis),
     Undo,
     Capture(String),
     Rename(usize, String),
@@ -182,6 +203,7 @@ mod tests {
         doc.slots[1].name = "Renamed".into();
         doc.order.reverse();
         let recalled: MapDocument = ron::from_str(&ron::to_string(&doc).unwrap()).unwrap();
+        map.position = LatticePos::ORIGIN;
         assert_eq!(recalled.map(1), Some(map));
         assert_eq!(recalled.map(0), None);
         assert_eq!(doc.capture(LatticeMap::default(), "New".into()), Some(2));

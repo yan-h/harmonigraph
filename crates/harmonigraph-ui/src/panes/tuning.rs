@@ -772,7 +772,7 @@ fn map_controls(
     state: &mut PictureState,
     params: &dyn ParamBackend,
 ) -> harmonigraph_core::lattice_map::TuningEngine {
-    use crate::lattice_maps::{MapEdit, MIDI_LABELS};
+    use crate::lattice_maps::{MapAxis, MapEdit, MIDI_LABELS};
     use harmonigraph_core::lattice_map::{TuningEngine, COORDINATE_LIMIT};
     let Some(view) = params.lattice_maps() else {
         return TuningEngine::Adaptive;
@@ -831,32 +831,38 @@ fn map_controls(
             params.edit_lattice_map(MapEdit::Return);
         }
     });
-    if let Some(map) = view.working {
+    ui.weak("Automate Map Fifths, Map Thirds and Map Harmonic sevenths to offset any shape.");
+    let mut pos = view.playback.offset;
+    ui.horizontal_wrapped(|ui| {
+        for (label, value, axis) in [
+            ("Fifths", &mut pos.threes, MapAxis::Fifths),
+            ("Thirds", &mut pos.fives, MapAxis::Thirds),
+            ("Harmonic sevenths", &mut pos.sevens, MapAxis::Sevenths),
+        ] {
+            ui.label(label);
+            let response = ui.add(
+                egui::DragValue::new(value).range(-COORDINATE_LIMIT..=COORDINATE_LIMIT).speed(0.1),
+            );
+            let one_shot = response.changed() && !response.dragged() && !response.drag_stopped();
+            if response.drag_started() || one_shot {
+                params.edit_lattice_map(MapEdit::BeginOffset(axis));
+            }
+            if response.changed() {
+                params.edit_lattice_map(MapEdit::Offset(axis, *value));
+            }
+            if response.drag_stopped() || one_shot {
+                params.edit_lattice_map(MapEdit::EndOffset(axis));
+            }
+        }
+    });
+    if view.working.is_some() {
         ui.colored_label(
             theme::armed(),
-            "Audition · ignores Map automation until Return to arrangement",
+            "Audition shape · Map selection paused; offset automation remains live",
         );
         let mut editing = view.edit_shape;
         if ui.checkbox(&mut editing, "Edit shape · click destination on lattice").changed() {
             params.edit_lattice_map(MapEdit::EditShape(editing));
-        }
-        let mut pos = map.position;
-        ui.horizontal_wrapped(|ui| {
-            for (label, value) in [
-                ("Fifths", &mut pos.threes),
-                ("Thirds", &mut pos.fives),
-                ("Sevenths", &mut pos.sevens),
-            ] {
-                ui.label(label);
-                ui.add(
-                    egui::DragValue::new(value)
-                        .range(-COORDINATE_LIMIT..=COORDINATE_LIMIT)
-                        .speed(0.1),
-                );
-            }
-        });
-        if pos != map.position {
-            params.edit_lattice_map(MapEdit::Position(pos));
         }
         if ui.add_enabled(view.can_undo, egui::Button::new("Undo map edit")).clicked() {
             params.edit_lattice_map(MapEdit::Undo);
@@ -871,9 +877,7 @@ fn map_controls(
             }
         });
         ui.data_mut(|data| data.insert_temp(key, name));
-        ui.weak(
-            "Capture saves a map. Place its Map value in Bitwig with a held automation segment.",
-        );
+        ui.weak("Capture saves shape only. Map selection leaves the three offsets unchanged.");
         if view.full {
             ui.colored_label(theme::armed(), "All 128 stable map identities have been used.");
         }

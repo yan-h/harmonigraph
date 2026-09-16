@@ -37,7 +37,9 @@ fn lattice_map_automation_precedes_coincident_attacks_in_both_callback_orders() 
         for hub_first in [false, true] {
             let mut hub = Device::new(false);
             hub.activate_format(48000.0, frames);
-            let (first, second) = install(&hub);
+            let (first, mut second) = install(&hub);
+            // Rotation is zero, so MIDI E still reaches the substituted base E slot.
+            second.position = LatticePos::new(50, -3, 1);
             let mut tune = Device::new(true);
             tune.activate_format(48000.0, frames);
             // 2x tolerates Hub-first callbacks without changing input timestamps.
@@ -47,7 +49,12 @@ fn lattice_map_automation_precedes_coincident_attacks_in_both_callback_orders() 
             let start = i64::from(frames);
             let boundary = frames / 2;
             let input = vec![note(1, 0, 64, boundary - 1, true), note(2, 0, 76, boundary, true)];
-            let automation = vec![parameter("lattice-map", 1.0, boundary)];
+            let automation = vec![
+                parameter("map-fifths", 4096.0 + 50.0, boundary),
+                parameter("lattice-map", 1.0, boundary),
+                parameter("map-thirds", 4096.0 - 3.0, boundary),
+                parameter("map-sevenths", 4096.0 + 1.0, boundary),
+            ];
             if hub_first {
                 hub.run_format(start, automation, None, None, frames);
                 tune.run_format(start, input, None, None, frames);
@@ -66,7 +73,7 @@ fn lattice_map_automation_precedes_coincident_attacks_in_both_callback_orders() 
                 voice(&hub, 0, 76).frozen_offset_microcents,
                 second.correction(76, Tuning::just())
             );
-            assert_eq!(voice(&hub, 0, 76).attack_node, Some(LatticePos::new(4, 0, 0)));
+            assert_eq!(voice(&hub, 0, 76).attack_node, Some(second.node(76)));
             let corrections: Vec<_> = output
                 .values
                 .iter()
@@ -83,6 +90,13 @@ fn lattice_map_automation_precedes_coincident_attacks_in_both_callback_orders() 
                 (corrections[1] - second.correction(76, Tuning::just()) as f64 / 1e8).abs() < 1e-8
             );
             assert_eq!(tune.shared().misses.load(Ordering::Relaxed), 0);
+            // Following callbacks seed plain values without translating twice.
+            hub.run_format(start * 4, vec![note(3, 0, 88, 0, true)], None, None, frames);
+            assert_eq!(voice(&hub, crate::tuning::DIRECT, 88).attack_node, Some(second.node(88)));
+            assert_eq!(
+                voice(&hub, 0, 64).frozen_offset_microcents,
+                first.correction(64, Tuning::just())
+            );
         }
     }
 }
@@ -146,15 +160,30 @@ fn lattice_map_shared_axes_and_audition_apply_to_new_attacks_only() {
     );
     hub_wrapper(&hub)
         .test_inspect_plugin(|plugin| plugin.params.map_editor.lock().working = Some(second));
-    hub.run(1024, vec![parameter("lattice-map", 0.0, 0), note(3, 0, 64, 0, true)], None);
+    hub.run(
+        1024,
+        vec![
+            parameter("lattice-map", 0.0, 0),
+            parameter("map-fifths", 4092.0, 0),
+            parameter("map-thirds", 4099.0, 0),
+            parameter("map-sevenths", 4094.0, 0),
+            note(3, 0, 64, 0, true),
+        ],
+        None,
+    );
+    // Keep label rotation zero so the auditioned shape differs at MIDI E.
+    let offset = LatticePos::new(-4, 3, -2);
     let auditioned = voice(&hub, crate::tuning::DIRECT, 64);
-    assert_eq!(auditioned.attack_node, Some(LatticePos::new(4, 0, 0)));
+    assert_eq!(auditioned.attack_node, Some(LatticeMap { position: offset, ..second }.node(64)));
     hub_wrapper(&hub).test_inspect_plugin(|plugin| {
         assert_eq!(plugin.params.maps.read().map(0), Some(first));
         plugin.params.map_editor.lock().working = None;
     });
     hub.run(1536, vec![note(4, 0, 76, 0, true)], None);
-    assert_eq!(voice(&hub, crate::tuning::DIRECT, 76).attack_node, Some(LatticePos::new(0, 1, 0)));
+    assert_eq!(
+        voice(&hub, crate::tuning::DIRECT, 76).attack_node,
+        Some(LatticeMap { position: offset, ..first }.node(76))
+    );
     assert_eq!(
         voice(&hub, crate::tuning::DIRECT, 64).frozen_offset_microcents,
         auditioned.frozen_offset_microcents
@@ -162,17 +191,23 @@ fn lattice_map_shared_axes_and_audition_apply_to_new_attacks_only() {
     // Map is an automatable stepped state selector, never additive modulation.
     let params = hub.params();
     let count = unsafe { params.count.unwrap()(hub.plugin) };
-    let mut found = false;
+    let ids = ["lattice-map", "map-fifths", "map-thirds", "map-sevenths"];
+    let mut found = 0;
     for index in 0..count {
         let mut info: clap_sys::ext::params::clap_param_info = unsafe { std::mem::zeroed() };
         assert!(unsafe { params.get_info.unwrap()(hub.plugin, index, &mut info) });
-        if info.id == nice_plug::wrapper::hash_param_id("lattice-map") {
+        if let Some(id) = ids.iter().find(|id| info.id == nice_plug::wrapper::hash_param_id(id)) {
             use clap_sys::ext::params::*;
             assert_ne!(info.flags & CLAP_PARAM_IS_STEPPED, 0);
             assert_ne!(info.flags & CLAP_PARAM_IS_AUTOMATABLE, 0);
             assert_eq!(info.flags & CLAP_PARAM_IS_MODULATABLE, 0);
-            found = true;
+            if *id != "lattice-map" {
+                assert_eq!(info.min_value, 0.0);
+                assert_eq!(info.max_value, 8192.0);
+                assert_eq!(info.default_value, 4096.0);
+            }
+            found += 1;
         }
     }
-    assert!(found);
+    assert_eq!(found, ids.len());
 }

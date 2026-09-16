@@ -280,7 +280,7 @@ pub(crate) fn draw_lattice(
             if let Some(destination) = state.surfaces.hovered.filter(|_| maps.edit_shape) {
                 let midi =
                     harmonigraph_core::lattice_map::LatticeMap::midi_class(destination) as u8;
-                let mut map = maps.working.unwrap_or_default();
+                let mut map = maps.playback.map.unwrap_or_default();
                 let old = map.correction(midi, state.runtime.tuning);
                 map.replace(destination);
                 let cents = map.correction(midi, state.runtime.tuning) as f64 / 1e6;
@@ -735,6 +735,7 @@ mod tests {
                 map: Some(map),
                 audition: true,
                 selected: 0,
+                offset: harmonigraph_core::LatticePos::ORIGIN,
             },
             pending: false,
             names: vec![],

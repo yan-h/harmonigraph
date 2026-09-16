@@ -149,6 +149,12 @@ pub struct HarmonigraphParams {
     pub map_playback: Arc<parking_lot::Mutex<harmonigraph_ui::lattice_maps::MapPlayback>>,
     #[id = "lattice-map"]
     pub map: IntParam,
+    #[id = "map-fifths"]
+    pub map_fifths: IntParam,
+    #[id = "map-thirds"]
+    pub map_thirds: IntParam,
+    #[id = "map-sevenths"]
+    pub map_sevenths: IntParam,
     #[id = "tuning-engine"]
     pub tuning_engine: IntParam,
     session: std::sync::OnceLock<Arc<tuning::setup::Shared>>,
@@ -255,6 +261,13 @@ impl Default for HarmonigraphParams {
                         None => format!("{} · unavailable", id + 1),
                     }
                 })),
+            map_fifths: IntParam::new("Map Fifths", 0, IntRange::Linear { min: -4096, max: 4096 }),
+            map_thirds: IntParam::new("Map Thirds", 0, IntRange::Linear { min: -4096, max: 4096 }),
+            map_sevenths: IntParam::new(
+                "Map Harmonic sevenths",
+                0,
+                IntRange::Linear { min: -4096, max: 4096 },
+            ),
             tuning_engine: IntParam::new("Tuning mode", 1, IntRange::Linear { min: 0, max: 2 })
                 .with_value_to_string(Arc::new(|value| {
                     ["Off", "Adaptive", "Lattice Map"][value.clamp(0, 2) as usize].into()
@@ -937,7 +950,8 @@ impl ClapPlugin for Harmonigraph {
         }
     }
     const CLAP_CONFIGURATION: bool = true;
-    const CLAP_NON_MODULATABLE_PARAMS: &'static [&'static str] = &["lattice-map"];
+    const CLAP_NON_MODULATABLE_PARAMS: &'static [&'static str] =
+        &["lattice-map", "map-fifths", "map-thirds", "map-sevenths"];
     const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] =
         &["tuning-c-offset", "tuning-three", "tuning-five", "tuning-seven", "tuning-tolerance"];
     const CLAP_CONFIGURATION_FIELDS: &'static [&'static str] = &[configuration::MUSICAL_SETTINGS];
@@ -983,6 +997,7 @@ impl ClapPlugin for Harmonigraph {
         owner.maps.seed(
             self.params.tuning_engine.value(),
             self.params.map.unmodulated_plain_value(),
+            lattice_maps::offset(&self.params),
             self.params.configuration.get().unwrap().accepted_restore.load(Ordering::Acquire),
         );
         owner.begin(boundary, &self.take, self.presentation_seconds);
@@ -1338,7 +1353,14 @@ mod tests {
                 key.id(),
             );
         }
-        let operational = ["analysis-input", "lattice-map", "tuning-engine"];
+        let operational = [
+            "analysis-input",
+            "lattice-map",
+            "tuning-engine",
+            "map-fifths",
+            "map-thirds",
+            "map-sevenths",
+        ];
         for id in operational {
             assert!(host_ids.iter().any(|host| host == id), "missing operational parameter {id}");
         }

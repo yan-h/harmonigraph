@@ -14,21 +14,30 @@ Mode is saved but is not automatable in this prototype.
 
 Choose Lattice Map in Tuning.
 Audition working copy makes a separate copy of the currently selected saved map.
-Its edits remain active through loops and Map automation until Return to arrangement.
+Its shape edits remain active through loops and Map selection automation until Return to arrangement.
+The three offset automation lanes remain live during audition.
 Closing the editor does not end audition;
 loading project state does.
 Audition and its bounded 64-edit undo history are transient and are not saved.
 
-The three integer position controls move the entire region in fifth,
-third and seventh steps.
+Saved maps define shape only.
+Use the independent Map Fifths,
+Map Thirds and Map Harmonic sevenths automation lanes to move any shape in integer generator steps.
+The same controls are always available in Lattice Map mode without entering audition or capturing a map.
+Positive values move along the corresponding generator;
+negative values move back.
+Zero on all three places the shape at its origin.
+Recalling a map changes shape and leaves these offsets unchanged.
 Edit shape enables one destination click on the lattice:
 the destination's fixed-generator MIDI class determines which assignment moves.
 Hover previews the full correction and pitch change;
 a camera drag never commits an edit.
-Undo restores the previous shape or position.
+Undo restores the previous shape;
+offset changes are host parameter gestures.
 Editing is suspended outside Lattice Map mode.
 
-Capture new map appends the working geometry under a name.
+Capture new map appends the working shape under a name.
+It never captures the three live offsets.
 It does not select that map or emit Map automation.
 Return to arrangement resumes the host-selected map.
 Select a saved map to report an ordinary host parameter gesture,
@@ -36,7 +45,7 @@ or draw discrete held values for Map in Bitwig.
 Use held segments:
 a host ramp that explicitly sends intervening IDs selects those IDs.
 There is no smoothing or interpolation in the plugin.
-Map does not advertise additive modulation.
+Map and the three offsets do not advertise additive modulation.
 
 Assignments and sounding intervals shows all twelve full corrections and exact coordinates,
 plus actual held-note intervals above the lowest sounding voice.
@@ -72,7 +81,8 @@ never silently repaired to a different chosen copy.
 Names are exposed through the Map parameter's value text;
 document edits request a host state-dirty notification and value/text rescan.
 
-Each map holds twelve coordinates relative to C plus absolute region position.
+Each map holds twelve coordinates relative to C.
+The three offset parameters supply absolute region position independently.
 The starting rectangle has fifth coordinates −1 through 2,
 third coordinates 0 through 2,
 and seventh coordinate 0:
@@ -92,6 +102,14 @@ No nearest-pitch or nearest-octave operation occurs.
 Every MIDI octave repeats that full correction,
 even after drift exceeds an octave.
 Exact geometric copies survive temperament changes and project recall.
+Offset IDs are `map-fifths`,
+`map-thirds` and `map-sevenths`;
+plain saved values range from −4096 to 4096 and default to zero.
+CLAP exposes stepped indices 0–8192 with neutral index 4096;
+parameter text displays the signed musical steps.
+The earlier prototype's per-map `position` field is removed:
+previously captured shapes remain,
+but their saved positions are ignored and must be set using the offset parameters.
 
 Temperament,
 axis values and reference pitch remain shared musical settings.
@@ -119,8 +137,9 @@ Each timestamped history entry captures complete geometry and effective shared t
 so a later document edit cannot reinterpret an older attack.
 
 The CLAP wrapper already retains timestamped input and walks configuration before performance.
-At adoption the owner seeds Map and mode from host parameters,
-then observes every Map event and resolved tuning edit at its absolute input sample.
+At adoption the owner seeds Map,
+mode and all three offsets from host parameters,
+then observes every Map/offset event and resolved tuning edit at its absolute input sample.
 The last configuration at a coincident sample wins before all attacks at that sample,
 even if the host lists a note first.
 The Hub looks up the attack's original input sample,
@@ -149,6 +168,7 @@ unwrapped drift beyond an octave,
 MIDI octave repetition,
 and JI versus meantone substitution at exact geometric copies.
 Production CLAP fixtures cover coincident automation across buffer sizes and both Tune/Hub callback orders,
+signed fifth/third/seventh offsets,
 held-note retention,
 new/chased attacks,
 Off with player expression,

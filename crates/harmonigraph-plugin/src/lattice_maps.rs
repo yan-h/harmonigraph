@@ -1,7 +1,9 @@
 //! Editor-owned musical document, bounded audio snapshot and sample-indexed
 //! next-attack state. No editor window is needed for restore or automation.
 use harmonigraph_core::configuration::ResolvedConfig;
+use harmonigraph_core::lattice_map::COORDINATE_LIMIT;
 use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
+use harmonigraph_core::LatticePos;
 use harmonigraph_ui::lattice_maps::*;
 use nice_plug::prelude::*;
 use nice_plug::wrapper::clap::configuration::{ConfigurationBoundary, InputValue, OwnedInput};
@@ -17,6 +19,19 @@ fn engine(value: i32) -> TuningEngine {
     }
 }
 
+pub fn offset(params: &crate::HarmonigraphParams) -> LatticePos {
+    LatticePos::new(
+        params.map_fifths.unmodulated_plain_value(),
+        params.map_thirds.unmodulated_plain_value(),
+        params.map_sevenths.unmodulated_plain_value(),
+    )
+}
+
+fn translated(mut shape: LatticeMap, offset: LatticePos) -> LatticeMap {
+    shape.position = offset;
+    shape
+}
+
 pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     let document = params.maps.read();
     let mut editor = params.map_editor.lock();
@@ -25,10 +40,15 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     }
     let adopted = *params.map_playback.lock();
     let selected = params.map.value().clamp(0, 127) as usize;
+    let offset = offset(params);
     let playback = MapPlayback {
         engine: engine(params.tuning_engine.value()),
         selected,
-        map: editor.working.or_else(|| document.map(selected)),
+        offset,
+        map: editor
+            .working
+            .or_else(|| document.map(selected))
+            .map(|shape| translated(shape, offset)),
         audition: editor.working.is_some(),
     };
     MapView {
@@ -47,6 +67,11 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
         setter.begin_set_parameter(param);
         setter.set_parameter(param, value);
         setter.end_set_parameter(param);
+    };
+    let axis_param = |axis| match axis {
+        MapAxis::Fifths => &params.map_fifths,
+        MapAxis::Thirds => &params.map_thirds,
+        MapAxis::Sevenths => &params.map_sevenths,
     };
     let document_edit = matches!(
         &edit,
@@ -79,18 +104,16 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
                 editor.working = Some(map);
             }
         }
-        MapEdit::Position(position) => {
-            let mut editor = params.map_editor.lock();
-            if let Some(mut map) = editor.working {
-                map.position = position;
-                editor.change(map);
-            }
-        }
+        MapEdit::BeginOffset(axis) => setter.begin_set_parameter(axis_param(axis)),
+        MapEdit::Offset(axis, value) => setter.set_parameter(axis_param(axis), value),
+        MapEdit::EndOffset(axis) => setter.end_set_parameter(axis_param(axis)),
         MapEdit::Replace(destination) => {
             let mut editor = params.map_editor.lock();
             if editor.edit_shape {
                 if let Some(mut map) = editor.working {
+                    map.position = offset(params);
                     map.replace(destination);
+                    map.position = LatticePos::ORIGIN;
                     editor.change(map);
                 }
             }
@@ -159,6 +182,7 @@ pub struct AudioMaps {
     restore_id: u64,
     seed_mode: i32,
     seed_map: i32,
+    seed_offset: LatticePos,
 }
 impl AudioMaps {
     pub fn new(params: &crate::HarmonigraphParams) -> Self {
@@ -182,12 +206,14 @@ impl AudioMaps {
             restore_id: 0,
             seed_mode: 1,
             seed_map: 0,
+            seed_offset: LatticePos::ORIGIN,
         }
     }
-    pub fn seed(&mut self, mode: i32, map: i32, restore_id: u64) {
+    pub fn seed(&mut self, mode: i32, map: i32, offset: LatticePos, restore_id: u64) {
         self.restore_id = restore_id;
         self.seed_mode = mode;
         self.seed_map = map;
+        self.seed_offset = offset;
     }
     pub fn begin(&mut self, boundary: ConfigurationBoundary) {
         if boundary.steady_time < self.boundary.steady_time + i64::from(self.boundary.frames) {
@@ -207,6 +233,7 @@ impl AudioMaps {
         }
         self.set_engine(engine(self.seed_mode));
         self.playback.selected = self.seed_map.clamp(0, 127) as usize;
+        self.playback.offset = self.seed_offset;
         self.resolve();
         self.adopted = true;
         self.push(self.boundary.steady_time, config);
@@ -219,7 +246,10 @@ impl AudioMaps {
     }
     fn resolve(&mut self) {
         self.playback.audition = self.working.is_some();
-        self.playback.map = self.working.or(self.bank[self.playback.selected]);
+        self.playback.map = self
+            .working
+            .or(self.bank[self.playback.selected])
+            .map(|shape| translated(shape, self.playback.offset));
         if let Some(mut published) = self.published.try_lock() {
             *published = self.playback;
         }
@@ -234,7 +264,17 @@ impl AudioMaps {
             } else if id == nice_plug::wrapper::hash_param_id("tuning-engine") {
                 self.set_engine(engine(value.round() as i32));
             } else {
-                return;
+                // CLAP stepped values are indices from zero, unlike saved/plain params.
+                let step = (value.round() as i32).clamp(0, 2 * COORDINATE_LIMIT) - COORDINATE_LIMIT;
+                if id == nice_plug::wrapper::hash_param_id("map-fifths") {
+                    self.playback.offset.threes = step;
+                } else if id == nice_plug::wrapper::hash_param_id("map-thirds") {
+                    self.playback.offset.fives = step;
+                } else if id == nice_plug::wrapper::hash_param_id("map-sevenths") {
+                    self.playback.offset.sevens = step;
+                } else {
+                    return;
+                }
             }
             self.resolve();
             self.push(event.sample.unwrap_or(self.boundary.steady_time), config);
