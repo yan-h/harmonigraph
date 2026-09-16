@@ -2489,6 +2489,96 @@ mod tests {
         assert!(bare <= 4, "the picture under the clouds is not smooth: {bare}");
         assert!(clouded <= 12, "the cloud layer drew an edge of its own: {clouded} over {bare}");
     }
+
+    /// The layer saturates no channel the picture had not saturated already.
+    ///
+    /// A channel that clips is a flat patch with a hard edge on it, and it
+    /// shifts the colour as well as flattening it, which is what made the
+    /// bright patches look metallic rather than like bright cloud. They got
+    /// worse as the sheen was raised because the sheen is what pushed the
+    /// shading over, so this runs at the deepest cover and the most sheen the
+    /// dials reach — where the product of transmission, relief and sheen runs
+    /// furthest past what the palette can hold.
+    #[test]
+    fn scale_clouds_clip_no_channel_the_picture_had_not_clipped() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let mut cb = flat_cloud_fixture();
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+        let bare = fresh_frame(&device, &queue, &cb);
+        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+        settings.cloud_depth = 1.0;
+        settings.cloud_cover = 1.0;
+        settings.scale_glint = 1.0;
+        settings.scale_overlap = 1.1;
+        let clouded = fresh_frame(&device, &queue, &cb);
+        let clipped = |frame: &[u8]| {
+            frame.chunks_exact(4).filter(|p| p[..3].iter().any(|&c| c >= 254)).count()
+        };
+        // The fixture's own picture is nowhere near the top of the ramp, so
+        // anything saturated in the clouded frame is the layer's doing.
+        assert_eq!(clipped(&bare), 0, "the fixture clips on its own and measures nothing");
+        assert_eq!(clipped(&clouded), 0, "the cloud layer clipped a channel flat");
+    }
+
+    /// A bright place in the picture lights cloud that is nowhere near it.
+    ///
+    /// This is the difference between clouds LIT by the sound and clouds
+    /// passing over it: the light is gathered over a ring a cloud wide, so one
+    /// loud partial glows through whatever cloud is around it and fades away
+    /// with distance. Read per pixel, the layer only ever repeats the picture
+    /// underneath and the clouds read as a texture sliding over a static one.
+    ///
+    /// Measured over the dark rows well away from the fixture's ridge, where
+    /// the picture itself is black: what the layer draws there can only have
+    /// come from somewhere else. The falloff is the other half — a layer that
+    /// lit the whole pane evenly would pass a "reaches the dark" check and
+    /// would not be a light at all.
+    #[test]
+    fn a_bright_place_lights_the_cloud_around_it() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let mut cb = cloud_fixture();
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
+        // No relief and no sheen, so what is measured is the light reaching
+        // the cloud and not a lit bump that happens to face the right way.
+        cb.atmosphere.as_mut().unwrap().settings.scale_glint = 0.0;
+        // And no ambient, which is a floor the same everywhere: it would hold
+        // the far rows up and cap the falloff this measures.
+        cb.atmosphere.as_mut().unwrap().settings.cloud_ambient = 0.0;
+        let clouded = fresh_frame(&device, &queue, &cb);
+        let mut plain = cloud_fixture();
+        plain.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+        let bare = fresh_frame(&device, &queue, &plain);
+        // The fixture's ridge sits at row 63 of 128, and its own diffusion dies
+        // out by row 80; rows are pitch, so a band of them below that is a
+        // distance from the ridge across black picture.
+        let row_light = |frame: &[u8], row: usize| {
+            let w = SIZE[0] as usize;
+            (0..w).map(|x| u32::from(frame[(row * w + x) * 4 + 2])).sum::<u32>() as f32 / w as f32
+        };
+        let band = |frame: &[u8], rows: std::ops::Range<usize>| {
+            let n = rows.len() as f32;
+            rows.map(|r| row_light(frame, r)).sum::<f32>() / n
+        };
+        let near = band(&clouded, 80..87);
+        let far = band(&clouded, 90..97);
+        let near_bare = band(&bare, 80..87);
+        let far_bare = band(&bare, 90..97);
+        assert!(
+            near_bare == 0.0 && far_bare == 0.0,
+            "the fixture's own picture reaches these rows, so they measure it and not the \
+             cloud: {near_bare} and {far_bare}"
+        );
+        assert!(far > 0.5, "no light reached the cloud over the dark rows at all: {far}");
+        assert!(
+            near > far * 2.0,
+            "the light did not fall off with distance from the ridge, so it is an even wash \
+             over the pane rather than a light: {near} near against {far} far"
+        );
+    }
 }
 
 #[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
