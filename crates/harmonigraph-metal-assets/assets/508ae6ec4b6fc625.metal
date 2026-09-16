@@ -35,6 +35,8 @@ struct VertexOut {
     float t;
     char _pad3[8];
 };
+constant float PUFF_JITTER = 0.6;
+constant int PUFF_OCTAVES = 3;
 
 uint stored(
     uint slot,
@@ -221,24 +223,15 @@ metal::float4 heatmap_color(
     return metal::float4(c.xyz, 1.0);
 }
 
-metal::float3 linear_from_gamma_rgb(
-    metal::float3 srgb
-) {
-    metal::bool3 cutoff = srgb < metal::float3(0.04045);
-    metal::float3 lower = srgb / metal::float3(12.92);
-    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
-    return metal::select(higher, lower, cutoff);
-}
-
-struct fs_heatmap_linearInput {
+struct fs_heatmap_gammaInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_heatmap_linearOutput {
+struct fs_heatmap_gammaOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_heatmap_linearOutput fs_heatmap_linear(
-  fs_heatmap_linearInput varyings [[stage_in]]
+fragment fs_heatmap_gammaOutput fs_heatmap_gamma(
+  fs_heatmap_gammaInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , constant Locals& locals [[buffer(0)]]
 , device type_3 const& grid [[buffer(1)]]
@@ -247,6 +240,5 @@ fragment fs_heatmap_linearOutput fs_heatmap_linear(
 ) {
     const VertexOut in = { position, varyings.slab, varyings.t };
     metal::float4 _e1 = heatmap_color(in, locals, grid, lut, _buffer_sizes);
-    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
-    return fs_heatmap_linearOutput { metal::float4(_e3, _e1.w) };
+    return fs_heatmap_gammaOutput { _e1 };
 }

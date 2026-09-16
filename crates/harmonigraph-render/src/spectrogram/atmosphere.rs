@@ -18,6 +18,9 @@ pub struct SpectrogramAtmosphere {
     /// Physical display points per cent and per millisecond, before clipping.
     pub points_per_cent: f32,
     pub points_per_ms: f32,
+    /// The pane's clock, which drives the cloud drift. Offline it is the
+    /// frame's time, so a render is deterministic.
+    pub now: f64,
 }
 
 /// Bound filter work by reducing each axis only as its musical radius grows.
@@ -76,6 +79,18 @@ struct Uniforms {
     contour_softness: f32,
     style: u32,
     _pad: u32,
+    /// Cloud-space offset of the scale clouds and a bounded clock for the
+    /// scales' slow turning. Both are reduced from f64 on the CPU.
+    drift: [f32; 2],
+    time: f32,
+    cloud_depth: f32,
+    cloud_scale: f32,
+    cloud_cover: f32,
+    scale_size: f32,
+    scale_overlap: f32,
+    scale_glint: f32,
+    cloud_ambient: f32,
+    _pad2: [f32; 2],
 }
 
 pub(super) struct Pipelines {
@@ -388,6 +403,14 @@ impl Targets {
         let pitch = settings.pitch_softness * atmosphere.points_per_cent;
         let time = settings.time_softness * atmosphere.points_per_ms;
         let radius = if pitch_vertical { [time, pitch] } else { [pitch, time] };
+        // A steady crossing plus the lattice nebula's wander, in cloud units
+        // (five across the pane's height at scale 1): at 1x a cloud crosses
+        // the pane in about two minutes.
+        let cloud_time = atmosphere.now * f64::from(settings.cloud_speed);
+        let drift = [
+            (cloud_time * 0.04 + (cloud_time * 0.071).sin() * 0.6) as f32,
+            (cloud_time * -0.025 + (cloud_time * 0.053).cos() * 0.6) as f32,
+        ];
         let uniforms = Uniforms {
             origin: rect.min.into(),
             size: rect.size().into(),
@@ -402,6 +425,16 @@ impl Targets {
                 harmonigraph_scene::SpectrogramStyle::Blur => 1,
                 harmonigraph_scene::SpectrogramStyle::Lava => 2,
             },
+            drift,
+            time: (cloud_time % 1000.0) as f32,
+            cloud_depth: settings.cloud_depth,
+            cloud_scale: settings.cloud_scale,
+            cloud_cover: settings.cloud_cover,
+            scale_size: settings.scale_size,
+            scale_overlap: settings.scale_overlap,
+            scale_glint: settings.scale_glint,
+            cloud_ambient: settings.cloud_ambient,
+            _pad2: [0.0; 2],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }

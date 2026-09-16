@@ -20,7 +20,20 @@ struct Cloud {
     float contour_softness;
     uint style;
     uint _pad;
+    metal::float2 drift;
+    float time;
+    float cloud_depth;
+    float cloud_scale;
+    float cloud_cover;
+    float scale_size;
+    float scale_overlap;
+    float scale_glint;
+    float cloud_ambient;
+    float _pad2_;
+    float _pad3_;
 };
+constant float PUFF_JITTER = 0.6;
+constant int PUFF_OCTAVES = 3;
 
 float density_decode(
     float value

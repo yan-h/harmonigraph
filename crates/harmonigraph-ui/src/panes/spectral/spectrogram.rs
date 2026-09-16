@@ -295,6 +295,7 @@ pub(crate) fn draw_spectrogram(
             pitch_vertical: axes.dir_pitch().y.abs() > 0.5,
             points_per_cent: axes.pitch_len() / (scale.span * 100.0),
             points_per_ms: time.region_depth_len(axes) / (time.window() as f32 * 1000.0),
+            now,
         }),
     ));
 }
