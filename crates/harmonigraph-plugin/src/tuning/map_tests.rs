@@ -133,6 +133,44 @@ fn lattice_map_held_notes_keep_onset_while_chased_notes_and_off_use_current_stat
 }
 
 #[test]
+fn lattice_map_tunes_a_pre_tuned_keyboard_to_its_rounded_key_rather_than_twice() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    let (first, _) = install(&hub);
+    hub.run(0, vec![parameter("tuning-engine", 2.0, 0)], None);
+    // A keyboard already sending the map's own 5-limit E, as a meantone or MTS
+    // keyboard does. Its own tuning selects the slot; it is not a head start
+    // the map adds another 13.7¢ to.
+    let e = first.correction(64, Tuning::just());
+    let semitones = e as f64 / 100_000_000.0;
+    hub.run(512, vec![note(1, 0, 64, 0, true), expression(1, semitones, 0)], None);
+    let landed = voice(&hub, crate::tuning::DIRECT, 64);
+    assert_eq!(landed.player_tuning, semitones, "the incoming tuning is still the player's");
+    assert_eq!(landed.frozen_offset_microcents, 0, "already on the map, nothing left to add");
+    assert_eq!(landed.attack_node, Some(first.node(64)));
+    assert_eq!(landed.onset_pitch_microcents, 64 * 100_000_000 + e);
+    // Sixty cents sharp of E sounds nearer F, so it takes F's assignment and
+    // is pulled onto it rather than left between two slots.
+    hub.run(1024, vec![note(2, 0, 76, 0, true), expression(2, 0.6, 0)], None);
+    let rounded = voice(&hub, crate::tuning::DIRECT, 76);
+    assert_eq!(rounded.attack_node, Some(first.node(77)));
+    assert_eq!(
+        rounded.onset_pitch_microcents,
+        77 * 100_000_000 + first.correction(77, Tuning::just())
+    );
+    // A channel bend standing at the attack is part of the pitch that arrived,
+    // exactly as the adaptive engine reads it.
+    hub.run(1536, vec![raw_midi([0xE0, 0x00, 0x60], 0), note(3, 0, 67, 1, true)], None);
+    let bent = voice(&hub, crate::tuning::DIRECT, 67);
+    assert!(bent.frozen_offset_microcents != first.correction(67, Tuning::just()));
+    assert_eq!(
+        bent.onset_pitch_microcents,
+        68 * 100_000_000 + first.correction(68, Tuning::just())
+    );
+}
+
+#[test]
 fn lattice_map_shared_axes_and_audition_apply_to_new_attacks_only() {
     use nice_plug::prelude::Param;
     let _scope = crate::test_scope::enter();

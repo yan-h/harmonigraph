@@ -6,7 +6,8 @@ Retune and Show remain per-source controls.
 Tuning mode is shared by the Hub:
 Off preserves player pitch,
 Adaptive uses the existing policy,
-and Lattice Map assigns each incoming MIDI class from explicit geometry.
+and Lattice Map assigns each incoming note from explicit geometry,
+choosing its slot by the 12-TET key the note actually sounds.
 Adaptive remains the default.
 Mode is saved but is not automatable in this prototype.
 
@@ -120,6 +121,33 @@ so preceding notes cannot move its reference or axes.
 Leaving or entering Adaptive clears its context at the next attack group;
 it never clears the sounding voices' frozen corrections.
 
+## Which slot an incoming note takes
+
+An onset's whole sounding pitch chooses its slot:
+key number,
+per-note tuning and channel bend added together and then rounded to the nearest 12-TET semitone.
+A keyboard that already applies its own temperament — quarter-comma meantone,
+an MTS scale — therefore lands on the key it is playing rather than on whatever its detune drifts past.
+A source further than half a semitone from its written key selects the key it actually sounds;
+the map holds twelve slots and has nothing else to offer a pitch that far out.
+
+The map then states an absolute pitch rather than an increment.
+The emitted correction is the difference from what arrived to the map's own pitch,
+so the incoming tuning is spent selecting a slot and is not added to the map's offset a second time.
+An E arriving already 13.686¢ flat onto a map whose E is 5/4 receives no further correction at all.
+Adding to the arriving pitch instead would move every note off the map by exactly the source's own tuning,
+which is [#891](https://github.com/yan-h/harmonigraph/issues/891).
+
+Reading a standing channel bend as part of the arriving pitch is the same rule Adaptive applies,
+so the two engines never disagree about what was played.
+It has a cost worth stating:
+a bend held at the attack is absorbed into the frozen correction,
+and returning the wheel to centre afterwards moves that voice by the amount the bend was worth.
+A per-note tuning event and a performed bend are one number on the wire;
+telling them apart would need a declared source-tuning baseline the input does not carry.
+Expression after the onset stays live as a change from it,
+under the existing frozen-correction contract.
+
 ## State ownership and ordering
 
 The dependency order is explicit geometry,
@@ -166,12 +194,16 @@ Core fixtures cover fixed label rotation,
 the fifty-fifths example,
 unwrapped drift beyond an octave,
 MIDI octave repetition,
-and JI versus meantone substitution at exact geometric copies.
+JI versus meantone substitution at exact geometric copies,
+and slot selection by rounded key with no second correction of a pre-tuned source.
 Production CLAP fixtures cover coincident automation across buffer sizes and both Tune/Hub callback orders,
 signed fifth/third/seventh offsets,
 held-note retention,
 new/chased attacks,
 Off with player expression,
+a keyboard arriving in its own tuning,
+a detune large enough to select the neighbouring key,
+a channel bend standing at the attack,
 and editor-closed host project recall.
 Document tests cover naming,
 reordering,
