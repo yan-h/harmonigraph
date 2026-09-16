@@ -898,10 +898,10 @@ fn map_controls(
     egui::CollapsingHeader::new("Assignments and sounding intervals").show(ui, |ui| {
         if let Some(map) = view.playback.map {
             for (midi, name) in MIDI_LABELS.iter().enumerate() {
-                let p = map.node(midi as u8);
+                let p = map.node(midi as i64);
                 ui.monospace(format!(
                     "{name:2} · {:+.2}¢ · ({}, {}, {})",
-                    map.correction(midi as u8, state.runtime.tuning) as f64 / 1e6,
+                    map.correction(midi as i64, state.runtime.tuning) as f64 / 1e6,
                     p.threes,
                     p.fives,
                     p.sevens

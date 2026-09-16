@@ -241,7 +241,7 @@ pub(crate) fn draw_lattice(
             && state.runtime.neighbourhood.has_context();
         for node in &scene.nodes {
             let assigned = active_map
-                .and_then(|map| (0..12u8).find(|&midi| map.node(midi) == node.lattice_pos));
+                .and_then(|map| (0..12i64).find(|&midi| map.node(midi) == node.lattice_pos));
             let outlined = assigned.is_some()
                 || adaptive && state.runtime.neighbourhood.nodes.contains(&node.lattice_pos);
             let candidate = maps.is_some_and(|m| m.editing())
@@ -279,7 +279,7 @@ pub(crate) fn draw_lattice(
         {
             if let Some(destination) = state.surfaces.hovered.filter(|_| maps.edit_shape) {
                 let midi =
-                    harmonigraph_core::lattice_map::LatticeMap::midi_class(destination) as u8;
+                    harmonigraph_core::lattice_map::LatticeMap::midi_class(destination) as i64;
                 let mut map = maps.playback.map.unwrap_or_default();
                 let old = map.correction(midi, state.runtime.tuning);
                 map.replace(destination);

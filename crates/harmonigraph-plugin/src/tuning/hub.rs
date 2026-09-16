@@ -749,12 +749,19 @@ impl Hub {
                 configuration: config,
             });
         }
+        // What actually arrived, key number and every tuning the source already
+        // applied to it. Both engines decide from this one pitch: whatever a
+        // keyboard's own temperament, an MTS scale or a bend held at the attack
+        // has done is part of the note here, not something to correct on top of.
+        let incoming =
+            i64::from(key) * 100_000_000 + channel_pitch + (player * 100_000_000.0).round() as i64;
         if self.sequencer.engine != TuningEngine::Adaptive {
             let mapped = (self.sequencer.engine == TuningEngine::LatticeMap)
                 .then_some(self.sequencer.map)
                 .flatten();
-            let correction = mapped.map_or(0, |map| map.correction(key, config.tuning));
-            let node = mapped.map(|map| map.node(key));
+            let assigned = mapped.map(|map| map.assignment(incoming, config.tuning));
+            let correction = assigned.map_or(0, |(_, correction)| correction);
+            let node = assigned.map(|(node, _)| node);
             let decision = if mapped.is_some() {
                 self.sequencer.decision += 1;
                 self.decisions += 1;
@@ -780,11 +787,7 @@ impl Hub {
             self.sequencer.loop_pending = false;
         }
         self.sequencer.fill(self.rate);
-        let onset = policy::OrderedOnset {
-            pitch: i64::from(key) * 100_000_000
-                + channel_pitch
-                + (player * 100_000_000.0).round() as i64,
-        };
+        let onset = policy::OrderedOnset { pitch: incoming };
         let count = self.sequencer.working.len();
         let selected = policy::assign_new_note(
             config.into(),

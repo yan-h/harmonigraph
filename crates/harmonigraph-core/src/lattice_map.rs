@@ -50,19 +50,44 @@ impl LatticeMap {
             && self.nodes.iter().enumerate().all(|(i, &p)| bounded(p) && Self::midi_class(p) == i)
     }
 
-    pub fn node(&self, midi: u8) -> LatticePos {
-        let index = (usize::from(midi % 12) + 12 - Self::midi_class(self.position)) % 12;
+    pub fn node(&self, midi: i64) -> LatticePos {
+        let index = (midi.rem_euclid(12) as usize + 12 - Self::midi_class(self.position)) % 12;
         self.nodes[index] + self.position
     }
 
     /// Full unwrapped correction. Subtract the fixed MIDI generator interval,
     /// never the nearest octave; this preserves even more than an octave of drift.
-    pub fn correction(&self, midi: u8, tuning: Tuning) -> i64 {
+    pub fn correction(&self, midi: i64, tuning: Tuning) -> i64 {
         let p = self.node(midi);
         i64::from(tuning.c_offset)
             + i64::from(p.threes) * (i64::from(tuning.three) - 700_000_000)
             + i64::from(p.fives) * (i64::from(tuning.five) - 400_000_000)
             + i64::from(p.sevens) * (i64::from(tuning.seven) - 1_000_000_000)
+    }
+
+    /// The 12-TET key an incoming onset selects, from its pitch in microcents.
+    ///
+    /// Selection is by sounding pitch rather than by key number, so a keyboard
+    /// that already applies its own tuning — quarter-comma meantone, an MTS
+    /// scale, a bend held at the attack — still lands on the key it is playing.
+    /// A source further than half a semitone from its written key selects the
+    /// key it actually sounds; the map has twelve slots and nothing else to
+    /// offer a pitch that far out.
+    pub fn rounded_key(pitch: i64) -> i64 {
+        pitch.div_euclid(100_000_000) + i64::from(pitch.rem_euclid(100_000_000) >= 50_000_000)
+    }
+
+    /// The node one incoming onset lands on and what it takes to put it there.
+    ///
+    /// `pitch` is the onset's whole sounding pitch in microcents — key number,
+    /// per-note tuning and channel bend together. The map states an absolute
+    /// pitch, so the returned correction is the difference to it and the
+    /// incoming detune is spent selecting the slot rather than added to the
+    /// map's own offset. Correcting from wherever the source arrived would
+    /// tune a pre-tuned E twice and move it off the map by its own tuning.
+    pub fn assignment(&self, pitch: i64, tuning: Tuning) -> (LatticePos, i64) {
+        let key = Self::rounded_key(pitch);
+        (self.node(key), key * 100_000_000 + self.correction(key, tuning) - pitch)
     }
 
     /// The exact destination determines the replaced slot. No source-selection
@@ -124,5 +149,35 @@ mod tests {
         assert_eq!(map.node(1), destination);
         assert!(!map.replace(destination));
         assert!(map.valid());
+    }
+
+    #[test]
+    fn a_pre_tuned_source_selects_by_rounded_key_and_is_not_corrected_twice() {
+        let map = LatticeMap::default();
+        let just = Tuning::just();
+        let (c, e) = (map.correction(60, just), map.correction(64, just));
+        assert!(((e - c) as f64 / 1e6 + 13.686286).abs() < 0.001, "the map's E is 5/4");
+        // A keyboard already sending that E arrives ON the map. The old rule
+        // added the map's offset to whatever came in and bent it 13.7¢ again.
+        assert_eq!(map.assignment(64 * 100_000_000 + e, just), (map.node(64), 0));
+        // Every detune inside the key resolves to the one pitch the map states.
+        for detune in [-49_999_999, e, -1, 0, 1, 49_999_999] {
+            let pitch = 64 * 100_000_000 + detune;
+            let (node, correction) = map.assignment(pitch, just);
+            assert_eq!(node, map.node(64));
+            assert_eq!(pitch + correction, 64 * 100_000_000 + e);
+        }
+        // Past half a semitone the sounding pitch picks the neighbouring key,
+        // and gets that key's assignment rather than a spot between the two.
+        for (detune, key) in [(50_000_000, 65), (99_000_000, 65), (-60_000_000, 63)] {
+            let pitch = 64 * 100_000_000 + detune;
+            let (node, correction) = map.assignment(pitch, just);
+            assert_eq!(node, map.node(key));
+            assert_eq!(pitch + correction, key * 100_000_000 + map.correction(key, just));
+        }
+        // A bend under the bottom key rounds without wrapping to the top of
+        // the lattice, which is what an i64 rem rather than rem_euclid would do.
+        assert_eq!(LatticeMap::rounded_key(-1), 0);
+        assert_eq!(LatticeMap::rounded_key(-60_000_000), -1);
     }
 }
