@@ -310,16 +310,80 @@ impl AudioMaps {
         let end = self.history.partition_point(|entry| entry.sample <= sample);
         end.checked_sub(1).map(|index| self.history[index].state)
     }
+    /// Entries strictly inside `(start, end)`. The history is sample-ordered —
+    /// the same invariant `at` binary-searches on — so both ends are found by
+    /// `partition_point` rather than by walking up to `HISTORY` entries per
+    /// process block on the audio thread. `max` keeps an empty or inverted
+    /// window from handing `range` a backwards bound, which panics: a
+    /// zero-frame segment asks for `changes(start, start)`, and an entry
+    /// sitting exactly on `start` puts `first` one past `last`.
     pub fn changes(&self, start: i64, end: i64) -> impl Iterator<Item = (i64, AttackState)> + '_ {
-        self.history
-            .iter()
-            .filter(move |entry| entry.sample > start && entry.sample < end)
-            .map(|entry| (entry.sample, entry.state))
+        let first = self.history.partition_point(|entry| entry.sample <= start);
+        let last = self.history.partition_point(|entry| entry.sample < end).max(first);
+        self.history.range(first..last).map(|entry| (entry.sample, entry.state))
     }
     pub fn restored(&mut self) {
         self.working = None;
     }
     pub fn reset(&mut self) {
         self.history.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use harmonigraph_core::configuration::ConfigReducer;
+
+    /// A history filled to its `HISTORY` cap, one entry per sample. A window
+    /// queried in the middle then has thousands of entries on either side of
+    /// it, which is where a scan and a pair of `partition_point`s can only
+    /// disagree at the window's own two ends; a handful of entries never
+    /// reaches that.
+    fn filled() -> AudioMaps {
+        let params = crate::HarmonigraphParams::default();
+        let mut maps = AudioMaps::new(&params);
+        let config = ConfigReducer::default().resolved();
+        for sample in 0..HISTORY as i64 {
+            // Each push differs from the last, so none is coalesced away.
+            maps.playback.offset.threes = sample as i32;
+            maps.push(sample, config);
+        }
+        assert_eq!(maps.history.len(), HISTORY);
+        maps
+    }
+
+    #[test]
+    fn changes_is_the_open_interval_at_both_ends_of_a_full_history() {
+        let maps = filled();
+        // Both ends land exactly on an entry, which is what an off-by-one in
+        // either partition_point would admit.
+        let window: Vec<_> = maps
+            .changes(4000, 4010)
+            .map(|(sample, state)| {
+                assert_eq!(state.playback.offset.threes, sample as i32);
+                sample
+            })
+            .collect();
+        assert_eq!(window, (4001..4010).collect::<Vec<_>>());
+        // The two ends of the deque itself, where a clamp would be wrong the
+        // other way and drop a real change.
+        assert_eq!(maps.changes(-1, 2).map(|(sample, _)| sample).collect::<Vec<_>>(), vec![0, 1]);
+        let top = HISTORY as i64 - 1;
+        assert_eq!(
+            maps.changes(top - 2, top + 5).map(|(sample, _)| sample).collect::<Vec<_>>(),
+            vec![top - 1, top]
+        );
+        // Adjacent ends: the interval is open, so neither entry qualifies.
+        assert_eq!(maps.changes(4000, 4001).count(), 0);
+    }
+
+    #[test]
+    fn changes_over_an_empty_window_yields_nothing() {
+        let maps = filled();
+        // `record` asks for `changes(start, start)` whenever a segment is zero
+        // frames long, and `range` panics on a backwards bound.
+        assert_eq!(maps.changes(4000, 4000).count(), 0);
+        assert_eq!(maps.changes(4000, 3990).count(), 0);
     }
 }
