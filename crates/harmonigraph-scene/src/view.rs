@@ -324,11 +324,16 @@ impl NoteAnimationConfig {
     pub fn staggers(self) -> bool {
         self.order != AnimationOrder::Simultaneous && self.stagger_spread > 0.0
     }
-    pub fn movement_duration(self, duration: f32) -> f32 {
-        duration * if self.staggers() { 1.0 - self.stagger_spread } else { 1.0 }
-    }
     /// Fixed delays of complete displayed sectors; shared by live/export and
     /// renderer fixtures, including wheels with unequal outer sectors.
+    ///
+    /// A delay is a START OFFSET and nothing else: every sector still animates
+    /// for the whole `duration`, so the spread widens the total to
+    /// `duration * (1 + stagger_spread)` rather than dividing one fade time
+    /// between waiting and moving. Compressing instead is what made a high
+    /// spread read as two different animations -- the first sector fading over
+    /// the full time because the level ramp under it was never staggered, the
+    /// last one snapping in over what little time the spread had left it.
     pub fn delays(
         self,
         layout: &crate::OctaveLayout,
