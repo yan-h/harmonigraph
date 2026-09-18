@@ -2896,8 +2896,11 @@ mod tests {
         };
         let plain = painted(|_| {});
         for (name, turn) in [
-            ("Glob size", (|s: &mut harmonigraph_scene::SpectralAtmosphere| s.wash_size = 2.0)
-                as fn(&mut harmonigraph_scene::SpectralAtmosphere)),
+            (
+                "Glob size",
+                (|s: &mut harmonigraph_scene::SpectralAtmosphere| s.wash_size = 2.0)
+                    as fn(&mut harmonigraph_scene::SpectralAtmosphere),
+            ),
             ("Variety", |s| s.wash_variety = 0.0),
             ("Fuzz", |s| s.wash_fuzz = 0.0),
             ("Ragged", |s| s.wash_ragged = 0.0),
