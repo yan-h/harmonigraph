@@ -294,6 +294,16 @@ so under a trim the two carry different spans.
 
 Rendering is faster than realtime on an M-series Mac (roughly 19 s of 1080p60 in 17 s), so a five-minute piece is a coffee, not an afternoon.
 
+Every export ends with a line saying where that time went:
+
+```
+timing: a 5442-frame export in 774.6 s, 718.9 s of it drawing at 7.6 fps — ui+tess 5.54 ms/frame (4%), submit 7.20 ms/frame (5%), readback 20.79 ms/frame (16%), emit 98.47 ms/frame (75%)
+```
+
+`ui+tess` is everything on the CPU before the GPU hears about the frame, `submit` is handing the frame's commands over, `readback` is waiting for the GPU and unpacking the result, and `emit` is handing the pixels to ffmpeg — which blocks once the encoder is behind, so a large `emit` share means the encoder is the bottleneck rather than the picture.
+The shares are of the drawing clock;
+the gap between it and the total is setup plus the encoder's backlog after the last frame.
+
 ## Replacing crackly audio with a clean bounce
 
 Live playback can crackle, so the audio a take records is not always good enough to ship.
