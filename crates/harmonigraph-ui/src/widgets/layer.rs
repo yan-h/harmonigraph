@@ -151,18 +151,23 @@ impl Grab {
     /// where home sat in it — are testable without a pointer.
     fn apply(self, v: f32) -> (i32, i32, i32) {
         let on_axis = |i: i32| i.clamp(-SEVENS_LAYER_LIMIT, SEVENS_LAYER_LIMIT);
-        // An end reads the BORDER it is drawn on, half a cell outside the sheet
-        // it names, so it lands on the border nearest the pointer.
-        let border = |v: f32| on_axis(cell_at(v + 0.5));
+        // The BORDER nearest the pointer, as the index of the sheet ABOVE it —
+        // borders run half a cell outside the sheets, so they are numbered one
+        // wider than the axis at the top and the clamp belongs on the sheet
+        // each arm derives rather than here. Clamping the border instead cost
+        // the high end its top sheet: the index it wants at the ceiling is
+        // `LIMIT + 1`, so held to `LIMIT` it came out a sheet short, and the
+        // last cell of the strip could not be dragged to at all.
+        let border = |v: f32| cell_at(v + 0.5);
         match self {
             Grab::Low { home, high } => {
-                let low = border(v).min(high);
+                let low = on_axis(border(v)).min(high);
                 (low, home.max(low), high)
             }
             Grab::High { low, home } => {
-                // The high end's border is the LOW border of the cell above it,
-                // which is the one `border` answers with.
-                let high = (border(v) - 1).max(low);
+                // The high end stands on the low border of the cell ABOVE its
+                // own sheet, which is the one `border` answers with.
+                let high = on_axis(border(v).saturating_sub(1)).max(low);
                 (low, home.min(high), high)
             }
             Grab::Home { low, high } => (low, on_axis(cell_at(v)).clamp(low, high), high),
@@ -635,6 +640,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Each end dragged to the far side of the axis lands ON the far sheet, and
+    /// the sweep above cannot see this: it proves each gesture is SELECTABLE
+    /// somewhere, never where a maximally dragged handle ends up. The high end
+    /// shipped a cell short of the top for exactly that reason — its border is
+    /// numbered a sheet wider than the axis, so a clamp on the border rather
+    /// than on the sheet left the last cell of the strip undraggable, with a
+    /// dead run of bar the pointer could enter and nothing happen.
+    #[test]
+    fn either_end_dragged_to_the_edge_lands_on_the_last_sheet() {
+        const LIMIT: i32 = SEVENS_LAYER_LIMIT;
+        // Off the end of the axis, so the clamp rather than the pointer is what
+        // decides where each stops.
+        let (low_end, high_end) = (-LIMIT as f32 - 3.0, LIMIT as f32 + 3.0);
+        assert_eq!(
+            Grab::at(high_end, (-2, 0, 3)).apply(high_end),
+            (-2, 0, LIMIT),
+            "the high end stopped short of the top sheet",
+        );
+        assert_eq!(
+            Grab::at(low_end, (-2, 0, 3)).apply(low_end),
+            (-LIMIT, 0, 3),
+            "the low end stopped short of the bottom sheet",
+        );
+        // And the whole axis is reachable as one stack, from either direction.
+        assert_eq!(Grab::at(low_end, (-2, 0, 3)).apply(low_end).0, -LIMIT);
+        assert_eq!(Grab::at(high_end, (-LIMIT, 0, 3)).apply(high_end), (-LIMIT, 0, LIMIT));
     }
 
     /// Double-clicking is the only way back to the stock stack, so where it
