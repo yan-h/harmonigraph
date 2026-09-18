@@ -1,16 +1,20 @@
 //! Ordinary recording through the actual exported VST3 factory and callback.
 use nice_plug::prelude::Plugin;
 use nice_plug::wrapper::vst3::vst3;
+use parking_lot::Mutex;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
+use vst3::Steinberg::Vst::Event_::EventTypes_;
 use vst3::Steinberg::Vst::{
-    AudioBusBuffers, AudioBusBuffers__type0, IAudioProcessor, IAudioProcessorTrait, IComponent,
-    IComponentTrait, ProcessData, ProcessModes_, ProcessSetup, SymbolicSampleSizes_,
+    AudioBusBuffers, AudioBusBuffers__type0, Event, IAudioProcessor, IAudioProcessorTrait,
+    IComponent, IComponentTrait, IEventList, IEventListTrait, NoteOffEvent, NoteOnEvent,
+    ProcessData, ProcessModes_, ProcessSetup, SymbolicSampleSizes_,
 };
 use vst3::Steinberg::{
-    kResultOk, IPluginBaseTrait, IPluginFactory, IPluginFactoryTrait, PClassInfo,
+    kInvalidArgument, kResultOk, tresult, IPluginBaseTrait, IPluginFactory, IPluginFactoryTrait,
+    PClassInfo,
 };
-use vst3::{ComPtr, Interface};
+use vst3::{Class, ComPtr, ComWrapper, Interface};
 
 #[allow(clippy::unnecessary_cast)]
 const SAMPLE_32: i32 = SymbolicSampleSizes_::kSample32 as i32;
@@ -53,6 +57,12 @@ impl Device {
         }
     }
     fn block(&self) {
+        self.block_with(ptr::null_mut(), ptr::null_mut());
+    }
+    /// One callback, optionally carrying the host's event lists. Both lists are
+    /// built by the caller BEFORE the callback, so the fixture itself allocates
+    /// nothing inside the guarded `process`.
+    fn block_with(&self, input_events: *mut IEventList, output_events: *mut IEventList) {
         let mut input = [[0.25, 0.5, 0.75, 1.0], [-0.25, -0.5, -0.75, -1.0]];
         let mut output = [[0.0; 4]; 2];
         let mut inputs = input.each_mut().map(|c| c.as_mut_ptr());
@@ -69,8 +79,8 @@ impl Device {
             outputs: &mut output_bus,
             inputParameterChanges: ptr::null_mut(),
             outputParameterChanges: ptr::null_mut(),
-            inputEvents: ptr::null_mut(),
-            outputEvents: ptr::null_mut(),
+            inputEvents: input_events,
+            outputEvents: output_events,
             processContext: ptr::null_mut(),
         };
         // The dev-enabled assert_process_allocs guards the exported wrapper,
@@ -95,6 +105,68 @@ fn descriptor(channels: &mut [*mut f32; 2]) -> AudioBusBuffers {
         __field0: AudioBusBuffers__type0 { channelBuffers32: channels.as_mut_ptr() },
     }
 }
+
+/// A host event list. `queued` is what the plugin reads; `collected` is what it
+/// writes back. One instance plays one role, and both vectors are sized before
+/// the callback so neither COM method allocates inside the guard.
+struct Events {
+    queued: Vec<Event>,
+    collected: Mutex<Vec<Event>>,
+}
+impl Events {
+    fn queued(events: Vec<Event>) -> ComWrapper<Self> {
+        ComWrapper::new(Self { queued: events, collected: Mutex::new(Vec::new()) })
+    }
+    fn collector() -> ComWrapper<Self> {
+        ComWrapper::new(Self { queued: Vec::new(), collected: Mutex::new(Vec::with_capacity(16)) })
+    }
+}
+impl Class for Events {
+    type Interfaces = (IEventList,);
+}
+impl IEventListTrait for Events {
+    unsafe fn getEventCount(&self) -> i32 {
+        self.queued.len() as i32
+    }
+    unsafe fn getEvent(&self, index: i32, event: *mut Event) -> tresult {
+        match usize::try_from(index).ok().and_then(|index| self.queued.get(index)) {
+            Some(queued) => {
+                unsafe { event.write(*queued) };
+                kResultOk
+            }
+            None => kInvalidArgument,
+        }
+    }
+    unsafe fn addEvent(&self, event: *mut Event) -> tresult {
+        let mut collected = self.collected.lock();
+        assert!(
+            collected.len() < collected.capacity(),
+            "the collector must not grow under the guard"
+        );
+        collected.push(unsafe { *event });
+        kResultOk
+    }
+}
+/// A raw pointer the callback can read, valid while `wrapper` is alive.
+fn event_list(wrapper: &ComWrapper<Events>) -> *mut IEventList {
+    wrapper.as_com_ref::<IEventList>().unwrap().as_ptr()
+}
+fn note_on(note: i16, sample_offset: i32) -> Event {
+    let mut event: Event = unsafe { std::mem::zeroed() };
+    event.sampleOffset = sample_offset;
+    event.r#type = EventTypes_::kNoteOnEvent as u16;
+    event.__field0.noteOn =
+        NoteOnEvent { channel: 0, pitch: note, tuning: 0.0, velocity: 0.75, length: 0, noteId: -1 };
+    event
+}
+fn note_off(note: i16, sample_offset: i32) -> Event {
+    let mut event: Event = unsafe { std::mem::zeroed() };
+    event.sampleOffset = sample_offset;
+    event.r#type = EventTypes_::kNoteOffEvent as u16;
+    event.__field0.noteOff =
+        NoteOffEvent { channel: 0, pitch: note, velocity: 0.5, noteId: -1, tuning: 0.0 };
+    event
+}
 fn wait(ready: impl Fn() -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !ready() {
@@ -107,6 +179,72 @@ impl Drop for Resume<'_> {
     fn drop(&mut self) {
         self.0.pause_boundary(false);
     }
+}
+
+/// The plain-MIDI arm of `process` — `mapped_note` → `publish_note` →
+/// `take.note` → `send_event` — runs only where the plugin has no
+/// configuration owner AND the host actually hands it events. The VST3 wrapper
+/// is that shell; every guarded fixture through it passed `inputEvents: null`,
+/// so the whole chain was allocation-guarded by nothing.
+///
+/// Reach is asserted from both ends of the arm rather than assumed: the take
+/// file carries what `take.note` wrote, and the collector carries what
+/// `send_event` handed back, which is the last statement of the same arm.
+#[test]
+fn vst3_notes_reach_the_take_and_the_host_through_the_guarded_callback() {
+    const { assert!(!crate::Harmonigraph::SAMPLE_ACCURATE_AUTOMATION) };
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-vst3-notes-{}", std::process::id()));
+    let (recorder, control) = harmonigraph_record::channel();
+    let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
+    control.start(48000.0, String::new(), true);
+    crate::configuration::inject_recorder(recorder);
+    let device = Device::new();
+    let queued = Events::queued(vec![note_on(60, 0), note_off(60, 3)]);
+    let collected = Events::collector();
+    device.block_with(event_list(&queued), event_list(&collected));
+    control.stop(None);
+    drop(device);
+    wait(|| control.last_take().is_some());
+    assert!(!probe.failed());
+
+    // A transparent MIDI effect hands both events straight back, in order.
+    let sent = collected.collected.lock();
+    let sent: Vec<_> = sent
+        .iter()
+        .map(|event| {
+            // Read the arm's own union member rather than trading on the two
+            // note structs starting with the same two fields.
+            let pitch = if event.r#type == EventTypes_::kNoteOnEvent as u16 {
+                unsafe { event.__field0.noteOn.pitch }
+            } else {
+                unsafe { event.__field0.noteOff.pitch }
+            };
+            (event.r#type, event.sampleOffset, pitch)
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        vec![(EventTypes_::kNoteOnEvent as u16, 0, 60), (EventTypes_::kNoteOffEvent as u16, 3, 60),],
+        "send_event must forward both notes, which is the end of the arm under test"
+    );
+
+    let take = harmonigraph_take::Take::read(control.last_take().unwrap()).unwrap();
+    let notes: Vec<_> = take.notes().map(|note| (note.note, note.channel, note.kind)).collect();
+    assert_eq!(
+        notes,
+        vec![
+            (60, 0, harmonigraph_take::NoteKind::On { velocity: 0.75 }),
+            (60, 0, harmonigraph_take::NoteKind::Off),
+        ],
+        "take.note must record both notes at their own offsets"
+    );
+    let times: Vec<_> = take.notes().map(|note| note.t).collect();
+    assert_eq!(times, vec![0.0, 3.0 / 48000.0], "each note keeps its own sample offset");
+
+    drop(control);
+    wait(|| probe.finished());
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
