@@ -366,6 +366,10 @@ fn run() -> Result<(), String> {
 }
 
 fn export(args: Args) -> Result<(), String> {
+    // The whole run, so the summary's total covers reading the take, decoding
+    // the audio, any playhead precompute and the encoder's backlog as well as
+    // the loop — everything between typing the command and having the file.
+    let began = std::time::Instant::now();
     if args.dump_layout {
         // Without a take there's no frame to compose, so dump the named preset
         // (or the default) as a starting point for a custom .ron.
@@ -540,7 +544,7 @@ fn export(args: Args) -> Result<(), String> {
     };
     let mut replay = Replay::new(take);
     let mut pushed = 0u64;
-    render::render(&mut replay, audio.as_mut(), &settings, appearance, |frame| {
+    let stages = render::render(&mut replay, audio.as_mut(), &settings, appearance, |frame| {
         if !sink.push(frame)? {
             // ffmpeg closed the pipe (e.g. -shortest, the soundtrack ending
             // before the visuals). Stop feeding; finish() below reads whether
@@ -568,6 +572,11 @@ fn export(args: Args) -> Result<(), String> {
     // `total` planned, and the plugin reads this count as the render's total —
     // so the bar ends full against what was written, not stalled at the cut.
     eprintln!("done: {written} frames -> {}", out.display());
+    // Where the time went. Printed for every export rather than behind a flag:
+    // a number nobody asked for is what makes the next question askable, and
+    // the alternative is that the tool's cost stays unattributed exactly as
+    // long as nobody remembers the flag exists (#895, stream B).
+    eprintln!("{}", stages.summary(began.elapsed()));
     if matches!(out.extension().and_then(|e| e.to_str()), Some("rgba") | Some("raw")) {
         eprintln!(
             "  encode with: ffmpeg -f rawvideo -pix_fmt rgba -s {w}x{h} -r {} -i {} out.mp4",

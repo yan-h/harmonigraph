@@ -39,6 +39,25 @@ fn aligned(bytes: u32) -> u32 {
     bytes.div_ceil(align) * align
 }
 
+/// What one frame cost on this side of the loop.
+///
+/// Two numbers rather than one because they answer different questions. GPU
+/// work is asynchronous: `submit` is the CPU building command buffers and
+/// handing them over, which is the only part a cheaper scene would shorten,
+/// while `readback` is the export waiting for the GPU to have finished and
+/// then unpadding the result. A readback that dominates is an argument for a
+/// deeper readback ring (#660); a submit that dominates is not.
+#[derive(Clone, Copy, Default)]
+pub struct FrameCost {
+    /// Applying texture deltas, running the paint callbacks' `prepare`,
+    /// encoding the pass and the copy, and `queue.submit`.
+    pub submit: std::time::Duration,
+    /// `map_async`, the poll that blocks until it lands, and the unpadding
+    /// copy out of the mapped rows. The whole of it is the render thread doing
+    /// nothing else, which is what makes it worth its own number.
+    pub readback: std::time::Duration,
+}
+
 impl Renderer {
     /// `size` is in physical pixels. Returns `None` if the machine has no
     /// usable GPU adapter — callers decide whether that is fatal. Tests use
@@ -111,14 +130,16 @@ impl Renderer {
     }
 
     /// Paint one frame's tessellated shapes and read the result back as
-    /// tightly packed RGBA8 (row padding removed).
+    /// tightly packed RGBA8 (row padding removed), with what the two halves
+    /// cost — see [`FrameCost`].
     pub fn render(
         &mut self,
         primitives: &[egui::ClippedPrimitive],
         textures: &egui::TexturesDelta,
         pixels_per_point: f32,
         clear: egui::Color32,
-    ) -> Vec<u8> {
+    ) -> (Vec<u8>, FrameCost) {
+        let handed_over = std::time::Instant::now();
         for (id, delta) in &textures.set {
             self.egui.update_texture(&self.device, &self.queue, *id, delta);
         }
@@ -183,7 +204,9 @@ impl Renderer {
             wgpu::Extent3d { width: self.size[0], height: self.size[1], depth_or_array_layers: 1 },
         );
         self.queue.submit(callback_commands.into_iter().chain([encoder.finish()]));
+        let submit = handed_over.elapsed();
 
+        let waited = std::time::Instant::now();
         let slice = self.readback.slice(..);
         slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
         self.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
@@ -198,11 +221,26 @@ impl Renderer {
             frame
         };
         self.readback.unmap();
+        let readback = waited.elapsed();
 
         for id in &textures.free {
             self.egui.free_texture(id);
         }
-        frame
+        (frame, FrameCost { submit, readback })
+    }
+
+    /// [`Self::render`] without the cost, for the probes below — they are
+    /// about what a frame LOOKS like, and threading a `.0` through eight of
+    /// them would say nothing.
+    #[cfg(test)]
+    pub fn render_to_vec(
+        &mut self,
+        primitives: &[egui::ClippedPrimitive],
+        textures: &egui::TexturesDelta,
+        pixels_per_point: f32,
+        clear: egui::Color32,
+    ) -> Vec<u8> {
+        self.render(primitives, textures, pixels_per_point, clear).0
     }
 }
 
@@ -379,7 +417,8 @@ mod tests {
                 },
             );
             let primitives = context.tessellate(output.shapes, PPP);
-            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let bytes =
+                renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
             let path = dir.join(format!(
                 "node-glow-reach{:.0}-strength{:.0}.png",
                 reach * 100.0,
@@ -478,7 +517,8 @@ mod tests {
                 },
             );
             let primitives = context.tessellate(output.shapes, PPP);
-            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let bytes =
+                renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
             let path = dir.join(format!("gap{:.0}-{tag}.png", gap * 100.0));
             image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
                 .expect("write the png");
@@ -611,7 +651,8 @@ mod tests {
                 },
             );
             let primitives = context.tessellate(output.shapes, PPP);
-            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let bytes =
+                renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
             let path = dir.join(format!(
                 "plus-arm{:.0}-width{:.0}-taper{:.0}{}-{names:?}.png",
                 size * 100.0,
@@ -711,7 +752,8 @@ mod tests {
                 },
             );
             let primitives = context.tessellate(output.shapes, PPP);
-            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let bytes =
+                renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
             let path = dir.join(format!("shadows-{:.0}-{tag}.png", shadow * 100.0));
             image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
                 .expect("write the png");
@@ -816,7 +858,8 @@ mod tests {
                 },
             );
             let primitives = context.tessellate(output.shapes, PPP);
-            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let bytes =
+                renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
             (at(&bytes, 600, 500), at(&bytes, 600, 690))
         };
 
@@ -1039,7 +1082,8 @@ mod tests {
                 },
             );
             let primitives = context.tessellate(output.shapes, PPP);
-            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let bytes =
+                renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
             let path = dir.join(format!("{source}{at}.png"));
             image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
                 .expect("write the png");
@@ -1155,7 +1199,8 @@ mod tests {
                     },
                 );
                 let primitives = context.tessellate(output.shapes, PPP);
-                let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+                let bytes =
+                    renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
                 if now + STEP * 0.5 >= want[shot] {
                     let path = dir.join(format!("release-{tag}-t{:03.0}.png", (now - OFF) * 100.0));
                     image::save_buffer(
@@ -1266,7 +1311,8 @@ mod tests {
                 },
             );
             let primitives = context.tessellate(output.shapes, PPP);
-            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let bytes =
+                renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
             let path = dir.join(format!("marker-depth-{tag}.png"));
             image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
                 .expect("write the png");

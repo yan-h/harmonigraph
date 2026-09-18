@@ -16,6 +16,83 @@ use crate::wav::Audio;
 use crate::frames::Renderer;
 use crate::replay::Replay;
 
+use std::time::{Duration, Instant};
+
+/// Where an export's wall clock went.
+///
+/// Four stages, chosen so each one names something that could be done about
+/// it, and the whole loop accounted for between them:
+///
+/// - `ui` — the replay's advance, the analyzer feed, egui's own pass and
+///   tessellation. Everything on the CPU before the GPU hears about the frame.
+/// - `submit` — building the frame's command buffers and handing them over
+///   ([`FrameCost::submit`](crate::frames::FrameCost::submit)).
+/// - `readback` — waiting for the GPU and unpadding the result
+///   ([`FrameCost::readback`](crate::frames::FrameCost::readback)).
+/// - `emit` — handing the finished bytes to the sink.
+///
+/// `wall` is the loop's own elapsed time, so the four shares are of something
+/// they can add up to; the export's TOTAL is longer by whatever setup came
+/// before the loop and by the encoder's backlog after it, and the gap between
+/// the two is the part of a render that is ffmpeg rather than this crate.
+#[derive(Clone, Copy, Default)]
+pub struct Stages {
+    /// Frames DRAWN, which is what the stage costs are per. Short of
+    /// `frame_count()` when the encoder stopped early, and one more than the
+    /// video holds in that case: the frame that found the pipe shut was drawn
+    /// and paid for like any other.
+    pub frames: u64,
+    pub wall: Duration,
+    pub ui: Duration,
+    pub submit: Duration,
+    pub readback: Duration,
+    pub emit: Duration,
+}
+
+impl Stages {
+    /// One line for the end of an export: the wall clock, the rate, and each
+    /// stage as milliseconds per frame and a share of the loop.
+    ///
+    /// It must not contain the substring `" frames"`, and that is a CONTRACT
+    /// rather than a style choice. The plugin's Video pane drives its progress
+    /// bar off this same stderr, and `harmonigraph_record::parse_report` reads
+    /// a count out of any segment carrying that substring — so a summary line
+    /// spelling the word out would land in the bar as a frame count and
+    /// retarget it, after the render is over and nothing is left to correct
+    /// it. `the_timing_summary_avoids_the_progress_bars_substring` holds this.
+    pub fn summary(&self, total: Duration) -> String {
+        let Some(per) = (self.frames > 0).then(|| self.frames as f64) else {
+            return format!("timing: nothing drawn, {:.1} s spent", total.as_secs_f64());
+        };
+        let share = |stage: Duration| {
+            let of = self.wall.as_secs_f64();
+            if of > 0.0 {
+                100.0 * stage.as_secs_f64() / of
+            } else {
+                0.0
+            }
+        };
+        let stage = |name: &str, took: Duration| {
+            format!(
+                "{name} {:.2} ms/frame ({:.0}%)",
+                1000.0 * took.as_secs_f64() / per,
+                share(took)
+            )
+        };
+        format!(
+            "timing: a {}-frame export in {:.1} s, {:.1} s of it drawing at {:.1} fps — {}, {}, {}, {}",
+            self.frames,
+            total.as_secs_f64(),
+            self.wall.as_secs_f64(),
+            per / self.wall.as_secs_f64().max(f64::MIN_POSITIVE),
+            stage("ui+tess", self.ui),
+            stage("submit", self.submit),
+            stage("readback", self.readback),
+            stage("emit", self.emit),
+        )
+    }
+}
+
 /// Select and normalize once before output setup. Explicit re-render settings
 /// replace the recorded document in full. Refusal retains the existing default
 /// rendering policy and reports it where an offline user can see it.
@@ -110,7 +187,8 @@ fn frame_input(screen: egui::Rect, now: f64, max_texture_side: usize) -> egui::R
     }
 }
 
-/// Render every frame, handing each to `emit` as tightly packed RGBA8.
+/// Render every frame, handing each to `emit` as tightly packed RGBA8, and
+/// report where the time went ([`Stages`]).
 ///
 /// `emit` returning an error stops the render — that is how a dead encoder
 /// gets reported rather than swallowed for another thousand frames. `emit`
@@ -123,7 +201,7 @@ pub fn render(
     settings: &Settings,
     appearance: AppearanceDocument,
     mut emit: impl FnMut(&[u8]) -> Result<bool, String>,
-) -> Result<u64, String> {
+) -> Result<Stages, String> {
     let mut renderer = Renderer::new(settings.size)
         .ok_or("no usable GPU adapter (this needs a real GPU, not a container)")?;
 
@@ -223,7 +301,13 @@ pub fn render(
     state.set_background(settings.layout.background);
 
     let frames = settings.frame_count();
+    // Timers only: nothing between here and the end of the loop reads a clock
+    // to decide anything, so the picture is the same with them as without, and
+    // the determinism tests still hold.
+    let mut stages = Stages::default();
+    let loop_began = Instant::now();
     for frame in 0..frames {
+        let drawing = Instant::now();
         let now = prepare_frame(replay, &mut state, audio.as_deref_mut(), settings, frame)?;
 
         // No panels and no dock: the layout owns the frame, and the
@@ -240,20 +324,34 @@ pub fn render(
         });
 
         let primitives = context.tessellate(output.shapes, settings.pixels_per_point);
-        let bytes = renderer.render(
+        stages.ui += drawing.elapsed();
+
+        let (bytes, cost) = renderer.render(
             &primitives,
             &output.textures_delta,
             settings.pixels_per_point,
             background,
         );
-        if !emit(&bytes)? {
+        stages.submit += cost.submit;
+        stages.readback += cost.readback;
+
+        let handing_over = Instant::now();
+        let wanted = emit(&bytes)?;
+        stages.emit += handing_over.elapsed();
+        stages.frames = frame + 1;
+        stages.wall = loop_began.elapsed();
+        if !wanted {
             // The encoder wants no more frames (e.g. ffmpeg under -shortest,
             // the soundtrack ending before the visuals). Stop here; the caller
             // reads whether that was a clean finish from the exit status.
-            return Ok(frame);
+            //
+            // This frame was drawn and handed over and the sink dropped it, so
+            // it counts toward the stage costs but not toward the frames the
+            // file holds — which is the encoder's own count, printed separately.
+            return Ok(stages);
         }
     }
-    Ok(frames)
+    Ok(stages)
 }
 
 /// Advance one export frame through the same replay/audio path the renderer
@@ -367,6 +465,44 @@ mod tests {
             ],
             ..Default::default()
         }
+    }
+
+    /// The timing line must not carry the substring the plugin's progress bar
+    /// is parsed by, and its shares must be of the loop it can account for.
+    ///
+    /// `harmonigraph_record::parse_report` pulls the token before `" frames"`
+    /// out of any segment of the renderer's stderr, which is how the Video
+    /// pane follows a render. This line is printed AFTER `done: N frames`, so
+    /// a `" frames"` in it would be the last word on the subject and would
+    /// leave the bar retargeted at whatever number happened to precede it.
+    #[test]
+    fn the_timing_summary_avoids_the_progress_bars_substring() {
+        // A plausible export rather than a blank one: every field is nonzero,
+        // so every number in the line is actually formatted, and the total is
+        // longer than the loop the way a real one is.
+        let stages = Stages {
+            frames: 5320,
+            wall: Duration::from_secs_f64(78.125),
+            ui: Duration::from_secs_f64(33.0),
+            submit: Duration::from_secs_f64(9.5),
+            readback: Duration::from_secs_f64(31.0),
+            emit: Duration::from_secs_f64(4.4),
+        };
+        let line = stages.summary(Duration::from_secs_f64(92.4));
+        assert!(!line.contains(" frames"), "{line}");
+        assert!(line.contains("5320-frame"), "{line}");
+        for stage in ["ui+tess", "submit", "readback", "emit"] {
+            assert!(line.contains(stage), "{stage} is missing from {line}");
+        }
+        // Shares are of the LOOP, so the four account for it and the gap up to
+        // the total is the setup and the encoder's backlog, not an unnamed
+        // stage: 33.0 s of a 78.125 s loop is 42%, not the 36% it is of 92.4.
+        assert!(line.contains("(42%)"), "{line}");
+        assert!(line.contains("68.1 fps"), "5320 frames in 78.125 s: {line}");
+
+        // A render that drew nothing says so rather than dividing by no frames.
+        let nothing = Stages::default().summary(Duration::from_secs_f64(0.2));
+        assert!(nothing.contains("nothing drawn"), "{nothing}");
     }
 
     #[test]
