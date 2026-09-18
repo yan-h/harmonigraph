@@ -45,24 +45,20 @@ pub fn channel() -> (Recorder, Control) {
     let thread_progress = progress.clone();
     let thread_render = render.clone();
     let _ = std::thread::Builder::new().name("harmonigraph-take-writer".into()).spawn(move || {
-        let mut open: Option<Open> = None;
-        let mut pending_stop = None;
-        let mut fanout = CanonicalFanout::default();
-        let failure = FailureAccount::default();
-        let mut disconnected = false;
+        let mut pump = Pump::default();
         loop {
             #[cfg(feature = "test-support")]
             thread_fence.worker_before_commands.reach();
             let mut waiting_for_start = false;
             #[cfg(all(test, feature = "test-support"))]
             let mut processed_stop = false;
-            if !disconnected {
+            if !pump.disconnected {
             match orders.try_recv() {
                 Ok(Command::Start(epoch, header, path, spec)) => {
-                    if pending_stop.is_some() {
+                    if pump.pending_stop.is_some() {
                         thread_fence.fail();
                     } else {
-                        open =
+                        pump.open =
                             Open::create(*header, path, 1, spec, &thread_status).map(|mut open| {
                                 #[cfg(all(test, feature = "test-support"))]
                                 { open.fail_marker_on_pass = *thread_fence.test_marker_failure.lock(); }
@@ -73,7 +69,7 @@ pub fn channel() -> (Recorder, Control) {
                                 open
                             });
                         #[cfg(feature = "test-support")]
-                        if let Some(audio) = open.as_mut().and_then(|o| o.audio.as_mut()) {
+                        if let Some(audio) = pump.open.as_mut().and_then(|o| o.audio.as_mut()) {
                             if let Some(limit) = *thread_fence.test_wav_limit.lock() {
                                 audio.limit_frames_for_test(limit);
                             }
@@ -81,9 +77,9 @@ pub fn channel() -> (Recorder, Control) {
                                 audio.fail_finish_for_test();
                             }
                         }
-                        if open.as_ref().is_none_or(|o| spec.is_some() && o.audio.is_none()) {
+                        if pump.open.as_ref().is_none_or(|o| spec.is_some() && o.audio.is_none()) {
                             thread_fence.fail_with_message(thread_status.lock().clone());
-                            failure.account(&mut open, epoch, &thread_status, Some(&thread_fence), harmonigraph_take::IncompleteRecord {
+                            pump.failure.account(&mut pump.open, epoch, &thread_status, Some(&thread_fence), harmonigraph_take::IncompleteRecord {
                                 reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
                                 ..Default::default()
                             });
@@ -93,8 +89,8 @@ pub fn channel() -> (Recorder, Control) {
                 Ok(Command::Stop(epoch, render)) => {
                     #[cfg(all(test, feature = "test-support"))]
                     { processed_stop = true; }
-                    pending_stop = Some((epoch, render));
-                    if !failure.contains(epoch) {
+                    pump.pending_stop = Some((epoch, render));
+                    if !pump.failure.contains(epoch) {
                         *thread_status.lock() =
                             "finishing — waiting for the recording prefix".into();
                     }
@@ -104,108 +100,45 @@ pub fn channel() -> (Recorder, Control) {
                     // before the drains below. With no file yet, its records
                     // and audio still belong to that pending command. An
                     // accounted failure can dispose its remaining entries.
-                    waiting_for_start = open.is_none()
-                        && !failure.contains(thread_fence.epoch());
+                    waiting_for_start = pump.open.is_none()
+                        && !pump.failure.contains(thread_fence.epoch());
                     #[cfg(feature = "test-support")]
                     {
                         thread_fence.worker_empty_visits.fetch_add(1, Ordering::AcqRel);
                         thread_fence.worker_after_empty.reach();
                     }
                 }
-                Err(mpsc::TryRecvError::Disconnected) => disconnected = true,
+                Err(mpsc::TryRecvError::Disconnected) => pump.disconnected = true,
             }
             }
-            // Acquire idle ownership BEFORE draining: the callback's release
-            // follows its last AudioSamples record. A later callback's RMW
-            // sees disarmed, so it cannot extend this prefix behind the drain.
-            if let Some(current) = open.as_mut() {
-                current.observe_idle_producer(&thread_fence);
-            }
-            let had_records = !waiting_for_start && drain_with_boundaries(
-                &mut consumer, Some(&mut audio_consumer), &mut open,
-                &thread_status, Some(&thread_fence), &failure,
-                |open| {
-                    fanout.drain(&mut publications, open, &thread_fence, &failure);
-                },
+            let pumped = pump.pass(
+                &mut consumer,
+                &mut audio_consumer,
+                &mut publications,
+                &thread_status,
+                &thread_fence,
+                waiting_for_start,
             );
-            let had_publications =
-                fanout.drain(&mut publications, &mut open, &thread_fence, &failure) != 0;
-            #[cfg(feature = "test-support")]
-            if pending_stop.is_some() { thread_fence.worker_after_stop.reach(); }
-
-            // Failure is pending until both lanes, including the independent
-            // loss snapshot, have delivered their retained prefix to its file.
-            if thread_fence.failed.load(Ordering::Acquire) {
-                #[cfg(feature = "test-support")]
-                thread_fence.worker_before_retirement_check.reach();
-                // Acquire the terminal ownership release BEFORE checking the
-                // lanes again; the release may follow their last publication.
-                if !thread_fence.retirement_hold.load(Ordering::Acquire)
-                    && !failure.contains(thread_fence.epoch())
-                    && consumer.is_empty() && publications.settled()
-                    && (open.is_some() || disconnected)
-                {
-                    failure.account(&mut open, thread_fence.epoch(), &thread_status, Some(&thread_fence),
-                        harmonigraph_take::IncompleteRecord {
-                            reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
-                            ..Default::default()
-                        });
-                }
-                if failure.contains(thread_fence.epoch()) {
-                    // Stop may arrive after the files were already accounted.
-                    // Its render request is disposed here on the worker, and
-                    // the failure status remains visible without another callback.
-                    pending_stop = None;
-                    thread_fence.finishing.store(false, Ordering::Release);
-                    #[cfg(all(test, feature = "test-support"))]
-                    thread_fence.worker_failure_accounted.store(true, Ordering::Release);
-                }
-            } else if pending_stop.as_ref()
-                .is_some_and(|(epoch, _)| open.as_ref().is_some_and(|o| o.ready(*epoch)))
-            {
-                let (_, render) = pending_stop.take().unwrap();
-                if let Some(path) = finish_ready(&mut open, thread_fence.epoch(), &thread_fence) {
-                    *thread_last_take.lock() = Some(path.clone());
-                    thread_fence.finishing.store(false, Ordering::Release);
-                    if let Some(render) = render {
-                        spawn_render(*render, path, thread_status.clone(),
-                            thread_progress.clone(), thread_render.clone());
-                    }
+            // Before the shutdown check below, so a take sealed by the same
+            // pass that observed the disconnect is published and rendered
+            // rather than going with the thread.
+            if let Some((path, render)) = pumped.finished {
+                *thread_last_take.lock() = Some(path.clone());
+                if let Some(render) = render {
+                    spawn_render(*render, path, thread_status.clone(),
+                        thread_progress.clone(), thread_render.clone());
                 }
             }
             #[cfg(all(test, feature = "test-support"))]
             if processed_stop {
                 thread_fence.worker_stop_processed.store(true, Ordering::Release);
             }
-            // Shutdown uses the same cross-lane pump and honors a now-ready
-            // Stop first. Only ownership still unresolved after that is lost.
-            if disconnected && !thread_fence.retirement_hold.load(Ordering::Acquire)
-                && consumer.is_empty() {
-                if publications.settled() {
-                    if open.is_some() {
-                        thread_fence.fail();
-                        failure.account(&mut open, thread_fence.epoch(), &thread_status, Some(&thread_fence),
-                            harmonigraph_take::IncompleteRecord {
-                                reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
-                                ..Default::default()
-                            });
-                        *thread_status.lock() = "recording incomplete: producer disconnected before finalization".into();
-                    }
-                    #[cfg(feature = "test-support")]
-                    thread_fence.worker_finished.store(true, Ordering::Release);
-                    return;
-                }
-                if fanout.waiting_file {
-                    // No remaining command can materialize this addressed file.
-                    thread_fence.fail();
-                    failure.account(&mut open, thread_fence.epoch(), &thread_status, Some(&thread_fence),
-                        harmonigraph_take::IncompleteRecord {
-                            reason: harmonigraph_take::canonical::GapReasonRecord::InvalidRecord,
-                            ..Default::default()
-                        });
-                }
+            if pumped.shutdown {
+                #[cfg(feature = "test-support")]
+                thread_fence.worker_finished.store(true, Ordering::Release);
+                return;
             }
-            if !had_records && !had_publications {
+            if !pumped.worked {
                 std::thread::sleep(DRAIN_IDLE);
             }
         }
@@ -256,6 +189,171 @@ pub fn channel() -> (Recorder, Control) {
             render,
         },
     )
+}
+
+/// Everything one writer carries between passes of the pump: the file it is
+/// writing, the two lanes' accounting, and the two terminal conditions.
+///
+/// One struct rather than five locals because [`Pump::pass`] is driven from two
+/// places — the thread above and `testing::FileWriter`, which stands in for it
+/// in every dependent crate's take coverage. Those two used to hold their own
+/// copies of the drain/failure/stop sequence, and the copies had drifted apart:
+/// the test one accounted a failure with no file open, never cleared
+/// `pending_stop` or `finishing`, and had no disconnect tier at all, so four
+/// files across two crates were testing a pump the plugin does not run (#895).
+#[derive(Default)]
+struct Pump {
+    open: Option<Open>,
+    fanout: CanonicalFanout,
+    failure: FailureAccount,
+    /// The Stop whose prefix is not closed yet, and the render it asked for.
+    pending_stop: Option<(u64, Option<Box<RenderRequest>>)>,
+    /// No further command can arrive, so unresolved ownership is lost.
+    disconnected: bool,
+}
+
+/// What one [`Pump::pass`] leaves for its driver to do.
+#[derive(Default)]
+struct Pumped {
+    /// Either lane had something, so the writer must not sleep yet.
+    worked: bool,
+    /// A take sealed this pass: where it landed, and the render Stop carried.
+    finished: Option<(std::path::PathBuf, Option<Box<RenderRequest>>)>,
+    /// Both lanes are drained and no command can arrive: the thread returns.
+    shutdown: bool,
+}
+
+impl Pump {
+    /// One cross-lane pass: drain the record ring and the publication lane in
+    /// order, then resolve failure, a ready Stop, and shutdown.
+    ///
+    /// `waiting_for_start` retains this iteration's records for a `Start` that
+    /// may already have armed a producer — only the command half above can
+    /// observe that, so it is passed in rather than recomputed here.
+    fn pass(
+        &mut self,
+        consumer: &mut rtrb::Consumer<Entry>,
+        audio: &mut rtrb::Consumer<f32>,
+        publications: &mut publication::Consumer,
+        status: &Mutex<String>,
+        fence: &RecordFence,
+        waiting_for_start: bool,
+    ) -> Pumped {
+        let mut pumped = Pumped::default();
+        // Acquire idle ownership BEFORE draining: the callback's release
+        // follows its last AudioSamples record. A later callback's RMW
+        // sees disarmed, so it cannot extend this prefix behind the drain.
+        if let Some(current) = self.open.as_mut() {
+            current.observe_idle_producer(fence);
+        }
+        let fanout = &mut self.fanout;
+        let failure = &self.failure;
+        let had_records = !waiting_for_start
+            && drain_with_boundaries(
+                consumer,
+                Some(audio),
+                &mut self.open,
+                status,
+                Some(fence),
+                failure,
+                |open| {
+                    fanout.drain(publications, open, fence, failure);
+                },
+            );
+        let had_publications =
+            self.fanout.drain(publications, &mut self.open, fence, &self.failure) != 0;
+        pumped.worked = had_records || had_publications;
+        #[cfg(feature = "test-support")]
+        if self.pending_stop.is_some() {
+            fence.worker_after_stop.reach();
+        }
+
+        // Failure is pending until both lanes, including the independent
+        // loss snapshot, have delivered their retained prefix to its file.
+        if fence.failed.load(Ordering::Acquire) {
+            #[cfg(feature = "test-support")]
+            fence.worker_before_retirement_check.reach();
+            // Acquire the terminal ownership release BEFORE checking the
+            // lanes again; the release may follow their last publication.
+            if !fence.retirement_hold.load(Ordering::Acquire)
+                && !self.failure.contains(fence.epoch())
+                && consumer.is_empty()
+                && publications.settled()
+                && (self.open.is_some() || self.disconnected)
+            {
+                self.failure.account(
+                    &mut self.open,
+                    fence.epoch(),
+                    status,
+                    Some(fence),
+                    harmonigraph_take::IncompleteRecord {
+                        reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
+                        ..Default::default()
+                    },
+                );
+            }
+            if self.failure.contains(fence.epoch()) {
+                // Stop may arrive after the files were already accounted.
+                // Its render request is disposed here on the worker, and
+                // the failure status remains visible without another callback.
+                self.pending_stop = None;
+                fence.finishing.store(false, Ordering::Release);
+                #[cfg(all(test, feature = "test-support"))]
+                fence.worker_failure_accounted.store(true, Ordering::Release);
+            }
+        } else if self
+            .pending_stop
+            .as_ref()
+            .is_some_and(|(epoch, _)| self.open.as_ref().is_some_and(|o| o.ready(*epoch)))
+        {
+            let (_, render) = self.pending_stop.take().unwrap();
+            if let Some(path) = finish_ready(&mut self.open, fence.epoch(), fence) {
+                fence.finishing.store(false, Ordering::Release);
+                pumped.finished = Some((path, render));
+            }
+        }
+        // Shutdown uses the same cross-lane pump and honors a now-ready
+        // Stop first. Only ownership still unresolved after that is lost.
+        if self.disconnected
+            && !fence.retirement_hold.load(Ordering::Acquire)
+            && consumer.is_empty()
+        {
+            if publications.settled() {
+                if self.open.is_some() {
+                    fence.fail();
+                    self.failure.account(
+                        &mut self.open,
+                        fence.epoch(),
+                        status,
+                        Some(fence),
+                        harmonigraph_take::IncompleteRecord {
+                            reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
+                            ..Default::default()
+                        },
+                    );
+                    *status.lock() =
+                        "recording incomplete: producer disconnected before finalization".into();
+                }
+                pumped.shutdown = true;
+                return pumped;
+            }
+            if self.fanout.waiting_file {
+                // No remaining command can materialize this addressed file.
+                fence.fail();
+                self.failure.account(
+                    &mut self.open,
+                    fence.epoch(),
+                    status,
+                    Some(fence),
+                    harmonigraph_take::IncompleteRecord {
+                        reason: harmonigraph_take::canonical::GapReasonRecord::InvalidRecord,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        pumped
+    }
 }
 
 /// In-memory endpoints for dependent crates that need to reach their real
