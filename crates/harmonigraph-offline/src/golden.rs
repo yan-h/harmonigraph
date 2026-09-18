@@ -314,9 +314,9 @@ fn check_take(name: &str, shot: Shot, take: Take) {
     let mut last = Vec::new();
     let appearance = crate::render::appearance_for(replay.take(), None);
     match render(&mut replay, Some(&mut audio), &settings, appearance, |bytes| {
-        last.clear();
-        last.extend_from_slice(bytes);
-        Ok(true)
+        // The gate wants the LAST frame: keep this one and hand the previous
+        // one back to be drawn into again.
+        Ok(Some(std::mem::replace(&mut last, bytes)))
     }) {
         Ok(_) => {}
         Err(e) if e.contains("no usable GPU adapter") => {
@@ -506,10 +506,10 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
     let mut last = None;
     let mut frames = 0u64;
     let appearance = crate::render::appearance_for(replay.take(), None);
-    match render(&mut replay, Some(&mut audio), &settings, appearance, |_| {
+    match render(&mut replay, Some(&mut audio), &settings, appearance, |frame| {
         seen += 1;
         if seen <= WARMUP {
-            return Ok(true);
+            return Ok(Some(frame));
         }
         let now = std::time::Instant::now();
         if first.is_none() {
@@ -518,7 +518,7 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
             frames += 1;
         }
         last = Some(now);
-        Ok(true)
+        Ok(Some(frame))
     }) {
         Ok(_) => {}
         Err(e) if e.contains("no usable GPU adapter") => return None,
@@ -594,10 +594,10 @@ fn spectral_shadow_frame_ms(
     let mut last = None;
     let mut frames = 0u64;
     let appearance = crate::render::appearance_for(replay.take(), None);
-    match render(&mut replay, Some(&mut audio), &settings, appearance, |_| {
+    match render(&mut replay, Some(&mut audio), &settings, appearance, |frame| {
         seen += 1;
         if seen <= WARMUP {
-            return Ok(true);
+            return Ok(Some(frame));
         }
         let now = std::time::Instant::now();
         if first.is_none() {
@@ -606,7 +606,7 @@ fn spectral_shadow_frame_ms(
             frames += 1;
         }
         last = Some(now);
-        Ok(true)
+        Ok(Some(frame))
     }) {
         Ok(_) => {}
         Err(e) if e.contains("no usable GPU adapter") => return None,

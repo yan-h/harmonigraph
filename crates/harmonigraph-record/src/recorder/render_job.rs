@@ -16,10 +16,6 @@ mod tests;
 /// and off the GUI thread, so a long render never touches the DAW.
 pub struct RenderRequest {
     pub program: std::path::PathBuf,
-    /// Bounced audio to mux in and feed the spectrum, if any.
-    pub audio: Option<String>,
-    /// `--align` value (take-time the audio starts), if set; else auto-align.
-    pub align: Option<String>,
     /// A appearance document passed as `--appearance`, overriding the take's record-time
     /// look — set for "Re-render take" so post-record settings reach the video;
     /// `None` for auto-render (which uses the take's own recorded look).
@@ -74,11 +70,6 @@ impl RenderRequest {
         };
         RenderRequest {
             program,
-            // Bounced audio is shelved: every render uses the take's own
-            // recording as soundtrack and spectrum, aligned by construction — so
-            // no --audio replacement and no --align override.
-            audio: None,
-            align: None,
             appearance,
             size: config.frame.pixels(config.short_edge),
             // Not forced: the take carries the Video pane's Spectrogram choice
@@ -450,12 +441,6 @@ pub(super) fn spawn_render(
 
         let mut command = std::process::Command::new(&request.program);
         command.arg(&take_path).arg("--out").arg(&partial);
-        if let Some(audio) = &request.audio {
-            command.arg("--audio").arg(audio);
-        }
-        if let Some(align) = &request.align {
-            command.arg("--align").arg(align);
-        }
         if let Some(file) = &appearance_file {
             command.arg("--appearance").arg(file);
         }

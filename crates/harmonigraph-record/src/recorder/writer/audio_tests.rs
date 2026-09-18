@@ -92,8 +92,6 @@ impl Worker {
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
         self.control.as_ref().unwrap().stop(Some(RenderRequest {
             program,
-            audio: None,
-            align: None,
             appearance: None,
             size: [16, 16],
             playhead: None,
