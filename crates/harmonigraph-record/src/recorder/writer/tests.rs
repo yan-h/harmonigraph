@@ -97,8 +97,7 @@ struct Bench {
     entries: rtrb::Consumer<Entry>,
     samples: rtrb::Consumer<f32>,
     end_at_rewind: Arc<AtomicBool>,
-    hit_rewind: Arc<AtomicBool>,
-    stop_at_bar: Arc<StopAtBar>,
+    latches: Arc<TakeLatches>,
     dropped: Arc<AtomicU64>,
 }
 
@@ -107,8 +106,7 @@ impl Bench {
         let (producer, entries) = rtrb::RingBuffer::new(1024);
         let (audio, samples) = rtrb::RingBuffer::new(1024);
         let end_at_rewind = Arc::new(AtomicBool::new(false));
-        let hit_rewind = Arc::new(AtomicBool::new(false));
-        let stop_at_bar = Arc::new(StopAtBar::default());
+        let latches = Arc::new(TakeLatches::default());
         let dropped = Arc::new(AtomicU64::new(0));
         Bench {
             rec: Recorder {
@@ -131,16 +129,12 @@ impl Bench {
                 rolling: Arc::new(AtomicBool::new(false)),
                 audio_started: false,
                 end_at_rewind: end_at_rewind.clone(),
-                captured: Arc::new(AtomicU64::new(0)),
-                hit_rewind: hit_rewind.clone(),
-                stop_at_bar: stop_at_bar.clone(),
-                rolled: Arc::new(AtomicBool::new(false)),
+                latches: latches.clone(),
             },
             entries,
             samples,
             end_at_rewind,
-            hit_rewind,
-            stop_at_bar,
+            latches,
             dropped,
         }
     }
@@ -161,15 +155,15 @@ impl Bench {
     }
 
     fn hit_rewind(&self) -> bool {
-        self.hit_rewind.load(Ordering::Relaxed)
+        self.latches.hit_rewind.load(Ordering::Relaxed)
     }
 
     fn stop_at_bar(&self, bar: f64) {
-        self.stop_at_bar.set(Some(bar));
+        self.latches.stop_at_bar.set(Some(bar));
     }
 
     fn hit_stop_bar(&self) -> bool {
-        self.stop_at_bar.hit.load(Ordering::Relaxed)
+        self.latches.stop_at_bar.hit.load(Ordering::Relaxed)
     }
 
     /// Everything pushed since the last call, rendered as comparable

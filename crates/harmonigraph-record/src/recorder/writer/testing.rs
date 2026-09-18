@@ -125,21 +125,24 @@ impl Capture {
 
 /// File-backed consumer of the very same captured producer stream and
 /// completion gate used by the worker. No synthetic musical resolution.
+///
+/// **The pump this drives is the worker's own** ([`Pump::pass`]), not a copy of
+/// it: what the writer thread does between polling for a command and sleeping
+/// is exactly what [`FileWriter::drain`] does here. The only halves it does not
+/// have are the ones a command channel owns — no `Start` opens its file (the
+/// constructor does), and nothing can disconnect it.
 pub struct FileWriter {
-    open: Option<Open>,
+    pump: Pump,
     fence: Arc<RecordFence>,
     status: Mutex<String>,
-    stopping: bool,
     pub finished: Option<std::path::PathBuf>,
-    fanout: CanonicalFanout,
-    failure: FailureAccount,
 }
 impl FileWriter {
     pub fn retained_passes(&self) -> usize {
-        self.open.as_ref().map_or(0, |o| o.retained.len())
+        self.pump.open.as_ref().map_or(0, |o| o.retained.len())
     }
     pub fn current_pass(&self) -> Option<u32> {
-        self.open.as_ref().map(|o| o.pass)
+        self.pump.open.as_ref().map(|o| o.pass)
     }
     pub fn new(capture: &Capture, path: std::path::PathBuf, spec: Option<AudioSpec>) -> Self {
         let status = Mutex::new(String::new());
@@ -149,54 +152,28 @@ impl FileWriter {
         open.configuration_enabled = capture.fence.enabled.load(Ordering::Acquire);
         open.source_enabled = capture.fence.canonical_enabled.load(Ordering::Acquire);
         Self {
-            open: Some(open),
+            pump: Pump { open: Some(open), ..Default::default() },
             fence: capture.fence.clone(),
             status,
-            stopping: false,
             finished: None,
-            fanout: CanonicalFanout::default(),
-            failure: FailureAccount::default(),
         }
     }
+    /// The Stop the GUI sends, minus the render request: a fixture that wanted
+    /// one would be asserting on `spawn_render`, which has its own tests.
     pub fn stop(&mut self) {
-        self.stopping = true;
+        self.pump.pending_stop = Some((self.fence.epoch(), None));
     }
     pub fn drain(&mut self, capture: &mut Capture) {
-        if let Some(current) = self.open.as_mut() {
-            current.observe_idle_producer(&self.fence);
-        }
-        drain_with_boundaries(
+        let pumped = self.pump.pass(
             &mut capture._records,
-            Some(&mut capture.audio),
-            &mut self.open,
+            &mut capture.audio,
+            &mut capture.publications,
             &self.status,
-            Some(&self.fence),
-            &self.failure,
-            |open| {
-                self.fanout.drain(&mut capture.publications, open, &self.fence, &self.failure);
-            },
+            &self.fence,
+            false,
         );
-        self.fanout.drain(&mut capture.publications, &mut self.open, &self.fence, &self.failure);
-        if self.fence.failed.load(Ordering::Acquire) {
-            if !self.fence.retirement_hold.load(Ordering::Acquire)
-                && capture._records.is_empty()
-                && capture.publications.settled()
-                && !self.failure.contains(self.fence.epoch())
-            {
-                self.failure.account(
-                    &mut self.open,
-                    self.fence.epoch(),
-                    &self.status,
-                    Some(&self.fence),
-                    harmonigraph_take::IncompleteRecord {
-                        reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
-                        ..Default::default()
-                    },
-                );
-            }
-        } else if self.stopping {
-            self.finished = finish_ready(&mut self.open, self.fence.epoch(), &self.fence)
-                .or_else(|| self.finished.take());
+        if let Some((path, _)) = pumped.finished {
+            self.finished = Some(path);
         }
     }
     pub fn failed(&self) -> bool {
@@ -213,7 +190,6 @@ pub fn channel() -> (Recorder, Capture) {
     let dropped = Arc::new(AtomicU64::new(0));
     let rolling = Arc::new(AtomicBool::new(false));
     let end_at_rewind = Arc::new(AtomicBool::new(false));
-    let hit_rewind = Arc::new(AtomicBool::new(false));
     let fence = Arc::new(RecordFence::default());
     let recorder = Recorder {
         _writer_lifetime: None,
@@ -235,10 +211,7 @@ pub fn channel() -> (Recorder, Capture) {
         rolling,
         audio_started: false,
         end_at_rewind,
-        captured: Arc::new(AtomicU64::new(0)),
-        hit_rewind,
-        stop_at_bar: Arc::new(StopAtBar::default()),
-        rolled: Arc::new(AtomicBool::new(false)),
+        latches: Arc::new(TakeLatches::default()),
     };
     let capture = Capture {
         fence,
