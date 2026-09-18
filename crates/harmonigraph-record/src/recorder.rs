@@ -113,6 +113,20 @@ pub enum Entry {
     NewPass,
 }
 
+// [`TAKE_RING_CAPACITY`] of these are allocated up front and stay resident for
+// the life of the plugin instance, so the cell's size IS a per-instance memory
+// cost: 96 B × 65,536 is exactly 6 MiB, before the audio ring's 4 MiB beside
+// it. Nothing else here reads that number, which is what makes it worth
+// pinning where `publication.rs` pins its own cell — a variant that doubled it
+// would cost megabytes an instance with nothing on screen to say so.
+//
+// `ConfigurationAt` is the widest variant and the one that will move: a
+// 16-byte address beside an 80-byte `ConfigurationRecord`, which carries the
+// whole resolved configuration by value because the audio thread cannot
+// allocate a box for it.
+const _: () = assert!(std::mem::size_of::<Entry>() <= 96);
+const _: () = assert!(std::mem::align_of::<Entry>() <= 8);
+
 /// What the writer thread needs to open a WAV beside the take.
 #[derive(Clone, Copy)]
 pub struct AudioSpec {
