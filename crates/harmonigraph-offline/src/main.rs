@@ -308,6 +308,23 @@ fn start_of_render(explicit: Option<f64>, capture_start: Option<f64>, lead: f64)
     }
 }
 
+/// Where the render stops when `--end` does not say.
+///
+/// The last event plus `--tail`, so releases finish fading and the roll clears
+/// instead of the video cutting mid-decay — and never before the soundtrack
+/// runs out, because a video that stops while the music is still playing is a
+/// bug, where one that holds a second of settled picture is a fade.
+///
+/// Beside [`start_of_render`] rather than inline in `export`, and for the same
+/// reason: it is a policy with four ways through it, and a policy that only
+/// exists inside a function nothing can call is a policy nothing can test.
+fn end_of_render(explicit: Option<f64>, events_end: f64, tail: f64, audio_end: Option<f64>) -> f64 {
+    explicit.unwrap_or_else(|| {
+        let visual = events_end + tail;
+        audio_end.map_or(visual, |audio| visual.max(audio))
+    })
+}
+
 /// Whether an explicit `--size` composes the frame the take was dialed in at.
 ///
 /// Compares shape, not pixels: `--size` is how you render the same picture
@@ -462,13 +479,12 @@ fn export(args: Args) -> Result<(), String> {
 
     let audio_start = start_of_audio(args.align, is_replacement, take.header.audio_start);
 
-    // Default end: the last event plus a tail, so releases finish fading
-    // and the roll clears instead of the video cutting mid-decay. If
-    // there's audio, don't stop before it does.
-    let end = args.end.unwrap_or_else(|| {
-        let visual = take.duration() + args.tail;
-        audio.as_ref().map_or(visual, |a| visual.max(audio_start + a.seconds()))
-    });
+    let end = end_of_render(
+        args.end,
+        take.duration(),
+        args.tail,
+        audio.as_ref().map(|a| audio_start + a.seconds()),
+    );
     let scale = args.scale.unwrap_or_else(|| default_scale(size));
     let lead = args.lead.unwrap_or(0.0);
     // Where the recording begins: its first event, or the start of its own
@@ -798,6 +814,30 @@ mod tests {
         assert_eq!(start_of_render(Some(30.0), Some(5.48), 1.0), 30.0);
         // Including when there are no notes to anchor to.
         assert_eq!(start_of_render(Some(12.0), None, 1.0), 12.0);
+    }
+
+    /// The default end waits for BOTH the picture and the sound, whichever
+    /// finishes last.
+    ///
+    /// The tail is the visual half: a note released on the last beat is still
+    /// fading, and the roll still has it on screen. The soundtrack is the other
+    /// half and is the one that used to be missed — a take whose recording runs
+    /// past its last note (a pedal, a reverb tail, or simply the transport left
+    /// rolling) would have had its sound cut off by a video that ended with the
+    /// notes.
+    #[test]
+    fn the_render_ends_after_both_the_last_release_and_the_soundtrack() {
+        // No audio at all: the last event plus the tail.
+        assert_eq!(end_of_render(None, 30.0, 2.0, None), 32.0);
+        // A soundtrack that outlasts the picture holds the render open...
+        assert_eq!(end_of_render(None, 30.0, 2.0, Some(40.0)), 40.0);
+        // ...and one that stops first does not cut the fade short.
+        assert_eq!(end_of_render(None, 30.0, 2.0, Some(31.0)), 32.0);
+        // --end outranks both, including cutting a take short on purpose...
+        assert_eq!(end_of_render(Some(10.0), 30.0, 2.0, Some(40.0)), 10.0);
+        // ...and including 0, which `frame_count() == 0` then refuses by name
+        // rather than quietly falling back to the whole take.
+        assert_eq!(end_of_render(Some(0.0), 30.0, 2.0, None), 0.0);
     }
 
     /// `--start 0` has to survive parsing as a REQUEST, not as the absence of
