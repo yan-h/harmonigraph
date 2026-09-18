@@ -49,7 +49,28 @@ fn ndc(camera: &Camera, view: &ViewConfig, aspect: f32, pos: LatticePos) -> Opti
 /// [`a_cabinet_camera_never_reaches_the_node_budget`].
 #[test]
 fn everything_the_pane_shows_is_in_the_window() {
-    let view = ViewConfig { extent_sevens: 2, ..ViewConfig::default() };
+    // Both shapes of stack, because only one of them can see the arithmetic
+    // that carries the septimal axis: the slab `scrolled` asks the camera for
+    // is measured FROM home, and a stack symmetric about home cannot tell that
+    // from a slab measured ABOUT it. The leaning one is also the shape absolute
+    // ends exist for — every sheet above home and one below.
+    for (min_sevens, max_sevens, center_sevens) in [(-2, 2, 0), (-1, 3, 0), (0, 3, 1)] {
+        let view = ViewConfig { min_sevens, max_sevens, center_sevens, ..ViewConfig::default() };
+        // The drawn window carries the stack whole rather than the widest
+        // count either side of home, which is what a leaning stack would come
+        // out as if anything downstream re-derived it symmetrically.
+        assert_eq!(
+            (view.reach().min.sevens, view.reach().max.sevens),
+            (min_sevens, max_sevens),
+            "the naming reach narrowed a leaning stack",
+        );
+        sweep_the_pane(&view);
+    }
+}
+
+/// The sweep [`everything_the_pane_shows_is_in_the_window`] runs per stack.
+fn sweep_the_pane(view: &ViewConfig) {
+    let (low, high) = view.sevens_window();
     for projection in PROJECTIONS {
         for aspect in ASPECTS {
             for distance in [Camera::MIN_DISTANCE, Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE] {
@@ -59,10 +80,13 @@ fn everything_the_pane_shows_is_in_the_window() {
                     continue;
                 }
                 let drawn_set: std::collections::HashSet<_> = drawn.positions().collect();
-                // Wider than any window this camera can produce, so the search
-                // is not the window's own claim about itself.
-                for pos in coords::positions_within(-90..=90, -90..=90, -2..=2) {
-                    let Some(p) = ndc(&camera, &view, aspect, pos) else {
+                // Wider than any window this camera can produce on the two
+                // sheet axes, so the search is not the window's own claim about
+                // itself. The septimal axis is the exception and is swept at
+                // the stack's own ends: no camera widens it, so anything
+                // outside them is a sheet the view does not have.
+                for pos in coords::positions_within(-90..=90, -90..=90, low..=high) {
+                    let Some(p) = ndc(&camera, view, aspect, pos) else {
                         continue;
                     };
                     if p.x.abs() > 1.0 || p.y.abs() > 1.0 {
@@ -184,8 +208,8 @@ fn a_loaded_view_never_draws_a_node_its_reach_cannot_name() {
 #[test]
 fn a_cabinet_camera_never_reaches_the_node_budget() {
     let mut worst = 0;
-    for sevens in 0..=4 {
-        let view = ViewConfig { extent_sevens: sevens, ..ViewConfig::default() };
+    for sevens in 0..=SEVENS_LAYER_LIMIT {
+        let view = ViewConfig { min_sevens: -sevens, max_sevens: sevens, ..ViewConfig::default() };
         for aspect in [0.3, 1.0, 1.5, 16.0 / 9.0, 2.4, 3.0] {
             // Every pitch, to say that cabinet ignores it, and both ends of
             // the shear, which is the one thing that does widen the window.
@@ -367,8 +391,8 @@ fn the_budget_trims_the_horizon_not_the_foreground() {
     // Near enough the center to be the picture rather than the far field: at
     // the zoom limit the pane is about twenty steps tall all told.
     const FOREGROUND: i32 = 12;
-    for sevens in [0, 2, 4] {
-        let view = ViewConfig { extent_sevens: sevens, ..ViewConfig::default() };
+    for sevens in [0, SEVENS_LAYER_LIMIT / 2, SEVENS_LAYER_LIMIT] {
+        let view = ViewConfig { min_sevens: -sevens, max_sevens: sevens, ..ViewConfig::default() };
         let center = view.center();
         for pitch in [0.6f32, 0.75, 0.9] {
             for distance in [Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE] {
@@ -574,7 +598,11 @@ fn the_zoom_limit_lands_near_twenty_steps() {
 /// The picture there is a line, and what it must not be is a stall.
 #[test]
 fn no_camera_asks_for_more_than_the_budget() {
-    let view = ViewConfig { extent_sevens: 4, ..ViewConfig::default() };
+    let view = ViewConfig {
+        min_sevens: -SEVENS_LAYER_LIMIT,
+        max_sevens: SEVENS_LAYER_LIMIT,
+        ..ViewConfig::default()
+    };
     for projection in PROJECTIONS {
         for aspect in [0.05, 1.0, 20.0] {
             for pitch in [0.0, 1.0, Camera::PITCH_LIMIT] {

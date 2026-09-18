@@ -1,6 +1,6 @@
-//! Which recording pass and time origin own an output sample. Configuration is
-//! block-granular, so a pass records the value adopted at each of its segments
-//! rather than a history keyed on the sample an edit was observed at.
+//! Which recording pass and time origin own an output sample. Each segment
+//! records its adopted configuration; the owner splits segments at timed
+//! shared-tuning changes in Lattice Map mode.
 use harmonigraph_core::canonical::ClockId;
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_record::{

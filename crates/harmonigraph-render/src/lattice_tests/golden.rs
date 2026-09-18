@@ -337,7 +337,8 @@ fn the_zoomed_out_view_on_the_distance_row() -> Scene {
 /// #498 needs it because a caster on the home sheet has to darken what stands
 /// on the sheet behind it, at whatever depth it darkens the ground.
 fn a_sheet_behind_a_node() -> Scene {
-    let view = harmonigraph_scene::ViewConfig { extent_sevens: 1, ..Default::default() };
+    let view =
+        harmonigraph_scene::ViewConfig { min_sevens: -1, max_sevens: 1, ..Default::default() };
     lattice(&view, near_camera())
 }
 
@@ -501,7 +502,8 @@ fn two_strokes_of_one_name() -> Shot {
 /// stop overlapping the first time either moved — the frame would still render
 /// and would still be blessed.
 pub(super) fn names_overlapping_on_one_sheet() -> Shot {
-    let view = harmonigraph_scene::ViewConfig { extent_sevens: 1, ..Default::default() };
+    let view =
+        harmonigraph_scene::ViewConfig { min_sevens: -1, max_sevens: 1, ..Default::default() };
     let camera = Camera {
         projection: harmonigraph_scene::Projection::Perspective,
         pitch: 1.1,

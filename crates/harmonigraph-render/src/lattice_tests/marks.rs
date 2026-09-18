@@ -528,8 +528,13 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
     }
     // A small window so the nodes draw big enough to measure.
-    let base =
-        ViewConfig { extent_threes: 2, extent_fives: 2, extent_sevens: 0, ..ViewConfig::default() };
+    let base = ViewConfig {
+        extent_threes: 2,
+        extent_fives: 2,
+        min_sevens: 0,
+        max_sevens: 0,
+        ..ViewConfig::default()
+    };
     let scene_for = |marks: bool| {
         derive_scene(
             &tracker,

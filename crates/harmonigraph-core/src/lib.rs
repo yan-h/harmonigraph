@@ -24,6 +24,7 @@ pub mod configuration;
 pub mod confirmed;
 pub mod coords;
 pub mod history;
+pub mod lattice_map;
 pub mod notes;
 pub mod policy;
 pub mod roll;

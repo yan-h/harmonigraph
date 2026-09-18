@@ -60,7 +60,7 @@ pub use style::{
 };
 pub use view::{
     AnimationOrder, DrawnWindow, FrameParams, GlowCurve, NoteAnimation, NoteAnimationConfig,
-    RingStack, ViewConfig,
+    RingStack, ViewConfig, SEVENS_LAYER_LIMIT,
 };
 
 use glam::{Vec3, Vec4};

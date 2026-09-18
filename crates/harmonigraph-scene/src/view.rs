@@ -26,6 +26,23 @@ const MAX_DRAWN_EXTENT: i32 = 4096;
 /// [`MAX_DRAWN_EXTENT`] allows.
 const MAX_CENTER: i32 = 1 << 30;
 
+/// How far from C a septimal sheet may sit — the axis the layer strip offers,
+/// and so the only sheets a sanitized view holds.
+///
+/// A PICTURE limit rather than an arithmetic one, and the only one of the
+/// three axes to have one: the strip draws a cell per sheet, so its axis is
+/// what a reader can actually take hold of, and thirteen cells on a settings
+/// column is where a cell is still wide enough to grab. The bound it replaced
+/// was twenty steps of home travel against a count of at most four each side —
+/// two numbers that could not be shown on one axis without either the ends
+/// being unreachable or the cells being a few points wide.
+///
+/// Thirteen sheets is more depth than the old pair could ask for (nine), not
+/// less; what narrows is how far from C the stack may be PARKED. Six septimal
+/// steps is already a spelling with six marks on it, and
+/// [`DrawnWindow::fit_to_node_budget`] is what bounds the work either way.
+pub const SEVENS_LAYER_LIMIT: i32 = 6;
+
 /// A block of lattice positions, as explicit inclusive bounds.
 ///
 /// Two of these are in play and they answer different questions: the DRAWN
@@ -190,7 +207,8 @@ impl DrawnWindow {
         // the count is — the count goes as their product, so that is the
         // factor that lands near the cap in one step whatever shape the block
         // is. The sevens axis is left alone: it is a setting rather than a
-        // consequence of the camera, and it is at most nine sheets.
+        // consequence of the camera, and it is at most thirteen sheets (see
+        // `SEVENS_LAYER_LIMIT`).
         let shrink = (MAX_DRAWN_NODES as f32 / count as f32).sqrt();
         // Spent as a RADIUS about the center that the block is clipped into,
         // rather than as a scale on each bound: an end already inside the
@@ -306,11 +324,16 @@ impl NoteAnimationConfig {
     pub fn staggers(self) -> bool {
         self.order != AnimationOrder::Simultaneous && self.stagger_spread > 0.0
     }
-    pub fn movement_duration(self, duration: f32) -> f32 {
-        duration * if self.staggers() { 1.0 - self.stagger_spread } else { 1.0 }
-    }
     /// Fixed delays of complete displayed sectors; shared by live/export and
     /// renderer fixtures, including wheels with unequal outer sectors.
+    ///
+    /// A delay is a START OFFSET and nothing else: every sector still animates
+    /// for the whole `duration`, so the spread widens the total to
+    /// `duration * (1 + stagger_spread)` rather than dividing one fade time
+    /// between waiting and moving. Compressing instead is what made a high
+    /// spread read as two different animations -- the first sector fading over
+    /// the full time because the level ramp under it was never staggered, the
+    /// last one snapping in over what little time the spread had left it.
     pub fn delays(
         self,
         layout: &crate::OctaveLayout,
@@ -402,12 +425,27 @@ pub struct ViewConfig {
     /// whole of what the search wants.
     pub extent_threes: i32,
     pub extent_fives: i32,
-    /// How many sheets either side of the home one the lattice draws. Unlike
-    /// the two above this IS the drawn window, and it keeps its bar: how deep
-    /// the lattice runs is a question about the music, where how wide it runs
-    /// is a question about the pane, and only the pane can be read off the
-    /// screen.
-    pub extent_sevens: i32,
+    /// The lowest and highest sheet the lattice draws, in the same units
+    /// [`center_sevens`](Self::center_sevens) is counted in: steps from the
+    /// sheet containing C. Unlike the two extents above this IS the drawn
+    /// window, and it keeps its bar: how deep the lattice runs is a question
+    /// about the music, where how wide it runs is a question about the pane,
+    /// and only the pane can be read off the screen.
+    ///
+    /// Absolute ends rather than a count each side of home, which is what the
+    /// pair before them was. A count each side cannot say *two sheets above
+    /// home and none below* — every stack it can describe is symmetric about
+    /// the sheet it is read against — and the septimal axis is the one axis
+    /// where that is a thing to ask for: the sheets above home and the ones
+    /// below carry different spellings, so wanting one direction and not the
+    /// other is an ordinary request rather than an odd one.
+    ///
+    /// The invariant is `min_sevens <= center_sevens <= max_sevens`, held by
+    /// [`sanitize`](Self::sanitize) and by the one control that writes all
+    /// three. Nothing downstream re-derives it: a reader wanting the count
+    /// either side subtracts, and gets an honest asymmetric answer.
+    pub min_sevens: i32,
+    pub max_sevens: i32,
     /// Center of the window, in lattice steps from C (v1's Grid X/Y/Z). The
     /// center node renders at the world origin, so panning the window doesn't
     /// walk the content away from the camera.
@@ -415,13 +453,17 @@ pub struct ViewConfig {
     /// The fifths and thirds centers are driven by the camera rather than by a
     /// bar ([`follow_camera`](Self::follow_camera)): they are where the reach
     /// above is centered, and it has to stay under what is on screen. The
-    /// sevens center is the home sheet, which is a choice, and keeps its bar.
+    /// sevens center is the home sheet, which is a choice, and keeps a control
+    /// — the middle handle of the strip whose ends are
+    /// [`min_sevens`](Self::min_sevens) and [`max_sevens`](Self::max_sevens),
+    /// since which sheet is home is only meaningful among the sheets drawn.
     pub center_threes: i32,
     pub center_fives: i32,
     pub center_sevens: i32,
     // ---- The sevens layer ------------------------------------------------
     // How the sheets other than the home one draw. Both settings go inert
-    // while `extent_sevens` is 0, which is where a fresh view starts. What
+    // while the strip holds a single sheet (`min_sevens == max_sevens`), which
+    // is where a fresh view starts. What
     // makes a small node legible over a large one is the Shadow
     // ([`shadow`](Self::shadow)) — each item multiplying the frame under it by
     // what its own ink casts, at any extent and on every sheet.
@@ -1765,18 +1807,10 @@ impl ViewConfig {
     /// number is a stall.
     pub fn scrolled(&self, camera: &Camera, aspect: f32) -> DrawnWindow {
         let center = self.center();
-        let sevens = self.extent_sevens.max(0);
+        let (low, high) = self.sevens_window();
         let flat = |threes: i32, fives: i32| DrawnWindow {
-            min: LatticePos::new(
-                center.threes - threes,
-                center.fives - fives,
-                center.sevens - sevens,
-            ),
-            max: LatticePos::new(
-                center.threes + threes,
-                center.fives + fives,
-                center.sevens + sevens,
-            ),
+            min: LatticePos::new(center.threes - threes, center.fives - fives, low),
+            max: LatticePos::new(center.threes + threes, center.fives + fives, high),
         };
         let spacing = self.spacing;
         // A spacing of zero divides by nothing and a NaN one poisons the
@@ -1787,9 +1821,13 @@ impl ViewConfig {
         }
         // The slab the sheets occupy, in world depth about the home sheet —
         // `lattice_to_world` puts the sevens axis on z, and the window's
-        // center sheet is drawn at the origin.
-        let depth = sevens as f32 * spacing;
-        let Some(sheet) = camera.visible_world_bounds(aspect, -depth, depth) else {
+        // center sheet is drawn at the origin. Measured from HOME rather than
+        // symmetrically about it: an asymmetric stack leans to one side of the
+        // origin, and a slab taken as ±(the deeper end) would ask the camera
+        // for a depth with no sheet in it.
+        let back = (low - center.sevens) as f32 * spacing;
+        let front = (high - center.sevens) as f32 * spacing;
+        let Some(sheet) = camera.visible_world_bounds(aspect, back, front) else {
             return self.reach();
         };
         // Where the pane shows the sheets all the way to the horizon there is
@@ -1852,12 +1890,12 @@ impl ViewConfig {
             min: LatticePos::new(
                 center.threes + offset(min.y - margin, f32::floor),
                 center.fives + offset(min.x - margin, f32::floor),
-                center.sevens - sevens,
+                low,
             ),
             max: LatticePos::new(
                 center.threes + offset(max.y + margin, f32::ceil),
                 center.fives + offset(max.x + margin, f32::ceil),
-                center.sevens + sevens,
+                high,
             ),
         };
         window.fit_to_node_budget(center);
@@ -1874,12 +1912,29 @@ impl ViewConfig {
     /// frame where no lattice pane drew one.
     pub fn reach(&self) -> DrawnWindow {
         let center = self.center();
-        let extent = LatticePos::new(
-            self.extent_threes.max(0),
-            self.extent_fives.max(0),
-            self.extent_sevens.max(0),
-        );
-        DrawnWindow { min: center - extent, max: center + extent }
+        let extent = LatticePos::new(self.extent_threes.max(0), self.extent_fives.max(0), 0);
+        // The sevens ends are absolute sheets rather than a count each side,
+        // so they go on whole instead of through the symmetric pair above.
+        // They must not be narrowed to a symmetric reach either: this is what
+        // names what `scrolled` draws, and a stack leaning one way would have
+        // its far sheets drawn out past the block that can spell them.
+        let (low, high) = self.sevens_window();
+        let min = center - extent;
+        let max = center + extent;
+        DrawnWindow {
+            min: LatticePos::new(min.threes, min.fives, low),
+            max: LatticePos::new(max.threes, max.fives, high),
+        }
+    }
+
+    /// The sheets the picture draws, low end first.
+    ///
+    /// The one place the pair's order is repaired for a reader, so no window
+    /// builder has to: [`sanitize`](Self::sanitize) already orders what it
+    /// loads, and this covers the views that never went through it — a test
+    /// fixture, and a `ViewConfig` assembled field by field.
+    pub fn sevens_window(&self) -> (i32, i32) {
+        (self.min_sevens.min(self.max_sevens), self.max_sevens.max(self.min_sevens))
     }
 
     /// Keep the window's center under the camera, moving both together so the
@@ -2030,7 +2085,7 @@ impl ViewConfig {
         // and `reach` adds each center to its extent, so a blob carrying a
         // billion sheets overflows both — and the derived window now counts
         // nodes on every draw, which puts that arithmetic in the frame rather
-        // than at the edge of it. The sevens extent is held to what its bar
+        // than at the edge of it. The sevens ends are held to what their strip
         // offers.
         //
         // The other two are the naming REACH, and they are floored at the
@@ -2043,13 +2098,23 @@ impl ViewConfig {
         // value to respect and no readout for a floor to contradict: raising
         // it is free. `a_loaded_view_never_draws_a_node_its_reach_cannot_name`
         // holds the cabinet case, which is the one the sizing is FOR.
-        self.extent_sevens = self.extent_sevens.clamp(0, 4);
+        // The two ends onto the strip's axis, low end first so an INVERTED
+        // pair comes out closed rather than silently swapped: a blob holding
+        // `max < min` is one nobody dragged, and the sheet it agrees to draw
+        // is the one its low end names.
+        self.min_sevens = self.min_sevens.clamp(-SEVENS_LAYER_LIMIT, SEVENS_LAYER_LIMIT);
+        self.max_sevens = self.max_sevens.clamp(self.min_sevens, SEVENS_LAYER_LIMIT);
         self.extent_threes = self.extent_threes.clamp(fresh.extent_threes, MAX_DRAWN_EXTENT);
         self.extent_fives = self.extent_fives.clamp(fresh.extent_fives, MAX_DRAWN_EXTENT);
-        // The seventh center is the one center exposed as a setting. Keep a
-        // restored value on the same twenty-step axis its bar can produce;
-        // the camera-owned fifths/thirds centers retain the arithmetic guard.
-        self.center_sevens = self.center_sevens.clamp(-20, 20);
+        // The seventh center is the one center exposed as a setting, and it
+        // names a sheet the picture DRAWS — so it is held inside the pair
+        // above rather than merely on the same axis. A home sheet outside the
+        // stack is one no node is on, and `sevens_size` measures every sheet
+        // against it: nothing would come out at full size, and the sheet the
+        // music is heard against would be off screen.
+        //
+        // The camera-owned fifths/thirds centers retain the arithmetic guard.
+        self.center_sevens = self.center_sevens.clamp(self.min_sevens, self.max_sevens);
         self.center_threes = self.center_threes.clamp(-MAX_CENTER, MAX_CENTER);
         self.center_fives = self.center_fives.clamp(-MAX_CENTER, MAX_CENTER);
 
@@ -2346,13 +2411,14 @@ impl Default for ViewConfig {
             // instead — see `SharedState::shown`.
             extent_threes: 12,
             extent_fives: 20,
-            // The home sevens sheet alone. A sheet either side (extent 1)
-            // shows the septimal axis without anyone having to go find it;
-            // the tradeoff is that nothing tells the eye which sheet a node
-            // is on until the sevens layer settings below are turned down to
-            // read as an annotation rather than a second sheet (see
-            // sevens_size).
-            extent_sevens: 0,
+            // The home sevens sheet alone — the strip closed on its one cell.
+            // A sheet either side shows the septimal axis without anyone
+            // having to go find it; the tradeoff is that nothing tells the eye
+            // which sheet a node is on until the sevens layer settings below
+            // are turned down to read as an annotation rather than a second
+            // sheet (see sevens_size).
+            min_sevens: 0,
+            max_sevens: 0,
             center_threes: 0,
             center_fives: 1,
             center_sevens: 0,

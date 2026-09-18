@@ -49,7 +49,6 @@ struct Motion {
     bass: MarkMotion,
     order_delay: [f32; 11],
     order_seed: u32,
-    movement_fraction: f32,
     audio_waiting: bool,
 }
 impl Default for Motion {
@@ -64,7 +63,6 @@ impl Default for Motion {
             bass: MarkMotion::default(),
             order_delay: [0.0; 11],
             order_seed: 0,
-            movement_fraction: 1.0,
             audio_waiting: false,
         }
     }
@@ -133,6 +131,15 @@ impl Motion {
                 (self.progress[i] + if self.gate { moving / duration } else { -moving / duration })
                     .clamp(0.0, 1.0)
             };
+            // Undelayed, and over the WHOLE duration, on purpose. This is the
+            // node's presence rather than any one slice's: it reaches the shader
+            // as `ink.w` (`params.x` for a slot no note lights) and is
+            // multiplied by the slice's own reveal, which is already nothing
+            // before that slice's delay. Waiting here too -- the tempting
+            // symmetry -- makes the whole wheel wait for whichever slice the
+            // note happens to light, and a note on a LATE slice then collapses
+            // the stagger: measured, every slice arrived within 0.08 of the
+            // others instead of spanning 0.9.
             self.levels[i] = approach(self.levels[i], self.targets[i], dt, env);
         }
         self.melody.advance(dt, env);
@@ -224,7 +231,13 @@ impl NodeMotion {
                     duration,
                 );
                 motion.delay = motion.order_delay;
-                motion.movement_fraction = view.note_animation.movement_duration(1.0);
+                // Ordered departure needs a COMPLETE arrival, and an arrival now
+                // takes `1 + stagger_spread` fades rather than one, so the hold
+                // that earns this has got longer by the same factor. At a high
+                // spread most notes a player actually holds fall short and take
+                // the reversal branch below, departing without order. That is the
+                // cost of the spread being a start offset; the alternative was
+                // compressing every piece into a tenth of the fade.
             } else if !gate && motion.gate && motion.progress.iter().all(|&p| p == 1.0) {
                 motion.order_delay = delays(
                     &scene.octave_layout,
@@ -234,7 +247,6 @@ impl NodeMotion {
                     duration,
                 );
                 motion.delay = motion.order_delay;
-                motion.movement_fraction = view.note_animation.movement_duration(1.0);
             } else if gate != motion.gate {
                 // A reversal never schedules new waiting: pending pieces cancel
                 // on off and every piece reverses its current pose immediately.
@@ -254,8 +266,7 @@ impl NodeMotion {
     }
     fn advance(&mut self, dt: f64, duration: f32, env: &Envelope) {
         for motion in self.nodes.values_mut() {
-            let moving_time = duration * motion.movement_fraction;
-            motion.advance(dt.max(0.0), moving_time, env);
+            motion.advance(dt.max(0.0), duration, env);
         }
     }
     fn step(
@@ -270,6 +281,12 @@ impl NodeMotion {
         if !now.is_finite() {
             return;
         }
+        // The 2.0 is not a round number: one animation now spans
+        // `duration * (1 + stagger_spread)`, so the horizon has to exceed that
+        // or a gap longer than it seeds a MID-FLIGHT arrival as settled and the
+        // wheel pops. The spread's 0.9 ceiling (`ValueBar` and `sanitize` both)
+        // puts the longest arrival at 1.9, leaving 0.1 of margin — so raising
+        // that ceiling means raising this too, and 1.0 would leave none.
         let horizon = f64::from(duration.max(0.0)) * 2.0 + f64::from(view.mark_delay) + 0.001;
         // A hidden surface cannot benefit from replaying minutes of settled
         // history. Seed current state and replay only the visible horizon.
@@ -658,7 +675,7 @@ mod tests {
         assert_eq!(origin(&draw(&mut motion, &mut tracker, &view, 2.1, true)).melody_level, 0.0);
     }
     #[test]
-    fn stagger_spread_spans_starts_finishes_on_time_and_reverses_without_waiting() {
+    fn stagger_spread_spans_starts_and_reverses_without_waiting() {
         let layout = harmonigraph_scene::octave_layout(4, 60.0, 1, 0.3, 0.7);
         for order in AnimationOrder::ALL {
             for spread in [0.0, NoteAnimationConfig::default().stagger_spread, 0.9] {
@@ -700,9 +717,76 @@ mod tests {
                         .abs()
                         < 1e-6
                 );
-                draw(&mut motion, &mut tracker, &view, 2.10001, false);
+                // The widest delay plus one whole duration: a departure now
+                // SPANS `1 + spread`, because the spread offsets starts and no
+                // longer buys its waiting out of each slice's own time.
+                let end = 1.1 + 1.0 + f64::from(0.9 - spread) + 1e-5;
+                draw(&mut motion, &mut tracker, &view, end, false);
                 assert_eq!(motion.nodes[&LatticePos::ORIGIN].progress, [0.0; 11]);
             }
+        }
+    }
+    #[test]
+    fn every_staggered_slice_animates_for_the_whole_duration_from_its_own_start() {
+        // The complaint this answers: at a high spread some slices faded in over
+        // the whole note and others waited and then popped. Measured on the old
+        // compression at spread 0.9, one wheel's slices took 0.98, 0.84, 0.69,
+        // 0.54, 0.39, 0.24 and 0.09 of a duration -- every slice finishing
+        // together at the fade time, so the earlier it started the longer it
+        // took. Both assertions below are needed: the lengths were all EQUAL to
+        // each other then too (each reveal ran 0.1), so only measuring them
+        // against ONE WHOLE DURATION separates the two contracts.
+        let step = 0.01f64;
+        let spread = 0.9f32;
+        for order in AnimationOrder::ALL {
+            let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..Default::default() };
+            view.note_animation.order = order;
+            view.note_animation.stagger_spread = spread;
+            let mut tracker = NoteTracker::new();
+            let mut motion = NodeMotion::default();
+            // C5, deliberately NOT middle C, whose slice is the one the orders
+            // start from: the presence check below is about a note landing on a
+            // LATE slice, and middle C would give it a delay of zero to pass at.
+            tracker.handle_event(on(0.0, 72));
+            let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
+            let span = first.octave_layout.span as usize;
+            let mut started = [None; 11];
+            let mut done = [None; 11];
+            let mut now = 0.0;
+            // Past the last slice's finish at `spread + 1`, which is exactly
+            // what a sweep stopping at one duration would never see.
+            while now < f64::from(spread) + 1.5 {
+                now += step;
+                let scene = draw(&mut motion, &mut tracker, &view, now, false);
+                let node = origin(&scene);
+                // The node's presence carries every slot no note lights, so it
+                // must NOT wait for the lit slice. Staggering it too makes the
+                // whole wheel wait on whichever slot the note happens to take,
+                // and C5's is a late one: measured, that collapsed seven starts
+                // spanning 0.9 into all of them landing within 0.08.
+                assert!(node.activation > 0.0, "{order:?}: presence waited for its lit slice");
+                for i in 0..span {
+                    started[i] = started[i].or((node.slice_progress[i] > 0.0).then_some(now));
+                    done[i] = done[i].or((node.slice_progress[i] >= 1.0).then_some(now));
+                }
+            }
+            let at = |v: Option<f64>, what: &str| v.unwrap_or_else(|| panic!("{order:?}: {what}"));
+            for i in 0..span {
+                let length = at(done[i], "slice never finished") - at(started[i], "never started");
+                assert!(
+                    (length - 1.0).abs() <= 2.0 * step,
+                    "{order:?}: slice {i} animated for {length}, not one whole duration"
+                );
+            }
+            let begins: Vec<f64> = (0..span).map(|i| at(started[i], "never started")).collect();
+            let widest = begins.iter().copied().fold(0.0, f64::max)
+                - begins.iter().copied().fold(f64::INFINITY, f64::min);
+            let expected =
+                if order == AnimationOrder::Simultaneous { 0.0 } else { f64::from(spread) };
+            assert!(
+                (widest - expected).abs() <= 2.0 * step,
+                "{order:?}: starts span {widest}, expected {expected}"
+            );
         }
     }
     #[test]

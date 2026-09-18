@@ -694,7 +694,7 @@ mod tests {
         let replacement_path = directory.join("replacement.ron");
         let mut recorded = harmonigraph_ui::AppearanceDocument::default();
         recorded.camera.cabinet_scale = 0.7;
-        recorded.view.extent_sevens = 3;
+        recorded.view.max_sevens = 3;
         recorded.spectrum.low_midi = 40.5;
         recorded.spiral.zoom = 2.75;
         recorded.render.short_edge = 180;
@@ -746,7 +746,7 @@ mod tests {
         assert_eq!(original.dimensions(), (320, 180));
         let mut replacement = recorded.clone();
         replacement.camera.cabinet_scale = 0.9;
-        replacement.view.extent_sevens = 1;
+        replacement.view.max_sevens = 1;
         replacement.spectrum.low_midi = 45.0;
         replacement.spiral.zoom = 1.5;
         replacement.render.frame.aspect_w = 1;

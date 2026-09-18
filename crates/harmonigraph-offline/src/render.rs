@@ -574,7 +574,7 @@ mod tests {
     fn export_selects_one_complete_appearance_and_defaults_a_refused_replacement() {
         let mut recorded = AppearanceDocument::default();
         recorded.camera.yaw = 1.23;
-        recorded.view.extent_sevens = 3;
+        recorded.view.max_sevens = 3;
         recorded.spectrum.low_midi = 40.5;
         recorded.spiral.zoom = 2.75;
         recorded.render.short_edge = 2160;
@@ -584,7 +584,7 @@ mod tests {
         assert_eq!(selected.serialize(), recorded.serialize());
         let mut replacement = AppearanceDocument::default();
         replacement.camera.yaw = -0.5;
-        replacement.view.extent_sevens = 2;
+        replacement.view.max_sevens = 2;
         replacement.spectrum.low_midi = 45.0;
         replacement.spiral.zoom = 1.5;
         replacement.render.short_edge = 720;
