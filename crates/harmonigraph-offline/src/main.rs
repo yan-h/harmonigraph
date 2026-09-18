@@ -545,15 +545,15 @@ fn export(args: Args) -> Result<(), String> {
     let mut replay = Replay::new(take);
     let mut pushed = 0u64;
     let stages = render::render(&mut replay, audio.as_mut(), &settings, appearance, |frame| {
-        if !sink.push(frame)? {
+        let Some(next) = sink.push(frame)? else {
             // ffmpeg closed the pipe (e.g. -shortest, the soundtrack ending
             // before the visuals). Stop feeding; finish() below reads whether
             // that was a clean finish or a crash from ffmpeg's exit status.
-            return Ok(false);
-        }
+            return Ok(None);
+        };
         pushed += 1;
         report(sink.encoded().unwrap_or(pushed));
-        Ok(true)
+        Ok(Some(next))
     })?;
     // Still reporting: the encoder is working through its backlog.
     sink.finish(&mut report)?;

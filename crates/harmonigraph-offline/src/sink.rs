@@ -98,26 +98,34 @@ impl Writer {
         Writer { frames: Some(frames), spare, thread: Some(thread) }
     }
 
-    /// Hand one frame over, with [`Sink::push`]'s answer.
+    /// Hand one frame over and take a buffer back, with [`Sink::push`]'s
+    /// answer.
     ///
     /// The answer is about the frames BEFORE this one: an early stop is
     /// something the writer discovers a frame or three later, so the renderer
     /// draws that many past the point ffmpeg stopped listening and they are
     /// dropped. Which costs a few frames of a render that is ending anyway,
     /// and is what buys the overlap the rest of the time.
-    fn push(&mut self, frame: &[u8]) -> Result<bool, String> {
+    ///
+    /// The frame is MOVED into the queue and a written one comes back in its
+    /// place, so the same handful of buffers go round for a whole render and
+    /// the pixels are copied once, out of the mapped readback. `try_recv`
+    /// rather than `recv`: waiting for a buffer to come back would be waiting
+    /// for the encoder, which is what [`QUEUE_DEPTH`] exists not to do. Its
+    /// empty answer mints one more buffer, which is how the circulation
+    /// reaches its steady size over the first few frames.
+    fn push(&mut self, frame: Vec<u8>) -> Result<Option<Vec<u8>>, String> {
         let Some(frames) = self.frames.as_ref() else {
-            return Ok(false);
+            return Ok(None);
         };
-        let mut buffer = self.spare.try_recv().unwrap_or_default();
-        buffer.clear();
-        buffer.extend_from_slice(frame);
-        if frames.send(buffer).is_ok() {
-            return Ok(true);
+        match frames.send(frame) {
+            Ok(()) => Ok(Some(self.spare.try_recv().unwrap_or_default())),
+            // The channel is closed only because the writer returned, and it
+            // returns only on an early stop or a failure. Which one is its
+            // verdict. The frame it refused comes back in the error, so a
+            // render that carries on after a full verdict keeps its buffer.
+            Err(std::sync::mpsc::SendError(frame)) => Ok(self.collect()?.then_some(frame)),
         }
-        // The channel is closed only because the writer returned, and it
-        // returns only on an early stop or a failure. Which one is its verdict.
-        self.collect()
     }
 
     /// Stop the writer and take its verdict, closing ffmpeg's stdin with it —
@@ -324,27 +332,35 @@ impl Sink {
         }
     }
 
-    /// Feed one frame. `Ok(true)` means keep going; `Ok(false)` means the
-    /// encoder has closed the pipe and wants no more frames — a clean early
-    /// stop, NOT a failure. ffmpeg does exactly this under `-shortest` when the
-    /// soundtrack ends before the visuals (a one-loop take: audio is the loop,
-    /// the picture keeps fading out past it). Whether that early stop was
-    /// success or a crash is ffmpeg's call, read from its exit status in
-    /// [`Self::finish`]; the caller just stops feeding on `Ok(false)`.
+    /// Feed one frame and take a buffer back for the next one. `Ok(None)`
+    /// means the encoder has closed the pipe and wants no more frames — a
+    /// clean early stop, NOT a failure. ffmpeg does exactly this under
+    /// `-shortest` when the soundtrack ends before the visuals (a one-loop
+    /// take: audio is the loop, the picture keeps fading out past it). Whether
+    /// that early stop was success or a crash is ffmpeg's call, read from its
+    /// exit status in [`Self::finish`]; the caller just stops feeding.
     ///
     /// The video sink answers about the frames before this one — see
-    /// [`Writer::push`]. `frame` is copied rather than taken, the renderer
-    /// handing over a view of a buffer it owns; the copy is into a buffer the
-    /// writer hands back, so it costs a memcpy and no allocation.
-    pub fn push(&mut self, frame: &[u8]) -> Result<bool, String> {
+    /// [`Writer::push`].
+    ///
+    /// `frame` is TAKEN rather than borrowed, and the buffer that comes back
+    /// is the one to draw into next. The renderer would otherwise allocate a
+    /// frame and this would copy it into a recycled one, which at 1440p is
+    /// 14.7 MB allocated and 14.7 MB memcpy'd per frame for a picture that is
+    /// already a copy out of the mapped readback. The two sinks with no thread
+    /// behind them hand the same buffer straight back, having finished with it
+    /// by the time they return.
+    pub fn push(&mut self, frame: Vec<u8>) -> Result<Option<Vec<u8>>, String> {
         match self {
             Sink::Video { writer, .. } => writer.push(frame),
-            Sink::Raw { file } => file.write_all(frame).map(|()| true).map_err(|e| e.to_string()),
+            Sink::Raw { file } => {
+                file.write_all(&frame).map(|()| Some(frame)).map_err(|e| e.to_string())
+            }
             Sink::Pngs { dir, stem, index, size } => {
                 let path = dir.join(format!("{stem}-{index:05}.png"));
                 *index += 1;
-                image::save_buffer(&path, frame, size[0], size[1], image::ExtendedColorType::Rgba8)
-                    .map(|()| true)
+                image::save_buffer(&path, &frame, size[0], size[1], image::ExtendedColorType::Rgba8)
+                    .map(|()| Some(frame))
                     .map_err(|e| format!("{}: {e}", path.display()))
             }
         }
@@ -496,8 +512,19 @@ mod tests {
         // Distinguishable per frame, so the check is about ORDER and not just
         // about the byte count.
         let frames: Vec<Vec<u8>> = (0..64u8).map(|k| vec![k; 4 * 2 * 4]).collect();
+        // Fed the way the renderer feeds it: the frame goes in by move and the
+        // buffer that comes back is the one refilled for the next frame. That
+        // is what makes "truncated — a buffer recycled while it is still being
+        // written" reachable here; handing a fresh `Vec` over each time would
+        // check the queue and never the recycling.
+        let mut buffer = Vec::new();
         for frame in &frames {
-            assert_eq!(sink.push(frame), Ok(true), "the fake encoder is reading");
+            buffer.clear();
+            buffer.extend_from_slice(frame);
+            buffer = sink
+                .push(buffer)
+                .expect("an early stop is not an error")
+                .expect("the fake encoder is reading");
         }
         sink.finish(|_| {}).expect("a clean finish");
 
@@ -522,11 +549,20 @@ mod tests {
         // broken pipe.
         let dir = fake_ffmpeg("early-stop", "exit 0");
         let mut sink = video_to(&dir);
-        // Well past the 64 KB a pipe will hold without a reader, so this
-        // cannot end by running out of frames instead.
-        let frame = vec![0u8; 64 * 1024];
+        let mut buffer = Vec::new();
         let mut fed = 0;
-        while sink.push(&frame).expect("an early stop is not an error") {
+        loop {
+            // Well past the 64 KB a pipe will hold without a reader, so this
+            // cannot end by running out of frames instead. Refilled each time
+            // rather than sent as-is: a buffer minted to stand in for one still
+            // in flight comes back empty, and an empty write never breaks a
+            // pipe, so a loop that fed it would spin instead of stopping.
+            buffer.clear();
+            buffer.resize(64 * 1024, 0);
+            let Some(spare) = sink.push(buffer).expect("an early stop is not an error") else {
+                break;
+            };
+            buffer = spare;
             fed += 1;
             assert!(fed < 4096, "the encoder is gone and the sink went on accepting frames");
         }
@@ -550,9 +586,14 @@ mod tests {
             "cat > /dev/null\nprintf 'frame=40\\nfps=12.0\\nprogress=continue\\nframe=64\\nprogress=end\\n'",
         );
         let mut sink = video_to(&dir);
-        let frame = vec![0u8; 4 * 2 * 4];
+        let mut buffer = Vec::new();
         for _ in 0..64 {
-            assert_eq!(sink.push(&frame), Ok(true), "the fake encoder is reading");
+            buffer.clear();
+            buffer.resize(4 * 2 * 4, 0);
+            buffer = sink
+                .push(buffer)
+                .expect("an early stop is not an error")
+                .expect("the fake encoder is reading");
         }
         let mut reported = Vec::new();
         sink.finish(|frames| reported.push(frames)).expect("a clean finish");

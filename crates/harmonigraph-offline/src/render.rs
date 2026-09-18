@@ -190,9 +190,14 @@ fn frame_input(screen: egui::Rect, now: f64, max_texture_side: usize) -> egui::R
 /// Render every frame, handing each to `emit` as tightly packed RGBA8, and
 /// report where the time went ([`Stages`]).
 ///
+/// `emit` takes the frame's buffer and returns one to draw the next frame
+/// into — its own, once it has finished with it, or one that has been round a
+/// writer thread. A 1440p frame is 14.7 MB, so a buffer per frame would be the
+/// allocator doing 880 MB a second of video for nothing.
+///
 /// `emit` returning an error stops the render — that is how a dead encoder
 /// gets reported rather than swallowed for another thousand frames. `emit`
-/// returning `Ok(false)` also stops it, but cleanly: the encoder wants no more
+/// returning `Ok(None)` also stops it, but cleanly: the encoder wants no more
 /// frames (ffmpeg under `-shortest`, its soundtrack shorter than the visuals),
 /// and the caller reads the true verdict from the encoder's exit status.
 pub fn render(
@@ -200,7 +205,7 @@ pub fn render(
     mut audio: Option<&mut Audio>,
     settings: &Settings,
     appearance: AppearanceDocument,
-    mut emit: impl FnMut(&[u8]) -> Result<bool, String>,
+    mut emit: impl FnMut(Vec<u8>) -> Result<Option<Vec<u8>>, String>,
 ) -> Result<Stages, String> {
     let mut renderer = Renderer::new(settings.size)
         .ok_or("no usable GPU adapter (this needs a real GPU, not a container)")?;
@@ -306,6 +311,11 @@ pub fn render(
     // the determinism tests still hold.
     let mut stages = Stages::default();
     let loop_began = Instant::now();
+    // The frame buffer, going round: drawn into here, handed to the sink, and
+    // back from `emit` for the next frame. Empty to start with — the first
+    // render sizes it, and after the first few the sink is handing back
+    // buffers that are already the right size.
+    let mut buffer = Vec::new();
     for frame in 0..frames {
         let drawing = Instant::now();
         let now = prepare_frame(replay, &mut state, audio.as_deref_mut(), settings, frame)?;
@@ -326,7 +336,8 @@ pub fn render(
         let primitives = context.tessellate(output.shapes, settings.pixels_per_point);
         stages.ui += drawing.elapsed();
 
-        let (bytes, cost) = renderer.render(
+        let cost = renderer.render(
+            &mut buffer,
             &primitives,
             &output.textures_delta,
             settings.pixels_per_point,
@@ -336,11 +347,11 @@ pub fn render(
         stages.readback += cost.readback;
 
         let handing_over = Instant::now();
-        let wanted = emit(&bytes)?;
+        let returned = emit(std::mem::take(&mut buffer))?;
         stages.emit += handing_over.elapsed();
         stages.frames = frame + 1;
         stages.wall = loop_began.elapsed();
-        if !wanted {
+        let Some(next) = returned else {
             // The encoder wants no more frames (e.g. ffmpeg under -shortest,
             // the soundtrack ending before the visuals). Stop here; the caller
             // reads whether that was a clean finish from the exit status.
@@ -349,7 +360,8 @@ pub fn render(
             // it counts toward the stage costs but not toward the frames the
             // file holds — which is the encoder's own count, printed separately.
             return Ok(stages);
-        }
+        };
+        buffer = next;
     }
     Ok(stages)
 }
@@ -636,8 +648,8 @@ mod tests {
                 &settings,
                 appearance_for(&take, None),
                 |bytes| {
-                    frames.push(bytes.to_vec());
-                    Ok(true)
+                    frames.push(bytes);
+                    Ok(Some(Vec::new()))
                 },
             );
             match result {
@@ -678,8 +690,8 @@ mod tests {
                 &settings,
                 appearance,
                 |bytes| {
-                    frames.push(bytes.to_vec());
-                    Ok(true)
+                    frames.push(bytes);
+                    Ok(Some(Vec::new()))
                 },
             );
             match result {
@@ -814,8 +826,8 @@ mod tests {
         let mut frames = Vec::new();
         let appearance = appearance_for(replay.take(), None);
         match render(&mut replay, None, settings, appearance, |bytes| {
-            frames.push(bytes.to_vec());
-            Ok(true)
+            frames.push(bytes);
+            Ok(Some(Vec::new()))
         }) {
             Ok(_) => Some(frames),
             // Optional local GPU tests may skip. The shared device setup
@@ -1035,8 +1047,8 @@ mod tests {
             let mut frames = Vec::new();
             let appearance = appearance_for(replay.take(), None);
             match render(&mut replay, Some(&mut audio), &settings, appearance, |bytes| {
-                frames.push(bytes.to_vec());
-                Ok(true)
+                frames.push(bytes);
+                Ok(Some(Vec::new()))
             }) {
                 Ok(_) => Some(frames),
                 Err(e) if e.contains("no usable GPU adapter") => {

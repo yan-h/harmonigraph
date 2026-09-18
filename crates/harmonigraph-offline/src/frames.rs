@@ -129,16 +129,23 @@ impl Renderer {
         self.device.limits().max_texture_dimension_2d as usize
     }
 
-    /// Paint one frame's tessellated shapes and read the result back as
-    /// tightly packed RGBA8 (row padding removed), with what the two halves
-    /// cost — see [`FrameCost`].
+    /// Paint one frame's tessellated shapes into `frame` as tightly packed
+    /// RGBA8 (row padding removed), reporting what the two halves cost — see
+    /// [`FrameCost`].
+    ///
+    /// `frame` is filled rather than returned, and the caller is expected to
+    /// hand back a buffer that has been round the sink: at 1440p a frame is
+    /// 14.7 MB, so allocating one per frame is 880 MB a second of video through
+    /// the allocator for no reason. Whatever is in it is overwritten; only its
+    /// capacity is reused.
     pub fn render(
         &mut self,
+        frame: &mut Vec<u8>,
         primitives: &[egui::ClippedPrimitive],
         textures: &egui::TexturesDelta,
         pixels_per_point: f32,
         clear: egui::Color32,
-    ) -> (Vec<u8>, FrameCost) {
+    ) -> FrameCost {
         let handed_over = std::time::Instant::now();
         for (id, delta) in &textures.set {
             self.egui.update_texture(&self.device, &self.queue, *id, delta);
@@ -211,27 +218,27 @@ impl Renderer {
         slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
         self.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
         let row_bytes = (self.size[0] * 4) as usize;
-        let frame = {
+        frame.clear();
+        frame.reserve(row_bytes * self.size[1] as usize);
+        {
             let mapped = slice.get_mapped_range();
-            let mut frame = Vec::with_capacity(row_bytes * self.size[1] as usize);
             for row in 0..self.size[1] as usize {
                 let start = row * self.bytes_per_row as usize;
                 frame.extend_from_slice(&mapped[start..start + row_bytes]);
             }
-            frame
-        };
+        }
         self.readback.unmap();
         let readback = waited.elapsed();
 
         for id in &textures.free {
             self.egui.free_texture(id);
         }
-        (frame, FrameCost { submit, readback })
+        FrameCost { submit, readback }
     }
 
-    /// [`Self::render`] without the cost, for the probes below — they are
-    /// about what a frame LOOKS like, and threading a `.0` through eight of
-    /// them would say nothing.
+    /// [`Self::render`] into a fresh buffer, for the probes below — they are
+    /// about what a frame LOOKS like, and neither the recycling nor the cost
+    /// would say anything to them.
     #[cfg(test)]
     pub fn render_to_vec(
         &mut self,
@@ -240,7 +247,9 @@ impl Renderer {
         pixels_per_point: f32,
         clear: egui::Color32,
     ) -> Vec<u8> {
-        self.render(primitives, textures, pixels_per_point, clear).0
+        let mut frame = Vec::new();
+        self.render(&mut frame, primitives, textures, pixels_per_point, clear);
+        frame
     }
 }
 
