@@ -184,6 +184,16 @@ pub(crate) fn spectrum_settings_pane(
                  where each scale's face points, so the bands break and bend through the \
                  cloud. 0 leaves the light where it is and the cloud is just a lit body.",
             );
+        ValueBar::new(&mut atmosphere.scale_facet, 0.0..=1.0, "Facet")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "WHERE a scale reads the light. 0 reads it where the scale's own face points, \
+                 so the picture bends through the cloud. 100% reads it at the scale's centre \
+                 instead \u{2014} one value for the whole scale, so the cloud comes apart into \
+                 flat quantized patches. Refraction scales the first of those and not the \
+                 second.",
+            );
         ValueBar::new(&mut atmosphere.scale_relief, 0.0..=1.0, "Scale relief")
             .percent()
             .show(ui)
@@ -198,6 +208,21 @@ pub(crate) fn spectrum_settings_pane(
             .on_hover_text(
                 "The sparkle on a scale's face. The light leans with the sound's own \
                  gradient, so the glints travel across the clouds as the picture scrolls.",
+            );
+        ValueBar::new(&mut atmosphere.scale_sparkle, 6.0..=40.0, "Sparkle")
+            .integer()
+            .show(ui)
+            .on_hover_text(
+                "How TIGHT that sparkle is. Low is a broad sheen across a whole face; high \
+                 picks out a small hard star on the few faces aimed right at the light.",
+            );
+        ValueBar::new(&mut atmosphere.scale_rock, 0.0..=1.0, "Rock")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "Each scale rocks on its own slow clock, so the glints wander even under a \
+                 picture holding still. It runs on the same clock as the drift, so Cloud \
+                 speed at 0 holds it too.",
             );
         ValueBar::new(&mut atmosphere.cloud_ambient, 0.0..=1.0, "Cloud ambient")
             .percent()

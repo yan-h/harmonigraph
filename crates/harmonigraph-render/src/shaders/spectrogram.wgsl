@@ -277,7 +277,11 @@ struct Cloud {
     scale_relief: f32,
     scale_glint: f32,
     cloud_ambient: f32,
+    scale_facet: f32,
+    scale_sparkle: f32,
+    scale_rock: f32,
     _pad2: f32,
+    _pad3: f32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -413,6 +417,15 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 //
 // Cloud space is the pane's, aspect-corrected and independent of DPI: five
 // cloud units across the pane's height at size 1, like the lattice nebula.
+//
+// Three of round 1's qualities are on DIALS rather than decided here, because
+// describing which of them Yan wants back has failed in words twice: `Facet`
+// carries the lookup from this round's continuous slope onto round 1's flat
+// per-scale patch, `Sparkle` is the specular exponent round 1 had at 24 and
+// this one at 14, and `Rock` is round 1's per-dome clock. **All three are
+// defaults that reproduce this round exactly** — 0, 14 and 0 — so the picture
+// they start from is the one that is already loaded, and every step away from
+// it is one Yan asked for.
 
 fn cloud_gradient(cell: vec2<i32>) -> vec2<f32> {
     var n = (bitcast<u32>(cell.x) * 0x9e3779b9u) ^ (bitcast<u32>(cell.y) * 0x85ebca6bu);
@@ -490,12 +503,27 @@ const DOME_UNION: f32 = 9.0;
 // The steepest a unit dome gets, which is what `scale_refract` is measured
 // against. h = (1 - d^2)^1.5, so |dh/dd| peaks at d = 1/sqrt(2) and equals 1.5.
 const DOME_PEAK_SLOPE: f32 = 1.5;
+// How far off its own face a scale's normal may be rocked, at the top of the
+// dial. Round 1 rocked by 0.12 against a tilt vector that reached about 0.5, so
+// round 1's whole wobble sits around 40% of the way up this one and the rest of
+// the dial is past anything that has been seen.
+const ROCK_TILT: f32 = 0.30;
 
 struct Pile {
     // Soft-union height of the domes covering this point, 0 where none do.
     height: f32,
     // Its slope, in cell units: the face the scales here present to the light.
     slope: vec2<f32>,
+    // Where the domes covering this point keep their CENTRES, as an offset from
+    // the point in cell units. Inside a dome one weight runs away with the
+    // union, so this is `centre - r` and `r + to_centre` is the CONSTANT centre —
+    // a flat facet. On a bisector the two weights are equal and it is their
+    // mean, so the reading turns over continuously where round 1's nearest-cell
+    // pick stepped. That is the whole difference between the two.
+    to_centre: vec2<f32>,
+    // Each dome's own slow wobble at unit amplitude, blended by the same
+    // weights, so the scales rock past each other rather than together.
+    rock: vec2<f32>,
 };
 
 // One octave of domes: a soft union over the 3x3 ring, with the union's own
@@ -509,6 +537,8 @@ fn dome_octave(r: vec2<f32>, occupancy: f32) -> Pile {
     let base = floor(r);
     var weight = 0.0;
     var slope = vec2<f32>(0.0);
+    var to_centre = vec2<f32>(0.0);
+    var rock = vec2<f32>(0.0);
     for (var j = -1; j <= 1; j += 1) {
         for (var i = -1; i <= 1; i += 1) {
             let cell = vec2<i32>(base) + vec2<i32>(i, j);
@@ -529,16 +559,32 @@ fn dome_octave(r: vec2<f32>, occupancy: f32) -> Pile {
             let w = exp(DOME_UNION * h);
             weight += w;
             slope += w * (-3.0 * root * d / DOME_RADIUS);
+            to_centre += w * (centre - r);
+            // Round 1's clock, rates and phases unchanged: each dome turns at
+            // its own rate from its own offset, so no two scales beat together.
+            // Behind the knob because a sine and a cosine per dome per pixel is
+            // real work to do for an amplitude of zero, and the branch is on a
+            // uniform, so no two lanes ever disagree about taking it.
+            if cloud.scale_rock > 0.0 {
+                rock += w * vec2<f32>(
+                    sin(cloud.time * (0.2 + 0.3 * h3.x) + h3.y * 6.2831853),
+                    cos(cloud.time * (0.25 + 0.2 * h3.y) + h3.x * 6.2831853),
+                );
+            }
         }
     }
     var out: Pile;
     if weight <= 0.0 {
         out.height = 0.0;
         out.slope = vec2<f32>(0.0);
+        out.to_centre = vec2<f32>(0.0);
+        out.rock = vec2<f32>(0.0);
         return out;
     }
     out.height = log(weight) / DOME_UNION;
     out.slope = slope / weight;
+    out.to_centre = to_centre / weight;
+    out.rock = rock / weight;
     return out;
 }
 
@@ -564,6 +610,19 @@ fn cloud_domes(r: vec2<f32>, occupancy: f32) -> Pile {
     // the finer octave's slope arrives in ITS cell units, so it carries the
     // lacunarity back out with it
     out.slope = (coarse.slope + DOME_FINE_GAIN * DOME_LACUNARITY * fine.slope) / norm;
+    // The facet is the COARSE octave's alone, and that is not an omission. A
+    // facet is flat because one dome's centre answers for its whole interior,
+    // so mixing a second octave in puts a finer mosaic inside every patch and
+    // takes the flatness back out. Worse, the fine octave's bisectors are
+    // 2.1 times closer together and its swing between centres turns over inside
+    // a pixel — a hard edge in miniature, everywhere, which is the one thing
+    // this construction exists to avoid. The crinkle it carries still reaches
+    // the picture through the SLOPE above, which is where it belongs: it is
+    // surface, not a scale.
+    out.to_centre = coarse.to_centre;
+    // An amplitude rather than a derivative, so this takes the height's
+    // combination and not the slope's — no lacunarity.
+    out.rock = (coarse.rock + DOME_FINE_GAIN * fine.rock) / norm;
     return out;
 }
 
@@ -631,7 +690,22 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     // so a wisp bends the light less than a body does.
     let face = pile.slope / DOME_PEAK_SLOPE;
     let bend = cloud.scale_refract * scale_points * density;
-    let bent = cloud_light(pt - face * bend);
+    // `scale_facet` swings that offset off the face the scale PRESENTS and onto
+    // the scale's own CENTRE, which is round 1's reading: one value for the
+    // whole scale, so the picture comes apart into flat quantized patches
+    // instead of bending through them. `to_centre` is in cells and `scale_points`
+    // is how many pane points a cell is, so `pile.to_centre * scale_points` lands
+    // exactly on the dome's centre — the same arithmetic round 1 spelled out as
+    // `centre_pt`. Faded out by `density` with the bend, so the wisps at a
+    // cloud's edge stay where they are.
+    //
+    // `scale_refract` scales the face half only. At facet 1 the reading is the
+    // centre whatever Refraction says, because the two are then measuring
+    // different things: Refraction is how far a FACE carries the light, and a
+    // facet has stopped asking the face. Dialling one down to look at the other
+    // is what this build is for, so they are kept from cancelling.
+    let lookup = mix(-face * bend, pile.to_centre * (scale_points * density), cloud.scale_facet);
+    let bent = cloud_light(pt + lookup);
 
     // Which way the picture's light grows, from taps about a scale apart, so the
     // sun leans with the sound and the glints travel as it scrolls. A flat field
@@ -650,14 +724,25 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     // The scales' normal, from the same slope that bent the light, flattened by
     // `scale_relief` so 0 is a smooth body with no faces at all.
     let relief = cloud.scale_relief * density;
-    let normal = normalize(vec3<f32>(-face * relief, 1.0));
+    // Rocked off that face by `scale_rock`, on each dome's own clock, so the
+    // glints wander over a picture that is holding still. The LOOKUP is left
+    // alone: a scale that rocked the light it refracts would swim, and what
+    // round 1 had was the highlight travelling over a lens that stayed put.
+    var tilt = face;
+    if cloud.scale_rock > 0.0 {
+        tilt += pile.rock * (cloud.scale_rock * ROCK_TILT);
+    }
+    let normal = normalize(vec3<f32>(-tilt * relief, 1.0));
     // The light stands 45 degrees over the plane, on the side it grows toward.
     // Diffuse is 1 on a flat face, so a relief of 0 leaves the light alone.
     let sun = normalize(vec3<f32>(toward * 0.7, 0.7));
     let diffuse = max(dot(normal, sun), 0.0) / sun.z;
     let half = normalize(sun + vec3<f32>(0.0, 0.0, 1.0));
-    let flat_glint = pow(half.z, 14.0);
-    let glint = max(pow(max(dot(normal, half), 0.0), 14.0) - flat_glint, 0.0)
+    // One exponent for both, and it has to stay that way: the subtraction is
+    // the lobe's excess over what a FLAT face returns, so a `flat_glint` on a
+    // different power would leave a floor or a hole rather than nothing.
+    let flat_glint = pow(half.z, cloud.scale_sparkle);
+    let glint = max(pow(max(dot(normal, half), 0.0), cloud.scale_sparkle) - flat_glint, 0.0)
         / (1.0 - flat_glint) * aimed;
 
     // The edge facing the light is the bright rim and the thick core is dimmer,

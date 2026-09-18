@@ -2419,6 +2419,126 @@ mod tests {
         );
     }
 
+    /// The facet dial QUANTIZES that bend, and adds nothing of its own.
+    ///
+    /// Reading the light at the nearest scale's CENTRE is the other half of
+    /// what round 1 had and round 5 removed, and round 5 was right about the
+    /// defect: a nearest-cell pick STEPS across the bisector between two
+    /// scales, which is a straight edge through a cloud. The soft union keeps
+    /// the reading and loses the step. `Pile::toward` is the union's own
+    /// weights against each dome's offset to its own centre, so inside a dome
+    /// one weight runs away with the sum and the reading is that dome's centre
+    /// — one value for the whole interior, which is the flat patch — while on a
+    /// bisector the two weights are equal and the reading crosses over
+    /// continuously.
+    ///
+    /// Measured exactly as the refraction above, and for the same reason: the
+    /// dial moves 7.6% of the pane over the ridge fixture and EXACTLY zero over
+    /// the flat one. The zero is the half that carries the claim. A displaced
+    /// lookup over a constant field returns that constant wherever it reads, so
+    /// a facet that moved a featureless picture would be PAINTING its scales
+    /// on rather than quantizing what is behind them — and paint is the easy
+    /// thing to mistake for this effect, because a mosaic drawn over a flat
+    /// field looks like a mosaic too.
+    #[test]
+    fn the_facet_dial_quantizes_the_bend_rather_than_painting_scales() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let moved_by_facet = |cb: &mut SpectrogramCallback| {
+            {
+                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                s.cloud_depth = 1.0;
+                s.cloud_cover = 1.0;
+                s.scale_facet = 0.0;
+            }
+            let bent = fresh_frame(&device, &queue, cb);
+            cb.atmosphere.as_mut().unwrap().settings.scale_facet = 1.0;
+            let faceted = fresh_frame(&device, &queue, cb);
+            let n = bent.len() / 4;
+            let moved = bent
+                .chunks_exact(4)
+                .zip(faceted.chunks_exact(4))
+                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+                .count();
+            moved as f32 / n as f32
+        };
+        let over_structure = moved_by_facet(&mut cloud_fixture());
+        let over_flat = moved_by_facet(&mut flat_cloud_fixture());
+        assert!(
+            over_structure > 0.02,
+            "carrying the lookup from the scales' faces to their centres moved almost none of \
+             the pane over a picture with structure in it, so the facet is not reaching the \
+             lookup at all: {over_structure}"
+        );
+        assert_eq!(
+            over_flat, 0.0,
+            "the facet moved a FEATURELESS picture, so it is drawing its scales rather than \
+             quantizing what is behind them: {over_flat} flat against {over_structure} over \
+             structure"
+        );
+    }
+
+    /// The two dials that only SHADE reach the shader, each on its own.
+    ///
+    /// Neither changes where the light is read, so neither shows up in the
+    /// measurement above — and both ride in the same uniform, which is read by
+    /// OFFSET rather than by name. A field added in the wrong place there swaps
+    /// two values silently and nothing in either type system notices, so what
+    /// this holds is that each of them separately moves the picture it is
+    /// supposed to move.
+    ///
+    /// At the fixture's default relief the scales are barely domed and the
+    /// glint has almost no face to sit on, which is a fixture too small to
+    /// reach either knob: both are turned up here so the shading they change is
+    /// actually in the picture. Measured at 5.7% of the pane for the rock and
+    /// 1.8% for the sparkle; at rock 0 it is EXACTLY zero, which is what says
+    /// the knob costs the picture it starts from nothing.
+    ///
+    /// What this does NOT say is that the rock is on a CLOCK, and no cheap test
+    /// can: the rock's phase advances on `cloud_time`, the same clock that
+    /// drives the drift, so there is no setting that runs one and holds the
+    /// other — at `cloud_speed` 0 both stop. Over half a second the drift alone
+    /// moves 8.1% of this pane and the rock changes that to 8.0%, which is
+    /// noise. The wander is visible in a render and not in a pair of frames.
+    #[test]
+    fn the_rock_and_the_sparkle_each_reach_the_scales() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // The fixture's own relief and glint are too small to reach either
+        // knob: a scale barely domed presents no face for a sparkle to sit on.
+        let lit = |turn: fn(&mut harmonigraph_scene::SpectralAtmosphere)| {
+            let mut cb = cloud_fixture();
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.cloud_depth = 1.0;
+            s.cloud_cover = 1.0;
+            s.scale_relief = 1.0;
+            s.scale_glint = 1.0;
+            turn(s);
+            fresh_frame(&device, &queue, &cb)
+        };
+        let plain = lit(|_| {});
+        for (name, turn) in [
+            (
+                "Rock",
+                (|s: &mut harmonigraph_scene::SpectralAtmosphere| s.scale_rock = 1.0)
+                    as fn(&mut harmonigraph_scene::SpectralAtmosphere),
+            ),
+            ("Sparkle", |s| s.scale_sparkle = 40.0),
+        ] {
+            let frame = lit(turn);
+            let n = plain.len() / 4;
+            let moved = plain
+                .chunks_exact(4)
+                .zip(frame.chunks_exact(4))
+                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+                .count() as f32
+                / n as f32;
+            assert!(moved > 0.01, "{name} moved almost none of the pane: {moved}");
+        }
+    }
+
     /// Cover is the knob that opens the sky, over its whole range.
     ///
     /// It is a threshold on the band-passed field, so this also says the band

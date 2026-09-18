@@ -40,12 +40,24 @@ pub struct SpectralAtmosphere {
     /// refraction, and the whole reason the layer reads as a lens rather than
     /// as something painted over the picture. 0 leaves the light where it is.
     pub scale_refract: f32,
+    /// Where a scale reads the light: at 0 where its own face POINTS, at 1 at
+    /// the scale's CENTRE — which is one value across the whole scale, so the
+    /// picture comes apart into flat quantized patches instead of bending
+    /// smoothly.
+    pub scale_facet: f32,
     /// How domed the scales are, which is what gives them faces to catch the
     /// light with. 0 is a smooth body with no scales in it at all.
     pub scale_relief: f32,
     /// The specular lobe on a scale's face: the sparkle that travels as the
     /// picture scrolls under it.
     pub scale_glint: f32,
+    /// How tight that lobe is — the specular exponent itself. Low is a broad
+    /// sheen over a whole face, high a small hard star.
+    pub scale_sparkle: f32,
+    /// How far each scale rocks on its own slow clock, so the glints wander
+    /// even under a picture that is holding still. 0 leaves them where the
+    /// sound puts them.
+    pub scale_rock: f32,
     /// Light a cloud shows with nothing sounding under it, so a cloud over
     /// silence is visible rather than black.
     pub cloud_ambient: f32,
@@ -68,8 +80,11 @@ impl Default for SpectralAtmosphere {
             cloud_cover: 0.45,
             scale_size: 2.2,
             scale_refract: 0.30,
+            scale_facet: 0.0,
             scale_relief: 0.35,
             scale_glint: 0.4,
+            scale_sparkle: 14.0,
+            scale_rock: 0.0,
             cloud_ambient: 0.12,
         }
     }
@@ -98,9 +113,12 @@ impl SpectralAtmosphere {
         self.cloud_cover = clamp(self.cloud_cover, fresh.cloud_cover, 0.0, 1.0);
         self.scale_size = clamp(self.scale_size, fresh.scale_size, 0.25, 4.0);
         self.scale_refract = clamp(self.scale_refract, fresh.scale_refract, 0.0, 1.0);
+        self.scale_facet = clamp(self.scale_facet, fresh.scale_facet, 0.0, 1.0);
         self.scale_relief = clamp(self.scale_relief, fresh.scale_relief, 0.0, 1.0);
         self.cloud_ambient = clamp(self.cloud_ambient, fresh.cloud_ambient, 0.0, 1.0);
         self.scale_glint = clamp(self.scale_glint, fresh.scale_glint, 0.0, 1.0);
+        self.scale_sparkle = clamp(self.scale_sparkle, fresh.scale_sparkle, 6.0, 40.0);
+        self.scale_rock = clamp(self.scale_rock, fresh.scale_rock, 0.0, 1.0);
         self
     }
 }
