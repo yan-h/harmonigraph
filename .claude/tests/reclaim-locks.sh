@@ -213,7 +213,7 @@ check_handmade_lock() {
     RECLAIM_DRY_RUN=1 RECLAIM_FORCE=1 RECLAIM_NO_NETWORK=1 \
     "$SCRIPT" </dev/null 2>&1)
 
-  if printf '%s' "$out" | grep -q "would remove"; then
+  if grep -q "would remove" <<<"$out"; then
     echo "✗ $desc" >&2
     printf '%s' "$out" | sed 's/^/    got: /' >&2
     failures=$((failures + 1))
@@ -297,9 +297,17 @@ SHIM
     RECLAIM_DRY_RUN=1 RECLAIM_FORCE=1 RECLAIM_MIN_IDLE_MINUTES=0 \
     "$SCRIPT" </dev/null 2>&1)
 
+  # Herestrings, not `printf | grep -q`, for the reason the script itself
+  # spells out at its REGISTERED check: under `set -o pipefail` a matching
+  # `grep -q` exits while printf is still writing, printf takes SIGPIPE, and
+  # the pipeline reports 141 even though the match succeeded — so the assertion
+  # inverts. Every guard below is a matcher over captured output, so this is
+  # the shape all of them take. It was not hypothetical here: this loop failed
+  # on `behind-w` with `printf: write error: Broken pipe` while its own failure
+  # dump printed the line it had just been told was missing.
   for case in "closed-w:a PR closed unmerged" "behind-w:a branch behind the sha that merged"; do
     wt=${case%%:*}
-    if printf '%s\n' "$out" | grep -q "would remove .*$wt"; then
+    if grep -q "would remove .*$wt" <<<"$out"; then
       echo "✓ ${case#*:} is resolved by containment"
     else
       echo "✗ containment missed ${case#*:} ($wt)" >&2
@@ -311,8 +319,8 @@ SHIM
   # The one that must survive. Asserting on "no-remove" rather than on the
   # absence of "would remove" keeps a fixture that never reached the decision
   # from passing as a success.
-  if printf '%s\n' "$out" | grep -q "no-remove live-w: unresolved" &&
-    ! printf '%s\n' "$out" | grep -q "would remove .*live-w"; then
+  if grep -q "no-remove live-w: unresolved" <<<"$out" &&
+    ! grep -q "would remove .*live-w" <<<"$out"; then
     echo "✓ a branch in no PR is still kept"
   else
     echo "✗ containment removed a branch that no PR resolves" >&2
@@ -382,13 +390,206 @@ check_orphan_report() {
     return
   fi
 
-  if printf '%s\n' "$out" | grep -q "left-behind"; then
+  if grep -q "left-behind" <<<"$out"; then
     echo "✓ $desc"
   else
     echo "✗ $desc: survived but was never named, so it stays invisible" >&2
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     failures=$((failures + 1))
   fi
+}
+
+# A throwaway superproject with a real submodule at `.shared-skills` and one
+# registered worktree under `.claude/worktrees` whose submodule is CHECKED OUT,
+# sitting on main's commit so the ancestor signal resolves it. Sets $main and
+# $wt for the caller.
+#
+# The checkout is the whole fixture. `git worktree remove` refuses on a
+# POPULATED submodule; an uninitialised gitlink removes plainly, which is both
+# why tier 2 ever worked and why a fixture that skipped `submodule update`
+# would pass against the unfixed script — the shape #450 warns about. The
+# assertion at the bottom is there to keep it honest.
+build_submodule_fixture() {
+  work=$1
+  main="$work/main"
+  sub="$work/sub"
+  wt="$main/.claude/worktrees/w1"
+  mkdir -p "$main" "$sub" "$work/bin" || return 1
+
+  (
+    cd "$sub" || exit 1
+    git init -q . 2>/dev/null || exit 1
+    git checkout -q -b main 2>/dev/null || true
+    git config user.email t@t; git config user.name t
+    : > skill.md
+    git add skill.md || exit 1
+    git commit -q -m base || exit 1
+  ) || return 1
+
+  (
+    cd "$main" || exit 1
+    git init -q . 2>/dev/null || exit 1
+    real=$(pwd -P)
+    here=$(git rev-parse --absolute-git-dir 2>/dev/null)
+    case "$here" in
+      "$real"/*) ;;
+      *) echo "refusing: git resolves to ${here:-nothing}, not $real" >&2; exit 1 ;;
+    esac
+    git checkout -q -b main 2>/dev/null || true
+    git config user.email t@t; git config user.name t
+    printf '/.claude/worktrees/\n/target/\n' > .gitignore
+    git add .gitignore
+    git commit -q -m base || exit 1
+    # file:// submodules are refused by default since git 2.38, and a local
+    # path is the only kind a hermetic test can have.
+    git -c protocol.file.allow=always submodule add -q "$sub" .shared-skills || exit 1
+    git commit -q -m submodule || exit 1
+    git worktree add -q -b w1 .claude/worktrees/w1 HEAD 2>/dev/null || exit 1
+    git -C .claude/worktrees/w1 -c protocol.file.allow=always \
+      submodule update --init --quiet || exit 1
+    mkdir -p .claude/worktrees/w1/target/debug || exit 1
+    : > .claude/worktrees/w1/target/debug/sentinel
+  ) || return 1
+
+  # ` <sha> .shared-skills (heads/main)` is populated; `-<sha>` is a gitlink
+  # nobody checked out, and git removes that worktree without complaint.
+  case "$(git -C "$wt" submodule status 2>/dev/null)" in
+    " "*) return 0 ;;
+    *) echo "fixture: .shared-skills is not populated in the worktree" >&2; return 1 ;;
+  esac
+}
+
+# The removal that silently did not happen. git refuses a worktree containing a
+# submodule, the script discarded that stderr and returned 1, so a dry run
+# promising three removals was followed by a real run that took none of them and
+# said nothing (#898). Every Claude worktree now populates `.shared-skills`, so
+# without the `--force` retry tier 2 removes nothing at all, ever.
+check_submodule_removal() {
+  desc="a worktree with a populated submodule is removed"
+  work="$TMP/submodule"
+  build_submodule_fixture "$work" || {
+    echo "✗ $desc: could not build the fixture" >&2
+    failures=$((failures + 1))
+    return
+  }
+
+  # The idle guard sits after the removal decision's other gates and would hold
+  # a just-built worktree back for a reason that is not what this case is about.
+  find "$wt" -depth -exec touch -t 200001010000 {} \; 2>/dev/null
+  touch -t 200001010000 "$wt"
+
+  out=$(cd "$main" && CLAUDE_PROJECT_DIR="$main" RECLAIM_FORCE=1 \
+    RECLAIM_NO_NETWORK=1 RECLAIM_MIN_IDLE_MINUTES=0 \
+    "$SCRIPT" </dev/null 2>&1)
+
+  registered=$(git -C "$main" worktree list --porcelain)
+  if [ -d "$wt" ] || grep -q "worktrees/w1" <<<"$registered"; then
+    echo "✗ $desc: it survived, which is #898 exactly" >&2
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    failures=$((failures + 1))
+    return
+  fi
+
+  # --force is aimed at one worktree, but a submodule is shared-looking state:
+  # prove the main checkout still has its own copy.
+  if [ ! -f "$main/.shared-skills/skill.md" ]; then
+    echo "✗ $desc: the main checkout's submodule went with it" >&2
+    failures=$((failures + 1))
+    return
+  fi
+  echo "✓ $desc"
+}
+
+# `--force` gives up git's own refusal on a dirty tree, so the ONLY thing
+# standing between uncommitted work and deletion is this script's `status
+# --porcelain` check. The work here is inside the submodule, which the
+# superproject reports as a modified gitlink — the reading the whole retry
+# leans on.
+check_submodule_dirty_is_kept() {
+  desc="uncommitted work inside the submodule keeps the worktree"
+  work="$TMP/submodule-dirty"
+  build_submodule_fixture "$work" || {
+    echo "✗ $desc: could not build the fixture" >&2
+    failures=$((failures + 1))
+    return
+  }
+
+  # BEFORE the backdate, deliberately: at maxdepth 2 this file is also what the
+  # idle guard sees, and a fixture that tripped that guard instead would be
+  # kept for a reason that has nothing to do with being dirty.
+  : > "$wt/.shared-skills/scratch.md"
+  find "$wt" -depth -exec touch -t 200001010000 {} \; 2>/dev/null
+  touch -t 200001010000 "$wt"
+
+  dry=$(cd "$main" && CLAUDE_PROJECT_DIR="$main" RECLAIM_DRY_RUN=1 \
+    RECLAIM_FORCE=1 RECLAIM_NO_NETWORK=1 RECLAIM_MIN_IDLE_MINUTES=0 \
+    "$SCRIPT" </dev/null 2>&1)
+  (cd "$main" && CLAUDE_PROJECT_DIR="$main" RECLAIM_FORCE=1 \
+    RECLAIM_NO_NETWORK=1 RECLAIM_MIN_IDLE_MINUTES=0 \
+    "$SCRIPT" </dev/null) >/dev/null 2>&1
+
+  # Both halves, as in the orphan tier: that the CLEAN check is the gate that
+  # fires, and that the file is still there afterwards. Survival alone would
+  # pass just as happily on a fixture that never reached the decision.
+  if grep -q "no-remove w1: .*uncommitted/untracked" <<<"$dry" &&
+    [ -f "$wt/.shared-skills/scratch.md" ]; then
+    echo "✓ $desc"
+  else
+    echo "✗ $desc: --force reached a dirty tree, or the clean check never ran" >&2
+    printf '%s\n' "$dry" | sed 's/^/    dry: /' >&2
+    [ -f "$wt/.shared-skills/scratch.md" ] || echo "    the scratch file is GONE" >&2
+    failures=$((failures + 1))
+  fi
+}
+
+# Whatever the next refusal turns out to be, it has to be audible. A dry-run
+# note is no help — the dry run never attempts a removal — so the real run's
+# systemMessage is the only channel, and it has to fire even on a run that
+# freed nothing. The shim refuses every `worktree remove` and passes everything
+# else to the real git.
+check_refused_removal_is_audible() {
+  desc="a removal git refuses is reported, not swallowed"
+  work="$TMP/refused"
+  build_submodule_fixture "$work" || {
+    echo "✗ $desc: could not build the fixture" >&2
+    failures=$((failures + 1))
+    return
+  }
+
+  real_git=$(command -v git)
+  cat > "$work/bin/git" <<SHIM
+#!/usr/bin/env bash
+case "\$*" in
+  *"worktree remove"*) echo 'fatal: refused by the test shim' >&2; exit 128 ;;
+esac
+exec "$real_git" "\$@"
+SHIM
+  chmod +x "$work/bin/git"
+
+  find "$wt" -depth -exec touch -t 200001010000 {} \; 2>/dev/null
+  touch -t 200001010000 "$wt"
+
+  msg=$(cd "$main" && PATH="$work/bin:$PATH" CLAUDE_PROJECT_DIR="$main" \
+    RECLAIM_FORCE=1 RECLAIM_NO_NETWORK=1 RECLAIM_MIN_IDLE_MINUTES=0 \
+    RECLAIM_PRUNE_IDLE_MINUTES=0 "$SCRIPT" </dev/null 2>/dev/null)
+
+  if ! grep -q '"systemMessage"' <<<"$msg" ||
+    ! grep -q 'REFUSED' <<<"$msg" ||
+    ! grep -q 'w1' <<<"$msg"; then
+    echo "✗ $desc: the run said nothing a session would see" >&2
+    printf '%s\n' "${msg:-(no output at all)}" | sed 's/^/    /' >&2
+    failures=$((failures + 1))
+    return
+  fi
+
+  # And the refusal must not cost the disk win: a worktree tier 2 could not
+  # remove still falls through to tier 1.
+  if [ -d "$wt/target/debug" ]; then
+    echo "✗ $desc: a refused worktree stopped getting its cache pruned" >&2
+    failures=$((failures + 1))
+    return
+  fi
+  echo "✓ $desc"
 }
 
 case_n=0
@@ -418,6 +619,9 @@ check_codex_ownership
 check_handmade_lock
 check_containment
 check_orphan_report
+check_submodule_removal
+check_submodule_dirty_is_kept
+check_refused_removal_is_audible
 
 echo
 if [ "$failures" -gt 0 ]; then
