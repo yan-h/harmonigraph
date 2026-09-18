@@ -72,10 +72,9 @@ No older format is migrated or partially recovered.
 ## Audio input memory
 
 The renderer reads uncompressed WAV input through bounded decoding buffers.
-Alignment scans the source into onset envelopes;
-playhead precomputation reads the render window with its FFT margins, and frame analysis then advances through that window.
+Playhead precomputation reads the render window with its FFT margins, and frame analysis then advances through that window.
 A long source therefore does not require a decoded copy of the whole file in memory.
-Notes, onset envelopes, spectrogram columns and the encoder have their own storage costs.
+Notes, spectrogram columns and the encoder have their own storage costs.
 See [the input design and measurements](offline-audio-input.md) for the scope and measured limits.
 
 ## Pass 1 — recording a take
@@ -237,7 +236,7 @@ The flags worth knowing (`--help` lists them all):
 |---|---|
 | `--out` | `.mp4`/`.mov`/`.mkv` → ffmpeg; `.png` → numbered stills; `.rgba` → raw |
 | `--audio` | audio to use instead of the take's own: feeds the spectrum **and** is muxed in |
-| `--align` | how `--audio` lines up: `auto` (default), `off`, or a start in seconds |
+| `--align` | where the soundtrack's first sample falls, in seconds of take time; `off` (the default) leaves it where its own clock says |
 | `--layout` | preset name or a `.ron` file (see below) |
 | `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect and Resolution, whose fresh short edge is 1440 |
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
@@ -304,29 +303,25 @@ Bounce a clean WAV of the same performance and pass it as `--audio`:
 harmonigraph-offline take.take --audio clean-bounce.wav --out piece.mp4
 ```
 
-The catch a naive swap hits is alignment.
-The clean bounce might start at a different song position than where recording armed, and plugin-delay compensation can shift it by a constant amount —
-either way the sound drifts against the picture.
+The catch a naive swap hits is where the bounce starts.
+The take's own recording is stamped to the same clock as the notes — its header says when it armed — so it is *already* aligned to the visualization.
+A bounce carries no such stamp, and is assumed to start at **take zero**.
+That is right for the usual case: take times are the host's transport position, so a bounce exported from the top of the song does start at zero, whatever point in the arrangement the recording armed at.
 
-The fix uses the take's own recording as a timing reference.
-That recording is crackly, but it is stamped to the same clock as the notes, so it is *already* aligned to the visualization.
-`--audio` cross-correlates the clean bounce against it —
-on onset envelopes, which shrug off the crackle and the level difference —
-and places the bounce wherever it actually belongs.
-It prints what it found:
+When it isn't right — plugin-delay compensation shifting the file, or a bounce of a section rather than the whole song — say where it starts:
 
-```
-aligned audio to the take's recording: soundtrack starts at 3.500s (confidence 0.97)
+```sh
+harmonigraph-offline take.take --audio clean-bounce.wav --align 12.5 --out piece.mp4
 ```
 
-Confidence near 1 is a solid match;
-if it comes out low, the two files may not be the same performance, and `--align <seconds>` sets the start by hand.
-`--align off` skips correlation and assumes the bounce starts at take zero.
+`--align` is take-time seconds for the soundtrack's first sample, and it overrides the take's own recording just as readily as a replacement.
+`--align off` is that default spelled out: every soundtrack starts where its own clock says.
 
-This needs the take to have recorded its own audio, which it does unless the device sat somewhere no audio reached it.
-Without a reference there is nothing to correlate against, and the bounce is assumed to start at take zero unless you say otherwise.
-For a Sidechain take, the replacement should resemble that selected sidechain signal;
-a different main mix may not correlate reliably, so give `--align` explicitly.
+Nothing measures the offset for you.
+The drift is a constant, so one number fixes the whole render —
+read it off the first clear attack and pass it.
+(`--align auto` used to cross-correlate the bounce against the take's recording;
+it was deleted in #895, unused.)
 
 ## Layouts
 
