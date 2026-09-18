@@ -61,7 +61,7 @@ impl Stages {
     /// retarget it, after the render is over and nothing is left to correct
     /// it. `the_timing_summary_avoids_the_progress_bars_substring` holds this.
     pub fn summary(&self, total: Duration) -> String {
-        let Some(per) = (self.frames > 0).then(|| self.frames as f64) else {
+        let Some(per) = (self.frames > 0).then_some(self.frames as f64) else {
             return format!("timing: nothing drawn, {:.1} s spent", total.as_secs_f64());
         };
         let share = |stage: Duration| {
