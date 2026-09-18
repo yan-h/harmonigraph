@@ -49,11 +49,6 @@ struct Motion {
     bass: MarkMotion,
     order_delay: [f32; 11],
     order_seed: u32,
-    /// Slot of the wheel's LOWEST slice, so slice `i` is slot `base + i` --
-    /// [`Ring::base`](harmonigraph_scene::Ring::base), kept here because
-    /// [`slice_of`](Self::slice_of) is what maps a slot's level onto the slice
-    /// whose delay governs it.
-    base: i32,
     audio_waiting: bool,
 }
 impl Default for Motion {
@@ -68,7 +63,6 @@ impl Default for Motion {
             bass: MarkMotion::default(),
             order_delay: [0.0; 11],
             order_seed: 0,
-            base: 0,
             audio_waiting: false,
         }
     }
@@ -125,27 +119,10 @@ fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
     }
 }
 impl Motion {
-    /// How long of `dt` slice `i` has actually been animating for.
-    fn waited(&self, dt: f64, i: usize) -> f32 {
-        (dt as f32 - self.delay[i]).max(0.0)
-    }
     fn advance(&mut self, dt: f64, duration: f32, env: &Envelope) {
-        // Both ramps read `delay` before any of it is spent, so the two stay on
-        // one clock rather than one of them seeing a decremented copy.
-        for slot in 0..11 {
-            // The SAME waited time the reveal below gets. What a viewer reads
-            // as one slice arriving is the PRODUCT of the two -- the shader
-            // multiplies this level through `ink.w` by the reveal's own opacity
-            // -- so a level ramp advancing on raw `dt` gives the first slice a
-            // fade as long as the whole duration and the last one a level that
-            // already arrived while it waited: one control, two animation
-            // lengths, which is the bug this indexing exists to fix.
-            let waited = self.slice_of(slot).map_or(dt as f32, |i| self.waited(dt, i));
-            self.levels[slot] =
-                approach(self.levels[slot], self.targets[slot], f64::from(waited), env);
-        }
         for i in 0..11 {
-            let moving = self.waited(dt, i);
+            let moving = (dt as f32 - self.delay[i]).max(0.0);
+            self.delay[i] = (self.delay[i] - dt as f32).max(0.0);
             self.progress[i] = if self.audio_waiting {
                 1.0
             } else if duration <= 0.0 {
@@ -154,22 +131,19 @@ impl Motion {
                 (self.progress[i] + if self.gate { moving / duration } else { -moving / duration })
                     .clamp(0.0, 1.0)
             };
-        }
-        for delay in &mut self.delay {
-            *delay = (*delay - dt as f32).max(0.0);
+            // Undelayed, and over the WHOLE duration, on purpose. This is the
+            // node's presence rather than any one slice's: it reaches the shader
+            // as `ink.w` (`params.x` for a slot no note lights) and is
+            // multiplied by the slice's own reveal, which is already nothing
+            // before that slice's delay. Waiting here too -- the tempting
+            // symmetry -- makes the whole wheel wait for whichever slice the
+            // note happens to light, and a note on a LATE slice then collapses
+            // the stagger: measured, every slice arrived within 0.08 of the
+            // others instead of spanning 0.9.
+            self.levels[i] = approach(self.levels[i], self.targets[i], dt, env);
         }
         self.melody.advance(dt, env);
         self.bass.advance(dt, env);
-    }
-    /// Which SLICE of the wheel draws octave slot `slot`, because `delay` and
-    /// `progress` are indexed by slice while `levels` and `targets` are indexed
-    /// by slot -- slice `i` is slot [`base`](Self::base) `+ i`, and the offset
-    /// is 2 for a C node on the default wheel rather than 0. `None` where the
-    /// wheel draws no slice for that slot, which waits for nothing because it
-    /// is never lit either -- and NOT slice 0, whose own delay is only zero for
-    /// the order that happens to start there.
-    fn slice_of(&self, slot: usize) -> Option<usize> {
-        usize::try_from(slot as i32 - self.base).ok().filter(|&i| i < 11)
     }
 }
 fn delays(
@@ -196,9 +170,6 @@ impl NodeMotion {
             let newly_visible = !self.nodes.contains_key(&node.lattice_pos);
             let motion = self.nodes.entry(node.lattice_pos).or_default();
             let (lo, hi) = scene.octave_layout.slots(node.cents);
-            // Unconditional: which slices the wheel draws is a property of the
-            // node and the layout, not of any animation running on it.
-            motion.base = lo;
             motion.targets = [0.0; 11];
             let mut melody = None;
             let mut bass = None;
@@ -604,21 +575,7 @@ mod tests {
                 tracker.handle_event(on(0.25, 60));
                 let scene = draw(&mut motion, &mut tracker, &view, 0.3, false);
                 let node = origin(&scene);
-                // 0.2 of rising, less whatever the lit slot's own slice spent
-                // WAITING before any of it started: the stab's two reversals
-                // cancel (0.05 down, 0.05 back up) and the delay does not come
-                // back, so the level owes exactly one delay. An order that
-                // starts at this slot -- every one here but `RandomStagger` --
-                // waits nothing and reads the bare 0.2.
-                let held = &motion.nodes[&LatticePos::ORIGIN];
-                let lit = held.targets.iter().position(|&t| t > 0.0).expect("stab lit no slot");
-                let waited = held.order_delay[held.slice_of(lit).expect("lit slot off the wheel")];
-                assert!(waited < 0.15, "{order:?}: slice waits {waited}, past this stab's rise");
-                assert!(
-                    (node.activation - (0.2 - waited)).abs() < 1e-5,
-                    "{order:?}: {} with its slice waiting {waited}",
-                    node.activation
-                );
+                assert!((node.activation - 0.2).abs() < 1e-5, "{order:?}: {}", node.activation);
                 snapshots.push((node.activation, node.slice_progress));
                 let repeated = draw(&mut motion, &mut tracker, &view, 0.3, false);
                 assert_eq!(node.slice_progress, origin(&repeated).slice_progress);
@@ -758,12 +715,14 @@ mod tests {
     }
     #[test]
     fn every_staggered_slice_animates_for_the_whole_duration_from_its_own_start() {
-        // What a viewer reads as one slice arriving is the reveal TIMES the
-        // level ramp under it, so both have to wait the same delay. While only
-        // the reveal waited, one spread produced two animation lengths: the
-        // first slice fading over the whole duration and the last one snapping
-        // in over whatever the spread had left it -- which is the complaint this
-        // measures, per slice, rather than the totals it used to check.
+        // The complaint this answers: at a high spread some slices faded in over
+        // the whole note and others waited and then popped. Measured on the old
+        // compression at spread 0.9, one wheel's slices took 0.98, 0.84, 0.69,
+        // 0.54, 0.39, 0.24 and 0.09 of a duration -- every slice finishing
+        // together at the fade time, so the earlier it started the longer it
+        // took. Both assertions below are needed: the lengths were all EQUAL to
+        // each other then too (each reveal ran 0.1), so only measuring them
+        // against ONE WHOLE DURATION separates the two contracts.
         let step = 0.01f64;
         let spread = 0.9f32;
         for order in AnimationOrder::ALL {
@@ -772,51 +731,38 @@ mod tests {
             view.note_animation.stagger_spread = spread;
             let mut tracker = NoteTracker::new();
             let mut motion = NodeMotion::default();
-            // Deliberately NOT middle C: on the default wheel its slice is the
-            // one the orders start from, so a level ramp that ignored the delay
-            // would agree with a delay of zero and pass. C5 sits a slice along.
+            // C5, deliberately NOT middle C, whose slice is the one the orders
+            // start from: the presence check below is about a note landing on a
+            // LATE slice, and middle C would give it a delay of zero to pass at.
             tracker.handle_event(on(0.0, 72));
             let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
             let span = first.octave_layout.span as usize;
-            let node = &motion.nodes[&LatticePos::ORIGIN];
-            let delays = node.order_delay;
-            let lit = node.targets.iter().position(|&t| t > 0.0).expect("fixture lit no slot");
-            let slice = node.slice_of(lit).expect("lit slot is off the wheel");
-            if matches!(
-                order,
-                AnimationOrder::Circular
-                    | AnimationOrder::Bidirectional
-                    | AnimationOrder::OddEvenStagger
-            ) {
-                assert!(
-                    delays[slice] > 0.1,
-                    "{order:?}: lit slice waits {}, too little for an undelayed level to fail",
-                    delays[slice]
-                );
-            }
             let mut started = [None; 11];
             let mut done = [None; 11];
-            let (mut lit_start, mut lit_done) = (None, None);
             let mut now = 0.0;
-            // Past the last slice's finish at `spread + 1`, which is what a
-            // sweep stopping at one duration would never see.
+            // Past the last slice's finish at `spread + 1`, which is exactly
+            // what a sweep stopping at one duration would never see.
             while now < f64::from(spread) + 1.5 {
                 now += step;
                 let scene = draw(&mut motion, &mut tracker, &view, now, false);
                 let node = origin(&scene);
+                // The node's presence carries every slot no note lights, so it
+                // must NOT wait for the lit slice. Staggering it too makes the
+                // whole wheel wait on whichever slot the note happens to take,
+                // and C5's is a late one: measured, that collapsed seven starts
+                // spanning 0.9 into all of them landing within 0.08.
+                assert!(node.activation > 0.0, "{order:?}: presence waited for its lit slice");
                 for i in 0..span {
                     started[i] = started[i].or((node.slice_progress[i] > 0.0).then_some(now));
-                    done[i] = done[i].or((node.slice_progress[i] >= 0.999).then_some(now));
+                    done[i] = done[i].or((node.slice_progress[i] >= 1.0).then_some(now));
                 }
-                lit_start = lit_start.or((node.octaves[lit] > 0.0).then_some(now));
-                lit_done = lit_done.or((node.octaves[lit] >= 0.999).then_some(now));
             }
             let at = |v: Option<f64>, what: &str| v.unwrap_or_else(|| panic!("{order:?}: {what}"));
             for i in 0..span {
                 let length = at(done[i], "slice never finished") - at(started[i], "never started");
                 assert!(
                     (length - 1.0).abs() <= 2.0 * step,
-                    "{order:?}: slice {i} animated for {length}, not one duration"
+                    "{order:?}: slice {i} animated for {length}, not one whole duration"
                 );
             }
             let begins: Vec<f64> = (0..span).map(|i| at(started[i], "never started")).collect();
@@ -828,16 +774,6 @@ mod tests {
                 (widest - expected).abs() <= 2.0 * step,
                 "{order:?}: starts span {widest}, expected {expected}"
             );
-            // The fix itself: the lit slot's LEVEL keeps its slice's clock.
-            for (level, reveal, what) in
-                [(lit_done, done[slice], "finish"), (lit_start, started[slice], "start")]
-            {
-                let (level, reveal) = (at(level, "level never moved"), at(reveal, "no reveal"));
-                assert!(
-                    (level - reveal).abs() <= 2.0 * step,
-                    "{order:?}: level {what} at {level}, reveal at {reveal}"
-                );
-            }
         }
     }
     #[test]
