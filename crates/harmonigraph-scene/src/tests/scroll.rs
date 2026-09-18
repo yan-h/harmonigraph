@@ -49,7 +49,7 @@ fn ndc(camera: &Camera, view: &ViewConfig, aspect: f32, pos: LatticePos) -> Opti
 /// [`a_cabinet_camera_never_reaches_the_node_budget`].
 #[test]
 fn everything_the_pane_shows_is_in_the_window() {
-    let view = ViewConfig { extent_sevens: 2, ..ViewConfig::default() };
+    let view = ViewConfig { min_sevens: -2, max_sevens: 2, ..ViewConfig::default() };
     for projection in PROJECTIONS {
         for aspect in ASPECTS {
             for distance in [Camera::MIN_DISTANCE, Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE] {
@@ -185,7 +185,7 @@ fn a_loaded_view_never_draws_a_node_its_reach_cannot_name() {
 fn a_cabinet_camera_never_reaches_the_node_budget() {
     let mut worst = 0;
     for sevens in 0..=4 {
-        let view = ViewConfig { extent_sevens: sevens, ..ViewConfig::default() };
+        let view = ViewConfig { min_sevens: -sevens, max_sevens: sevens, ..ViewConfig::default() };
         for aspect in [0.3, 1.0, 1.5, 16.0 / 9.0, 2.4, 3.0] {
             // Every pitch, to say that cabinet ignores it, and both ends of
             // the shear, which is the one thing that does widen the window.
@@ -368,7 +368,7 @@ fn the_budget_trims_the_horizon_not_the_foreground() {
     // the zoom limit the pane is about twenty steps tall all told.
     const FOREGROUND: i32 = 12;
     for sevens in [0, 2, 4] {
-        let view = ViewConfig { extent_sevens: sevens, ..ViewConfig::default() };
+        let view = ViewConfig { min_sevens: -sevens, max_sevens: sevens, ..ViewConfig::default() };
         let center = view.center();
         for pitch in [0.6f32, 0.75, 0.9] {
             for distance in [Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE] {
@@ -574,7 +574,7 @@ fn the_zoom_limit_lands_near_twenty_steps() {
 /// The picture there is a line, and what it must not be is a stall.
 #[test]
 fn no_camera_asks_for_more_than_the_budget() {
-    let view = ViewConfig { extent_sevens: 4, ..ViewConfig::default() };
+    let view = ViewConfig { min_sevens: -4, max_sevens: 4, ..ViewConfig::default() };
     for projection in PROJECTIONS {
         for aspect in [0.05, 1.0, 20.0] {
             for pitch in [0.0, 1.0, Camera::PITCH_LIMIT] {

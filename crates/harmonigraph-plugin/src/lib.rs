@@ -1299,7 +1299,7 @@ mod tests {
             let mut saved = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
             saved.picture.appearance.spectrum.window = SpectrumWindow::Precise;
             saved.picture.appearance.camera.yaw = 1.23;
-            saved.picture.appearance.view.extent_sevens = 3;
+            saved.picture.appearance.view.max_sevens = 3;
             saved.picture.appearance.spiral.zoom = 2.75;
             saved.picture.appearance.render.short_edge = 2160;
             harmonigraph_ui::shell::close(&saved)
@@ -1322,7 +1322,7 @@ mod tests {
         let shared = plugin.editor_shared.lock();
         let lag = shared.ui.picture.runtime.spectrum.column_lag();
         assert_eq!(shared.ui.picture.appearance.camera.yaw, 1.23);
-        assert_eq!(shared.ui.picture.appearance.view.extent_sevens, 3);
+        assert_eq!(shared.ui.picture.appearance.view.max_sevens, 3);
         assert_eq!(shared.ui.picture.appearance.spiral.zoom, 2.75);
         assert_eq!(shared.ui.picture.appearance.render.short_edge, 2160);
         assert!(

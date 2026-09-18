@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! cargo run -p harmonigraph-ui --example appearance -- \
-//!     extent_sevens=1 sevens_size=0.55 cabinet_scale=0.71 > view.ron
+//!     min_sevens=-1 max_sevens=1 sevens_size=0.55 cabinet_scale=0.71 > view.ron
 //! harmonigraph-offline chord.take --appearance view.ron --layout lattice -o frame.png
 //! ```
 //!

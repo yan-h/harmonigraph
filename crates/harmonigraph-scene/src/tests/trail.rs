@@ -76,7 +76,7 @@ fn a_memory_touches_no_field_but_trail() {
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
     let frame = plain_frame();
     let tuning = Tuning::default();
-    let view = ViewConfig { extent_sevens: 1, ..ViewConfig::default() };
+    let view = ViewConfig { min_sevens: -1, max_sevens: 1, ..ViewConfig::default() };
     let bare = scene_of(
         &tracker,
         &tuning,
@@ -145,7 +145,7 @@ fn a_memory_touches_no_field_but_trail() {
 fn a_remembered_position_loses_its_marker_to_its_own_name() {
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
-    let view = ViewConfig { extent_sevens: 1, ..ViewConfig::default() };
+    let view = ViewConfig { min_sevens: -1, max_sevens: 1, ..ViewConfig::default() };
     let scene = scene_of(
         &tracker,
         &Tuning::default(),
@@ -174,7 +174,7 @@ fn an_off_sheet_node_stays_blank_even_after_it_is_played() {
     // wherever it landed, but an off-sheet node stays blank — a lone name out
     // in the sevens dimension reads as noise, not as territory. The home node
     // of the same pitch class carries the memory instead.
-    let view = ViewConfig { extent_sevens: 1, ..trail_view(true) };
+    let view = ViewConfig { min_sevens: -1, max_sevens: 1, ..trail_view(true) };
     let tuning = Tuning::default();
     let frame = plain_frame();
     let off_sheet = LatticePos::new(0, 0, 1);

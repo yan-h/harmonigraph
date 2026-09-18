@@ -245,11 +245,15 @@ fn profile_frame() {
     profile("idle, hover spectral", 2.0, on_spectral, |_| {});
 
     println!("-- a bigger lattice: the scene derivation is per NODE --");
-    profile("sevens open (819 nodes)", 2.0, idle, |s| s.picture.appearance.view.extent_sevens = 1);
+    profile("sevens open (819 nodes)", 2.0, idle, |s| {
+        s.picture.appearance.view.min_sevens = -1;
+        s.picture.appearance.view.max_sevens = 1;
+    });
     profile("3075 nodes", 2.0, idle, |s| {
         s.picture.appearance.view.extent_threes = 20;
         s.picture.appearance.view.extent_fives = 12;
-        s.picture.appearance.view.extent_sevens = 1;
+        s.picture.appearance.view.min_sevens = -1;
+        s.picture.appearance.view.max_sevens = 1;
     });
 
     println!("-- a busy passage: 6 notes a frame, each held a quarter second --");

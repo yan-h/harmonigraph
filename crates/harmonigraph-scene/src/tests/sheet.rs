@@ -11,7 +11,12 @@ fn home_sheet_nodes_are_flagged_for_the_blank_ring() {
     let view = ViewConfig {
         extent_threes: 0,
         extent_fives: 0,
-        extent_sevens: 1,
+        // A stack that does not straddle zero, so `on_home` following the
+        // window's center rather than `sevens == 0` is what the assertion
+        // below can see. The ends are absolute sheets, so they move with the
+        // center rather than being counted from it.
+        min_sevens: 1,
+        max_sevens: 3,
         center_sevens: 2,
         ..ViewConfig::default()
     };
@@ -28,7 +33,13 @@ fn the_marker_field_is_the_home_sheet_and_only_it() {
     // also why it is not hoverable. Nothing the music does changes that — an
     // off-sheet note floats over the field at the size its sheet gives it,
     // with nothing drawn between it and home.
-    let view = ViewConfig { extent_threes: 1, extent_fives: 0, extent_sevens: 2, ..plain_view() };
+    let view = ViewConfig {
+        extent_threes: 1,
+        extent_fives: 0,
+        min_sevens: -2,
+        max_sevens: 2,
+        ..plain_view()
+    };
     let home_count = |scene: &Scene| scene.nodes.iter().filter(|n| n.on_home).count();
 
     // Idle: a marker at every home position, and no mark anywhere off it.
@@ -545,7 +556,8 @@ fn off_sheet_nodes_shrink_away_from_the_home_sheet_both_ways() {
     // Size says DISTANCE from the home sheet, not depth toward the eye: a
     // sheet in front shrinks exactly as much as one behind. The home sheet
     // is the ground the music is read against and stays full size.
-    let view = ViewConfig { extent_sevens: 2, sevens_size: 0.5, ..ViewConfig::default() };
+    let view =
+        ViewConfig { min_sevens: -2, max_sevens: 2, sevens_size: 0.5, ..ViewConfig::default() };
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
     assert_eq!(node_at(&scene, LatticePos::new(0, 0, 0)).scale, 1.0);
     for sevens in [-1, 1] {
@@ -562,7 +574,12 @@ fn sevens_size_never_enlarges_and_never_vanishes() {
     // would put the sevens layer in front of the picture it annotates), and
     // never small enough to disappear at the far extents.
     let scene_with = |size: f32| {
-        let view = ViewConfig { extent_sevens: 4, sevens_size: size, ..ViewConfig::default() };
+        let view = ViewConfig {
+            min_sevens: -4,
+            max_sevens: 4,
+            sevens_size: size,
+            ..ViewConfig::default()
+        };
         scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0)
     };
     let huge = scene_with(4.0);
@@ -580,7 +597,7 @@ fn the_comma_measures_the_node_against_its_own_namesake() {
     // sevens step lands on the LETTER two fifths down. The comma is the
     // distance to that node — the septimal comma, 64/63, ~27 cents at just
     // intonation.
-    let view = ViewConfig { extent_sevens: 1, ..ViewConfig::default() };
+    let view = ViewConfig { min_sevens: -1, max_sevens: 1, ..ViewConfig::default() };
     let tuning = Tuning::just();
     let scene = scene_of(&NoteTracker::new(), &tuning, &view, &plain_frame(), 0.0);
 
@@ -607,7 +624,7 @@ fn the_comma_takes_the_short_way_round_the_octave() {
     // Pitch classes wrap, so a raw subtraction can come out an octave off
     // and report a 1173-cent "comma". Two sevens steps land far enough
     // round the circle to catch it.
-    let view = ViewConfig { extent_sevens: 3, ..ViewConfig::default() };
+    let view = ViewConfig { min_sevens: -3, max_sevens: 3, ..ViewConfig::default() };
     let scene = scene_of(&NoteTracker::new(), &Tuning::just(), &view, &plain_frame(), 0.0);
     for sevens in [-3, -2, -1, 1, 2, 3] {
         let comma = node_at(&scene, LatticePos::new(0, 0, sevens)).comma;

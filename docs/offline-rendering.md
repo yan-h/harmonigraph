@@ -52,7 +52,7 @@ For an explicit replacement file:
 ./read-plugin-state.py --appearance project.bwproject > appearance.ron
 ./target/release/harmonigraph-offline piece.take --appearance appearance.ron --out piece.mp4
 # Or synthesize a look without a DAW project:
-cargo run -p harmonigraph-ui --example appearance -- extent_sevens=1 > appearance.ron
+cargo run -p harmonigraph-ui --example appearance -- min_sevens=-1 max_sevens=1 > appearance.ron
 ```
 
 Close the plugin window and save the Bitwig project before extracting its appearance.
