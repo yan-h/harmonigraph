@@ -2737,6 +2737,188 @@ mod tests {
              it from, so the union gains and loses it as `floor(r)` crosses a cell"
         );
     }
+
+    /// The same two inequalities for the WASH's glob grid, which pushes on them
+    /// differently in three places.
+    ///
+    /// `Wander` is ABSENT from both, and that is the design rather than an
+    /// oversight: it turns each glob's jitter offset about its own cell instead
+    /// of adding a travel to it, so the offset's length never changes and the
+    /// clock cannot carry a glob anywhere the ring does not already reach. What
+    /// it costs instead is the `sqrt(2)` on the reach side — a rotated corner of
+    /// the jitter box can point along either axis, where an unturned one is at
+    /// most `JITTER / 2` along it.
+    ///
+    /// `Ragged` pushes a RIM outward and never inward, which is the whole reason
+    /// it is one-sided in the shader: coverage reads the untouched
+    /// `WASH_RADIUS_MIN` while only reach pays `* (1 + WASH_RAGGED)`. A zero-mean
+    /// wobble of the same visible amplitude would cost both ends and buy a
+    /// narrower `Variety` band for the same picture.
+    ///
+    /// And the ring is `WASH_RING` cells rather than a hard-coded 1, because at
+    /// 3x3 these inequalities leave a radius band of about 1.19:1 at a jitter of
+    /// 0.20 — a nearly regular grid of nearly equal globs, which is the one thing
+    /// a field of DIFFERENT SIZED globs cannot be.
+    ///
+    /// Read off the shipped shader text, not a transcription: an uncovered point
+    /// is not visible as a hole, it is a pixel whose lookup falls from most of a
+    /// radius to nothing, which is a hard edge in a construction whose whole
+    /// point is not having one.
+    #[test]
+    fn the_wash_grid_covers_the_plane_and_the_ring_holds_it() {
+        let number = |name: &str| -> f32 {
+            crate::shadow::tests::shader_const(SPECTROGRAM_SRC, name).parse().expect("a number")
+        };
+        let slack = number("WASH_JITTER") / 2.0 * std::f32::consts::SQRT_2;
+        let smallest = number("WASH_RADIUS").min(number("WASH_RADIUS_MIN"));
+        let largest = number("WASH_RADIUS").max(number("WASH_RADIUS_MAX"));
+        let farthest = 0.5 * std::f32::consts::SQRT_2 + slack;
+        assert!(
+            smallest > farthest,
+            "a glob of {smallest} cannot reach a corner {farthest} away, so at some corner of \
+             the cell grid no glob of the base octave covers the pane and the wash reads its \
+             own light with no centre to borrow"
+        );
+        let rim = largest * (1.0 + number("WASH_RAGGED"));
+        let unvisited = number("WASH_RING") + 0.5 - slack;
+        assert!(
+            rim < unvisited,
+            "a rim of {rim} reaches {unvisited} into a pixel the ring never visits it from, \
+             so the wash gains and loses that glob as `floor(r)` crosses a cell"
+        );
+    }
+
+    /// The fixture the wash is measured over: the ridge pane above, with the
+    /// watercolour texture selected and its globs made big enough to BE a
+    /// texture on a 128-point pane.
+    ///
+    /// The size is the part that has to be said. At the fresh cloud size a glob
+    /// is about three points across here, and a texture whose own detail is
+    /// three pixels wide measures its own aliasing rather than the dial being
+    /// turned — the same trap `rough_band_fixture` names for the scales.
+    fn wash_fixture() -> SpectrogramCallback {
+        let mut cb = cloud_fixture();
+        // Off zero, because `Wander` is a RATE: it turns each glob's offset on
+        // the cloud clock, so at time 0 every setting of it draws the same
+        // frame and a fixture left there would measure nothing.
+        cb.atmosphere.as_mut().unwrap().now = 3.0;
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        s.cloud_style = harmonigraph_scene::CloudStyle::Wash;
+        s.cloud_depth = 1.0;
+        s.cloud_scale = 2.0;
+        cb
+    }
+
+    /// The wash BENDS the picture rather than painting over it — the same claim
+    /// [`the_layer_bends_the_picture_rather_than_painting_over_it`] makes for the
+    /// scales, and it needs both halves here for the same reason.
+    ///
+    /// Refraction is the only term in the wash that carries the sound: every
+    /// other one is pigment, which is a function of the glob field alone. So
+    /// over a picture with structure in it the dial has to move a lot of the
+    /// pane, and over a FEATURELESS one it has to move EXACTLY nothing, because
+    /// a lookup displaced across a constant field returns that constant wherever
+    /// it lands. A wash that drew its globs from the paint rather than from the
+    /// light would move both.
+    ///
+    /// Exactly zero and not merely small: the pigment cues (tide line, rim,
+    /// grain) are still drawn over the flat fixture and are still there in both
+    /// frames, so anything this measures is the lookup alone.
+    #[test]
+    fn the_wash_reads_the_light_at_each_globs_centre_and_invents_none() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let moved_by_refraction = |cb: &mut SpectrogramCallback| {
+            cb.atmosphere.as_mut().unwrap().settings.wash_refract = 0.0;
+            let straight = fresh_frame(&device, &queue, cb);
+            cb.atmosphere.as_mut().unwrap().settings.wash_refract = 1.0;
+            let bent = fresh_frame(&device, &queue, cb);
+            let n = straight.len() / 4;
+            straight
+                .chunks_exact(4)
+                .zip(bent.chunks_exact(4))
+                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+                .count() as f32
+                / n as f32
+        };
+        let over_structure = moved_by_refraction(&mut wash_fixture());
+        let mut flat = wash_fixture();
+        flat.grid.run = Arc::new(vec![150; flat.grid.run.len()]);
+        let over_flat = moved_by_refraction(&mut flat);
+        assert!(
+            over_structure > 0.02,
+            "carrying every glob's reading from under the pixel to its own centre moved \
+             almost none of the pane over a picture with structure in it, so the wash is not \
+             refracting at all: {over_structure}"
+        );
+        assert_eq!(
+            over_flat, 0.0,
+            "the refraction moved a FEATURELESS picture, so the wash is drawing its globs out \
+             of the paint rather than reading them out of the light: {over_flat} flat against \
+             {over_structure} over structure"
+        );
+    }
+
+    /// Every wash dial separately reaches the shader.
+    ///
+    /// Eleven new `f32`s ride in one uniform read by OFFSET rather than by name,
+    /// so a field added in the wrong place swaps two values silently and nothing
+    /// in either type system notices. Folded into one test the way
+    /// [`the_rock_and_the_variety_each_reach_the_scales`] is, because what each
+    /// of them holds is the same thing about the same buffer.
+    ///
+    /// The base setting is not the fresh one. Several of these dials only have
+    /// room to move away from a middle — `Fuzz` at its fresh 100% has already
+    /// taken three quarters of the tide line away, so `Edge pooling` turned from
+    /// there measures almost nothing — and a fixture too small to reach the
+    /// branch is the failure this repo ships most often. Each dial is therefore
+    /// carried from a middle to an end.
+    #[test]
+    fn the_wash_dials_each_reach_the_globs() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let painted = |turn: fn(&mut harmonigraph_scene::SpectralAtmosphere)| {
+            let mut cb = wash_fixture();
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.wash_variety = 0.5;
+            s.wash_fuzz = 0.5;
+            s.wash_ragged = 0.5;
+            s.wash_lobe = 0.5;
+            s.wash_pool = 0.5;
+            s.wash_grain = 0.3;
+            s.wash_layers = 0.5;
+            s.wash_soften = 0.3;
+            s.wash_wander = 0.3;
+            turn(s);
+            fresh_frame(&device, &queue, &cb)
+        };
+        let plain = painted(|_| {});
+        for (name, turn) in [
+            ("Glob size", (|s: &mut harmonigraph_scene::SpectralAtmosphere| s.wash_size = 2.0)
+                as fn(&mut harmonigraph_scene::SpectralAtmosphere)),
+            ("Variety", |s| s.wash_variety = 0.0),
+            ("Fuzz", |s| s.wash_fuzz = 0.0),
+            ("Ragged", |s| s.wash_ragged = 0.0),
+            ("Lobe shape", |s| s.wash_lobe = 0.0),
+            ("Edge pooling", |s| s.wash_pool = 1.0),
+            ("Grain", |s| s.wash_grain = 1.0),
+            ("Layers", |s| s.wash_layers = 0.0),
+            ("Softness", |s| s.wash_soften = 1.0),
+            ("Wander", |s| s.wash_wander = 1.0),
+        ] {
+            let frame = painted(turn);
+            let n = plain.len() / 4;
+            let moved = plain
+                .chunks_exact(4)
+                .zip(frame.chunks_exact(4))
+                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+                .count() as f32
+                / n as f32;
+            assert!(moved > 0.02, "{name} moved almost none of the pane: {moved}");
+        }
+    }
 }
 
 #[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]

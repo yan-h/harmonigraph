@@ -18,6 +18,8 @@ mod golden;
 mod render;
 mod replay;
 mod sink;
+#[cfg(test)]
+mod wash_probe;
 mod wav;
 
 use harmonigraph_ui::layout::export_pixels_per_point as default_scale;

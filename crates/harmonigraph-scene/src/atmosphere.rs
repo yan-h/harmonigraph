@@ -11,6 +11,20 @@ pub enum SpectrogramStyle {
     Lava,
 }
 
+/// Which texture the atmosphere layer draws over the spectrogram.
+///
+/// Two constructions, not two presets of one: [`CloudStyle::Water`] is a pile of
+/// soft domes joined by a soft union and lit by a leaning sun, and
+/// [`CloudStyle::Wash`] is a field of translucent watercolour globs whose tone is
+/// paper minus pigment and which has no light in it at all. They share the
+/// blurred light field, the palette and the drift clock, and nothing else.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CloudStyle {
+    #[default]
+    Water,
+    Wash,
+}
+
 /// Independent spectrogram diffusion, analyzer shading and note light.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -55,6 +69,43 @@ pub struct SpectralAtmosphere {
     /// How much light a face turned away from the sun still keeps: 0 lets it go
     /// black, 1 flattens the shading away entirely.
     pub scale_shade_floor: f32,
+    /// Which texture the layer draws. `Water` is the refracting scale clouds
+    /// above; `Wash` is the watercolour glob field below, and every `wash_`
+    /// setting belongs to it alone.
+    pub cloud_style: CloudStyle,
+    /// How big one glob is, as a multiplier on how many of them cross the cloud
+    /// frame. Larger is bigger, like `scale_size`.
+    pub wash_size: f32,
+    /// How much the globs differ in size from each other, over the band the
+    /// layer's coverage proof allows.
+    pub wash_variety: f32,
+    /// One dial over everything that dissolves a glob's rim: how far it feathers
+    /// into what lies beneath, how far it bleeds into what is about to cover it,
+    /// and — falling as those rise — how much of the tide line is left.
+    pub wash_fuzz: f32,
+    /// How far the shared fine-scale wobble carries a glob's rim off its circle.
+    pub wash_ragged: f32,
+    /// How far the shared domain warp carries glob space off the grid: 0 is
+    /// bubbles, the top of the dial is shearing lobes.
+    pub wash_lobe: f32,
+    /// How far each glob's tone is pulled to the light at its own centre. 0
+    /// leaves the picture exactly where it is.
+    pub wash_refract: f32,
+    /// How dark the pigment pools along the edge a later glob lays over this one.
+    pub wash_pool: f32,
+    /// How much extra pigment settles where globs are piled deepest.
+    pub wash_grain: f32,
+    /// How opaque the finer octave's wash is over the coarse one. 0 draws the
+    /// coarse octave alone and skips the finer one's work.
+    pub wash_layers: f32,
+    /// How far the light a glob reads is carried from the close material toward
+    /// the wide blur.
+    pub wash_soften: f32,
+    /// How fast each glob's centre turns about its own cell, on its own hashed
+    /// rate. A rate rather than a distance: the centre swings round the offset
+    /// the jitter already gave it, so the field can never stir a glob out of the
+    /// neighbourhood a pixel searches.
+    pub wash_wander: f32,
 }
 
 impl Default for SpectralAtmosphere {
@@ -78,6 +129,21 @@ impl Default for SpectralAtmosphere {
             scale_relief: 0.35,
             scale_rock: 0.0,
             scale_shade_floor: 0.25,
+            cloud_style: CloudStyle::Water,
+            // J2 "dissolved" from the prototype's sheet J, translated: globs
+            // about two harmonic lines across, the rim fully dissolved, the
+            // wobble at the top of what the coverage proof allows.
+            wash_size: 1.0,
+            wash_variety: 1.0,
+            wash_fuzz: 1.0,
+            wash_ragged: 1.0,
+            wash_lobe: 0.55,
+            wash_refract: 0.85,
+            wash_pool: 0.5,
+            wash_grain: 0.0,
+            wash_layers: 0.5,
+            wash_soften: 0.0,
+            wash_wander: 0.0,
         }
     }
 }
@@ -109,6 +175,17 @@ impl SpectralAtmosphere {
         self.scale_relief = clamp(self.scale_relief, fresh.scale_relief, 0.0, 1.0);
         self.scale_rock = clamp(self.scale_rock, fresh.scale_rock, 0.0, 1.0);
         self.scale_shade_floor = clamp(self.scale_shade_floor, fresh.scale_shade_floor, 0.0, 1.0);
+        self.wash_size = clamp(self.wash_size, fresh.wash_size, 0.25, 4.0);
+        self.wash_variety = clamp(self.wash_variety, fresh.wash_variety, 0.0, 1.0);
+        self.wash_fuzz = clamp(self.wash_fuzz, fresh.wash_fuzz, 0.0, 1.0);
+        self.wash_ragged = clamp(self.wash_ragged, fresh.wash_ragged, 0.0, 1.0);
+        self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);
+        self.wash_refract = clamp(self.wash_refract, fresh.wash_refract, 0.0, 1.0);
+        self.wash_pool = clamp(self.wash_pool, fresh.wash_pool, 0.0, 1.0);
+        self.wash_grain = clamp(self.wash_grain, fresh.wash_grain, 0.0, 1.0);
+        self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
+        self.wash_soften = clamp(self.wash_soften, fresh.wash_soften, 0.0, 1.0);
+        self.wash_wander = clamp(self.wash_wander, fresh.wash_wander, 0.0, 1.0);
         self
     }
 }

@@ -97,7 +97,35 @@ struct Uniforms {
     scale_shade_floor: f32,
     scale_facet: f32,
     scale_rock: f32,
+    /// 0 for the refracting scales, 1 for the watercolour wash. The wash reads
+    /// none of the `scale_` settings and the scales read none of the `wash_`
+    /// ones; both share what sits above them.
+    cloud_style: u32,
+    wash_size: f32,
+    wash_variety: f32,
+    wash_fuzz: f32,
+    wash_ragged: f32,
+    wash_lobe: f32,
+    wash_refract: f32,
+    wash_pool: f32,
+    wash_grain: f32,
+    wash_layers: f32,
+    wash_soften: f32,
+    wash_wander: f32,
 }
+
+/// The `Cloud` struct's size in the uniform address space, which WGSL rounds up
+/// to a multiple of 16 whatever the members add to.
+///
+/// A Rust mirror SHORTER than that binds a buffer the shader is entitled to read
+/// past, and wgpu refuses the bind group rather than the draw — so this is a
+/// compile-time check on a runtime failure that would otherwise arrive as a
+/// validation error on the first clouded frame.
+const _: () = assert!(
+    std::mem::size_of::<Uniforms>() % 16 == 0,
+    "the cloud uniform is not a whole number of 16-byte rows, so the shader's rounded-up \
+     struct is larger than the buffer Rust writes",
+);
 
 pub(super) struct Pipelines {
     pub source: wgpu::RenderPipeline,
@@ -442,6 +470,21 @@ impl Targets {
             scale_shade_floor: settings.scale_shade_floor,
             scale_facet: settings.scale_facet,
             scale_rock: settings.scale_rock,
+            cloud_style: match settings.cloud_style {
+                harmonigraph_scene::CloudStyle::Water => 0,
+                harmonigraph_scene::CloudStyle::Wash => 1,
+            },
+            wash_size: settings.wash_size,
+            wash_variety: settings.wash_variety,
+            wash_fuzz: settings.wash_fuzz,
+            wash_ragged: settings.wash_ragged,
+            wash_lobe: settings.wash_lobe,
+            wash_refract: settings.wash_refract,
+            wash_pool: settings.wash_pool,
+            wash_grain: settings.wash_grain,
+            wash_layers: settings.wash_layers,
+            wash_soften: settings.wash_soften,
+            wash_wander: settings.wash_wander,
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }

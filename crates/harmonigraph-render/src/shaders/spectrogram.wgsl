@@ -278,6 +278,21 @@ struct Cloud {
     scale_shade_floor: f32,
     scale_facet: f32,
     scale_rock: f32,
+    // Which texture the layer draws: 0 the refracting scales above, 1 the
+    // watercolour wash below. Nothing is shared between the two but the blurred
+    // light, the palette, the clock and `cloud_depth`.
+    cloud_style: u32,
+    wash_size: f32,
+    wash_variety: f32,
+    wash_fuzz: f32,
+    wash_ragged: f32,
+    wash_lobe: f32,
+    wash_refract: f32,
+    wash_pool: f32,
+    wash_grain: f32,
+    wash_layers: f32,
+    wash_soften: f32,
+    wash_wander: f32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -756,8 +771,473 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     // for to prevent a clipping that can no longer happen.
     return mix(base, body, cloud.cloud_depth);
 }
+// ======================= A watercolour WASH of globs ========================
+//
+// The second texture, beside the scales above and sharing nothing with them but
+// the blurred light, the palette and the drift clock. It is what Yan asked for
+// first, on a sheet of watercolour cumulus: *"this watercolor clouds example is
+// roughly what I want - with additional movement and refraction, and different
+// colors of course"*, *"I want the entire field to look like a field of
+// different sized cloud globs, with some variation"*, *"I want the texture, not
+// the exact shape of how clouds behave in real life"*. So again one continuous
+// isotropic field with no sky, no up and no gaps — but a WATERCOLOUR one, where
+// the shape comes from globs laid over each other rather than from a lit relief.
+//
+// Prototyped in numpy over a real recording across two contact sheets; Yan's
+// pick was *"I like J1, J2 and J5 the most"*, which are one construction at
+// three settings, so the settings are the dials below and the construction is
+// this. The prototype's own negative results are why several obvious things are
+// NOT here: a z-buffer of spheres instead of a paint order (cracked mud), an
+// even outline on each glob (a contour map), transparency where the paper is
+// lightest (the raw stripes show through as a screen door), any additive
+// highlight (wet plastic), tone quantisation (cel shading), and elongated globs
+// (rice grains).
+//
+// **Paint order, not depth.** Every cell hashes a centre, a radius and a PAINT
+// ORDER. The glob a pixel shows is the highest order among those covering it, so
+// every boundary in the picture is one glob's own arc — a curve — and never the
+// bisector between two, which is the straight crossing that made the z-buffered
+// version read as cracked mud.
+//
+// **Subtractive tone.** A glob's tone is `paper - pigment`, both bounded, and
+// nothing anywhere lightens. `paper` is the lifted light read AT THE GLOB'S OWN
+// CENTRE — the whole refraction, and the only term carrying the sound — and
+// `pigment` is the tide line, the rim and the grain. Because a wash can only
+// darken what is under it, the metal/gel clipping the scales needed a tone map
+// to hold back cannot happen here at all.
+//
+// **Feather is the fuzziness.** A visible glob dissolves at its OWN rim into
+// whatever lies beneath it, reaching half and half exactly on the boundary so
+// both sides meet. That is the antialiasing as well: there is no supersampling
+// here and the prototype's final renders had none either, precisely so they
+// showed what a fragment shader would really draw.
+
+// The ring each octave walks, and the four numbers that decide whether walking
+// it is enough. THESE ARE A PROOF and not four tastes, held against the shipped
+// text of this file by `the_wash_grid_covers_the_plane_and_the_ring_holds_it`.
+//
+// **Coverage.** A centre sits at its cell's middle give or take `JITTER / 2` on
+// each axis, so it can be `(JITTER / 2) * sqrt(2)` from that middle in any
+// direction — `Wander` TURNS that offset rather than adding to it, so the clock
+// never widens this. The point hardest to reach is a lattice corner with all four
+// cells touching it pushed away from it, `0.5 * sqrt(2) + (JITTER / 2) * sqrt(2)`
+// from every one of them, and the SMALLEST radius a glob can draw has to clear
+// that. An uncovered point is not a dim spot — it is a pixel that reads its own
+// light with no glob's centre to borrow, so the lookup falls off a cliff from
+// most of a radius to nothing.
+//
+// **Reach.** A cell `RING + 1` out can put its centre no nearer than
+// `RING + 1.5 - (JITTER / 2) * sqrt(2)` from the pixel's own cell origin, and the
+// pixel is at most 1 past that origin, so the LARGEST rim has to stay under
+// `RING + 0.5 - (JITTER / 2) * sqrt(2)` or a glob the ring never visits can cover
+// the pixel — which is a step on the cell grid every time `floor(r)` moves.
+//
+// The largest RIM is not the largest radius: `Ragged` only ever pushes a rim
+// OUTWARD (see `wash_glob`), by up to `RAGGED` of its own radius, so the reach
+// bound carries `RADIUS_MAX * (1 + RAGGED)` while the coverage bound carries
+// `RADIUS_MIN` untouched. One-sided is what makes that asymmetry available: a
+// zero-mean wobble of the same visible amplitude costs BOTH bounds, and buys a
+// narrower `Variety` band for the same picture.
+//
+// A 5x5 ring rather than 3x3, and it is the jitter and the variety that buy it.
+// At 3x3 these same inequalities leave a radius band of about 1.19:1 with a
+// jitter of 0.20 — a nearly regular grid of nearly equal globs, which is the one
+// thing this look cannot be, since a field of DIFFERENT SIZED globs is what was
+// asked for. The wider ring costs a second pass over 25 cells instead of 9 and
+// buys jitter 0.40, a 1.63:1 radius band, and a rim wobble at the prototype's
+// own amplitude.
+const WASH_RING: i32 = 2;
+const WASH_JITTER: f32 = 0.40;
+const WASH_RAGGED: f32 = 0.30;
+const WASH_RADIUS: f32 = 1.18;
+const WASH_RADIUS_MIN: f32 = 1.02;
+const WASH_RADIUS_MAX: f32 = 1.66;
+
+// The finer octave: how much smaller its cells are, and how many of them carry a
+// glob at all. It is sparse on purpose — a big wash sometimes carries a small one
+// and sometimes sits beside it, and where two washes meet the tone steps, which
+// is where the reference's tones come from. Only the BASE octave owes coverage;
+// a pixel no fine glob reaches simply shows the coarse wash under it.
+const WASH_LACUNARITY: f32 = 2.1;
+const WASH_FINE_OCCUPANCY: f32 = 0.20;
+
+// The tops of the four dials whose shader value is not a plain 0..1: the domain
+// warp in cells, the tide line, the grain, and the rim wobble above. The warp
+// draws bubbles at 0, lobes around 0.25 and flames past 0.55, so the dial stops
+// short of where it stops being paint.
+const WASH_WARP: f32 = 0.45;
+const WASH_WARP_SCALE: f32 = 0.9;
+const WASH_RAGGED_SCALE: f32 = 2.8;
+const WASH_POOL: f32 = 0.44;
+const WASH_GRAIN: f32 = 0.10;
+
+// How wide the tide line lies outside the covering glob's boundary, and how
+// hard it comes on. A crescent on the OVERLAPPED glob hugging the outside of the
+// front glob's arc — the one edge cue the reference has and the one this look
+// keeps. An even line on a glob's own rim was tried and is a contour map.
+const WASH_POOL_WIDTH: f32 = 0.55;
+
+// Pigment that is a property of the paint rather than of an edge: `SURF` settles
+// toward a glob's own rim, and `PIG_DEPTH` makes every pigment bite in
+// proportion to the paper under it. Without the latter the crevices go black and
+// the field reads as mortar between stones rather than as paint on paper.
+const WASH_SURF: f32 = 0.07;
+const WASH_PIG_DEPTH: f32 = 0.35;
+const WASH_TONE_FLOOR: f32 = 0.05;
+
+// The paper: the light, expanded about a pivot and lifted, before any pigment.
+// The expansion is what keeps a wash over a ridge nearly as bright as the ridge
+// instead of reading as a shadow on it — the same job `cloud_light`'s `max` does
+// for the scales, done here in the tone because the wash reads a POINT rather
+// than a neighbourhood and has no blurred copy to floor itself against.
+const WASH_PIVOT: f32 = 0.45;
+const WASH_LIFT_A: f32 = 1.15;
+const WASH_LIFT_B: f32 = 0.16;
+
+// Three 10-bit fractions off a salted cell hash. Two of these per cell: one for
+// the centre and the radius, one for the paint order, the occupancy draw and the
+// wander phase. Six channels is what the construction needs and no fewer.
+fn wash_hash(cell: vec2<i32>, salt: u32) -> vec3<f32> {
+    var n = (bitcast<u32>(cell.x) * 0x9e3779b9u) ^ (bitcast<u32>(cell.y) * 0x85ebca6bu);
+    n = n ^ (salt * 0x27d4eb2du);
+    n = (n ^ (n >> 16u)) * 0x7feb352du;
+    n = (n ^ (n >> 15u)) * 0x846ca68bu;
+    n = n ^ (n >> 16u);
+    return vec3<f32>(
+        f32(n & 0x3ffu) / 1023.0,
+        f32((n >> 10u) & 0x3ffu) / 1023.0,
+        f32((n >> 20u) & 0x3ffu) / 1023.0,
+    );
+}
+
+// Smooth value noise, two octaves. Used for the two SHARED fields only — the
+// domain warp and the rim wobble — each evaluated once per pixel and then read
+// by every glob of every octave, which is what keeps neighbouring globs wobbling
+// together along a shared boundary instead of each wandering off on its own.
+fn wash_noise(p: vec2<f32>, salt: u32) -> f32 {
+    let b = floor(p);
+    let f = p - b;
+    let t = f * f * (3.0 - 2.0 * f);
+    let i = vec2<i32>(b);
+    let n00 = wash_hash(i, salt).x;
+    let n10 = wash_hash(i + vec2<i32>(1, 0), salt).x;
+    let n01 = wash_hash(i + vec2<i32>(0, 1), salt).x;
+    let n11 = wash_hash(i + vec2<i32>(1, 1), salt).x;
+    return mix(mix(n00, n10, t.x), mix(n01, n11, t.x), t.y);
+}
+fn wash_fbm(p: vec2<f32>, salt: u32) -> f32 {
+    let coarse = wash_noise(p, salt);
+    let fine = wash_noise(p * 2.07 + vec2<f32>(13.1, -7.3), salt + 31u);
+    return (coarse + 0.5 * fine) / 1.5;
+}
+
+struct Glob {
+    centre: vec2<f32>,
+    // Where the pixel sits on this glob's rim: under 1 is inside it. The shared
+    // wobble is already in here, which is why it is the RIM coordinate and not a
+    // distance.
+    edge: f32,
+    order: f32,
+}
+
+// One cell's glob, at the pixel `r` — both in this octave's cell units.
+fn wash_glob(cell: vec2<i32>, salt: u32, r: vec2<f32>, wob: f32, occupancy: f32) -> Glob {
+    let h = wash_hash(cell, salt);
+    let g = wash_hash(cell, salt + 77u);
+    var offset = (h.xy - 0.5) * WASH_JITTER;
+    // `Wander` TURNS each glob's offset about its own cell rather than adding a
+    // travel to it, each at its own hashed rate, so no two stir together and a
+    // glob sitting near its cell's middle barely moves while one out at the edge
+    // sweeps a real circle. A rotation and not a displacement is what makes the
+    // movement free: the offset's LENGTH never changes, so neither bound above
+    // ever sees the clock and no glob can wander out of the ring the pixel
+    // searches — which is the popping artifact this would otherwise buy.
+    //
+    // The PAINT ORDER is held still through all of it. Globs that swapped depth
+    // would pop, where a glob that only moves redraws its own arc. And the clock
+    // is `cloud.time`, the one the drift already runs on, so an offline render
+    // stays deterministic and `Cloud speed` at 0 holds this too.
+    if cloud.wash_wander > 0.0 {
+        let turn = cloud.time * (0.05 + 0.12 * g.z) * cloud.wash_wander;
+        let c = cos(turn);
+        let s = sin(turn);
+        offset = vec2<f32>(offset.x * c - offset.y * s, offset.x * s + offset.y * c);
+    }
+    let centre = vec2<f32>(cell) + 0.5 + offset;
+    // `Variety` opens a band about the single shared radius, never below
+    // `RADIUS_MIN` and never above `RADIUS_MAX`, so every step of the dial is
+    // still a position the proof above holds at.
+    let radius = mix(
+        WASH_RADIUS,
+        mix(WASH_RADIUS_MIN, WASH_RADIUS_MAX, h.z),
+        cloud.wash_variety,
+    );
+    var out: Glob;
+    out.centre = centre;
+    out.order = g.x;
+    // A cell the occupancy draw missed carries no glob. Its rim is put out of
+    // reach rather than branched around, so the loop stays uniform.
+    let present = g.y < occupancy;
+    out.edge = select(1.0e9, length(r - centre) / radius + wob, present);
+    return out;
+}
+
+struct Wash {
+    // The visible glob's centre, and the centre of the glob directly beneath it
+    // — what its own rim dissolves INTO.
+    centre: vec2<f32>,
+    under: vec2<f32>,
+    // The nearest glob painted AFTER the visible one, which is the arc about to
+    // take this pixel, and how near it is as `1 - edge` (never above 0).
+    front: vec2<f32>,
+    near: f32,
+    // Where the pixel sits on the visible glob's rim, and whether any glob
+    // covers it at all — the latter is what a finer wash is composited by.
+    edge: f32,
+    cover: f32,
+    // How many globs are piled over this pixel, smoothly counted. `Grain` reads
+    // the excess of this over its own average.
+    tau: f32,
+}
+
+// One octave, in ONE walk of the ring.
+//
+// Three things come out of it. The two highest-ordered globs COVERING the pixel
+// are the one it shows and the one its rim dissolves into, and both are a plain
+// running top-two. The pile count is a sum. The FRONT — the glob painted after
+// the visible one whose arc is about to take this pixel — is the awkward one: it
+// is defined against an answer the same walk is still computing, since the
+// visible glob's order is not known until the last cell.
+//
+// So the walk keeps the two NEAREST non-covering globs and picks the front out
+// of them at the end. That is exact wherever the front matters and approximate
+// only where it does not, and the reason is worth writing down: a glob ordered
+// above the visible one cannot be covering — the visible one is the highest
+// order that does — and where the tide line is STRONG the front glob's rim is
+// right against the pixel, which makes it the nearest non-covering glob there
+// is. It differs from an exhaustive search only when both nearest neighbours are
+// ordered BELOW the visible glob, and the qualifying glob the search would then
+// find is further out than either, so the crescent it draws is already near
+// nothing. The alternative is a second walk of all 25 cells, which measured at
+// 6.5 ms a frame against this one's 2.8.
+fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, wob: f32) -> Wash {
+    var out: Wash;
+    // What an uncovered pixel would draw: its own light, unmoved, and no
+    // pigment. Unreachable for the base octave while the constants hold — see
+    // the proof above — and the ordinary case for a sparse finer one, which is
+    // composited by `cover` and so never shows it.
+    out.centre = r;
+    out.under = r;
+    out.front = r;
+    out.near = -1.0e9;
+    out.edge = 1.0;
+    out.cover = 0.0;
+    out.tau = 0.0;
+    var best = -1.0e9;
+    var second = -1.0e9;
+    // The two nearest globs the pixel is OUTSIDE, with the order each was
+    // painted at, so the front can be chosen once `best` has settled.
+    var near_a = -1.0e9;
+    var near_b = -1.0e9;
+    var order_a = -1.0e9;
+    var order_b = -1.0e9;
+    var front_a = r;
+    var front_b = r;
+    let base = vec2<i32>(floor(r));
+    for (var j = -WASH_RING; j <= WASH_RING; j += 1) {
+        for (var i = -WASH_RING; i <= WASH_RING; i += 1) {
+            let glob = wash_glob(base + vec2<i32>(i, j), salt, r, wob, occupancy);
+            let prox = 1.0 - glob.edge;
+            out.cover = max(out.cover, clamp(prox / 0.05, 0.0, 1.0));
+            let body = clamp(prox / 0.10, 0.0, 1.0);
+            out.tau += body * body * (3.0 - 2.0 * body);
+            if glob.edge < 1.0 {
+                if glob.order > best {
+                    second = best;
+                    out.under = out.centre;
+                    best = glob.order;
+                    out.centre = glob.centre;
+                    out.edge = glob.edge;
+                } else if glob.order > second {
+                    second = glob.order;
+                    out.under = glob.centre;
+                }
+            } else if prox > near_a {
+                near_b = near_a;
+                order_b = order_a;
+                front_b = front_a;
+                near_a = prox;
+                order_a = glob.order;
+                front_a = glob.centre;
+            } else if prox > near_b {
+                near_b = prox;
+                order_b = glob.order;
+                front_b = glob.centre;
+            }
+        }
+    }
+    // The further of the two first, so the nearer one wins if both qualify.
+    if order_b > best {
+        out.near = near_b;
+        out.front = front_b;
+    }
+    if order_a > best {
+        out.near = near_a;
+        out.front = front_a;
+    }
+    return out;
+}
+
+// The light one wash reads, display intensity 0..1.
+//
+// `close_light` is NOT decoded: at composite time that attachment holds the
+// finished scalar material `fs_cloud_light` already decoded on its way out, and
+// `Spread` has already mixed the two blurs into it. `Softness` carries the
+// reading further toward the wide blur, which is the plugin's two rungs of the
+// prototype's mip chain — at the glob sizes Yan picked it found little or no
+// pre-blur was right, so the dial starts at none.
+fn wash_light(pt: vec2<f32>) -> f32 {
+    let uv = pt / cloud.size;
+    let material = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
+    if cloud.wash_soften <= 0.0 {
+        return material;
+    }
+    let wide = density_decode(textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r);
+    return mix(material, wide, cloud.wash_soften);
+}
+
+// One wash's tone: paper minus pigment, and nothing that adds light.
+//
+// `pane_per_cell` converts this octave's cell units to pane points, so a lookup
+// offset measured in cells lands where the glob's centre really is.
+fn wash_tone(f: Wash, r: vec2<f32>, pane_per_cell: f32, pt: vec2<f32>, average_pile: f32) -> f32 {
+    // ONE dial over the rim. The tide line has to fade as the edge dissolves: a
+    // crisp dark crescent drawn on a boundary that is no longer there reads as a
+    // line floating in fog, and at small glob sizes it is what turns a field into
+    // caviar — the same relative width with sixty times as many of them is a dark
+    // net over the picture. A quarter of it is kept at full fuzz, or the field
+    // goes to featureless mist.
+    let fuzz = cloud.wash_fuzz;
+    let feather = 0.10 + 0.80 * fuzz;
+    let bleed = 0.12 + 0.78 * fuzz;
+    let tide = WASH_POOL * cloud.wash_pool * (1.0 - 0.75 * fuzz);
+    let surf = WASH_SURF * (1.0 - 0.45 * fuzz);
+
+    var look = f.centre;
+    // FEATHER: the visible wash dissolves at its own rim into whatever lies
+    // beneath, reaching half and half exactly on the boundary so the two sides
+    // meet. This is the whole of the fuzziness AND the whole of the
+    // antialiasing — there is no supersampling anywhere in this path.
+    var fa = clamp((f.edge - (1.0 - feather)) / feather, 0.0, 1.0);
+    fa = fa * fa * (3.0 - 2.0 * fa) * 0.5;
+    look = mix(look, f.under, fa);
+    // BLEED: the reading crossfades toward the glob about to cover this pixel,
+    // over a band at their shared edge. Still one tap, and dialled up it is what
+    // makes neighbouring washes run into each other.
+    var bl = clamp((f.near + bleed) / bleed, 0.0, 1.0);
+    bl = bl * bl * (3.0 - 2.0 * bl) * 0.5;
+    look = mix(look, f.front, bl);
+
+    // THE REFRACTION, and the only term that carries the sound. The offset is
+    // measured from the WARPED pixel — which is where the glob geometry lives —
+    // and applied from the real one, so at 0 the light is read exactly under the
+    // pixel and the layer displaces nothing at all.
+    let light = wash_light(pt + (look - r) * pane_per_cell * cloud.wash_refract);
+    let paper = clamp(WASH_PIVOT + WASH_LIFT_A * (light - WASH_PIVOT) + WASH_LIFT_B, 0.0, 1.0);
+
+    let rim = clamp(f.edge, 0.0, 1.0);
+    var pigment = surf * rim * rim;
+    // The tide line: a broad soft crescent lying on the OVERLAPPED glob, hugging
+    // the outside of the front glob's arc. Squared, so it comes on gently.
+    let crescent = clamp((f.near + WASH_POOL_WIDTH) / WASH_POOL_WIDTH, 0.0, 1.0);
+    pigment += tide * crescent * crescent;
+    // Granulation: pigment settling where the washes are piled deepest, read as
+    // the excess over how deep they are on average.
+    pigment += WASH_GRAIN * cloud.wash_grain * max(f.tau - average_pile, 0.0);
+
+    // Subtractive, and biting in proportion to the paper under it: a pigment
+    // that took the same bite out of a dark tone as out of a light one turns
+    // every crevice black, which is mortar between stones rather than paint.
+    let pig = max(pigment, 0.0);
+    return paper - pig * (WASH_PIG_DEPTH + (1.0 - WASH_PIG_DEPTH) * paper);
+}
+
+// How deep the washes are piled on average, which is what `Grain` measures the
+// excess over. One glob per cell of area `pi * R^2`, and at `Variety` above 0 the
+// radius is drawn uniformly from a band, so this is the band's mean square.
+fn wash_average_pile(occupancy: f32) -> f32 {
+    let lo = mix(WASH_RADIUS, WASH_RADIUS_MIN, cloud.wash_variety);
+    let hi = mix(WASH_RADIUS, WASH_RADIUS_MAX, cloud.wash_variety);
+    return occupancy * 3.14159265 * (lo * lo + lo * hi + hi * hi) / 3.0;
+}
+
+fn wash_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
+    // Same gate as the scales: no blur means no light field to read.
+    if cloud.cloud_depth <= 0.0 || all(cloud.step == vec2<f32>(0.0)) {
+        return base;
+    }
+    let pt = position / cloud.ppp - cloud.origin;
+    let units = 5.0 / cloud.cloud_scale;
+    let q = (pt - cloud.size * 0.5) / cloud.size.y * units + cloud.drift;
+
+    // `wash_size` is how big one glob is, so the knob reads as a size: four
+    // cells cross a cloud unit at 1x, which at the fresh cloud size is forty of
+    // them up the pane — the prototype's J2.
+    let cells = 4.0 / cloud.wash_size;
+    let pane_per_cell = cloud.size.y / units / cells;
+    let r = q * cells;
+
+    // Two shared fields, one evaluation each per pixel and then read by every
+    // glob of every octave: a domain warp of glob space, which is what stops a
+    // glob being a circle, and a finer ragged offset on every rim. Both are read
+    // at the UNWARPED point, and both stay small — a heavy warp draws flames.
+    var warped = r;
+    if cloud.wash_lobe > 0.0 {
+        let amp = WASH_WARP * cloud.wash_lobe;
+        warped += amp * 2.0 * vec2<f32>(
+            wash_fbm(r * WASH_WARP_SCALE, 71u) - 0.5,
+            wash_fbm(r * WASH_WARP_SCALE + vec2<f32>(37.0, -19.0), 73u) - 0.5,
+        );
+    }
+    // One-sided, and that is what buys the amplitude: a rim is only ever pushed
+    // OUTWARD, by up to `RAGGED` of its own radius, so the coverage half of the
+    // proof above is untouched and only the reach half pays. Against a
+    // zero-mean wobble it is the same picture — a rim of mean radius
+    // `R * (1 + RAGGED / 2)` wobbling by half of `RAGGED` either way.
+    var wob = 0.0;
+    if cloud.wash_ragged > 0.0 {
+        wob = WASH_RAGGED * cloud.wash_ragged * (wash_fbm(r * WASH_RAGGED_SCALE, 41u) - 1.0);
+    }
+
+    let coarse = wash_scan(warped, 1u, 1.0, wob);
+    var tone = wash_tone(coarse, warped, pane_per_cell, pt, wash_average_pile(1.0));
+    // Coarse to fine, the finer octave a translucent wash over the one below and
+    // sparse, so a big wash sometimes carries a small one and sometimes sits
+    // beside it. At `Layers` 0 it is not drawn at all, which is also the cheapest
+    // this path gets.
+    if cloud.wash_layers > 0.0 {
+        let fine_r = warped * WASH_LACUNARITY + vec2<f32>(17.3, 5.9);
+        let fine = wash_scan(fine_r, 2u, WASH_FINE_OCCUPANCY, wob);
+        let fine_tone = wash_tone(
+            fine,
+            fine_r,
+            pane_per_cell / WASH_LACUNARITY,
+            pt,
+            wash_average_pile(WASH_FINE_OCCUPANCY),
+        );
+        tone = mix(tone, fine_tone, cloud.wash_layers * fine.cover);
+    }
+
+    let body = palette_color(clamp(tone, WASH_TONE_FLOOR, 1.0));
+    return mix(base, body, cloud.cloud_depth);
+}
+
 fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
     let base = density_color(level);
+    // The branch is on a uniform, so no two lanes ever disagree about it.
+    if cloud.cloud_style == 1u {
+        return vec4<f32>(wash_clouds(base.rgb, position), 1.0);
+    }
     return vec4<f32>(scale_clouds(base.rgb, position), 1.0);
 }
 // Empty history uses the same field and palette with a zero measured core.
