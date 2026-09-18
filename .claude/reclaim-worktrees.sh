@@ -133,7 +133,11 @@
 # decision. A tier that only prints cannot destroy a repo it misidentifies.
 #
 # `git worktree remove` keeps the branch ref, so merged commits stay reachable
-# and the branch can be checked out again later.
+# and the branch can be checked out again later. It also REFUSES any worktree
+# holding a submodule, which since `.shared-skills` is initialised everywhere
+# is every Claude worktree — so tier 2 retries with `--force` once its own
+# clean-tree check has passed a second time. See the removal itself for why
+# `submodule deinit` is not the alternative it looks like (#898).
 #
 # Codex owns cleanup and snapshots for its managed worktrees, so both tiers
 # leave those alone even though `git worktree list` includes them. Exact
@@ -155,7 +159,10 @@
 # why — which is exactly what the earlier $PWD-derived path produced.
 #
 # A no-op prints nothing, so a session that reclaims nothing stays quiet; when
-# it does free something it reports the total as a systemMessage.
+# it does free something it reports the total as a systemMessage. A removal git
+# REFUSED is reported there too, even on a run that freed nothing: a refusal
+# after every gate said yes is the one outcome a silent run cannot be told
+# apart from, and DRY_RUN is no help because the dry run never attempts one.
 #
 # Written for bash 3.2 (macOS system bash): no mapfile, no associative arrays.
 
@@ -281,6 +288,15 @@ freed_kb=0
 removed=0
 pruned=0
 names=""
+
+# A removal git refuses after every gate here said yes. Counted separately from
+# "kept for a reason" because it is the shape that reads as a no-op run and is
+# not one: three eligible worktrees were refused silently for weeks (#898), the
+# dry run promising removals the real run never took. These feed the closing
+# systemMessage, which is the only channel a hook run has.
+REFUSED_N=0
+REFUSED_NAMES=""
+REFUSED_WHY=""
 
 human() {
   awk -v kb="$1" 'BEGIN {
@@ -593,12 +609,67 @@ remove_worktree() {
   fi
 
   [ "$locked" = 1 ] && git -C "$ROOT" worktree unlock "$path" >/dev/null 2>&1
-  if git -C "$ROOT" worktree remove "$path" >/dev/null 2>&1; then
+
+  # THE PLAIN REMOVE IS TRIED FIRST because git's own refusals are a second
+  # opinion worth having: it re-checks the clean tree this function checked a
+  # few lines up, and only `--force` gives that up. So force is the retry, not
+  # the call — and it runs only after a fresh porcelain check says the tree is
+  # still clean, because `du` of a multi-gigabyte worktree sits between the two
+  # checks and `--force` is the one command here that cannot be taken back.
+  #
+  # What forces the retry at all is a SUBMODULE: `git worktree remove` refuses
+  # any worktree containing one ("working trees containing submodules cannot be
+  # moved or removed"), and `.shared-skills` is one in every worktree that has
+  # run `.claude/ensure-shared-skills.sh` — which the post-checkout hook and
+  # SessionStart both do. Tier 2 worked at all only because a harness-made
+  # worktree used to arrive with that submodule EMPTY (#855), and an
+  # uninitialised gitlink removes plainly; initialising it turned every Claude
+  # worktree into a permanent resident (#898).
+  #
+  # `submodule deinit -f` first, then a plain remove, is NOT the alternative it
+  # looks like: git also refuses on the worktree's own `.git/worktrees/<n>/
+  # modules` directory, which deinit leaves behind, so the plain remove fails
+  # exactly as before (measured, git 2.50.1). --force is the only way past.
+  # It takes the submodule's gitdir with it and leaves the main checkout's own
+  # `.shared-skills` untouched.
+  #
+  # The retry does NOT reach a locked worktree — that needs `--force` twice,
+  # and the unlock above is the only thing here allowed to clear a lock.
+  #
+  # `2>&1 >/dev/null` keeps git's stderr and drops its stdout, and `rc` is read
+  # into a variable at each step: `$?` after the `if` below would be the IF's
+  # status, which is 0 whenever its condition is merely false.
+  err=$(git -C "$ROOT" worktree remove "$path" 2>&1 >/dev/null)
+  rc=$?
+  if [ "$rc" != 0 ]; then
+    # FAIL CLOSED, like the first clean check: an empty capture means "clean"
+    # OR "the command failed", and only one of those may reach `--force`. A
+    # `git status` that errors in this window — an unreadable path, a
+    # concurrent git operation, a transient index failure — would otherwise
+    # read as a clean tree and license the one irreversible command here.
+    recheck=$(git -C "$path" status --porcelain 2>/dev/null)
+    recheck_rc=$?
+    if [ "$recheck_rc" = 0 ] && [ -z "$recheck" ]; then
+      err=$(git -C "$ROOT" worktree remove --force "$path" 2>&1 >/dev/null)
+      rc=$?
+    fi
+  fi
+  if [ "$rc" = 0 ]; then
     removed=$((removed + 1))
     freed_kb=$((freed_kb + size_kb))
     names="$names $(basename "$path" | tr -cd 'A-Za-z0-9._-')"
     return 0
   fi
+
+  # Audible, because this is the case that looked like nothing happening. The
+  # caller still falls through to tier 1, so a refused worktree keeps getting
+  # its build cache pruned.
+  REFUSED_N=$((REFUSED_N + 1))
+  REFUSED_NAMES="$REFUSED_NAMES $(basename "$path" | tr -cd 'A-Za-z0-9._-')"
+  # First refusal only, and scrubbed to what can sit inside the systemMessage's
+  # JSON string: a quote or a backslash from git would corrupt the object.
+  [ -n "$REFUSED_WHY" ] || REFUSED_WHY=$(printf '%s' "$err" | head -1 |
+    tr -cd 'A-Za-z0-9 ._:/(),-' | cut -c1-120)
   return 1
 }
 
@@ -718,21 +789,31 @@ fi
 # is the exception worth breaking that for, because it is the one thing here
 # NOTHING will ever clear on its own — but only once past the df gate, so the
 # nudge appears when the disk is actually tight rather than every session.
-if [ "$removed" -gt 0 ] || [ "$pruned" -gt 0 ] || [ "$ORPHAN_N" -gt 0 ]; then
+# A REFUSED removal is the other exception, and for the same reason: nothing
+# clears it either, and unreported it is indistinguishable from a quiet run.
+if [ "$removed" -gt 0 ] || [ "$pruned" -gt 0 ] || [ "$ORPHAN_N" -gt 0 ] ||
+  [ "$REFUSED_N" -gt 0 ]; then
   detail=""
   [ "$removed" -gt 0 ] && detail="$removed resolved worktree(s):$names"
   if [ "$pruned" -gt 0 ]; then
     [ -n "$detail" ] && detail="$detail, "
     detail="${detail}${pruned} idle build cache(s)"
   fi
-  if [ "$ORPHAN_N" -gt 0 ]; then
-    printf '{"systemMessage":"%s. %d unregistered director(ies) under .claude/worktrees hold %s and need removing by hand:%s"}\n' \
-      "$([ -n "$detail" ] && printf 'Reclaimed %s of disk from %s' "$(human "$freed_kb")" "$detail" || printf 'Nothing was reclaimable')" \
-      "$ORPHAN_N" "$(human "$ORPHAN_KB")" "$ORPHAN_NAMES"
-    exit 0
+  # One string with clauses appended, rather than a printf per combination:
+  # three independent things to report is eight of those.
+  msg=$([ -n "$detail" ] &&
+    printf 'Reclaimed %s of disk from %s' "$(human "$freed_kb")" "$detail" ||
+    printf 'Nothing was reclaimable')
+  if [ "$REFUSED_N" -gt 0 ]; then
+    # ASCII only, like the orphan clause: this string is a JSON value the
+    # harness parses, and the error text above has already been scrubbed to
+    # the same alphabet.
+    msg="$msg. git REFUSED to remove $REFUSED_N eligible worktree(s):$REFUSED_NAMES [${REFUSED_WHY:-no error text}]"
   fi
-  printf '{"systemMessage":"Reclaimed %s of disk from %s"}\n' \
-    "$(human "$freed_kb")" "$detail"
+  if [ "$ORPHAN_N" -gt 0 ]; then
+    msg="$msg. $ORPHAN_N unregistered director(ies) under .claude/worktrees hold $(human "$ORPHAN_KB") and need removing by hand:$ORPHAN_NAMES"
+  fi
+  printf '{"systemMessage":"%s"}\n' "$msg"
 fi
 
 exit 0
