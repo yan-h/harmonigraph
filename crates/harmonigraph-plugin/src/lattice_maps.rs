@@ -54,7 +54,7 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     MapView {
         playback,
         pending: playback != adopted,
-        names: document.names(),
+        names: editor.names(&document),
         working: editor.working,
         edit_shape: editor.edit_shape,
         can_undo: !editor.undo.is_empty(),
@@ -124,26 +124,11 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
                 params.maps.write().capture(map, name);
             }
         }
-        MapEdit::Rename(id, name) => {
-            if let Some(map) = params.maps.write().slots.get_mut(id) {
-                map.name = name;
-            }
-        }
-        MapEdit::Delete(id) => {
-            if let Some(map) = params.maps.write().slots.get_mut(id) {
-                map.deleted = true;
-            }
-        }
-        MapEdit::MoveEarlier(id) => {
-            let mut doc = params.maps.write();
-            let mut order: Vec<_> = doc.names().into_iter().map(|(id, _)| id).collect();
-            if let Some(index) = order.iter().position(|&item| item == id) {
-                if index > 0 {
-                    order.swap(index, index - 1);
-                }
-            }
-            doc.order = order;
-        }
+        // Every document mutation goes through a `MapDocument` method, because
+        // each one has to move the revision `MapEditor::names` is keyed on.
+        MapEdit::Rename(id, name) => params.maps.write().rename(id, name),
+        MapEdit::Delete(id) => params.maps.write().delete(id),
+        MapEdit::MoveEarlier(id) => params.maps.write().move_earlier(id),
     }
     if document_edit {
         if let Some(mailbox) = params.configuration.get() {

@@ -3,6 +3,8 @@
 use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
 use harmonigraph_core::LatticePos;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 pub const MAP_CAPACITY: usize = 128;
 pub const MIDI_LABELS: [&str; 12] =
@@ -49,19 +51,62 @@ impl Default for NamedMap {
     }
 }
 
+/// The visible slots in display order, with their names — see
+/// [`MapDocument::names`].
+///
+/// `Arc<str>` rather than `String`: the editor rebuilds a [`MapView`] every
+/// frame it draws the Lattice or Tuning pane, and the names are the only part
+/// of it that owns heap. Sharing them makes that rebuild a `Vec` and up to
+/// [`MAP_CAPACITY`] refcount bumps instead of that many string copies.
+pub type MapNames = Vec<(usize, Arc<str>)>;
+
+/// A process-unique ticket for one state of a [`MapDocument`], minted at
+/// construction, at deserialization and at every mutation.
+///
+/// Not a counter on the document, because a document is also REPLACED whole
+/// when saved state loads: a per-document counter would restart at zero there
+/// and alias a state a memo had already seen. Minting from one process-wide
+/// source leaves "this is not the document my value came from" the only thing
+/// the key can say, and makes the load case need no bump site to remember.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Revision(u64);
+impl Default for Revision {
+    fn default() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MapDocument {
     /// Slot index is the host identity. Slots are never removed or recycled.
+    ///
+    /// Public for READING — the plugin's `lattice-map` parameter formats a slot
+    /// name through it. Every mutation goes through a method below, because
+    /// [`names`](Self::names) is memoized against [`revision`](Self::revision)
+    /// and a write that skips the bump serves a stale name in the UI forever.
     pub slots: Vec<NamedMap>,
     pub order: Vec<usize>,
+    /// Skipped rather than persisted: a loaded document is a new state, and
+    /// `Default` mints it a ticket nothing has seen.
+    #[serde(skip)]
+    revision: Revision,
 }
 impl Default for MapDocument {
     fn default() -> Self {
-        Self { slots: vec![NamedMap::default()], order: vec![0] }
+        Self { slots: vec![NamedMap::default()], order: vec![0], revision: Revision::default() }
     }
 }
 impl MapDocument {
+    /// Which state this is. Everything [`names`](Self::names) derives from —
+    /// a slot's existence, its name, its deleted flag, and `order` — moves this.
+    pub fn revision(&self) -> Revision {
+        self.revision
+    }
+    fn touch(&mut self) {
+        self.revision = Revision::default();
+    }
     pub fn map(&self, id: usize) -> Option<LatticeMap> {
         self.slots.get(id).filter(|m| !m.deleted)?.geometry.resolve()
     }
@@ -72,9 +117,38 @@ impl MapDocument {
         let id = self.slots.len();
         self.slots.push(NamedMap { name, geometry: map.into(), deleted: false });
         self.order.push(id);
+        self.touch();
         Some(id)
     }
-    pub fn names(&self) -> Vec<(usize, String)> {
+    pub fn rename(&mut self, id: usize, name: String) {
+        if let Some(slot) = self.slots.get_mut(id) {
+            slot.name = name;
+            self.touch();
+        }
+    }
+    pub fn delete(&mut self, id: usize) {
+        if let Some(slot) = self.slots.get_mut(id) {
+            slot.deleted = true;
+            self.touch();
+        }
+    }
+    /// Move `id` one place earlier in the display order, rebuilding `order`
+    /// from the visible sequence so a hand-edited file's stray entries do not
+    /// survive the swap.
+    pub fn move_earlier(&mut self, id: usize) {
+        let mut order: Vec<_> = self.names().into_iter().map(|(id, _)| id).collect();
+        if let Some(index) = order.iter().position(|&item| item == id) {
+            if index > 0 {
+                order.swap(index, index - 1);
+            }
+        }
+        self.order = order;
+        self.touch();
+    }
+    /// The visible slots in display order. [`MapNames`] says why the names are
+    /// shared rather than copied; [`MapEditor::names`] is what the editor
+    /// should call, which reaches this only when the document has changed.
+    pub fn names(&self) -> MapNames {
         // Invalid order entries from a hand-edited file cannot hide or alias slots.
         let mut ids: Vec<_> = self
             .order
@@ -89,7 +163,7 @@ impl MapDocument {
                 if std::mem::replace(&mut seen[id], true) || self.slots[id].deleted {
                     None
                 } else {
-                    Some((id, self.slots[id].name.clone()))
+                    Some((id, Arc::from(self.slots[id].name.as_str())))
                 }
             })
             .collect()
@@ -102,8 +176,31 @@ pub struct MapEditor {
     pub working: Option<LatticeMap>,
     pub edit_shape: bool,
     pub undo: Vec<LatticeMap>,
+    /// Memo of [`MapDocument::names`] and the document state it was read from.
+    ///
+    /// It lives here rather than in the document because the document is
+    /// behind an `RwLock` the AUDIO thread `try_read`s: filling a cache on the
+    /// draw path would mean taking the WRITE lock every frame and losing that
+    /// read. The editor's own `Mutex` is already held by the one caller that
+    /// builds a [`MapView`], and the audio thread never reads this field.
+    names: Option<(Revision, MapNames)>,
 }
 impl MapEditor {
+    /// `document`'s names, rebuilt only when the document is a state this memo
+    /// has not seen. The key carries the document's revision and nothing else:
+    /// the rest of a [`MapView`] — selection, offsets, the working copy — is
+    /// rebuilt by its caller every frame, because none of it decides this value.
+    pub fn names(&mut self, document: &MapDocument) -> MapNames {
+        let revision = document.revision();
+        match &self.names {
+            Some((seen, names)) if *seen == revision => names.clone(),
+            _ => {
+                let names = document.names();
+                self.names = Some((revision, names.clone()));
+                names
+            }
+        }
+    }
     pub fn restore(&mut self, id: u64) {
         if self.restore_id != id {
             self.restore_id = id;
@@ -152,7 +249,9 @@ pub struct MapView {
     /// Current host/document intent; pending distinguishes it from audio adoption.
     pub playback: MapPlayback,
     pub pending: bool,
-    pub names: Vec<(usize, String)>,
+    /// Shared with the document's memo (see [`MapEditor::names`]), so cloning a
+    /// view is refcounts rather than up to [`MAP_CAPACITY`] string copies.
+    pub names: MapNames,
     pub working: Option<LatticeMap>,
     pub edit_shape: bool,
     pub can_undo: bool,
@@ -208,5 +307,61 @@ mod tests {
         assert_eq!(recalled.map(0), None);
         assert_eq!(doc.capture(LatticeMap::default(), "New".into()), Some(2));
         assert_eq!(recalled.names(), vec![(1, "Renamed".into())]);
+    }
+
+    /// `Arc::ptr_eq` is the instrument: a memo hit hands back the very
+    /// allocations the last call did, and a rebuild cannot.
+    #[test]
+    fn names_are_memoized_and_every_document_mutation_invalidates_them() {
+        let mut doc = MapDocument::default();
+        assert_eq!(doc.capture(LatticeMap::default(), "Passage".into()), Some(1));
+        let mut editor = MapEditor::default();
+        let first = editor.names(&doc);
+        assert_eq!(first.len(), 2, "the fixture needs a name that survives each mutation");
+        let held = editor.names(&doc);
+        assert!(Arc::ptr_eq(&held[0].1, &first[0].1), "an unchanged document must not rebuild");
+
+        // Each of the four mutations the editor can make, in turn. Slot 0 is
+        // never the one edited, so its Arc is what says the LIST was rebuilt
+        // rather than merely that the edited entry changed.
+        let mut previous = first;
+        // What was done, how, and the names it must leave visible.
+        type Mutation<'a> = (&'a str, &'a dyn Fn(&mut MapDocument), &'a [&'a str]);
+        let mutations: [Mutation; 4] = [
+            ("rename", &|doc| doc.rename(1, "Renamed".into()), &["C · 3×4", "Renamed"]),
+            (
+                "capture",
+                &|doc| {
+                    doc.capture(LatticeMap::default(), "Added".into());
+                },
+                &["C · 3×4", "Renamed", "Added"],
+            ),
+            ("reorder", &|doc| doc.move_earlier(1), &["Renamed", "C · 3×4", "Added"]),
+            ("delete", &|doc| doc.delete(1), &["C · 3×4", "Added"]),
+        ];
+        for (what, mutate, visible) in mutations {
+            mutate(&mut doc);
+            let next = editor.names(&doc);
+            assert!(
+                !Arc::ptr_eq(&next[0].1, &previous[0].1),
+                "a {what} must move the revision the memo is keyed on"
+            );
+            assert_eq!(next.iter().map(|(_, name)| &**name).collect::<Vec<_>>(), visible, "{what}");
+            previous = next;
+        }
+    }
+
+    /// The case a per-document counter gets wrong: a loaded document restarts
+    /// such a counter at zero and collides with a memo read from an unrelated
+    /// document, which is why the revision is a process-unique ticket.
+    #[test]
+    fn a_loaded_document_never_answers_from_another_documents_memo() {
+        let mut editor = MapEditor::default();
+        // A memo taken from a FRESH document — revision zero under a counter.
+        assert_eq!(&*editor.names(&MapDocument::default())[0].1, "C · 3×4");
+        let mut other = MapDocument::default();
+        other.rename(0, "Other".into());
+        let loaded: MapDocument = ron::from_str(&ron::to_string(&other).unwrap()).unwrap();
+        assert_eq!(&*editor.names(&loaded)[0].1, "Other");
     }
 }
