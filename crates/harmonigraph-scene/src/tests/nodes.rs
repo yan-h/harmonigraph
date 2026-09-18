@@ -934,7 +934,8 @@ fn window_center_pans_which_nodes_display() {
         center_fives: 0,
         extent_threes: 1,
         extent_fives: 0,
-        extent_sevens: 0,
+        min_sevens: 0,
+        max_sevens: 0,
         ..ViewConfig::default()
     };
     let positions: Vec<_> = view.reach().positions().collect();

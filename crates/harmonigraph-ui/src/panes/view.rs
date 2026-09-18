@@ -7,7 +7,7 @@
 //! Part of [`super::display`] rather than of [`super::tuning`], though view
 //! and tuning answer halves of one question — where the nodes sit in pitch,
 //! and which of them you are looking at. That kinship is real about the
-//! CONTENT and no help on a label, which shows one word: these are thirteen
+//! CONTENT and no help on a label, which shows one word: these are twelve
 //! control rows to Tuning's five, so a tab merging the two is named for its
 //! smaller half, and the camera is reachable only by opening something called
 //! Tuning and scrolling.
@@ -24,7 +24,7 @@
 
 use super::normalize_deg;
 use super::section;
-use crate::widgets::{button_row, choice_row, ValueBar};
+use crate::widgets::{button_row, choice_row, LayerStrip, ValueBar};
 use crate::{AppearanceDocument, CameraPreset};
 use harmonigraph_scene::Camera;
 use harmonigraph_scene::Projection;
@@ -208,15 +208,15 @@ pub(super) fn view_pane(
     sevens_section(ui, appearance);
 }
 
-/// The depth axis, whole: how many sheets there are, which one is home, and how
-/// the ones behind the home sheet draw. Sheet size and Sheet labels are inert
-/// with Sheets at 0 (a flat lattice has only the home sheet), so they disable
-/// themselves rather than pretending otherwise; Sheets and Home sheet are what
-/// turn depth on, and are live whatever it is set to.
+/// The depth axis, whole: which sheets there are, which one is home, and how
+/// the ones off the home sheet draw. Size per layer and Outer layer labels are
+/// inert while the strip holds one sheet (a flat lattice has only the home
+/// sheet), so they disable themselves rather than pretending otherwise; the
+/// strip is what turns depth on, and is live whatever it is set to.
 ///
-/// One section rather than an Extents heading over the first two: an extent
-/// here is how many SHEETS there are, so it is the same subject as how those
-/// sheets draw, and a heading over the pair spent a name on the distinction
+/// One section rather than an Extents heading over the strip: what it sets is
+/// which SHEETS there are, so it is the same subject as how those sheets draw,
+/// and a heading over one control would spend a name on the distinction
 /// between a count and a size.
 ///
 /// The other two axes have no extent to set, which is why this one is not a
@@ -239,30 +239,25 @@ pub(super) fn view_pane(
 /// than of this layer, whatever its field names say.
 fn sevens_section(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     section(ui, "Seventh layers");
-    for (extent, range, label, hover) in [
-        // Ranges must contain the ViewConfig defaults or the bar could never
-        // drag back to them.
-        (
-            &mut appearance.view.extent_sevens,
-            0.0..=4.0,
-            "Layers each side",
-            "Number of seventh layers on each side of the center. 0 shows only the center layer; 1 shows three layers total.",
-        ),
-        // Which sheet is home, in lattice steps from C (v1's Grid Z).
-        (
-            &mut appearance.view.center_sevens,
-            -20.0..=20.0,
-            "Center layer",
-            "Center layer, counted in seventh steps from the layer containing C.",
-        ),
-    ] {
-        let mut value = *extent as f32;
-        if ValueBar::new(&mut value, range, label).integer().show(ui).on_hover_text(hover).changed()
-        {
-            *extent = value as i32;
-        }
-    }
-    let has_depth = appearance.view.extent_sevens != 0;
+    // Which sheets, and which of them is home, in lattice steps from C (v1's
+    // Grid Z). One control because the three are one answer: an end means
+    // nothing without knowing where home is, and home means nothing outside
+    // the ends.
+    LayerStrip::new(
+        &mut appearance.view.min_sevens,
+        &mut appearance.view.center_sevens,
+        &mut appearance.view.max_sevens,
+        appearance.view.sevens_size,
+    )
+    .show(ui)
+    .on_hover_text(
+        "Which seventh layers the lattice draws and which of them is home, \
+         counted in seventh steps from the layer containing C. Drag an end to \
+         add or drop layers on that side, the middle mark to move home, \
+         between them to slide the whole stack. Double-click for the home \
+         layer alone.",
+    );
+    let has_depth = appearance.view.max_sevens != appearance.view.min_sevens;
     ui.add_enabled_ui(has_depth, |ui| {
         ValueBar::new(&mut appearance.view.sevens_size, 0.15..=1.0, "Size per layer")
         .unit(1.0, "×")

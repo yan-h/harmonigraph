@@ -12,7 +12,7 @@ fn persist_round_trips_camera_and_view() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.camera.distance = 18.0;
-    state.picture.appearance.view.extent_sevens = 3;
+    state.picture.appearance.view.max_sevens = 3;
     // Non-default values throughout, so the fields prove they
     // round-trip rather than matching the defaults by luck.
     state.picture.appearance.view.band_width = 0.7;
@@ -78,7 +78,7 @@ fn persist_round_trips_camera_and_view() {
     restored.load_persist(&saved);
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
     assert_eq!(restored.picture.appearance.camera.distance, 18.0);
-    assert_eq!(restored.picture.appearance.view.extent_sevens, 3);
+    assert_eq!(restored.picture.appearance.view.max_sevens, 3);
     assert_eq!(restored.picture.appearance.view.band_width, 0.7);
     assert_eq!(restored.picture.appearance.view.spectral_ring_width, 0.1);
     assert_eq!(restored.picture.appearance.view.ring_gap, 0.02);
@@ -641,7 +641,7 @@ fn a_blob_written_against_the_taper_keeps_what_it_still_says() {
 fn a_blob_with_retired_shimmer_settings_survives() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
-    state.picture.appearance.view.extent_sevens = 3;
+    state.picture.appearance.view.max_sevens = 3;
     state.picture.appearance.render.short_edge = 2160;
     let saved = state.save_persist();
     let stale = saved.replace(
@@ -654,7 +654,7 @@ fn a_blob_with_retired_shimmer_settings_survives() {
     let mut restored = fresh();
     assert!(restored.load_persist(&stale));
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
-    assert_eq!(restored.picture.appearance.view.extent_sevens, 3);
+    assert_eq!(restored.picture.appearance.view.max_sevens, 3);
     assert_eq!(restored.picture.appearance.render.short_edge, 2160);
     let resaved = restored.save_persist();
     for key in [
@@ -857,7 +857,7 @@ fn a_spliced_blob_survives(anchor: &str, spliced: &str) {
     // Non-defaults on both sides of the splice, so "the blob survived" is
     // distinguishable from "it sank and everything reverted": the view is what
     // the editor door restores, short_edge what the offline door reads.
-    state.picture.appearance.view.extent_sevens = 3;
+    state.picture.appearance.view.max_sevens = 3;
     state.picture.appearance.render.short_edge = 2160;
     let saved = state.save_persist();
     let stale = saved.replace(anchor, &format!("{spliced}{anchor}"));
@@ -866,7 +866,7 @@ fn a_spliced_blob_survives(anchor: &str, spliced: &str) {
     let mut restored = fresh();
     restored.load_persist(&stale);
     assert_eq!(
-        restored.picture.appearance.view.extent_sevens, 3,
+        restored.picture.appearance.view.max_sevens, 3,
         "an unknown key must not sink the blob"
     );
 
@@ -943,7 +943,7 @@ fn a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob() {
         let mut state = fresh();
         // A non-default elsewhere in the blob, so "the blob survived" is
         // distinguishable from "it sank and everything reverted".
-        state.picture.appearance.view.extent_sevens = 3;
+        state.picture.appearance.view.max_sevens = 3;
         let saved = state.save_persist();
         let without = saved.replacen(key.as_str(), "", 1);
         assert_ne!(without, saved, "{key:?} must be in the blob to drop");
@@ -951,7 +951,7 @@ fn a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob() {
         let mut restored = fresh();
         restored.load_persist(&without);
         assert_eq!(
-            restored.picture.appearance.view.extent_sevens, 3,
+            restored.picture.appearance.view.max_sevens, 3,
             "dropping {key:?} must cost that key alone, not the whole blob",
         );
         assert_eq!(
@@ -1001,7 +1001,7 @@ fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
     // blob survived" is distinguishable from "it sank and everything
     // reverted". The camera is not swept for that reason.
     state.picture.appearance.camera.yaw = 1.23;
-    state.picture.appearance.view.extent_sevens = 3;
+    state.picture.appearance.view.max_sevens = 3;
     let saved = state.save_persist();
 
     for (key, _) in top_level_pairs(&saved) {
@@ -1032,7 +1032,7 @@ fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
 fn workspace_edits_do_not_change_recorded_appearance() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
-    state.picture.appearance.view.extent_sevens = 3;
+    state.picture.appearance.view.max_sevens = 3;
     state.picture.appearance.spectrum.low_midi = 40.5;
     state.picture.appearance.spiral.zoom = 2.75;
     state.picture.appearance.render.short_edge = 2160;
@@ -1060,7 +1060,7 @@ fn workspace_edits_do_not_change_recorded_appearance() {
 fn an_appearance_missing_any_one_group_keeps_the_rest() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
-    state.picture.appearance.view.extent_sevens = 3;
+    state.picture.appearance.view.max_sevens = 3;
     state.picture.appearance.spectrum.low_midi = 40.5;
     state.picture.appearance.spiral.zoom = 2.75;
     state.picture.appearance.render.short_edge = 2160;
@@ -1207,7 +1207,7 @@ fn pre_cap_persist_blobs_load_as_uncapped() {
     // persist (layout, camera, every view setting) rather than one setting.
     let mut state = fresh();
     state.workspace.interaction.fps_cap = Some(30.0);
-    state.picture.appearance.view.extent_sevens = 3;
+    state.picture.appearance.view.max_sevens = 3;
     let saved = state.save_persist();
     let stripped = saved.replace(",fps_cap:Some(30.0)", "");
     assert_ne!(stripped, saved, "the field removal must have hit");
@@ -1215,10 +1215,7 @@ fn pre_cap_persist_blobs_load_as_uncapped() {
     let mut restored = fresh();
     restored.load_persist(&stripped);
     assert_eq!(restored.workspace.interaction.fps_cap, None, "a missing cap reads as uncapped");
-    assert_eq!(
-        restored.picture.appearance.view.extent_sevens, 3,
-        "the rest of the blob must survive"
-    );
+    assert_eq!(restored.picture.appearance.view.max_sevens, 3, "the rest of the blob must survive");
 }
 
 /// A key this build has RETIRED does not cost the blob it sits in.
@@ -1406,7 +1403,7 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
     // is. See `load_persist` for why that price is paid rather than shimmed.
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
-    state.picture.appearance.view.extent_sevens = 3;
+    state.picture.appearance.view.max_sevens = 3;
     let saved = state.save_persist();
     assert!(saved.contains(&format!("version:{UI_PERSIST_VERSION}")), "saves at the floor");
 
@@ -1422,8 +1419,8 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
     let defaults = fresh();
     assert_eq!(restored.picture.appearance.camera.yaw, defaults.picture.appearance.camera.yaw);
     assert_eq!(
-        restored.picture.appearance.view.extent_sevens,
-        defaults.picture.appearance.view.extent_sevens
+        restored.picture.appearance.view.max_sevens,
+        defaults.picture.appearance.view.max_sevens
     );
 
     // And the same blob at the floor still loads, so the test above is
@@ -1431,7 +1428,7 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
     let mut current = fresh();
     current.load_persist(&saved);
     assert_eq!(current.picture.appearance.camera.yaw, 1.23);
-    assert_eq!(current.picture.appearance.view.extent_sevens, 3);
+    assert_eq!(current.picture.appearance.view.max_sevens, 3);
 }
 /// Loading a project asks the detects afresh, even at a tuning this session
 /// has already judged.
@@ -1911,7 +1908,7 @@ fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
     ];
     for (key, value, hint, range) in cases {
         let mut state = fresh();
-        state.picture.appearance.view.extent_sevens = 3;
+        state.picture.appearance.view.max_sevens = 3;
         let saved = state.save_persist();
         let was = match key {
             "yaw" => state.picture.appearance.camera.yaw,
@@ -1939,7 +1936,7 @@ fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
             assert!(got >= lo && got <= hi, "{hint}: `{key}` opened at {got}, outside {lo}..={hi}");
         }
         assert_eq!(
-            restored.picture.appearance.view.extent_sevens, 3,
+            restored.picture.appearance.view.max_sevens, 3,
             "{hint}: the rest of the blob still restores"
         );
     }
@@ -1964,7 +1961,7 @@ fn a_saved_angle_lands_where_the_camera_controls_could_have_put_it() {
         [("a NaN yaw", "NaN", "0.0"), ("a pitch past `orbit`'s limit", "0.0", "10.0")]
     {
         let mut state = fresh();
-        state.picture.appearance.view.extent_sevens = 3;
+        state.picture.appearance.view.max_sevens = 3;
         state.workspace.interaction.camera_presets.push(crate::CameraPreset {
             name: "reading".to_string(),
             yaw: 0.25,
@@ -1977,7 +1974,7 @@ fn a_saved_angle_lands_where_the_camera_controls_could_have_put_it() {
         let mut restored = fresh();
         restored.load_persist(&edited);
         assert_eq!(
-            restored.picture.appearance.view.extent_sevens, 3,
+            restored.picture.appearance.view.max_sevens, 3,
             "{hint}: the rest of the blob still restores"
         );
         let preset = &restored.workspace.interaction.camera_presets[0];
@@ -2006,7 +2003,7 @@ fn a_saved_angle_lands_where_the_camera_controls_could_have_put_it() {
 #[test]
 fn a_blob_naming_a_nonsense_camera_target_opens_on_a_drawable_one() {
     let mut state = fresh();
-    state.picture.appearance.view.extent_sevens = 3;
+    state.picture.appearance.view.max_sevens = 3;
     let saved = state.save_persist();
     let edited = saved.replace("target:(0.0,0.0,0.0),", "target:(NaN,0.0,0.0),");
     assert_ne!(edited, saved, "`target` is not in the blob to edit");
@@ -2019,7 +2016,7 @@ fn a_blob_naming_a_nonsense_camera_target_opens_on_a_drawable_one() {
         restored.picture.appearance.camera.target,
     );
     assert_eq!(
-        restored.picture.appearance.view.extent_sevens, 3,
+        restored.picture.appearance.view.max_sevens, 3,
         "the rest of the blob still restores"
     );
 }
@@ -2033,7 +2030,7 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
         [("NaN", "a NaN split", (0.05, 0.95)), ("inf", "an infinite split", (0.05, 0.95))];
     for (value, hint, (lo, hi)) in cases {
         let mut state = fresh();
-        state.picture.appearance.view.extent_sevens = 3;
+        state.picture.appearance.view.max_sevens = 3;
         let saved = state.save_persist();
         let was = state.picture.appearance.render.frame.split;
         let edited = replace_pair(&saved, "split", &format!("{was:?}"), value);
@@ -2045,7 +2042,7 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
         assert!(got.is_finite(), "{hint}: `split` opened at {got}");
         assert!(got >= lo && got <= hi, "{hint}: `split` opened at {got}, outside {lo}..={hi}");
         assert_eq!(
-            restored.picture.appearance.view.extent_sevens, 3,
+            restored.picture.appearance.view.max_sevens, 3,
             "{hint}: the rest of the blob still restores"
         );
     }

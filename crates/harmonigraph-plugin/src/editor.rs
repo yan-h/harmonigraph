@@ -1346,7 +1346,7 @@ mod tests {
             control,
         );
         shared.ui.picture.appearance.camera.yaw = 1.23;
-        shared.ui.picture.appearance.view.extent_sevens = 3;
+        shared.ui.picture.appearance.view.max_sevens = 3;
         shared.ui.picture.appearance.spectrum.low_midi = 40.5;
         shared.ui.picture.appearance.spiral.zoom = 2.75;
         shared.ui.picture.appearance.render.short_edge = 2160;

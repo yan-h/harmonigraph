@@ -3,7 +3,8 @@
 //! that replaces egui's rail-and-knob `Slider` + separate `DragValue`.
 //! `RangeBar` is its two-handle sibling, for a pair of values that bound a
 //! span rather than one value on a scale. `OctaveStrip` is the octave wheel's
-//! own — two counts and the profile they produce, in one row.
+//! own — two counts and the profile they produce, in one row — and `LayerStrip`
+//! is the septimal stack's, three handles over a cell per sheet.
 //!
 //! One module per control, over a shared spine in [`bar`]: the lengths every
 //! bar is built out of, the reach a handle answers to, and the two readings
@@ -14,6 +15,7 @@
 
 mod bar;
 mod gradient;
+mod layer;
 mod mesh;
 mod octave;
 #[cfg(test)]
@@ -26,6 +28,7 @@ mod stack;
 mod value;
 
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
+pub use layer::LayerStrip;
 pub use octave::OctaveStrip;
 pub use range::RangeBar;
 pub use rows::{button_row, choice_row, option_label, record_button, row_field, toggle_switch};

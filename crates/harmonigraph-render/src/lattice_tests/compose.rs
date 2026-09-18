@@ -51,8 +51,13 @@ fn fractional_bloom_strength_is_independent_of_render_scale() {
 fn sheets_draw_back_to_front_along_the_sevens_axis() {
     use harmonigraph_scene::{Camera, FrameParams, Projection, ViewConfig};
 
-    let view =
-        ViewConfig { extent_threes: 1, extent_fives: 1, extent_sevens: 2, ..ViewConfig::default() };
+    let view = ViewConfig {
+        extent_threes: 1,
+        extent_fives: 1,
+        min_sevens: -2,
+        max_sevens: 2,
+        ..ViewConfig::default()
+    };
     for projection in [Projection::Cabinet, Projection::Perspective, Projection::Orthographic] {
         let mut scene = harmonigraph_scene::derive_scene(
             &harmonigraph_core::NoteTracker::new(),

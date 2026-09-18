@@ -727,7 +727,7 @@ mod tests {
     /// its own light plus every neighbour's, and so does the ground between the
     /// nodes; what says the light is UNDER the node is that the middle is not
     /// the darker of the two. Adding a sevens sheet must not change which way
-    /// that reads, and it is `extent_sevens` alone that moves between the two
+    /// that reads, and it is the sevens stack alone that moves between the two
     /// shots here.
     ///
     /// Read at a wide Reach because that is the regime where it matters most:
@@ -777,7 +777,8 @@ mod tests {
             // shot part way up its attack, which is a reading of the ramp.
             state.appearance.view.glow_attack = 0.0;
             state.appearance.view.glow_release = 0.0;
-            state.appearance.view.extent_sevens = extent;
+            state.appearance.view.min_sevens = -extent;
+            state.appearance.view.max_sevens = extent;
             // The off-sheet nodes at the home sheet's own size, so what differs
             // between the two shots is the sheet COUNT and not how big anything
             // on it is drawn.

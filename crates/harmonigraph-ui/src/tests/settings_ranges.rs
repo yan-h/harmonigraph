@@ -3,16 +3,16 @@
 //! This matrix is MANUAL: new pages, conditional controls and state fields need
 //! a scenario/fixture and a visit expectation here. SETTINGS_PANES only checks
 //! our page inventory, not future conditional coverage. Disabled bars are still
-//! recorded. Gradients, StackBar, OctaveStrip, choices, text fields, RangeBar
-//! ordering/minimum spans and gestures are outside this guard, as are renderer
-//! clamps and semantic unit mappings.
+//! recorded. Gradients, StackBar, OctaveStrip, LayerStrip, choices, text
+//! fields, RangeBar ordering/minimum spans and gestures are outside this guard,
+//! as are renderer clamps and semantic unit mappings.
 
 use super::harness::{DisplayPage, SettingsPane, SETTINGS_PANES};
 use super::probe::{fresh, themed};
 use crate::widgets::range_probe::collect;
 use crate::*;
 use harmonigraph_core::configuration::{ConfigMutation, ConfigReducer, PolicyConfig, TuningModes};
-use harmonigraph_scene::{Projection, ShadowKernel, SpectralReading};
+use harmonigraph_scene::{Projection, ShadowKernel, SpectralReading, SEVENS_LAYER_LIMIT};
 
 #[derive(Clone, Copy, Debug)]
 enum Edge {
@@ -52,7 +52,8 @@ fn loaded(edge: Edge) -> SharedState {
     poison!(a.view.note_animation; radial_start, start_size, stagger_spread);
     poison!(a.view.atmosphere; nebula_depth, nebula_scale, nebula_speed,
         breath_amount, breath_speed);
-    a.view.extent_sevens = edge.integer();
+    a.view.min_sevens = edge.integer();
+    a.view.max_sevens = edge.integer();
     a.view.center_sevens = edge.integer();
     for shadow in a.view.shadow.groups_mut() {
         poison!(shadow; width, depth, falloff);
@@ -82,6 +83,20 @@ fn loaded(edge: Edge) -> SharedState {
         (STOP_BAR_RANGE.0..=STOP_BAR_RANGE.1).contains(&state.picture.appearance.render.stop_bar)
     );
     assert!((0.05..=0.95).contains(&state.picture.appearance.render.frame.split));
+    // The sevens stack is a LayerStrip rather than a pair of bars, so it left
+    // the recorded set when the two merged. Its three integers still cross this
+    // door, and the invariant is the strip's own: both ends on the axis, home
+    // between them and so on a sheet the picture draws.
+    let view = &state.picture.appearance.view;
+    let axis = -SEVENS_LAYER_LIMIT..=SEVENS_LAYER_LIMIT;
+    assert!(axis.contains(&view.min_sevens) && axis.contains(&view.max_sevens));
+    assert!(
+        view.min_sevens <= view.center_sevens && view.center_sevens <= view.max_sevens,
+        "home {} is outside the stack {}..{}",
+        view.center_sevens,
+        view.min_sevens,
+        view.max_sevens,
+    );
     // Export parses the same document through the other production entry.
     let exported = AppearanceDocument::parse(&saved.picture.appearance.serialize()).unwrap();
     assert_eq!(state.picture.appearance.serialize(), exported.serialize());
@@ -161,7 +176,7 @@ fn scenarios() -> Vec<Scenario> {
         let visits = match pane {
             SettingsPane::Tab(panes::Tab::Tuning) => 7,
             SettingsPane::Page(DisplayPage::Colors) => 2,
-            SettingsPane::Page(DisplayPage::Lattice) => 28,
+            SettingsPane::Page(DisplayPage::Lattice) => 26,
             SettingsPane::Page(DisplayPage::Analyzer) => 19,
             SettingsPane::Page(DisplayPage::Lighting) => 26,
             SettingsPane::Page(DisplayPage::System) => 2,
@@ -178,7 +193,7 @@ fn scenarios() -> Vec<Scenario> {
             pane: SettingsPane::Page(DisplayPage::Lattice),
             projection,
             enabled: true,
-            visits: 28,
+            visits: 26,
             ..base
         });
     }

@@ -21,7 +21,8 @@ fn plus_view() -> ViewConfig {
     ViewConfig {
         extent_threes: 3,
         extent_fives: 3,
-        extent_sevens: 1,
+        min_sevens: -1,
+        max_sevens: 1,
         note_names: NoteNames::Played,
         ..plain_view()
     }
@@ -715,7 +716,13 @@ fn an_off_sheet_note_leaves_the_marker_field_alone() {
     // draws at is what says how far off it has gone. A chain drawn down to
     // home would be the other answer, and the field is what it costs — so the
     // field is the same field whether that note sounds or not.
-    let view = ViewConfig { extent_threes: 0, extent_fives: 0, extent_sevens: 2, ..plain_view() };
+    let view = ViewConfig {
+        extent_threes: 0,
+        extent_fives: 0,
+        min_sevens: -2,
+        max_sevens: 2,
+        ..plain_view()
+    };
     // 12-TET default: a sevens step is 1000¢, so (0,0,2) is MIDI 68's pitch
     // class. The home node is C.
     let mut tracker = NoteTracker::new();
