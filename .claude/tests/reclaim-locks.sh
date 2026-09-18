@@ -500,13 +500,20 @@ check_submodule_removal() {
   echo "✓ $desc"
 }
 
-# `--force` gives up git's own refusal on a dirty tree, so the ONLY thing
-# standing between uncommitted work and deletion is this script's `status
-# --porcelain` check. The work here is inside the submodule, which the
-# superproject reports as a modified gitlink — the reading the whole retry
-# leans on.
+# `--force` gives up git's own refusal on a dirty tree, so every clean check
+# in this script now carries weight it did not carry before. What this case
+# measures is the narrow half of that: whether uncommitted work INSIDE the
+# submodule is visible to the superproject at all. It is not obvious that it
+# is — the file is in another repository — and the answer is that git reports
+# it as a modified gitlink, ` M .shared-skills`. Every gate downstream reads
+# that line, so if it ever stopped appearing, nothing else here would notice.
+#
+# This case stops at the FIRST clean check, which returns before any removal
+# is attempted; it therefore says nothing about the retry's own recheck, and
+# it passes against the pre-`--force` script for that reason.
+# `check_force_retry_gate` is the one that reaches the retry.
 check_submodule_dirty_is_kept() {
-  desc="uncommitted work inside the submodule keeps the worktree"
+  desc="a dirty submodule is visible to the first clean gate"
   work="$TMP/submodule-dirty"
   build_submodule_fixture "$work" || {
     echo "✗ $desc: could not build the fixture" >&2
@@ -528,18 +535,103 @@ check_submodule_dirty_is_kept() {
     RECLAIM_NO_NETWORK=1 RECLAIM_MIN_IDLE_MINUTES=0 \
     "$SCRIPT" </dev/null) >/dev/null 2>&1
 
-  # Both halves, as in the orphan tier: that the CLEAN check is the gate that
-  # fires, and that the file is still there afterwards. Survival alone would
-  # pass just as happily on a fixture that never reached the decision.
+  # Both halves, as in the orphan tier: that the clean check is the gate that
+  # names the reason, and that the file is still there afterwards. Survival
+  # alone would pass just as happily on a fixture that never reached the gate.
   if grep -q "no-remove w1: .*uncommitted/untracked" <<<"$dry" &&
     [ -f "$wt/.shared-skills/scratch.md" ]; then
     echo "✓ $desc"
   else
-    echo "✗ $desc: --force reached a dirty tree, or the clean check never ran" >&2
+    echo "✗ $desc: submodule dirt did not reach the superproject's porcelain" >&2
     printf '%s\n' "$dry" | sed 's/^/    dry: /' >&2
     [ -f "$wt/.shared-skills/scratch.md" ] || echo "    the scratch file is GONE" >&2
     failures=$((failures + 1))
   fi
+}
+
+# THE RETRY'S OWN GATE, which is where the change puts its weight: `--force`
+# discards an unclean tree, so between the plain remove failing and the retry
+# firing, the script re-asks whether the tree is still clean. That window is
+# the reason the recheck exists — `du` of a multi-gigabyte worktree sits in it.
+#
+# No fixture reaches this gate on its own: the FIRST clean check returns long
+# before, so a tree that starts dirty never gets here. The shim is what makes
+# it reachable — it refuses the plain remove the way git's submodule refusal
+# does, and changes the world on its way out:
+#
+#   dirty    the worktree acquires an untracked file as the remove is refused.
+#   unknown  `git status` itself fails on the recheck. Its output is empty
+#            either way, so an empty-output-is-clean test cannot tell "clean"
+#            from "could not tell" — and would force on the second one.
+#
+# The assertion is that `--force` was never ATTEMPTED, not merely that the
+# worktree survived: the shim refuses `--force` too, so survival alone would
+# pass just as happily on a script that forced a dirty tree and was told no.
+check_force_retry_gate() {
+  mode=$1
+  desc=$2
+  work="$TMP/retry-$mode"
+  build_submodule_fixture "$work" || {
+    echo "✗ $desc: could not build the fixture" >&2
+    failures=$((failures + 1))
+    return
+  }
+
+  real_git=$(command -v git)
+  forced="$work/forced"
+  marker="$work/refused-once"
+
+  # The --force arm is FIRST: `git -C <root> worktree remove --force <path>`
+  # matches the plain pattern too, and a case takes the first match.
+  cat > "$work/bin/git" <<SHIM
+#!/usr/bin/env bash
+case "\$*" in
+  *"worktree remove --force"*)
+    : > "$forced"
+    echo 'fatal: the retry should not have run' >&2
+    exit 128 ;;
+  *"worktree remove"*)
+    : > "$marker"
+    [ "$mode" = dirty ] && : > "$wt/scratch.md"
+    echo 'fatal: working trees containing submodules cannot be moved or removed' >&2
+    exit 128 ;;
+  *"status --porcelain"*)
+    # Only the RECHECK, so the first clean check still answers honestly and
+    # the run gets as far as attempting a removal.
+    if [ "$mode" = unknown ] && [ -e "$marker" ]; then
+      exit 1
+    fi ;;
+esac
+exec "$real_git" "\$@"
+SHIM
+  chmod +x "$work/bin/git"
+
+  find "$wt" -depth -exec touch -t 200001010000 {} \; 2>/dev/null
+  touch -t 200001010000 "$wt"
+
+  msg=$(cd "$main" && PATH="$work/bin:$PATH" CLAUDE_PROJECT_DIR="$main" \
+    RECLAIM_FORCE=1 RECLAIM_NO_NETWORK=1 RECLAIM_MIN_IDLE_MINUTES=0 \
+    RECLAIM_PRUNE_IDLE_MINUTES=0 "$SCRIPT" </dev/null 2>/dev/null)
+
+  if [ ! -e "$marker" ]; then
+    echo "✗ $desc: the run never attempted a removal, so the gate never ran" >&2
+    printf '%s\n' "${msg:-(no output at all)}" | sed 's/^/    /' >&2
+    failures=$((failures + 1))
+    return
+  fi
+  if [ -e "$forced" ]; then
+    echo "✗ $desc: --force ran anyway" >&2
+    printf '%s\n' "${msg:-(no output at all)}" | sed 's/^/    /' >&2
+    failures=$((failures + 1))
+    return
+  fi
+  if [ ! -d "$wt" ] || ! grep -q 'REFUSED' <<<"$msg"; then
+    echo "✗ $desc: the worktree went, or the refusal was never reported" >&2
+    printf '%s\n' "${msg:-(no output at all)}" | sed 's/^/    /' >&2
+    failures=$((failures + 1))
+    return
+  fi
+  echo "✓ $desc"
 }
 
 # Whatever the next refusal turns out to be, it has to be audible. A dry-run
@@ -621,6 +713,10 @@ check_containment
 check_orphan_report
 check_submodule_removal
 check_submodule_dirty_is_kept
+check_force_retry_gate dirty \
+  "a tree that goes dirty before the retry is not forced"
+check_force_retry_gate unknown \
+  "a recheck that cannot answer is not read as clean"
 check_refused_removal_is_audible
 
 echo

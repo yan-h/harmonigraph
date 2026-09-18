@@ -641,9 +641,18 @@ remove_worktree() {
   # status, which is 0 whenever its condition is merely false.
   err=$(git -C "$ROOT" worktree remove "$path" 2>&1 >/dev/null)
   rc=$?
-  if [ "$rc" != 0 ] && [ -z "$(git -C "$path" status --porcelain 2>/dev/null)" ]; then
-    err=$(git -C "$ROOT" worktree remove --force "$path" 2>&1 >/dev/null)
-    rc=$?
+  if [ "$rc" != 0 ]; then
+    # FAIL CLOSED, like the first clean check: an empty capture means "clean"
+    # OR "the command failed", and only one of those may reach `--force`. A
+    # `git status` that errors in this window — an unreadable path, a
+    # concurrent git operation, a transient index failure — would otherwise
+    # read as a clean tree and license the one irreversible command here.
+    recheck=$(git -C "$path" status --porcelain 2>/dev/null)
+    recheck_rc=$?
+    if [ "$recheck_rc" = 0 ] && [ -z "$recheck" ]; then
+      err=$(git -C "$ROOT" worktree remove --force "$path" 2>&1 >/dev/null)
+      rc=$?
+    fi
   fi
   if [ "$rc" = 0 ]; then
     removed=$((removed + 1))
