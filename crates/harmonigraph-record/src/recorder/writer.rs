@@ -29,10 +29,7 @@ pub fn channel() -> (Recorder, Control) {
     let rolling = Arc::new(AtomicBool::new(false));
     let with_audio = Arc::new(AtomicBool::new(false));
     let end_at_rewind = Arc::new(AtomicBool::new(false));
-    let rolled = Arc::new(AtomicBool::new(false));
-    let captured = Arc::new(AtomicU64::new(0));
-    let hit_rewind = Arc::new(AtomicBool::new(false));
-    let stop_at_bar = Arc::new(StopAtBar::default());
+    let latches = Arc::new(TakeLatches::default());
     let status = Arc::new(Mutex::new(String::new()));
     let last_take = Arc::new(Mutex::new(None));
     let progress = Arc::new(Progress::default());
@@ -165,10 +162,7 @@ pub fn channel() -> (Recorder, Control) {
             audio: audio_producer,
             with_audio: with_audio.clone(),
             end_at_rewind: end_at_rewind.clone(),
-            captured: captured.clone(),
-            hit_rewind: hit_rewind.clone(),
-            stop_at_bar: stop_at_bar.clone(),
-            rolled: rolled.clone(),
+            latches: latches.clone(),
         },
         Control {
             display: Arc::new(Mutex::new(Some(display_consumer))),
@@ -181,10 +175,7 @@ pub fn channel() -> (Recorder, Control) {
             rolling,
             with_audio,
             end_at_rewind,
-            rolled,
-            captured,
-            hit_rewind,
-            stop_at_bar,
+            latches,
             progress,
             render,
         },

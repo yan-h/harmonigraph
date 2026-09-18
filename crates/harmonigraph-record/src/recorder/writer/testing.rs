@@ -190,7 +190,6 @@ pub fn channel() -> (Recorder, Capture) {
     let dropped = Arc::new(AtomicU64::new(0));
     let rolling = Arc::new(AtomicBool::new(false));
     let end_at_rewind = Arc::new(AtomicBool::new(false));
-    let hit_rewind = Arc::new(AtomicBool::new(false));
     let fence = Arc::new(RecordFence::default());
     let recorder = Recorder {
         _writer_lifetime: None,
@@ -212,10 +211,7 @@ pub fn channel() -> (Recorder, Capture) {
         rolling,
         audio_started: false,
         end_at_rewind,
-        captured: Arc::new(AtomicU64::new(0)),
-        hit_rewind,
-        stop_at_bar: Arc::new(StopAtBar::default()),
-        rolled: Arc::new(AtomicBool::new(false)),
+        latches: Arc::new(TakeLatches::default()),
     };
     let capture = Capture {
         fence,

@@ -173,6 +173,53 @@ impl StopAtBar {
     }
 }
 
+/// What a take must not inherit from the take before it, and the one place it
+/// is cleared.
+///
+/// One struct for the same reason [`StopAtBar`] is one: these are cleared
+/// together or not at all, and both halves of the recorder hold all four. They
+/// are cleared TWICE per take, on purpose — the audio thread clears them on the
+/// arming edge ([`Recorder::update_armed`]) and the GUI clears them when it
+/// sends `Start` ([`Control::start`]) — because either can go first, and a take
+/// that armed before its command landed would otherwise read as already under
+/// way. What is not on purpose is two hand-written copies of the same four
+/// stores, which is how one of them comes to be missing a latch the other
+/// gained (#895).
+#[derive(Default)]
+struct TakeLatches {
+    /// Notes that entered the current take, through either the plain-MIDI arm
+    /// or addressed publication. The status line reads this independently of
+    /// transport progress: audio-only takes and delayed notes also roll.
+    captured: AtomicU64,
+    /// Whether this take has recorded a block yet, published for the GUI's
+    /// Transport-stop countdown (`Control::has_rolled`). Whether an owed split
+    /// has a pass to split from is the lifecycle's own `Waiting` state.
+    rolled: AtomicBool,
+    /// Published for the GUI: the transport went backwards and the take is done
+    /// — the GUI reads this, stops, and renders the one pass.
+    hit_rewind: AtomicBool,
+    /// The bar the GUI wants the take to end at, and the latch saying it did.
+    /// See [`StopAtBar`] and [`Recorder::observe_bar`].
+    stop_at_bar: StopAtBar,
+}
+
+impl TakeLatches {
+    /// Clear what the previous take left behind, so neither end latch can end
+    /// this one before the transport even rolls — nor its note count, which
+    /// would read as this take being under way.
+    ///
+    /// The stop BAR itself is not here: it is the GUI's setting for the take
+    /// about to run, written every frame, and clearing it would disarm the
+    /// trigger at the moment it is needed. Only the latch saying the bar was
+    /// crossed belongs to the finished take.
+    fn clear(&self) {
+        self.captured.store(0, Ordering::Relaxed);
+        self.rolled.store(false, Ordering::Relaxed);
+        self.hit_rewind.store(false, Ordering::Relaxed);
+        self.stop_at_bar.hit.store(false, Ordering::Relaxed);
+    }
+}
+
 /// The audio-thread half: push entries, gated by an atomic the GUI owns.
 pub struct Recorder {
     /// Pins the writer independently from all GUI Control clones. A retired
@@ -220,20 +267,9 @@ pub struct Recorder {
     /// [`OnTransportStop`](harmonigraph_take::RenderTrigger::OnTransportStop).
     /// The take ends there rather than splitting into another pass.
     end_at_rewind: Arc<AtomicBool>,
-    /// Notes that entered the current take, through either the plain-MIDI arm
-    /// or addressed publication. The status line reads this independently of
-    /// transport progress: audio-only takes and delayed notes also roll.
-    captured: Arc<AtomicU64>,
-    /// Published for the GUI: the transport went backwards and the take is done
-    /// — the GUI reads this, stops, and renders the one pass.
-    hit_rewind: Arc<AtomicBool>,
-    /// The bar the GUI wants the take to end at, and the latch saying it did.
-    /// See [`StopAtBar`] and [`Recorder::observe_bar`].
-    stop_at_bar: Arc<StopAtBar>,
-    /// Whether this take has recorded a block yet, published for the GUI's
-    /// Transport-stop countdown (`Control::has_rolled`). Whether an owed split
-    /// has a pass to split from is the lifecycle's own `Waiting` state.
-    rolled: Arc<AtomicBool>,
+    /// What the take in progress has latched, shared with the [`Control`] that
+    /// reads it and clears it. See [`TakeLatches`].
+    latches: Arc<TakeLatches>,
 }
 
 impl Recorder {
@@ -286,7 +322,7 @@ impl Recorder {
             && route.address.is_some()
             && !matches!(note.event.kind, NoteEventKind::SourceReset | NoteEventKind::SessionReset)
         {
-            self.captured.fetch_add(1, Ordering::Relaxed);
+            self.latches.captured.fetch_add(1, Ordering::Relaxed);
         }
         let display = self.display.note(note, publication::Route::default());
         self.outage.take |= take == Err(publication::PublishError::Lost);
@@ -407,10 +443,7 @@ impl Recorder {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.last_configuration = None;
             self.audio_started = false;
-            self.captured.store(0, Ordering::Relaxed);
-            self.rolled.store(false, Ordering::Relaxed);
-            self.hit_rewind.store(false, Ordering::Relaxed);
-            self.stop_at_bar.hit.store(false, Ordering::Relaxed);
+            self.latches.clear();
         }
         armed
     }
@@ -428,7 +461,7 @@ impl Recorder {
 
     pub fn note(&mut self, t: f64, source: SourceId, channel: u8, note: u8, kind: NoteEventKind) {
         self.push(Entry::Note { t, source, channel, note, kind });
-        self.captured.fetch_add(1, Ordering::Relaxed);
+        self.latches.captured.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn wants_audio(&self) -> bool {
@@ -529,7 +562,7 @@ impl Recorder {
         }
         let rolling = matches!(action, Action::Record | Action::SplitAndRecord);
         if rolling {
-            self.rolled.store(true, Ordering::Relaxed);
+            self.latches.rolled.store(true, Ordering::Relaxed);
         }
         self.rolling.store(rolling, Ordering::Relaxed);
         rolling
@@ -573,15 +606,15 @@ impl Recorder {
     fn advance(&mut self, observation: Observation) -> Action {
         let policy = Policy {
             end_at_rewind: self.end_at_rewind.load(Ordering::Relaxed),
-            stop_bar: self.stop_at_bar.get(),
+            stop_bar: self.latches.stop_at_bar.get(),
         };
         let next = lifecycle::transition(self.lifecycle, self.history, observation, policy);
         self.lifecycle = next.state;
         self.history = next.history;
         if let Action::Complete(end) = next.action {
             match end {
-                End::Rewind => self.hit_rewind.store(true, Ordering::Relaxed),
-                End::Bar => self.stop_at_bar.hit.store(true, Ordering::Relaxed),
+                End::Rewind => self.latches.hit_rewind.store(true, Ordering::Relaxed),
+                End::Bar => self.latches.stop_at_bar.hit.store(true, Ordering::Relaxed),
             }
             self.rolling.store(false, Ordering::Relaxed);
         }
@@ -709,16 +742,9 @@ pub struct Control {
     with_audio: Arc<AtomicBool>,
     /// Mirror for the audio thread of whether a backward jump ends the take.
     end_at_rewind: Arc<AtomicBool>,
-    /// Whether any transport block has been accepted in this take.
-    rolled: Arc<AtomicBool>,
-    /// The audio thread's count of notes in the current take.
-    captured: Arc<AtomicU64>,
-    /// Set by the audio thread when the transport went backwards: the take is
-    /// done and the GUI should stop + render it.
-    hit_rewind: Arc<AtomicBool>,
-    /// The bar to end the take at, and the audio thread's latch saying it
-    /// happened. See [`StopAtBar`].
-    stop_at_bar: Arc<StopAtBar>,
+    /// What the take in progress has latched, shared with the [`Recorder`] that
+    /// sets it. See [`TakeLatches`].
+    latches: Arc<TakeLatches>,
     /// How far the background render has got, for the Video pane's bar.
     progress: Arc<Progress>,
     /// Shared by every render this Control starts, so a new request cancels
@@ -745,18 +771,18 @@ impl Control {
     /// Whether this take accepted a transport block, including audio-only
     /// exports and blocks whose notes are still awaiting publication.
     pub fn has_rolled(&self) -> bool {
-        self.rolled.load(Ordering::Relaxed)
+        self.latches.rolled.load(Ordering::Relaxed)
     }
 
     /// Notes the current take has captured, by either path into it.
     pub fn captured(&self) -> u64 {
-        self.captured.load(Ordering::Relaxed)
+        self.latches.captured.load(Ordering::Relaxed)
     }
 
     /// Whether the audio thread saw the transport go backwards and ended the
     /// take — the GUI's cue to stop recording and render the one pass.
     pub fn hit_rewind(&self) -> bool {
-        self.hit_rewind.load(Ordering::Relaxed)
+        self.latches.hit_rewind.load(Ordering::Relaxed)
     }
 
     /// The bar to end the take at, or `None` for every trigger but
@@ -764,13 +790,13 @@ impl Control {
     /// frame, like [`set_end_at_rewind`](Self::set_end_at_rewind), so a
     /// mid-take change of mind reaches the audio thread.
     pub fn set_stop_bar(&self, bar: Option<f64>) {
-        self.stop_at_bar.set(bar);
+        self.latches.stop_at_bar.set(bar);
     }
 
     /// Whether the audio thread played the take through its stop bar and ended
     /// it there — the GUI's cue to stop recording and render.
     pub fn hit_stop_bar(&self) -> bool {
-        self.stop_at_bar.hit.load(Ordering::Relaxed)
+        self.latches.stop_at_bar.hit.load(Ordering::Relaxed)
     }
 
     /// Whether the audio thread last saw the transport moving.
@@ -874,14 +900,9 @@ impl Control {
         }
         self.recording.store(true, Ordering::Relaxed);
         self.rolling.store(false, Ordering::Relaxed);
-        // Clear a previous take's end latches so neither can end this one
-        // before the transport even rolls — nor its note count, which would
-        // read as this take being under way. The audio thread also clears
-        // them on arm.
-        self.hit_rewind.store(false, Ordering::Relaxed);
-        self.stop_at_bar.hit.store(false, Ordering::Relaxed);
-        self.captured.store(0, Ordering::Relaxed);
-        self.rolled.store(false, Ordering::Relaxed);
+        // The audio thread clears these too, on the arming edge; see
+        // [`TakeLatches`] for why both ends do it.
+        self.latches.clear();
         // Finishing barred Start until every old armed callback retired.
         // An overlapping idle callback captured disarmed and owns no audio,
         // so its activity bit cannot carry ownership into this new epoch.

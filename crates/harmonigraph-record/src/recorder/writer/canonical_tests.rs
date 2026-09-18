@@ -46,9 +46,9 @@ fn stopped_export_restore_keeps_the_unpublished_notes_original_route() {
     let address = recorder.configuration_address().unwrap();
     recorder.mark_audio_start(origin);
     recorder.audio(&mut std::iter::repeat_n(0.25, 128), 128);
-    assert_eq!(recorder.captured.load(Ordering::Relaxed), 0);
+    assert_eq!(recorder.latches.captured.load(Ordering::Relaxed), 0);
     assert!(!recorder.observe_transport(5.0, false, duration));
-    assert!(recorder.hit_rewind.load(Ordering::Relaxed));
+    assert!(recorder.latches.hit_rewind.load(Ordering::Relaxed));
     let note = accepted(NoteEvent::on(origin, SourceId(1), 0, 60, 0.8), 1);
     let route = publication::Route { address: Some(address), time_offset: 0.0 };
     assert!(recorder.publish_note(note, route).take.is_ok());
