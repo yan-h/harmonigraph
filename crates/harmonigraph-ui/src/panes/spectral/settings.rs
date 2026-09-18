@@ -488,9 +488,9 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .show(ui)
         .on_hover_text(
             "Size of one glob, as a share of the frame above. At 1\u{d7} and the fresh cloud \
-             size about forty of them cross the pane, which is roughly two harmonic lines to \
-             a glob; halve it and a glob is one line wide and the music reads through the \
-             paint.",
+             size a glob is about a twentieth of the pane's height across, which is roughly \
+             two harmonic lines; halve it and a glob is one line wide and the music reads \
+             through the paint.",
         );
     ValueBar::new(&mut atmosphere.wash_variety, 0.0..=1.0, "Variety")
         .percent()

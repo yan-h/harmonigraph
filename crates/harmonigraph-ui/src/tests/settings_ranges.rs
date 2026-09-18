@@ -173,6 +173,10 @@ struct Scenario {
     enabled: bool,
     meantone: bool,
     marvel: bool,
+    /// Draw the Analyzer page's cloud dials for the watercolour wash rather
+    /// than for the refracting scales. Two constructions sharing three bars, so
+    /// the page has two inventories and only one of them is the fresh state's.
+    wash: bool,
     visits: usize,
 }
 
@@ -184,6 +188,7 @@ fn scenarios() -> Vec<Scenario> {
         enabled: false,
         meantone: false,
         marvel: false,
+        wash: false,
         visits: 0,
     };
     let mut cases = Vec::new();
@@ -203,6 +208,17 @@ fn scenarios() -> Vec<Scenario> {
         // marks, audio reading, sevens, roll/note names, glow and shadow falloff.
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
+    // The wash's own inventory: it takes the seven scale bars off the Analyzer
+    // page and puts eleven of its own there, and nothing else on the page moves.
+    // Its own scenario rather than a flag on the loop above because the fresh
+    // state selects the scales, so without this the eleven are drawn by no case
+    // here at all.
+    cases.push(Scenario {
+        pane: SettingsPane::Page(DisplayPage::Analyzer),
+        wash: true,
+        visits: 33,
+        ..base
+    });
     for projection in [Projection::Perspective, Projection::Orthographic] {
         cases.push(Scenario {
             pane: SettingsPane::Page(DisplayPage::Lattice),
@@ -238,6 +254,11 @@ fn check(edge: Edge) {
         a.spectrum.show_roll = scenario.enabled;
         a.spectrum.show_spectrogram = scenario.enabled;
         a.spectrum.note_names = scenario.enabled;
+        a.spectrum.atmosphere.cloud_style = if scenario.wash {
+            harmonigraph_scene::CloudStyle::Wash
+        } else {
+            harmonigraph_scene::CloudStyle::Water
+        };
         a.view.show_perf = scenario.enabled;
         a.view.atmosphere.enabled = scenario.enabled;
         for style in a.view.shadow.groups_mut() {

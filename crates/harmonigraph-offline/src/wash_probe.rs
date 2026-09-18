@@ -9,7 +9,8 @@ mod tests {
     use harmonigraph_take::{Header, Take};
     use harmonigraph_ui::{Layout, PictureState, SpectrogramRender};
 
-    const OUT: &str = "/Users/yan/.claude/jobs/f5be7549/tmp/port";
+    const OUT: &str = "/Users/yan/.claude/jobs/57dd5ad2/tmp/port";
+    const OLD: &str = "/Users/yan/.claude/jobs/f5be7549/tmp/port";
     const TAKE: &str = "/Users/yan/Music/Harmonigraph Takes/take-2026-09-11_03-16-17.wav";
     const START: f64 = 72.0;
     const SPAN: f32 = 8.0;
@@ -137,6 +138,20 @@ mod tests {
         a.wash_refract = 0.7;
         a.wash_layers = 0.42;
         a.wash_grain = 0.5;
+    }
+
+    /// The prototype's globs are `rad 0.90` cells wide and the shader's are
+    /// `WASH_RADIUS 1.18`, so matching the CELL count leaves the plugin's globs
+    /// 31% too big. These three ask which number reproduces J2's picture.
+    #[test]
+    #[ignore = "scratch"]
+    fn wash_size_match() {
+        for (tag, size) in [("cells", 1.0f32), ("diameter", 0.763), ("between", 0.87)] {
+            draw(&format!("size-match-{tag}"), [960, 540], 1.0, |a| {
+                wash(a);
+                a.wash_size = size;
+            });
+        }
     }
 
     #[test]
@@ -275,8 +290,8 @@ mod tests {
     #[ignore = "scratch"]
     fn wash_against_two_pass() {
         for (a, b) in [("twopass-j2", "plug-j2-default"), ("twopass-fuzz0", "plug-fuzz-0")] {
-            let old = image::open(format!("{OUT}/{a}.png")).unwrap().to_rgba8();
-            let new = image::open(format!("{OUT}/{b}.png")).unwrap().to_rgba8();
+            let old = image::open(format!("{OLD}/{a}.png")).unwrap().to_rgba8();
+            let new = image::open(format!("{OLD}/{b}.png")).unwrap().to_rgba8();
             let n = old.len() / 4;
             let count = |t: u8| {
                 old.chunks_exact(4)

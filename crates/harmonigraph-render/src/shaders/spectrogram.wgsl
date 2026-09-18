@@ -839,19 +839,37 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
 // zero-mean wobble of the same visible amplitude costs BOTH bounds, and buys a
 // narrower `Variety` band for the same picture.
 //
+// Both bounds are about globs that COVER the pixel, which is what the visible
+// glob, the one beneath it, `cover` and `tau` are all read off. The tide line is
+// the one term that reads a glob it is OUTSIDE, and its window runs `POOL_WIDTH`
+// of a radius past the rim — further than this ring reaches. What holds that is
+// not the ring but the top-two rule in `wash_scan`: the front is chosen from the
+// two nearest non-covering globs, and at a radius near the cell spacing those
+// are always neighbours, never the ring's outer edge. A pixel would have to be
+// covered by every cell within two of it before the second-nearest miss sat that
+// far out, and the crescent at that distance is under a tenth of its strength.
+//
 // A 5x5 ring rather than 3x3, and it is the jitter and the variety that buy it.
-// At 3x3 these same inequalities leave a radius band of about 1.19:1 with a
+// At 3x3 these same inequalities leave a radius band of about 1.2:1 with a
 // jitter of 0.20 — a nearly regular grid of nearly equal globs, which is the one
 // thing this look cannot be, since a field of DIFFERENT SIZED globs is what was
 // asked for. The wider ring costs a second pass over 25 cells instead of 9 and
-// buys jitter 0.40, a 1.63:1 radius band, and a rim wobble at the prototype's
-// own amplitude.
+// buys jitter 0.40, a 1.63:1 radius band, and a rim wobble of half of `RAGGED`
+// either way about an inflated radius. That last one is where the proof and the
+// prototype part: ±0.15 reaches J1's and J5's wobble of ±0.10 with room over,
+// and stops short of J2's ±0.34, which the prototype could afford only by
+// widening its ring per render and tolerating pinholes.
 const WASH_RING: i32 = 2;
 const WASH_JITTER: f32 = 0.40;
 const WASH_RAGGED: f32 = 0.30;
 const WASH_RADIUS: f32 = 1.18;
 const WASH_RADIUS_MIN: f32 = 1.02;
 const WASH_RADIUS_MAX: f32 = 1.66;
+
+// How many cells cross one cloud unit at `Glob size` 1x — see `wash_clouds`,
+// where it is chosen so a glob comes out the width the prototype's J2 drew
+// rather than so the CELLS come out at J2's count.
+const WASH_CELLS: f32 = 5.25;
 
 // The finer octave: how much smaller its cells are, and how many of them carry a
 // glob at all. It is sparse on purpose — a big wash sometimes carries a small one
@@ -1010,16 +1028,26 @@ struct Wash {
 // visible glob's order is not known until the last cell.
 //
 // So the walk keeps the two NEAREST non-covering globs and picks the front out
-// of them at the end. That is exact wherever the front matters and approximate
-// only where it does not, and the reason is worth writing down: a glob ordered
-// above the visible one cannot be covering — the visible one is the highest
-// order that does — and where the tide line is STRONG the front glob's rim is
-// right against the pixel, which makes it the nearest non-covering glob there
-// is. It differs from an exhaustive search only when both nearest neighbours are
-// ordered BELOW the visible glob, and the qualifying glob the search would then
-// find is further out than either, so the crescent it draws is already near
-// nothing. The alternative is a second walk of all 25 cells, which measured at
-// 6.5 ms a frame against this one's 2.8.
+// of them at the end. It is EXACT where the tide line is strongest and
+// approximate below that, and the shape of the error is worth spelling out
+// rather than waving at. A glob ordered above the visible one cannot be covering
+// — the visible one is the highest order that does — and a crescent only reaches
+// full strength where the front's rim is right against the pixel, which makes it
+// the nearest non-covering glob there is. The approximation bites when BOTH of
+// the two nearest are ordered BELOW the visible glob and a third, further one is
+// not: the walk then draws no crescent where an exhaustive search would draw a
+// weaker one. What is dropped is a fraction of a tide line rather than a whole
+// one, since the third-nearest sits well inside the crescent's `-0.55` window —
+// but it is neither nothing nor rare. Measured against the two-walk render at
+// the J2 default, 19% of pixels differ by more than 4/255 and 5.6% by more than
+// 16, worst 109.
+//
+// The one-walk picture is the one KEPT, and for the look rather than for the
+// clock: the exhaustive front lays a thin dark hairline along every glob edge —
+// toward the cracked mud the prototype's z-buffered version was rejected for —
+// where dropping the weakest crescents leaves the same texture with a softer
+// edge. That it also costs 2.8 ms a frame against a second walk's 6.5 is the
+// smaller half of the reason.
 fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, wob: f32) -> Wash {
     var out: Wash;
     // What an uncovered pixel would draw: its own light, unmoved, and no
@@ -1180,10 +1208,16 @@ fn wash_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     let units = 5.0 / cloud.cloud_scale;
     let q = (pt - cloud.size * 0.5) / cloud.size.y * units + cloud.drift;
 
-    // `wash_size` is how big one glob is, so the knob reads as a size: four
-    // cells cross a cloud unit at 1x, which at the fresh cloud size is forty of
-    // them up the pane — the prototype's J2.
-    let cells = 4.0 / cloud.wash_size;
+    // `wash_size` is how big one GLOB is, so the knob reads as a size.
+    //
+    // The number is set by the picture and not by the cell count, and the two
+    // are not the same: a glob here is `WASH_RADIUS` 1.18 cells wide where the
+    // prototype's was `rad` 0.90, so matching J2's forty cells up the pane would
+    // draw its globs 31% too big — measured against `j2.png`, a visibly blobbier
+    // field with two or three fewer harmonic lines showing through it. Matching
+    // the DIAMETER instead puts 40 * 1.18 / 0.90 ≈ 52 cells up the pane at the
+    // fresh cloud size, which is `WASH_CELLS` per cloud unit.
+    let cells = WASH_CELLS / cloud.wash_size;
     let pane_per_cell = cloud.size.y / units / cells;
     let r = q * cells;
 

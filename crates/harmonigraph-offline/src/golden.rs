@@ -260,6 +260,12 @@ impl Shot {
     /// same axes, so every note in the fixture is heatmap the gate cannot see —
     /// and the roll is not what #503 moves.
     fn take(&self) -> Take {
+        self.dialled(|_| {})
+    }
+
+    /// The same take with one further turn of the appearance, for a shot that
+    /// is about a setting rather than about the pane.
+    fn dialled(&self, tune: impl FnOnce(&mut harmonigraph_ui::AppearanceDocument)) -> Take {
         let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         let cfg = &mut state.appearance.spectrum;
         cfg.show_roll = false;
@@ -270,6 +276,7 @@ impl Shot {
         cfg.roll_seconds = WINDOW;
         (cfg.low_midi, cfg.high_midi) = self.range;
         state.appearance.render.spectrogram = SpectrogramRender::Scrolling;
+        tune(&mut state.appearance);
         Take {
             header: Header { appearance: Some(state.appearance.serialize()), ..Default::default() },
             events: Vec::new(),
@@ -361,6 +368,24 @@ fn a_zoomed_in_pane_draws_the_frame_on_record() {
 #[test]
 fn the_whole_song_layout_draws_the_frame_on_record() {
     check("spectrogram-whole-song", Shot { size: TALL, range: whole_axis(), whole: true });
+}
+
+/// The watercolour wash draws the frame on record.
+///
+/// Every frame above is drawn with the OTHER cloud texture, the refracting
+/// scales, which is what makes the four of them the proof that a second texture
+/// landed without disturbing the first. This is the one that has the wash in
+/// it, and it earns its place because nothing else committed here executes
+/// `wash_clouds` end to end — the claim tests beside the shader each turn one
+/// dial and compare two frames, where this pins the whole construction, every
+/// constant in it, at the settings the page opens the texture at.
+#[test]
+fn the_watercolour_wash_draws_the_frame_on_record() {
+    let shot = Shot { size: TALL, range: whole_axis(), whole: false };
+    let take = shot.dialled(|a| {
+        a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Wash;
+    });
+    check_take("spectrogram-watercolour-wash", shot, take);
 }
 
 /// A non-vacuous Step 7 frame: held roll notes use the Gaussian geometry
