@@ -2345,8 +2345,9 @@ mod tests {
     ///
     /// It used to be the fixture the cloud layer was measured over, because a
     /// pile of puffs draws its own texture against a flat picture as readily
-    /// as against any other. It is the negative control now, and the inversion
-    /// is the change: a layer cut out of the sound has nothing to cut here.
+    /// as against any other. It is the negative control now: everything that
+    /// moves the LOOKUP has to leave this pane alone, because a displaced
+    /// constant is that constant.
     fn flat_cloud_fixture() -> SpectrogramCallback {
         let mut cb = cloud_fixture();
         cb.grid.run = Arc::new(vec![150; cb.grid.run.len()]);
@@ -2369,11 +2370,11 @@ mod tests {
     /// would move BOTH, and a layer that did nothing would move neither.
     ///
     /// Everything but the refraction is held still between the two frames:
-    /// same cloud shape, same relief, same glint, same ambient. Only
-    /// `scale_refract` moves, so what is measured is the displacement alone.
+    /// same field, same relief, same glint, same ambient. Only `scale_refract`
+    /// moves, so what is measured is the displacement alone.
     ///
-    /// Measured: 3.2% of the pane over the ridge fixture, and EXACTLY zero
-    /// over the flat one. The 3.2 is not small for the wrong reason — this
+    /// Measured: 6.8% of the pane over the ridge fixture, and EXACTLY zero
+    /// over the flat one. The 6.8 is not small for the wrong reason — this
     /// fixture is one narrow ridge in a mostly dark pane, and bending black
     /// gives black, so only the neighbourhood of the ridge can move at all.
     /// The zero is the half that carries the claim, and it is exact rather
@@ -2387,9 +2388,6 @@ mod tests {
             {
                 let s = &mut cb.atmosphere.as_mut().unwrap().settings;
                 s.cloud_depth = 1.0;
-                // Overcast, so the cloud covers the pane and the comparison is
-                // not dominated by how much sky each frame happens to have.
-                s.cloud_cover = 1.0;
                 s.scale_refract = 0.0;
             }
             let straight = fresh_frame(&device, &queue, cb);
@@ -2425,7 +2423,7 @@ mod tests {
     /// what round 1 had and round 5 removed, and round 5 was right about the
     /// defect: a nearest-cell pick STEPS across the bisector between two
     /// scales, which is a straight edge through a cloud. The soft union keeps
-    /// the reading and loses the step. `Pile::toward` is the union's own
+    /// the reading and loses the step. `Pile::to_centre` is the union's own
     /// weights against each dome's offset to its own centre, so inside a dome
     /// one weight runs away with the sum and the reading is that dome's centre
     /// — one value for the whole interior, which is the flat patch — while on a
@@ -2433,7 +2431,7 @@ mod tests {
     /// continuously.
     ///
     /// Measured exactly as the refraction above, and for the same reason: the
-    /// dial moves 7.6% of the pane over the ridge fixture and EXACTLY zero over
+    /// dial moves 7.1% of the pane over the ridge fixture and EXACTLY zero over
     /// the flat one. The zero is the half that carries the claim. A displaced
     /// lookup over a constant field returns that constant wherever it reads, so
     /// a facet that moved a featureless picture would be PAINTING its scales
@@ -2449,7 +2447,6 @@ mod tests {
             {
                 let s = &mut cb.atmosphere.as_mut().unwrap().settings;
                 s.cloud_depth = 1.0;
-                s.cloud_cover = 1.0;
                 s.scale_facet = 0.0;
             }
             let bent = fresh_frame(&device, &queue, cb);
@@ -2479,10 +2476,10 @@ mod tests {
         );
     }
 
-    /// The two dials that only SHADE reach the shader, each on its own.
+    /// The dials that do not move the LOOKUP reach the shader, each on its own.
     ///
-    /// Neither changes where the light is read, so neither shows up in the
-    /// measurement above — and both ride in the same uniform, which is read by
+    /// None of them changes where the light is read, so none shows up in the
+    /// measurement above — and all ride in the same uniform, which is read by
     /// OFFSET rather than by name. A field added in the wrong place there swaps
     /// two values silently and nothing in either type system notices, so what
     /// this holds is that each of them separately moves the picture it is
@@ -2490,10 +2487,18 @@ mod tests {
     ///
     /// At the fixture's default relief the scales are barely domed and the
     /// glint has almost no face to sit on, which is a fixture too small to
-    /// reach either knob: both are turned up here so the shading they change is
-    /// actually in the picture. Measured at 5.7% of the pane for the rock and
-    /// 1.8% for the sparkle; at rock 0 it is EXACTLY zero, which is what says
-    /// the knob costs the picture it starts from nothing.
+    /// reach any of them: relief and glint are turned up here so the shading
+    /// they change is actually in the picture. Measured at 6.7% of the pane for
+    /// the rock, 1.9% for the sparkle and 3.1% for the variety; at rock 0 it is
+    /// EXACTLY zero, which is what says the knob costs the picture it starts
+    /// from nothing.
+    ///
+    /// Variety is in here rather than in its own test because what it changes
+    /// is the same KIND of thing: it redraws each dome's radius, which moves
+    /// every face and so the whole shading, and the property that makes it
+    /// safe — that its smallest radius still covers the plane — is geometry
+    /// rather than pixels and is held by
+    /// [`the_dome_grid_covers_the_plane_and_the_ring_holds_it`].
     ///
     /// What this does NOT say is that the rock is on a CLOCK, and no cheap test
     /// can: the rock's phase advances on `cloud_time`, the same clock that
@@ -2506,26 +2511,31 @@ mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // The fixture's own relief and glint are too small to reach either
-        // knob: a scale barely domed presents no face for a sparkle to sit on.
+        // The fixture's own relief and glint are too small to reach any of
+        // these: a scale barely domed presents no face for a sparkle to sit on.
         let lit = |turn: fn(&mut harmonigraph_scene::SpectralAtmosphere)| {
             let mut cb = cloud_fixture();
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
             s.cloud_depth = 1.0;
-            s.cloud_cover = 1.0;
             s.scale_relief = 1.0;
             s.scale_glint = 1.0;
             turn(s);
             fresh_frame(&device, &queue, &cb)
         };
-        let plain = lit(|_| {});
+        let plain = lit(|s| s.scale_variety = 0.0);
         for (name, turn) in [
             (
                 "Rock",
-                (|s: &mut harmonigraph_scene::SpectralAtmosphere| s.scale_rock = 1.0)
-                    as fn(&mut harmonigraph_scene::SpectralAtmosphere),
+                (|s: &mut harmonigraph_scene::SpectralAtmosphere| {
+                    s.scale_variety = 0.0;
+                    s.scale_rock = 1.0;
+                }) as fn(&mut harmonigraph_scene::SpectralAtmosphere),
             ),
-            ("Sparkle", |s| s.scale_sparkle = 40.0),
+            ("Sparkle", |s| {
+                s.scale_variety = 0.0;
+                s.scale_sparkle = 40.0;
+            }),
+            ("Variety", |s| s.scale_variety = 1.0),
         ] {
             let frame = lit(turn);
             let n = plain.len() / 4;
@@ -2539,48 +2549,6 @@ mod tests {
         }
     }
 
-    /// Cover is the knob that opens the sky, over its whole range.
-    ///
-    /// It is a threshold on the band-passed field, so this also says the band
-    /// pass is wired up: a threshold on a plain blur would move with the
-    /// picture's level rather than with this dial.
-    #[test]
-    fn cloud_cover_opens_the_sky() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let mut cb = cloud_fixture();
-        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
-        let bare = fresh_frame(&device, &queue, &cb);
-        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.9;
-        let mut painted = |cover: f32| {
-            cb.atmosphere.as_mut().unwrap().settings.cloud_cover = cover;
-            let frame = fresh_frame(&device, &queue, &cb);
-            bare.chunks_exact(4)
-                .zip(frame.chunks_exact(4))
-                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 3))
-                .count()
-        };
-        let clear = painted(0.0);
-        let mid = painted(0.5);
-        let overcast = painted(1.0);
-        assert!(
-            clear < mid && mid < overcast,
-            "cover did not open the sky monotonically: {clear} then {mid} then {overcast}"
-        );
-        // A factor rather than a doubling, and the ceiling here is the
-        // FIXTURE's and not the knob's: this pane holds one narrow ridge in a
-        // mostly dark field, so there is only so much concentration for any
-        // threshold to find. That is the layer working — cover decides how
-        // much of the sound's structure is drawn as cloud, not how much of the
-        // pane is painted regardless. Over a pane of real music the same knob
-        // runs from a scatter of billows to a near overcast.
-        assert!(
-            overcast > (clear as f32 * 1.4) as usize,
-            "the whole range of the knob barely moved the cloud: {clear} to {overcast}"
-        );
-    }
-
     /// The layer saturates no channel the picture had not saturated already.
     ///
     /// A clipped channel is a flat patch with a hard edge in a shifted hue —
@@ -2592,7 +2560,7 @@ mod tests {
     /// stays as the guard on that construction — an additive term
     /// reintroduced anywhere in the paint would trip it.
     ///
-    /// Run at the deepest cover and the most pigment the dials reach, which is
+    /// Run at the deepest layer and the most pigment the dials reach, which is
     /// where the old one went over.
     #[test]
     fn the_layer_saturates_no_channel_the_picture_had_not() {
@@ -2604,7 +2572,6 @@ mod tests {
         let bare = fresh_frame(&device, &queue, &cb);
         let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
         settings.cloud_depth = 1.0;
-        settings.cloud_cover = 1.0;
         settings.scale_glint = 1.0;
         settings.scale_relief = 1.0;
         // Undiluted: the most pigment there is, and the least water to pale it.
@@ -2615,6 +2582,56 @@ mod tests {
         };
         assert_eq!(clipped(&bare), 0, "the fixture clips on its own and measures nothing");
         assert_eq!(clipped(&clouded), 0, "the cloud layer clipped a channel flat");
+    }
+
+    /// Every point of the plane is inside some dome, and every dome that
+    /// reaches a point is inside the ring the union walks.
+    ///
+    /// This is the one property the whole "texture everywhere" change rests on,
+    /// and it is NOT observable in a frame — an uncovered point draws a face of
+    /// zero, which is also what the top of a dome draws. What it would cost is a
+    /// discontinuity rather than a hole: `to_centre` falls from most of a radius
+    /// to nothing at the rim of the last dome, so a pinhole is a hard edge in a
+    /// picture whose entire construction is about not having one. So the claim
+    /// is checked where it lives, in the geometry, against the constants the
+    /// SHIPPED shader spells rather than a transcription of them.
+    ///
+    /// **Coverage.** A centre sits at its cell's middle give or take
+    /// `JITTER / 2`. The point hardest to reach is a lattice corner with all
+    /// four cells touching it pushed diagonally away, `(0.5 + JITTER / 2)
+    /// * sqrt(2)` from every one of them, so the smallest radius any dome can
+    /// draw has to clear that. At variety 0 that radius is `DOME_RADIUS`; at
+    /// variety 1 it is `DOME_RADIUS_MIN`, and every setting between is a `mix`
+    /// of the two and so never below the smaller.
+    ///
+    /// **Reach.** A cell two out can put its centre no nearer than
+    /// `2.5 - JITTER / 2` from the pixel's own cell origin, and the pixel is at
+    /// most 1 past that origin, so the largest radius has to stay under
+    /// `1.5 - JITTER / 2` or a dome the 3x3 ring never visits can touch the
+    /// pixel — which is a step on the cell grid every time `floor(r)` moves.
+    ///
+    /// Round 5's jitter of 0.75 failed BOTH (it needed a radius at once above
+    /// 1.237 and below 1.125), and both failures were live in the picture.
+    #[test]
+    fn the_dome_grid_covers_the_plane_and_the_ring_holds_it() {
+        let number = |name: &str| -> f32 {
+            crate::shadow::tests::shader_const(SPECTROGRAM_SRC, name).parse().expect("a number")
+        };
+        let jitter = number("DOME_JITTER");
+        let smallest = number("DOME_RADIUS").min(number("DOME_RADIUS_MIN"));
+        let largest = number("DOME_RADIUS").max(number("DOME_RADIUS_MAX"));
+        let farthest = (0.5 + jitter / 2.0) * std::f32::consts::SQRT_2;
+        assert!(
+            smallest > farthest,
+            "a dome of {smallest} cannot reach a corner {farthest} away, so at some corner of \
+             the cell grid no dome covers the pane and `to_centre` steps to nothing there"
+        );
+        let unvisited = 1.5 - jitter / 2.0;
+        assert!(
+            largest < unvisited,
+            "a dome of {largest} reaches {unvisited} into a pixel the 3x3 ring never visits \
+             it from, so the union gains and loses it as `floor(r)` crosses a cell"
+        );
     }
 }
 

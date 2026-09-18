@@ -144,36 +144,44 @@ pub(crate) fn spectrum_settings_pane(
             .percent()
             .show(ui)
             .on_hover_text(
-                "Drifting clouds made of reflective scales, each scale bending the sound's \
-                 light behind it so the picture is seen THROUGH the cloud rather than under \
-                 something painted over it. 0% removes them. They need some softness above: \
-                 the softened field is the light they bend.",
+                "A drifting texture of reflective scales over the WHOLE pane, each scale \
+                 bending the sound's light behind it so the picture is seen THROUGH it \
+                 rather than under something painted over it. 0% removes it and anything \
+                 below full lets the plain picture back through. It needs some softness \
+                 above: the softened field is the light it bends.",
             );
         ValueBar::new(&mut atmosphere.cloud_scale, 0.25..=4.0, "Cloud size")
             .unit(1.0, "\u{d7}")
             .show(ui)
-            .on_hover_text("Size of one cloud. Five of them cross the pane's height at 1\u{d7}.");
+            .on_hover_text(
+                "The frame the scales are measured and drifted in. Five of these cross the \
+                 pane's height at 1\u{d7}. With Scale size it decides how big a scale is, \
+                 and on its own it decides how far the texture travels as it drifts.",
+            );
         ValueBar::new(&mut atmosphere.cloud_speed, 0.0..=20.0, "Cloud speed")
             .unit(1.0, "\u{d7}")
             .show(ui)
             .on_hover_text(
-                "1\u{d7} crosses the pane in about two minutes. 0 holds the clouds still.",
-            );
-        ValueBar::new(&mut atmosphere.cloud_cover, 0.0..=1.0, "Cloud cover")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "How much sky is left between the clouds. Low is a scatter of separate \
-                 billows over a clear pane, high an overcast with the picture showing \
-                 through its thin places.",
+                "1\u{d7} crosses the pane in about two minutes. 0 holds the texture still.",
             );
         ValueBar::new(&mut atmosphere.scale_size, 0.25..=4.0, "Scale size")
             .unit(1.0, "\u{d7}")
             .show(ui)
             .on_hover_text(
-                "Size of one scale, as a share of a cloud. Small is a fine grain over the \
-                 whole cloud; large is a few broad faces. Changing it does not change how \
-                 far the light bends \u{2014} Refraction is measured in scale widths.",
+                "Size of one scale, as a share of the frame above. Small is a fine grain \
+                 over the whole pane; large is a few broad faces. Changing it does not \
+                 change how far the light bends \u{2014} Refraction is measured in scale \
+                 widths.",
+            );
+        ValueBar::new(&mut atmosphere.scale_variety, 0.0..=1.0, "Variety")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "How much the scales differ in size from EACH OTHER. 0 gives every glob in \
+                 the field one radius, which is the most regular texture there is; turning \
+                 it up draws each glob its own, so big ones swallow their neighbours and \
+                 small ones sit in the gaps. It never opens a hole: the smallest radius it \
+                 can draw still covers the plane.",
             );
         ValueBar::new(&mut atmosphere.scale_refract, 0.0..=1.0, "Refraction")
             .percent()

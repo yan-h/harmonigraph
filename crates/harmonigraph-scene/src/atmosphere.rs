@@ -30,12 +30,12 @@ pub struct SpectralAtmosphere {
     /// slow drift, like the lattice nebula's.
     pub cloud_scale: f32,
     pub cloud_speed: f32,
-    /// How much sky the clouds leave: the threshold the cloud field stands on,
-    /// so the range runs from a clear pane to an overcast whose thin places the
-    /// picture still shows through.
-    pub cloud_cover: f32,
     /// Size of one scale, as a multiplier on how many of them cross a cloud.
     pub scale_size: f32,
+    /// How much the scales differ in size from each other. 0 is one radius for
+    /// every glob in the field, which is the most regular texture there is; 1
+    /// draws each from the whole band the layer's coverage proof allows.
+    pub scale_variety: f32,
     /// How far a scale bends the light behind it, in SCALE WIDTHS — the
     /// refraction, and the whole reason the layer reads as a lens rather than
     /// as something painted over the picture. 0 leaves the light where it is.
@@ -77,8 +77,8 @@ impl Default for SpectralAtmosphere {
             cloud_depth: 1.0,
             cloud_scale: 0.5,
             cloud_speed: 1.0,
-            cloud_cover: 0.45,
             scale_size: 2.2,
+            scale_variety: 0.5,
             scale_refract: 0.30,
             scale_facet: 0.0,
             scale_relief: 0.35,
@@ -110,8 +110,8 @@ impl SpectralAtmosphere {
         self.cloud_depth = clamp(self.cloud_depth, fresh.cloud_depth, 0.0, 1.0);
         self.cloud_scale = clamp(self.cloud_scale, fresh.cloud_scale, 0.25, 4.0);
         self.cloud_speed = clamp(self.cloud_speed, fresh.cloud_speed, 0.0, 20.0);
-        self.cloud_cover = clamp(self.cloud_cover, fresh.cloud_cover, 0.0, 1.0);
         self.scale_size = clamp(self.scale_size, fresh.scale_size, 0.25, 4.0);
+        self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
         self.scale_refract = clamp(self.scale_refract, fresh.scale_refract, 0.0, 1.0);
         self.scale_facet = clamp(self.scale_facet, fresh.scale_facet, 0.0, 1.0);
         self.scale_relief = clamp(self.scale_relief, fresh.scale_relief, 0.0, 1.0);
