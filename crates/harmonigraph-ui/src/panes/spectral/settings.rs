@@ -210,34 +210,22 @@ pub(crate) fn spectrum_settings_pane(
                  light with. 0 is a smooth body with no scales in it; high picks each face \
                  out separately.",
             );
-        ValueBar::new(&mut atmosphere.scale_glint, 0.0..=1.0, "Glint")
+        ValueBar::new(&mut atmosphere.scale_shade_floor, 0.0..=1.0, "Shade floor")
             .percent()
             .show(ui)
             .on_hover_text(
-                "The sparkle on a scale's face. The light leans with the sound's own \
-                 gradient, so the glints travel across the clouds as the picture scrolls.",
-            );
-        ValueBar::new(&mut atmosphere.scale_sparkle, 6.0..=40.0, "Sparkle")
-            .integer()
-            .show(ui)
-            .on_hover_text(
-                "How TIGHT that sparkle is. Low is a broad sheen across a whole face; high \
-                 picks out a small hard star on the few faces aimed right at the light.",
+                "How much light a face turned AWAY from the sun still keeps. 0 lets it go \
+                 black, which is where the shading gets harsh over a loud band; 100% \
+                 flattens the shading off altogether. The lit end is untouched either way, \
+                 so this only lifts what was already dark.",
             );
         ValueBar::new(&mut atmosphere.scale_rock, 0.0..=1.0, "Rock")
             .percent()
             .show(ui)
             .on_hover_text(
-                "Each scale rocks on its own slow clock, so the glints wander even under a \
-                 picture holding still. It runs on the same clock as the drift, so Cloud \
-                 speed at 0 holds it too.",
-            );
-        ValueBar::new(&mut atmosphere.cloud_ambient, 0.0..=1.0, "Cloud ambient")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "Light a cloud shows with nothing sounding under it, so a cloud over \
-                 silence is visible rather than black.",
+                "Each scale rocks on its own slow clock, so the shading on its face sways \
+                 even under a picture holding still. It runs on the same clock as the \
+                 drift, so Cloud speed at 0 holds it too.",
             );
     }
     ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")

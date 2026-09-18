@@ -2373,8 +2373,8 @@ mod tests {
     /// same field, same relief, same glint, same ambient. Only `scale_refract`
     /// moves, so what is measured is the displacement alone.
     ///
-    /// Measured: 6.8% of the pane over the ridge fixture, and EXACTLY zero
-    /// over the flat one. The 6.8 is not small for the wrong reason — this
+    /// Measured: 6.6% of the pane over the ridge fixture, and EXACTLY zero
+    /// over the flat one. The 6.6 is not small for the wrong reason — this
     /// fixture is one narrow ridge in a mostly dark pane, and bending black
     /// gives black, so only the neighbourhood of the ridge can move at all.
     /// The zero is the half that carries the claim, and it is exact rather
@@ -2485,13 +2485,15 @@ mod tests {
     /// this holds is that each of them separately moves the picture it is
     /// supposed to move.
     ///
-    /// At the fixture's default relief the scales are barely domed and the
-    /// glint has almost no face to sit on, which is a fixture too small to
-    /// reach any of them: relief and glint are turned up here so the shading
-    /// they change is actually in the picture. Measured at 6.7% of the pane for
-    /// the rock, 1.9% for the sparkle and 3.1% for the variety; at rock 0 it is
-    /// EXACTLY zero, which is what says the knob costs the picture it starts
-    /// from nothing.
+    /// At the fixture's fresh relief the scales are barely domed and at its
+    /// fresh refraction the lookup hardly moves, which is a fixture too small
+    /// to reach either knob; both are turned up here. Measured at 3.0% of the
+    /// pane for the rock and 2.6% for the variety. Both are smaller than they
+    /// were before the glint went: the glint was an ADDITIVE term that carried
+    /// a lot of whatever moved the normal, and with it gone everything these
+    /// two do has to arrive through `diffuse` and the lookup alone. At rock 0
+    /// the difference is EXACTLY zero, which is what says the knob costs the
+    /// picture it starts from nothing.
     ///
     /// Variety is in here rather than in its own test because what it changes
     /// is the same KIND of thing: it redraws each dome's radius, which moves
@@ -2507,18 +2509,21 @@ mod tests {
     /// moves 8.1% of this pane and the rock changes that to 8.0%, which is
     /// noise. The wander is visible in a render and not in a pair of frames.
     #[test]
-    fn the_rock_and_the_sparkle_each_reach_the_scales() {
+    fn the_rock_and_the_variety_each_reach_the_scales() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // The fixture's own relief and glint are too small to reach any of
-        // these: a scale barely domed presents no face for a sparkle to sit on.
+        // The fixture's own relief is too small to reach either: a scale barely
+        // domed has hardly any face for the shading to find.
         let lit = |turn: fn(&mut harmonigraph_scene::SpectralAtmosphere)| {
             let mut cb = cloud_fixture();
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
             s.cloud_depth = 1.0;
             s.scale_relief = 1.0;
-            s.scale_glint = 1.0;
+            // Refraction up as well: `Variety` redraws each dome's RADIUS,
+            // which reaches the picture through the lookup as much as through
+            // the shading, and at the fresh 30% the lookup barely moves.
+            s.scale_refract = 1.0;
             turn(s);
             fresh_frame(&device, &queue, &cb)
         };
@@ -2531,10 +2536,6 @@ mod tests {
                     s.scale_rock = 1.0;
                 }) as fn(&mut harmonigraph_scene::SpectralAtmosphere),
             ),
-            ("Sparkle", |s| {
-                s.scale_variety = 0.0;
-                s.scale_sparkle = 40.0;
-            }),
             ("Variety", |s| s.scale_variety = 1.0),
         ] {
             let frame = lit(turn);
@@ -2545,7 +2546,7 @@ mod tests {
                 .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
                 .count() as f32
                 / n as f32;
-            assert!(moved > 0.01, "{name} moved almost none of the pane: {moved}");
+            assert!(moved > 0.02, "{name} moved almost none of the pane: {moved}");
         }
     }
 
@@ -2572,7 +2573,6 @@ mod tests {
         let bare = fresh_frame(&device, &queue, &cb);
         let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
         settings.cloud_depth = 1.0;
-        settings.scale_glint = 1.0;
         settings.scale_relief = 1.0;
         // Undiluted: the most pigment there is, and the least water to pale it.
         settings.scale_refract = 1.0;
@@ -2582,6 +2582,110 @@ mod tests {
         };
         assert_eq!(clipped(&bare), 0, "the fixture clips on its own and measures nothing");
         assert_eq!(clipped(&clouded), 0, "the cloud layer clipped a channel flat");
+    }
+
+    /// A loud band with a sharp pitch edge against silence, its level rough
+    /// from column to column the way a real spectrogram's is.
+    ///
+    /// Both halves are load-bearing and neither is decoration. The BAND is what
+    /// puts a crest in the light field, and a crest is where the picture's
+    /// gradient reverses. The per-column ROUGHNESS is what makes the crest
+    /// wander between neighbouring columns instead of sitting on one row, which
+    /// is what turned a seam into the row of vertical tears Yan photographed.
+    /// `cloud_fixture`'s own band is four slabs of a flat 255 and cannot show
+    /// it: a crest that does not move has nothing to tear along.
+    fn rough_band_fixture() -> SpectrogramCallback {
+        let mut cb = cloud_fixture();
+        let mut bytes = vec![0u8; 12 * BINS as usize];
+        let mut seed = 0x9e37_79b9u32;
+        for slab in 0..12 {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            // The band's upper edge wanders by up to three rows between one
+            // column and the next, which is what makes its crest a ragged line
+            // rather than a straight one.
+            let top = 560 - ((seed >> 26) as usize);
+            for b in 240..top {
+                bytes[slab * BINS as usize + b] = 255;
+            }
+        }
+        cb.grid = grid_of(Arc::new(bytes), BINS, 12, 0);
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        s.cloud_depth = 1.0;
+        // The dials Yan had up when he found it: the shading has to be deep
+        // enough that a sun on the wrong side of a face is visible.
+        s.scale_relief = 1.0;
+        s.scale_refract = 1.0;
+        s.scale_facet = 1.0;
+        // Globs about 19 points across on this 128-point pane. At the fresh
+        // size they would be 5, and a texture whose own detail is four pixels
+        // wide has column steps of its own that would drown the thing being
+        // measured.
+        s.cloud_scale = 2.0;
+        // The floor is a taste dial that LIFTS a turned-away face, so it hides
+        // exactly what this is measuring. At 0 the shading is the raw Lambert
+        // the defect lived in.
+        s.scale_shade_floor = 0.0;
+        cb
+    }
+
+    /// The sun leans with the picture but never JUMPS across it.
+    ///
+    /// Yan, on the build before this one: *"There are some areas with high
+    /// contrast which looks really rough. Can't seem to get rid of it by
+    /// adjusting the settings."* — a row of near-black vertical tears along the
+    /// top of a loud band, and he was right that no dial reached it, because
+    /// the flip was in the SUN rather than in the scales.
+    ///
+    /// The sun's direction used to be `normalize(grad / magnitude)`, a unit
+    /// vector aimed along the picture's gradient. A gradient reverses across
+    /// every crest, so the sun crossed to the opposite side of the sky along
+    /// the top of every band and every face that had been lit turned away in
+    /// one pixel step. Scaling the gradient instead of normalising it takes the
+    /// lean smoothly through zero at a crest — overhead there, and back down
+    /// the other side — so there is no step left to draw.
+    ///
+    /// Measured as the count of adjacent-COLUMN luminance steps past 24/255,
+    /// which is the shape a row of vertical tears makes. The bare picture under
+    /// this fixture has NONE, so any the layer shows are its own; on the old
+    /// sun it shows 5 and on this one 0. The check is on columns rather than on
+    /// rows because the tears run down the band, and a row-wise measure would
+    /// find the band's own sharp edges instead.
+    ///
+    /// Non-vacuous, and measured both ways rather than reasoned about: putting
+    /// the two old lines back into the shader fails this at 5 against a floor
+    /// of 0. The 5 is small because the pane is 128 points wide with about six
+    /// columns of band on it; the same defect over a 1280-point render of the
+    /// same content is 2666 such steps, and that is the picture Yan saw.
+    #[test]
+    fn the_sun_leans_across_a_loud_band_without_jumping_sides() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let lum =
+            |p: &[u8]| 0.299 * f32::from(p[0]) + 0.587 * f32::from(p[1]) + 0.114 * f32::from(p[2]);
+        let torn = |frame: &[u8]| {
+            let mut count = 0u32;
+            for y in 0..SIZE[1] as usize {
+                for x in 1..SIZE[0] as usize {
+                    let a = (y * SIZE[0] as usize + x) * 4;
+                    count +=
+                        u32::from((lum(&frame[a..a + 4]) - lum(&frame[a - 4..a])).abs() > 24.0);
+                }
+            }
+            count
+        };
+        let mut bare = rough_band_fixture();
+        bare.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+        let floor = torn(&fresh_frame(&device, &queue, &bare));
+        let layered = torn(&fresh_frame(&device, &queue, &rough_band_fixture()));
+        assert!(
+            layered <= floor,
+            "the layer tore {layered} column steps past 24/255 over a loud band where the bare \
+             picture has {floor}, so it is adding roughness of its own — which is the sun \
+             crossing sides along the band's crest"
+        );
     }
 
     /// Every point of the plane is inside some dome, and every dome that

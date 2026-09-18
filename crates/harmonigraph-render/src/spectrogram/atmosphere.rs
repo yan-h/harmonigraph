@@ -94,13 +94,9 @@ struct Uniforms {
     scale_variety: f32,
     scale_refract: f32,
     scale_relief: f32,
-    scale_glint: f32,
-    cloud_ambient: f32,
+    scale_shade_floor: f32,
     scale_facet: f32,
-    scale_sparkle: f32,
     scale_rock: f32,
-    _pad2: f32,
-    _pad3: f32,
 }
 
 pub(super) struct Pipelines {
@@ -443,13 +439,9 @@ impl Targets {
             scale_variety: settings.scale_variety,
             scale_refract: settings.scale_refract,
             scale_relief: settings.scale_relief,
-            cloud_ambient: settings.cloud_ambient,
-            scale_glint: settings.scale_glint,
+            scale_shade_floor: settings.scale_shade_floor,
             scale_facet: settings.scale_facet,
-            scale_sparkle: settings.scale_sparkle,
             scale_rock: settings.scale_rock,
-            _pad2: 0.0,
-            _pad3: 0.0,
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }

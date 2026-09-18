@@ -275,13 +275,9 @@ struct Cloud {
     scale_variety: f32,
     scale_refract: f32,
     scale_relief: f32,
-    scale_glint: f32,
-    cloud_ambient: f32,
+    scale_shade_floor: f32,
     scale_facet: f32,
-    scale_sparkle: f32,
     scale_rock: f32,
-    _pad2: f32,
-    _pad3: f32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -411,12 +407,15 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 // just make it softer" — the softness is a property of the construction rather
 // than a blur applied to a hard thing afterwards.
 //
-// What is kept from round 1, deliberately and verbatim in structure, because it
-// is what Yan liked: the light is LIFTED so a glob over a ridge glows nearly as
-// bright as the ridge rather than reading as a shadow on it; the sun leans with
-// the picture's own gradient, which is what moves the glints as the sound
-// scrolls; there is a specular glint, and an ambient floor so the layer is
-// visible over a dark picture.
+// What is kept from round 1: the light is LIFTED so a glob over a ridge glows
+// nearly as bright as the ridge rather than reading as a shadow on it, and the
+// sun leans with the picture's own gradient, which is what moves the shading as
+// the sound scrolls.
+//
+// What is NOT kept, both on Yan seeing the built thing: the specular glint and
+// its exponent (*"I don't like glint or sparkle, we can remove them"*), and the
+// ambient floor (*"'Ambient' slider is useless"*). Diffuse alone shapes the
+// texture now, and over silence the layer draws the palette's own bottom.
 //
 // Two things that are NOT round 1:
 //
@@ -437,11 +436,10 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 //
 // Four qualities are on DIALS rather than decided here, because describing which
 // of them Yan wants has failed in words repeatedly: `Facet` carries the lookup
-// from this round's continuous slope onto round 1's flat per-glob patch,
-// `Sparkle` is the specular exponent round 1 had at 24 and this one at 14,
-// `Rock` is round 1's per-dome clock, and `Variety` is how much the globs differ
-// in size. The first three default to the picture Yan has already seen — 0, 14
-// and 0 — so every step away from it is one he asked for.
+// from this round's continuous slope onto round 1's flat per-glob patch, `Rock`
+// is round 1's per-dome clock, `Variety` is how much the globs differ in size,
+// and `Shade floor` is how dark a face turned away from the sun may get — the
+// one quantity in the fix below that is taste rather than correctness.
 
 // One cell's dome, as three 10-bit fractions: where its centre sits inside the
 // cell, and how wide it is.
@@ -504,6 +502,11 @@ const DOME_FACE: f32 = 2.0 / (DOME_RADIUS * DOME_RADIUS);
 // round 1's whole wobble sits around 40% of the way up this one and the rest of
 // the dial is past anything that has been seen.
 const ROCK_TILT: f32 = 0.30;
+// How far the sun may lean off vertical, and the gradient at which it has leant
+// half that far. `SUN_LEAN` of 1 against a height of 1 is 45 degrees, which is
+// where the sun stood before it was allowed to stand up.
+const SUN_LEAN: f32 = 1.0;
+const SUN_KNEE: f32 = 0.03;
 
 struct Pile {
     // The face the scales here present to the light: each covering dome's own
@@ -643,15 +646,6 @@ fn cloud_light(pt: vec2<f32>) -> f32 {
     return 1.4 * max(wide, 0.85 * material);
 }
 
-// Compress rather than clip, keeping the hue. See where it is applied.
-fn softened(colour: vec3<f32>) -> vec3<f32> {
-    let m = max(max(colour.r, colour.g), colour.b);
-    if m <= 0.75 {
-        return max(colour, vec3<f32>(0.0));
-    }
-    return max(colour, vec3<f32>(0.0))
-        * ((0.75 + 0.25 * (1.0 - exp((0.75 - m) * 4.0))) / m);
-}
 
 // How much of the light survives the layer, now that the layer is everywhere.
 //
@@ -700,54 +694,67 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     let bent = cloud_light(pt + lookup);
 
     // Which way the picture's light grows, from taps about a scale apart, so the
-    // sun leans with the sound and the glints travel as it scrolls. A flat field
-    // has no direction and the terms that need one fade out there.
+    // sun leans with the sound and the shading travels as it scrolls.
+    //
+    // **The lean is the gradient, NOT its direction, and that is the whole of
+    // what stopped this tearing.** It used to be
+    // `normalize(mix(fallback, grad / magnitude, smoothstep(0, 0.03, magnitude)))`
+    // — a UNIT vector aimed along the gradient. A gradient reverses across every
+    // crest of the picture, so the sun jumped to the opposite side of the sky
+    // along the top of every band, and every face that had been lit turned away
+    // in one pixel step. That is the row of near-black vertical tears Yan found
+    // along a loud band, and no dial could reach it because the flip is in the
+    // sun rather than in the scales. The `smoothstep` was meant to fade the
+    // direction out where the field is flat, but its window is far too narrow to
+    // matter: inside a loud band `magnitude` stays well above 0.03, so the
+    // fallback never engaged and the raw flip ran at full strength.
+    //
+    // Scaling instead of normalising, the lean passes THROUGH zero at a crest —
+    // the sun stands overhead there and comes back down the other side — which
+    // is continuous, and it needs no fallback direction at all. That also
+    // retires the fixed screen-space `(0.55, -0.83)`, which gave the layer an up
+    // and a down that Yan has said he does not want.
+    //
+    // `SUN_KNEE` is where the lean reaches half of `SUN_LEAN`; a gradient well
+    // past it leans the full 45 degrees the old sun always stood at.
     let reach = vec2<f32>(scale_points * 0.75, 0.0);
     let grad = vec2<f32>(
         cloud_light(pt + reach.xy) - cloud_light(pt - reach.xy),
         cloud_light(pt + reach.yx) - cloud_light(pt - reach.yx),
     );
-    let magnitude = length(grad);
-    let directed = smoothstep(0.0, 0.03, magnitude);
-    let toward =
-        normalize(mix(vec2<f32>(0.55, -0.83), grad / max(magnitude, 0.00001), directed));
-    let aimed = 0.5 + 0.5 * directed;
+    let lean = grad * (SUN_LEAN / (SUN_KNEE + length(grad)));
 
     // The scales' normal, from the same face that bent the light, flattened by
     // `scale_relief` so 0 is a smooth body with no faces at all.
     let relief = cloud.scale_relief;
     // Rocked off that face by `scale_rock`, on each dome's own clock, so the
-    // glints wander over a picture that is holding still. The LOOKUP is left
-    // alone: a scale that rocked the light it refracts would swim, and what
-    // round 1 had was the highlight travelling over a lens that stayed put.
+    // shading on a face sways over a picture that is holding still. The LOOKUP
+    // is left alone: a scale that rocked the light it refracts would swim, and
+    // what round 1 had was the shading travelling over a lens that stayed put.
     var tilt = face;
     if cloud.scale_rock > 0.0 {
         tilt += pile.rock * (cloud.scale_rock * ROCK_TILT);
     }
     let normal = normalize(vec3<f32>(-tilt * relief, 1.0));
-    // The light stands 45 degrees over the plane, on the side it grows toward.
     // Diffuse is 1 on a flat face, so a relief of 0 leaves the light alone.
-    let sun = normalize(vec3<f32>(toward * 0.7, 0.7));
-    let diffuse = max(dot(normal, sun), 0.0) / sun.z;
-    let half = normalize(sun + vec3<f32>(0.0, 0.0, 1.0));
-    // One exponent for both, and it has to stay that way: the subtraction is
-    // the lobe's excess over what a FLAT face returns, so a `flat_glint` on a
-    // different power would leave a floor or a hole rather than nothing.
-    let flat_glint = pow(half.z, cloud.scale_sparkle);
-    let glint = max(pow(max(dot(normal, half), 0.0), cloud.scale_sparkle) - flat_glint, 0.0)
-        / (1.0 - flat_glint) * aimed;
+    // `scale_shade_floor` is how much a face turned right away still keeps: the
+    // top of the range is untouched by it, so it darkens nothing that was not
+    // already dark.
+    let sun = normalize(vec3<f32>(lean, 1.0));
+    let lambert = max(dot(normal, sun), 0.0) / sun.z;
+    let diffuse = mix(cloud.scale_shade_floor, 1.0, lambert);
 
-    let lit = bent * diffuse * CLOUD_SHADE + cloud.cloud_ambient;
-    let body = palette_color(clamp(lit, 0.0, 1.0))
-        + vec3<f32>(glint * cloud.scale_glint * bent * 0.5);
-    // The glint is ADDITIVE, so over a bright picture it runs past what the
-    // palette can hold — which is round (4)'s bright metallic patches, and they
-    // got worse as the glint was raised because the glint is what pushed it
-    // over. Compressing the MAGNITUDE and keeping the direction keeps the hue: a
-    // clipped channel shifts the colour as well as flattening it, and that
-    // shift is what reads as metal rather than as a bright cloud. Kept from
-    // round 6, which is the one thing in it that this round should not undo.
-    return mix(base, softened(body), cloud.cloud_depth);
+    let lit = bent * diffuse * CLOUD_SHADE;
+    let body = palette_color(clamp(lit, 0.0, 1.0));
+    // `softened` used to sit here, compressing anything whose brightest channel
+    // ran past 0.75. It was holding back the ADDITIVE glint, and with the glint
+    // gone `body` is `palette_color(clamp(lit, 0, 1))` — a colour the palette
+    // itself chose, which cannot leave the ramp. Measured on the shipped look it
+    // was a complete no-op, byte for byte, at the defaults and at every dial up;
+    // the only input that still reached it was an EDITED bright palette, where
+    // it dimmed 231k pixels by up to 24/255 — darkening colours Yan had asked
+    // for to prevent a clipping that can no longer happen.
+    return mix(base, body, cloud.cloud_depth);
 }
 fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
     let base = density_color(level);
