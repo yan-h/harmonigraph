@@ -32,13 +32,20 @@ from 0% to 90%,
 with 28% as the default.
 Zero starts every piece together;
 Simultaneous ignores the control.
-Each piece moves during the remaining duration,
-so every piece finishes within Note fade.
+The spread is a START OFFSET and nothing else:
+every piece still moves for the whole Note fade,
+so an arrival spans Note fade times one plus the spread rather than fitting inside one Note fade.
+Dividing one fade between waiting and moving is what produced two animation lengths from this one control —
+the first piece fading over the whole time and the last snapping in over what little the spread left it —
+and at 90% the measured per-piece lengths ran 0.98 down to 0.09 of a fade.
 All orders use the full selected spread,
 including Random stagger and Bidirectional.
-A normal departure from a settled node uses the same order.
+A normal departure from a settled node uses the same order,
+and "settled" now takes that same one plus the spread:
+a note released before its arrival finished reverses in place and departs without order,
+which at a high spread is most notes a player actually holds.
 Changing spread while held applies to the next normal departure;
-interruptions retain their current movement speed and cancel pending waits.
+interruptions cancel pending waits and reverse from the current pose at the one rate there is.
 
 A factual note-off immediately reverses an unfinished pose and its MIDI opacity.
 Pending pieces cancel;

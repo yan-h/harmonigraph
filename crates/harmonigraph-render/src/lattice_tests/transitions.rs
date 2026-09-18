@@ -103,6 +103,16 @@ fn distance_shadows_fade_continuously_across_layers_and_settling() {
                     initial_mass = mass;
                 }
                 if step > 0 && kernel == harmonigraph_scene::ShadowKernel::Distance {
+                    // A SNAP detector, not a bound calibrated to the sampling.
+                    // Measured peaks here are 8 (`wide`), 16 (`grow`) and 3-7
+                    // for the rest, so the 80 is an order of magnitude of slack
+                    // on purpose: it has to hold across whatever GPU CI gives
+                    // us, and `wide`'s own sampling is not fixed either -- a
+                    // spread now stretches the arrival it sweeps, so one step
+                    // moves a slice's reveal by 0.019 where the old compressed
+                    // timeline moved it by 0.1. Tightening this to bind on
+                    // `wide` would land within 25% of what `grow` already
+                    // measures, trading a loose test for a flaky one.
                     assert!(
                         *max < 80 && mean < 0.8,
                         "{name} at {p}: shadow jumped {max} levels, mean {mean}"

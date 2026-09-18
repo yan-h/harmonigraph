@@ -231,6 +231,13 @@ impl NodeMotion {
                     duration,
                 );
                 motion.delay = motion.order_delay;
+                // Ordered departure needs a COMPLETE arrival, and an arrival now
+                // takes `1 + stagger_spread` fades rather than one, so the hold
+                // that earns this has got longer by the same factor. At a high
+                // spread most notes a player actually holds fall short and take
+                // the reversal branch below, departing without order. That is the
+                // cost of the spread being a start offset; the alternative was
+                // compressing every piece into a tenth of the fade.
             } else if !gate && motion.gate && motion.progress.iter().all(|&p| p == 1.0) {
                 motion.order_delay = delays(
                     &scene.octave_layout,
@@ -274,6 +281,12 @@ impl NodeMotion {
         if !now.is_finite() {
             return;
         }
+        // The 2.0 is not a round number: one animation now spans
+        // `duration * (1 + stagger_spread)`, so the horizon has to exceed that
+        // or a gap longer than it seeds a MID-FLIGHT arrival as settled and the
+        // wheel pops. The spread's 0.9 ceiling (`ValueBar` and `sanitize` both)
+        // puts the longest arrival at 1.9, leaving 0.1 of margin — so raising
+        // that ceiling means raising this too, and 1.0 would leave none.
         let horizon = f64::from(duration.max(0.0)) * 2.0 + f64::from(view.mark_delay) + 0.001;
         // A hidden surface cannot benefit from replaying minutes of settled
         // history. Seed current state and replay only the visible horizon.
