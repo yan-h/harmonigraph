@@ -49,6 +49,10 @@ fn distance_shadows_fade_continuously_across_layers_and_settling() {
             }
             let delays =
                 scene.note_animation.delays(&scene.octave_layout, scene.nodes[0].cents, 42, 1.0);
+            // `p` sweeps the WHOLE arrival, which a stagger widens past one
+            // sector's own duration: every sector animates for 1.0 and the
+            // last one only starts at the widest delay.
+            let span = 1.0 + delays.iter().copied().fold(0.0, f32::max);
             let mut previous = vec![0i16; 256 * 256];
             let mut csv = String::from("time,mass,max_delta,mean_delta\n");
             let mut peak_mass = 0i64;
@@ -62,9 +66,8 @@ fn distance_shadows_fade_continuously_across_layers_and_settling() {
                     102 => 1.0,
                     _ => step as f32 / 100.0,
                 };
-                scene.nodes[0].slice_progress = std::array::from_fn(|i| {
-                    ((p - delays[i]) / scene.note_animation.movement_duration(1.0)).clamp(0.0, 1.0)
-                });
+                scene.nodes[0].slice_progress =
+                    std::array::from_fn(|i| (p * span - delays[i]).clamp(0.0, 1.0));
                 scene.nodes[0].activation = p;
                 scene.nodes[0].octaves = [p; 11];
                 scene.nodes[0].melody_level = p;
@@ -376,12 +379,12 @@ fn all_orders_draw_complete_rotated_pieces_at_their_shared_delays() {
                     ..Default::default()
                 };
                 let delays = scene.note_animation.delays(&scene.octave_layout, 350.0, 42, 1.0);
-                let duration = scene.note_animation.movement_duration(1.0);
+                let span = 1.0 + delays.iter().copied().fold(0.0, f32::max);
                 for (step, time) in
                     [0.1f32, 0.25, 0.5, 0.8, 1.0, -0.1, -0.25, -0.5, -1.0].into_iter().enumerate()
                 {
                     scene.nodes[0].slice_progress = std::array::from_fn(|i| {
-                        let p = ((time.abs() - delays[i]) / duration).clamp(0.0, 1.0);
+                        let p = (time.abs() * span - delays[i]).clamp(0.0, 1.0);
                         if time < 0.0 {
                             1.0 - p
                         } else {

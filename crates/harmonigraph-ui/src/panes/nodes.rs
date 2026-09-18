@@ -378,7 +378,7 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
         ValueBar::new(&mut view.note_animation.stagger_spread, 0.0..=0.9, "Stagger spread")
             .unit(100.0, "%")
             .show(ui)
-            .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Zero starts every slice together; Simultaneous ignores this setting.");
+            .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Every slice still animates for the whole Note fade, so the arrival lasts that much longer. Zero starts every slice together; Simultaneous ignores this setting.");
     });
     ValueBar::new(&mut view.note_animation.radial_start, -1.0..=1.0, "Starting position")
         .unit(100.0, "%").show(ui)
