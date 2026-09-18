@@ -858,6 +858,13 @@ impl Open {
 
     /// Mark this recording — this pass, every pass it still retains, and by
     /// [`Open::next_pass`] every pass it opens from here on.
+    ///
+    /// **The FIRST gap is the one the file names**, and a later one adds
+    /// nothing: the marker says this take has a hole, and the reader has to
+    /// name the same hole the writer did. `Take::parse` reads it back under the
+    /// same rule, which it did not before (#895). A gap that arrives second is
+    /// still written into its pass as an ordinary `Gap` record, so nothing
+    /// about the hole is lost — only the marker is singular.
     fn mark_incomplete(
         &mut self,
         record: harmonigraph_take::IncompleteRecord,

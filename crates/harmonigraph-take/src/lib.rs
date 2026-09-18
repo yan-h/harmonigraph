@@ -223,6 +223,16 @@ pub struct Take {
     /// and usable; callers should say so rather than pretend the take is
     /// whole.
     pub truncated: bool,
+    /// The hole in the note history this take carries, if it has one: the
+    /// FIRST gap the file names, whether it named it as an `Incomplete` marker
+    /// or as a `Gap` among the events.
+    ///
+    /// First rather than last because that is the rule the WRITER already
+    /// applies — `Open::mark_incomplete` in `harmonigraph-record` writes its
+    /// marker once per recording and every later gap leaves it alone — and the
+    /// two have to agree. They did not: the reader took the last line, so a
+    /// take with two gaps was exported with a warning naming a different gap
+    /// from the one its own marker held (#895, correctness item 4).
     pub incomplete: Option<IncompleteRecord>,
 }
 
@@ -330,7 +340,9 @@ impl Take {
                 Record::Canonical(record) => {
                     record.validate().map_err(|_| ReadError::InvalidCanonical(i + 1))?;
                     if let CanonicalRecord::Gap(gap) = &record {
-                        take.incomplete = Some(IncompleteRecord {
+                        // First gap wins, like the writer's marker; see
+                        // [`Take::incomplete`].
+                        take.incomplete.get_or_insert(IncompleteRecord {
                             first_publication: gap.first,
                             last_publication: gap.last,
                             reason: gap.reason,
@@ -339,7 +351,9 @@ impl Take {
                     event_lines.push(i + 1);
                     take.events.push(record);
                 }
-                Record::Incomplete(incomplete) => take.incomplete = Some(incomplete),
+                Record::Incomplete(incomplete) => {
+                    take.incomplete.get_or_insert(incomplete);
+                }
                 Record::Param(param) => take.params.push(param),
                 Record::Configuration(config) => take.configurations.push(config),
             }
