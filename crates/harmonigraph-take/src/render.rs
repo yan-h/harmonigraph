@@ -187,7 +187,7 @@ pub struct RenderConfig {
     /// nothing reads it: the recorder captures audio unconditionally and every
     /// render uses the take's own recording as soundtrack and spectrum,
     /// aligned to the picture by construction — see `RenderRequest::build` in
-    /// `harmonigraph-record`, which passes neither `--audio` nor `--align`.
+    /// `harmonigraph-record`, which has no `--audio` or `--align` to pass.
     /// (Named rather than linked: that crate depends on this one, not the
     /// other way round.)
     ///
@@ -216,8 +216,8 @@ pub struct RenderConfig {
     /// and is muxed into the video. Empty renders silent, with no
     /// spectrum — the roll and the lattice are unaffected.
     pub audio_path: String,
-    /// Take-time (seconds) where the bounce starts — empty means auto-align to
-    /// the MIDI onsets, a number passes `--align`. A string so "empty = auto"
+    /// Take-time (seconds) where the bounce starts — empty leaves it at take
+    /// zero, a number passes `--align`. A string so "empty = the default"
     /// reads naturally and it matches the other free-text fields.
     pub audio_offset: String,
     /// Which spectrogram the render bakes; see [`SpectrogramRender`]. Read by

@@ -12,7 +12,6 @@
 //!
 //! See `docs/offline-rendering.md` for the whole workflow.
 
-mod align;
 mod frames;
 #[cfg(test)]
 mod golden;
@@ -48,8 +47,8 @@ OPTIONS:
                            a raw stream.  [default: <take>.mp4]
     -a, --audio <WAV>      Audio to use instead of the take's own recording
                            — a clean bounce in place of a crackly one. It
-                           is auto-aligned to the take (see --align), feeds
-                           the spectrum, and is muxed into the video.
+                           starts at take zero unless --align says otherwise,
+                           feeds the spectrum, and is muxed into the video.
     -l, --layout <SPEC>    Preset name or path to a .ron layout.
                            Presets: PRESET_LIST
                            [default: side-by-side]
@@ -79,10 +78,10 @@ OPTIONS:
                            versioned appearance RON (read-plugin-state.py --appearance).
         --ffmpeg <PATH>    ffmpeg to run. Normally found automatically, on
                            PATH or in the usual install locations.
-        --align <MODE>     How to line a --audio file up with the picture:
-                           auto (default) cross-correlates it against the
-                           take\'s own recording; off assumes it starts at
-                           take zero; a number sets the start by hand.
+        --align <SEC>      Where the soundtrack\'s first sample falls, in
+                           seconds of take time. off is the default spelled
+                           out: a --audio file starts at take zero, the
+                           take\'s own recording where its header says.
         --playhead         Lay the render window\'s spectrogram out at once and
                            sweep a playhead across it, instead of the live
                            scrolling window. Needs audio.
@@ -131,22 +130,11 @@ struct Args {
     crf: u32,
     appearance: Option<String>,
     ffmpeg: Option<String>,
-    align: Align,
+    /// A hand-set start for the soundtrack, in seconds of take time. `None`
+    /// places it where it starts by construction — see `start_of_audio`.
+    align: Option<f64>,
     dump_layout: bool,
     playhead: bool,
-}
-
-/// How to place a soundtrack on the take's timeline.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Align {
-    /// The take's own recording as-is; a replacement cross-correlated
-    /// against that recording. The default, and the point of the feature.
-    Auto,
-    /// Assume the soundtrack starts where the take does (take zero for a
-    /// replacement, the recording's own start otherwise).
-    Off,
-    /// A hand-set start, in seconds of take time.
-    Fixed(f64),
 }
 
 impl Default for Args {
@@ -172,7 +160,7 @@ impl Default for Args {
             crf: 10,
             appearance: None,
             ffmpeg: None,
-            align: Align::Auto,
+            align: None,
             dump_layout: false,
             playhead: false,
         }
@@ -242,15 +230,24 @@ fn parse_number<T: std::str::FromStr>(name: &str, text: &str) -> Result<T, Strin
     text.parse().map_err(|_| format!("{name}: {text:?} is not a number"))
 }
 
-fn parse_align(text: &str) -> Result<Align, String> {
+fn parse_align(text: &str) -> Result<Option<f64>, String> {
     match text {
-        "auto" => Ok(Align::Auto),
-        "off" | "none" => Ok(Align::Off),
+        "off" => Ok(None),
         other => other
             .parse()
-            .map(Align::Fixed)
-            .map_err(|_| format!("--align: expected auto, off, or a number, got {other:?}")),
+            .map(Some)
+            .map_err(|_| format!("--align: expected off or a number, got {other:?}")),
     }
+}
+
+/// Where the soundtrack's first sample falls on the take's timeline.
+///
+/// The take's own recording is placed by construction: the header says where
+/// it started. A REPLACEMENT has no such stamp, and take times are the host
+/// transport's, so a bounce exported from the top of the song starts at zero.
+/// `--align` overrides either.
+fn start_of_audio(align: Option<f64>, is_replacement: bool, recorded_start: Option<f64>) -> f64 {
+    align.unwrap_or(if is_replacement { 0.0 } else { recorded_start.unwrap_or(0.0) })
 }
 
 fn parse_size(text: &str) -> Result<[u32; 2], String> {
@@ -324,71 +321,6 @@ fn size_matches_frame(size: [u32; 2], frame: &harmonigraph_ui::RenderFrame) -> b
     let asked = size[0] as f64 / size[1].max(1) as f64;
     let framed = frame.aspect_w.max(1) as f64 / frame.aspect_h.max(1) as f64;
     (asked - framed).abs() <= framed * 0.005
-}
-
-/// Line a replacement soundtrack up with the take timeline, reporting what it
-/// found. Prefers the take\'s own recording as a timing reference; with no
-/// recording it correlates the bounce against the MIDI note-ons directly (the
-/// notes are already on the take clock). Falls back to take zero, loudly, only
-/// when neither can place it.
-fn align_replacement(
-    recorded: Option<&std::path::Path>,
-    soundtrack: Option<&mut crate::wav::Audio>,
-    reference_start: f64,
-    midi_onsets: &[(f64, f32)],
-    span: f64,
-) -> Result<f64, String> {
-    let Some(soundtrack) = soundtrack else { return Ok(0.0) };
-    let clean_onsets = crate::align::audio_onsets(soundtrack)?;
-
-    // Most robust: the take\'s own recording, stamped to the same clock as the
-    // notes. Fall through only if it is missing or too short to lock onto.
-    if let Some(recorded) = recorded {
-        let mut reference = crate::wav::read(recorded)?;
-        let reference_onsets = crate::align::audio_onsets(&mut reference)?;
-        if let Some(found) = crate::align::align(&reference_onsets, reference_start, &clean_onsets)
-        {
-            eprintln!(
-                "aligned audio to the take\'s recording: soundtrack starts at \
-                 {:.3}s (confidence {:.2})",
-                found.start, found.confidence,
-            );
-            if found.confidence < 0.35 {
-                eprintln!(
-                    "  low confidence — if the sound drifts against the picture, \
-                     set the start by hand with --align <seconds>"
-                );
-            }
-            return Ok(found.start);
-        }
-    }
-
-    // No usable recording: line the bounce up against the MIDI note onsets.
-    // Great for clear attacks; soft or legato onsets match weakly, so say so.
-    match crate::align::align_to_notes(midi_onsets, span, &clean_onsets) {
-        Some(found) if found.confidence >= 0.25 => {
-            eprintln!(
-                "aligned audio to the MIDI note onsets: soundtrack starts at \
-                 {:.3}s (confidence {:.2})",
-                found.start, found.confidence,
-            );
-            if found.confidence < 0.4 {
-                eprintln!(
-                    "  low confidence (soft or sparse onsets) — set --align \
-                     <seconds> by hand if it drifts"
-                );
-            }
-            Ok(found.start)
-        }
-        _ => {
-            eprintln!(
-                "note: no scratch recording, and the MIDI onsets did not match the \
-                 audio confidently — assuming it starts at take zero. Set --align \
-                 <seconds> if it drifts."
-            );
-            Ok(0.0)
-        }
-    }
 }
 
 /// What is wrong with the take itself, in the order a person should hear it.
@@ -524,40 +456,7 @@ fn export(args: Args) -> Result<(), String> {
         );
     }
 
-    // Where the soundtrack's first sample falls on the take's timeline.
-    // The take's own recording is aligned by construction (the header
-    // says where it started). A REPLACEMENT — a clean bounce standing in
-    // for a crackly recording — is aligned against that recording by
-    // cross-correlation, so it inherits the same alignment to the
-    // picture. --align overrides either.
-    let reference_start = take.header.audio_start.unwrap_or(0.0);
-    // Note-on times on the take clock, for aligning a bounce that has no
-    // scratch recording to correlate against.
-    let midi_onsets: Vec<(f64, f32)> = take
-        .notes()
-        .filter_map(|note| match note.kind {
-            harmonigraph_take::NoteKind::On { velocity } => Some((note.t, velocity)),
-            _ => None,
-        })
-        .collect();
-    let audio_start = match args.align {
-        Align::Fixed(seconds) => seconds,
-        Align::Off => {
-            if is_replacement {
-                0.0
-            } else {
-                reference_start
-            }
-        }
-        Align::Auto if !is_replacement => reference_start,
-        Align::Auto => align_replacement(
-            recorded.as_deref(),
-            audio.as_mut(),
-            reference_start,
-            &midi_onsets,
-            take.duration(),
-        )?,
-    };
+    let audio_start = start_of_audio(args.align, is_replacement, take.header.audio_start);
 
     // Default end: the last event plus a tail, so releases finish fading
     // and the roll clears instead of the video cutting mid-decay. If
@@ -902,6 +801,54 @@ mod tests {
         };
         assert_eq!(parse(&["--start", "0"]), Some(0.0));
         assert_eq!(parse(&["--fps", "30"]), None);
+    }
+
+    /// Where a soundtrack's first sample lands, for every way that is decided.
+    ///
+    /// The take's own recording is placed by construction: `Header::audio_start`
+    /// is take time, so the picture and the sound agree without anything being
+    /// measured. A REPLACEMENT bounce carries no such stamp — take times are the
+    /// host transport's, so a file exported from the top of the song starts at
+    /// take zero — and `--align` overrides either.
+    #[test]
+    fn a_soundtrack_starts_where_its_own_clock_says() {
+        // The take's own recording, armed 5.48s into the song.
+        assert!((start_of_audio(None, false, Some(5.48)) - 5.48).abs() < 1e-9);
+        // A take whose header carries no audio stamp at all: take zero.
+        assert_eq!(start_of_audio(None, false, None), 0.0);
+        // A replacement ignores the recording's stamp rather than inheriting
+        // it, whether or not there is a recording to inherit from.
+        assert_eq!(start_of_audio(None, true, Some(5.48)), 0.0);
+        assert_eq!(start_of_audio(None, true, None), 0.0);
+        // --align outranks both, in either direction and including back to
+        // zero, which is the flag's whole point on a bounce that drifts.
+        assert!((start_of_audio(Some(2.5), false, Some(5.48)) - 2.5).abs() < 1e-9);
+        assert_eq!(start_of_audio(Some(0.0), false, Some(5.48)), 0.0);
+        assert!((start_of_audio(Some(-1.25), true, None) + 1.25).abs() < 1e-9);
+    }
+
+    /// `--align` keeps both spellings its users actually type, and refuses the
+    /// one the cross-correlator took with it.
+    ///
+    /// `--align 0` is what `docs/evidence/realfft-adoption/{runtime,frames}.py`
+    /// run and `--align off` is what `docs/offline-audio-input.md` reproduces
+    /// with; `off` is the default spelled out, so both land on the same
+    /// placement. `auto` has to be REFUSED rather than quietly parsed or
+    /// ignored — a command line that names a placement and gets a different one
+    /// is the failure this flag exists to prevent.
+    #[test]
+    fn align_takes_a_number_or_off_and_refuses_the_deleted_auto() {
+        assert_eq!(parse_align("off").unwrap(), None);
+        assert_eq!(parse_align("0").unwrap(), Some(0.0));
+        assert_eq!(parse_align("-1.5").unwrap(), Some(-1.5));
+        let refused = parse_align("auto").unwrap_err();
+        assert!(refused.contains("auto"), "the refusal names what was typed: {refused}");
+
+        // Through the command line, which is where they are typed.
+        let parse = |flags: &[&str]| parse_args_from(flags.iter().map(|s| s.to_string()));
+        assert_eq!(parse(&["--align", "0"]).unwrap().unwrap().align, Some(0.0));
+        assert_eq!(parse(&["--align", "off"]).unwrap().unwrap().align, None);
+        assert!(parse(&["--align", "auto"]).is_err());
     }
 
     /// The warning fires on a different SHAPE and stays quiet for a bigger
