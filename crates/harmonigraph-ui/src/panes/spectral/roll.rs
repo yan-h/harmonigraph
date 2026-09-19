@@ -141,31 +141,14 @@ fn outline(style: harmonigraph_scene::ShadowStyle) -> (f32, Color32) {
 /// passes UNDER an unbroken hairline, which is what keeps the boundary
 /// followable while a chord is reaching over it.
 ///
-/// Zero where the pane has no spectrum to reach into, which is two layouts and
-/// not a guard against a bad number:
-///
-///   - Whole-song (the offline `--playhead` render) hands the roll the entire
-///     depth axis and draws no spectrum at all, so `split` is 0 and there is no
-///     line anywhere on the pane to cross.
-///   - The divider dragged all the way over the curve leaves the same picture
-///     from the other direction.
-///
-/// Both fall out of the arithmetic rather than needing a test of their own —
-/// a `split` of 0 is a spectrum of no length, and the share of nothing is
-/// nothing — but the guard is kept because `whole_song` does not always mean a
-/// zero split to the reader, and because a lead is a claim about a picture that
-/// is not being drawn at all there.
+/// Zero where the divider has been dragged shut over the spectrum: a lead
+/// cannot reach into a spectrum region of no length.
 ///
 /// Off comes back zero-reach AND zero-fade, never one or the other, for
 /// [`outline`]'s reason: the reach is what the geometry grows by, so a lead
 /// that will not be drawn must not be paid for in a fade either.
-pub(super) fn lead(
-    cfg: &crate::SpectrumConfig,
-    axes: &Axes,
-    whole_song: bool,
-    split: f32,
-) -> (f32, f32) {
-    if whole_song || split <= 0.0 {
+pub(super) fn lead(cfg: &crate::SpectrumConfig, axes: &Axes, split: f32) -> (f32, f32) {
+    if split <= 0.0 {
         return (0.0, 0.0);
     }
     let spectrum_px = split * axes.depth_len();
@@ -305,8 +288,7 @@ pub(super) fn draw_roll(
     // already did — a note is deliberately allowed to overhang the window's
     // oldest edge and slide out under the scissor (see `note_instances`), and
     // this is the same edge in the same place.
-    let (lead_px, _) =
-        lead(&state.appearance.spectrum, axes, state.runtime.whole_song.is_some(), options.split);
+    let (lead_px, _) = lead(&state.appearance.spectrum, axes, options.split);
     let near = (options.split - lead_px / axes.depth_len().max(1.0)).max(0.0);
     let region = egui::Rect::from_two_pos(axes.at(0.0, near), axes.at(1.0, 1.0));
     let painter = painter.with_clip_rect(painter.clip_rect().intersect(region));
@@ -368,8 +350,7 @@ fn note_instances_with_floor(
     ribbon_floor_scale: f32,
 ) -> Vec<RollInstance> {
     let cfg = &state.appearance.spectrum;
-    // Shared time<->depth mapping: a `now`-anchored scrolling window live, or
-    // the whole take laid out statically (offline playhead mode).
+    // Shared time<->depth mapping: a `now`-anchored scrolling window.
     let time = TimeAxis::new(state, split, now);
     let oldest = time.oldest();
 
@@ -401,7 +382,7 @@ fn note_instances_with_floor(
     // decided once for the same reason. See [`lead`]. How much of that a
     // particular note still has is [`lead_alpha`]'s, and is per note: it is a
     // reading of that note's own release.
-    let (lead_px, lead_fade_px) = lead(cfg, axes, time.whole_song(), split);
+    let (lead_px, lead_fade_px) = lead(cfg, axes, split);
     // The antialiasing ramp the shader feathers every edge with — one physical
     // pixel, in points at this display's density, the same figure it takes as
     // `feather`. Ink reaches half of it past whatever it edges.
@@ -427,12 +408,6 @@ fn note_instances_with_floor(
     // it leaves. Bounded on purpose — an unclamped overhang is what makes a
     // ten-minute note a ten-minute quad.
     //
-    // Not in whole-song mode. That layout is static: nothing scrolls, so no
-    // note ever crosses an edge and there is no pop to prevent. What an
-    // overhang would buy there is a note held from before the render started
-    // beginning a few points outside the region rather than square on its
-    // edge, and the render starts where it starts.
-    //
     // `min_half_depth` is in the overhang because the length floor grows a
     // leaving note's box back toward the region as its true length is truncated
     // to nothing — so without it the last sliver of a floored note would appear
@@ -448,13 +423,9 @@ fn note_instances_with_floor(
     // converted through.
     let per_point = time.seconds_per_point(axes);
     // One POINT of depth back from the present moment, signed: what a length
-    // in points is multiplied by to move a box INTO THE PAST. Read off the
-    // mapping rather than assumed, because the two modes run time opposite ways
-    // along this axis — the live window pins `now` to the near edge and scrolls
-    // history outward, while the whole-song layout starts the take at that edge
-    // and runs it forward.
+    // in points is multiplied by to move a box INTO THE PAST.
     let into_past = time.depth_of_unclamped(now - per_point) - time.depth_of_unclamped(now);
-    let ink_seconds = if time.whole_song() { 0.0 } else { f64::from(ink_px) * per_point };
+    let ink_seconds = f64::from(ink_px) * per_point;
     let edge = oldest - ink_seconds;
     // Across pitch there is no margin to be had at the NOTE's level, and that
     // is the whole reason the test moved down into the loop.
@@ -511,8 +482,6 @@ fn note_instances_with_floor(
         let half_true = 0.5 * span_px;
         let half_drawn = half_true.max(min_half_depth);
         // Where the note's own stop sits, in points into the past from `now`.
-        // Negative only for a note that has not been played yet, which is
-        // something only the whole-song layout has.
         let stop_px = ((now - note.stop(now)) / per_point) as f32;
         // The floor may lengthen a note into the past; it may not carry ink
         // into the FUTURE, past the moment the picture calls now.
@@ -552,13 +521,6 @@ fn note_instances_with_floor(
         // sounded into the future, and drawing it as though it had is what put
         // ink on the spectrum's side of the boundary to begin with.
         //
-        // A note whose stop is AHEAD of now is left alone, which is the
-        // whole-song layout's case and not a live one. That layout draws the
-        // take's future as well as its past, so a note the playhead has not
-        // reached has not been played and belongs where it is; clamping it
-        // would drag the rest of the take onto the playhead and pop each note
-        // forward as the sweep passed it.
-        //
         // The LEAD still crosses, and is measured from the clamped end: that is
         // a distance a setting asks for, drawn as a tongue that fades out, and
         // not a floor's rounding landing in the middle of the analyzer.
@@ -592,16 +554,6 @@ fn note_instances_with_floor(
             // contain: a detached dot a few points off the ribbon's own end,
             // wearing the full outline, which is all a box with no length is.
             //
-            // Reachable both ways round. Whole-song the edge IS the render's
-            // start, so any note that glides and is then held across it has its
-            // glide behind the crop; live the edge trails the window by the ink
-            // overhang, and per-note tuning puts a short segment at the head of
-            // every note ([`RollNote::SETTLE`]), which is the one most likely
-            // to have scrolled past it.
-            //
-            // Strictly before, so this can never empty a note: the note filter
-            // above already refused every note whose stop is behind the edge,
-            // and a note's last segment ends on that stop.
             if t1 < edge {
                 continue;
             }
@@ -1246,12 +1198,7 @@ mod tests {
     }
 
     /// Where an instance's box lands along the DEPTH axis, in points from the
-    /// region's near edge, as `(low, high)`.
-    ///
-    /// Which END of time each of those is depends on the mode, and the callers
-    /// say so rather than this: the live window runs the past outward from the
-    /// near edge, so `low` is the end at the now-line; the whole-song layout
-    /// runs the take forward from that edge, so `low` is the earlier end.
+    /// region's near edge, as `(low, high)`. `low` is the end at the now-line.
     ///
     /// Read through [`Axes`] rather than off a screen coordinate, because the
     /// pane can be turned any of four ways and none of them is a screen side.
@@ -1381,101 +1328,6 @@ mod tests {
             );
             previous = leading;
         }
-    }
-
-    /// The clamp is on a note the picture has already reached, not on every box
-    /// against the playhead. The whole-song layout draws the take's future as
-    /// well as its past, so a note that has not been played yet belongs where it
-    /// is — clamping every box would drag the rest of the take onto the playhead
-    /// and pop each note forward as the sweep passed it.
-    #[test]
-    fn the_whole_song_layout_keeps_drawing_the_take_ahead_of_the_playhead() {
-        let mut state = fresh();
-        state.appearance.spectrum.orientation = SpectralOrientation::Left;
-        state.appearance.spectrum.low_midi = 48.0;
-        state.appearance.spectrum.high_midi = 84.0;
-        // The whole take at once, the way the offline renderer lays it out: a
-        // brief note that is over well before the playhead reaches it, so the
-        // floor is what draws it and there is a clamp to get wrong.
-        state.runtime.tracker.handle_event(NoteEvent::on(6.0, SourceId::DIRECT, 0, 60, 1.0));
-        state.runtime.tracker.handle_event(NoteEvent::off(6.02, SourceId::DIRECT, 0, 60));
-        let roll = state.runtime.tracker.roll().clone();
-        state.runtime.whole_song =
-            Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
-
-        let cfg = &state.appearance.spectrum;
-        let axes = Axes::new(PANE, cfg);
-        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
-        // The mode gives the roll the whole depth axis; there is no spectrum
-        // beside it to leave room for.
-        let split = 0.0;
-        let ins = note_instances(&axes, &scale, &state, split, 1.0, 2.0);
-        let (low, high) = depth_from_edge(&axes, split, one(&ins));
-
-        // Depth runs forward in time here, so the note sits on its own
-        // mid-time: 6.01 of the take's 10 seconds, over 300 points of axis.
-        // Against the MIDPOINT and to a tolerance well inside half a floor,
-        // because the two answers this is separating — centered, or dragged
-        // onto the playhead — differ by exactly what the floor added.
-        let want = 6.01 / 10.0 * axes.depth_len();
-        let mid = (low + high) * 0.5;
-        assert!(
-            (mid - want).abs() < 0.05,
-            "a note six seconds into the take was drawn at {mid} pt, not {want} — \
-             a clamp meant for a note already played has pulled it toward the playhead",
-        );
-    }
-
-    /// Which way the clamp moves a note in the whole-song layout, with margin.
-    ///
-    /// That layout runs time FORWARD from the near edge while the live window
-    /// runs it backward, so the direction the floor grows into is read off the
-    /// mapping rather than assumed. The sign is the whole of that reading, and
-    /// nothing else in the suite would notice it flipped: the live tests cannot
-    /// see it, and a released note far from the playhead is not clamped at all.
-    ///
-    /// A note ending ON the playhead is the case that pins it. Floored, its box
-    /// is half a floor longer than the note in each direction; clamped the right
-    /// way it ends on the playhead, and clamped the wrong way it reaches a whole
-    /// floor past it, into a part of the take that has not been played.
-    #[test]
-    fn the_whole_song_clamp_grows_a_note_back_toward_the_takes_start() {
-        let mut state = fresh();
-        state.appearance.spectrum.orientation = SpectralOrientation::Left;
-        state.appearance.spectrum.low_midi = 48.0;
-        state.appearance.spectrum.high_midi = 84.0;
-        state.runtime.tracker.handle_event(NoteEvent::on(6.0, SourceId::DIRECT, 0, 60, 1.0));
-        state.runtime.tracker.handle_event(NoteEvent::off(6.02, SourceId::DIRECT, 0, 60));
-        let roll = state.runtime.tracker.roll().clone();
-        state.runtime.whole_song =
-            Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
-
-        let cfg = &state.appearance.spectrum;
-        let axes = Axes::new(PANE, cfg);
-        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
-        let split = 0.0;
-        // The playhead exactly on the note's release, where the clamp binds by
-        // the whole of what the floor added.
-        let now = 6.02;
-        let ins = note_instances(&axes, &scale, &state, split, now, 2.0);
-        let (low, high) = depth_from_edge(&axes, split, one(&ins));
-
-        let playhead = (now / 10.0) as f32 * axes.depth_len();
-        let floor = MIN_LENGTH_DEVICE_PX / 2.0;
-        assert!(
-            high < playhead + 1e-3,
-            "the note reaches {high} pt, past the playhead at {playhead} — the floor \
-             grew it into the take's future, so `into_past` has the wrong sign here",
-        );
-        assert!(
-            (high - playhead).abs() < 1e-3,
-            "the note ends at {high} pt rather than on the playhead at {playhead}",
-        );
-        assert!(
-            (high - low - floor).abs() < 1e-3,
-            "the note is {} pt long, not the floor's {floor}",
-            high - low,
-        );
     }
 
     /// The floor is in DEVICE pixels, so it is half as many points on a 2x
@@ -1632,11 +1484,8 @@ mod tests {
     /// contain: an outline with nothing inside it, standing a few points off
     /// the ribbon's own end and belonging to no note the picture shows (#385).
     ///
-    /// Both layouts reach it, and the note is the same one either way: a C4
-    /// glided to G4 and then held across the edge. Whole-song the edge is the
-    /// render's start; live it trails the window by the ink overhang, which is
-    /// where a per-note tuning's opening segment ends up on any note held long
-    /// enough.
+    /// A C4 glides to G4 and is held across the live edge. The edge trails
+    /// the window by the ink overhang.
     #[test]
     fn a_bend_finished_before_the_region_leaves_nothing_at_its_edge() {
         let bent = || {
@@ -1666,17 +1515,10 @@ mod tests {
             "the ribbon left is the glide's own stump, not the held note: {held:?}",
         );
 
-        // Whole-song: the take is cropped to start at 4.0, well past the bend.
-        let mut song = bent();
-        let roll = song.runtime.tracker.roll().clone();
-        song.runtime.whole_song =
-            Some(crate::WholeSong { columns: Vec::new(), roll, start: 4.0, span: 10.0 });
-        let ins = instances(&song, 8.0);
-        let held = one(&ins);
         // The one ribbon is the held stretch, at G4 and not at the C4-to-G4
         // midpoint the dropped segment would have drawn at.
         let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
-        let axes = Axes::new(PANE, &song.appearance.spectrum);
+        let axes = Axes::new(PANE, &live.appearance.spectrum);
         let g4 = axes.at(scale.t_of(67.0), 0.5).y;
         assert!(
             (held.center[1] - g4).abs() < 1.0,
@@ -1708,12 +1550,15 @@ mod tests {
         state.appearance.spectrum.high_midi = 84.0;
         state.runtime.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
         state.runtime.tracker.handle_event(NoteEvent::off(4.0, SourceId::DIRECT, 0, 60));
-        let roll = state.runtime.tracker.roll().clone();
-        // The crop opens exactly where the note closed.
-        state.runtime.whole_song =
-            Some(crate::WholeSong { columns: Vec::new(), roll, start: 4.0, span: 10.0 });
-
-        let ins = instances(&state, 8.0);
+        state.appearance.spectrum.roll_seconds = 10.0;
+        let cfg = &state.appearance.spectrum;
+        let axes = Axes::new(PANE, cfg);
+        let per_point =
+            10.0 / f64::from(axes.depth_len() * (1.0 - super::super::axes::spectrum_share(cfg)));
+        let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry);
+        let ink_px = min_half_depth_for(PPP) + outline_px + 0.5 / PPP;
+        // Put the live ink boundary exactly on the note's stop.
+        let ins = instances(&state, 14.0 + f64::from(ink_px) * per_point);
         let floored = one(&ins);
         assert!(
             (floored.half_extent[1] - min_half_depth_for(PPP)).abs() < 1e-3,
@@ -2242,12 +2087,7 @@ mod tests {
     }
 
     /// A pane with no spectrum on it has no line to cross, and nothing leads.
-    ///
-    /// Two layouts reach that state and both are ordinary rather than
-    /// degenerate: the offline `--playhead` render lays the whole take out
-    /// statically and gives the roll the entire depth axis, and the divider
-    /// dragged all the way over the curve leaves the same picture live. A lead
-    /// in either would be a ribbon poking off the end of the pane.
+    /// Dragging the divider over the curve must not leave a lead off the pane.
     #[test]
     fn a_pane_with_no_spectrum_has_no_line_to_lead_over() {
         let cfg = crate::SpectrumConfig {
@@ -2257,19 +2097,14 @@ mod tests {
         };
         let axes = Axes::new(PANE, &cfg);
         let px = |share: f32| share * 0.45 * axes.depth_len();
-        let (reach, fade) = lead(&cfg, &axes, false, 0.45);
+        let (reach, fade) = lead(&cfg, &axes, 0.45);
         assert!(
             (reach - px(0.05)).abs() < 1e-3 && (fade - px(0.04)).abs() < 1e-3,
             "an ordinary pane leads ({reach}, {fade}) rather than ({}, {})",
             px(0.05),
             px(0.04),
         );
-        assert_eq!(lead(&cfg, &axes, true, 0.45), (0.0, 0.0), "the whole-song layout drew a lead",);
-        assert_eq!(
-            lead(&cfg, &axes, false, 0.0),
-            (0.0, 0.0),
-            "a pane with no spectrum drew a lead",
-        );
+        assert_eq!(lead(&cfg, &axes, 0.0), (0.0, 0.0), "a pane with no spectrum drew a lead",);
     }
 
     /// A note off the octave zoom is dropped when its INK is off it, and how

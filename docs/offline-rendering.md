@@ -75,12 +75,17 @@ custom-spacing looks are lost,
 and the appearance generator rejects new `spacing=` input.
 Camera,
 zoom and label controls remain available.
+The retired **Playhead** spectrogram mode and `--playhead` flag are no longer supported.
+An editor blob naming `Playhead` is refused whole with a console message, including its camera and layout;
+a fresh instance opens at defaults.
+An appearance naming it is also refused whole, and offline export reports the failure before using the default appearance.
+This enum parse failure happens before the editor version-floor check.
 No older format is migrated or partially recovered.
 
 ## Audio input memory
 
 The renderer reads uncompressed WAV input through bounded decoding buffers.
-Playhead precomputation reads the render window with its FFT margins, and frame analysis then advances through that window.
+Frame analysis advances through the render window using the same bounded history as the live analyzer.
 A long source therefore does not require a decoded copy of the whole file in memory.
 Notes, spectrogram columns and the encoder have their own storage costs.
 See [the input design and measurements](offline-audio-input.md) for the scope and measured limits.
@@ -252,7 +257,6 @@ The flags worth knowing (`--help` lists them all):
 | `--lead` | extra empty frame before the recording starts; default 0 |
 | `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note |
 | `--appearance` | use a different look than the one in the take |
-| `--playhead` | lay the render window's spectrogram out at once and sweep a playhead through it |
 
 ### Where the video starts
 
@@ -288,17 +292,9 @@ Font sizes and paddings are in *points*, so the scale decides how large the UI r
 The default keeps the same apparent size at any output resolution;
 raise it for chunkier text, lower it to fit more lattice in.
 
-`--playhead` changes how time reads.
-Otherwise the spectrogram and roll scroll past a fixed now-line.
+The spectrogram and roll scroll past a fixed now-line.
 Under **Scrolling** they span the Analyzer's history;
-under **Whole video**, the fresh choice, that span is the render's own length.
-With `--playhead` the render window is laid out at once —
-its whole spectrogram across the frame —
-and a playhead sweeps through it, so the finished shape is visible the whole way rather than arriving and scrolling off.
-With no `--start`/`--end` that window is the whole take, which is every auto-render.
-It needs audio (the spectrogram is audio-derived) and uses whatever spectrogram and roll look the take already carries.
-The roll is laid out ahead too, and is the whole piece whatever the window is —
-so under a trim the two carry different spans.
+under **Whole video**, the fresh choice, that span is the render's own length, capped at 10 minutes.
 
 Rendering is faster than realtime on an M-series Mac (roughly 19 s of 1080p60 in 17 s), so a five-minute piece is a coffee, not an afternoon.
 

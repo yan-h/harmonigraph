@@ -74,10 +74,6 @@ pub(super) const LABEL_INSET_PT: f32 = 2.0;
 /// and standing alone on the outer edge they reach the far end instead. The
 /// offset follows, so in both the label sits inside the pane rather than off
 /// it.
-///
-/// Whole-song mode draws no spectrum at all and hands the whole axis to the
-/// roll (`split` is 0), so it takes the first arm and its labels ride the near
-/// edge — the only edge it has to put them on.
 pub(super) fn label_anchor(split: f32) -> (f32, f32) {
     if split < 1.0 {
         (0.0, LABEL_INSET_PT)
@@ -862,65 +858,38 @@ pub(super) fn level_grid(
         .collect()
 }
 
-/// Maps take time to a depth fraction on the shared time axis (the region the
-/// roll and spectrogram split between them), and back. One mapping for two
-/// modes, so the live and offline paths go through the same place instead of
-/// each carrying a copy:
-///
-/// - **Live**: a `now`-anchored window. `now` sits on the near edge (`split`)
-///   and the past scrolls out to the far edge (1), spanning `roll_seconds`.
-/// - **Whole-song** (offline playhead): the entire take laid out statically —
-///   the near edge is the render's start, the far edge its end — and only the
-///   playhead ([`depth_of`](Self::depth_of) of `now`) moves.
+/// Maps the shared scrolling roll/heatmap time window onto pane depth.
 #[derive(Clone, Copy)]
 pub(super) struct TimeAxis {
     pub(super) split: f32,
     pub(super) depth_span: f32,
-    /// Live: `roll_seconds`. Whole-song: the take span.
+    /// Visible scrolling history, floored at `MIN_WINDOW`.
     pub(super) window: f64,
-    /// Take time at the near edge. Live: `now`. Whole-song: the render start.
+    /// Take time at the near edge: `now`.
     pub(super) origin: f64,
     pub(super) now: f64,
-    pub(super) whole_song: bool,
 }
 
 impl TimeAxis {
+    /// A time window must remain nonzero even for unsanitized drawing inputs.
+    /// This geometry floor is separate from the user-facing history range.
+    const MIN_WINDOW: f64 = 0.05;
+
     pub(super) fn new(state: &PictureState, split: f32, now: f64) -> Self {
         let depth_span = 1.0 - split;
-        match state.runtime.whole_song.as_ref() {
-            Some(ws) => TimeAxis {
-                split,
-                depth_span,
-                // The take's own, floored there rather than here: the trim
-                // that feeds the heatmap reads the same method, and a second
-                // copy of this floor is what let the two disagree.
-                window: ws.window(),
-                origin: ws.start,
-                now,
-                whole_song: true,
-            },
-            None => TimeAxis {
-                split,
-                depth_span,
-                // The same floor on the live arm's own input, for the same
-                // reason — a window of nothing maps every time to one depth.
-                window: (state.appearance.spectrum.roll_seconds as f64)
-                    .max(crate::WholeSong::MIN_WINDOW),
-                origin: now,
-                now,
-                whole_song: false,
-            },
+        TimeAxis {
+            split,
+            depth_span,
+            window: (state.appearance.spectrum.roll_seconds as f64).max(Self::MIN_WINDOW),
+            origin: now,
+            now,
         }
     }
 
     /// Fraction from the near edge (0) to the far edge (1) for take time `t`,
     /// unclamped.
     pub(super) fn frac(&self, t: f64) -> f64 {
-        if self.whole_song {
-            (t - self.origin) / self.window
-        } else {
-            (self.origin - t) / self.window
-        }
+        (self.origin - t) / self.window
     }
 
     /// Depth for take time `t`, WITHOUT clamping it into the region.
@@ -945,20 +914,12 @@ impl TimeAxis {
     /// [`depth_of`](Self::depth_of).
     pub(super) fn time_at(&self, d: f32) -> f64 {
         let f = ((d - self.split) / self.depth_span) as f64;
-        if self.whole_song {
-            self.origin + f * self.window
-        } else {
-            self.origin - f * self.window
-        }
+        self.origin - f * self.window
     }
 
     /// The oldest take time the region shows — its far-edge cull point.
     pub(super) fn oldest(&self) -> f64 {
-        if self.whole_song {
-            self.origin
-        } else {
-            self.now - self.window
-        }
+        self.now - self.window
     }
 
     /// Seconds spanned across the region.
@@ -966,18 +927,8 @@ impl TimeAxis {
         self.window
     }
 
-    /// Whether this is the offline whole-song layout.
-    pub(super) fn whole_song(&self) -> bool {
-        self.whole_song
-    }
-
-    /// Depth of the playhead (the present moment).
-    pub(super) fn playhead_depth(&self) -> f32 {
-        self.depth_of(self.now)
-    }
-
     /// This axis' own share of the depth axis, in points: `depth_span` (the
-    /// far region's fraction of it, live or whole-song alike) of what the
+    /// far region's fraction of it) of what the
     /// full axis spans.
     pub(super) fn region_depth_len(&self, axes: &Axes) -> f32 {
         axes.depth_len() * self.depth_span

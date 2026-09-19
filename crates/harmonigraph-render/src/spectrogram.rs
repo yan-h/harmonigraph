@@ -257,9 +257,8 @@ struct SpectrogramResources {
     cloud: Option<atmosphere::Pipelines>,
     layout: wgpu::BindGroupLayout,
     target_format: wgpu::TextureFormat,
-    /// What a closed spectrogram would otherwise hold is the grid copy — up to
-    /// 15.7 MB for a whole-song ring at 4096 slabs — so a closed tab keeping
-    /// one is worth a sweep, and a pane hidden for a frame keeping one is worth
+    /// A closed spectrogram would otherwise hold its grid copy, so a closed
+    /// tab keeping one is worth a sweep, and a pane hidden for a frame is worth
     /// not rebuilding. The age it sweeps at is
     /// [`crate::pass_aged::TTL_PASSES`].
     panes: PassAged<SpectrogramPane>,
@@ -522,10 +521,8 @@ impl CallbackTrait for SpectrogramCallback {
             };
             // The whole ring in one write, so the slots the run does not cover
             // are zero rather than whatever the buffer held before — which is
-            // what lets one be kept above. A
-            // whole-song ring is 4096 x 3828 bytes = 15.7 MB, comfortably
-            // inside wgpu's default 128 MiB storage binding, and this runs
-            // only on a refold or a lost buffer.
+            // what lets one be kept above. This runs only on a refold or a
+            // lost buffer.
             let mut staging = vec![0u8; size as usize];
             for j in 0..run_slabs {
                 let at = slot_of(self.grid.first_key + j as i64, self.grid.capacity) as usize
@@ -2334,8 +2331,8 @@ mod tests {
     /// Two spectrograms in one frame keep their own grid copies, and a pane
     /// that stops drawing gives its copy back.
     ///
-    /// A whole-song ring is 15.7 MB, so a closed tab holding one is the reason
-    /// the sweep exists — and there is no teardown to hang it on, a closed tab
+    /// A closed tab holding a grid is the reason the sweep exists — and there
+    /// is no teardown to hang it on, a closed tab
     /// simply stopping calling back, so the sweep runs from whichever pane IS
     /// preparing.
     #[test]

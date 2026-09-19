@@ -118,18 +118,6 @@ impl Replay {
         }
     }
 
-    /// A [`harmonigraph_core::NoteRoll`] holding EVERY note in the take, laid out
-    /// from the start — for the whole-song render, where the roll shows the
-    /// whole piece at once rather than filling in up to `now`. Pitch comes from
-    /// the notes and their bends, exactly as the live tracker builds it.
-    pub fn full_roll(&self) -> harmonigraph_core::NoteRoll {
-        let mut tracker = harmonigraph_core::NoteTracker::new();
-        for record in &self.take.events {
-            record.apply(&mut tracker).expect("validated canonical take");
-        }
-        tracker.roll().clone()
-    }
-
     /// Whether every recorded event has been delivered.
     pub fn is_spent(&self) -> bool {
         self.next_note == self.take.events.len()
@@ -146,6 +134,16 @@ mod tests {
     use super::*;
     use harmonigraph_render::wgpu::TextureFormat;
     use harmonigraph_take::{Header, NoteKind, NoteRecord, ParamRecord};
+
+    // Independent of frame cadence: apply the complete validated event stream
+    // directly, so replay assertions retain an all-at-once observation path.
+    fn roll_from_all_events(take: &Take) -> harmonigraph_core::NoteRoll {
+        let mut tracker = harmonigraph_core::NoteTracker::new();
+        for record in &take.events {
+            record.apply(&mut tracker).expect("validated canonical take");
+        }
+        tracker.roll().clone()
+    }
 
     fn take_with(notes: Vec<NoteRecord>, params: Vec<ParamRecord>) -> Take {
         Take {
@@ -275,7 +273,7 @@ mod tests {
                 "actual Off does not repair source completeness"
             );
             replay.advance_to(&mut state.runtime, 5.0);
-            for roll in [state.runtime.tracker.roll(), &replay.full_roll()] {
+            for roll in [state.runtime.tracker.roll(), &roll_from_all_events(replay.take())] {
                 let note = roll.notes().next().unwrap();
                 assert_eq!(
                     (note.start, note.end, note.observed_until),
@@ -451,7 +449,7 @@ mod tests {
             replay.advance_to(&mut state.runtime, 0.5);
             assert!(replay.is_spent());
             let snapshot = roll_snapshot(state.runtime.tracker.roll());
-            assert_eq!(snapshot, roll_snapshot(&replay.full_roll()));
+            assert_eq!(snapshot, roll_snapshot(&roll_from_all_events(replay.take())));
             assert_eq!(snapshot.len(), 2);
             assert_eq!((snapshot[0].2, snapshot[0].3, snapshot[0].6), (0.01, Some(0.07), 60.25));
             assert_eq!(
@@ -611,7 +609,7 @@ mod tests {
         assert_eq!(state.runtime.tracker.held_count(), 0);
         assert!(replay.is_spent());
 
-        for roll in [state.runtime.tracker.roll(), &replay.full_roll()] {
+        for roll in [state.runtime.tracker.roll(), &roll_from_all_events(replay.take())] {
             let notes: Vec<_> =
                 roll.notes().map(|n| (n.source, n.start, n.end, n.end_pitch())).collect();
             assert_eq!(

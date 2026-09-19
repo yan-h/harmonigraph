@@ -47,26 +47,6 @@ use harmonigraph_scene::Gradient;
 /// finest rung of its ladder that fits a window inside this many slabs, so the
 /// image holds between half of them and all of them.
 pub(crate) const LIVE_SLAB_CAP: f32 = 1024.0;
-/// The same for the offline whole-song build, which spans an entire take rather
-/// than a scrolling window and so wants more of them.
-pub(crate) const WHOLE_SONG_SLAB_CAP: f32 = 4096.0;
-/// Columns per slab, at the finest slab the display can ask for: the margin that
-/// keeps every slab occupied when the two grids are independent (the analyzer
-/// counts samples, the slabs divide a window). At 1.0 they would beat against
-/// each other and leave slabs empty.
-pub(crate) const COLUMNS_PER_SLAB: f64 = 1.6;
-/// Never subdivide finer than the data arrives. A shorter bucket leaves empty
-/// buckets between columns, and the grid's linear time axis assumes
-/// evenly-spaced slabs — gaps there stretch the edge columns into flat streaks.
-/// Derived from the FFT rate rather than restated, because the two must move
-/// together and a stale copy of this number is exactly the bug that shows up as
-/// duplicated columns scrolling past.
-///
-/// The WHOLE-SONG build's floor. The live grid gets the same guarantee from
-/// [`live_slab`]'s ladder, whose lowest rung is two analysis intervals, so this
-/// no longer floors it.
-pub(crate) const MIN_BUCKET: f64 = crate::AudioSpectrum::FFT_INTERVAL * COLUMNS_PER_SLAB;
-
 /// The live grid's finest rung, in analysis intervals — see [`live_slab`].
 ///
 /// TWO, not one: the column grid and the slab grid share a period on the ladder
@@ -74,8 +54,7 @@ pub(crate) const MIN_BUCKET: f64 = crate::AudioSpectrum::FFT_INTERVAL * COLUMNS_
 /// so at one column per slab a boundary falling mid-interval leaves some slabs
 /// empty, and the uniform time axis then stretches the columns either side of an
 /// empty slab into a flat streak. At two, a phase offset costs a slab one of its
-/// columns and never both. It is [`COLUMNS_PER_SLAB`]'s job, done by the ladder
-/// instead of by a margin.
+/// columns and never both.
 const LADDER_FLOOR_COLUMNS: f64 = 2.0;
 
 /// The slab width a LIVE window is cut into: the analysis interval, doubled
@@ -168,7 +147,7 @@ fn held_slab(window: f64, target_cols: usize, held: Option<f64>) -> f64 {
 ///
 /// It used to absorb frame jitter, which was the common case: the FFT fired on
 /// frame boundaries, so one long frame left a slab with nothing in it. Columns
-/// now land on a sample grid [`COLUMNS_PER_SLAB`] finer than the narrowest slab
+/// now land on a sample grid finer than the narrowest live slab
 /// (see `AudioSpectrum::push_samples`), so an ordinary stream cannot skip one at
 /// all. What is left for this to cover is a real gap in the samples — a host
 /// dropout, the pane being switched on, a transport jump re-anchoring the grid.
@@ -179,9 +158,6 @@ const JITTER_SLABS: i64 = 1;
 
 /// Where the visible slabs sit in absolute time — everything the mesh's slab
 /// coordinate needs.
-///
-/// One shape for both builds: the live window's run and the whole-song fold's
-/// differ in how they were folded and in nothing the geometry can see.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TexLayout {
     /// Seconds one slab spans. Carried here because every mapping below reads it
@@ -391,17 +367,15 @@ impl GpuGrid {
     /// old, shorter extent until another column arrives (#714).
     fn hit(&self, plan: &Plan, history: &crate::SpectrumHistory) -> Option<TexLayout> {
         let sent = self.sent.as_ref().filter(|sent| sent.key == plan.key)?;
-        if !plan.key.whole
-            && history.get(plan.first).zip(history.back()).is_some_and(|(first, newest)| {
-                let target = (first.time / plan.bucket).floor() as i64;
-                let min_key = ((newest.time / plan.bucket).floor() as i64)
-                    .saturating_sub(plan.capacity.max(1) as i64 - 1);
-                // The same admitted first slab as SpectrogramAgg::window.
-                // A smaller budget may reuse a longer run in its existing
-                // buffer; the next column's build applies the smaller bound.
-                target.max(min_key) < sent.first_key
-            })
-        {
+        if history.get(plan.first).zip(history.back()).is_some_and(|(first, newest)| {
+            let target = (first.time / plan.bucket).floor() as i64;
+            let min_key = ((newest.time / plan.bucket).floor() as i64)
+                .saturating_sub(plan.capacity.max(1) as i64 - 1);
+            // The same admitted first slab as SpectrogramAgg::window.
+            // A smaller budget may reuse a longer run in its existing
+            // buffer; the next column's build applies the smaller bound.
+            target.max(min_key) < sent.first_key
+        }) {
             return None;
         }
         Some(sent.layout)
@@ -557,30 +531,13 @@ pub(crate) struct PaneView {
     pub(crate) window: f64,
     pub(crate) scale: PitchScale,
     pub(crate) cfg: SpectrumConfig,
-    /// The whole-song (offline playhead) layout rather than the live window.
-    pub(crate) whole: bool,
 }
 
 /// Which stored columns a frame draws — the other half of a [`Plan`]'s inputs.
 ///
-/// The whole-song arm counts its stored set, while the fold reads
-/// [`WholeSong::drawn_columns`](crate::WholeSong::drawn_columns) — so `start`
-/// reaches the key through nothing at all, and `span` only through `bucket`,
-/// which is many-to-one wherever [`MIN_BUCKET`] binds. Two windows on one
-/// column set can therefore mint the same key for different runs.
-///
-/// What makes that safe rather than the stale-key bug it looks like is that a
-/// [`WholeSong`](crate::WholeSong) and its window-bounded column set are built
-/// once per render, before the frame loop, and only its `roll` is written
-/// afterwards — so `start`, `span` and `columns.last()` are constants for the
-/// life of every key minted from them. It is safe by that fact and not by the
-/// key, which is why the fact is written down: a
-/// `WholeSong` that changed window mid-render would draw the previous
-/// window's grid at the previous window's geometry, and no assertion here
-/// would see it.
 pub(crate) struct Columns {
     /// The oldest in-window column; it advances as the window scrolls one off
-    /// the far end. Whole-song draws its entire fixed set, so 0.
+    /// the far end.
     pub(crate) first: usize,
     pub(crate) len: usize,
     /// The newest column's time, which moves whenever a fresh column arrives —
@@ -610,7 +567,6 @@ pub(crate) struct RunKey {
     cols_len: usize,
     newest_bits: u64,
     bucket_bits: u64,
-    whole: bool,
 }
 
 /// What this frame's heatmap needs folded, and the key that says whether the
@@ -635,8 +591,7 @@ pub(crate) struct Plan {
     /// still under a SPAN drag: the widest run a window can have at this slab
     /// width is `target_cols` of them, whatever the Span is doing inside that
     /// rung. What holds it still under a PANE drag is [`ring_slots`] — the
-    /// pane's own pixel count moves every frame of one. Unused by the
-    /// whole-song build, whose run is its own capacity.
+    /// pane's own pixel count moves every frame of one.
     capacity: usize,
     first: usize,
     pub(crate) key: RunKey,
@@ -658,24 +613,13 @@ impl Plan {
         // the depth axis, under the cap the slab count takes.
         let rows = pitch_pixels(view.pitch_len, view.ppp);
         let depth_px = (view.depth_len * view.ppp).round();
-        // Whole-song spans an entire take, so it needs a higher cap than the
-        // live window.
-        let col_cap = if view.whole { WHOLE_SONG_SLAB_CAP } else { LIVE_SLAB_CAP };
-        let target_cols = depth_px.clamp(2.0, col_cap) as usize;
-        let bucket = if view.whole {
-            // The offline build draws its own fixed column set rather than the
-            // live store's, so it shares no ladder with it and has nothing to
-            // hold still — its grid is laid out once and cached for the render.
-            (view.window / target_cols as f64).max(MIN_BUCKET)
-        } else {
-            held_slab(view.window, target_cols, held)
-        };
+        let target_cols = depth_px.clamp(2.0, LIVE_SLAB_CAP) as usize;
+        let bucket = held_slab(view.window, target_cols, held);
         let key = RunKey {
             first: columns.first,
             cols_len: columns.len,
             newest_bits: columns.newest.to_bits(),
             bucket_bits: bucket.to_bits(),
-            whole: view.whole,
         };
         Plan { rows, bucket, capacity: ring_slots(target_cols), first: columns.first, key }
     }
@@ -761,10 +705,8 @@ pub(crate) fn read_of(view: &PaneView, rows: usize) -> SpectrogramRead {
 pub(crate) fn build(
     history: &crate::SpectrumHistory,
     surfaces: &mut crate::spectrum::SpectrogramSurfaces,
-    whole: Option<&crate::WholeSong>,
     surface: usize,
     plan: &Plan,
-    view: &PaneView,
 ) -> Option<TexLayout> {
     let bucket = plan.bucket;
     // Aggregate the in-window columns into one slab per depth pixel by a FIXED
@@ -772,22 +714,8 @@ pub(crate) fn build(
     // space: the rows read them in the fragment shader, so the fold is blind to
     // the pitch axis and a zoom or pan of it re-reads this grid instead of
     // re-walking the store.
-    let (centers, power) = match whole {
-        // Offline whole-song: a fixed column set, folded once per render — a
-        // plain batch aggregate over the columns the depth axis can draw. The
-        // stored set includes analyzer pre-roll, so the fold still owns the
-        // exact window trim (see
-        // [`WholeSong::drawn_columns`](crate::WholeSong::drawn_columns)).
-        Some(ws) => aggregate_slabs(ws.drawn_columns(view.window), bucket),
-        // Live: fold only the new column(s) into the kept slab grid instead of
-        // rescanning the whole window every rebuild. `history` and the
-        // aggregator are disjoint fields of `spectrum`.
-        None => {
-            let hist = history;
-            let agg = surfaces.at(surface).agg.get_or_insert_with(SpectrogramAgg::new);
-            agg.window(hist, plan.first, bucket, plan.capacity)
-        }
-    };
+    let agg = surfaces.at(surface).agg.get_or_insert_with(SpectrogramAgg::new);
+    let (centers, power) = agg.window(history, plan.first, bucket, plan.capacity);
     let w = centers.len();
     if w < 2 {
         return None;
@@ -801,9 +729,7 @@ pub(crate) fn build(
         return None;
     }
     let first_key = (centers[0] / bucket).floor() as i64;
-    // The whole-song run is its own capacity: it is folded once for the render
-    // and never scrolls, so there is no lap for a key to come round on.
-    let capacity = if view.whole { w } else { ring_capacity(plan.capacity, w) };
+    let capacity = ring_capacity(plan.capacity, w);
     let layout = TexLayout { bucket, t_origin, tex_span };
     surfaces.at(surface).gpu.accept(plan.key.clone(), first_key, capacity, power, layout);
     Some(layout)
@@ -815,21 +741,14 @@ pub(crate) fn build(
 pub(crate) fn run_for(
     history: &crate::SpectrumHistory,
     surfaces: &mut crate::spectrum::SpectrogramSurfaces,
-    whole: Option<&crate::WholeSong>,
     surface: usize,
     plan: &Plan,
-    view: &PaneView,
 ) -> Option<TexLayout> {
-    // The width this frame settles on is the next frame's incumbent — the LIVE
-    // width alone, since only that arm reads it. The whole-song build cuts its
-    // grid straight from the window rather than off the ladder, so its bucket
-    // is not a rung, and a live frame holding one would sit at a width the
-    // ladder never offers for as long as the window stayed near it. See
-    // [`Plan::new`].
-    surfaces.at(surface).held_bucket = (!view.whole).then_some(plan.bucket);
+    // The next frame retains this slab width until it crosses a ladder rung.
+    surfaces.at(surface).held_bucket = Some(plan.bucket);
     match surfaces.at(surface).gpu.hit(plan, history) {
         Some(layout) => Some(layout),
-        None => build(history, surfaces, whole, surface, plan, view),
+        None => build(history, surfaces, surface, plan),
     }
 }
 
@@ -851,6 +770,7 @@ pub(crate) fn frame_data(
 /// and represented counts, then divide once before quantizing. Coarse history
 /// contributes the same weight as the raw measurements it replaced.
 /// Pitch, level, style and palette remain independent downstream reads.
+#[cfg(test)]
 fn aggregate_slabs<'a>(
     columns: impl Iterator<Item = &'a crate::SpectrogramColumn>,
     bucket: f64,
@@ -1050,8 +970,7 @@ impl SlabGrid {
 /// crossing a ladder rung), a backward transport jump, or a window that jumped
 /// outside the kept grid falls back to a full rebuild — each of which is just
 /// `aggregate_slabs` again, so correctness never rides on the fast path alone;
-/// and the refold adds linear powers, then quantizes once per slab. The offline whole-song path does NOT use this
-/// (its column set is fixed and already cached after the first frame).
+/// and the refold adds linear powers, then quantizes once per slab.
 ///
 /// **A folded slab is never recomputed, even when the store re-writes the
 /// columns behind it.** Columns arrive in time order, so no future column can
@@ -1064,10 +983,6 @@ impl SlabGrid {
 /// its energy across a boundary the raw columns respected — so the two
 /// disagree, and this keeps what it folded from the finer data rather than
 /// re-reading the coarser.
-///
-/// That is also what the offline renderer sees: [`crate::WholeSong`] analyses
-/// its render window into raw columns and never merges them, so a grid built
-/// from raw columns is the picture the live heatmap is meant to match.
 ///
 /// Treating the merge as a reason to fall back instead is what this replaced,
 /// and it was not a small cost: it fired on every frame at any Span past the
@@ -1300,8 +1215,7 @@ fn slab_at(layout: &TexLayout, t: f64) -> f32 {
 /// point: the column lands somewhere inside its slab, so up to half a slab of
 /// drawn strip can sit past the last centre with nothing on its far side to
 /// blend towards. That sliver is filled from the newest column, the only thing
-/// the analyzer has said about the stretch. The whole-song build overruns at
-/// its own trailing end for the same reason.
+/// the analyzer has said about the stretch.
 pub(crate) fn hold_time(layout: &TexLayout) -> f64 {
     layout.t_origin + layout.tex_span - 0.5 * layout.bucket
 }
@@ -1476,7 +1390,6 @@ mod tests {
             cols_len: len,
             newest_bits: newest.to_bits(),
             bucket_bits: bucket.to_bits(),
-            whole: false,
         }
     }
 
@@ -2209,14 +2122,13 @@ mod tests {
     #[test]
     fn the_plan_decides_the_layout_without_a_frame() {
         let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
-        let view = |ppp: f32, pitch_len: f32, depth_len: f32, window: f64, whole: bool| PaneView {
+        let view = |ppp: f32, pitch_len: f32, depth_len: f32, window: f64| PaneView {
             ppp,
             pitch_len,
             depth_len,
             window,
             scale,
             cfg: SpectrumConfig::default(),
-            whole,
         };
         let columns = Columns { first: 3, len: 400, newest: 12.0 };
         let plan = |v: &PaneView| Plan::new(v, &columns, None);
@@ -2225,8 +2137,7 @@ mod tests {
         // the density it will be drawn at, rather than upsampled from half of
         // it — and to the pixel, since a row costs a fragment's arithmetic and
         // no memory at all.
-        let rows_at =
-            |ppp: f32, pitch: f32| plan(&view(ppp, pitch, 800.0, 12.0, false)).rows as f32;
+        let rows_at = |ppp: f32, pitch: f32| plan(&view(ppp, pitch, 800.0, 12.0)).rows as f32;
         for (ppp, pitch) in [(1.0, 300.0), (2.0, 300.0), (1.0, 517.0), (2.0, 517.0)] {
             assert_eq!(rows_at(ppp, pitch), (pitch * ppp).round(), "rows are the pane's pixels");
         }
@@ -2252,11 +2163,11 @@ mod tests {
         // streaks. Two columns to a slab, since the grids share the ladder's
         // period but not its phase.
         let floor = crate::AudioSpectrum::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
-        let dense = plan(&view(2.0, 300.0, 4000.0, 1.0, false));
+        let dense = plan(&view(2.0, 300.0, 4000.0, 1.0));
         assert!(dense.bucket >= floor, "slab {} is finer than the data", dense.bucket);
         // And it is always ON the ladder, so it lands on the store's own grid.
         for window in [1.0f64, 12.0, 30.0, 600.0] {
-            let steps = (plan(&view(2.0, 300.0, 4000.0, window, false)).bucket / floor).log2();
+            let steps = (plan(&view(2.0, 300.0, 4000.0, window)).bucket / floor).log2();
             assert!((steps - steps.round()).abs() < 1e-9, "a {window} s Span fell off the ladder");
         }
 
@@ -2264,226 +2175,33 @@ mod tests {
         // keep up with — the cap `SpectrumHistory::COARSE_COLUMNS` is sized
         // against.
         for window in [1.0f64, 12.0, 60.0, 600.0] {
-            let p = plan(&view(2.0, 300.0, 4000.0, window, false));
+            let p = plan(&view(2.0, 300.0, 4000.0, window));
             let slabs = window / p.bucket;
             assert!(
                 slabs <= LIVE_SLAB_CAP as f64 + 1.0,
                 "a {window} s Span asks for {slabs} slabs, past the {LIVE_SLAB_CAP} cap",
             );
         }
-        // The whole-song build spans an entire take rather than a window, so it
-        // is allowed the higher cap.
-        let take = plan(&view(2.0, 300.0, 4000.0, 600.0, true));
-        assert!(
-            600.0 / take.bucket > LIVE_SLAB_CAP as f64,
-            "the offline build should out-resolve the live cap",
-        );
-
         // A wider pane buys finer slabs, up to the cap — the pane's size is an
         // INPUT to the grid, which is why resizing rebuilds it.
-        let narrow = plan(&view(1.0, 300.0, 200.0, 30.0, false));
-        let wide = plan(&view(1.0, 300.0, 900.0, 30.0, false));
+        let narrow = plan(&view(1.0, 300.0, 200.0, 30.0));
+        let wide = plan(&view(1.0, 300.0, 900.0, 30.0));
         assert!(wide.bucket < narrow.bucket, "a wider pane should resolve time more finely");
 
         // The key travels with the plan, and names the FOLD: a density change
         // that moves no slab boundary re-reads the run it already has, while one
         // that crosses a ladder rung does not.
-        let at_1x = plan(&view(1.0, 300.0, 800.0, 12.0, false)).key;
-        assert_eq!(at_1x, plan(&view(1.0, 300.0, 800.0, 12.0, false)).key);
+        let at_1x = plan(&view(1.0, 300.0, 800.0, 12.0)).key;
+        assert_eq!(at_1x, plan(&view(1.0, 300.0, 800.0, 12.0)).key);
         assert_eq!(
             at_1x,
-            plan(&view(1.0, 900.0, 800.0, 12.0, false)).key,
+            plan(&view(1.0, 900.0, 800.0, 12.0)).key,
             "a taller pane reads the same slabs and must not refold",
         );
         assert_ne!(
             at_1x,
-            plan(&view(1.0, 300.0, 200.0, 12.0, false)).key,
+            plan(&view(1.0, 300.0, 200.0, 12.0)).key,
             "a quarter of the depth pixels crosses a rung, which is a different fold",
-        );
-    }
-
-    /// **A take longer than the render's window must not fold past the slab
-    /// cap.**
-    ///
-    /// The sweep above cannot see this: it derives the whole-song slab count
-    /// from `window / bucket`, and the two numbers part company exactly here.
-    /// `bucket` is cut for the WINDOW ([`Plan::new`]) while the run's length
-    /// comes from the columns the fold walks. A caller can supply a set wider
-    /// than the window, and ten seconds selected from three minutes would then
-    /// fold to some 14 000 slabs — several times the size of the picture that
-    /// shows it, on time no pixel reaches.
-    ///
-    /// FOLDED rather than counted. The length is a property of
-    /// [`SlabGrid::fold`]'s absolute keying — an empty slab still takes a row,
-    /// so the count follows the columns' EXTENT and not their number — and an
-    /// arithmetic restatement of that is a restatement of the thing under test.
-    /// It is also what lets the fixture be sparse: columns half a second apart
-    /// reach the same 14 000 slabs as the analyzer's own rate for a sixtieth of
-    /// the memory.
-    ///
-    /// The window starts are deliberately off the slab grid: a window whose ends
-    /// both fall mid-slab is the case that spends a slab at each end.
-    #[test]
-    fn a_take_longer_than_the_render_window_folds_inside_the_slab_cap() {
-        const TAKE: f64 = 180.0;
-        let columns: Vec<_> = (0..=360).map(|i| col(i as f64 * 0.5, &[(1000, 1.0)])).collect();
-        let mut ws = crate::WholeSong {
-            start: 0.0,
-            span: TAKE,
-            columns,
-            roll: harmonigraph_core::NoteRoll::default(),
-        };
-        let plan_for = |ppp: f32, depth: f32, span: f64| {
-            Plan::new(
-                &PaneView {
-                    ppp,
-                    pitch_len: 1000.0,
-                    depth_len: depth,
-                    window: span,
-                    scale: SWEEP_SCALE,
-                    cfg: SpectrumConfig { roll_seconds: span as f32, ..SpectrumConfig::default() },
-                    whole: true,
-                },
-                &Columns { first: 0, len: 361, newest: TAKE },
-                None,
-            )
-        };
-
-        // The cap, plus the slab each end of the window can spend by falling
-        // mid-slab.
-        let ceiling = WHOLE_SONG_SLAB_CAP as usize + 2;
-        for ppp in [1.0f32, 2.0, 3.0] {
-            for depth in [800.0f32, 2000.0, 8000.0] {
-                for span in [2.5f64, 10.0, 47.0, TAKE] {
-                    for offset in [0.0f64, 0.331, 60.017] {
-                        ws.start = offset.min(TAKE - span);
-                        ws.span = span;
-                        let p = plan_for(ppp, depth, span);
-                        let (centers, _) = aggregate_slabs(ws.drawn_columns(span), p.bucket);
-                        assert!(
-                            centers.len() <= ceiling,
-                            "a {span} s window at {} of a {TAKE} s take folds to {} slabs, \
-                             past the {ceiling} the cap allows",
-                            ws.start,
-                            centers.len(),
-                        );
-                    }
-                }
-            }
-        }
-
-        // And the untrimmed fold really did overrun, so a sweep that passes is
-        // reading the trim rather than a take that happened to fit.
-        ws.start = 60.0;
-        ws.span = 10.0;
-        let p = plan_for(2.0, 800.0, 10.0);
-        let (all, all_power) = aggregate_slabs(ws.columns.iter(), p.bucket);
-        assert!(
-            all.len() > ceiling,
-            "the fixture no longer reproduces #367: the whole take folds to {} slabs, \
-             inside the {ceiling} the cap allows",
-            all.len(),
-        );
-
-        // Both ENDS are the window's own, inclusive. A column stamped exactly
-        // at an edge is inside the region the axis draws — `frac` gives it 0
-        // or 1 — so dropping it would shorten the image by a slab at a
-        // boundary that is otherwise the commonest one there is: `--start 0`
-        // puts a column on the near edge whenever the hop divides it.
-        ws.start = 60.0;
-        ws.span = 10.0;
-        let edges: Vec<f64> = ws.drawn_columns(ws.span).map(|c| c.time).collect();
-        assert_eq!(
-            (edges.first().copied(), edges.last().copied()),
-            (Some(60.0), Some(70.0)),
-            "the window's own endpoints were trimmed off it",
-        );
-
-        // And the trim moved nothing that was drawn. The slab keys are
-        // ABSOLUTE, so the window's slabs are the same slabs at the same times
-        // carrying the same bytes — the trimmed grid is a contiguous run of the
-        // untrimmed one, which is the whole claim that this costs no picture.
-        let (kept, kept_power) = aggregate_slabs(ws.drawn_columns(10.0), p.bucket);
-        let at = all
-            .iter()
-            .position(|c| (c - kept[0]).abs() < 1e-9)
-            .expect("the window's first slab is one of the take's");
-        assert_eq!(&all[at..at + kept.len()], &kept[..], "the window's slabs moved in time");
-        assert_eq!(
-            &all_power[at * SPECTRUM_BINS..(at + kept.len()) * SPECTRUM_BINS],
-            &kept_power[..],
-            "the window's slabs changed value",
-        );
-    }
-
-    /// **The fold is trimmed to the window the AXIS draws, not to the span the
-    /// take was asked for** — the two are the same number only above the axis'
-    /// own floor.
-    ///
-    /// `TimeAxis::new` puts a floor of 0.05 s under the window it maps time
-    /// across, so a render shorter than that draws a depth region reaching past
-    /// `start + span`, and the columns out there have a real depth on screen.
-    /// Trimming to `span` dropped them: a 20 ms render folded out to 60.032 of
-    /// a region drawn to 60.05, leaving 36% of the heatmap as bare bed with the
-    /// columns for it sitting unused in `WholeSong::columns`.
-    ///
-    /// Through [`build`] rather than
-    /// [`drawn_columns`](crate::WholeSong::drawn_columns) directly, and that is
-    /// the whole point of the test: what broke was not the trim but WHICH
-    /// window `build` hands it, so a test that passes the window in itself
-    /// asserts its own arithmetic and would have passed throughout. The
-    /// returned [`TexLayout`] is where the answer shows.
-    ///
-    /// A sub-50 ms export is degenerate (one frame at 30 fps), which is why the
-    /// fix is to hand the trim the plan's own `window` rather than to lower the
-    /// axis' floor: two expressions of one window are what drift, and the
-    /// degenerate case is only where the drift becomes visible.
-    #[test]
-    fn the_fold_covers_the_whole_depth_region_a_short_render_draws() {
-        // The axis' own floor, from `TimeAxis::new`.
-        const FLOOR: f64 = 0.05;
-        let (start, span) = (60.0, 0.02);
-        // Columns at the analyzer's rate across the floored axis window and
-        // past it, so handing `build` the requested span would end the run early.
-        let columns: Vec<_> = (0..40)
-            .map(|i| col(59.9 + i as f64 * crate::AudioSpectrum::FFT_INTERVAL, &[(1000, 1.0)]))
-            .collect();
-        let ws =
-            crate::WholeSong { start, span, columns, roll: harmonigraph_core::NoteRoll::default() };
-        // What the pane hands the plan: `time.window()`, the FLOORED one.
-        let window = ws.span.max(FLOOR);
-        let view = PaneView {
-            ppp: 2.0,
-            pitch_len: 500.0,
-            depth_len: 300.0,
-            window,
-            scale: SWEEP_SCALE,
-            cfg: SpectrumConfig { roll_seconds: window as f32, ..SpectrumConfig::default() },
-            whole: true,
-        };
-        let columns_in = Columns { first: 0, len: ws.columns.len(), newest: 60.2 };
-        let plan = Plan::new(&view, &columns_in, None);
-        let spectrum = crate::AudioSpectrum::default();
-        let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
-        let layout = build(spectrum.history(), &mut surfaces, Some(&ws), 0, &plan, &view)
-            .expect("a whole-song fold over columns this dense");
-
-        // The last column the axis puts inside the region. The run has to reach
-        // it: `depth_of` maps both through the same `frac`, so a run ending
-        // short of it leaves the rest of the region bare.
-        let last_on_screen = ws
-            .columns
-            .iter()
-            .rev()
-            .find(|c| c.time <= start + window)
-            .expect("the fixture spans the window")
-            .time;
-        let reach = layout.t_origin + layout.tex_span;
-        assert!(
-            reach >= last_on_screen,
-            "the run reaches {reach}, short of the column at {last_on_screen} that the \
-             region still draws — {:.0}% of the depth region is bare",
-            100.0 * (start + window - reach) / window,
         );
     }
 
@@ -2930,83 +2648,6 @@ mod tests {
         steps > 0.0 && (steps.log2() - steps.log2().round()).abs() < 1e-9
     }
 
-    /// A live frame drawn after a whole-song one cuts its grid on a LADDER
-    /// RUNG, not on the width the whole-song build happened to leave behind.
-    ///
-    /// The two builds share a surface but not a ladder: whole-song cuts its
-    /// grid straight from the window (`window / target_cols`), so its width is
-    /// an arbitrary real and not a rung. Held into a live frame it would sit
-    /// there for as long as the window stayed near it — and the ladder's
-    /// guarantee that the STORE is fine enough to fill the grid
-    /// (see [`live_slab`]) is a claim about rungs, so a live grid cut at a
-    /// non-rung width has nothing standing behind it.
-    ///
-    /// The fixture is built to be held if anything is: the whole-song width is
-    /// coarser than the live rung and inside the live window's [`RUNG_HOLD`]
-    /// margin, which are the two things [`held_slab`] asks.
-    #[test]
-    fn a_live_frame_after_a_whole_song_one_cuts_on_a_rung() {
-        // A whole-song frame at 50 s over 1000 slabs: a width of 0.05 s, which
-        // is between the 32 ms and 64 ms rungs and so on neither.
-        let (start, span) = (0.0, 50.0);
-        let columns: Vec<_> = (0..((span / crate::AudioSpectrum::FFT_INTERVAL) as usize))
-            .map(|i| col(i as f64 * crate::AudioSpectrum::FFT_INTERVAL, &[(1000, 1.0)]))
-            .collect();
-        let ws =
-            crate::WholeSong { start, span, columns, roll: harmonigraph_core::NoteRoll::default() };
-        let mut spectrum = crate::AudioSpectrum::default();
-        let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
-        let whole_view = PaneView {
-            ppp: 2.0,
-            pitch_len: 300.0,
-            depth_len: 500.0,
-            window: span,
-            scale: SWEEP_SCALE,
-            cfg: SpectrumConfig { roll_seconds: span as f32, ..SpectrumConfig::default() },
-            whole: true,
-        };
-        let whole_columns = Columns { first: 0, len: ws.columns.len(), newest: span };
-        let whole_plan = Plan::new(&whole_view, &whole_columns, None);
-        assert!(
-            !is_rung(whole_plan.bucket),
-            "the fixture's whole-song width {} IS a rung, so it cannot be told apart",
-            whole_plan.bucket,
-        );
-        run_for(spectrum.history(), &mut surfaces, Some(&ws), 0, &whole_plan, &whole_view)
-            .expect("a whole run");
-
-        // The live frame on that same surface. Its own rung is 32 ms, and the
-        // whole-song width above is both coarser and inside the hold's margin
-        // (30 s is past 1024 * 0.05 * 0.5 * 0.95), so a held one would stick.
-        let mut clock = 0.0;
-        let mut bins = [0.0f32; SPECTRUM_BINS];
-        bins[1000] = 0.8;
-        while clock < 40.0 {
-            spectrum.push_history(clock, &bins);
-            clock += crate::AudioSpectrum::FFT_INTERVAL;
-        }
-        let live_view = PaneView {
-            window: 30.0,
-            depth_len: LIVE_SLAB_CAP * 0.5,
-            whole: false,
-            cfg: SpectrumConfig { roll_seconds: 30.0, ..SpectrumConfig::default() },
-            ..whole_view
-        };
-        let hist = spectrum.history();
-        let live_columns = Columns {
-            first: hist.partition_point(|c| c.time < clock - live_view.window).saturating_sub(1),
-            len: hist.len(),
-            newest: hist.back().map_or(clock, |c| c.time),
-        };
-        let held = surfaces.at(0).held_bucket;
-        let live_plan = Plan::new(&live_view, &live_columns, held);
-        assert!(
-            is_rung(live_plan.bucket),
-            "a live frame after a whole-song one was cut at {} s, off the ladder",
-            live_plan.bucket,
-        );
-    }
-
     /// The hold reaches the pane through the SURFACE: a Span dithering on a
     /// boundary refolds twice, not once a frame.
     ///
@@ -3038,7 +2679,6 @@ mod tests {
             window,
             scale: SWEEP_SCALE,
             cfg: SpectrumConfig { roll_seconds: window as f32, ..SpectrumConfig::default() },
-            whole: false,
         };
         let step = (-(DEPTH_ZOOM_PER_DRAG_POINT as f64)).exp();
 
@@ -3060,8 +2700,7 @@ mod tests {
             let held = surfaces.at(0).held_bucket;
             let plan = Plan::new(&view, &columns, held);
             buckets.insert((plan.bucket * 1e6).round() as i64);
-            run_for(spectrum.history(), &mut surfaces, None, 0, &plan, &view)
-                .expect("a run to draw");
+            run_for(spectrum.history(), &mut surfaces, 0, &plan).expect("a run to draw");
         }
 
         // The opening frame's rung and the one it steps up to, and nothing after.
@@ -3095,7 +2734,6 @@ mod tests {
             window: 1.5,
             scale: SWEEP_SCALE,
             cfg: SpectrumConfig { roll_seconds: 1.5, ..SpectrumConfig::default() },
-            whole: false,
         };
         let columns = |len: usize, newest: f64| Columns { first: 0, len, newest };
         let fold = |spectrum: &mut crate::AudioSpectrum,
@@ -3103,8 +2741,7 @@ mod tests {
                     view: &PaneView,
                     cols: &Columns| {
             let plan = Plan::new(view, cols, None);
-            let layout =
-                run_for(spectrum.history(), surfaces, None, 0, &plan, view).expect("a run to draw");
+            let layout = run_for(spectrum.history(), surfaces, 0, &plan).expect("a run to draw");
             let sent = surfaces.at(0).gpu.sent.as_ref().expect("a run was accepted");
             let held = (layout, sent.run.clone(), sent.dirty.clone());
             // The frame drew, which is what entitles the next one to a delta.
@@ -3169,16 +2806,13 @@ mod tests {
                 window: span,
                 scale: SWEEP_SCALE,
                 cfg: SpectrumConfig::default(),
-                whole: false,
             };
             let initial = Plan::new(&view, &columns, None);
             assert_eq!((initial.bucket, initial.capacity), (bucket, 264));
             // Docked pane and preview start on the same clipped run, but each
             // must recover its own extent when it is resized.
             for surface in 0..2 {
-                let old =
-                    run_for(spectrum.history(), &mut surfaces, None, surface, &initial, &view)
-                        .unwrap();
+                let old = run_for(spectrum.history(), &mut surfaces, surface, &initial).unwrap();
                 assert!(old.t_origin <= newest - span && old.t_origin > newest - 2.0 * span);
                 acknowledge(&surfaces.at(surface).gpu);
             }
@@ -3196,8 +2830,7 @@ mod tests {
                     );
                 }
                 let recovered =
-                    run_for(spectrum.history(), &mut surfaces, None, surface, &resize, &view)
-                        .unwrap();
+                    run_for(spectrum.history(), &mut surfaces, surface, &resize).unwrap();
                 assert!(
                     recovered.t_origin <= newest - 2.0 * span,
                     "retained extent stayed clipped"
@@ -3222,7 +2855,7 @@ mod tests {
                     let plan = Plan::new(&view, &columns, held);
                     assert_eq!(plan.key, initial.key);
                     assert_eq!(
-                        run_for(spectrum.history(), &mut surfaces, None, surface, &plan, &view),
+                        run_for(spectrum.history(), &mut surfaces, surface, &plan),
                         Some(recovered)
                     );
                     let state = surfaces.at(surface);
@@ -3262,12 +2895,10 @@ mod tests {
             window: 4.0,
             scale: SWEEP_SCALE,
             cfg: SpectrumConfig::default(),
-            whole: false,
         };
         let initial = Plan::new(&view, &columns, None);
         for surface in 0..2 {
-            let layout =
-                run_for(spectrum.history(), &mut surfaces, None, surface, &initial, &view).unwrap();
+            let layout = run_for(spectrum.history(), &mut surfaces, surface, &initial).unwrap();
             let run = surfaces.at(surface).gpu.sent.as_ref().unwrap().run.clone();
             acknowledge(&surfaces.at(surface).gpu);
             // Cross the capacity boundary in both directions while the bucket
@@ -3285,7 +2916,7 @@ mod tests {
                 let plan = Plan::new(&view, &columns, held);
                 assert_eq!(plan.key, initial.key);
                 assert_eq!(
-                    run_for(spectrum.history(), &mut surfaces, None, surface, &plan, &view),
+                    run_for(spectrum.history(), &mut surfaces, surface, &plan),
                     Some(layout)
                 );
                 let state = surfaces.at(surface);
@@ -3329,7 +2960,6 @@ mod tests {
             window: 1.5,
             scale: SWEEP_SCALE,
             cfg: SpectrumConfig { roll_seconds: 1.5, ..SpectrumConfig::default() },
-            whole: false,
         };
         // A fresh surface, filled past the window, and the columns that carry
         // it one slab further on. Replayed twice, so the two runs differ only
@@ -3349,8 +2979,7 @@ mod tests {
                         newest: f64,
                         len: usize| {
                 let plan = Plan::new(&view, &Columns { first: 0, len, newest }, None);
-                run_for(spectrum.history(), surfaces, None, 0, &plan, &view)
-                    .expect("a run to draw");
+                run_for(spectrum.history(), surfaces, 0, &plan).expect("a run to draw");
                 let sent = surfaces.at(0).gpu.sent.as_ref().expect("accepted");
                 (sent.first_key, sent.run.len() / SPECTRUM_BINS, sent.dirty.len())
             };
@@ -3754,7 +3383,6 @@ mod tests {
             window: 12.0,
             scale,
             cfg: SpectrumConfig::default(),
-            whole: false,
         };
         let columns = Columns { first: 3, len: 200, newest: 5.0 };
         let key = |v: &PaneView, c: &Columns| Plan::new(v, c, None).key;
@@ -3772,7 +3400,6 @@ mod tests {
         }
         // The slab width, through the ladder, and the build path.
         assert_ne!(base, key(&PaneView { depth_len: 200.0, ..base_view }, &columns));
-        assert_ne!(base, key(&PaneView { whole: true, ..base_view }, &columns));
 
         // And everything that is a UNIFORM: the rows, the pitch range and every
         // colour input read the run rather than deciding it, so none of them may
@@ -3942,15 +3569,7 @@ mod tests {
         /// The half of a [`PaneView`] [`read_of`] reads; the rest decides a fold
         /// that no test here performs.
         fn view_of(scale: PitchScale, cfg: SpectrumConfig) -> PaneView {
-            PaneView {
-                ppp: 1.0,
-                pitch_len: 1.0,
-                depth_len: 1.0,
-                window: 1.0,
-                scale,
-                cfg,
-                whole: false,
-            }
+            PaneView { ppp: 1.0, pitch_len: 1.0, depth_len: 1.0, window: 1.0, scale, cfg }
         }
 
         /// A grid the callback takes, keyed from 0 in a ring exactly the run's
@@ -4097,7 +3716,6 @@ mod tests {
                 window,
                 scale: whole_axis(),
                 cfg: SpectrumConfig { roll_seconds: window as f32, ..SpectrumConfig::default() },
-                whole: false,
             }
         }
 
@@ -4189,7 +3807,7 @@ mod tests {
                 let uploads = surfaces.at(0).gpu.full_uploads();
                 let refolds = surfaces.at(0).agg.as_ref().map_or(0, |a| a.rebuilds());
                 let hit = surfaces.at(0).gpu.hit(&plan, &spectrum.history).is_some();
-                run_for(spectrum.history(), surfaces, None, 0, &plan, view).expect("a run to draw");
+                run_for(spectrum.history(), surfaces, 0, &plan).expect("a run to draw");
                 t.folds += u32::from(!hit);
                 t.rebuilds += u32::from(surfaces.at(0).gpu.full_uploads() > uploads);
                 t.backwards += u32::from(
@@ -4306,8 +3924,7 @@ mod tests {
                 newest: hist.back().map_or(tally.clock, |c| c.time),
             };
             let plan = Plan::new(&view, &columns, None);
-            run_for(spectrum.history(), &mut surfaces, None, 0, &plan, &view)
-                .expect("a run to draw");
+            run_for(spectrum.history(), &mut surfaces, 0, &plan).expect("a run to draw");
             let (moved, shades) = frame_data(&mut surfaces, 0, &cfg).expect("a grid to draw");
             assert!(!moved.dirty.is_empty(), "nothing moved, so nothing could be withheld");
             let read = read_of(&view, plan.rows);
@@ -4387,8 +4004,7 @@ mod tests {
                     newest: hist.back().map_or(now, |c| c.time),
                 };
                 let plan = Plan::new(&view, &columns, None);
-                run_for(spectrum.history(), &mut surfaces, None, 0, &plan, &view)
-                    .expect("a run to draw");
+                run_for(spectrum.history(), &mut surfaces, 0, &plan).expect("a run to draw");
                 let (grid, _) = frame_data(&mut surfaces, 0, &cfg).expect("a grid to draw");
                 let slabs = (grid.run.len() / SPECTRUM_BINS) as u32;
                 let first_slot = grid.first_key.rem_euclid(i64::from(grid.capacity)) as u32;
@@ -4968,7 +4584,6 @@ mod tests {
                     window,
                     scale: whole_axis(),
                     cfg,
-                    whole: false,
                 };
                 let hist = spectrum.history();
                 let columns = Columns {
@@ -4977,8 +4592,7 @@ mod tests {
                     newest: hist.back().map_or(*clock, |c| c.time),
                 };
                 let plan = Plan::new(&view, &columns, None);
-                run_for(spectrum.history(), surfaces, None, 0, &plan, &view)
-                    .expect("a run to draw");
+                run_for(spectrum.history(), surfaces, 0, &plan).expect("a run to draw");
                 let (grid, shades) = frame_data(surfaces, 0, &cfg).expect("a grid to draw");
                 let slabs = (grid.run.len() / SPECTRUM_BINS) as u32;
                 let read = read_of(&view, plan.rows);

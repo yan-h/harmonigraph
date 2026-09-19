@@ -268,8 +268,7 @@ struct Occupancy {
 ///     from 12 names to 7 and moves every one.
 ///   - What an offer must clear is read off this grid while the name is DRAWN
 ///     at its own width, so a name wider than its lane's overruns the one
-///     before it — consecutive `E♯-5↓` overlap by 4.69 points live, and up to
-///     14.11 in the whole-song layout.
+///     before it — consecutive `E♯-5↓` overlap by 4.69 points.
 ///
 /// Both are left standing because every local repair measured worse, and the
 /// two obvious ones badly: sizing the grid at the lane's CENTRE pitch names a
@@ -483,7 +482,7 @@ pub(super) fn plan(
         return Vec::new();
     }
     let time = TimeAxis::new(state, split, now);
-    let anchor = Anchor::of(&time, cfg);
+    let anchor = Anchor::of(cfg);
     let roll = state.roll();
 
     let size = LABEL_PT * scales.label;
@@ -507,11 +506,7 @@ pub(super) fn plan(
     // ...and which way it lies on SCREEN, which is the same fact in the other
     // currency: from the ribbon's head the name runs into the picture (with
     // increasing depth), from its onset back out toward the now-line.
-    let grow = if anchor == Anchor::Onset && !time.whole_song() {
-        -axes.dir_depth()
-    } else {
-        axes.dir_depth()
-    };
+    let grow = if anchor == Anchor::Onset { -axes.dir_depth() } else { axes.dir_depth() };
 
     // How far back of the window the sweep has to read. NOT the whole roll,
     // and not the window either.
@@ -534,8 +529,7 @@ pub(super) fn plan(
     // stay clear of the picture with a whole cell to spare.
     let lookback = 4.0 * snap_grid(room(&WIDEST_NAME));
     let oldest = time.oldest();
-    let sweep_from =
-        if time.whole_song() { time.time_at(0.0) - lookback } else { oldest - lookback };
+    let sweep_from = oldest - lookback;
     let mut notes: Vec<(&RollNote, Edge)> = roll
         .notes()
         // On its stop first, which is the one end every note carries without
@@ -551,17 +545,7 @@ pub(super) fn plan(
         // its anchor can be any distance back — a drone's is unbounded — while
         // its ribbon is still filling the picture.
         //
-        // What that buys differs by layout, and both halves are worth having. A
-        // STILL picture crops rather than scrolls, so such a note's name is
-        // drawn at the crop (see [`drawn_edge`]) and this arm is the only thing
-        // that reaches it — a take rendered from its second minute names the pad
-        // already sounding. LIVE the name has travelled off with the end it is
-        // written on and is not drawn at all; what the arm keeps there is the
-        // note's turn in the THINNING, which is a fact about the music and does
-        // not wait for the pane to be able to show it. Bounded either way,
-        // because what bounds it is the window rather than a constant: a note
-        // only qualifies while it has ink on the pane, and the roll holds one
-        // such note per key.
+        // Keep the note in thinning even after its anchor scrolls away.
         .filter(|(note, edge)| edge.time >= sweep_from || note.stop(now) >= oldest)
         .collect();
     // By ANCHOR, oldest first — where the name will sit, which is what
@@ -624,13 +608,6 @@ pub(super) fn plan(
     // lifetime below is where that is decided, and it is also what keeps an
     // unclamped depth finite.
     //
-    // The WHOLE-SONG layout clamps, and the difference is the picture's rather
-    // than the mode's: a still take is CROPPED at the render's start, not
-    // scrolled past it, so a name held at the crop lags nothing — nothing there
-    // moves for it to lag — and a note sounding across that start would
-    // otherwise go unnamed for the whole video. See [`drawn_edge`], which moves
-    // the pitch with the clamp so the pair stays one.
-    //
     // A box growing toward the now-line is held on the PANE, and that is the
     // only thing it is held off. A note is younger than its own name for the
     // first fraction of a second of it, so a name written on the end that
@@ -674,11 +651,7 @@ pub(super) fn plan(
     let place = |edge: &Edge, name: &NoteName| {
         // Live, the anchor's own depth however far past the far edge it has
         // gone; in a still picture, held at the crop. See above.
-        let d = if time.whole_song() {
-            time.depth_of(edge.time)
-        } else {
-            time.depth_of_unclamped(edge.time)
-        };
+        let d = time.depth_of_unclamped(edge.time);
         let t = scale.t_of(edge.pitch);
         let rect = label_rect(axes, grow, t, d, name, size, scales);
         // Where the LETTER's ink is to land, which is what a reader measures
@@ -761,21 +734,11 @@ pub(super) fn plan(
 
     let mut occupied = Occupancy::default();
     let mut placed: Vec<NoteLabel> = Vec::new();
-    // Each thinned placement's lane, alongside it, and the indices of the ones
-    // the clamp PARKED — both only for the pass below, which is the one thing
-    // here that has to compare two placements against each other rather than
-    // against the grid. A `NoteLabel` carries neither, and should not: what it
-    // is for is drawing, and neither survives into the picture.
-    let mut lanes: Vec<i32> = Vec::new();
-    let mut parked: Vec<usize> = Vec::new();
     let mut held: Vec<NoteLabel> = Vec::new();
     for (note, edge) in notes {
         // On the pane, and so worth drawing — decided on the pitch the name
         // will be DRAWN at, not the note's pitch in general, since the two
         // differ for a bent note and it is the name that has to be visible.
-        // Its POSITION only: the spelling is still asked of the true anchor,
-        // for the reason [`drawn_edge`] gives.
-        //
         // Two questions: the ribbon still reaches into the pitch zoom
         // (`ribbon_reach`), and the name still has ink on the pane.
         //
@@ -794,22 +757,12 @@ pub(super) fn plan(
         // the edge — on nearly every note, since at the default Span a name is
         // seconds of take time long.
         //
-        // A still picture asks the NOTE, because a cropped name is held at the
-        // crop ([`drawn_edge`]) and always has ink there: it lives as long as
-        // there is ribbon to hold it on, and a note that ended before the
-        // render began is not named at all.
-        //
         // Only DRAWING is culled. A note off the far edge still takes its turn
         // in the thinning, which is what lets the names on the pane stand still
         // while it scrolls.
         //
-        let drawn = drawn_edge(note, &edge, now, &time);
-        let visible = ribbon_reach.contains(&drawn.pitch)
-            && if time.whole_song() {
-                note.stop(now) >= oldest
-            } else {
-                shows(&edge, naming(edge.pitch, &mut names).1)
-            };
+        let visible =
+            ribbon_reach.contains(&edge.pitch) && shows(&edge, naming(edge.pitch, &mut names).1);
         // A held note whose name is anchored on the LEADING EDGE stands outside
         // the sweep in BOTH directions: it is named whatever is already there,
         // and it is not recorded, so it takes nothing out of the running for
@@ -841,7 +794,7 @@ pub(super) fn plan(
                 continue;
             }
             let (name, _) = naming(edge.pitch, &mut names);
-            let (rect, lead) = place(&drawn, &name);
+            let (rect, lead) = place(&edge, &name);
             // Two keys sounding one pitch — a doubled MIDI source, a layered
             // MPE part — would otherwise stamp the same name on the same
             // points once per voice. The name still appears; it is drawn once.
@@ -851,7 +804,7 @@ pub(super) fn plan(
                 held.push(NoteLabel {
                     name,
                     onset: note.start,
-                    pitch: drawn.pitch,
+                    pitch: edge.pitch,
                     rect,
                     lead,
                     grow,
@@ -894,24 +847,11 @@ pub(super) fn plan(
         lane.reached = to;
         if clear && visible {
             let (name, _) = naming(edge.pitch, &mut names);
-            let (rect, lead) = place(&drawn, &name);
-            // A name held at a crop is PARKED: the clamp keeps it on the edge
-            // while the thinning that spaced it goes on measuring from the
-            // anchor's true time, somewhere off the picture. The two agree only
-            // while depth is affine in take time, which is exactly what the
-            // clamp stops being true — so a parked name is the one placement the
-            // grid cannot vouch for. Read off the clamp itself rather than from
-            // a comparison of times, so that the two cannot come apart; noted
-            // here, with its lane, rather than re-derived below where neither is
-            // still in hand.
-            if drawn.time != edge.time {
-                parked.push(placed.len());
-            }
-            lanes.push(key);
+            let (rect, lead) = place(&edge, &name);
             placed.push(NoteLabel {
                 name,
                 onset: note.start,
-                pitch: drawn.pitch,
+                pitch: edge.pitch,
                 rect,
                 lead,
                 grow,
@@ -919,58 +859,6 @@ pub(super) fn plan(
                 at: edge.time,
             });
         }
-    }
-    // A parked name yields to one that is still at its own anchor and has
-    // caught up with it.
-    //
-    // The thinning hands out room in TAKE TIME, which is the right currency for
-    // everything it decides — a name's place is a fact about the music, and
-    // measuring it in screen points is what would make the spacing breathe as
-    // the picture scrolls. A parked name is the one case where that currency
-    // stops converting: it is held at the crop while its own anchor lies further
-    // back, so two names the grid spaced seconds apart can be drawn on top of
-    // each other. The offender is always the parked one, and always at the
-    // picture's own edge.
-    //
-    // Only a STILL picture parks — a live one lets a name travel off with the
-    // end it names (see [`place`](plan)) — so what this pass runs on is a note
-    // sounding across a render's start and a later strike of its pitch. It is
-    // written against the clamp rather than against the layout all the same:
-    // what it repairs is a name drawn somewhere its own anchor is not, and that
-    // is the clamp's doing wherever the clamp is.
-    //
-    // So the parked name goes and the one standing at its own anchor stays.
-    // That is the right way round for reading — the survivor is at its note's
-    // true onset, where the parked one is only at the edge its note is cut off
-    // by — and it cannot BLINK: neither name moves between frames of a still
-    // picture, so the pair is decided once and answers the same way for the
-    // length of the render.
-    //
-    // Same lane only. Two names at different pitches are different rows and the
-    // pitch axis keeps them apart; it is the repeat of ONE pitch that collides,
-    // which is also the only thing the grid was ever spacing.
-    if !parked.is_empty() {
-        // Compared against the names still at their own anchors, never against
-        // another parked one. Two parked names in one lane are two voices
-        // sounding one pitch, both cut off by the same edge and both drawn on
-        // it, so dropping either would be a coin toss.
-        let doomed: Vec<usize> = parked
-            .iter()
-            .copied()
-            .filter(|&i| {
-                (0..placed.len()).any(|j| {
-                    j != i
-                        && !parked.contains(&j)
-                        && lanes[j] == lanes[i]
-                        && placed[j].rect.intersects(placed[i].rect)
-                })
-            })
-            .collect();
-        let mut index = 0;
-        placed.retain(|_| {
-            index += 1;
-            !doomed.contains(&(index - 1))
-        });
     }
     placed.append(&mut held);
     // Paint oldest first, then low to high for simultaneous onsets. Releasing
@@ -986,9 +874,7 @@ pub(super) fn plan(
 /// about the music, where a depth is a fact about where the window happens to
 /// be — and it is the only one of the two that still says anything about a
 /// note off the pane, where what a depth says depends on which picture is
-/// asking — it runs on past a scrolling edge and stops dead at a crop. The
-/// depth follows from it for the few notes that are actually drawn, by
-/// whichever of the two [`place`](plan) is owed.
+/// asking. The depth follows from it for the few notes actually drawn.
 #[derive(Clone, Copy)]
 struct Edge {
     time: f64,
@@ -1010,8 +896,7 @@ struct Edge {
 ///
 /// Which of the two a pane uses is [`of`](Self::of)'s, and it is not the
 /// setting's alone: the orientation picks the end that READS first and the
-/// setting asks for the other one — with the whole-song layout outside both,
-/// on the onset always.
+/// setting asks for the other one.
 #[derive(Clone, Copy, PartialEq)]
 enum Anchor {
     /// The end that touches the now-line: the low-depth end live, which is the
@@ -1023,8 +908,6 @@ enum Anchor {
     /// travelling at the release. A name you can read in one place while you
     /// play, at the price of a movement the music did not make and of a drone
     /// whose name never scrolls at all.
-    ///
-    /// Live only — see [`of`](Self::of) for why a static layout cannot use it.
     Leading,
     /// The onset — the moment the key went down, wherever the layout puts it.
     ///
@@ -1037,9 +920,6 @@ enum Anchor {
     /// instead is the trade [`place`](plan) declines — the gap between a letter
     /// and the end it names is what a name IS here, and a name that outstays its
     /// own end has given that up to stay on screen.
-    ///
-    /// The whole-song layout has no other option, for a reason that is about
-    /// the TAKE rather than about reading order — see [`of`](Self::of).
     Onset,
 }
 
@@ -1078,26 +958,9 @@ impl Anchor {
     /// reader sees on every note rather than only on the one under their
     /// finger.
     ///
-    /// **The whole-song layout is outside all of it, and takes the ONSET in
-    /// every orientation.** Reading order would name the note's stop in the two
-    /// reversed ones, and a stop is not a fact about the take the way an onset
-    /// is: a note the recording never released stops at `stop(now)`, which is
-    /// the PLAYHEAD, so its name would ride the sweep across a picture that is
-    /// otherwise a still. The thinning cannot hold that. It hands out names by
-    /// grid cell (see [`Lane`]) and an anchor that walks through cell after
-    /// cell is offered a name in one and refused in the next, which is a name
-    /// blinking on and off for the length of a rendered video — the very defect
-    /// the held-note exemption exists to prevent live, arriving where that
-    /// exemption cannot help because nothing in a still picture scrolls away
-    /// from anything. The onset is fixed for every note the take contains, so
-    /// it is the one end a static layout can anchor to at all.
-    ///
     /// [`SpectralOrientation::is_time_reversed`]:
     ///     crate::SpectralOrientation::is_time_reversed
-    fn of(time: &TimeAxis, cfg: &crate::SpectrumConfig) -> Anchor {
-        if time.whole_song() {
-            return Anchor::Onset;
-        }
+    fn of(cfg: &crate::SpectrumConfig) -> Anchor {
         let reads_first =
             if cfg.orientation.is_time_reversed() { Anchor::Onset } else { Anchor::Leading };
         if cfg.note_names_travel {
@@ -1114,69 +977,6 @@ impl Anchor {
             Anchor::Onset => Anchor::Leading,
         }
     }
-}
-
-/// The anchor as the picture can actually draw it: the [`Edge`] itself where
-/// the picture reaches it, and the last of the ribbon still showing where a
-/// CROP has cut it off.
-///
-/// Only a still picture crops. A live one scrolls, and there a name travels off
-/// with the end it is written on rather than being held against the edge — see
-/// [`place`](plan), where that trade is made and measured — so this is a no-op
-/// in every live frame, at either anchor.
-///
-/// Where it does bite, the PITCH has to move with the time. [`place`](plan)
-/// holds the whole-song depth inside the region (`depth_of` clamps), so without
-/// this the pitch alone would go on describing a point the picture does not
-/// contain, and the pair [`anchor_edge`] returns would come apart exactly where
-/// the clamp does. That puts a name off its own ribbon: a note gliding while
-/// its onset sits before the render's start is at one pitch where the name is
-/// written and another where the ribbon crosses the edge, which is a semitone
-/// for a modest bend and a quarter of the axis for a wide glide. Reading the
-/// pitch at the CLAMPED time closes it — the name lands on the ribbon at the
-/// point the reader's eye actually meets it.
-///
-/// Only the position is clamped, never the note's IDENTITY: the spelling, the
-/// lane and the grid cell all keep the true anchor, on the same argument the
-/// depth clamp is already made under — a note's cell and its reach are the
-/// music's and must not move with what the pane had room to show. So a glided
-/// note parked on a crop is drawn where its ribbon is and still spelled for the
-/// note that was struck.
-fn drawn_edge(note: &RollNote, edge: &Edge, now: f64, time: &TimeAxis) -> Edge {
-    let oldest = time.oldest();
-    if !time.whole_song() || edge.time >= oldest {
-        return *edge;
-    }
-    Edge { time: oldest, pitch: pitch_at(note, now, oldest) }
-}
-
-/// The pitch a note is sounding at take time `t`, straight off the segments the
-/// ribbon is drawn from — so a name placed by it lands on the ribbon rather
-/// than near it.
-///
-/// Reads the SEGMENTS rather than interpolating the bends directly, because
-/// they are what the roll draws: between two breakpoints the pitch is a straight
-/// line ([`RollNote::segments`]), and taking the same line here is what makes
-/// "on the ribbon" exact instead of close.
-///
-/// Off either end it answers the nearest end's pitch, which is the same thing
-/// the ribbon shows there. Never `None`: a note's segments are never empty.
-fn pitch_at(note: &RollNote, now: f64, t: f64) -> f32 {
-    let mut last = note.settled_pitch();
-    for ((t0, p0), (t1, p1)) in note.segments(now) {
-        if t <= t0 {
-            return p0;
-        }
-        if t <= t1 {
-            // Straight line between the two breakpoints, exactly as the ribbon
-            // is sheared between them. A segment of no duration is the
-            // just-pressed note, where both ends are one point anyway.
-            let span = t1 - t0;
-            return if span > 0.0 { p0 + (p1 - p0) * ((t - t0) / span) as f32 } else { p1 };
-        }
-        last = p1;
-    }
-    last
 }
 
 /// Where on a ribbon its name goes, and the pitch the ribbon has there.
@@ -1196,9 +996,7 @@ fn pitch_at(note: &RollNote, now: f64, t: f64) -> f32 {
 /// out from under it, and a held note is the one always named there.
 ///
 /// Neither end is bounded here, and the pair is the true one however far off
-/// the picture it lies. What a pane can draw is [`plan`]'s question: live it
-/// lets a name leave with the end it names, and in a still picture
-/// [`drawn_edge`] holds a cropped one at the edge — moving this pitch with it.
+/// the picture it lies. [`plan`] lets a name leave with the end it names.
 fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
     match anchor {
         // The onset end, so the pitch the note SETTLED on rather than the key
@@ -3127,128 +2925,6 @@ mod tests {
         }
     }
 
-    /// The offline whole-song layout names a ribbon at its ONSET rather than
-    /// at its release, in every orientation — the one place the anchor is not
-    /// the orientation's to decide. See [`Anchor::of`] for why a still picture
-    /// has only the one end it can anchor to.
-    #[test]
-    fn whole_song_names_a_ribbon_at_its_onset() {
-        let mut state = state(24.0, 10.0);
-        state.runtime.tracker.handle_event(on(2.0, 60));
-        state.runtime.tracker.handle_event(off(6.0, 60));
-        let roll = state.runtime.tracker.roll().clone();
-        state.runtime.whole_song =
-            Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
-
-        let placed = labels(&state, 4.0);
-        assert_eq!(said(&placed), ["C"]);
-        let axes = Axes::new(PANE, &state.appearance.spectrum);
-        // Laid out statically from the near edge: the onset at 2 s of 10 is a
-        // fifth of the way along, and the name starts there and grows later.
-        let onset = axes.at(scale_of(&state).t_of(60.0), 0.2);
-        assert!(placed[0].rect.min.x >= onset.x, "named at the onset, growing into the note");
-        assert!(placed[0].rect.min.x < onset.x + 8.0);
-
-        // ...and the static layout does not move as the playhead sweeps.
-        let later = labels(&state, 9.0);
-        assert_eq!(later[0].rect.min.x, placed[0].rect.min.x);
-    }
-
-    /// Whole-song keeps a note that began BEFORE the render's start, named at
-    /// the near edge it reaches over.
-    ///
-    /// The layout's own edge of the clamp: a name is owed to every note with
-    /// ribbon on the pane, and this is the one whose anchor is off it in the
-    /// direction only a static layout has. What it keeps is a take rendered
-    /// from its second minute still naming the notes already sounding at that
-    /// moment — `--start` past the first note is an ordinary way to render an
-    /// excerpt.
-    ///
-    /// Asked at two depths, and the second is the one the sweep's own
-    /// `lookback` decides. Just before the start, the note is inside that bound
-    /// and would be named however the bound were written; a pad that began a
-    /// minute earlier is outside it, and reaches the picture only because a
-    /// note with ink on the pane is kept whatever its anchor is doing.
-    #[test]
-    fn whole_song_keeps_a_note_that_began_before_the_render() {
-        let named_from = |onset: f64, release: f64, start: f64| {
-            let mut state = state(24.0, 10.0);
-            state.runtime.tracker.handle_event(on(onset, 60)); // before the render's start
-            state.runtime.tracker.handle_event(off(release, 60));
-            let roll = state.runtime.tracker.roll().clone();
-            state.runtime.whole_song =
-                Some(crate::WholeSong { columns: Vec::new(), roll, start, span: 10.0 });
-            let placed = labels(&state, start + 2.0);
-            let axes = Axes::new(PANE, &state.appearance.spectrum);
-            (said(&placed), placed.first().map(|l| l.rect), axes.at(0.5, 0.0).x)
-        };
-
-        let (names, rect, near) = named_from(1.0, 8.0, 3.0);
-        assert_eq!(names, ["C"], "still sounding at the render's start, still named");
-        assert!(
-            rect.expect("named").min.x >= near,
-            "clamped onto the near edge rather than drawn off the pane",
-        );
-
-        // A pad from a minute before the excerpt: its onset is many times
-        // `lookback` (four of the widest name's rooms, a few seconds here) off
-        // the near edge, so nothing but the ribbon keeps it.
-        let (names, rect, near) = named_from(1.0, 60.0, 30.0);
-        assert_eq!(names, ["C"], "a note held from long before the excerpt lost its name");
-        assert!(
-            rect.expect("named").min.x >= near,
-            "clamped onto the near edge rather than drawn off the pane",
-        );
-    }
-
-    /// In the whole-song layout a note the PLAYHEAD is inside is thinned like
-    /// any other, so a render's names are decided once for the whole take.
-    ///
-    /// The held-note exemption is for a name standing at the now-line while the
-    /// picture scrolls past it, and whole-song has no such name: the take is
-    /// laid out statically and every name is anchored at an onset. Exempting a
-    /// note because the playhead happens to be inside it makes a name appear
-    /// and go as the playhead sweeps, which in a rendered video is a name
-    /// blinking for no reason a viewer can see.
-    #[test]
-    fn a_whole_song_render_thins_a_sounding_note_like_any_other() {
-        // Two strikes of one pitch too close for both names, the second still
-        // sounding — the case the exemption used to hand a name to.
-        //
-        // Swept over every orientation, because a note the take never released
-        // is live in EVERY frame of a render: a layout that anchored these
-        // names on the leading edge would put that note's name on the playhead,
-        // where it both takes the exemption and moves under it.
-        for orientation in SpectralOrientation::ALL {
-            let mut state = turned(24.0, 10.0, orientation);
-            state.runtime.tracker.handle_event(on(1.0, 60));
-            state.runtime.tracker.handle_event(off(1.05, 60));
-            state.runtime.tracker.handle_event(on(1.1, 60));
-            let roll = state.runtime.tracker.roll().clone();
-            state.runtime.whole_song =
-                Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
-
-            // The playhead inside the second note, then well past where it
-            // would have ended: the same one name, in the same place,
-            // throughout.
-            let inside = labels(&state, 1.5);
-            assert_eq!(
-                inside.len(),
-                1,
-                "{orientation:?}: thinned, exactly as a released pair would be",
-            );
-            for now in [3.0, 6.0, 9.0] {
-                let later = labels(&state, now);
-                assert_eq!(
-                    said(&later),
-                    said(&inside),
-                    "{orientation:?}: the playhead moved a name at {now}s",
-                );
-                assert_eq!(later[0].rect.min, inside[0].rect.min, "{orientation:?} at {now}s");
-            }
-        }
-    }
-
     /// The tiebreak's stated job is to keep a name from moving when the view
     /// is panned. In a collapsed tuning many nodes answer to one pitch, and
     /// which of them the iteration reaches first changes with the view — so
@@ -3902,166 +3578,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// A parked name yields to a name of the SAME pitch that has caught up with
-    /// it, rather than the two being drawn on top of each other.
-    ///
-    /// The thinning spaces names in take time, which is the right currency for
-    /// everything it decides — until a name is parked, when the clamp holds it
-    /// on the picture's edge while its own anchor lies further back. Two names
-    /// the grid spaced two seconds apart are then drawn five points apart, boxes
-    /// 10.1 points wide: the picture
-    /// `the_first_instance_takes_the_name_and_the_next_waits_for_room` exists to
-    /// forbid, arriving by a route that test cannot see.
-    ///
-    /// A WHOLE-SONG render, because a still picture is the only one that parks
-    /// — live, a name travels off with the end it names rather than being held
-    /// (see [`place`](plan)). A note sounding across the render's start is
-    /// cropped and drawn at that edge; a second strike of its pitch, just after
-    /// the start, is the one that catches up with it. The pair is read twice,
-    /// with the second strike far along the take and then close to the crop, so
-    /// that a fixture where they never met could not pass.
-    #[test]
-    fn a_parked_name_yields_to_one_of_its_own_pitch_that_has_caught_up() {
-        let render = |second: f64| {
-            let mut state = state(24.0, 10.0);
-            state.runtime.tracker.handle_event(on(1.0, 60)); // sounding across the start
-            state.runtime.tracker.handle_event(off(4.0, 60));
-            state.runtime.tracker.handle_event(on(second, 60));
-            state.runtime.tracker.handle_event(off(second + 1.0, 60));
-            let roll = state.runtime.tracker.roll().clone();
-            state.runtime.whole_song =
-                Some(crate::WholeSong { columns: Vec::new(), roll, start: 3.0, span: 10.0 });
-            labels(&state, 5.0)
-        };
-
-        // Far apart: the cropped note's name parked on the near edge, the
-        // second strike's out in the middle of the picture.
-        let apart = render(6.0);
-        assert_eq!(said(&apart), ["C", "C"], "both names are owed while they are apart");
-        assert!(
-            !apart[0].rect.intersects(apart[1].rect),
-            "the fixture is vacuous: the two names already overlap at {:?} / {:?}",
-            apart[0].rect,
-            apart[1].rect,
-        );
-
-        // ...and where the second strike lands close to the crop, one name, and
-        // it is the one standing at its own onset.
-        let met = render(3.15);
-        assert_eq!(said(&met), ["C"], "two names of one pitch were drawn on top of each other");
-        // By ANCHOR and not by box, which is the only thing that says WHICH of
-        // the two survived: the parked name is drawn at the crop and the other
-        // at its own onset, and only the take times tell them apart.
-        assert_eq!(
-            met[0].at, 3.15,
-            "the wrong one yielded: the parked name (onset 1.0) should go, not the one \
-             standing at its own onset (3.15)",
-        );
-    }
-
-    /// A parked name of a BENT note is written where its ribbon crosses the
-    /// picture's edge, not where the note began.
-    ///
-    /// [`anchor_edge`] returns a time and the pitch the ribbon has AT that time,
-    /// as a pair, and its own doc is about why they must stay one: take the
-    /// depth from one end and the pitch from the other and the name lands off
-    /// the ribbon entirely. Parking clamps the depth, so the pitch has to be
-    /// read at the clamped time or the pair comes apart exactly where the clamp
-    /// bites.
-    ///
-    /// A whole-song render, which is where the clamp lives, of a note that
-    /// glides a fifth before the render's start and is held past it: measured,
-    /// the name sat 29.2 points from its ribbon on a 100-point pitch axis — a
-    /// name saying C in clear air, with the ribbon it belongs to a quarter of
-    /// the axis away.
-    #[test]
-    fn a_parked_name_of_a_bent_note_lands_on_its_ribbon_and_not_on_its_onset() {
-        let mut state = state(24.0, 10.0);
-        state.runtime.tracker.handle_event(on(1.0, 60));
-        state.runtime.tracker.handle_event(tuning(1.5, 60, 7.0)); // C4 -> G4, then held
-        let now = 8.0;
-        let roll = state.runtime.tracker.roll().clone();
-        state.runtime.whole_song =
-            Some(crate::WholeSong { columns: Vec::new(), roll, start: 4.0, span: 10.0 });
-
-        let placed = labels(&state, now);
-        assert_eq!(said(&placed), ["C"], "the note is on the pane and owed a name");
-        // Where the ribbon actually is at the far edge — read off the roll's own
-        // geometry rather than assumed, so this cannot pass against a name and a
-        // ribbon that have BOTH moved.
-        let cfg = &state.appearance.spectrum;
-        let axes = Axes::new(PANE, cfg);
-        let scale = scale_of(&state);
-        let split = super::super::axes::spectrum_share(cfg);
-        let ribbons = super::super::roll::note_instances(&axes, &scale, &state, split, now, 2.0);
-        let crossing = ribbons
-            .iter()
-            .max_by(|a, b| a.half_extent[1].total_cmp(&b.half_extent[1]))
-            .expect("the glided note draws a ribbon");
-        // The name's own row against the ribbon's, across pitch. Time is
-        // horizontal in this orientation, so pitch is the screen's y.
-        let off_by = (placed[0].rect.center().y - crossing.center[1]).abs();
-        assert!(
-            off_by < 4.0,
-            "the name sits {off_by} points off the ribbon it names ({:?} vs {:?})",
-            placed[0].rect.center(),
-            crossing.center,
-        );
-        // The onset's own row is a long way from the ribbon — so the assertion
-        // above is about the pitch moving with the clamp and not about a pitch
-        // axis too small to tell the two apart.
-        let onset_row = axes.at(scale.t_of(60.0), 1.0).y;
-        assert!(
-            (onset_row - crossing.center[1]).abs() > 20.0,
-            "the fixture is vacuous: the onset's pitch and the ribbon's agree",
-        );
-    }
-
-    /// A cropped name is KEPT OR DROPPED on the pitch it is drawn at, not on
-    /// the pitch its note began at.
-    ///
-    /// The same pair [`drawn_edge`] exists to hold together, asked of the cull
-    /// rather than of the placement: it moves the pitch with the clamped time
-    /// so the name lands on its ribbon, and a cull reading the other pitch
-    /// answers for a point the picture does not contain. Both directions are
-    /// wrong and neither is quiet — a note that glides INTO the zoom before the
-    /// render's start draws its ribbon across the whole picture and is refused
-    /// a name, and one that glides OUT of it keeps a name drawn off the pitch
-    /// axis altogether.
-    ///
-    /// The zoom is the two octaves above middle C, so the note's onset pitch
-    /// sits three semitones below the floor and the pitch it is sounding at the
-    /// crop four semitones inside it. Live the two pitches are one and this
-    /// cannot bite, the anchor never being clamped there.
-    #[test]
-    fn a_cropped_name_is_culled_on_the_pitch_it_is_drawn_at() {
-        let mut state = state(24.0, 10.0);
-        state.appearance.spectrum.low_midi = 63.0;
-        state.appearance.spectrum.high_midi = 87.0;
-        state.runtime.tracker.handle_event(on(1.0, 60));
-        state.runtime.tracker.handle_event(tuning(1.5, 60, 7.0)); // C4 -> G4, then held
-        let roll = state.runtime.tracker.roll().clone();
-        state.runtime.whole_song =
-            Some(crate::WholeSong { columns: Vec::new(), roll, start: 4.0, span: 10.0 });
-
-        let placed = labels(&state, 8.0);
-        assert_eq!(
-            said(&placed),
-            ["C"],
-            "the ribbon crosses the whole picture at G, inside the zoom, and went unnamed",
-        );
-        // ...on the ribbon's own row, which is the placement half of the same
-        // pair — and the row its onset would have had is off the axis here, so
-        // a name placed by that pitch could not be found by this assertion at
-        // all.
-        let axes = Axes::new(PANE, &state.appearance.spectrum);
-        let row = axes.at(scale_of(&state).t_of(67.0), 0.0).y;
-        assert!(
-            (placed[0].rect.center().y - row).abs() < 2.0,
-            "the name sits at {} rather than on the ribbon's row at {row}",
-            placed[0].rect.center().y,
-        );
     }
 }

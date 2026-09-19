@@ -35,31 +35,9 @@ fn automatic_and_manual_requests_keep_the_active_settings() {
     for request in [&automatic, &manual] {
         assert_eq!(request.program, std::path::Path::new("/custom/harmonigraph-offline"));
         assert_eq!(request.size, [2160, 3840]);
-        assert_eq!(request.playhead, None);
     }
     assert_eq!(automatic.appearance, None);
     assert_eq!(manual.appearance.as_deref(), Some("current appearance"));
-}
-
-/// The renderer is never told to use the whole-song playhead.
-///
-/// It ORs `--playhead` with the take's own recorded setting, so a flag
-/// passed here can only add. Passing it unconditionally would make the
-/// Video pane's "Scrolling" choice unreachable: the pane writes
-/// `spectrogram: Scrolling` into the take and the flag would turn the
-/// playhead straight back on. Leaving it unset is what lets the row decide
-/// every way, so this holds the request to saying nothing.
-#[test]
-fn the_take_decides_the_spectrogram_not_a_forced_flag() {
-    use harmonigraph_take::SpectrogramRender;
-    for spectrogram in
-        [SpectrogramRender::Scrolling, SpectrogramRender::WholeVideo, SpectrogramRender::Playhead]
-    {
-        let config = RenderConfig { spectrogram, ..Default::default() };
-        assert_eq!(RenderRequest::from_config(&config).unwrap().playhead, None);
-        let now = RenderRequest::render_now(&config, "(dummy)".into());
-        assert_eq!(now.playhead, None, "Re-render take must not force it either");
-    }
 }
 
 /// A second request for the same take supersedes the first, which is what
@@ -155,12 +133,7 @@ fn a_second_request_kills_the_render_in_flight() {
     let progress = Arc::new(Progress::default());
     let start = || {
         spawn_render(
-            RenderRequest {
-                program: fake.clone(),
-                appearance: None,
-                size: [16, 16],
-                playhead: None,
-            },
+            RenderRequest { program: fake.clone(), appearance: None, size: [16, 16] },
             take.clone(),
             status.clone(),
             progress.clone(),
@@ -227,12 +200,7 @@ fn cancelling_a_render_kills_it_and_deletes_what_it_had_written() {
     let status = Arc::new(Mutex::new(String::new()));
     let progress = Arc::new(Progress::default());
     spawn_render(
-        RenderRequest {
-            program: fake.clone(),
-            appearance: Some("(dummy)".into()),
-            size: [16, 16],
-            playhead: None,
-        },
+        RenderRequest { program: fake.clone(), appearance: Some("(dummy)".into()), size: [16, 16] },
         take.clone(),
         status.clone(),
         progress.clone(),
@@ -297,12 +265,7 @@ fn a_render_of_another_take_waits_rather_than_replacing_this_one() {
     let progress = Arc::new(Progress::default());
     let start = |take: std::path::PathBuf| {
         spawn_render(
-            RenderRequest {
-                program: fake.clone(),
-                appearance: None,
-                size: [16, 16],
-                playhead: None,
-            },
+            RenderRequest { program: fake.clone(), appearance: None, size: [16, 16] },
             take,
             status.clone(),
             progress.clone(),

@@ -386,7 +386,6 @@ fn seconds_per_point_matches_the_time_at_derivation() {
                     window: 12.0,
                     origin: 5.0,
                     now: 5.0,
-                    whole_song: false,
                 };
                 let direct = (time.time_at(1.0) - time.time_at(0.0)).abs()
                     / f64::from(a.depth_len().max(1.0));
@@ -1197,8 +1196,7 @@ fn the_frequency_labels_ride_the_peak_end_of_the_spectrum() {
     assert_eq!(d, 1.0, "the labels sat on the baseline, not the peak end");
     assert!(into < 0.0, "the offset runs off the pane rather than into it");
 
-    // Whole-song draws no spectrum and gives the roll the whole axis; its
-    // labels have only the near edge to ride, and must still turn inward.
+    // A zero spectrum share still turns labels inward at the near edge.
     assert_eq!(label_anchor(0.0), (0.0, into.abs()));
 }
 
@@ -2151,51 +2149,6 @@ fn the_live_strip_stops_half_a_window_short_of_the_now_line() {
     assert_eq!(near, split, "a column from the future dragged the strip over the divider");
 }
 
-/// A whole-song pane takes the other branch of `strip_depths` entirely, so
-/// #914's leading gap belongs to the live picture alone and an export still
-/// draws its run end to end. `WholeSong::precompute` feeds half a window past
-/// the far edge for exactly this reason — the last measurement is centred ON
-/// that edge, so offline has no unmeasured sliver to leave out.
-///
-/// The fixture arrives by making the two branches answer as differently as they
-/// can: the newest column is at the take's END, so the live branch would put
-/// the near edge at the far end of the region where this one puts it at the
-/// region's own near edge. A fixture with the newest column near the start
-/// would pass under either branch.
-#[test]
-fn a_whole_song_strip_still_spans_its_run_end_to_end() {
-    let mut state = fresh();
-    let (start, span) = (10.0, 8.0);
-    let roll = state.runtime.tracker.roll().clone();
-    state.runtime.whole_song = Some(crate::WholeSong {
-        start,
-        span,
-        columns: (0..=80)
-            .map(|i| {
-                crate::SpectrogramColumn::from_power(
-                    start + i as f64 * 0.1,
-                    &[0.25; harmonigraph_core::spectrum::SPECTRUM_BINS],
-                )
-            })
-            .collect(),
-        roll,
-    });
-    let time = super::axes::TimeAxis::new(&state, 0.0, start + 3.0);
-    assert!(time.whole_song(), "the fixture never reached the whole-song layout");
-    let layout = crate::spectrogram::TexLayout { bucket: 0.1, t_origin: start, tex_span: span };
-    let newest = start + span;
-
-    assert_eq!(
-        super::spectrogram::strip_depths(&time, 0.0, &layout, newest),
-        (0.0, 1.0),
-        "the export's strip no longer spans the run it folded",
-    );
-    assert!(
-        time.depth_of(newest) > 0.9,
-        "the live branch would have answered the same depth here, so this proves nothing",
-    );
-}
-
 /// The now-line is painted after the roll that arrives at it.
 ///
 /// A sounding note's ribbon reaches the line and carries its lead THROUGH it,
@@ -2254,122 +2207,6 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
         quiet_early + 1,
         "the roll paints over the line it arrives at, biting half its width out \
          under every sounding note",
-    );
-}
-
-/// **A whole-song pane must not fold a heatmap past the slab cap**, however
-/// much take lies either side of the window it draws.
-///
-/// The call-site half of the spectrogram module's
-/// `a_take_longer_than_the_render_window_folds_inside_the_slab_cap` —
-/// that one holds the trim, this one holds the fold being GIVEN it. Named
-/// rather than linked, because rustdoc never resolves a link inside a
-/// `#[test]` and so never reports one that has gone dead.
-/// `build`'s whole-song arm is one expression away from the bug in either
-/// direction, and only a frame that actually paints can say which expression
-/// is there.
-///
-/// The frame itself is most of the test: the run the pane hands the GPU is what
-/// the fold produced. The deliberately wider stored set makes a fold given all
-/// of it come out several times the cap, while the slab is cut for the window.
-#[test]
-fn a_whole_song_pane_draws_a_window_of_a_longer_take_inside_the_slab_cap() {
-    let mut state = fresh();
-    state.appearance.spectrum.orientation = SpectralOrientation::Left;
-    // Three minutes of columns, sampled far more sparsely than the analyzer
-    // would: an empty slab still takes a texel of its own, so the image's
-    // width follows the columns' EXTENT and not their number.
-    let columns = (0..=360)
-        .map(|i| {
-            crate::SpectrogramColumn::from_power(
-                i as f64 * 0.5,
-                &[0.25; harmonigraph_core::spectrum::SPECTRUM_BINS],
-            )
-        })
-        .collect();
-    // A four-second window a minute into it — short enough that the slab
-    // floors at `MIN_BUCKET`, which is what makes the whole take's fold
-    // several times the limit rather than merely wider than the window's.
-    state.runtime.whole_song = Some(crate::WholeSong {
-        start: 60.0,
-        span: 4.0,
-        columns,
-        roll: state.runtime.tracker.roll().clone(),
-    });
-    let _ = painted_pane(WIDE, &mut state, 61.0);
-
-    let slabs = state.surfaces.spectrogram.at(0).gpu.run_slabs();
-    assert!(slabs > 0, "no heatmap in the frame, so it never reached the fold this is about");
-    // The cap, plus the slab each end of the window can spend by falling
-    // mid-slab.
-    let ceiling = crate::spectrogram::WHOLE_SONG_SLAB_CAP as usize + 2;
-    assert!(slabs <= ceiling, "a {slabs} slab run went to a pane the cap holds at {ceiling}",);
-}
-
-/// Whole-song mode's playhead is painted after the roll, for the same reason
-/// the now-line is — and it needs it harder.
-///
-/// This mode hands the roll the WHOLE depth axis (`split` is 0), so the
-/// playhead crosses every ribbon on the pane rather than meeting a row of
-/// them end-on: under the roll it comes out dashed, notched once per note it
-/// passes over. It is the one moving mark in a static picture, and it is what
-/// `--playhead` bakes into an exported video.
-#[test]
-fn the_whole_song_playhead_paints_over_the_roll_it_sweeps_across() {
-    // Same trick as the now-line's: the note is what identifies the roll's
-    // paint callback, and the count of callbacks BEFORE the playhead is what
-    // it has to move.
-    let frame = |sounding: bool| {
-        let mut state = fresh();
-        state.appearance.spectrum.orientation = SpectralOrientation::Left;
-        state.appearance.spectrum.low_midi = 60.0;
-        state.appearance.spectrum.high_midi = 72.0;
-        if sounding {
-            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
-        }
-        // The take laid out statically, the way the offline renderer sets it
-        // up. No columns: the heatmap is not what this is about, and the roll
-        // reads `whole_song.roll` rather than the live tracker here.
-        state.runtime.whole_song = Some(crate::WholeSong {
-            start: 0.0,
-            span: 2.0,
-            columns: Vec::new(),
-            roll: state.runtime.tracker.roll().clone(),
-        });
-        let out = painted_pane(WIDE, &mut state, 1.0);
-        let callbacks = out
-            .shapes
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| matches!(&s.shape, egui::Shape::Callback(_)))
-            .map(|(i, _)| i);
-        // The playhead is the accent-colored segment across the pitch axis;
-        // the now-line is not drawn in this mode at all.
-        let playhead = out
-            .shapes
-            .iter()
-            .position(|s| {
-                matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
-                    if stroke.color == theme::accent())
-            })
-            .expect("expected a playhead in a whole-song frame");
-        let callbacks: Vec<usize> = callbacks.collect();
-        (callbacks.len(), callbacks.iter().filter(|&&c| c < playhead).count())
-    };
-
-    let (quiet_total, quiet_early) = frame(false);
-    let (sounding_total, sounding_early) = frame(true);
-    assert_eq!(
-        sounding_total,
-        quiet_total + 1,
-        "the note did not add the roll's paint callback, so there is no roll here \
-         to have drawn in either order",
-    );
-    assert_eq!(
-        sounding_early,
-        quiet_early + 1,
-        "the roll paints over the playhead sweeping across it, notching the mark \
-         once per note it passes",
     );
 }
 
@@ -2783,26 +2620,6 @@ fn level_label_room_answers_to_the_axis_the_depth_runs_on() {
     });
 }
 
-/// Whole-song playhead mode rules no levels either — it draws no spectrum for a
-/// level to measure, and a ruling drawn anyway would be baked into every frame
-/// of a `--playhead` export.
-#[test]
-fn whole_song_mode_rules_no_levels() {
-    let mut state = fresh();
-    state.appearance.spectrum.orientation = SpectralOrientation::Left;
-    state.runtime.whole_song = Some(crate::WholeSong {
-        start: 0.0,
-        span: 2.0,
-        columns: Vec::new(),
-        roll: state.runtime.tracker.roll().clone(),
-    });
-    let out = painted_pane(WIDE, &mut state, 1.0);
-    let ruled = out.shapes.iter().any(
-        |s| matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if is_ruling(stroke.color)),
-    );
-    assert!(!ruled, "a whole-song frame ruled a grid across a pane with no spectrum on it");
-}
-
 /// The stronger ink goes on the decade boundaries and nowhere else.
 ///
 /// Pinned as a MAPPING — which pitches got which weight — rather than as two
@@ -2842,30 +2659,6 @@ fn only_the_decade_boundaries_take_the_stronger_ink() {
             );
         }
     }
-}
-
-/// Whole-song playhead mode rules nothing.
-///
-/// It hands the WHOLE depth axis to the roll and the spectrogram (`split` is
-/// 0), so there is no spectrum region for a ruling to measure — and a ruling
-/// drawn anyway would be a zero-length segment per frequency baked into every
-/// frame of a `--playhead` video export.
-#[test]
-fn whole_song_mode_rules_no_frequencies() {
-    let mut state = fresh();
-    state.appearance.spectrum.orientation = SpectralOrientation::Left;
-    state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
-    state.runtime.whole_song = Some(crate::WholeSong {
-        start: 0.0,
-        span: 2.0,
-        columns: Vec::new(),
-        roll: state.runtime.tracker.roll().clone(),
-    });
-    let out = painted_pane(WIDE, &mut state, 1.0);
-    let ruled = out.shapes.iter().any(
-        |s| matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if is_ruling(stroke.color)),
-    );
-    assert!(!ruled, "a whole-song frame ruled a frequency across a pane with no spectrum on it");
 }
 
 /// Whether a stroke color is one of the two a ruling — of either grid — is
@@ -3340,5 +3133,20 @@ fn both_spectral_pictures_size_themselves_from_one_raw_reading_of_the_density() 
              pictures then read different runs of buckets below 1x, and a \
              ridge sits at a different height from the curve drawn over it",
         );
+    }
+}
+
+#[test]
+fn the_live_time_axis_keeps_a_nonzero_geometry_window() {
+    let mut state = crate::tests::probe::fresh_picture();
+    for seconds in [0.0, 0.02, 0.05, 0.1] {
+        state.appearance.spectrum.roll_seconds = seconds;
+        let time = TimeAxis::new(&state, 0.4, 5.0);
+        assert_eq!(time.window(), f64::from(seconds).max(0.05));
+        for t in [time.oldest(), 4.975, 5.0] {
+            let depth = time.depth_of_unclamped(t);
+            assert!(depth.is_finite());
+            assert!((time.time_at(depth) - t).abs() < 1e-6);
+        }
     }
 }

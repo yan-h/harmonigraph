@@ -15,7 +15,7 @@
 //! is for.
 //!
 //! **Each frame reaches one thing #503 changes**, and that is what makes the
-//! set worth its runtime rather than one frame worth four:
+//! set worth its runtime rather than one frame worth three:
 //!
 //! - a TALL and a SHORT pane, zoomed out. Both resample the same bucket-space
 //!   image and differ only in how finely they sample it, so what the pair
@@ -27,17 +27,13 @@
 //!   between two of them instead. Its half-bucket centre offset is one of the
 //!   things #503's own trap list calls easy to lose in the port, and no
 //!   zoomed-out frame executes it at all.
-//! - the WHOLE-SONG layout, which folds a grid over the entire take rather
-//!   than scrolling a window across it. It is a second build path, ported
-//!   separately, and the live frames say nothing about it.
-//!
 //! Each frame was held against the read it claims, by breaking that read and
 //! measuring what moved. Flattening the minifying arm to a plain max over its
-//! run moves the short pane by a mean of 32.0/255, the tall by 14.8 and the
-//! whole-song frame by 12.5, and the zoomed-in one by 1.1 — the ordering the
+//! run moves the short pane by a mean of 32.0/255, the tall by 14.8,
+//! and the zoomed-in one by 1.1 — the ordering the
 //! footprint argument predicts, widest run first. Dropping the magnifying
 //! arm's half-bucket centre offset moves the zoomed-in frame by 1.1 and the
-//! other three by nothing at all.
+//! other two by nothing at all.
 //! Before that last number the zoomed-in shot was six semitones over 384
 //! rows, which the two-octave floor widened under it into a mean on every
 //! row: it drew a plausible frame, blessed, and measured nothing.
@@ -175,9 +171,6 @@ struct Shot {
     /// this against the height above: wider than a bucket per row is a mean,
     /// narrower is a lerp.
     range: (f32, f32),
-    /// Lay the whole take out at once under a playhead, rather than scrolling
-    /// a window.
-    whole: bool,
 }
 
 /// The whole analyzer axis — where a fresh pane opens.
@@ -296,7 +289,6 @@ impl Shot {
             start: 0.0,
             end: SECONDS,
             audio_start: 0.0,
-            whole_song_spectrogram: self.whole,
         }
     }
 }
@@ -338,7 +330,7 @@ fn check_take(name: &str, shot: Shot, take: Take) {
 /// A tall pane zoomed out draws the frame on record.
 #[test]
 fn a_tall_pane_zoomed_out_draws_the_frame_on_record() {
-    check("spectrogram-tall-pane", Shot { size: TALL, range: whole_axis(), whole: false });
+    check("spectrogram-tall-pane", Shot { size: TALL, range: whole_axis() });
 }
 
 /// A short pane zoomed out draws the frame on record.
@@ -348,7 +340,7 @@ fn a_tall_pane_zoomed_out_draws_the_frame_on_record() {
 /// and what a per-pixel-footprint mean makes unavoidable.
 #[test]
 fn a_short_pane_zoomed_out_draws_the_frame_on_record() {
-    check("spectrogram-short-pane", Shot { size: SHORT, range: whole_axis(), whole: false });
+    check("spectrogram-short-pane", Shot { size: SHORT, range: whole_axis() });
 }
 
 /// A pane zoomed in past one bucket per row draws the frame on record.
@@ -361,19 +353,13 @@ fn a_short_pane_zoomed_out_draws_the_frame_on_record() {
 #[test]
 fn a_zoomed_in_pane_draws_the_frame_on_record() {
     let range = (ZOOMED_IN.0 as f32, ZOOMED_IN.1 as f32);
-    check("spectrogram-zoomed-in", Shot { size: ZOOMED, range, whole: false });
-}
-
-/// The whole-song layout draws the frame on record.
-#[test]
-fn the_whole_song_layout_draws_the_frame_on_record() {
-    check("spectrogram-whole-song", Shot { size: TALL, range: whole_axis(), whole: true });
+    check("spectrogram-zoomed-in", Shot { size: ZOOMED, range });
 }
 
 /// The watercolour wash draws the frame on record.
 ///
 /// Every frame above is drawn with the OTHER cloud texture, the refracting
-/// scales, which is what makes the four of them the proof that a second texture
+/// scales, which is what makes the three of them the proof that a second texture
 /// landed without disturbing the first. This is the one that has the wash in
 /// it, and it earns its place because nothing else committed here executes
 /// `wash_clouds` end to end — the claim tests beside the shader each turn one
@@ -381,7 +367,7 @@ fn the_whole_song_layout_draws_the_frame_on_record() {
 /// constant in it, at the settings the page opens the texture at.
 #[test]
 fn the_watercolour_wash_draws_the_frame_on_record() {
-    let shot = Shot { size: TALL, range: whole_axis(), whole: false };
+    let shot = Shot { size: TALL, range: whole_axis() };
     let take = shot.dialled(|a| {
         a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
     });
@@ -394,7 +380,7 @@ fn the_watercolour_wash_draws_the_frame_on_record() {
 /// that catches either old under-body black or the skin knockout being lost.
 #[test]
 fn mixed_spectral_shadows_draw_the_frame_on_record() {
-    let shot = Shot { size: [320, 200], range: (48.0, 84.0), whole: false };
+    let shot = Shot { size: [320, 200], range: (48.0, 84.0) };
     let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
     state.appearance.spectrum.show_roll = true;
     state.appearance.spectrum.roll_fraction = 0.65;
@@ -517,7 +503,6 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
         start: 0.0,
         end: SECONDS,
         audio_start: 0.0,
-        whole_song_spectrogram: false,
     };
     let mut audio = probe_audio();
     let mut replay = Replay::new(take);
@@ -610,7 +595,6 @@ fn spectral_shadow_frame_ms(
         start: 0.0,
         end: SECONDS,
         audio_start: 0.0,
-        whole_song_spectrogram: false,
     };
     let mut audio = probe_audio();
     let mut replay = Replay::new(take);

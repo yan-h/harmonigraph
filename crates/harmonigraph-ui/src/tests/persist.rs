@@ -2122,3 +2122,22 @@ fn animation_controls_round_trip_and_retired_choice_does_not_discard_appearance(
     assert_eq!(state.picture.appearance.view.note_animation, Default::default());
     assert_eq!(state.picture.appearance.view.label_scale, 0.7);
 }
+
+#[test]
+fn retired_playhead_refuses_the_entire_editor_and_appearance_document() {
+    let mut state = fresh();
+    state.picture.appearance.render.spectrogram = crate::SpectrogramRender::Scrolling;
+    state.picture.appearance.camera.cabinet_scale = 0.7;
+    let saved = state.save_persist();
+    let dropped = saved.replace("spectrogram:Scrolling", "spectrogram:Playhead");
+    assert_ne!(saved, dropped, "fixture must carry the retired variant");
+    let mut restored = fresh();
+    let before = restored.save_persist();
+    assert!(!restored.load_persist(&dropped));
+    assert_eq!(restored.save_persist(), before, "no camera or workspace state is applied");
+    assert!(restored.picture.runtime.console.lines().any(|line| line.contains("did not parse")));
+    let appearance = state.picture.appearance.serialize();
+    let dropped = appearance.replace("spectrogram:Scrolling", "spectrogram:Playhead");
+    assert_ne!(appearance, dropped);
+    assert!(AppearanceDocument::parse(&dropped).is_err());
+}

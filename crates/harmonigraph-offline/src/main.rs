@@ -78,9 +78,6 @@ OPTIONS:
                            seconds of take time. off is the default spelled
                            out: the take\'s recording starts where its
                            header says (or at zero if unstamped).
-        --playhead         Lay the render window\'s spectrogram out at once and
-                           sweep a playhead across it, instead of the live
-                           scrolling window. Needs audio.
         --dump-layout      Print the resolved layout as .ron and exit —
                            the starting point for a custom one.
     -h, --help             Show this.
@@ -129,7 +126,6 @@ struct Args {
     /// places it where it starts by construction — see `start_of_audio`.
     align: Option<f64>,
     dump_layout: bool,
-    playhead: bool,
 }
 
 impl Default for Args {
@@ -156,7 +152,6 @@ impl Default for Args {
             ffmpeg: None,
             align: None,
             dump_layout: false,
-            playhead: false,
         }
     }
 }
@@ -208,7 +203,6 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
             "--appearance" => args.appearance = Some(value("--appearance")?),
             "--ffmpeg" => args.ffmpeg = Some(value("--ffmpeg")?),
             "--align" => args.align = parse_align(&value("--align")?)?,
-            "--playhead" => args.playhead = true,
             "--dump-layout" => args.dump_layout = true,
             other if other.starts_with('-') => {
                 return Err(format!("unknown option {other:?} (--help for the list)"))
@@ -374,7 +368,7 @@ fn run() -> Result<(), String> {
 
 fn export(args: Args) -> Result<(), String> {
     // The whole run, so the summary's total covers reading the take, decoding
-    // the audio, any playhead precompute and the encoder's backlog as well as
+    // the audio and the encoder's backlog as well as
     // the loop — everything between typing the command and having the file.
     let began = std::time::Instant::now();
     if args.dump_layout {
@@ -450,13 +444,6 @@ fn export(args: Args) -> Result<(), String> {
     }
     let mut audio = audio_path.as_deref().map(crate::wav::read).transpose()?;
 
-    if args.playhead && audio.is_none() {
-        eprintln!(
-            "note: --playhead lays out the audio spectrogram, but this render has \
-             no audio; falling back to the scrolling view."
-        );
-    }
-
     let audio_start = start_of_audio(args.align, take.header.audio_start);
 
     let end = end_of_render(
@@ -476,16 +463,8 @@ fn export(args: Args) -> Result<(), String> {
         (None, only) => only,
     };
     let start = start_of_render(args.start, capture_start, lead);
-    let settings = Settings {
-        layout,
-        size,
-        pixels_per_point: scale,
-        fps: args.fps,
-        start,
-        end,
-        audio_start,
-        whole_song_spectrogram: args.playhead,
-    };
+    let settings =
+        Settings { layout, size, pixels_per_point: scale, fps: args.fps, start, end, audio_start };
     if settings.frame_count() == 0 {
         return Err(format!(
             "nothing to render: the start ({start:.2}s) is at or past the end ({end:.2}s)"
@@ -586,6 +565,14 @@ fn export(args: Args) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retired_playhead_flag_is_rejected() {
+        let error = parse_args_from(["take.take", "--playhead"].map(str::to_owned))
+            .err()
+            .expect("retired flag must fail");
+        assert!(error.contains("--playhead"), "{error}");
+    }
 
     /// Through CLI parsing, files, output selection and the real render loop:
     /// replacing appearance must draw exactly what recording it would draw.

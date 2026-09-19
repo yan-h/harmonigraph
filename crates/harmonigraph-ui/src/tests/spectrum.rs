@@ -1,5 +1,5 @@
 //! The analyzer and its spectrogram history: what is stored, when it is
-//! stamped, and how the live path and the offline precompute agree.
+//! stamped, and how stereo partials survive analysis.
 
 use super::probe::fresh;
 use crate::*;
@@ -253,10 +253,10 @@ fn a_live_column_is_stamped_at_the_middle_of_its_window() {
 /// duplicating a neighbour.
 ///
 /// Hence the second assertion, which is the one the eye sees: no gap wider than
-/// `MIN_BUCKET` means no slab is ever empty, at any frame rate or cap.
+/// the narrowest live slab means no slab is ever empty, at any frame rate or cap.
 #[test]
 fn columns_are_evenly_spaced_however_the_shell_batches_them() {
-    use crate::spectrogram::MIN_BUCKET;
+    let min_bucket = crate::spectrogram::live_slab(0.0, 1);
     let sr = 48_000.0f32;
     let config = SpectrumConfig::default();
     let mut spectrum = AudioSpectrum::default();
@@ -287,7 +287,7 @@ fn columns_are_evenly_spaced_however_the_shell_batches_them() {
             "columns {:.4} s apart, not {hop} — the batching is reaching the grid",
             gap,
         );
-        assert!(gap < MIN_BUCKET, "a {gap:.4} s gap can leave a {MIN_BUCKET} s slab empty");
+        assert!(gap < min_bucket, "a {gap:.4} s gap can leave a {min_bucket} s slab empty");
     }
 }
 
@@ -301,7 +301,7 @@ fn columns_are_evenly_spaced_however_the_shell_batches_them() {
 /// (erased entirely by a sum) under an in-phase E5. If either path mixed down,
 /// its columns would be missing a partial the other one has.
 #[test]
-fn the_live_path_and_the_offline_precompute_agree_on_stereo() {
+fn stereo_analysis_preserves_an_antiphase_partial() {
     use harmonigraph_core::spectrum::midi_to_hz;
     let sr = 48_000.0f32;
     let frames = 48_000usize; // one second
@@ -322,19 +322,7 @@ fn the_live_path_and_the_offline_precompute_agree_on_stereo() {
     spectrum.push_samples(&samples, 2, sr, span, &cfg);
     let live: Vec<_> = spectrum.history().iter().map(|c| (c.time, c.db().clone())).collect();
 
-    // Offline: the same buffer, the whole-song build.
-    let ws = precompute(&samples, 2, sr, 0.0, 0.0, span, &cfg);
-    let offline: Vec<_> = ws.columns.iter().map(|c| (c.time, c.db().clone())).collect();
-
     assert!(live.len() > 50, "only {} live columns for a second of audio", live.len());
-    assert_eq!(live.len(), offline.len(), "different column counts");
-    for (i, ((lt, ldb), (ot, odb))) in live.iter().zip(&offline).enumerate() {
-        assert!((lt - ot).abs() < 1e-6, "column {i} stamped {lt} live, {ot} offline");
-        assert!(ldb == odb, "column {i} holds different buckets live and offline");
-    }
-
-    // And both really did keep the anti-phase partial — otherwise the two could
-    // agree by both being wrong in the same way.
     let bucket_of = |hz: f32| {
         ((harmonigraph_core::spectrum::hz_to_midi(hz)
             - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
@@ -382,7 +370,8 @@ fn a_tones_energy_lands_at_the_time_the_tone_started() {
         })
         .collect();
     let cfg = SpectrumConfig::default();
-    let ws = precompute(&samples, 1, sr, 0.0, 0.0, seconds, &cfg);
+    let mut spectrum = AudioSpectrum::default();
+    spectrum.push_samples(&samples, 1, sr, seconds, &cfg);
 
     // The bin the tone sits in, and how loud it reads once fully sounding.
     // Columns are stored as bytes of dB, so "half power" is 3 dB down from the
@@ -391,15 +380,15 @@ fn a_tones_energy_lands_at_the_time_the_tone_started() {
     let a4 = ((69.0 - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
         * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32)
         .round() as usize;
-    let loudest = ws.columns.iter().map(|c| c.db()[a4]).max().expect("columns");
+    let loudest = spectrum.history().iter().map(|c| c.db()[a4]).max().expect("columns");
     assert!(db_of(loudest) > -10.0, "the tone should read loudly at its own bin");
 
     // Where the ridge reaches half power is what the eye reads as the onset:
     // the window is Hann-weighted, so it crosses half when it is half over the
     // start of the tone. That must be the moment the tone started.
     let half_power = loudest.saturating_sub((3.01 / DB_STEP).round() as u8);
-    let half = ws
-        .columns
+    let half = spectrum
+        .history()
         .iter()
         .find(|c| c.db()[a4] >= half_power)
         .expect("the tone must reach half power somewhere");
@@ -462,155 +451,6 @@ fn stored_columns_stay_finer_than_the_slabs_they_are_drawn_into() {
             if tier == 0 { SpectrumHistory::FINE_COLUMNS } else { SpectrumHistory::COARSE_COLUMNS };
         age += columns as f64 * spacing;
         spacing *= 2.0;
-    }
-}
-
-#[test]
-fn whole_song_precompute_lays_the_take_out_deterministically() {
-    use harmonigraph_core::spectrum::{
-        midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI,
-    };
-    let sr = 48_000.0f32;
-    let seconds = 2.0;
-    let n = (sr as f64 * seconds) as usize;
-    // A steady A4 (MIDI 69) across the whole buffer.
-    let freq = midi_to_hz(69.0);
-    let samples: Vec<f32> =
-        (0..n).map(|i| 0.8 * (std::f32::consts::TAU * freq * i as f32 / sr).sin()).collect();
-    let cfg = SpectrumConfig::default();
-
-    let ws = precompute(&samples, 1, sr, 0.0, 0.0, seconds, &cfg);
-    assert_eq!(ws.span, seconds);
-    assert_eq!(ws.start, 0.0);
-    assert!(ws.columns.len() > 10, "a 2 s take yields many columns, got {}", ws.columns.len());
-
-    // A full-take request starts at sample 0 and ends at the buffer's last
-    // frame, so bounding the feed leaves its established hop grid untouched.
-    let window_frames = cfg.window.samples();
-    let hop_frames = (AudioSpectrum::FFT_INTERVAL * f64::from(sr)).round() as usize;
-    let first_end = window_frames.div_ceil(hop_frames) * hop_frames;
-    let expected_columns = (n - first_end) / hop_frames + 1;
-    assert_eq!(ws.columns.len(), expected_columns, "the full-take column grid changed");
-    let window_center = window_frames as f64 / f64::from(sr) * 0.5;
-    assert!((ws.columns[0].time - (first_end as f64 / f64::from(sr) - window_center)).abs() < 1e-9);
-    assert!((ws.columns.last().unwrap().time - (seconds - window_center)).abs() < 1e-9);
-
-    // Columns are in take time, strictly increasing, inside the take.
-    let mut prev = -1.0;
-    for c in &ws.columns {
-        assert!(c.time > prev, "columns are time-ordered");
-        assert!(c.time > 0.0 && c.time <= seconds + 0.1, "column time {} in range", c.time);
-        prev = c.time;
-    }
-
-    // A steady tone lands its energy at A4's bin.
-    let a4 = ((69.0 - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32).round() as usize;
-    let mid = &ws.columns[ws.columns.len() / 2];
-    let peak = (0..SPECTRUM_BINS).max_by_key(|&b| mid.db()[b]).unwrap();
-    assert!(peak.abs_diff(a4) <= 1, "peak bin {peak} should be A4 (bin {a4})");
-
-    // `time_origin` shifts every column onto the take's timeline.
-    let shifted = precompute(&samples, 1, sr, 5.0, 5.0, seconds, &cfg);
-    assert!(
-        (shifted.columns[0].time - ws.columns[0].time - 5.0).abs() < 1e-6,
-        "time_origin offsets the columns"
-    );
-
-    // Pure: same inputs in, byte-identical columns out (the render leans on
-    // this for reproducibility).
-    let again = precompute(&samples, 1, sr, 0.0, 0.0, seconds, &cfg);
-    assert_eq!(ws.columns.len(), again.columns.len());
-    for (a, b) in ws.columns.iter().zip(&again.columns) {
-        assert_eq!(a.time, b.time);
-        assert_eq!(a.db(), b.db(), "precompute is deterministic");
-    }
-}
-
-/// A late render window pays for that window and its analyzer input margins,
-/// while keeping the same absolute sample grid as a full-take analysis.
-///
-/// The nonzero audio origin and a start four seconds into a six-second take are
-/// both load-bearing: a fixture starting at zero would never enter the trimmed
-/// path, and relative slice timestamps would happen to look like take time.
-/// The signal changes pitch at the render start so the first drawable column
-/// also depends on samples from both sides of that boundary; matching the full
-/// analysis proves the pre-roll reaches the FFT rather than merely moving a
-/// timestamp.
-#[test]
-fn a_late_window_precomputes_only_its_audio_on_the_take_grid() {
-    use harmonigraph_core::spectrum::midi_to_hz;
-    let sr = 4_000.0f32;
-    let take_seconds = 6.0;
-    let time_origin = 10.0;
-    let start = 14.0;
-    let span = 1.0;
-    let frames = (f64::from(sr) * take_seconds) as usize;
-    let samples: Vec<f32> = (0..frames)
-        .map(|i| {
-            let t = i as f32 / sr;
-            let hz = if f64::from(t) < start - time_origin {
-                midi_to_hz(57.0)
-            } else {
-                midi_to_hz(69.0)
-            };
-            0.7 * (std::f32::consts::TAU * hz * t).sin()
-        })
-        .collect();
-    let cfg = SpectrumConfig { window: SpectrumWindow::Fast, ..SpectrumConfig::default() };
-    let full = precompute(&samples, 1, sr, time_origin, time_origin, take_seconds, &cfg);
-    let late = precompute(&samples, 1, sr, time_origin, start, span, &cfg);
-    let past_audio =
-        precompute(&samples, 1, sr, time_origin, time_origin + take_seconds + 1.0, span, &cfg);
-    assert!(past_audio.columns.is_empty(), "a disjoint window still analyzed the take");
-
-    let window = cfg.window.samples() as f64 / f64::from(sr);
-    let hop = AudioSpectrum::FFT_INTERVAL;
-    let stored_ceiling = ((span + window) / hop).ceil() as usize + 1;
-    assert!(
-        late.columns.len() <= stored_ceiling,
-        "{} columns exceed a {span} s window plus {window:.3} s of history",
-        late.columns.len(),
-    );
-    assert!(
-        full.columns.len() > late.columns.len() * 3,
-        "the fixture did not distinguish a late slice ({} columns) from the full take ({})",
-        late.columns.len(),
-        full.columns.len(),
-    );
-    assert!(
-        late.columns.first().is_some_and(|c| c.time >= start - window && c.time < start),
-        "the stored set does not begin in the analyzer history before {start}",
-    );
-    assert!(
-        late.columns.last().is_some_and(|c| c.time <= start + span),
-        "the stored set reaches beyond the requested end",
-    );
-
-    let drawn: Vec<_> = late.drawn_columns(span).collect();
-    assert!(drawn.len() > 10, "the late fixture never reached drawable columns");
-    assert!(
-        (drawn[0].time - start).abs() < hop * 0.25,
-        "the first drawable column is stamped {} instead of absolute take time {start}",
-        drawn[0].time,
-    );
-    assert!(
-        (drawn.last().unwrap().time - (start + span)).abs() < hop * 0.25,
-        "the last drawable column is stamped {} instead of reaching {}",
-        drawn.last().unwrap().time,
-        start + span,
-    );
-    for column in &late.columns {
-        let reference = full
-            .columns
-            .iter()
-            .find(|candidate| candidate.time == column.time)
-            .unwrap_or_else(|| panic!("{} is not on the full take's hop grid", column.time));
-        assert_eq!(
-            column.db(),
-            reference.db(),
-            "the sliced analyzer lost the history behind column {}",
-            column.time,
-        );
     }
 }
 
@@ -917,31 +757,6 @@ fn frame_observes_a_longer_fade_before_pruning() {
     assert_eq!(picture.runtime.tracker.voices().count(), 0);
 }
 
-fn precompute(
-    samples: &[f32],
-    channels: usize,
-    sample_rate: f32,
-    time_origin: f64,
-    start: f64,
-    span: f64,
-    config: &crate::SpectrumConfig,
-) -> WholeSong {
-    WholeSong::precompute(
-        samples.len() / channels,
-        channels,
-        sample_rate,
-        time_origin,
-        start,
-        span,
-        config,
-        |range, analyzer| {
-            analyzer.push_frames(&samples[range.start * channels..range.end * channels]);
-            Ok::<_, std::convert::Infallible>(())
-        },
-    )
-    .unwrap()
-}
-
 #[test]
 fn physical_chunks_preserve_the_complete_logical_batch() {
     let samples: Vec<f32> = (0..62_271)
@@ -981,49 +796,4 @@ fn physical_chunks_preserve_the_complete_logical_batch() {
             }
         }
     }
-}
-
-#[test]
-fn whole_song_feeding_preserves_margins_grid_and_large_logical_hops() {
-    let sr = 48_000.0;
-    let frames = 300_017;
-    let samples: Vec<f32> = (0..frames).map(|i| (i as f32 * 0.047).sin()).collect();
-    let cfg = SpectrumConfig::default();
-    for (start, span) in [(10.0, 6.0), (14.013, 0.157), (10.0, 1_000_000.0), (20.0, 1.0)] {
-        let whole = precompute(&samples, 1, sr, 10.0, start, span, &cfg);
-        let mut ranges = Vec::new();
-        let mut physical = 0;
-        let chunked =
-            WholeSong::precompute(frames, 1, sr, 10.0, start, span, &cfg, |range, analyzer| {
-                ranges.push(range.clone());
-                for chunk in samples[range].chunks(997) {
-                    analyzer.push_frames(chunk);
-                    physical += 1;
-                }
-                Ok::<_, ()>(())
-            })
-            .unwrap();
-        let columns = |ws: &WholeSong| {
-            ws.columns.iter().map(|c| (c.time, c.db().clone())).collect::<Vec<_>>()
-        };
-        assert_eq!(columns(&whole), columns(&chunked));
-        if start == 20.0 {
-            assert!(ranges.is_empty());
-            continue;
-        }
-        assert!(physical > 1);
-        let window = cfg.window.samples() as f64 / f64::from(sr);
-        let expected_first = ((start - window - 10.0) * f64::from(sr)).floor().max(0.0) as usize;
-        let expected_last =
-            (((start + span + window / 2.0 - 10.0) * f64::from(sr)).ceil() as usize).min(frames);
-        assert_eq!(ranges[0].start, expected_first);
-        assert_eq!(ranges.last().unwrap().end, expected_last);
-        assert!(ranges.windows(2).all(|pair| pair[0].end == pair[1].start));
-        if span > 100.0 {
-            assert_eq!(ranges.len(), 1, "huge logical hop must be segmented only by the feeder");
-        }
-    }
-    let failed =
-        WholeSong::precompute(frames, 1, sr, 10.0, 10.0, 1.0, &cfg, |_, _| Err("read failed"));
-    assert!(matches!(failed, Err("read failed")));
 }

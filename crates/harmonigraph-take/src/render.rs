@@ -146,9 +146,7 @@ mod trigger_tests {
 
 /// Which spectrogram a render bakes: the Video pane's Spectrogram row.
 ///
-/// One choice of three rather than two switches, because the two scrolling
-/// spans and the playhead exclude each other, and a pair of flags would admit a
-/// fourth state that one of them silently overrides.
+/// Both modes scroll the same history; the choice decides its visible span.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectrogramRender {
     /// The live scrolling window, spanning the Analyzer's History duration —
@@ -160,9 +158,6 @@ pub enum SpectrogramRender {
     /// the preview keeps the dialled span; the offline renderer applies this,
     /// held to the History duration bar's ends.
     WholeVideo,
-    /// The render window laid out at once with a playhead sweeping through it.
-    /// `--playhead` on the command line also turns it on. Needs audio.
-    Playhead,
 }
 
 /// How a finished take gets turned into a video, edited in the Video

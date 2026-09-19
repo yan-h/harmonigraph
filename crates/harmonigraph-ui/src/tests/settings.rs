@@ -352,7 +352,7 @@ fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
     // Shared by both shells: the section, the row, and the choice on it. The
     // standalone has no transport to record with and still renders, so this is
     // the one thing in Render it can act on.
-    for row in ["Render", "Spectrogram", "Whole video", "Playhead"] {
+    for row in ["Render", "Spectrogram", "Whole video"] {
         for supported in [true, false] {
             let (shapes, _) = video_pane_shapes(supported);
             assert!(

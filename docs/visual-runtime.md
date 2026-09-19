@@ -52,7 +52,7 @@ Teardown still joins the existing background drainer and consumes its final owne
 
 Raw spectral history now expires after the existing 610-second retention window even when input has stopped.
 Previously that trim waited for another sample batch.
-The visible window is at most 600 seconds and whole-song rendering uses separate storage.
+The visible window is at most 600 seconds, including Whole video export.
 This does not promise that every cache allocation releases its capacity;
 expiry can invalidate an existing aggregate key when its retained prefix changes.
 Saved appearance/editor documents and their versions are unchanged.

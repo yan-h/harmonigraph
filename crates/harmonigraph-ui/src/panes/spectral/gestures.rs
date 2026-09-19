@@ -581,11 +581,7 @@ pub(super) fn drag_zoom(
                 DepthZoom::Level => {
                     // Same rule, along the direction the curve actually grows in:
                     // away from the far region it joins, or — with that region off
-                    // — up from the outer edge instead. That is `spectral_pane`'s
-                    // `joined`, and it reads the same from here because the one
-                    // layout where the two part company — whole-song, where the
-                    // pane forces the split to 0 and draws no spectrum at all —
-                    // belongs to the offline renderer, which has no pointer.
+                    // — up from the outer edge instead.
                     let outward = if split < 1.0 { -along } else { along };
                     // Only the ceiling moves. The floor IS the baseline the curve
                     // stands on, so it is the fixed end of this zoom the way `now`

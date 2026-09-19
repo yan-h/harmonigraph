@@ -88,16 +88,10 @@ pub(crate) fn render_pane(
     ui.painter().rect_filled(box_rect, 0.0, egui::Color32::from_rgb(bg.0, bg.1, bg.2));
     frame_chrome(ui, box_rect, pad);
 
-    // The "Playhead" render variant lays the whole take's spectrogram out with
-    // a sweeping playhead, from audio the live preview doesn't have. Rather
-    // than show the live scrolling spectrogram and quietly mislead, leave the
-    // spectral region empty and say so.
     let placements = layout.resolve(box_rect.size());
-    let placeholder = state.appearance.render.spectrogram == crate::SpectrogramRender::Playhead;
     for (pane, rect) in &placements {
         let rect = rect.translate(box_rect.min.to_vec2());
         match pane {
-            Pane::Spectral if placeholder => playhead_preview(ui, rect, state),
             Pane::Spectral => {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                 // Its text sizes itself off the rect it is given, so drawing
@@ -410,13 +404,6 @@ fn clear_everything(ui: &mut egui::Ui, state: &mut PictureState) {
 /// transport still renders; the rows that need a take to exist follow the same
 /// `supported` gate Record does.
 ///
-/// `RenderConfig.spectrogram` is the ONLY thing deciding live-vs-playhead. The
-/// renderer turns the playhead on for `--playhead` or this setting, whichever
-/// says yes, so a plugin that also passed the flag would be answering a
-/// question the row is supposed to own — and passing it unconditionally would
-/// make "Scrolling" unreachable. `RenderRequest::playhead` is what keeps the row
-/// deciding. The live preview can't lay a whole take out, so a Playhead choice
-/// leaves the preview's spectral region blank — see `playhead_placeholder`.
 fn render_controls(
     ui: &mut egui::Ui,
     state: &mut PictureState,
@@ -445,11 +432,6 @@ fn render_controls(
                 SpectrogramRender::WholeVideo,
                 "Whole video",
                 "Scroll slowly enough that the whole video fits: by its last frame, the MIDI ribbons and spectrogram reach back to its first. Up to 10 minutes. The preview here keeps showing the History duration.",
-            ),
-            (
-                SpectrogramRender::Playhead,
-                "Playhead",
-                "Show the entire recorded spectrogram with a moving playhead. Requires recorded audio; this region stays blank in the live preview.",
             ),
         ],
     );
@@ -555,46 +537,6 @@ fn frame_chrome(ui: &egui::Ui, box_rect: egui::Rect, pad: f32) {
         p.line_segment([o, o - egui::vec2(sx * len, 0.0)], stroke);
         p.line_segment([o, o - egui::vec2(0.0, sy * len)], stroke);
     }
-}
-
-/// The preview's spectral region when the whole-song playhead variant is
-/// selected: deliberately blank, with a label saying why.
-///
-/// That render lays the take's whole spectrogram out at once from recorded
-/// audio and sweeps a playhead across it. The live preview has neither the
-/// audio nor the layout, so anything it drew here would be a different picture
-/// from the render — better to show nothing and name it. (Drawing the live
-/// scrolling spectrogram under a small "Playhead" pill in the corner reads as
-/// an odd label stuck on an otherwise trustworthy preview.)
-fn playhead_placeholder(ui: &egui::Ui, rect: egui::Rect) {
-    let p = ui.painter_at(rect);
-    // The pane's own background, so the region still reads as the spectral
-    // pane sitting there empty rather than as a hole in the frame.
-    p.rect_filled(rect, 0.0, theme::picture());
-    if rect.width() < 90.0 || rect.height() < 30.0 {
-        return;
-    }
-    let text = |s: &str, size: f32, color| {
-        p.layout(s.to_owned(), egui::FontId::proportional(size), color, rect.width() - 16.0)
-    };
-    let title = text("Playhead render", 14.0, theme::accent());
-    let sub = (rect.height() > 56.0)
-        .then(|| text("the whole take, laid out at render time", 11.0, theme::text_dim()));
-    let gap = if sub.is_some() { 4.0 } else { 0.0 };
-    let total = title.size().y + gap + sub.as_ref().map_or(0.0, |g| g.size().y);
-    let mut y = rect.center().y - total * 0.5;
-    for galley in [Some(title), sub].into_iter().flatten() {
-        let x = rect.center().x - galley.size().x * 0.5;
-        let height = galley.size().y;
-        p.galley(egui::pos2(x, y), galley, theme::text_dim());
-        y += height + gap;
-    }
-}
-
-fn playhead_preview(ui: &mut egui::Ui, rect: egui::Rect, state: &mut PictureState) {
-    playhead_placeholder(ui, rect);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-    super::spectral::preview_gestures(&mut child, state, PREVIEW_SURFACE);
 }
 
 /// The largest sub-rect of `outer` with the given width:height aspect, centered
@@ -778,7 +720,6 @@ mod tests {
         frame_rect: egui::Rect,
         modifiers: egui::Modifiers,
         events: Vec<egui::Event>,
-        placeholder: bool,
     ) {
         let spectral = preview_pane_rect(
             frame_rect,
@@ -797,19 +738,15 @@ mod tests {
                 ..Default::default()
             },
             |ui| {
-                if placeholder {
-                    playhead_preview(ui, spectral, state);
-                } else {
-                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(spectral));
-                    super::super::spectral::spectral_pane(
-                        &mut child,
-                        state,
-                        100.0,
-                        PREVIEW_SURFACE,
-                        1.0,
-                        super::super::spectral::Navigation::Preview,
-                    );
-                }
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(spectral));
+                super::super::spectral::spectral_pane(
+                    &mut child,
+                    state,
+                    100.0,
+                    PREVIEW_SURFACE,
+                    1.0,
+                    super::super::spectral::Navigation::Preview,
+                );
             },
         );
     }
@@ -975,14 +912,7 @@ mod tests {
                     vec![egui::Event::PointerMoved(end)],
                     vec![button(end, false)],
                 ] {
-                    spectral_preview_frame(
-                        &ctx,
-                        &mut state,
-                        rect,
-                        egui::Modifiers::NONE,
-                        events,
-                        false,
-                    );
+                    spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events);
                 }
                 let expected = match target {
                     LatticeSide::Left => SpectralOrientation::Left,
@@ -1007,14 +937,7 @@ mod tests {
                     vec![egui::Event::PointerMoved(outside)],
                     vec![button(outside, false)],
                 ] {
-                    spectral_preview_frame(
-                        &ctx,
-                        &mut state,
-                        rect,
-                        egui::Modifiers::NONE,
-                        events,
-                        false,
-                    );
+                    spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events);
                 }
                 assert_eq!(
                     state.appearance.spectrum.orientation, before,
@@ -1048,63 +971,9 @@ mod tests {
         for events in
             [vec![egui::Event::PointerMoved(near_right)], vec![button(true)], vec![button(false)]]
         {
-            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events, false);
+            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events);
         }
         assert_eq!(state.appearance.spectrum.orientation, SpectralOrientation::Left);
-    }
-
-    #[test]
-    fn playhead_placeholder_keeps_analyzer_orientation_and_pitch_zoom_live() {
-        let ctx = crate::tests::probe::themed();
-        let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
-        state.appearance.render.spectrogram = crate::SpectrogramRender::Playhead;
-        state.appearance.render.frame.lattice = LatticeSide::Left;
-        state.appearance.render.frame.split = 0.3;
-        state.appearance.spectrum.low_midi = 36.0;
-        state.appearance.spectrum.high_midi = 96.0;
-        let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
-        let spectral = preview_pane_rect(
-            rect,
-            state.appearance.render.frame.lattice,
-            state.appearance.render.frame.split,
-            Pane::Spectral,
-        );
-        let start = spectral.center();
-        let end = rect.center_top() + egui::vec2(0.0, 2.0);
-        let button = |pos, pressed| egui::Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        };
-        for events in [
-            vec![egui::Event::PointerMoved(start)],
-            vec![egui::Event::PointerMoved(start), button(start, true)],
-            vec![egui::Event::PointerMoved(end)],
-            vec![button(end, false)],
-        ] {
-            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events, true);
-        }
-        assert_eq!(state.appearance.spectrum.orientation, SpectralOrientation::Top);
-
-        let before = state.appearance.spectrum.high_midi - state.appearance.spectrum.low_midi;
-        for events in [
-            vec![egui::Event::PointerMoved(start)],
-            vec![egui::Event::PointerMoved(start)],
-            vec![
-                egui::Event::PointerMoved(start),
-                egui::Event::MouseWheel {
-                    unit: egui::MouseWheelUnit::Point,
-                    delta: egui::vec2(0.0, 40.0),
-                    phase: egui::TouchPhase::Move,
-                    modifiers: egui::Modifiers::NONE,
-                },
-            ],
-        ] {
-            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events, true);
-        }
-        let after = state.appearance.spectrum.high_midi - state.appearance.spectrum.low_midi;
-        assert!(after < before - 1.0, "the placeholder swallowed pitch zoom");
     }
 
     #[test]
@@ -1142,7 +1011,7 @@ mod tests {
             vec![egui::Event::PointerMoved(end)],
             vec![button(end, false)],
         ] {
-            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::SHIFT, events, false);
+            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::SHIFT, events);
         }
         assert!(
             state.appearance.spectrum.roll_seconds < before.roll_seconds * 0.75,
@@ -1188,7 +1057,7 @@ mod tests {
             vec![egui::Event::PointerMoved(end)],
             vec![button(end, false)],
         ] {
-            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events, false);
+            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events);
         }
         assert!(
             state.appearance.spectrum.roll_fraction < before.roll_fraction - 0.05,
@@ -1332,11 +1201,6 @@ mod tests {
                     assert_eq!(enlarged.spectral_text, saved.spectral_text);
                     // Exercise the actual scoped draw too: it must restore the
                     // settings that the dock and a subsequent export will read.
-                    assert_ne!(
-                        state.appearance.render.spectrogram,
-                        crate::SpectrogramRender::Playhead,
-                        "the spectral preview must draw"
-                    );
                     let ctx = egui::Context::default();
                     crate::theme::apply_theme(&ctx);
                     let output = ctx.run_ui(
