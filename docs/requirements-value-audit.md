@@ -40,7 +40,12 @@ Yan approved the small, separate removal of four dormant saved fields in [#959](
 Spacing, adaptive next-note outlines, separate-WAV replacement ([#972](https://github.com/yan-h/harmonigraph/issues/972)) and the four dormant export fields ([#959](https://github.com/yan-h/harmonigraph/issues/959)) are accepted for future removal.
 The take's own recorded audio remains supported.
 Cold-start optimization is explicitly retained.
-No other removal has been approved.
+Yan subsequently approved Playhead and extra single-pane/custom public export layouts in [#973](https://github.com/yan-h/harmonigraph/issues/973) and [#974](https://github.com/yan-h/harmonigraph/issues/974),
+while retaining Scrolling,
+Whole video and normal combined arrangement/orientation controls.
+No removal of Notes,
+Console,
+standalone or the browser laboratory has been approved.
 
 ## Method and limits
 
@@ -371,12 +376,12 @@ No removal of those four interfaces/tools has been approved.
 | Feature | Current evidence | Next audit boundary |
 | --- | --- | --- |
 | Spiral | Occasionally used by Yan. | Retain; do not infer disuse of its render path. |
-| Notes pane | Not used by Yan. | Trace pane-specific presentation and development inspection before proposing retirement; retain shared note tracking and naming. |
-| Console | Not used by Yan. | Distinguish the pane from the messages, warnings and diagnostics it exposes. Identify a retained way to observe important faults. |
-| Standalone application | Not used by Yan. | Inventory agent/test/development uses before proposing removal, including the font fallback whose retained consumer is this shell. |
-| Adaptive-tuning laboratory | Not used by Yan. | Distinguish browser exploration UI from simulator/reference-fixture generation and policy checks. Personal non-use alone does not retire the musical oracle. |
-| Playhead export | Not used by Yan. | Investigate the separate precomputed-history path; preserve Scrolling and Whole video. |
-| Single-pane and custom export layouts | Not used by Yan. | Investigate public presets/file loading; retain internal compositions needed by visual tests. |
+| Notes pane | Not used by Yan; consumer trace complete. | Small UI-retirement proposal; lose the exact per-voice debug table, retain shared tracking/naming and Analyzer warning. |
+| Console | Not used by Yan; two important plugin failures lack an existing alternative diagnostic. | Recommend keeping the small current pane; no new logging system. |
+| Standalone application | Not used by Yan; maintained developer capability, current launch frequency unknown. | Recommend keeping it at this checkpoint; no equivalent existing native interactive replacement established. |
+| Adaptive-tuning laboratory | Browser not used by Yan; headless fixture pipeline actively maintained. | Browser-only retirement is a proposal; preserve model, tests and fixture generation. |
+| Playhead export | Non-use followed by explicit removal approval. | Accepted, implementation deferred; preserve Scrolling and Whole video. |
+| Single-pane and custom export layouts | Non-use followed by explicit removal approval. | Accepted, implementation deferred; retain normal combined controls and internal compositions needed by visual tests. |
 | Combined Lattice/Analyzer arrangement and orientation | Explicitly used by Yan. | Keep normal preview/export layout, proportions, side and orientation controls. |
 
 Video layout means the composition of the exported frame:
@@ -396,15 +401,25 @@ tests and development consumers.
 It recommends investigating Playhead removal,
 distinguishes an unused browser interface from a live musical reference model,
 and preserves diagnostic access despite personal non-use of the Console pane.
-No additional product removal has been approved by these usage answers.
+Those usage answers alone did not approve removal.
+Yan's subsequent explicit approval settles Playhead and extra public export layouts;
+the four panes/developer interfaces remain proposals.
 
 ## Next use of this audit
+
+The [historical change-cost audit](historical-change-cost.md) and the developer-consumer continuation are now complete for this checkpoint.
+They reinforce the existing settings and replay-parity proposals,
+with no new general refactor or duplicate issue.
+Notes and browser-only lab retirement remain optional choices;
+keeping Console and standalone is the current audit recommendation.
 
 Keep the choice list small:
 Yan's direct non-use answer and removal approval make adaptive next-note outlines an accepted simplification;
 separate-WAV replacement is accepted too,
 while closed-window analysis and cold-start optimization are explicitly retained.
 The dormant-field removal is accepted too.
+Playhead and extra single-pane/custom public export-layout removal are also explicitly accepted,
+with normal combined arrangement/orientation controls retained.
 This batch of value questions is resolved;
 carry forward the accepted removals and existing concrete issues when Yan requests implementation.
 Do not reopen #790 or explicitly parked spectrogram campaigns merely because audit capacity is available.

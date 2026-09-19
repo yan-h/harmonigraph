@@ -1,14 +1,25 @@
 # Long-term maintainability
 
 Last updated: 2026-09-19.
-Status: discovery in progress; spacing, adaptive next-note outlines, separate-WAV replacement and four dormant export fields accepted for future removal; no product changes in this session.
+Status: discovery checkpoint reached; spacing, adaptive next-note outlines, separate-WAV replacement, four dormant export fields, Playhead and extra public export layouts accepted for future removal; implementation deferred.
 
 ## Start here
 
 **Aim:** make Harmonigraph easier for future agents to change correctly,
 while reducing the attention Yan must spend understanding and supervising those changes.
 
-**Current focus:** systematically discover and compare maintainability opportunities across the project before selecting implementation work.
+**Current position:** the recommended historical change-cost analysis and developer-tool investigation are complete for this checkpoint.
+The [historical report](historical-change-cost.md) inventories 100 merged changes and traces representative repairs,
+ordinary successes and misleading large diffs.
+It supports existing settings/test and replay-parity issues alongside the accepted removals,
+not a broad architecture rewrite.
+Notes and browser-only lab retirement remain optional product decisions;
+Console and standalone are recommended keeps for now.
+Naming/FOV comparisons and GUI-stack feasibility remain lower-priority,
+independent investigations.
+No implementation has begun.
+
+The discovery phase systematically compared opportunities before selecting implementation work.
 Spacing was a worked example of the method,
 not the start of a sequence of immediate fixes.
 The [broader discovery report](https://github.com/yan-h/harmonigraph/issues/954) now includes detailed checks of retained export/diagnostic machinery,
@@ -48,6 +59,10 @@ He subsequently approved removing separate-WAV replacement for take exports ([#9
 The take's own captured audio remains supported.
 He also approved removing the four dormant export fields ([#959](https://github.com/yan-h/harmonigraph/issues/959)),
 saying they can be added back if needed.
+He subsequently approved Playhead retirement ([#973](https://github.com/yan-h/harmonigraph/issues/973)) and the extra single-pane/custom public export layouts ([#974](https://github.com/yan-h/harmonigraph/issues/974)).
+Preserve Scrolling,
+Whole video and the combined Lattice/Analyzer arrangement,
+proportion and orientation controls he uses.
 These implementations are deferred.
 He chose to keep the cold-start shader optimization,
 and explicitly requires an accurate current lattice plus spectrogram history from while the editor was closed,
@@ -61,9 +76,9 @@ standalone application or adaptive-tuning laboratory.
 He also reported no use of Playhead,
 single-pane exports or custom export arrangements,
 while explicitly retaining the controls to arrange and orient Lattice and Analyzer together.
-These are [usage leads](requirements-value-audit.md#whole-feature-usage-inventory),
-not additional approved removals;
-check agent, test and diagnostic consumers before recommending a scope.
+The four unused panes/developer interfaces remain [usage leads](requirements-value-audit.md#whole-feature-usage-inventory),
+not approved removals.
+The later explicit approval settles Playhead and extra public export layouts only.
 The [feature-retirement trace](feature-retirement-discovery.md) now identifies concrete removal boundaries,
 including shared tests, musical reference data and diagnostic sinks that need to remain available.
 
@@ -144,7 +159,7 @@ The pilot and Yan's discovery-only direction have changed the sequence below.
 | --- | --- | --- | --- |
 | 1. Pilot | Examine recent fixes and one area with recurring maintenance work; trace requirements and challenge the strongest findings. | Twelve-case assessment and three recommendations in [#950](https://github.com/yan-h/harmonigraph/issues/950). | Complete |
 | 2. Worked discovery case | Trace persisted spacing and settings validation; inspect saved examples and render a keep/remove comparison. | Evidence in [#952](https://github.com/yan-h/harmonigraph/issues/952); Yan accepted the custom-input loss. | Complete; implementation deferred |
-| 3. Broader discovery and prioritization | Survey the areas below, trace realistic changes, challenge the best leads and compare their value. | Detailed results in [#954](https://github.com/yan-h/harmonigraph/issues/954); runtime probes and negative controls; [requirements-value audit](requirements-value-audit.md). | Current phase; broad requirements inventory and targeted history/code audit added |
+| 3. Broader discovery and prioritization | Survey the areas below, trace realistic changes, challenge the best leads and compare their value. | [#954](https://github.com/yan-h/harmonigraph/issues/954), runtime probes, [requirements-value audit](requirements-value-audit.md), [100-change history](historical-change-cost.md) and developer-consumer trace. | Checkpoint reached; smaller optional leads remain independently returnable |
 | 4. Selected simplification | After Yan requests implementation, sequence the most valuable accepted changes by dependencies and file overlap. | Focused PRs showing which maintenance obligations disappeared and what behavior was verified. | Deferred |
 | 5. Verification and handoff | Check the resulting workflows and update the explanations future agents need. | Evidence of preserved or explicitly changed behavior, remaining issues and a clear stopping point. | Follows implementation |
 
@@ -266,12 +281,27 @@ Record the source revision and relevant settings so comparisons can be reproduce
 
 ### Architecture: investigate the cost of realistic changes
 
-Choose a few plausible changes rather than auditing every abstraction against general style preferences.
-Examples from this discussion are:
+Yan chose historical analysis as the next investigation on 2026-09-19.
+The [first historical batch](historical-change-cost.md) is complete,
+with its exact population and limits recorded.
+Start with actual merged changes rather than implementing hypothetical ones.
+Inventory a stated range broadly,
+then inspect representative changes and their evidenced follow-ups,
+including straightforward successes.
+Examples of useful histories are:
 
 - Add a visual behavior that must appear in both the editor and exported video.
 - Change a setting while keeping its displayed, saved and rendered meanings consistent.
 - Change how recorded performance data reaches the renderer.
+
+File and line counts locate cases;
+they do not measure effort or architectural quality.
+Separate generated assets,
+file moves,
+tests and intentional product iteration from duplicated rules and avoidable coordination.
+Treat a later change as a repair only when its diff or recorded evidence supports that connection.
+Check whether the burden survives at the inspected revision before recommending another fix.
+Use a new experiment only for a specific consequential question history cannot answer.
 
 Identify where a maintainer must know the same fact in several places,
 where state lacks a clear owner,
@@ -377,7 +407,7 @@ These individual issues make the leads independently returnable without converti
 
 | Lead | Issue | Scope |
 | --- | --- | --- |
-| Dormant export fields | [#959](https://github.com/yan-h/harmonigraph/issues/959) | Revisit the earlier keep decision. |
+| Dormant export fields | [#959](https://github.com/yan-h/harmonigraph/issues/959) | Removal accepted after revisiting the earlier keep decision; implementation deferred. |
 | Retired tracing | [#960](https://github.com/yan-h/harmonigraph/issues/960) | Supported proposal; coordinate with fixture issue #955. |
 | Repeated ranges | [#961](https://github.com/yan-h/harmonigraph/issues/961) | Bounded sanitizer/range reuse; coordinate with #957. |
 | Recorder/display/replay parity | [#962](https://github.com/yan-h/harmonigraph/issues/962) | Promote focused coverage when implementation is requested. |
@@ -415,8 +445,8 @@ source sites and limits.
 This is a reason to reassess the rebase's value,
 not a conclusion that upgrading is worthwhile or safe.
 
-Prioritize that bounded feasibility work for further discovery,
-then compare it with the smaller settings and tracing proposals.
+That bounded feasibility work remains a separate investigation.
+The later historical checkpoint supports selecting the smaller accepted removals and existing settings/parity proposals without waiting for a dependency rebase.
 Hidden knobs remain secondary.
 Product choices should still arrive as a small batch with concrete losses;
 implementation remains deferred.

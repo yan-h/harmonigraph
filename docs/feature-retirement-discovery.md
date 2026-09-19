@@ -17,20 +17,24 @@ the browser tuning laboratory,
 Playhead exports,
 single-pane exports or custom export arrangements.
 He explicitly uses the controls to arrange and orient Lattice and Analyzer together.
-These usage answers are not additional removal approvals.
-The earlier accepted removals remain in the [plan](maintainability-plan.md).
+These usage answers initially supplied evidence only.
+Yan subsequently explicitly approved removing Playhead and the extra public export layouts,
+while keeping the combined arrangement/orientation controls.
+The four panes/developer interfaces still have no removal approval.
+All accepted removals remain deferred in the [plan](maintainability-plan.md).
 
 Discovery follow-ups are tracked in [#973: Playhead](https://github.com/yan-h/harmonigraph/issues/973),
 [#974: extra public export layouts](https://github.com/yan-h/harmonigraph/issues/974) and [#975: unused panes and developer interfaces](https://github.com/yan-h/harmonigraph/issues/975).
-Opening these issues does not approve product removal.
+Opening these issues did not approve product removal;
+the later direct decision settles #973 and #974 only.
 
 | Lead | Actual retirement opportunity | Recommendation |
 | --- | --- | --- |
-| Playhead export | Retire a distinct precomputed spectrogram/full-note-roll path and many fixed-timeline branches. | Strongest new candidate. Retain Scrolling, Whole video and live history; check shared constants and tests below. |
-| Single-pane/custom export options | Retire public preset choices and custom file input without deleting the shared preview/render layout engine. | Bounded candidate. Internal single-pane test compositions remain useful. |
+| Playhead export | Retire a distinct precomputed spectrogram/full-note-roll path and many fixed-timeline branches. | Accepted, implementation deferred. Retain Scrolling, Whole video and live history; check shared constants and tests below. |
+| Single-pane/custom export options | Retire public preset choices and custom file input without deleting the shared preview/render layout engine. | Accepted, implementation deferred. Combined controls and internal single-pane test compositions remain useful. |
 | Notes pane | Retire a held-voice debug table and its exclusive nearest-node lookup. | Small candidate; retain shared note tracking, naming and Analyzer off-lattice warning. |
-| Console | UI is small, but its buffer is the only current in-app sink for several important failures. | Keep diagnostic access pending a concrete existing alternative. Non-use does not make the messages unnecessary. |
-| Standalone application | Retire a separate eframe/midir shell, mock input, screenshots and manual take-generation workflow. | Worth a developer-consumer audit; personal non-use alone is insufficient. Do not replace it with a new framework just to delete it. |
+| Console | UI is small, but its buffer is the only current in-app sink for several important failures. | Recommend keeping the existing small pane: the completed consumer check found no equivalent plugin diagnostic for two retained behaviors. This is an audit recommendation, not a new user requirement. |
+| Standalone application | Retire a separate eframe/midir shell, mock input, screenshots and manual take-generation workflow. | Recommend leaving it in place at this checkpoint. Current launch frequency is unknown; no existing replacement for native interactive debugging was established. Do not create a replacement framework to justify retirement. |
 | Browser tuning lab | Retire browser presentation/worker while retaining the model that generates Rust musical fixtures. | Browser-only retirement is a credible candidate. Retain the headless musical reference unless its replacement is separately justified. |
 
 ## Playhead is separate from Whole video
@@ -138,6 +142,16 @@ Both Notes and Console are persisted `Tab` variants;
 dropping one can reject a saved dock even if Yan never opened that tab.
 The version floor is not a substitute for disclosing and reporting the refusal.
 
+The subsequent consumer check inspected main at `8b4edf4e`.
+Tuning mailbox refusal and incomplete/publication history already have inline warnings,
+but saved-state refusal and failure to start the background analyzer have no equivalent plugin-visible alternative.
+The latter explains losing the closed-window spectrogram history Yan explicitly wants.
+Existing offline stderr and tuning-specific logs do not cover those plugin failures.
+Commit `8306e98` deliberately made refused saved state observable;
+persist and background-restore tests still assert that diagnostic.
+Keeping the small existing Console is the bounded recommendation,
+not starting a logging project.
+
 ## Standalone and browser laboratory consumers
 
 The standalone crate is a separate 1,018-line application file plus its manifest.
@@ -158,6 +172,21 @@ Retiring the shell makes the fallback a follow-up lead;
 it does not prove every fallback or hot-reload feature can be removed without another consumer trace.
 No current usage frequency of the standalone by agents was established.
 
+The follow-up history check found maintained capabilities,
+including MPE handling (`86e62df2`),
+event tracing (`312fffe`),
+self-screenshot (`00a46265`),
+font bounds ([#553](https://github.com/yan-h/harmonigraph/pull/553)) and shared runtime ownership ([#798](https://github.com/yan-h/harmonigraph/pull/798)).
+Those changes and the current development instructions establish a maintained no-DAW tool,
+not a measured frequency of interactive use.
+The inspected #798 validation is explicitly headless;
+no recent standalone launch record was established by this bounded search.
+Private agent transcripts were not searched.
+At this checkpoint,
+leave the tool in place rather than ask Yan to decide how agents should debug native windows.
+This is a provisional audit recommendation,
+not a requirement to preserve it indefinitely or an invitation to keep investigating without a new reason.
+
 The browser laboratory separates more cleanly:
 `index.html`, `app.mjs`, `style.css` and `reach-worker.mjs` implement the interactive UI.
 `model.mjs`, `examples.mjs`, `model.test.mjs` and `export-plugin-fixtures.mjs` provide the headless model and fixture pipeline.
@@ -170,3 +199,20 @@ but shared selection and musical fixture generation remain separate obligations.
 No automated Node-test/generator invocation was found in current CI;
 the documented manual commands and generated Rust fixture are the identified consumers.
 Do not turn the absence of an automated invocation into a reason to add a CI job during this discovery.
+
+Actual historical browser checks were reported in the introduction PR [#778](https://github.com/yan-h/harmonigraph/pull/778),
+including musical examples,
+controls and import/export round-trip behavior.
+That establishes historical validation,
+not current user demand.
+The headless consumer is still active:
+[#956](https://github.com/yan-h/harmonigraph/pull/956) updates the generator,
+examples,
+committed fixture and Rust reader together to carry every declared setting and reach the unsnapped branch.
+The [historical change-cost audit](historical-change-cost.md) also traces #865's coordinated production/model/browser update.
+Removing browser presentation can retire those UI edits without discarding the distinct reference-model check.
+
+The bounded developer-interface investigation is complete for this checkpoint.
+Notes and browser-only retirement remain concrete proposals for Yan;
+Console and standalone are recommended keeps for now.
+No new product removal beyond the accepted Playhead/export-layout decisions is inferred.

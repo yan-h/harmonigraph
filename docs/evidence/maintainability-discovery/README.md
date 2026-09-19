@@ -6,6 +6,12 @@ They preserve the costly reproduction work behind [#954](https://github.com/yan-
 [#955](https://github.com/yan-h/harmonigraph/issues/955) and [#957](https://github.com/yan-h/harmonigraph/issues/957).
 Implementation remains deferred in [draft PR #951](https://github.com/yan-h/harmonigraph/pull/951).
 
+The subsequent [historical inventory](history-inventory.md) records file/line scope for 100 merged changes.
+It is read-only history evidence,
+not another runtime probe;
+its [interpretation and recommendations](../../historical-change-cost.md) separate generated output,
+moves and justified multi-file changes from recurring maintenance obligations.
+
 Measured on 2026-09-19,
 macOS arm64 with Rust 1.92,
 at `38ad34eedbfe40d164f77a0012e33c656f3de4a8`.
