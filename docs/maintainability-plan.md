@@ -1,28 +1,35 @@
 # Long-term maintainability
 
 Last updated: 2026-09-19.
-Status: first pilot complete; implementation has not started.
+Status: pilot and bounded settings investigation complete; spacing removal proposed; implementation has not started.
 
 ## Start here
 
 **Aim:** make Harmonigraph easier for future agents to change correctly,
 while reducing the attention Yan must spend understanding and supervising those changes.
 
-**Current focus:** turn the [completed twelve-change pilot](https://github.com/yan-h/harmonigraph/issues/950) into a small settings investigation.
-The next proposed step is to establish whether persisted lattice spacing serves a supported workflow,
-prepare the consequences of removing or retaining it,
-and record the actual paths that validate settings.
-The pilot found reasons to question some explanations and requirements,
-but did not justify a broad rewrite or removal of the existing safety guards.
+**Current focus:** decide the [spacing proposal prepared by the settings investigation](https://github.com/yan-h/harmonigraph/issues/952).
+The agent recommendation is to remove the hidden lattice-spacing setting completely and use one fixed world unit per step.
+All recoverable spacing values in the saved sample were the default;
+an executed comparison also reproduced one custom-spacing look exactly using the existing zoom and label-size controls.
+Removal would eliminate a configurable value shared across persistence,
+camera movement and geometry.
+It would give up custom spacing values,
+including unusual scales that cannot be recreated within the remaining controls' ranges.
 
-**Decisions needed from Yan now:** none.
-Agents should investigate enough to make any eventual product tradeoff concrete before asking.
+**Decision needed from Yan:** accept that custom-spacing loss or keep the setting and its safeguards.
+Removal is a proposal,
+not an established requirement or an authorized implementation.
+If accepted,
+the next implementation should be a small separate PR with default-scale output verified and the custom-file behavior change stated.
+The independent next investigation is the architecture-through-changes stage below.
 
 **How to return:** ask an agent to continue from `docs/maintainability-plan.md`.
 The agent should read the current document and linked work,
 then summarize the current position and take the next unblocked step within the requested scope.
 Yan authorized the first pilot and its expanded sample on 2026-09-19.
-That authorization does not cover implementation of all the proposed changes.
+He then authorized the settings investigation and keeping its documentation in the open draft PR #951.
+Those authorizations do not cover implementation of all the proposed changes.
 
 ## Confirmed preferences and the concern behind this work
 
@@ -86,8 +93,8 @@ The pilot can change this sequence.
 | Stage | Agent work | Useful result | State |
 | --- | --- | --- | --- |
 | 1. Pilot | Examine recent fixes and one area with recurring maintenance work; trace requirements and challenge the strongest findings. | Twelve-case assessment and three recommendations in [#950](https://github.com/yan-h/harmonigraph/issues/950). | Complete |
-| 2. Intent and reference cases | Start with persisted spacing and the settings validation paths; prepare a concrete keep/remove comparison using supported workflows and existing reference cases. | A justified requirement or deletion proposal, with observable consequences. | Next proposed step |
-| 3. Architecture through changes | Trace a few plausible future changes through state ownership and data flow. | Specific sources of duplicated knowledge, coordination or hidden assumptions. | Proposed |
+| 2. Settings intent and reference case | Trace persisted spacing and settings validation; inspect saved examples and render a keep/remove comparison. | Evidence and a full-removal proposal in [#952](https://github.com/yan-h/harmonigraph/issues/952), including the supported custom-input loss. | Investigation complete; product decision pending |
+| 3. Architecture through changes | Trace a few plausible future changes through state ownership and data flow. | Specific sources of duplicated knowledge, coordination or hidden assumptions. | Next proposed investigation |
 | 4. Simplification | Implement the most valuable justified removals or structural repairs in a coherent order. | Reviewable PRs showing what complexity disappeared and what behavior was verified. | Proposed |
 | 5. Verification and handoff | Check the resulting workflows and update the explanations future agents need. | Evidence of preserved or explicitly changed behavior, remaining issues and a clear stopping point. | Proposed |
 
@@ -187,6 +194,12 @@ current focus,
 consequential product decisions and links to active work.
 Keep the opening section current so returning does not require reading the whole history.
 
+Yan chose on 2026-09-19 to keep [draft PR #951](https://github.com/yan-h/harmonigraph/pull/951) open for this investigation phase.
+Update that PR as the findings develop;
+do not open a documentation PR for each step.
+Merge the phase at a meaningful checkpoint when Yan asks,
+and keep implementation changes in their own focused PRs.
+
 Use GitHub issues for concrete investigations or implementation work once justified.
 Keep reproduction steps,
 eliminated hypotheses,
@@ -199,6 +212,27 @@ It recommends the bounded settings investigation above,
 repairing the already-filed misleading shader-corpus check in [#947](https://github.com/yan-h/harmonigraph/issues/947),
 and retaining the useful cache ownership and diagnostic CI changes.
 No implementation work was performed by the pilot.
+
+Completed bounded investigation: [#952 — settings paths and lattice-spacing decision](https://github.com/yan-h/harmonigraph/issues/952).
+It corrects the pilot's writer inventory:
+the documented appearance generator can set spacing through its generic field handling.
+That establishes a supported capability,
+not a user requirement to preserve the field.
+Seventeen current-format take files and two usable saved project views all used spacing 1;
+the report states the sampling limits and separately records obsolete takes and an unusable project sample.
+Four rendered frames establish that zoom alone differs from spacing,
+while zoom plus label size exactly reproduces the chosen custom-spacing example.
+This does not establish equivalence for every legal configuration.
+
+The same report maps editor,
+recording and offline validation paths.
+Normal saved-state and offline appearance loading already normalize settings;
+direct typed callers can bypass that boundary.
+Do not turn the correction to a historical rationale into removal of unrelated numeric guards or a new validation framework.
+The proposal retires spacing's configurable invariant;
+camera checks,
+node budgets and renderer units retain their separate purposes.
+
 Do not create a parallel backlog or a second copy of the architectural documentation.
 
 For a consequential product decision,
