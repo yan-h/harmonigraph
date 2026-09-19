@@ -946,8 +946,8 @@ mod tests {
                 &settings,
                 appearance_for(take, None),
                 |bytes| {
-                    frames.push(bytes.to_vec());
-                    Ok(true)
+                    frames.push(bytes);
+                    Ok(Some(Vec::new()))
                 },
             );
             match result {
