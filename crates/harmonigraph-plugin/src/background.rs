@@ -17,25 +17,32 @@
 //! Draining both also keeps their shared presentation clock current, whether
 //! the host runs in realtime or bounces faster than a window could draw.
 //!
-//! **What it costs is a continuous FFT.** 0.23 ms per stereo column at the
-//! default 8192-point window, 125 columns a second: about 3% of a core for as
-//! long as the plugin is instantiated, paid now even by a project nobody opens
-//! the editor of, and paid continuously because a DAW streams silence as
-//! diligently as it streams music. Memory does not move — [`SpectrumHistory`]
-//! bounds its power sums at ~120 MiB per instance and already outlived the
-//! window, so this only reaches that bound sooner rather than raising it. The
-//! hop is the only lever
-//! if that ever needs to come down (32 ms instead of 8 puts it at 0.7%), but it
-//! is not one to reach for casually: the store's tiers, `live_slab`'s ladder
-//! and `COLUMNS_PER_SLAB` are all rungs of one shared `FFT_INTERVAL`, and a
-//! second hop rate is the exact shape of the duplicated-column bug those
-//! comments warn about.
+//! **Analysis keeps progressing, but silence need not run an FFT.**
+//! `harmonigraph-analysis` skips transforms when the retained window is exactly
+//! zero, while continuing output columns and history. It still transforms a
+//! window containing earlier nonzero samples even if the newest input is zero;
+//! `silent_windows_keep_readiness_retained_audio_and_resume` covers that boundary.
+//! This is no amplitude threshold or permission to suspend the drainer.
+//!
+//! Historical cost: the 2026-09-03 update (`0bcabce51`) recorded 0.23 ms per
+//! stereo column at an 8192-point window, 125 columns a second, about 3% of a
+//! core (and estimated 0.7% at a 32 ms hop). The original 2026-08-09
+//! [#305](https://github.com/yan-h/harmonigraph/pull/305) measured 0.417 ms,
+//! about 5.2%. Neither is a current full-plugin or silent-input measurement.
+//! Memory remains bounded by [`SpectrumHistory`]'s ~120 MiB power sums;
+//! the history already outlives the window. A different hop is not the only
+//! possible cost reduction, and would need to preserve the store tiers,
+//! `live_slab` ladder and `COLUMNS_PER_SLAB` on their shared `FFT_INTERVAL` grid.
 //!
 //! Nothing here analyzes anything itself. It calls
 //! [`LiveInput::drain`](crate::editor::LiveInput::drain) and
 //! [`VisualRuntime::advance_time`](harmonigraph_ui::VisualRuntime::advance_time),
 //! which is the frame's own drain plus the ageing a frame instead gets from
 //! `begin_frame`; see there for why sharing that one path is the point.
+//! A closed-window tick also calls [`EditorShared::poll_take_end`] so a take
+//! can finish and render without an open editor. This completion poll is
+//! separate from the GUI's full recording control synchronization; the
+//! `a_take_ends_itself_while_the_editor_window_is_shut` test covers it.
 //!
 //! **The project's own settings arrive here too**, for the same reason: this
 //! is the only thing running before the editor's window exists, and that
@@ -73,12 +80,11 @@ use crate::editor::{EditorShared, EguiState};
 /// lost. `the_ring_holds_many_polls_of_audio_at_any_rate_a_host_offers` is what
 /// keeps the two numbers in that relation.
 ///
-/// Bounded below by nothing that matters — the drain is the same work whenever
-/// it happens, and 50 wakeups a second against a 5%-of-a-core FFT load is not
-/// where the cost is. A shorter poll would shorten the TYPICAL lock hold, which
-/// is already about a millisecond of FFT; it would not shorten the worst one,
-/// because that is set by how full the ring got while this thread was away
-/// rather than by how often it means to look. See [`tick`] for that bound.
+/// The old 5%-of-a-core FFT estimate above does not establish the cost of these
+/// 50 wakeups a second on current silent input. A shorter poll can reduce the
+/// typical batch, but the worst drain is set by how full the ring got while
+/// this thread was away rather than by how often it means to look.
+/// See [`tick`] for that bound.
 pub(crate) const POLL: Duration = Duration::from_millis(20);
 
 /// The thread, and the flag that ends it.
@@ -259,6 +265,8 @@ impl Restore {
 /// worth, well under a millisecond. Neither is a hang, but 40 ms on the host's
 /// main thread inside `gui_create` is the figure to argue with if #296 is ever
 /// re-opened against this lock.
+/// These timings use the historical 0.23 ms/column estimate above, not a
+/// current lock-hold measurement; exactly zero retained windows skip the FFT.
 ///
 /// A skipped round costs nothing: the ring carries seventeen of them even at
 /// the fastest rate a host offers.

@@ -1,21 +1,21 @@
 # Long-term maintainability
 
 Last updated: 2026-09-19.
-Status: discovery complete for this checkpoint; coordinator handoff prepared; six product removals accepted; implementation has not started.
+Status: bounded first-batch implementation launched; six product removals accepted; coordinator authorized to merge in-scope PRs after checks and review.
 
 ## Start here
 
 **Aim:** make Harmonigraph easier for future agents to change correctly,
 while reducing the attention Yan must spend understanding and supervising those changes.
 
-**Hand off the implementation:** use [the single-coordinator handoff](maintainability-handoff.md).
+**Implementation scope:** use [the single-coordinator handoff](maintainability-handoff.md).
 It contains the bounded batch,
 package dependencies,
 overlap constraints,
 verification and completion criteria,
 and a copyable launch request that can authorize implementation and merging once for the batch.
-The launch request is a template for Yan to send,
-not permission granted by reading this file.
+Yan's 2026-09-19 launch authorized implementation of that bounded first batch and its in-scope merges after checks and appropriate review.
+The template itself grants no authority beyond an actual launch request.
 
 **Current position:** the recommended historical change-cost analysis and developer-tool investigation are complete for this checkpoint.
 The [historical report](historical-change-cost.md) inventories 100 merged changes and traces representative repairs,
@@ -26,9 +26,12 @@ Notes and browser-only lab retirement remain optional product decisions;
 Console and standalone are recommended keeps for now.
 Naming/FOV comparisons and GUI-stack feasibility remain lower-priority,
 independent investigations.
-No implementation has begun.
+Implementation has now begun with package A's guidance corrections.
+The coordinator owns review and merge order;
+workers deliver draft PRs.
+Live package status and PR links stay in the existing issues.
 
-The discovery phase systematically compared opportunities before selecting implementation work.
+**Discovery history (2026-09-19, before launch):** the discovery phase systematically compared opportunities before selecting implementation work.
 Spacing was a worked example of the method,
 not the start of a sequence of immediate fixes.
 The [broader discovery report](https://github.com/yan-h/harmonigraph/issues/954) now includes detailed checks of retained export/diagnostic machinery,
@@ -50,10 +53,16 @@ its newly met version trigger does not supersede this broader scope.
 The audit found stale requirements that could revive a retired tuning protocol ([#969](https://github.com/yan-h/harmonigraph/issues/969)).
 Yan directly confirmed that he does not use next-note outlines,
 then approved removing that feature ([#970](https://github.com/yan-h/harmonigraph/issues/970)).
-Implementation remains deferred while he asks about other removable requirements.
+Implementation was deferred while he asked about other removable requirements.
 
-**Latest instruction:** Yan requested a complete coordinator handoff and merging [PR #951](https://github.com/yan-h/harmonigraph/pull/951).
-This supersedes his earlier request to keep the discovery PR open.
+**Latest instruction (2026-09-19 launch):** implement the handoff's named first batch,
+including its technical prerequisites and documentation corrections,
+and merge its in-scope PRs after the repository's checks and appropriate review.
+Deferred features and investigations stay outside the batch.
+The coordinator owns integration and the final built plugin/offline pair;
+the shared DAW installation is not swapped.
+This follows Yan's earlier request for a complete handoff and merging [PR #951](https://github.com/yan-h/harmonigraph/pull/951),
+which superseded his request to keep the discovery PR open.
 The discovery session changed documentation and evidence only.
 Implementation and future code merges follow the actual launch request given to the coordinator;
 accepting a removal or publishing this handoff alone does not start that work.
@@ -71,7 +80,7 @@ He subsequently approved Playhead retirement ([#973](https://github.com/yan-h/ha
 Preserve Scrolling,
 Whole video and the combined Lattice/Analyzer arrangement,
 proportion and orientation controls he uses.
-These implementations are deferred.
+These implementations are included in the launched batch.
 He chose to keep the cold-start shader optimization,
 and explicitly requires an accurate current lattice plus spectrogram history from while the editor was closed,
 within the existing history limits.
@@ -90,10 +99,11 @@ The later explicit approval settles Playhead and extra public export layouts onl
 The [feature-retirement trace](feature-retirement-discovery.md) now identifies concrete removal boundaries,
 including shared tests, musical reference data and diagnostic sinks that need to remain available.
 
-**How to return:** send the [handoff's launch request](maintainability-handoff.md#start-and-authority) to one coordinator,
-or specify a narrower scope.
-It should inspect current status and proceed through the batch within that authority,
+**How to return:** resume with the single coordinator and [handoff](maintainability-handoff.md#start-and-authority).
+Inspect current issue/PR status and proceed through the batch within the launch authority,
 without repeating the discovery or the accepted product questions.
+The following chronology records the earlier discovery-only decisions on 2026-09-19;
+its deferred language does not supersede the later launch.
 Yan authorized the first pilot and its expanded sample on 2026-09-19.
 He then authorized the settings investigation and keeping its documentation in the open draft PR #951,
 accepted future spacing removal,
@@ -104,6 +114,13 @@ Those issues preserve evidence and deferred scope;
 opening one does not begin its implementation.
 Yan later requested the handoff and documentation merge;
 the implementation boundary now lives in the handoff and its actual launch request.
+
+## Discovery record (2026-09-19, before launch)
+
+The remaining sections preserve the discovery's preferences,
+proposed sequence and evidence at their recorded checkpoints.
+Their implementation deferrals are historical;
+the current position above and the handoff govern the launched batch.
 
 ## Confirmed preferences and the concern behind this work
 
@@ -226,6 +243,9 @@ including [#895](https://github.com/yan-h/harmonigraph/issues/895),
 [#922](https://github.com/yan-h/harmonigraph/issues/922) and [#940](https://github.com/yan-h/harmonigraph/issues/940).
 Their findings are tied to earlier revisions;
 check what landed and what still holds before carrying an item forward.
+Their dated dispatch mechanics are superseded by current [CLAUDE.md](../CLAUDE.md).
+The #940 completion record and #895 stopping decision remain historical evidence;
+neither old wave plan is a current work order.
 Their presence does not authorize this discovery session to execute an implementation wave.
 
 Use a broad,

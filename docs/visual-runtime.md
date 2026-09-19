@@ -38,9 +38,13 @@ Closed-only persisted-document adoption still happens before draining,
 so a restored analysis window affects the first consumed audio.
 An open window's unsaved controls are never replaced by its last saved blob.
 
-Recording synchronization remains once per GUI callback,
-with the existing twenty-callback stopped-transport debounce.
-It is not driven by closed runtime ticks.
+Full recording control synchronization remains once per GUI callback in [`EditorShared::sync_take`](../crates/harmonigraph-plugin/src/editor.rs).
+Closed-window [`background::tick`](../crates/harmonigraph-plugin/src/background.rs) separately calls `EditorShared::poll_take_end`,
+so a completed take can finish and render without reopening the editor.
+Both paths advance the shared twenty-poll stopped-transport debounce;
+with the window closed those are background polls rather than GUI callbacks.
+The completion poll does not run the GUI's full start/control synchronization.
+This boundary is covered by `a_take_ends_itself_while_the_editor_window_is_shut` in the background module.
 The open check, `try_lock`, window/context construction and restore boundaries remain in the host shell.
 The shared mutex still covers an open UI build;
 this extraction does not shorten that lock or change its scheduling.
@@ -55,18 +59,24 @@ Saved appearance/editor documents and their versions are unchanged.
 
 ## Fold sharing and keys
 
-`AudioSpectrum` keeps one lazy Fold measurement for matching draws at the same logical frame time.
-Its key is that time, the actual smoothed-spectrum revision, and normalized Fold width.
-It recomputes in the next frame even if input is unchanged;
-there is no cross-frame measurement reuse.
+[`AudioSpectrum::folded`](../crates/harmonigraph-ui/src/spectrum.rs) keeps one lazy Fold measurement keyed on `(display_revision, normalized_width_bits)`.
+It reuses that measurement across frames while the smoothed spectrum and normalized Fold width stay unchanged.
+Time gates availability before cache lookup;
+it is not part of the key.
 Audio changes at the same time increment the revision;
 replacing the analyzer drops the measurement with its source identity.
 Availability is checked before looking up the measurement,
 so stale audio cannot keep a cached ring alive.
 Camera, palette, viewport dimensions, node count, and other appearance controls are absent from the key because they do not feed the Fold calculation.
 The shared ring envelopes and per-surface geometry are applied after measuring.
+`a_fold_outlives_a_frame_that_brought_no_new_column` in the same source file covers cross-frame reuse and invalidation by new audio.
+This behavior supersedes the frame-time key removed in [#902](https://github.com/yan-h/harmonigraph/pull/902).
 
-## Measurement method
+## Historical measurement method (2026-09-09)
+
+The method, results and validation below record the original #732 extraction.
+They predate the closed-window completion change in [#817](https://github.com/yan-h/harmonigraph/pull/817) and the Fold-key change in #902;
+they are not new measurements of the current implementation.
 
 Baseline: `a03290a2ac6b20929556467a30fe99b8dbccd742`, including the appearance-document merge.
 The existing ignored headless profiler was extended before changing production hot paths:
@@ -142,7 +152,7 @@ The comparison does establish reduced duplicated Fold work,
 lower dock allocations,
 and approximately unchanged ordinary single-dock/runtime medians.
 
-## Validation
+## Historical validation (2026-09-09)
 
 The workspace suite passed 1,544 tests with no golden rebaseline.
 Focused additions exercise no-draw history aging and analysis uniqueness,
