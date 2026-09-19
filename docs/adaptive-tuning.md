@@ -282,7 +282,7 @@ The `ConfigReducer` owns the semantics and ordering of combined edits, presets, 
 a preset must not become a mixture of old locks and new axes —
 and it publishes one resolved configuration containing the effective tuning, tempered commas and policy-v3 controls.
 Those controls cover the keyboard tuning, neighborhood radius and axes, pitch flexibility, register weight per octave, a shared half-life, repetition tolerance, silence timeout and transport resets;
-their exact ranges and defaults live in the [implementation record](adaptive-tuning-plugin.md#controls-and-live-neighborhood).
+their exact ranges and defaults live in the [implementation record](adaptive-tuning-plugin.md#controls).
 The UI mirrors that resolved configuration rather than running a competing authority, and restoring state or automating tuning works with the editor never opened.
 
 Adoption is **block-level**.
@@ -666,7 +666,7 @@ each one then requests its own reactivation.
 Locked 12-TET produces zero adaptive correction;
 choose **Just** with **Auto** and **Learn** off for a first independent-tuning check.
 The moving-neighborhood defaults match the simulator's baseline profile;
-the [implementation record](adaptive-tuning-plugin.md#controls-and-live-neighborhood) describes every control and the precision profile used by its paired intentional-E examples.
+the [implementation record](adaptive-tuning-plugin.md#controls) describes every control and the precision profile used by its paired intentional-E examples.
 5. Play a phrase across several tracks and check the instrument's actual pitch as well as the displayed notes and live neighborhood.
 For reproducible policy checks use the versioned fixtures linked from the [implementation record](adaptive-tuning-plugin.md#validation).
 Destination conversion still matters:
