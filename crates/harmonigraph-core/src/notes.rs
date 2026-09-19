@@ -373,8 +373,21 @@ pub struct Voice {
     pub on_time: Time,
     /// Presentation timestamp before a shell's moving clock offset.
     original_onset: Time,
-    /// Visibility at the factual release, independent of frame/prune cadence.
-    history_eligible: bool,
+    /// Whether this voice's source was visible at its FACTUAL release —
+    /// the single question a released voice is asked, and the answer to both
+    /// halves of it. [`voices`](NoteTracker::voices) draws the released tail
+    /// on this and [`prune`](NoteTracker::prune) records on it, so a voice
+    /// that was on screen when it let go finishes its fade AND lands in the
+    /// history, and one that was not does neither.
+    ///
+    /// Stamped once, at the release, so neither answer depends on the frame
+    /// or prune cadence that happens to follow it.
+    ///
+    /// Meaningless while a voice is held, and never read there: the held half
+    /// of `voices()` filters on the CURRENT `hidden_sources` instead, so
+    /// hiding a source still clears everything it has DOWN from the screen at
+    /// once. This decides only what happens to a voice on its way out.
+    visible_at_release: bool,
     /// Canonical accepted lifetime, absent for ordinary direct observations.
     pub lifetime: Option<u64>,
     pub assignment: Option<crate::canonical::AssignmentMetadata>,
@@ -413,7 +426,7 @@ impl Voice {
             octave: 0,
             on_time,
             original_onset: on_time,
-            history_eligible: true,
+            visible_at_release: true,
             lifetime: None,
             assignment: None,
             state: VoiceState::Held,
@@ -921,14 +934,15 @@ impl NoteTracker {
     /// per exit is how one of them comes to be missing from one of them: the
     /// stamps a mark eases out of, a release the fade can run, and the
     /// visibility this voice had at its FACTUAL release rather than at whatever
-    /// frame the prune lands on (see [`Voice::history_eligible`]).
+    /// frame the draw or the prune lands on (see
+    /// [`Voice::visible_at_release`]).
     ///
     /// Leaves [`restamp_ends`](Self::restamp_ends) to the caller, which every
     /// exit calls once when its whole batch has left rather than per voice.
     fn release_voice(&mut self, mut voice: Voice, at: Time) {
         self.stamp_ends_worn(&mut voice);
         voice.state = VoiceState::Released { at };
-        voice.history_eligible = !self.hidden_sources.contains(&voice.source);
+        voice.visible_at_release = !self.hidden_sources.contains(&voice.source);
         self.released.push(voice);
     }
 
@@ -985,9 +999,14 @@ impl NoteTracker {
     ///
     /// A voice becomes a memory in the same step it stops being drawn, so
     /// the two never describe one note at once and a trail picks the note
-    /// up exactly where its fade lets go. (A retrigger without an off
-    /// replaces its voice outright — see `handle_event` — so that voice is
-    /// never recorded; the retrigger's own release covers the pitch.)
+    /// up exactly where its fade lets go. Drawn and remembered are one
+    /// question here, asked once: [`Voice::visible_at_release`] decides both,
+    /// so a voice whose source was hidden when it let go is never drawn AND
+    /// never recorded, and one visible then finishes its fade on screen and
+    /// lands in the history even if its source is hidden mid-fade. (A
+    /// retrigger without an off replaces its voice outright — see
+    /// `handle_event` — so that voice is never recorded; the retrigger's own
+    /// release covers the pitch.)
     /// Asks the RELEASE rather than the full activation, because the question
     /// here is whether the fade is over and not whether anything is currently
     /// on screen. The two part company for the whole of a note's arrival,
@@ -1002,7 +1021,7 @@ impl NoteTracker {
             if voice.release_level(now, env) > 0.0 {
                 return true;
             }
-            if voice.history_eligible {
+            if voice.visible_at_release {
                 history.record(voice, now);
             }
             false
@@ -1039,11 +1058,21 @@ impl NoteTracker {
     /// the lattice's node color goes to the first voice at the winning
     /// envelope, and every held voice shares one — so an unspecified order
     /// is an unspecified picture.
+    ///
+    /// The two halves ask visibility of different state, and that is the
+    /// whole rule. A HELD voice is filtered on the CURRENT `hidden_sources`,
+    /// so hiding a source takes everything it is holding off the screen in
+    /// that instant. A RELEASED one is filtered on
+    /// [`Voice::visible_at_release`], decided once when it left the held set
+    /// — the same flag [`prune`](Self::prune) records on, which is what makes
+    /// "drawn" and "remembered" one answer instead of two that can disagree
+    /// (#905). The visible cost is that hiding a source does not cut its
+    /// already-fading notes: they finish the fade they were drawing.
     pub fn voices(&self) -> impl Iterator<Item = &Voice> {
         self.held
             .values()
-            .chain(self.released.iter())
             .filter(|v| !self.hidden_sources.contains(&v.source))
+            .chain(self.released.iter().filter(|v| v.visible_at_release))
     }
 
     pub fn held_count(&self) -> usize {
@@ -1218,6 +1247,60 @@ mod tests {
         // ...gone after the fade time has fully elapsed.
         tracker.prune(2.1, &Envelope::default());
         assert_eq!(tracker.voices().count(), 0);
+    }
+
+    /// A released voice is decided ONCE, at its release (#905). The flag
+    /// stamped there says both whether the rest of its fade is drawn and
+    /// whether the trail picks the pitch up, so the two can never disagree —
+    /// a voice hidden when it let go is neither drawn nor remembered, and one
+    /// visible then is both, whatever its source does mid-fade. A HELD voice
+    /// is the other question and still answers to the current state: hiding a
+    /// source takes everything it is holding off the screen at once.
+    #[test]
+    fn a_released_voice_is_drawn_and_remembered_on_its_visibility_at_the_release() {
+        let env = Envelope::default();
+        let row = VoiceBaseline {
+            note: 60,
+            velocity: 0.8,
+            pitch_microcents: 6_000_000_000,
+            ..Default::default()
+        };
+
+        // Hidden at the release. The source stops participating while the
+        // note is still down — its baseline still lists the note, so the
+        // voice stays HELD and merely drops off the screen.
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(0.0, 60));
+        let hide = SourceBaseline::new(SourceId::DIRECT, 1, 1.0, 0, false, &[row]).unwrap();
+        tracker.replace_source(&hide).unwrap();
+        assert_eq!(tracker.voices().count(), 0, "a held voice cuts the instant its source hides");
+        tracker.handle_event(off(2.0, 60));
+        // The fixture has to actually reach the released tail, or every
+        // assertion below passes on a voice that was dropped at the hide.
+        assert_eq!(tracker.released.len(), 1, "the off released the hidden voice, not dropped it");
+        assert!(!tracker.released[0].visible_at_release, "and stamped it invisible");
+        // The source rejoins with two thirds of the fade still to run.
+        let rejoin = SourceBaseline::new(SourceId::DIRECT, 2, 2.3, 0, true, &[]).unwrap();
+        tracker.replace_source(&rejoin).unwrap();
+        assert!(tracker.released[0].release_level(2.3, &env) > 0.0, "mid-fade at the rejoin");
+        assert_eq!(tracker.voices().count(), 0, "a fade begun hidden is not handed back");
+        tracker.prune(3.1, &env);
+        assert!(tracker.history().is_empty(), "and what was never drawn is never remembered");
+
+        // Visible at the release, hidden mid-fade: the opposite direction.
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(0.0, 60));
+        tracker.handle_event(off(2.0, 60));
+        let hide = SourceBaseline::new(SourceId::DIRECT, 1, 2.3, 0, false, &[]).unwrap();
+        tracker.replace_source(&hide).unwrap();
+        assert_eq!(tracker.voices().count(), 1, "a fade begun visible finishes on screen");
+        assert!(tracker.voices().next().unwrap().activation(2.3, &env) > 0.0, "and is still lit");
+        tracker.prune(2.9, &env);
+        assert_eq!(tracker.voices().count(), 1, "still fading, still drawn");
+        tracker.prune(3.1, &env);
+        assert_eq!(tracker.voices().count(), 0, "gone when the fade is over");
+        let visits: Vec<_> = tracker.history().visits().map(|v| (v.pitch, v.last_off)).collect();
+        assert_eq!(visits, [(60.0, 2.0)], "and the trail picks it up where the fade let go");
     }
 
     /// The chord's two ends, and the moment each one changed hands. The
