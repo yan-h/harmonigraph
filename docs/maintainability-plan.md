@@ -1,35 +1,44 @@
 # Long-term maintainability
 
 Last updated: 2026-09-19.
-Status: pilot and bounded settings investigation complete; spacing removal proposed; implementation has not started.
+Status: discovery in progress; spacing removal accepted for future implementation; no product changes in this session.
 
 ## Start here
 
 **Aim:** make Harmonigraph easier for future agents to change correctly,
 while reducing the attention Yan must spend understanding and supervising those changes.
 
-**Current focus:** decide the [spacing proposal prepared by the settings investigation](https://github.com/yan-h/harmonigraph/issues/952).
-The agent recommendation is to remove the hidden lattice-spacing setting completely and use one fixed world unit per step.
-All recoverable spacing values in the saved sample were the default;
-an executed comparison also reproduced one custom-spacing look exactly using the existing zoom and label-size controls.
-Removal would eliminate a configurable value shared across persistence,
-camera movement and geometry.
-It would give up custom spacing values,
-including unusual scales that cannot be recreated within the remaining controls' ranges.
+**Current focus:** systematically discover and compare maintainability opportunities across the project before selecting implementation work.
+Spacing was a worked example of the method,
+not the start of a sequence of immediate fixes.
+The [first broader inventory](https://github.com/yan-h/harmonigraph/issues/954) records ranked leads,
+potential behavior losses and the strongest reasons to keep each candidate.
+Next,
+challenge the retained-apparatus and settings-inventory leads with bounded checks,
+and finish the fixture inventory for live-versus-recorded parity.
 
-**Decision needed from Yan:** accept that custom-spacing loss or keep the setting and its safeguards.
-Removal is a proposal,
-not an established requirement or an authorized implementation.
-If accepted,
-the next implementation should be a small separate PR with default-scale output verified and the custom-file behavior change stated.
-The independent next investigation is the architecture-through-changes stage below.
+**Session scope:** discovery only,
+as Yan requested on 2026-09-19.
+Read-only code/history inspection,
+scratch experiments and updates to this documentation are in scope.
+Do not change product behavior or start implementation merely because a candidate is accepted.
+Keep [draft PR #951](https://github.com/yan-h/harmonigraph/pull/951) open for the discovery record.
+
+**Accepted decision:** Yan is comfortable removing custom lattice spacing,
+including its custom-appearance capability loss,
+based on [#952](https://github.com/yan-h/harmonigraph/issues/952).
+Implementation is deferred.
+No product decision is needed now;
+gather and compare further candidates before bringing back a small batch of consequential choices.
 
 **How to return:** ask an agent to continue from `docs/maintainability-plan.md`.
 The agent should read the current document and linked work,
 then summarize the current position and take the next unblocked step within the requested scope.
 Yan authorized the first pilot and its expanded sample on 2026-09-19.
-He then authorized the settings investigation and keeping its documentation in the open draft PR #951.
-Those authorizations do not cover implementation of all the proposed changes.
+He then authorized the settings investigation and keeping its documentation in the open draft PR #951,
+accepted future spacing removal,
+and asked for systematic discovery instead of implementation.
+Continue that discovery scope unless Yan changes it.
 
 ## Confirmed preferences and the concern behind this work
 
@@ -41,6 +50,7 @@ These preferences come from the planning conversation with Yan on 2026-09-19:
 - LLM quota is available; Yan's attention is the scarce resource.
 - Paying an independent engineer is out of scope. Investigation, implementation and technical review will be performed by agents.
 - A central concern is that an agent's assumption becomes a comment, then a requirement, then an architecture that preserves something Yan never valued.
+- Accepted simplifications should accumulate during discovery; accepting a loss does not start its implementation in this session.
 
 The [README](../README.md) describes the product's purpose:
 composing microtonal music and making videos.
@@ -88,15 +98,15 @@ Silence does not confirm a preference.
 ## Proposed sequence
 
 Each stage should reuse existing evidence and infrastructure before adding anything.
-The pilot can change this sequence.
+The pilot and Yan's discovery-only direction have changed the sequence below.
 
 | Stage | Agent work | Useful result | State |
 | --- | --- | --- | --- |
 | 1. Pilot | Examine recent fixes and one area with recurring maintenance work; trace requirements and challenge the strongest findings. | Twelve-case assessment and three recommendations in [#950](https://github.com/yan-h/harmonigraph/issues/950). | Complete |
-| 2. Settings intent and reference case | Trace persisted spacing and settings validation; inspect saved examples and render a keep/remove comparison. | Evidence and a full-removal proposal in [#952](https://github.com/yan-h/harmonigraph/issues/952), including the supported custom-input loss. | Investigation complete; product decision pending |
-| 3. Architecture through changes | Trace a few plausible future changes through state ownership and data flow. | Specific sources of duplicated knowledge, coordination or hidden assumptions. | Next proposed investigation |
-| 4. Simplification | Implement the most valuable justified removals or structural repairs in a coherent order. | Reviewable PRs showing what complexity disappeared and what behavior was verified. | Proposed |
-| 5. Verification and handoff | Check the resulting workflows and update the explanations future agents need. | Evidence of preserved or explicitly changed behavior, remaining issues and a clear stopping point. | Proposed |
+| 2. Worked discovery case | Trace persisted spacing and settings validation; inspect saved examples and render a keep/remove comparison. | Evidence in [#952](https://github.com/yan-h/harmonigraph/issues/952); Yan accepted the custom-input loss. | Complete; implementation deferred |
+| 3. Broader discovery and prioritization | Survey the areas below, trace realistic changes, challenge the best leads and compare their value. | Initial inventory in [#954](https://github.com/yan-h/harmonigraph/issues/954); deepen the best leads into verified proposals. | Current phase; first breadth pass complete |
+| 4. Selected simplification | After Yan requests implementation, sequence the most valuable accepted changes by dependencies and file overlap. | Focused PRs showing which maintenance obligations disappeared and what behavior was verified. | Deferred |
+| 5. Verification and handoff | Check the resulting workflows and update the explanations future agents need. | Evidence of preserved or explicitly changed behavior, remaining issues and a clear stopping point. | Follows implementation |
 
 ### Pilot: assess whether the improvement process is working
 
@@ -129,6 +139,72 @@ Trace claims to evidence where feasible and preserve uncertainty where it is not
 The pilot ends with a short recommendation brief and linked evidence.
 Do not turn every suspicion into a fix or an issue.
 Confirmed bugs that will remain unfixed follow the existing issue rule in CLAUDE.md.
+
+### Broader discovery: find obligations worth retiring
+
+Survey several kinds of maintenance cost,
+not just more hidden settings.
+These are search lenses,
+not findings that the areas are defective:
+
+| Area | What to investigate | What would make an opportunity credible |
+| --- | --- | --- |
+| Product capabilities and constraints | Hidden settings, alternate modes, retained fallbacks, historical support promises. | A capability with uncertain value creates recurring work, and its actual consumers and loss can be stated. |
+| Duplicated knowledge | Defaults, ranges, units, field lists and rules repeated across UI, persistence, rendering and tests. | A normal change repeatedly needs coordinated edits or has already left the copies inconsistent. |
+| State ownership and data flow | Live state, snapshots, recorded events, replay, caches and invalidation. | A realistic change exposes unnecessary synchronization or competing authorities; required realtime separation is accounted for. |
+| Verification | Fixtures, golden coverage, hand-maintained test matrices and diagnostics used to justify fixes. | The evidence misses its claimed path, or maintaining a test duplicates a rule that could have one owner. |
+| Tooling and dependencies | Retained probes, vendor patches, generated assets, build variants and CI checks. | A former consumer disappeared or an obligation can be removed with its cost and lost diagnostic value understood. |
+| Written constraints | Comments, design records, agent guidance and old issue decisions. | A consequential rule lacks its claimed authority or outlived the circumstances that justified it. |
+
+Start with the existing audits and decision records,
+including [#895](https://github.com/yan-h/harmonigraph/issues/895),
+[#922](https://github.com/yan-h/harmonigraph/issues/922) and [#940](https://github.com/yan-h/harmonigraph/issues/940).
+Their findings are tied to earlier revisions;
+check what landed and what still holds before carrying an item forward.
+Their presence does not authorize this discovery session to execute an implementation wave.
+
+Use a broad,
+inexpensive inventory first,
+then spend deeper investigation on the most promising few leads.
+Record which areas and paths were inspected and which remain unknown;
+do not call the whole project audited because each area received a quick scan.
+Use bounded read-only agents for the inventory and evidence gathering,
+with coordinator review of the resulting shortlist.
+
+For each candidate,
+record the source revision and evidence,
+the maintenance obligation that could disappear,
+actual or possible users,
+what would change,
+the strongest keep argument,
+and the next check that could disprove the proposal.
+Search indirect consumers such as generic serializers and command generators before treating an absent assignment as an absent use.
+Low observed usage is evidence about a sample,
+not proof of no value.
+
+Compare removing the capability,
+keeping it,
+and simplifying its implementation while retaining it.
+Prioritize repeated repair costs and obligations shared across many owners over line counts or unfamiliar abstractions.
+Compare expected maintenance reduction with lost capability,
+confidence in the evidence,
+verification cost and interference with other work;
+do not disguise uncertain judgments as precise numerical scores.
+
+Keep the detailed inventory in one linked discovery report,
+including rejected hypotheses and their evidence.
+Use distinct states such as lead,
+verified proposal,
+accepted but deferred,
+keep and needs more evidence.
+Create individual implementation issues when an item merits that treatment,
+not for every suspicious field or comment.
+Bring Yan a small batch of concrete product choices after comparison;
+do not request a decision for each lead as it appears.
+
+A discovery checkpoint is useful when the shortlist explains the best opportunities found,
+their dependencies and what remains unexamined.
+It does not require finding a removal in every area or eliminating every uncertainty.
 
 ### Reference cases: anchor verification in desired behavior
 
@@ -229,9 +305,19 @@ recording and offline validation paths.
 Normal saved-state and offline appearance loading already normalize settings;
 direct typed callers can bypass that boundary.
 Do not turn the correction to a historical rationale into removal of unrelated numeric guards or a new validation framework.
-The proposal retires spacing's configurable invariant;
+The accepted future change retires spacing's configurable invariant;
 camera checks,
 node budgets and renderer units retain their separate purposes.
+
+Active discovery report: [#954 — ranked leads, retained mechanisms and coverage](https://github.com/yan-h/harmonigraph/issues/954).
+The first breadth pass groups opportunities around retained diagnostic/export machinery,
+duplicated setting ranges and test inventories,
+and live-versus-recorded event semantics.
+Hidden naming reach and camera FOV are secondary leads.
+The report records prior decisions and reasons to keep shared appearance ownership,
+independent realtime queues,
+core/wire type separation and useful tooling.
+These source-inspected leads have not received spacing's level of runtime verification and are not accepted implementation tasks.
 
 Do not create a parallel backlog or a second copy of the architectural documentation.
 
@@ -251,6 +337,9 @@ a characterization of current behavior does not by itself make that behavior a p
 Finish each bounded batch with the agreed behavior verified,
 changes handed over under the existing project workflow,
 and remaining uncertainty recorded.
+During discovery,
+the deliverable is verified evidence and a clear decision state;
+an accepted recommendation can remain unimplemented without leaving the discovery batch unfinished.
 No requirement exists to refactor every subsystem or eliminate every edge case.
 Useful progress means fewer hidden assumptions,
 clearer consequences for future changes,
@@ -267,5 +356,6 @@ Suggested resumption request:
 > Continue the maintainability work from `docs/maintainability-plan.md`.
 > Check the current status and linked evidence first.
 > If the pilot has not run, start with that read-only investigation.
+> Keep this session discovery-only; record accepted changes for later implementation.
 > Use agents to gather and challenge evidence, and bring me only concrete product decisions with recommendations.
 > Do not treat unconfirmed suggestions in the plan as requirements.
