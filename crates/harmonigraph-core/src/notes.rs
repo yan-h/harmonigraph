@@ -601,20 +601,6 @@ pub fn octave_start_midi(octave: i32) -> i32 {
 pub struct NoteTracker {
     held: BTreeMap<VoiceKey, Voice>,
     released: Vec<Voice>,
-    /// Voices whose fade is over but whose END IS NOT YET A FACT: a
-    /// publication gap let them go while their source's last baseline still
-    /// listed them, so the tracker does not know whether they stopped or were
-    /// merely lost sight of ([`end_unknown`]).
-    ///
-    /// They are off the screen — their fade really is over — which is why they
-    /// are not left in `released` for [`voices`](NoteTracker::voices) to hand
-    /// out. What is still open is only whether the trail marks them, and
-    /// [`prune`](NoteTracker::prune) settles that the moment the source speaks
-    /// for itself again: a repair baseline that lists one withdraws it, and
-    /// one that omits it confirms the end and records it at the release it
-    /// already has. A source that never speaks again leaves its voices here
-    /// unrecorded, bounded by what it held at the outage.
-    unconfirmed: Vec<Voice>,
     history: NoteHistory,
     roll: NoteRoll,
     /// The two ends of the held chord, restamped as the held set changes
@@ -699,39 +685,6 @@ fn baseline_matches(row: &VoiceBaseline, voice: &Voice) -> bool {
         } else {
             voice.lifetime == Some(row.lifetime)
         }
-}
-
-/// Whether this released voice's END is still an open question rather than a
-/// fact — the one thing [`NoteTracker::prune`] must not guess at.
-///
-/// Two conditions, and both are needed. The source is in DOUBT, so a
-/// publication gap has closed it and nothing has answered for it since; and
-/// the last baseline it published still LISTS this voice, so the note was
-/// sounding when we lost sight of it. Together they say the tracker let this
-/// voice go without ever observing it stop.
-///
-/// The listing is what makes this a question and not an answer, and reading it
-/// the other way is the trap. A baseline that still names the note is stale by
-/// construction — it predates the gap — so it cannot prove the note is still
-/// sounding, and suppressing the trail mark on it would lose the mark for good
-/// on a note that really did end during the outage. It cannot prove the note
-/// ended either. So it buys a WAIT rather than a verdict: the source's next
-/// complete baseline or reset answers, and until then the voice is parked in
-/// `unconfirmed`.
-///
-/// The second condition is what keeps an ordinary release out of the wait. A
-/// note attacked after the gap carries a lifetime the stale baseline never
-/// listed, so its own note-off is recorded the instant its fade ends, doubt or
-/// no doubt.
-fn end_unknown(
-    certainty: &Certainty,
-    baselines: &BTreeMap<SourceId, SourceBaseline>,
-    voice: &Voice,
-) -> bool {
-    !certainty.certain(voice.source)
-        && baselines
-            .get(&voice.source)
-            .is_some_and(|frame| frame.voices().iter().any(|row| baseline_matches(row, voice)))
 }
 
 #[derive(Default)]
@@ -883,28 +836,31 @@ impl NoteTracker {
         self.held.retain(|key, voice| {
             key.source != frame.source || voices.iter().any(|row| baseline_matches(row, voice))
         });
-        // The same identity question asked of both tails, and the reason it has
-        // to be asked there too is that a departure can be WITHDRAWN. A
+        // The same identity question asked of the released tail, and the reason
+        // it has to be asked there too is that a departure can be WITHDRAWN. A
         // publication gap releases what it could not see, because what it
         // cannot see may have ended and a fade is the guess the picture
         // recovers from; this frame is the source saying the note never
         // stopped. Leaving the copy in place would draw the note twice and
         // then, at the end of a fade it is not having, hand a still-sounding
         // pitch to [`NoteHistory`] — a trail mark on a node the music has not
-        // left (#936).
+        // left (#936). A row this baseline does NOT list is a genuine
+        // departure and keeps its fade.
         //
-        // Both tails, because the fade may already be over: a voice that ran
-        // out of fade while its source was in doubt is parked in `unconfirmed`
-        // waiting for exactly this frame to say which way it went. A row this
-        // baseline does NOT list is the other answer — a genuine departure,
-        // which keeps its fade in `released` and its trail mark in
-        // `unconfirmed`, both settled by `prune` now that the source is certain
-        // again.
-        let resumed = |voice: &Voice| {
-            voice.source == frame.source && voices.iter().any(|row| baseline_matches(row, voice))
-        };
-        self.released.retain(|voice| !resumed(voice));
-        self.unconfirmed.retain(|voice| !resumed(voice));
+        // KNOWN GAP, accepted deliberately: this only reaches a copy that is
+        // still IN the tail. A `prune` landing between the outage and this
+        // frame has already recorded the mark and dropped the voice, and there
+        // is nothing left to withdraw — at a `Fade` near 0 that is every time,
+        // since the release is over on the very next frame. What that costs is
+        // a trail mark arriving early on a node whose note is still sounding;
+        // `NoteHistory::record` is idempotent per cent-key and only the trail
+        // reads it, so the note's real release overwrites it. Closing it needs
+        // a third note-lifecycle state — released, and released-but-unconfirmed
+        // — which is not worth carrying for a source that has lost contact with
+        // the thing telling it what is playing (Yan's call, 2026-09-19).
+        self.released.retain(|voice| {
+            voice.source != frame.source || !voices.iter().any(|row| baseline_matches(row, voice))
+        });
         for row in voices {
             let onset = self.roll.live_onset(row.key(frame.source)).unwrap();
             let voice = self.held.entry(row.key(frame.source)).or_insert_with(|| {
@@ -1079,18 +1035,9 @@ impl NoteTracker {
     /// same way, see [`replace_source`](Self::replace_source): a note a
     /// publication gap let go of and the source then says is still sounding
     /// never reaches here at all, so the trail cannot mark a node the music
-    /// has not left.)
-    ///
-    /// The withdrawal above needs the voice to still BE here, and a fade is
-    /// not long enough to count on — `Fade` is a user parameter and reaches 0,
-    /// where every release is over on the very next frame. So a fade running
-    /// out is not by itself permission to answer: a voice whose end is still
-    /// an open question ([`end_unknown`]) is parked in `unconfirmed` instead
-    /// of recorded, and waits there for the source to speak for itself. That
-    /// is a DELAY and never a suppression — the second pass below records
-    /// every parked voice the moment its source is certain again, at the
-    /// release time it already carried, so a note that really did end inside
-    /// the outage still lands on the trail exactly where it stopped (#936).
+    /// has not left — as far as this gets, which is only while the voice is
+    /// still in the tail for the baseline to find. `replace_source` carries
+    /// what that leaves open.)
     ///
     /// Asks the RELEASE rather than the full activation, because the question
     /// here is whether the fade is over and not whether anything is currently
@@ -1102,28 +1049,8 @@ impl NoteTracker {
     pub fn prune(&mut self, now: Time, env: &Envelope) {
         self.roll.trim(now);
         let history = &mut self.history;
-        let (certainty, baselines) = (&self.certainty, &self.baselines);
-        let unconfirmed = &mut self.unconfirmed;
         self.released.retain(|voice| {
             if voice.release_level(now, env) > 0.0 {
-                return true;
-            }
-            if end_unknown(certainty, baselines, voice) {
-                unconfirmed.push(*voice);
-                return false;
-            }
-            if voice.visible_at_release {
-                history.record(voice, now);
-            }
-            false
-        });
-        // What the meantime answered. Re-asked every frame rather than pushed
-        // from the places that restore certainty, because all three of them —
-        // a repair baseline, a source reset and a transport reset — answer the
-        // same question, and a parked voice would otherwise be waiting on
-        // whichever of them remembered to look.
-        self.unconfirmed.retain(|voice| {
-            if end_unknown(certainty, baselines, voice) {
                 return true;
             }
             if voice.visible_at_release {
@@ -1973,14 +1900,13 @@ mod tests {
     /// fresh voice beside it instead of resuming this one, and every
     /// assertion below would pass on the wrong shape.
     ///
-    /// Run at `fade_time: 0.0` with a `prune` between the gap and the repair,
-    /// which is the case the withdrawal alone does not reach: `Fade` is a user
-    /// parameter and reaches 0, where the released copy is over on the very
-    /// next frame and there is nothing left to withdraw by the time the source
-    /// speaks.
+    /// The repair arrives with the copy still FADING, which is the case
+    /// production actually takes — `tuning::Hub::flush` republishes within a
+    /// callback or two of the outage. A prune landing in between instead is
+    /// the known gap `replace_source` documents, deliberately not covered.
     #[test]
     fn a_resuming_baseline_takes_back_the_release_the_gap_handed_out() {
-        let instant = Envelope { attack_time: 0.0, fade_time: 0.0, shape: 0.0 };
+        let env = Envelope::default();
         let source = SourceId(1);
         let row = published_voice(60, 61);
         let mut tracker = NoteTracker::new();
@@ -1998,13 +1924,6 @@ mod tests {
         assert_eq!(tracker.released.len(), 1, "the outage released it rather than dropping it");
         assert!(tracker.released[0].visible_at_release, "on screen when it went, so recordable");
 
-        // The frame in between, with no fade left to stall on. The voice has
-        // to survive it as a QUESTION rather than be answered either way.
-        tracker.prune(3.1, &instant);
-        assert_eq!(tracker.released.len(), 0, "its fade really is over at Fade 0");
-        assert_eq!(tracker.unconfirmed.len(), 1, "so it is parked, not recorded and not dropped");
-        assert!(tracker.history().is_empty(), "the trail must not mark it yet");
-
         // The repair: `tuning::Hub` republishes every live row's baseline once
         // an outage sets its `repair` flag, and those rows keep the lifetime
         // and onset they attacked with.
@@ -2015,95 +1934,16 @@ mod tests {
         assert_eq!(tracker.held_count(), 1, "the note is sounding again");
         assert_eq!(tracker.voices().count(), 1, "one note, drawn once");
         assert_eq!(tracker.roll().notes().count(), 1, "and one note in the roll to match");
-        assert_eq!(tracker.unconfirmed.len(), 0, "and the question is withdrawn, not answered");
 
-        tracker.prune(4.5, &instant);
+        tracker.prune(4.5, &env);
         assert_eq!(tracker.held_count(), 1, "still down a fade-length later");
         assert!(tracker.history().is_empty(), "so the trail has nowhere to mark yet");
 
         // And it still arrives in the trail on the release it really has.
         tracker.source_notes_off(source, 5.0);
-        tracker.prune(5.1, &instant);
+        tracker.prune(6.5, &env);
         let visits: Vec<_> = tracker.history().visits().map(|v| (v.pitch, v.last_off)).collect();
         assert_eq!(visits, [(60.0, 5.0)], "picked up where its own fade let go");
-    }
-
-    /// The other direction, and the reason the wait above is a DELAY rather
-    /// than a suppression: the note really did end inside the outage.
-    ///
-    /// Nothing at the moment of the gap can tell this case from the one above
-    /// — that is what an outage means — so the only honest read of the stale
-    /// baseline that still lists the note is "ask again later". Later arrives
-    /// as the source's own complete frame, and this one OMITS the note. That
-    /// is the source saying it stopped, so the trail marks it at the release
-    /// it has carried since the gap, not at the frame that confirmed it.
-    ///
-    /// Keying the wait on the note's published identity rather than on its
-    /// key is what keeps an ordinary release out of it: the second note here
-    /// is attacked after the gap, so the stale baseline never listed it and
-    /// its own note-off is recorded the moment its fade ends, doubt or no
-    /// doubt.
-    #[test]
-    fn a_baseline_that_omits_a_lost_note_confirms_the_end_and_the_trail_keeps_it() {
-        let instant = Envelope { attack_time: 0.0, fade_time: 0.0, shape: 0.0 };
-        let source = SourceId(1);
-        let row = published_voice(60, 61);
-        let mut tracker = NoteTracker::new();
-        tracker
-            .replace_source(&SourceBaseline::new(source, 1, 2.0, 0, true, &[row]).unwrap())
-            .unwrap();
-        tracker.handle_canonical(gap(3.0, None)).unwrap();
-
-        // A note the player starts AFTER the outage and lets go of inside it.
-        tracker.handle_event(NoteEvent::on(3.1, source, 0, 72, 0.8));
-        tracker.handle_event(NoteEvent::off(3.2, source, 0, 72));
-
-        tracker.prune(3.3, &instant);
-        assert_eq!(
-            tracker.history().visits().map(|v| v.pitch).collect::<Vec<_>>(),
-            [72.0],
-            "a release the stale baseline never listed is not waiting on anything"
-        );
-        assert_eq!(tracker.unconfirmed.len(), 1, "while the lost note is still a question");
-
-        // The source speaks, and does not list the lost note.
-        tracker
-            .replace_source(&SourceBaseline::new(source, 2, 3.4, 0, true, &[]).unwrap())
-            .unwrap();
-        assert_eq!(tracker.held_count(), 0, "it is not sounding, and never came back");
-        tracker.prune(3.5, &instant);
-        assert_eq!(tracker.unconfirmed.len(), 0, "the question is answered");
-        let visits: Vec<_> = tracker.history().visits().map(|v| (v.pitch, v.last_off)).collect();
-        assert_eq!(
-            visits,
-            [(60.0, 3.0), (72.0, 3.2)],
-            "and the lost note is marked where it stopped, not where we found out"
-        );
-    }
-
-    /// A transport reset answers for every source too, so nothing can be left
-    /// waiting by a source that simply stops publishing after an outage.
-    /// Without this the parked note's mark would depend on a repair baseline
-    /// that may never come.
-    #[test]
-    fn a_transport_reset_settles_what_an_outage_left_waiting() {
-        let instant = Envelope { attack_time: 0.0, fade_time: 0.0, shape: 0.0 };
-        let source = SourceId(1);
-        let mut tracker = NoteTracker::new();
-        tracker
-            .replace_source(
-                &SourceBaseline::new(source, 1, 2.0, 0, true, &[published_voice(60, 61)]).unwrap(),
-            )
-            .unwrap();
-        tracker.handle_canonical(gap(3.0, None)).unwrap();
-        tracker.prune(3.1, &instant);
-        assert_eq!(tracker.unconfirmed.len(), 1, "waiting on a source that never speaks again");
-
-        tracker.session_notes_off(3.5);
-        tracker.prune(3.6, &instant);
-        assert_eq!(tracker.unconfirmed.len(), 0);
-        let visits: Vec<_> = tracker.history().visits().map(|v| (v.pitch, v.last_off)).collect();
-        assert_eq!(visits, [(60.0, 3.0)], "still marked at the release it carried");
     }
 
     /// The one case where withdrawing a release also takes a note off the
