@@ -2641,13 +2641,6 @@ mod tests {
         }
     }
 
-    /// Whether `bucket` is a rung of [`live_slab`]'s ladder — the floor, times a
-    /// power of two.
-    fn is_rung(bucket: f64) -> bool {
-        let steps = bucket / (crate::AudioSpectrum::FFT_INTERVAL * LADDER_FLOOR_COLUMNS);
-        steps > 0.0 && (steps.log2() - steps.log2().round()).abs() < 1e-9
-    }
-
     /// The hold reaches the pane through the SURFACE: a Span dithering on a
     /// boundary refolds twice, not once a frame.
     ///
