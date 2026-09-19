@@ -2,7 +2,7 @@
 //! window, and no realtime.
 //!
 //! ```text
-//! harmonigraph-offline piece.take --audio piece.wav --out piece.mp4 --size 3840x2160
+//! harmonigraph-offline piece.take --out piece.mp4 --size 3840x2160
 //! ```
 //!
 //! The visualization is a pure function of its inputs, so a take
@@ -45,10 +45,6 @@ OPTIONS:
     -o, --out <PATH>       Output. .mp4/.mov/.mkv go through ffmpeg;
                            .png writes a numbered sequence; .rgba writes
                            a raw stream.  [default: <take>.mp4]
-    -a, --audio <WAV>      Audio to use instead of the take's own recording
-                           — a clean bounce in place of a crackly one. It
-                           starts at take zero unless --align says otherwise,
-                           feeds the spectrum, and is muxed into the video.
     -l, --layout <SPEC>    Preset name or path to a .ron layout.
                            Presets: PRESET_LIST
                            [default: side-by-side]
@@ -80,8 +76,8 @@ OPTIONS:
                            PATH or in the usual install locations.
         --align <SEC>      Where the soundtrack\'s first sample falls, in
                            seconds of take time. off is the default spelled
-                           out: a --audio file starts at take zero, the
-                           take\'s own recording where its header says.
+                           out: the take\'s recording starts where its
+                           header says (or at zero if unstamped).
         --playhead         Lay the render window\'s spectrogram out at once and
                            sweep a playhead across it, instead of the live
                            scrolling window. Needs audio.
@@ -108,7 +104,6 @@ fn main() -> std::process::ExitCode {
 struct Args {
     take: Option<String>,
     out: Option<String>,
-    audio: Option<String>,
     /// `None` means "use the frame the take was composed for" (its RenderFrame),
     /// falling back to a preset.
     layout: Option<String>,
@@ -142,7 +137,6 @@ impl Default for Args {
         Args {
             take: None,
             out: None,
-            audio: None,
             layout: None,
             size: None,
             scale: None,
@@ -202,7 +196,6 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
                 return Ok(None);
             }
             "-o" | "--out" => args.out = Some(value("--out")?),
-            "-a" | "--audio" => args.audio = Some(value("--audio")?),
             "-l" | "--layout" => args.layout = Some(value("--layout")?),
             "-s" | "--size" => args.size = Some(parse_size(&value("--size")?)?),
             "--scale" => args.scale = Some(parse_number("--scale", &value("--scale")?)?),
@@ -242,12 +235,9 @@ fn parse_align(text: &str) -> Result<Option<f64>, String> {
 
 /// Where the soundtrack's first sample falls on the take's timeline.
 ///
-/// The take's own recording is placed by construction: the header says where
-/// it started. A REPLACEMENT has no such stamp, and take times are the host
-/// transport's, so a bounce exported from the top of the song starts at zero.
-/// `--align` overrides either.
-fn start_of_audio(align: Option<f64>, is_replacement: bool, recorded_start: Option<f64>) -> f64 {
-    align.unwrap_or(if is_replacement { 0.0 } else { recorded_start.unwrap_or(0.0) })
+/// The header says where recording started; `--align` overrides that stamp.
+fn start_of_audio(align: Option<f64>, recorded_start: Option<f64>) -> f64 {
+    align.unwrap_or(recorded_start.unwrap_or(0.0))
 }
 
 fn parse_size(text: &str) -> Result<[u32; 2], String> {
@@ -438,7 +428,7 @@ fn export(args: Args) -> Result<(), String> {
     }
 
     // The WAV the take recorded for itself, beside the take file, if any.
-    let recorded = take
+    let audio_path = take
         .header
         .audio_file
         .as_ref()
@@ -450,24 +440,14 @@ fn export(args: Args) -> Result<(), String> {
         })
         .filter(|path| path.is_file());
 
-    // The soundtrack: a `--audio` file replaces the take's own recording;
-    // otherwise the recording is the soundtrack.
-    let is_replacement = args.audio.is_some();
-    let audio_path: Option<std::path::PathBuf> = match &args.audio {
-        Some(path) => Some(std::path::PathBuf::from(path)),
-        None => {
-            if take.header.audio_file.is_some() && recorded.is_none() {
-                // A take that names an audio file it no longer has beside
-                // it is worth saying out loud: the render would otherwise
-                // come out silent with no spectrum and no explanation.
-                eprintln!(
-                    "warning: take names {:?} but it is not beside the take",
-                    take.header.audio_file.as_deref().unwrap_or_default()
-                );
-            }
-            recorded.clone()
-        }
-    };
+    if take.header.audio_file.is_some() && audio_path.is_none() {
+        // A missing recording would otherwise produce a silent render with
+        // no spectrum and no explanation.
+        eprintln!(
+            "warning: take names {:?} but it is not beside the take",
+            take.header.audio_file.as_deref().unwrap_or_default()
+        );
+    }
     let mut audio = audio_path.as_deref().map(crate::wav::read).transpose()?;
 
     if args.playhead && audio.is_none() {
@@ -477,7 +457,7 @@ fn export(args: Args) -> Result<(), String> {
         );
     }
 
-    let audio_start = start_of_audio(args.align, is_replacement, take.header.audio_start);
+    let audio_start = start_of_audio(args.align, take.header.audio_start);
 
     let end = end_of_render(
         args.end,
@@ -852,39 +832,28 @@ mod tests {
         assert_eq!(parse(&["--fps", "30"]), None);
     }
 
-    /// Where a soundtrack's first sample lands, for every way that is decided.
-    ///
-    /// The take's own recording is placed by construction: `Header::audio_start`
-    /// is take time, so the picture and the sound agree without anything being
-    /// measured. A REPLACEMENT bounce carries no such stamp — take times are the
-    /// host transport's, so a file exported from the top of the song starts at
-    /// take zero — and `--align` overrides either.
+    /// Recorded audio keeps its header placement unless manually aligned.
     #[test]
     fn a_soundtrack_starts_where_its_own_clock_says() {
-        // The take's own recording, armed 5.48s into the song.
-        assert!((start_of_audio(None, false, Some(5.48)) - 5.48).abs() < 1e-9);
-        // A take whose header carries no audio stamp at all: take zero.
-        assert_eq!(start_of_audio(None, false, None), 0.0);
-        // A replacement ignores the recording's stamp rather than inheriting
-        // it, whether or not there is a recording to inherit from.
-        assert_eq!(start_of_audio(None, true, Some(5.48)), 0.0);
-        assert_eq!(start_of_audio(None, true, None), 0.0);
-        // --align outranks both, in either direction and including back to
-        // zero, which is the flag's whole point on a bounce that drifts.
-        assert!((start_of_audio(Some(2.5), false, Some(5.48)) - 2.5).abs() < 1e-9);
-        assert_eq!(start_of_audio(Some(0.0), false, Some(5.48)), 0.0);
-        assert!((start_of_audio(Some(-1.25), true, None) + 1.25).abs() < 1e-9);
+        assert_eq!(start_of_audio(None, Some(5.48)), 5.48);
+        assert_eq!(start_of_audio(None, None), 0.0);
+        assert_eq!(start_of_audio(Some(2.5), Some(5.48)), 2.5);
+        assert_eq!(start_of_audio(Some(0.0), Some(5.48)), 0.0);
+        assert_eq!(start_of_audio(Some(-1.25), Some(5.48)), -1.25);
     }
 
-    /// `--align` keeps both spellings its users actually type, and refuses the
-    /// one the cross-correlator took with it.
-    ///
-    /// `--align 0` is what `docs/evidence/realfft-adoption/{runtime,frames}.py`
-    /// run and `--align off` is what `docs/offline-audio-input.md` reproduces
-    /// with; `off` is the default spelled out, so both land on the same
-    /// placement. `auto` has to be REFUSED rather than quietly parsed or
-    /// ignored — a command line that names a placement and gets a different one
-    /// is the failure this flag exists to prevent.
+    #[test]
+    fn separate_audio_replacement_flags_are_rejected() {
+        for flag in ["-a", "--audio"] {
+            let result =
+                parse_args_from(["recorded.take", flag, "replacement.wav"].map(str::to_owned));
+            let Err(error) = result else { panic!("accepted retired flag {flag}") };
+            assert!(error.contains("unknown option") && error.contains(flag), "{error}");
+        }
+    }
+
+    /// `off` restores the recorded stamp; a number overrides it. Automatic
+    /// correlation remains retired and must be refused visibly.
     #[test]
     fn align_takes_a_number_or_off_and_refuses_the_deleted_auto() {
         assert_eq!(parse_align("off").unwrap(), None);

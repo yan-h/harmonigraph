@@ -76,7 +76,7 @@ pub struct Header {
     pub source: String,
     /// File name (not path) of the audio recorded with this take, if
     /// any. A sibling of the take file, so the pair can be moved
-    /// together. The renderer uses it when no audio is given explicitly.
+    /// together. The renderer uses it for the spectrum and soundtrack.
     pub audio_file: Option<String>,
     /// Take time corresponding to the audio's first sample.
     ///

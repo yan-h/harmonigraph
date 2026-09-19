@@ -47,8 +47,8 @@ impl RenderRequest {
     }
 
     /// Build a request for an explicit "Re-render take": always built, and it
-    /// carries the CURRENT `appearance` blob so the render reflects the frame,
-    /// bounce, and offset dialed in *after* recording — not the take's
+    /// carries the CURRENT `appearance` blob so the render reflects the framing
+    /// and appearance dialed in *after* recording — not the take's
     /// record-time snapshot.
     pub fn render_now(
         config: &harmonigraph_take::RenderConfig,

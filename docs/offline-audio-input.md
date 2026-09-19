@@ -2,8 +2,11 @@
 
 One of the three consumers measured here no longer exists.
 PR #903 deleted the offline audio aligner — `crates/harmonigraph-offline/src/align.rs`, `align_replacement`, `midi_onsets` and `Align::Auto` — so every sentence below about alignment, onset envelopes and correlation arrays is a record of a consumer that is gone, not a description of the code.
-`--align` survives as a plain number-or-`off` offset, and the command lines in this file still run;
-`--align auto` is now refused and `--align none` no longer parses.
+`--align` survives as a plain number-or-`off` offset for the take's recorded audio;
+`--align auto` is refused and `--align none` no longer parses.
+Separate-WAV replacement (`--audio`) was retired under #972.
+The commands below reproduce the dated measurements only with the pinned baseline and implementation revisions named under Measurement method;
+they are not commands for the current renderer.
 The WAV reader itself, `WholeSong::precompute` and the frame-analysis consumer are unchanged and are described accurately.
 
 Issue [#734](https://github.com/yan-h/harmonigraph/issues/734) replaces whole-file encoded and decoded allocations with one concrete seekable WAV reader.
