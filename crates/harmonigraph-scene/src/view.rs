@@ -2236,7 +2236,15 @@ impl ViewConfig {
         // what it costs is the SETTING: the ring is not drawn while the bar
         // reads out a number, and dragging the bar is then the only way to find
         // out that the number was never a size. Repaired to the fresh width, so
-        // a blob that has been through this door holds a ring somebody can see.
+        // the field and the picture agree about which it is.
+        //
+        // The fresh width is now 0 — the DAW capture at `64f7d41e` dialled the
+        // ring off — so this repair and `rings`' own reading of a NaN land in
+        // the same place today, and the sentence that used to stand here (a
+        // blob through this door "holds a ring somebody can see") stopped being
+        // true then. What the repair still buys is the agreement rather than
+        // the ring: the stored field stops being a number no layer matches.
+        // Should the fresh ring ever come back on, this line follows it.
         //
         // Where the ring SITS is not repaired here, because it is not stored: a
         // width is a width whatever is inside it, and the stack is what turns
