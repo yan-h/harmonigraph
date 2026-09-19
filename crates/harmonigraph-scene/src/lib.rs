@@ -102,11 +102,15 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// above the largest one a pane of ordinary shape reaches: 19251 nodes, at
 /// 3:1, fully zoomed out, nine sheets deep, at cavalier scale. Bounded is not
 /// the same as under the cap, and the difference is measured rather than
-/// assumed — past about 3.3:1 with full depth cabinet does reach this, and
+/// assumed — past about 3.3:1 at that depth cabinet does reach this, and
 /// there is a pane that gets there without hand-editing anything, since
 /// `Layout::split` will give the lattice a fifth of a 21:9 frame. What the
 /// trim costs there is 5634 nodes at 4:1 and 15912 at 6:1, off all four
-/// edges. A cap that covered it would have to be twice this one, for a band
+/// edges. Nine sheets is no longer the deepest a view can be set to, and at
+/// the thirteen `SEVENS_LAYER_LIMIT` now allows the crossing is at about
+/// 1.8:1 rather than 3.3:1 — see #916, which also carries what the test named
+/// for this bound, `a_cabinet_camera_never_reaches_the_node_budget`, actually
+/// reads. A cap that covered it would have to be twice this one, for a band
 /// of lattice eight steps tall.
 ///
 /// Cabinet's figures are the same under a window with bounds of its own as
