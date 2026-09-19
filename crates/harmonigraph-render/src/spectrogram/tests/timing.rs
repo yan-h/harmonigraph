@@ -9,6 +9,12 @@
 //! `PROBE_SIZE=WxH` (pixels, default 3840x2160), `PROBE_PPP` (default 2),
 //! `PROBE_FRAMES` (default 60) and `PROBE_CASE` (a substring of a case's name)
 //! narrow it. `docs/spectrogram-cloud-performance.md` holds the readings.
+//!
+//! `PROBE_CLOUD_PIXEL` (points per cloud sample, default whatever
+//! `SpectralAtmosphere::default` says) applies to EVERY case, after its own
+//! `turn`, so one run reads the whole table at one cloud resolution and two runs
+//! are what the reduction is worth. It is a dial rather than a case because the
+//! question is how much each of the rows above falls, not how one of them does.
 
 use super::*;
 use harmonigraph_scene::{CloudStyle, SpectralAtmosphere};
@@ -69,6 +75,8 @@ fn cloud_costs_by_style_and_dial() {
     let ppp: f32 = std::env::var("PROBE_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(2.0);
     let frames: usize =
         std::env::var("PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
+    let cloud_pixel: Option<f32> =
+        std::env::var("PROBE_CLOUD_PIXEL").ok().and_then(|v| v.parse().ok());
     crate::shader_assets::initialize();
     let instance = wgpu::Instance::default();
     let Ok(adapter) =
@@ -195,6 +203,11 @@ fn cloud_costs_by_style_and_dial() {
             cb.atmosphere = turn.map(|turn| {
                 let mut settings = SpectralAtmosphere::default();
                 turn(&mut settings);
+                // After the turn, so a case that dials the cloud cannot also
+                // decide its resolution behind this knob's back.
+                if let Some(cloud_pixel) = cloud_pixel {
+                    settings.cloud_pixel = cloud_pixel;
+                }
                 SpectrogramAtmosphere {
                     settings,
                     region: rect,

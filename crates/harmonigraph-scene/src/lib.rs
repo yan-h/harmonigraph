@@ -37,8 +37,8 @@ pub mod trail;
 pub mod view;
 
 pub use atmosphere::{
-    AtmosphereSettings, CloudStyle, SpectralAtmosphere, SpectralEffects, CLOUD_SIZE_MAX,
-    CLOUD_SIZE_MIN,
+    AtmosphereSettings, CloudStyle, SpectralAtmosphere, SpectralEffects, CLOUD_PIXEL_MAX,
+    CLOUD_PIXEL_MIN, CLOUD_SIZE_MAX, CLOUD_SIZE_MIN,
 };
 pub use camera::{Camera, Projection, Projector, VisibleSheet};
 pub use color::{

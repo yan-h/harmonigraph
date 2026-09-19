@@ -70,6 +70,20 @@ pub const CLOUD_SIZE_MIN: f32 = 0.0625;
 /// See [`CLOUD_SIZE_MIN`].
 pub const CLOUD_SIZE_MAX: f32 = 2.0;
 
+/// The band [`SpectralAtmosphere::cloud_pixel`] runs over, in egui points per
+/// cloud sample — and exported for the same reason [`CLOUD_SIZE_MIN`] is: the
+/// bar and the load-door clamp have to stop at one pair of numbers.
+///
+/// The FLOOR is where the layer is native on the display this is drawn on. At 2
+/// pixels per point a sample every half point is a sample every pixel, so 0.5
+/// is already the whole texture and anything under it would only ask for a
+/// target larger than the pane. The CEILING is a sixteenth of that resolution,
+/// which on a 2160-pixel pane is a cloud 270 samples tall — past the point
+/// where a rim is a rim, and there is nothing to buy beyond it.
+pub const CLOUD_PIXEL_MIN: f32 = 0.5;
+/// See [`CLOUD_PIXEL_MIN`].
+pub const CLOUD_PIXEL_MAX: f32 = 4.0;
+
 /// Independent spectrogram diffusion, analyzer shading and note light.
 ///
 /// There is no style here. Plain, Blur and Lava were three presets over three
@@ -99,6 +113,29 @@ pub struct SpectralAtmosphere {
     /// `scale_size`/`wash_size` for the texture's size and of this one for its
     /// travel.
     pub cloud_speed: f32,
+    /// How big one sample of the cloud's TONE is, in egui points: the layer's
+    /// resolution, and the one dial here that is about cost rather than about
+    /// the look.
+    ///
+    /// Both textures are per-pixel cell walks — eighteen domes or fifty globs
+    /// under every pixel — and nothing either walk computes depends on the
+    /// sound, so the scalar tone can be drawn once per sample this big and the
+    /// full-resolution composite can look the palette up from it. The cost
+    /// therefore falls with the SQUARE of this: 1 pt is a quarter of the walk, 2
+    /// pt a sixteenth. What is reduced is the tone alone — the base picture, its
+    /// terraces and the palette stay at full resolution under it.
+    ///
+    /// **POINTS and not device pixels**, so an exported frame and the editor
+    /// draw the same picture whatever the pixels-per-point is. The layer is
+    /// drawn NATIVELY whenever `cloud_pixel * pixels_per_point <= 1`, which is
+    /// what the fresh 0.5 is on a 2x display and on a 1x one: nothing is
+    /// allocated and no pass is encoded until the dial is turned up.
+    ///
+    /// What it spends is the texture's own fineness: a rim softens by about one
+    /// sample and detail below one sample is gone. Runs over
+    /// [`CLOUD_PIXEL_MIN`]..=[`CLOUD_PIXEL_MAX`], snapped to halves the way
+    /// [`Self::contours`] is snapped to whole numbers.
+    pub cloud_pixel: f32,
     /// Size of one scale, as a multiplier on that size: how many of them cross
     /// a cloud moves the other way, because the count is divided by this.
     /// Runs over [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`].
@@ -203,6 +240,9 @@ impl Default for SpectralAtmosphere {
             note_glow: 0.5,
             cloud_depth: 1.0,
             cloud_speed: 1.0,
+            // Native on a Retina display and on a plain one, so the fresh
+            // picture is the full-resolution one it always was.
+            cloud_pixel: 0.5,
             // 1.0x now draws what `cloud_scale` 0.5 against `scale_size` 2.2
             // drew, because `SCALE_CELLS` carries the retired dial's default.
             scale_size: 1.0,
@@ -246,6 +286,14 @@ impl SpectralAtmosphere {
         self.note_glow = clamp(self.note_glow, fresh.note_glow, 0.0, 1.0);
         self.cloud_depth = clamp(self.cloud_depth, fresh.cloud_depth, 0.0, 1.0);
         self.cloud_speed = clamp(self.cloud_speed, fresh.cloud_speed, 0.0, 20.0);
+        // Snapped to halves, so the dial is a handful of RESOLUTIONS to compare
+        // rather than a continuum: 0.5 native, 1 a quarter of the work, 1.5,
+        // 2 a sixteenth, and so on to 4. Half a point is also the finest step
+        // that means anything on a 2x display, where it is one device pixel.
+        self.cloud_pixel =
+            (clamp(self.cloud_pixel, fresh.cloud_pixel, CLOUD_PIXEL_MIN, CLOUD_PIXEL_MAX) * 2.0)
+                .round()
+                / 2.0;
         self.scale_size = clamp(self.scale_size, fresh.scale_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
         self.scale_refract = clamp(self.scale_refract, fresh.scale_refract, -1.0, 1.0);

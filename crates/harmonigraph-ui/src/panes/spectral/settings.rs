@@ -189,6 +189,25 @@ pub(crate) fn spectrum_settings_pane(
                 "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds \
                  it still, and holds Rock with it.",
             );
+        ValueBar::new(
+            &mut atmosphere.cloud_pixel,
+            harmonigraph_scene::CLOUD_PIXEL_MIN..=harmonigraph_scene::CLOUD_PIXEL_MAX,
+            "Cloud pixel size",
+        )
+        .unit(1.0, " pt")
+        .decimals(1)
+        .show(ui)
+        .on_hover_text(
+            "A PERFORMANCE control. Both textures walk their cells under every \
+             pixel, which is nearly all they cost, so drawing the texture coarser \
+             and stretching it over the picture saves with the SQUARE of this: 1 pt \
+             is a quarter of the work, 2 pt a sixteenth. 0.5 pt is one pixel on a \
+             Retina display, where the layer is drawn at full resolution and \
+             nothing is spent. What it costs as it grows is the texture's own \
+             fineness \u{2014} rims soften by about one of these steps and detail \
+             smaller than one is gone. The picture underneath, its terraces and the \
+             gradient stay sharp.",
+        );
         // Two constructions, so two sets of dials: nothing a wash carries means
         // anything to a lit scale, and a page listing both would be mostly
         // controls that do nothing wherever it stands.

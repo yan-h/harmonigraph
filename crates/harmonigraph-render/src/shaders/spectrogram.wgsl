@@ -265,7 +265,11 @@ struct Cloud {
     // a style enum: Plain, Blur and Lava are now the blur, the terraces and the
     // cloud each at zero or not, read off their own dials.
     contour_strength: f32,
-    _pad: u32,
+    // 1 when the cloud's scalar tone has been drawn into `cloud_tone` at the
+    // resolution `Cloud pixel size` asks for, so the composite reads it there
+    // instead of walking the cells per pixel. 0 is the native path, which is
+    // what every `cloud_pixel` at or under one device pixel takes.
+    tone_baked: u32,
     // Watercolour clouds. `drift` is the wash's offset in cloud units and
     // `time` a bounded clock; the rest are the sanitized settings. The filter
     // shader declares only the head of this struct, which is why these are
@@ -295,6 +299,11 @@ struct Cloud {
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
 @group(1) @binding(2) var cloud_sampler: sampler;
 @group(1) @binding(3) var<uniform> cloud: Cloud;
+/// The cloud's scalar tone, one texel per `cloud_pixel` of pane, as `fs_cloud_tone`
+/// drew it. Bound whether or not it holds anything — a pass that RENDERS into it
+/// binds a stand-in here, since wgpu validates every resource in a bound group
+/// against the attachments whether the shader reads it or not.
+@group(1) @binding(4) var cloud_tone: texture_2d<f32>;
 
 // Scalar display intensity has no gamma transfer function. In particular,
 // the float source target must not take fs_heatmap_linear's RGB conversion.
@@ -764,15 +773,13 @@ fn cloud_light(pt: vec2<f32>) -> f32 {
 // is the dial that lets the picture back through.
 const CLOUD_SHADE: f32 = 0.64;
 
-fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
-    // There is no gate on the blur here, and there used to be: the light field
-    // was only built when a softness was above zero, so the cloud quietly
-    // vanished with the blur. The field is built whenever a cloud is drawn now,
-    // and at zero softness it holds the measured picture unblurred.
-    if cloud.cloud_depth <= 0.0 {
-        return base;
-    }
-    let pt = position / cloud.ppp - cloud.origin;
+// The mosaic's scalar TONE at a pane-relative point, ahead of the palette.
+//
+// Split out of the colour because it is the whole of what the layer costs: two
+// 3x3 dome rings per pixel, of which not one term reads the sound. `clouded`
+// turns it into a colour at full resolution either way; what changes is whether
+// this ran under that pixel or once per `Cloud pixel size` in `fs_cloud_tone`.
+fn scale_tone(pt: vec2<f32>) -> f32 {
     let q = (pt - cloud.size * 0.5) / cloud.size.y * CLOUD_UNITS + cloud.drift;
 
     // The scales. `scale_size` DIVIDES how many of them cross one cloud unit,
@@ -882,16 +889,16 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     let diffuse = mix(pow(1.0 - relief, RELIEF_FLOOR_FALL), 1.0, lambert);
 
     let lit = bent * diffuse * CLOUD_SHADE;
-    let body = palette_color(clamp(lit, 0.0, 1.0));
-    // `softened` used to sit here, compressing anything whose brightest channel
-    // ran past 0.75. It was holding back the ADDITIVE glint, and with the glint
-    // gone `body` is `palette_color(clamp(lit, 0, 1))` — a colour the palette
-    // itself chose, which cannot leave the ramp. Measured on the shipped look it
-    // was a complete no-op, byte for byte, at the defaults and at every dial up;
-    // the only input that still reached it was an EDITED bright palette, where
-    // it dimmed 231k pixels by up to 24/255 — darkening colours Yan had asked
-    // for to prevent a clipping that can no longer happen.
-    return mix(base, body, cloud.cloud_depth);
+    // `softened` used to sit after the palette lookup this feeds, compressing
+    // anything whose brightest channel ran past 0.75. It was holding back the
+    // ADDITIVE glint, and with the glint gone the body is
+    // `palette_color(clamp(lit, 0, 1))` — a colour the palette itself chose,
+    // which cannot leave the ramp. Measured on the shipped look it was a
+    // complete no-op, byte for byte, at the defaults and at every dial up; the
+    // only input that still reached it was an EDITED bright palette, where it
+    // dimmed 231k pixels by up to 24/255 — darkening colours Yan had asked for
+    // to prevent a clipping that can no longer happen.
+    return clamp(lit, 0.0, 1.0);
 }
 // ======================= A watercolour WASH of globs ========================
 //
@@ -986,7 +993,7 @@ const WASH_RAGGED: f32 = 0.30;
 const WASH_RADIUS_MIN: f32 = 1.02;
 const WASH_RADIUS_MAX: f32 = 1.66;
 
-// How many cells cross one cloud unit at `Glob size` 1x — see `wash_clouds`,
+// How many cells cross one cloud unit at `Glob size` 1x — see `wash_cloud_tone`,
 // where it is chosen so a glob comes out the width the prototype's J2 drew
 // rather than so the CELLS come out at J2's count.
 const WASH_CELLS: f32 = 5.25;
@@ -1368,12 +1375,10 @@ fn wash_average_pile(occupancy: f32) -> f32 {
     return occupancy * 3.14159265 * (lo * lo + lo * hi + hi * hi) / 3.0;
 }
 
-fn wash_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
-    // Same gate as the scales, and like theirs it no longer asks for a blur.
-    if cloud.cloud_depth <= 0.0 {
-        return base;
-    }
-    let pt = position / cloud.ppp - cloud.origin;
+// The wash's scalar tone at a pane-relative point — `scale_tone`'s counterpart,
+// split out for the same reason and named `wash_cloud_tone` because `wash_tone`
+// above is one octave's own paper-minus-pigment.
+fn wash_cloud_tone(pt: vec2<f32>) -> f32 {
     let q = (pt - cloud.size * 0.5) / cloud.size.y * CLOUD_UNITS + cloud.drift;
 
     // `wash_size` is how big one GLOB is, so the knob reads as a size.
@@ -1436,17 +1441,48 @@ fn wash_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     // so it is a floor on the PAINT and not on the picture: the hold scales it
     // too, or the tone the wash draws over silence would be `TONE_FLOOR`
     // whatever the black point says.
-    let body = palette_color(clamp(paint.tone, WASH_TONE_FLOOR, 1.0) * paint.hold);
-    return mix(base, body, cloud.cloud_depth);
+    return clamp(paint.tone, WASH_TONE_FLOOR, 1.0) * paint.hold;
+}
+
+// Whichever texture is selected, as one scalar. The branch is on a uniform, so
+// no two lanes ever disagree about it.
+fn cloud_tone_at(pt: vec2<f32>) -> f32 {
+    if cloud.cloud_style == 1u {
+        return wash_cloud_tone(pt);
+    }
+    return scale_tone(pt);
+}
+
+// The cloud's tone reduced to a target of its own, one texel per `Cloud pixel
+// size` of pane. The coverage quad carries the pane-relative 0..1 fraction in
+// its `slab`/`t`, which is what makes this the same `pt` the composite would
+// have walked under each of its own pixels.
+@fragment
+fn fs_cloud_tone(in: VertexOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(cloud_tone_at(vec2<f32>(in.slab, in.t) * cloud.size), 0.0, 0.0, 1.0);
 }
 
 fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
     let base = density_color(level);
-    // The branch is on a uniform, so no two lanes ever disagree about it.
-    if cloud.cloud_style == 1u {
-        return vec4<f32>(wash_clouds(base.rgb, position), 1.0);
+    // There is no gate on the blur here, and there used to be: the light field
+    // was only built when a softness was above zero, so the cloud quietly
+    // vanished with the blur. The field is built whenever a cloud is drawn now,
+    // and at zero softness it holds the measured picture unblurred.
+    if cloud.cloud_depth <= 0.0 {
+        return base;
     }
-    return vec4<f32>(scale_clouds(base.rgb, position), 1.0);
+    let pt = position / cloud.ppp - cloud.origin;
+    // Either the walk under this pixel, or one bilinear tap into what
+    // `fs_cloud_tone` already walked. The palette lookup and the mix stay HERE
+    // whichever it was, so the base picture, its terraces and the gradient are
+    // full resolution even where the texture over them is not.
+    var tone: f32;
+    if cloud.tone_baked == 1u {
+        tone = textureSampleLevel(cloud_tone, cloud_sampler, pt / cloud.size, 0.0).r;
+    } else {
+        tone = cloud_tone_at(pt);
+    }
+    return vec4<f32>(mix(base.rgb, palette_color(tone), cloud.cloud_depth), 1.0);
 }
 // Empty history uses the same field and palette with a zero measured core.
 // This quad never samples the grid, so the oldest column cannot be smeared.

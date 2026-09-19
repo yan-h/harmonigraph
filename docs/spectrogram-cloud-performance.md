@@ -97,6 +97,10 @@ The cost is `pixels x cell visits x frames`, the walk is arithmetic-bound, and n
 so each lever removes one of the three.
 These are proposals; only the first has a measured bound.
 
+**Lever 1 is built**, as the `Cloud pixel size` dial:
+it runs 0.5 to 4 points per sample, is native at the fresh 0.5 on a Retina pane, and swallows lever 3 by being a dial rather than one fixed reduction.
+`PROBE_CLOUD_PIXEL` re-reads the table above at any of its settings.
+
 | Priority | Change | Expected | What it costs |
 | --- | --- | --- | --- |
 | 1 | Draw the cloud's scalar TONE into a half-resolution `R16Float` target (one sample per point at 2 px/pt), and have the full-resolution composite read it, look the palette up and mix the base | Measured bound: Mosaic 13.0 to about 3.2 + 1, Watercolor 37.3 to about 9.7 + 1 | One pass and one target per pane. Rims soften by half a point; at `Fuzz` 1 the rims are already tens of points wide. Terraces and the measured core stay full resolution because the base is still composited there. Needs Yan's eye at `Fuzz` 0 and on Mosaic's creases, so it belongs on a dial first |
