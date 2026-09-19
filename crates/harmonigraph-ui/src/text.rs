@@ -345,7 +345,26 @@ pub(crate) struct TextBatch {
     /// Every glyph this batch drew — the probe that decides whether egui has
     /// rasterized something our mirror of its atlas has not seen. See
     /// [`GlyphKey`] and [`AtlasMirror`].
+    ///
+    /// Filled only in a shell that needs the fallback, which is what
+    /// [`TextBatch::publishes_font_texture`] answers: the plugin and the
+    /// offline renderer hand their callbacks egui's own GPU texture and never
+    /// consult a mirror, so every key they built here was thrown away at the
+    /// flush that follows.
     drawn: Vec<GlyphKey>,
+    /// Whether this batch's shell publishes egui's font texture to the paint
+    /// callbacks — [`renderer_font_texture_is_current`], asked once for the
+    /// batch instead of once per glyph.
+    ///
+    /// Remembered rather than re-read, and the reason is not the `ctx.data`
+    /// lock. The collecting side and the flushing side have to give the SAME
+    /// answer: [`atlas_if_changed`] reads an empty `drawn` as "no glyph this
+    /// pane drew is new", so a batch that skipped its pushes and then took the
+    /// fallback arm would tell that mirror nothing had moved while handing the
+    /// renderer glyphs it has never held. One read cannot disagree with
+    /// itself. Nothing flips it under a batch either — the two shells that
+    /// publish call `use_renderer_font_texture` before their first frame.
+    publishes_font_texture: Option<bool>,
     /// In force for the piece being drawn, if any. See [`Magnify`].
     magnify: Option<Magnify>,
     /// Test-only: which glyphs came from which piece of text. The glyphs
@@ -443,6 +462,12 @@ impl TextBatch {
         out
     }
 
+    /// See [`publishes_font_texture`](Self::publishes_font_texture) the field:
+    /// asked of the context on first use and held for the rest of the batch.
+    fn publishes_font_texture(&mut self, ctx: &egui::Context) -> bool {
+        *self.publishes_font_texture.get_or_insert_with(|| renderer_font_texture_is_current(ctx))
+    }
+
     /// Add one piece of text, shadowed. `outline` should be the ground the
     /// text stands on (`theme::picture` over a picture pane), which contrasts
     /// with any text color by construction; a transparent one draws the
@@ -515,6 +540,8 @@ impl TextBatch {
         // everywhere the caller wants the rasterized size; see [`Magnify`] for
         // why a label that follows a zoom does not.
         let k = self.magnify.map_or(1.0, |m| m.factor);
+        // Only where a mirror is going to read them. See [`Self::drawn`].
+        let probe = !self.publishes_font_texture(painter.ctx());
         for row in &galley.rows {
             for glyph in &row.glyphs {
                 if glyph.uv_rect.is_nothing() {
@@ -525,7 +552,9 @@ impl TextBatch {
                 let min = self.magnify.map_or(min, |m| m.point(min));
                 let rect = [min.x, min.y, glyph.uv_rect.size.x * k, glyph.uv_rect.size.y * k];
                 let sdf = crate::text_sdf::sheet().type_patch(&sdf_family, glyph.chr);
-                self.drawn.push((font_size_bits, glyph.chr, glyph.uv_rect.min));
+                if probe {
+                    self.drawn.push((font_size_bits, glyph.chr, glyph.uv_rect.min));
+                }
                 self.glyphs.push(GlyphInstance {
                     rect,
                     uv: [
@@ -684,8 +713,7 @@ impl TextBatch {
             self.pieces.clear();
             self.marks.clear();
         }
-        let atlas = if renderer_font_texture_is_current(painter.ctx()) {
-            self.drawn.clear();
+        let atlas = if self.publishes_font_texture(painter.ctx()) {
             None
         } else {
             atlas_if_changed(
@@ -747,8 +775,7 @@ impl TextBatch {
         let (atlas, marks) = if self.glyphs.is_empty() {
             (None, None)
         } else {
-            let atlas = if renderer_font_texture_is_current(painter.ctx()) {
-                self.drawn.clear();
+            let atlas = if self.publishes_font_texture(painter.ctx()) {
                 None
             } else {
                 atlas_if_changed(
@@ -1707,20 +1734,29 @@ mod tests {
                 egui::RawInput { screen_rect: Some(rect), ..Default::default() },
                 |ui| {
                     let painter = ui.painter_at(rect);
+                    let font = egui::FontId::monospace(24.0);
+                    let label = crate::panes::spectral::frequency_label(1_000.0);
                     let mut batch = TextBatch::default();
                     batch.text(
                         &painter,
                         egui::pos2(48.0, 32.0),
                         egui::Align2::LEFT_CENTER,
-                        crate::panes::spectral::frequency_label(1_000.0),
-                        egui::FontId::monospace(24.0),
+                        label.clone(),
+                        font.clone(),
                         egui::Color32::GREEN,
                         egui::Color32::RED,
                     );
-                    let k = batch
-                        .drawn
+                    // Off the galley rather than off `batch.drawn`, which this
+                    // shell does not fill: it published the renderer's own
+                    // texture above, so there is no mirror to probe for. The
+                    // galley is where the batch read its own glyphs from, and
+                    // the same skip of the blanks puts the two in step.
+                    let galley = painter.layout_no_wrap(label, font, egui::Color32::PLACEHOLDER);
+                    let k = galley.rows[0]
+                        .glyphs
                         .iter()
-                        .position(|(_, ch, _)| *ch == 'k')
+                        .filter(|glyph| !glyph.uv_rect.is_nothing())
+                        .position(|glyph| glyph.chr == 'k')
                         .expect("the shipping formatter appends k");
                     let glyph = batch.glyphs[k];
                     assert_ne!(glyph.sdf_near, [0.0; 4], "k has no near field");
@@ -1728,7 +1764,6 @@ mod tests {
                     batch_sdf_near = glyph.sdf_near;
                     batch_sdf_coarse = glyph.sdf_coarse;
                     batch.glyphs = vec![glyph];
-                    batch.drawn.retain(|(_, ch, _)| *ch == 'k');
                     k_rect = Some(egui::Rect::from_min_size(
                         egui::pos2(glyph.rect[0], glyph.rect[1]),
                         egui::vec2(glyph.rect[2], glyph.rect[3]),
@@ -1928,12 +1963,17 @@ mod tests {
     /// A shell that installs egui's current GPU texture makes a CPU atlas
     /// publication pure duplication. The glyph run still has to reach the
     /// callback; only the cloned image is omitted.
+    ///
+    /// And the PROBE that would have fed that publication is not collected
+    /// either — a [`GlyphKey`] per glyph per frame, built for a mirror this
+    /// shell never asks. `drawn` is read by `atlas_if_changed` and by nothing
+    /// else, so where that is not called there is nothing to fill.
     #[test]
     fn a_renderer_font_texture_replaces_the_cpu_atlas_publication() {
         let ctx = egui::Context::default();
         use_renderer_font_texture(&ctx);
         let state = crate::tests::probe::fresh();
-        let mut result = (0usize, false);
+        let mut result = (0usize, false, 0usize);
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             let mut batch = TextBatch::default();
             batch.text(
@@ -1945,15 +1985,35 @@ mod tests {
                 egui::Color32::WHITE,
                 egui::Color32::BLACK,
             );
+            let probed = batch.drawn.len();
             let labels = batch.lattice_labels(
                 ui.painter(),
                 egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
                 &state.picture,
             );
-            result = (labels.glyphs.len(), labels.atlas.is_some());
+            result = (labels.glyphs.len(), labels.atlas.is_some(), probed);
         });
         assert!(result.0 > 0, "the fixture must hand glyphs to the renderer");
         assert!(!result.1, "the current renderer texture makes a CPU clone redundant");
+        assert_eq!(result.2, 0, "{} glyph keys collected for a mirror nobody reads", result.2);
+        // Non-vacuous: the same glyphs ARE probed in a shell that needs the
+        // fallback, which is the only thing that reads them.
+        let fallback = egui::Context::default();
+        let mut probed = 0usize;
+        let _ = fallback.run_ui(egui::RawInput::default(), |ui| {
+            let mut batch = TextBatch::default();
+            batch.text(
+                ui.painter(),
+                egui::pos2(20.0, 20.0),
+                egui::Align2::LEFT_TOP,
+                "C4".to_owned(),
+                egui::FontId::monospace(13.0),
+                egui::Color32::WHITE,
+                egui::Color32::BLACK,
+            );
+            probed = batch.drawn.len();
+        });
+        assert_eq!(probed, result.0, "the fallback shell must probe every glyph it drew");
     }
 
     #[test]
