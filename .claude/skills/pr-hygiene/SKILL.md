@@ -65,6 +65,12 @@ The shared skill reads the combined diff and keeps a `last-merge-audit` tag so c
 
 ## Squash by default; merge-commit the exception
 
+**When Yan says "merge it", he can say it while CI is still running:** the session waits and merges once `mergeStateStatus` is clean, so he is not coming back at green to press a button.
+Not `gh pr merge --auto --squash` — `main` carries no branch protection and no rulesets, so no check is *required*, and GitHub's auto-merge waits on required checks alone; it would merge a mergeable PR at once rather than at green (#943 holds the measurement and why that was rejected).
+`mergeStateStatus` is the better gate regardless, because it accounts for every check including `Metal shader assets`, whose `paths:` filter keeps it off most PRs and therefore out of any required-checks scheme — the `UNSTABLE`-while-`Full CI`-is-green case CLAUDE.md warns about.
+The rule is unchanged:
+nothing merges unless he asks.
+
 **Squash a PR unless its commits are separable.** The question is not how many there are —
 #97 had eight and was squashed, #95 had about seven and took a merge commit.
 It is whether the commits *supersede one another*.

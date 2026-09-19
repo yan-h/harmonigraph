@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Canonical full CI gate: formatting, markdown clause breaks and local links, workspace clippy with warnings denied,
-# workspace tests, the plugin package check, the release all-targets check, harmonigraph-render's own tests,
+# workspace tests with harmonigraph-render excluded, the plugin package check, the release all-targets check, harmonigraph-render's own tests,
 # vendored GUI crates' tests, the optional CLAP probe fixture and the gated startup-probe example, doc links, the harmonigraph-core dependency
 # guard, the security-audit trigger split, the CI group split, pinned shared
 # skills in fresh worktrees, worktree reclaim safety, and the registered-worktree bundle swap.
@@ -34,6 +34,12 @@ cd "$(dirname "$0")"
 # gate that exists precisely BECAUSE that unification hides something — the
 # plugin resolved on its own dependency edge, the optional probe feature,
 # harmonigraph-render's own tests, and the `exclude`d vendored crates.
+#
+# Since #922 that seam is exclusive rather than merely descriptive: the
+# `workspace` test run passes `--exclude harmonigraph-render`, so render's 282
+# tests run in `isolated` and nowhere else instead of once in each group.
+# Moving work off whichever group is the longer one is the lever this ceiling
+# leaves open, and that one was worth ~48s of the critical path.
 CI_GROUPS=(workspace isolated)
 CI_GROUP="${1:-all}"
 case " ${CI_GROUPS[*]} all " in
@@ -89,7 +95,22 @@ run cargo clippy --workspace --all-targets -- -D warnings
 # Guard the existing production performance scenarios at their exported callbacks.
 # The isolated configuration filter below does not reach them; enabling the
 # guard here keeps those expensive scenarios to one run.
-run cargo test --workspace --features nice-plug/assert_process_allocs
+#
+# harmonigraph-render is EXCLUDED because this run was the SECOND of two copies
+# of its tests and the wrong one to keep: 282 of them here in 47.7s, 284 of them
+# in `isolated` in 48.3s, differing only in that `--workspace` unifies
+# hot-reload ON — a configuration the bundle never ships — while
+# `cargo test -p harmonigraph-render` below runs them with it off, which is the
+# arm it does ship. Dropping the duplicate is ~48s off the critical-path group
+# (#922, measured on run 35422790108: 6.2 → ~5.4 min).
+#
+# The accepted cost, decided rather than merely noted, so it is not
+# re-litigated: render's tests never RUN under hot-reload-unified feature
+# resolution again. They are still COMPILED in it by the `--all-targets` clippy
+# line above, so a `#[cfg(feature = "hot-reload")]` break in one of them still
+# fails here; what is given up is a hot-reload-only RUNTIME failure inside a
+# render test, in a feature that is standalone-harness-only.
+run cargo test --workspace --exclude harmonigraph-render --features nice-plug/assert_process_allocs
 
 group isolated
 
@@ -156,6 +177,11 @@ run cargo check --release --workspace --all-targets
 # above. Dropping `with_common` from that arm would pass every gate and ship a
 # plugin whose glyph pipelines compile text.wgsl without the common half,
 # surfacing as a pipeline panic on first paint inside the DAW.
+#
+# Since #922 it is also the ONLY run of them: the `workspace` gate excludes the
+# package rather than running a hot-reload-unified second copy of the tests
+# these two share. So this line is load-bearing for all 284, not just for the
+# two the `cfg` deletes — narrowing it to a filter would silently drop the rest.
 run cargo test -p harmonigraph-render
 
 # The vendored crates are `exclude`d from the workspace (the `[workspace]`
