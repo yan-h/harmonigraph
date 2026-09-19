@@ -114,32 +114,49 @@ pub(crate) fn spectrum_settings_pane(
 
     section(ui, "Softness and glow");
     let atmosphere = &mut cfg.atmosphere;
-    use harmonigraph_scene::SpectrogramStyle;
-    choice_row(
-        ui,
-        "Spectrogram",
-        &mut atmosphere.style,
-        &[
-            (SpectrogramStyle::Plain, "Plain", "Measured power without styling"),
-            (SpectrogramStyle::Blur, "Blur", "Smooth the whole intensity field"),
-            (SpectrogramStyle::Lava, "Lava", "Smooth intensity terraces"),
-        ],
-    );
-    if atmosphere.style != SpectrogramStyle::Plain {
-        ValueBar::new(&mut atmosphere.pitch_softness, 0.0..=300.0, "Pitch softness")
-            .unit(1.0, " ct")
-            .show(ui);
-        ValueBar::new(&mut atmosphere.time_softness, 0.0..=2000.0, "Time softness")
-            .unit(1.0, " ms")
-            .show(ui);
+    // No style selector. Plain, Blur and Lava were three presets over three
+    // independent effects — the blur, the terraces and the cloud — and each of
+    // those now has a dial whose zero is off. The measured picture is all three
+    // at zero, and the renderer takes its plain path there, so nothing is paid
+    // for an effect that is not drawn. A row whose effect is off is greyed
+    // rather than hidden, like every other section of this page, so the page's
+    // inventory does not move under a drag.
+    ValueBar::new(&mut atmosphere.pitch_softness, 0.0..=300.0, "Pitch softness")
+        .unit(1.0, " ct")
+        .show(ui);
+    ValueBar::new(&mut atmosphere.time_softness, 0.0..=2000.0, "Time softness")
+        .unit(1.0, " ms")
+        .show(ui);
+    let soft = atmosphere.pitch_softness > 0.0 || atmosphere.time_softness > 0.0;
+    ui.add_enabled_ui(soft, |ui| {
         ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Spread").percent().show(ui);
-        if atmosphere.style == SpectrogramStyle::Lava {
-            ValueBar::new(&mut atmosphere.contours, 2.0..=64.0, "Contours").integer().show(ui);
-            ValueBar::new(&mut atmosphere.contour_softness, 0.01..=0.5, "Edge softness")
-                .percent()
-                .show(ui);
-        }
-        ui.label(egui::RichText::new("Cloud texture (prototype)").strong());
+    });
+    ValueBar::new(&mut atmosphere.contour_strength, 0.0..=1.0, "Contour strength")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How far the levels are gathered into smooth terraces. 0% leaves the measured \
+             levels alone and costs nothing.",
+        );
+    ui.add_enabled_ui(atmosphere.contour_strength > 0.0, |ui| {
+        ValueBar::new(&mut atmosphere.contours, 2.0..=64.0, "Contours").integer().show(ui);
+        ValueBar::new(&mut atmosphere.contour_softness, 0.01..=0.5, "Edge softness")
+            .percent()
+            .show(ui);
+    });
+    ui.label(egui::RichText::new("Cloud texture (prototype)").strong());
+    ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Cloud depth")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "A drifting texture over the WHOLE pane, reading the sound's light so the \
+             picture is seen THROUGH it rather than under something painted over it. \
+             0% removes it and anything below full lets the plain picture back through \
+             \u{2014} under Watercolor that reads as a double exposure, the sharp bands \
+             showing under their own washed copy. It reads whatever the softness above \
+             leaves: with none, the measured picture itself.",
+        );
+    ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
         // Two constructions rather than two presets of one, so the dials below
         // the shared three are per style: nothing a wash carries means anything
         // to a lit scale, and the page would otherwise be a list of controls
@@ -165,17 +182,6 @@ pub(crate) fn spectrum_settings_pane(
                 ),
             ],
         );
-        ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Cloud depth")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "A drifting texture over the WHOLE pane, reading the sound's light so the \
-                 picture is seen THROUGH it rather than under something painted over it. \
-                 0% removes it and anything below full lets the plain picture back through \
-                 \u{2014} under Watercolor that reads as a double exposure, the sharp bands \
-                 showing under their own washed copy. It needs some softness above: the \
-                 softened field is the light either texture reads.",
-            );
         ValueBar::new(&mut atmosphere.cloud_speed, 0.0..=20.0, "Cloud speed")
             .unit(1.0, "\u{d7}")
             .show(ui)
@@ -209,24 +215,17 @@ pub(crate) fn spectrum_settings_pane(
                  smallest at 100%. It never opens a hole \u{2014} a scale that loses its \
                  cell loses it to a neighbour already covering it.",
                 );
-            ValueBar::new(&mut atmosphere.scale_refract, 0.0..=1.0, "Refraction")
-                .percent()
+            ValueBar::new(&mut atmosphere.scale_refract, -1.0..=1.0, "Refraction")
+                .unit(100.0, "%")
                 .show(ui)
                 .on_hover_text(
-                    "How far a scale bends the light behind it, as a share of its own width. \
-                 This is the dial that makes the layer a LENS: the spectrogram is read \
-                 where each scale's face points, so the bands break and bend through the \
-                 cloud. 0 leaves the light where it is and the cloud is just a lit body.",
-                );
-            ValueBar::new(&mut atmosphere.scale_facet, 0.0..=1.0, "Facet")
-                .percent()
-                .show(ui)
-                .on_hover_text(
-                    "WHERE a scale reads the light. 0 reads it where the scale's own face points, \
-                 so the picture bends through the cloud. 100% reads it at the scale's centre \
-                 instead \u{2014} one value for the whole scale, so the cloud comes apart into \
-                 flat quantized patches. Refraction scales the first of those and not the \
-                 second.",
+                    "How far a scale carries the light behind it, and which way. This is the \
+                 dial that makes the layer a LENS. Above 0 the spectrogram is read where \
+                 each scale's face points, as a share of its own width, so the bands break \
+                 and bend through the cloud. Below 0 it is pulled toward the scale's own \
+                 centre instead \u{2014} at -100% one value for the whole scale, so the \
+                 cloud comes apart into flat quantized patches. 0 leaves the light where \
+                 it is and the cloud is just a lit body.",
                 );
             ValueBar::new(&mut atmosphere.scale_relief, 0.0..=1.0, "Scale relief")
                 .percent()
@@ -248,7 +247,7 @@ pub(crate) fn spectrum_settings_pane(
                  drift, so Cloud speed at 0 holds it too.",
                 );
         }
-    }
+    });
     ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")
         .percent().show(ui).on_hover_text("Blend the live analyzer from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram style and outline opacity.");
     ValueBar::new(&mut atmosphere.note_glow, 0.0..=1.0, "Note glow")
@@ -476,18 +475,9 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .unit(1.0, "\u{d7}")
         .show(ui)
         .on_hover_text(
-            "Size of one glob, as a share of the frame above. At 1\u{d7} and the fresh cloud \
-             size a glob is about a twentieth of the pane's height across, which is roughly \
-             two harmonic lines; halve it and a glob is one line wide and the music reads \
-             through the paint.",
-        );
-    ValueBar::new(&mut atmosphere.wash_variety, 0.0..=1.0, "Variety")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How much the globs differ in size from EACH OTHER. 0 gives every glob one \
-             radius; turning it up draws each its own, out of the widest band that still \
-             covers the plane with no pinhole in it.",
+            "Size of one glob. At 1\u{d7} a glob is about a twentieth of the pane's height \
+             across, which is roughly two harmonic lines; halve it and a glob is one line \
+             wide and the music reads through the paint.",
         );
     ValueBar::new(&mut atmosphere.wash_fuzz, 0.0..=1.0, "Fuzz").percent().show(ui).on_hover_text(
         "ONE dial over everything that dissolves a glob's rim: how far it feathers into \
@@ -525,11 +515,11 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .percent()
         .show(ui)
         .on_hover_text(
-            "How far up the dark end the paint is pulled back to the picture's own black. \
-             The paper is lifted so a glob over a loud band glows like the band rather than \
-             shadowing it, and that lift is also why silence comes out mid-tone instead of \
-             black. This takes the tone away again where the glob found no light and leaves \
-             every brighter tone untouched. 0 is the lifted paper everywhere.",
+            "How much of the picture's own black the paint gives back. The paper is lifted \
+             so a glob over a loud band glows like the band rather than shadowing it, and \
+             that lift is also why silence comes out mid-tone instead of black. This takes \
+             the tone away again where the glob found no light and leaves every brighter \
+             tone untouched. 0 is the lifted paper everywhere, 100% is silence drawn black.",
         );
     ValueBar::new(&mut atmosphere.wash_pool, 0.0..=1.0, "Edge pooling")
         .percent()
@@ -549,26 +539,8 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .on_hover_text(
             "How opaque a second, finer and sparser wash is over the first. It is where the \
              field gets its small lobes crowding the big ones, and where two washes meet the \
-             tone steps. 0 draws the coarse field alone, which is also the cheapest this \
-             texture runs.",
-        );
-    ValueBar::new(&mut atmosphere.wash_soften, 0.0..=1.0, "Softness")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How far the light a glob reads is carried from the close picture toward the \
-             wide blur above. At these glob sizes little or none is right \u{2014} the paint \
-             reads a POINT, so pre-blurring it only costs detail.",
-        );
-    ValueBar::new(&mut atmosphere.wash_wander, 0.0..=1.0, "Wander")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How fast each glob turns about its own cell, on its own rate, so the field stirs \
-             rather than sliding as one sheet. A glob near the middle of its cell barely moves \
-             and one out at the edge sweeps a circle. Which glob is on top never changes \
-             \u{2014} that would pop. It runs on the same clock as the drift, so Cloud speed \
-             at 0 holds it.",
+             tone steps. It is also where the field's range of glob sizes comes from. 0 \
+             draws the coarse field alone, which is also the cheapest this texture runs.",
         );
 }
 

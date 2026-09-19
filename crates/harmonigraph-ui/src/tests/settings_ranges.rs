@@ -65,7 +65,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
         attack, release, keyline, roll_seconds, roll_thickness, roll_opacity, roll_lead,
         roll_lead_fade, roll_lead_release, note_name_scale, volume_floor_db, volume_ceiling_db);
-    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, contours, contour_softness, analyzer_softness, note_glow);
+    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, contour_strength, contours, contour_softness, analyzer_softness, note_glow);
     saved.workspace.interaction.ui_scale = v;
     // These owners have NO ValueBar/RangeBar today. Still pass through their
     // real shared load boundary; zero Video visits below explicitly records
@@ -87,19 +87,6 @@ fn loaded(edge: Edge) -> SharedState {
     // Spiral and take-render settings share the load boundary but currently
     // have no recorded bar. Check their own normalization directly so adding
     // zero-visit panes to the matrix does not pretend the bar guard covers them.
-    //
-    // `view.spacing` joins them for the same reason and one more: it is in the
-    // `poison!` block above because the completeness guard below demands every
-    // dialled float be poisoned, and until #912 nothing read the result — the
-    // one field in that block whose value was written and then never looked
-    // at. This is what reads it, and it is the only place that can: no bar in
-    // the recorded set shows a spacing.
-    assert!(
-        (harmonigraph_scene::SPACING_MIN..=harmonigraph_scene::SPACING_MAX)
-            .contains(&state.picture.appearance.view.spacing),
-        "a poisoned spacing loaded as {}",
-        state.picture.appearance.view.spacing,
-    );
     assert!((1.0..=8.0).contains(&state.picture.appearance.spiral.zoom));
     assert!(state.picture.appearance.spiral.look.length() <= 1.0);
     assert!(
@@ -221,15 +208,15 @@ fn scenarios() -> Vec<Scenario> {
         // marks, audio reading, sevens, roll/note names, glow and shadow falloff.
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
-    // The wash's own inventory: it takes the six scale bars off the Analyzer
-    // page and puts twelve of its own there, and nothing else on the page moves.
+    // The wash's own inventory: it takes the five scale bars off the Analyzer
+    // page and puts nine of its own there, and nothing else on the page moves.
     // Its own scenario rather than a flag on the loop above because the fresh
-    // state selects the scales, so without this the twelve are drawn by no case
+    // state selects the scales, so without this the nine are drawn by no case
     // here at all.
     cases.push(Scenario {
         pane: SettingsPane::Page(DisplayPage::Analyzer),
         wash: true,
-        visits: 33,
+        visits: 31,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {

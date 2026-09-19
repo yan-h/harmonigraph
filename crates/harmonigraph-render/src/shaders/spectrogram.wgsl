@@ -261,7 +261,10 @@ struct Cloud {
     spread: f32,
     contours: f32,
     contour_softness: f32,
-    style: u32,
+    // How far the levels are gathered into terraces, 0 for none. This word was
+    // a style enum: Plain, Blur and Lava are now the blur, the terraces and the
+    // cloud each at zero or not, read off their own dials.
+    contour_strength: f32,
     _pad: u32,
     // Watercolour clouds. `drift` is the wash's offset in cloud units and
     // `time` a bounded clock; the rest are the sanitized settings. The filter
@@ -274,14 +277,12 @@ struct Cloud {
     scale_variety: f32,
     scale_refract: f32,
     scale_relief: f32,
-    scale_facet: f32,
     scale_rock: f32,
     // Which texture the layer draws: 0 the refracting scales above, 1 the
     // watercolour wash below. Nothing is shared between the two but the blurred
     // light, the palette, the clock and `cloud_depth`.
     cloud_style: u32,
     wash_size: f32,
-    wash_variety: f32,
     wash_fuzz: f32,
     wash_ragged: f32,
     wash_lobe: f32,
@@ -289,8 +290,6 @@ struct Cloud {
     wash_pool: f32,
     wash_grain: f32,
     wash_layers: f32,
-    wash_soften: f32,
-    wash_wander: f32,
     wash_black: f32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
@@ -348,19 +347,26 @@ fn baked_density(position: vec2<f32>) -> f32 {
     // after both filters have consumed it. No attachment samples itself.
     return textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
 }
-fn smoothed_level(core: f32, material: f32) -> f32 {
-    if all(cloud.step == vec2<f32>(0.0)) { return core; }
-    return material;
+// Whether the picture is the blurred field. At zero softness on both axes it is
+// the measured core instead — the light field may still have been built, for a
+// cloud to read, but it is then a copy of the core at the field's resolution
+// and the core itself is the sharper of the two.
+fn softened() -> bool {
+    return any(cloud.step != vec2<f32>(0.0));
 }
 // Local style transfer. No history, upload, smoothing or palette work is
 // duplicated when adding a display style here. A residual slope preserves
 // quiet fields below the first terrace; the zero input remains exactly zero.
+//
+// `Contour strength` scales the blend and nothing else, so 100% is what the
+// Lava style drew and 0 is the level untouched — behind the knob, because the
+// `fwidth` pair and the smoothsteps are per-pixel work for a blend of nothing.
 fn style_level(level: f32) -> f32 {
-    if cloud.style != 2u { return level; }
+    if cloud.contour_strength <= 0.0 { return level; }
     let x = clamp(level, 0.0, 1.0) * cloud.contours;
     let edge = min(0.5, max(cloud.contour_softness, fwidth(x) * 0.5));
     let terraces = (floor(x) + smoothstep(0.5 - edge, 0.5 + edge, fract(x))) / cloud.contours;
-    let strength = 0.9 * smoothstep(0.0, 1.0, x)
+    let strength = 0.9 * cloud.contour_strength * smoothstep(0.0, 1.0, x)
         * (1.0 - smoothstep(0.5, 1.5, fwidth(x)));
     return mix(level, terraces, strength);
 }
@@ -460,10 +466,10 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 // means its own size, and leaves the drift to the dial named after it.
 //
 // Three qualities are on DIALS rather than decided here, because describing
-// which of them Yan wants has failed in words repeatedly: `Facet` carries the
-// lookup from this round's continuous slope onto round 1's flat per-glob patch,
-// `Rock` is round 1's per-dome clock, and `Variety` is how much the globs differ
-// in size.
+// which of them Yan wants has failed in words repeatedly: the NEGATIVE half of
+// `Refraction` carries the lookup from this round's continuous slope onto round
+// 1's flat per-glob patch, `Rock` is round 1's per-dome clock, and `Variety` is
+// how much the globs differ in size.
 const CLOUD_UNITS: f32 = 10.0;
 // How many dome cells cross one cloud unit at `Scale size` 1x. Carries the
 // retired `Cloud size` default: the shipped picture was 6 cells per unit over a
@@ -745,8 +751,11 @@ fn cloud_light(pt: vec2<f32>) -> f32 {
 const CLOUD_SHADE: f32 = 0.64;
 
 fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
-    // No blur means no light field for the scales to bend.
-    if cloud.cloud_depth <= 0.0 || all(cloud.step == vec2<f32>(0.0)) {
+    // There is no gate on the blur here, and there used to be: the light field
+    // was only built when a softness was above zero, so the cloud quietly
+    // vanished with the blur. The field is built whenever a cloud is drawn now,
+    // and at zero softness it holds the measured picture unblurred.
+    if cloud.cloud_depth <= 0.0 {
         return base;
     }
     let pt = position / cloud.ppp - cloud.origin;
@@ -762,21 +771,26 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     // whatever the scale size is, and in each glob's OWN width whatever
     // `Variety` has made of it.
     let face = pile.face;
-    let bend = cloud.scale_refract * scale_points;
-    // `scale_facet` swings that offset off the face the scale PRESENTS and onto
-    // the scale's own CENTRE, which is round 1's reading: one value for the
-    // whole scale, so the picture comes apart into flat quantized patches
-    // instead of bending through them. `to_centre` is in cells and `scale_points`
-    // is how many pane points a cell is, so `pile.to_centre * scale_points` lands
-    // exactly on the dome's centre — the same arithmetic round 1 spelled out as
-    // `centre_pt`.
+    let bend = max(cloud.scale_refract, 0.0) * scale_points;
+    // The dial's NEGATIVE half swings the reading off the face the scale
+    // PRESENTS and onto the scale's own CENTRE, which is round 1's reading: one
+    // value for the whole scale, so the picture comes apart into flat quantized
+    // patches instead of bending through them. `to_centre` is in cells and
+    // `scale_points` is how many pane points a cell is, so at -1
+    // `pile.to_centre * scale_points` lands exactly on the dome's centre — the
+    // same arithmetic round 1 spelled out as `centre_pt` — and between 0 and -1
+    // the reading is pulled a share of the way there, which is what the wash
+    // below has always called its own refraction.
     //
-    // `scale_refract` scales the face half only. At facet 1 the reading is the
-    // centre whatever Refraction says, because the two are then measuring
-    // different things: Refraction is how far a FACE carries the light, and a
-    // facet has stopped asking the face. Dialling one down to look at the other
-    // is what this build is for, so they are kept from cancelling.
-    let lookup = mix(-face * bend, pile.to_centre * scale_points, cloud.scale_facet);
+    // One signed dial where there were two, `Refraction` and a `Facet` that
+    // blended between the two readings. They were kept apart so one could be
+    // dialled down to look at the other while the layer was being built, and
+    // together they spanned a plane of which the blends in the middle — part
+    // face, part centre — were neither look. Only one side is ever nonzero, so
+    // the other term adds an exact zero and the positive half draws what
+    // `Refraction` alone always drew, bit for bit.
+    let gather = max(-cloud.scale_refract, 0.0) * scale_points;
+    let lookup = -face * bend + pile.to_centre * gather;
     let bent = cloud_light(pt + lookup);
 
     // Which way the picture's light grows, from taps about a scale apart, so the
@@ -912,8 +926,7 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
 //
 // **Coverage.** A centre sits at its cell's middle give or take `JITTER / 2` on
 // each axis, so it can be `(JITTER / 2) * sqrt(2)` from that middle in any
-// direction — `Wander` TURNS that offset rather than adding to it, so the clock
-// never widens this. The point hardest to reach is a lattice corner with all four
+// direction. The point hardest to reach is a lattice corner with all four
 // cells touching it pushed away from it, `0.5 * sqrt(2) + (JITTER / 2) * sqrt(2)`
 // from every one of them, and the SMALLEST radius a glob can draw has to clear
 // that. An uncovered point is not a dim spot — it is a pixel that reads its own
@@ -931,7 +944,7 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
 // bound carries `RADIUS_MAX * (1 + RAGGED)` while the coverage bound carries
 // `RADIUS_MIN` untouched. One-sided is what makes that asymmetry available: a
 // zero-mean wobble of the same visible amplitude costs BOTH bounds, and buys a
-// narrower `Variety` band for the same picture.
+// narrower radius band for the same picture.
 //
 // Both bounds are about globs that COVER the pixel, which is what the visible
 // glob, the one beneath it, `cover` and `tau` are all read off. The tide line is
@@ -956,7 +969,6 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
 const WASH_RING: i32 = 2;
 const WASH_JITTER: f32 = 0.40;
 const WASH_RAGGED: f32 = 0.30;
-const WASH_RADIUS: f32 = 1.18;
 const WASH_RADIUS_MIN: f32 = 1.02;
 const WASH_RADIUS_MAX: f32 = 1.66;
 
@@ -1029,11 +1041,24 @@ const WASH_LIFT_B: f32 = 0.16;
 // from, at the glob's own centre. Gating on the light under the PIXEL instead
 // would cut every glob off at the picture's own silhouette and undo the
 // displacement that is the look.
-const WASH_BLACK_KNEE: f32 = 0.35;
+//
+// **The dial is how MUCH of that hold is applied, not how wide the knee is.** It
+// used to set the width — `smoothstep(0, 0.35 * dial, light)` — and that has a
+// step in it at the bottom: a smoothstep is 0 at its lower edge however narrow
+// it is, so with the dial one notch off zero every pixel whose light is EXACTLY
+// 0 went from the lifted paper straight to black, and exact zero is most of a
+// quiet pane, since everything under the level window's floor clamps there. The
+// rest of the travel then only slid the knee up through tones that were already
+// dark. An amount has no such edge: silence falls from the lift to the floor in
+// proportion, and 100% is the hold in full.
+//
+// The knee that is kept is the one the dial shipped at, half of 0.35, so the
+// fresh picture is the one it always was.
+const WASH_BLACK_KNEE: f32 = 0.175;
 
 // Three 10-bit fractions off a salted cell hash. Two of these per cell: one for
-// the centre and the radius, one for the paint order, the occupancy draw and the
-// wander phase. Six channels is what the construction needs and no fewer.
+// the paint order and the occupancy draw, one for the centre and the radius.
+// Five channels is what the construction needs, and one word holds three.
 fn wash_hash(cell: vec2<i32>, salt: u32) -> vec3<f32> {
     var n = (bitcast<u32>(cell.x) * 0x9e3779b9u) ^ (bitcast<u32>(cell.y) * 0x85ebca6bu);
     n = n ^ (salt * 0x27d4eb2du);
@@ -1079,43 +1104,37 @@ struct Glob {
 
 // One cell's glob, at the pixel `r` — both in this octave's cell units.
 fn wash_glob(cell: vec2<i32>, salt: u32, r: vec2<f32>, wob: f32, occupancy: f32) -> Glob {
-    let h = wash_hash(cell, salt);
     let g = wash_hash(cell, salt + 77u);
-    var offset = (h.xy - 0.5) * WASH_JITTER;
-    // `Wander` TURNS each glob's offset about its own cell rather than adding a
-    // travel to it, each at its own hashed rate, so no two stir together and a
-    // glob sitting near its cell's middle barely moves while one out at the edge
-    // sweeps a real circle. A rotation and not a displacement is what makes the
-    // movement free: the offset's LENGTH never changes, so neither bound above
-    // ever sees the clock and no glob can wander out of the ring the pixel
-    // searches — which is the popping artifact this would otherwise buy.
-    //
-    // The PAINT ORDER is held still through all of it. Globs that swapped depth
-    // would pop, where a glob that only moves redraws its own arc. And the clock
-    // is `cloud.time`, the one the drift already runs on, so an offline render
-    // stays deterministic and `Cloud speed` at 0 holds this too.
-    if cloud.wash_wander > 0.0 {
-        let turn = cloud.time * (0.05 + 0.12 * g.z) * cloud.wash_wander;
-        let c = cos(turn);
-        let s = sin(turn);
-        offset = vec2<f32>(offset.x * c - offset.y * s, offset.x * s + offset.y * c);
-    }
-    let centre = vec2<f32>(cell) + 0.5 + offset;
-    // `Variety` opens a band about the single shared radius, never below
-    // `RADIUS_MIN` and never above `RADIUS_MAX`, so every step of the dial is
-    // still a position the proof above holds at.
-    let radius = mix(
-        WASH_RADIUS,
-        mix(WASH_RADIUS_MIN, WASH_RADIUS_MAX, h.z),
-        cloud.wash_variety,
-    );
     var out: Glob;
-    out.centre = centre;
     out.order = g.x;
-    // A cell the occupancy draw missed carries no glob. Its rim is put out of
-    // reach rather than branched around, so the loop stays uniform.
-    let present = g.y < occupancy;
-    out.edge = select(1.0e9, length(r - centre) / radius + wob, present);
+    // A cell the occupancy draw missed carries no glob, and that is four cells
+    // in five of the finer octave, so it is answered before the geometry is
+    // worked out: the second hash and the square root are most of what a cell
+    // costs. Its rim is put out of reach, where `wash_scan` does exactly
+    // nothing with it — `1 - 1e9` rounds to `-1e9` in an f32, which is the
+    // value every running nearest starts at and no `>` passes, and it adds a
+    // clamped zero to the cover and the pile. So the early return draws the
+    // picture the uniform loop drew, bit for bit.
+    if g.y >= occupancy {
+        out.centre = r;
+        out.edge = 1.0e9;
+        return out;
+    }
+    let h = wash_hash(cell, salt);
+    let centre = vec2<f32>(cell) + 0.5 + (h.xy - 0.5) * WASH_JITTER;
+    // Each glob draws its own radius from the whole band the proof above
+    // allows. That was the top of a `Variety` dial, which is where it shipped
+    // and where it stays: the band is 1.63:1 and the paint order decides which
+    // glob a pixel shows, so the dial moved a twentieth of the pane end to end,
+    // and the size range the look is after comes from `Layers` instead.
+    //
+    // A `Wander` dial turned each centre about its own cell here, on a hashed
+    // rate. It could only ever TURN the jitter — a travel would break the reach
+    // bound — and a quarter of a cell swung round once a minute is a point or
+    // two of movement under a whole field already drifting faster than that.
+    let radius = mix(WASH_RADIUS_MIN, WASH_RADIUS_MAX, h.z);
+    out.centre = centre;
+    out.edge = length(r - centre) / radius + wob;
     return out;
 }
 
@@ -1239,18 +1258,15 @@ fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, wob: f32) -> Wash {
 //
 // `close_light` is NOT decoded: at composite time that attachment holds the
 // finished scalar material `fs_cloud_light` already decoded on its way out, and
-// `Spread` has already mixed the two blurs into it. `Softness` carries the
-// reading further toward the wide blur, which is the plugin's two rungs of the
-// prototype's mip chain — at the glob sizes Yan picked it found little or no
-// pre-blur was right, so the dial starts at none.
+// `Spread` has already mixed the two blurs into it.
+//
+// That mix is why there is no `Softness` dial here any more. It carried this
+// reading further toward the wide blur — `mix(mix(close, wide, spread), wide,
+// soften)`, which is `Spread` again with a larger argument, and measured
+// against the equivalent `Spread` the two pictures differed by an eighth of
+// what either moved. One tap, and the pre-blur is the dial that already says so.
 fn wash_light(pt: vec2<f32>) -> f32 {
-    let uv = pt / cloud.size;
-    let material = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
-    if cloud.wash_soften <= 0.0 {
-        return material;
-    }
-    let wide = density_decode(textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r);
-    return mix(material, wide, cloud.wash_soften);
+    return textureSampleLevel(close_light, cloud_sampler, pt / cloud.size, 0.0).r;
 }
 
 // One wash's tone, and how much of the picture's own black it has to keep.
@@ -1321,25 +1337,26 @@ fn wash_tone(f: Wash, r: vec2<f32>, pane_per_cell: f32, pt: vec2<f32>, average_p
 
     // The paper's black point. At `Black point` 0 this is 1 everywhere and the
     // tone is the lifted one above, unchanged.
-    var hold = 1.0;
-    if cloud.wash_black > 0.0 {
-        hold = smoothstep(0.0, WASH_BLACK_KNEE * cloud.wash_black, light);
-    }
+    // Spelled out rather than `mix`, which a GPU evaluates as `x + (y - x) * a`
+    // and so lands a last bit off the knee at 100% — this form is exact at both
+    // ends of the dial.
+    let knee = smoothstep(0.0, WASH_BLACK_KNEE, light);
+    let hold = (1.0 - cloud.wash_black) + cloud.wash_black * knee;
     return Painted(tone, hold);
 }
 
 // How deep the washes are piled on average, which is what `Grain` measures the
-// excess over. One glob per cell of area `pi * R^2`, and at `Variety` above 0 the
-// radius is drawn uniformly from a band, so this is the band's mean square.
+// excess over. One glob per cell of area `pi * R^2`, and the radius is drawn
+// uniformly from a band, so this is the band's mean square.
 fn wash_average_pile(occupancy: f32) -> f32 {
-    let lo = mix(WASH_RADIUS, WASH_RADIUS_MIN, cloud.wash_variety);
-    let hi = mix(WASH_RADIUS, WASH_RADIUS_MAX, cloud.wash_variety);
+    let lo = WASH_RADIUS_MIN;
+    let hi = WASH_RADIUS_MAX;
     return occupancy * 3.14159265 * (lo * lo + lo * hi + hi * hi) / 3.0;
 }
 
 fn wash_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
-    // Same gate as the scales: no blur means no light field to read.
-    if cloud.cloud_depth <= 0.0 || all(cloud.step == vec2<f32>(0.0)) {
+    // Same gate as the scales, and like theirs it no longer asks for a blur.
+    if cloud.cloud_depth <= 0.0 {
         return base;
     }
     let pt = position / cloud.ppp - cloud.origin;
@@ -1348,7 +1365,7 @@ fn wash_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     // `wash_size` is how big one GLOB is, so the knob reads as a size.
     //
     // The number is set by the picture and not by the cell count, and the two
-    // are not the same: a glob here is `WASH_RADIUS` 1.18 cells wide where the
+    // are not the same: a glob here was calibrated 1.18 cells wide where the
     // prototype's was `rad` 0.90, so matching J2's forty cells up the pane would
     // draw its globs 31% too big — measured against `j2.png`, a visibly blobbier
     // field with two or three fewer harmonic lines showing through it. Matching
@@ -1419,17 +1436,32 @@ fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
 }
 // Empty history uses the same field and palette with a zero measured core.
 // This quad never samples the grid, so the oldest column cannot be smeared.
+fn backdrop_color(position: vec2<f32>) -> vec4<f32> {
+    var level = 0.0;
+    if softened() { level = baked_density(position); }
+    return clouded(level, position);
+}
 @fragment
 fn fs_cloud_backdrop_gamma(in: VertexOut) -> @location(0) vec4<f32> {
-    return clouded(smoothed_level(0.0, baked_density(in.position.xy)), in.position.xy);
+    return backdrop_color(in.position.xy);
 }
 @fragment
 fn fs_cloud_backdrop_linear(in: VertexOut) -> @location(0) vec4<f32> {
-    let gamma = clouded(smoothed_level(0.0, baked_density(in.position.xy)), in.position.xy);
+    let gamma = backdrop_color(in.position.xy);
     return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), 1.0);
 }
+// One of the two levels, and only that one is read. The measured core is a walk
+// over every bucket under the pixel in two slabs, and the soft field REPLACES it
+// rather than blending with it, so reading both and keeping one paid for the
+// walk on every softened frame — which is nearly every frame drawn here.
 fn cloud_color(in: VertexOut) -> vec4<f32> {
-    return clouded(smoothed_level(heatmap_level(in), baked_density(in.position.xy)), in.position.xy);
+    var level: f32;
+    if softened() {
+        level = baked_density(in.position.xy);
+    } else {
+        level = heatmap_level(in);
+    }
+    return clouded(level, in.position.xy);
 }
 @fragment
 fn fs_cloud_gamma(in: VertexOut) -> @location(0) vec4<f32> {

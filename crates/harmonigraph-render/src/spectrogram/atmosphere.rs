@@ -32,7 +32,12 @@ pub(super) fn source_size(
     atmosphere: SpectrogramAtmosphere,
 ) -> [u32; 2] {
     let settings = atmosphere.settings.sanitized();
-    if settings.pitch_softness == 0.0 && settings.time_softness == 0.0 {
+    // Terraces alone read the level under the pixel, so nothing is ever drawn
+    // into this target and it costs one texel. A cloud at zero softness is the
+    // other case and falls through: both radii are zero, so both axes come out
+    // at full resolution and the filter's sub-texel arm copies the measured
+    // picture through for the cloud to read.
+    if !settings.effects().light() {
         return [1, 1];
     }
     let pitch = settings.pitch_softness * atmosphere.points_per_cent * ppp;
@@ -77,7 +82,7 @@ struct Uniforms {
     spread: f32,
     contours: f32,
     contour_softness: f32,
-    style: u32,
+    contour_strength: f32,
     _pad: u32,
     /// Cloud-space offset of the scale clouds and a bounded clock. Both are
     /// reduced from f64 on the CPU.
@@ -93,14 +98,12 @@ struct Uniforms {
     scale_variety: f32,
     scale_refract: f32,
     scale_relief: f32,
-    scale_facet: f32,
     scale_rock: f32,
     /// 0 for the refracting scales, 1 for the watercolour wash. The wash reads
     /// none of the `scale_` settings and the scales read none of the `wash_`
     /// ones; both share what sits above them.
     cloud_style: u32,
     wash_size: f32,
-    wash_variety: f32,
     wash_fuzz: f32,
     wash_ragged: f32,
     wash_lobe: f32,
@@ -108,8 +111,6 @@ struct Uniforms {
     wash_pool: f32,
     wash_grain: f32,
     wash_layers: f32,
-    wash_soften: f32,
-    wash_wander: f32,
     wash_black: f32,
     /// The tail the assert below needs, since the members above stop 4 bytes
     /// short of a whole 16-byte row. WGSL rounds its own copy of the struct up
@@ -460,12 +461,8 @@ impl Targets {
             spread: settings.spread,
             contours: settings.contours,
             contour_softness: settings.contour_softness,
+            contour_strength: settings.contour_strength,
             _pad: 0,
-            style: match settings.style {
-                harmonigraph_scene::SpectrogramStyle::Plain => 0,
-                harmonigraph_scene::SpectrogramStyle::Blur => 1,
-                harmonigraph_scene::SpectrogramStyle::Lava => 2,
-            },
             drift,
             time: (cloud_time % 1000.0) as f32,
             cloud_depth: settings.cloud_depth,
@@ -473,14 +470,12 @@ impl Targets {
             scale_variety: settings.scale_variety,
             scale_refract: settings.scale_refract,
             scale_relief: settings.scale_relief,
-            scale_facet: settings.scale_facet,
             scale_rock: settings.scale_rock,
             cloud_style: match settings.cloud_style {
                 harmonigraph_scene::CloudStyle::Mosaic => 0,
                 harmonigraph_scene::CloudStyle::Watercolor => 1,
             },
             wash_size: settings.wash_size,
-            wash_variety: settings.wash_variety,
             wash_fuzz: settings.wash_fuzz,
             wash_ragged: settings.wash_ragged,
             wash_lobe: settings.wash_lobe,
@@ -488,8 +483,6 @@ impl Targets {
             wash_pool: settings.wash_pool,
             wash_grain: settings.wash_grain,
             wash_layers: settings.wash_layers,
-            wash_soften: settings.wash_soften,
-            wash_wander: settings.wash_wander,
             wash_black: settings.wash_black,
             _tail: [0; 1],
         };

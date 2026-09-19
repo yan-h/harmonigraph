@@ -917,25 +917,22 @@ mod tests {
         assert!(first[mid] != dark[mid], "the glow changed no pixel of frame {mid}");
     }
 
-    /// A STIRRING watercolour wash renders to the same bytes twice.
+    /// A DRIFTING watercolour wash renders to the same bytes twice.
     ///
     /// The spectrogram's cloud layer is the one place in the draw path with a
-    /// clock of its own, and `Wander` is the part of it a reader cannot check
-    /// by eye: it turns each glob about its own cell at its own hashed rate, so
-    /// it is not one offset the frame index computes but a rotation per glob
-    /// per pixel, and all that keeps it reproducible is that the angle comes off
-    /// `atmosphere.now * cloud_speed` rather than a wall clock. The shader text
-    /// reads the same either way, so this is measured.
+    /// clock of its own, and all that keeps it reproducible is that the drift
+    /// comes off `atmosphere.now * cloud_speed` rather than a wall clock. The
+    /// shader text reads the same either way, so this is measured.
     ///
     /// Both halves are non-vacuous, and either could be silently absent. The
     /// wash has to be REACHED — the texture sits behind an enum whose fresh
     /// value is the other one, so the frame is held against the same take drawn
-    /// with the scales — and the wander has to MOVE something, or this is the
+    /// with the scales — and the clock has to MOVE something, or this is the
     /// test above with one more uniform in it. The second is held against the
-    /// same run with `Wander` alone at 0 and NOT against another frame of the
-    /// run itself: over a fixture with light in it the spectrogram scrolls, so
-    /// any two frames differ whatever the cloud clock does, and a frame-to-frame
-    /// comparison would pass with the whole layer frozen.
+    /// same run with `Cloud speed` alone at 0 and NOT against another frame of
+    /// the run itself: over a fixture with light in it the spectrogram scrolls,
+    /// so any two frames differ whatever the cloud clock does, and a
+    /// frame-to-frame comparison would pass with the whole layer frozen.
     ///
     /// Both of those rest on the pane HAVING LIGHT IN IT, which is the third
     /// assert and the one this test shipped without. Its first fixture was one
@@ -945,18 +942,16 @@ mod tests {
     /// they agreed pixel for pixel. A guard that a change of LOOK can turn
     /// vacuous is worth no more than the fixture behind it.
     #[test]
-    fn rendering_a_stirring_wash_twice_is_byte_identical() {
-        let clouded = |wash: bool, wander: f32| {
+    fn rendering_a_drifting_wash_twice_is_byte_identical() {
+        let clouded = |wash: bool, speed: f32| {
             let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
             let a = &mut state.appearance.spectrum.atmosphere;
             if wash {
                 a.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
-                a.wash_wander = wander;
             }
-            // Fast enough that a second of render is a visible turn of the
-            // field: at the fresh 1x the slowest globs would cross a twentieth
-            // of a revolution over the whole run.
-            a.cloud_speed = 8.0;
+            // Fast enough that a second of render carries the field a visible
+            // way: at the fresh 1x the whole run is a fraction of one glob.
+            a.cloud_speed = speed;
             let mut take = transient_take(0.0);
             take.header.appearance = Some(state.appearance.serialize());
             take
@@ -990,9 +985,9 @@ mod tests {
                 Err(e) => panic!("{e}"),
             }
         };
-        let Some(first) = run(&clouded(true, 1.0)) else { return };
-        assert_eq!(first, run(&clouded(true, 1.0)).expect("a second GPU run"));
-        let scales = run(&clouded(false, 0.0)).expect("a third GPU run");
+        let Some(first) = run(&clouded(true, 8.0)) else { return };
+        assert_eq!(first, run(&clouded(true, 8.0)).expect("a second GPU run"));
+        let scales = run(&clouded(false, 8.0)).expect("a third GPU run");
         let still = run(&clouded(true, 0.0)).expect("a fourth GPU run");
         let mid = first.len() / 2;
         // The pane has light in it, which is the assumption under BOTH asserts
@@ -1010,7 +1005,7 @@ mod tests {
              wash: {lit} of {pane} pixels lit",
         );
         assert!(first[mid] != scales[mid], "the wash drew the scales' frame {mid}");
-        assert!(first[mid] != still[mid], "`Wander` moved nothing in frame {mid}");
+        assert!(first[mid] != still[mid], "the cloud clock moved nothing in frame {mid}");
     }
 
     #[test]

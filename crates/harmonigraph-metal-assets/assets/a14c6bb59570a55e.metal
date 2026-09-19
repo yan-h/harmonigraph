@@ -54,7 +54,6 @@ constant float CLOUD_SHADE = 0.64;
 constant int WASH_RING = 2;
 constant float WASH_JITTER = 0.4;
 constant float WASH_RAGGED = 0.3;
-constant float WASH_RADIUS = 1.18;
 constant float WASH_RADIUS_MIN = 1.02;
 constant float WASH_RADIUS_MAX = 1.66;
 constant float WASH_CELLS = 5.25;
@@ -72,7 +71,7 @@ constant float WASH_TONE_FLOOR = 0.05;
 constant float WASH_PIVOT = 0.45;
 constant float WASH_LIFT_A = 1.15;
 constant float WASH_LIFT_B = 0.16;
-constant float WASH_BLACK_KNEE = 0.35;
+constant float WASH_BLACK_KNEE = 0.175;
 
 uint stored(
     uint slot,
