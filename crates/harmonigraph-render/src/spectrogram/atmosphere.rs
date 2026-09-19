@@ -122,7 +122,7 @@ struct Uniforms {
 /// compile-time check on a runtime failure that would otherwise arrive as a
 /// validation error on the first clouded frame.
 const _: () = assert!(
-    std::mem::size_of::<Uniforms>() % 16 == 0,
+    std::mem::size_of::<Uniforms>().is_multiple_of(16),
     "the cloud uniform is not a whole number of 16-byte rows, so the shader's rounded-up \
      struct is larger than the buffer Rust writes",
 );
