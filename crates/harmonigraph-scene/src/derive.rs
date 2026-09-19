@@ -6,7 +6,7 @@ use crate::camera::Camera;
 use crate::color::{pitch_lut_color, pitch_ramp_lut};
 use crate::octaves::octave_layout;
 use crate::trail::TrailField;
-use crate::view::{size, DrawnWindow, FrameParams, ViewConfig};
+use crate::view::{finite_or, size, DrawnWindow, FrameParams, ViewConfig};
 use crate::{
     lattice_to_world, GlowStep, NodeInstance, PlusInstance, Scene, SpectralPaint, MARK_DELAY_MAX,
     NODE_RADIUS_FACTOR, OCTAVE_SLOTS, PLUS_SIZE_MAX,
@@ -178,6 +178,18 @@ pub fn derive_scene(
     // recompute each node's pitch class to do it.
     let mut node_pcs = Vec::with_capacity(window.count());
     let center = view.center();
+    // The lattice's step as the picture may use it, resolved once for the
+    // frame: every world length below is this times something, so a step that
+    // is not a real number is the whole picture gone rather than one layer of
+    // it, and two readings of it would be two lattices. The bar's own low end
+    // and not 0 — a step has no off position, 0 being every node stacked on
+    // the origin rather than a lattice switched off.
+    //
+    // `derive_pluses` deliberately reads the RAW field instead: there the
+    // spacing is a factor of a marker's SIZE, and #910 settled that a size
+    // that is not a number takes the field away.
+    let spacing =
+        finite_or(view.spacing, crate::SPACING_MIN).clamp(crate::SPACING_MIN, crate::SPACING_MAX);
     // The NODE at rest, resolved once for the frame: what both of a node's
     // rings stand on where nothing is lit, and the neutral an unplayed node
     // falls back to. One resolve rather than two, so the two cannot answer
@@ -228,8 +240,11 @@ pub fn derive_scene(
     // Sanitized once, outside the node loop. Capped at 1: this axis makes
     // off-sheet nodes SMALLER, never larger, so the home sheet stays the
     // biggest thing on screen (see `ViewConfig::sevens_size`). The floor
-    // keeps a sheet from collapsing to an invisible speck at extent 4.
-    let sevens_size = view.sevens_size.clamp(0.15, 1.0);
+    // keeps a sheet from collapsing to an invisible speck at extent 4, and is
+    // where a value that is not a number lands as well — the clamp alone is no
+    // guard against one, and this factor is raised to the sheet count, so a
+    // NaN here is every off-sheet node drawn at no size at all.
+    let sevens_size = finite_or(view.sevens_size, 0.15).clamp(0.15, 1.0);
     // The octave wheel is a pitch axis, so it is a property of the VIEW and is
     // built once: every node draws the same slice WIDTHS. Which octaves those
     // slices are, and how far the ring is turned to put them on their pitches,
@@ -425,7 +440,7 @@ pub fn derive_scene(
         // World positions are relative to the window center, keeping the
         // displayed region under the camera wherever the window pans.
         let centered = pos - center;
-        let world_pos = lattice_to_world(centered, view.spacing);
+        let world_pos = lattice_to_world(centered, spacing);
 
         // The sevens layer: how far off the home sheet this node sits
         // decides how small it draws and whether it carries a comma.
@@ -507,8 +522,8 @@ pub fn derive_scene(
     Scene {
         nodes,
         camera,
-        node_radius: view.spacing * NODE_RADIUS_FACTOR,
-        note_animation: view.note_animation,
+        node_radius: spacing * NODE_RADIUS_FACTOR,
+        note_animation: view.note_animation.sanitized(),
         outer_inner: rings.band.0,
         outer_outer: rings.band.1,
         rings_outer: rings.outer,
@@ -527,24 +542,41 @@ pub fn derive_scene(
         pitch_lut: pitch_ramp_lut(view.pitch_gradient),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
-        render_scale: view.render_scale,
-        bloom_strength: view.bloom_strength,
+        // Repaired but not bounded, which is the one pair here that splits the
+        // two: the renderer owns both ranges and deliberately keeps them wider
+        // than the bars (`RENDER_SCALE_RANGE`, `render::bloom_strength`), so a
+        // range imposed here would narrow what a shell is allowed to ask for.
+        // What the renderer's own clamps cannot do is catch a NaN, so this
+        // hands them a real number and leaves the range where it is: the
+        // identity for a scale that has one, and no bloom at all for a light
+        // whose 0 is its off position.
+        render_scale: finite_or(view.render_scale, 1.0),
+        bloom_strength: finite_or(view.bloom_strength, 0.0),
         // Clamped here as well as in `sanitize`, for the shells that never come
         // through that door: reach sizes the halo's analytic span and its CPU
-        // culling bound, which must describe the same supported range.
-        glow_reach: view.glow_reach.clamp(0.0, crate::GLOW_REACH_MAX),
-        glow_strength: view.glow_strength.clamp(0.0, crate::GLOW_STRENGTH_MAX),
+        // culling bound, which must describe the same supported range. Through
+        // `finite_or` because a clamp is no guard against a NaN, and onto each
+        // bar's low end, which for both of these is the halo switched off.
+        glow_reach: finite_or(view.glow_reach, 0.0).clamp(0.0, crate::GLOW_REACH_MAX),
+        glow_strength: finite_or(view.glow_strength, 0.0).clamp(0.0, crate::GLOW_STRENGTH_MAX),
         glow_curve: view.glow_curve.sanitized(),
         // Every Shadow group on the same footing, a bar's range rather than a
         // billboard's: every caster's quad is grown by its group's width, so a
         // number from outside the bar is a quad nothing can fill.
         shadow: view.shadow.clamped(),
-        glow_wash: view.glow_wash.clamp(0.0, 1.0),
-        marker_unit: marker_world(view, 1.0),
-        glow_blend: view.glow_blend.clamp(0.0, 1.0),
+        glow_wash: finite_or(view.glow_wash, 0.0).clamp(0.0, 1.0),
+        // The repaired step, not the raw field: this is the SCALE every marker
+        // length on screen is read back through, so 0 is not an off position
+        // here but a field of markers with no size, and the step's own low end
+        // is what a number that is not one falls to.
+        marker_unit: marker_world(spacing, 1.0),
+        glow_blend: finite_or(view.glow_blend, 0.0).clamp(0.0, 1.0),
         // Shells may bypass `sanitize`; a mix factor outside this range would
-        // extrapolate beyond the two glow treatments instead of blending them.
-        glow_accumulation: view.glow_accumulation.clamp(0.0, 1.0),
+        // extrapolate beyond the two glow treatments instead of blending them,
+        // and one that is not a number would leave every blended value NaN. 0
+        // is one END of the mix rather than an off position — the low bound,
+        // for want of a reading here that is more neutral than another.
+        glow_accumulation: finite_or(view.glow_accumulation, 0.0).clamp(0.0, 1.0),
         // A row per node, so a scene nothing has carried still reads one strip
         // row per node — the shell's pass hands out rows of its own and raises
         // this to their high-water mark.
@@ -637,8 +669,14 @@ pub(crate) fn derive_plus_taper_start(view: &ViewConfig) -> f32 {
 /// resolve here, once, rather than the shader carrying a second copy of the
 /// convention for one more layer. The home sheet has no scale of its own, which
 /// is the sheet every marker stands on ([`derive_pluses`]).
-fn marker_world(view: &ViewConfig, uv: f32) -> f32 {
-    view.spacing * NODE_RADIUS_FACTOR * 1.8 * uv
+///
+/// The step is a PARAMETER rather than read off the view, because its two
+/// callers want opposite answers out of a `spacing` that is not a real number.
+/// [`Scene::marker_unit`](crate::Scene::marker_unit) is a scale and is handed
+/// the frame's repaired step, while [`derive_pluses`] hands over the raw field
+/// so that a marker SIZE nobody can draw takes the field away (#910).
+fn marker_world(spacing: f32, uv: f32) -> f32 {
+    spacing * NODE_RADIUS_FACTOR * 1.8 * uv
 }
 
 /// The lattice's resting picture: idle positions draw no disc, so a small
@@ -683,7 +721,7 @@ pub(crate) fn derive_pluses(
     nodes: &[NodeInstance],
     ink: Vec4,
 ) -> Vec<PlusInstance> {
-    let radius = marker_world(view, size(view.plus_arm, PLUS_SIZE_MAX));
+    let radius = marker_world(view.spacing, size(view.plus_arm, PLUS_SIZE_MAX));
     // 0 takes the markers away, and with them everything a resting lattice
     // draws but the node rings. Skipping the instances is the same picture the
     // shader would discard to, one draw earlier.
