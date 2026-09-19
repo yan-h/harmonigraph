@@ -19,6 +19,8 @@
 //! vertex rule feeding the two slab taps is `heatmap_mesh`'s.
 
 use std::collections::HashMap;
+
+use crate::pass_aged::PassAged;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -257,17 +259,13 @@ struct SpectrogramResources {
     cloud: Option<atmosphere::Pipelines>,
     layout: wgpu::BindGroupLayout,
     target_format: wgpu::TextureFormat,
-    panes: HashMap<u64, SpectrogramPane>,
+    /// What a closed spectrogram would otherwise hold is the grid copy — up to
+    /// 15.7 MB for a whole-song ring at 4096 slabs — so a closed tab keeping
+    /// one is worth a sweep, and a pane hidden for a frame keeping one is worth
+    /// not rebuilding. The age it sweeps at is
+    /// [`crate::pass_aged::TTL_PASSES`].
+    panes: PassAged<SpectrogramPane>,
 }
-
-/// How many egui passes a pane may go unseen before its buffers are dropped.
-///
-/// A pane is prepared once per pass while it is on screen, so this is about
-/// two seconds at 60 fps however many placements are live.
-/// What is being held is the grid copy — up to 15.7 MB for a whole-song ring
-/// at 4096 slabs — so a closed tab keeping one is worth a sweep, and a pane
-/// hidden for a frame keeping one is worth not rebuilding.
-const PANE_TTL_PASSES: u64 = 120;
 
 /// The grid's GPU copy and what it was built from. A new key rebuilds it from
 /// the whole run; the same key patches only the dirty slabs.
@@ -305,8 +303,6 @@ struct SpectrogramPane {
     /// Made with the grid buffer and the table, so it is remade whenever
     /// either is.
     bind_group: Option<wgpu::BindGroup>,
-    /// Egui's cumulative pass number when this pane was last drawn.
-    last_seen_pass: u64,
     cloud: Option<atmosphere::Targets>,
     cloud_ready: bool,
 }
@@ -366,22 +362,22 @@ impl SpectrogramResources {
             cloud: None,
             layout,
             target_format,
-            panes: HashMap::new(),
+            panes: PassAged::new(),
         }
     }
 }
 
 impl SpectrogramPane {
     /// This pane's buffers, made on first sight of its id and stamped with
-    /// `pass_nr` so [`SpectrogramPane::evict_unseen`] can tell a live pane
-    /// from one whose tab was closed.
+    /// `pass_nr` so the sweep can tell a live pane from one whose tab was
+    /// closed.
     fn get<'a>(
-        panes: &'a mut HashMap<u64, SpectrogramPane>,
+        panes: &'a mut PassAged<SpectrogramPane>,
         device: &wgpu::Device,
         pane_id: u64,
         pass_nr: u64,
     ) -> &'a mut SpectrogramPane {
-        let pane = panes.entry(pane_id).or_insert_with(|| SpectrogramPane {
+        panes.touched_or_insert_with(pane_id, pass_nr, || SpectrogramPane {
             uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("spectrogram_uniforms"),
                 size: std::mem::size_of::<SpectrogramUniforms>() as u64,
@@ -398,23 +394,9 @@ impl SpectrogramPane {
             grid: None,
             lut: None,
             bind_group: None,
-            last_seen_pass: pass_nr,
             cloud: None,
             cloud_ready: false,
-        });
-        pane.last_seen_pass = pass_nr;
-        pane
-    }
-
-    /// Drop every pane that has not been drawn for [`PANE_TTL_PASSES`].
-    ///
-    /// A spectrogram's id is its surface (the docked pane, the Render
-    /// preview), and a closed tab simply stops calling back — there is no
-    /// teardown to hang this on, so the panes still being prepared are the
-    /// only evidence of which ones exist. Run from whichever pane IS
-    /// preparing, so a lone survivor still clears the others.
-    fn evict_unseen(panes: &mut HashMap<u64, SpectrogramPane>, pass_nr: u64) {
-        panes.retain(|_, pane| pass_nr.saturating_sub(pane.last_seen_pass) < PANE_TTL_PASSES);
+        })
     }
 }
 
@@ -487,7 +469,12 @@ impl CallbackTrait for SpectrogramCallback {
         let resources: &mut SpectrogramResources =
             callback_resources.get_mut().expect("inserted above when missing");
         let SpectrogramResources { layout, panes, cloud, .. } = resources;
-        SpectrogramPane::evict_unseen(panes, self.pass_nr);
+        // A spectrogram's id is its surface (the docked pane, the Render
+        // preview), and a closed tab simply stops calling back — so the panes
+        // still being prepared are the only evidence of which ones exist.
+        // Swept from whichever pane IS preparing, so a lone survivor still
+        // clears the others.
+        panes.evict_unseen(self.pass_nr);
         let pane = SpectrogramPane::get(panes, device, self.pane_id, self.pass_nr);
         pane.cloud_ready = false;
 
@@ -789,7 +776,7 @@ impl CallbackTrait for SpectrogramCallback {
         let Some(resources) = callback_resources.get::<SpectrogramResources>() else {
             return;
         };
-        let Some(pane) = resources.panes.get(&self.pane_id) else {
+        let Some(pane) = resources.panes.get(self.pane_id) else {
             return;
         };
         let Some(bind_group) = &pane.bind_group else {
@@ -1402,7 +1389,12 @@ mod tests {
         let mut cb = cloud_fixture();
         frame_with(&device, &queue, &mut resources, &cb);
         assert_eq!(
-            resources.get::<SpectrogramResources>().unwrap().panes[&0]
+            resources
+                .get::<SpectrogramResources>()
+                .unwrap()
+                .panes
+                .get(0)
+                .expect("the spectrogram prepared a pane")
                 .cloud
                 .as_ref()
                 .unwrap()
@@ -1424,7 +1416,12 @@ mod tests {
             let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
             let mut encoder = device.create_command_encoder(&Default::default());
             let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-            let pane = &resources.get::<SpectrogramResources>().unwrap().panes[&0];
+            let pane = resources
+                .get::<SpectrogramResources>()
+                .unwrap()
+                .panes
+                .get(0)
+                .expect("the spectrogram prepared a pane");
             assert!(pane.cloud_ready, "Lava must still use its transfer/composite");
             assert_eq!(
                 pane.cloud.as_ref().unwrap().encoded_passes.load(Ordering::Relaxed),
@@ -1786,7 +1783,12 @@ mod tests {
                 exact_allocations += usize::from(previous_requested != Some(requested));
                 previous_requested = Some(requested);
                 frame_with(&device, &queue, &mut resources, &cb);
-                let target = resources.get::<SpectrogramResources>().unwrap().panes[&0]
+                let target = resources
+                    .get::<SpectrogramResources>()
+                    .unwrap()
+                    .panes
+                    .get(0)
+                    .expect("the spectrogram prepared a pane")
                     .cloud
                     .as_ref()
                     .unwrap();
@@ -1822,7 +1824,16 @@ mod tests {
         let smaller = frame_with(&device, &queue, &mut resources, &cb);
         assert_eq!(smaller, fresh_frame(&device, &queue, &cb));
         assert_eq!(
-            resources.get::<SpectrogramResources>().unwrap().panes[&0].cloud.as_ref().unwrap().size,
+            resources
+                .get::<SpectrogramResources>()
+                .unwrap()
+                .panes
+                .get(0)
+                .expect("the spectrogram prepared a pane")
+                .cloud
+                .as_ref()
+                .unwrap()
+                .size,
             atmosphere::source_size([128, 64], 1.0, cb.atmosphere.unwrap())
         );
         let mut other = cloud_fixture();
@@ -1856,7 +1867,15 @@ mod tests {
         cb.vertices.clear();
         let empty = frame_with(&device, &queue, &mut resources, &cb);
         assert!(empty.chunks_exact(4).all(|p| p == [0, 0, 0, 255]));
-        assert!(!resources.get::<SpectrogramResources>().unwrap().panes[&0].cloud_ready);
+        assert!(
+            !resources
+                .get::<SpectrogramResources>()
+                .unwrap()
+                .panes
+                .get(0)
+                .expect("the spectrogram prepared a pane")
+                .cloud_ready
+        );
     }
 
     #[test]
@@ -2305,18 +2324,26 @@ mod tests {
         let live = |resources: &CallbackResources| {
             let spectrogram: &SpectrogramResources =
                 resources.get().expect("prepare inserts its resources");
-            let mut ids: Vec<u64> = spectrogram.panes.keys().copied().collect();
+            let mut ids: Vec<u64> = spectrogram.panes.keys().collect();
             ids.sort_unstable();
             ids
         };
         assert_eq!(live(&resources), vec![0, 1], "both spectrograms should hold buffers");
         let held = |resources: &CallbackResources, id: u64| {
             let spectrogram: &SpectrogramResources = resources.get().expect("resources");
-            spectrogram.panes[&id].grid.as_ref().expect("a drawn pane holds a grid").buffer.size()
+            spectrogram
+                .panes
+                .get(id)
+                .expect("a drawn pane holds a grid")
+                .grid
+                .as_ref()
+                .expect("a drawn pane holds a grid")
+                .buffer
+                .size()
         };
         assert_eq!(held(&resources, 0), held(&resources, 1), "each pane sizes its own copy");
 
-        for pass_nr in 1..=PANE_TTL_PASSES {
+        for pass_nr in 1..=crate::pass_aged::TTL_PASSES {
             docked.pass_nr = pass_nr;
             prepare_once(&device, &queue, &mut resources, &docked);
         }

@@ -11,10 +11,10 @@ use std::collections::HashMap;
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
+use crate::pass_aged::PassAged;
 use crate::{create_vertex_buffer, shadow, wgpu};
 
 const INITIAL_CAPACITY: usize = 16;
-const SURFACE_TTL_PASSES: u64 = 120;
 
 #[derive(Clone)]
 pub(crate) struct Layouts {
@@ -98,7 +98,6 @@ struct Surface {
     submissions: Vec<Submission>,
     target: Option<shadow::ShadowTarget>,
     stats: ScheduleStats,
-    last_seen_pass: u64,
 }
 
 pub(crate) struct Resources {
@@ -106,7 +105,9 @@ pub(crate) struct Resources {
     sampler: wgpu::Sampler,
     dummy: shadow::ShadowTarget,
     cells: shadow::CellPipelines,
-    surfaces: HashMap<u64, Surface>,
+    /// Swept at [`crate::pass_aged::TTL_PASSES`]; what a destination surface
+    /// nobody draws to any more would otherwise hold is its shadow atlas.
+    surfaces: PassAged<Surface>,
 }
 
 impl Resources {
@@ -128,13 +129,13 @@ impl Resources {
             sampler,
             dummy,
             cells,
-            surfaces: HashMap::new(),
+            surfaces: PassAged::new(),
         }
     }
 
     fn surface(&mut self, device: &wgpu::Device, id: u64, pass_nr: u64) -> &mut Surface {
         let caster_layout = &self.layouts.casters;
-        let surface = self.surfaces.entry(id).or_insert_with(|| {
+        self.surfaces.touched_or_insert_with(id, pass_nr, || {
             let (casters, caster_bind) =
                 shadow::caster_buffer(device, caster_layout, INITIAL_CAPACITY);
             Surface {
@@ -151,11 +152,8 @@ impl Resources {
                 submissions: Vec::new(),
                 target: None,
                 stats: ScheduleStats::default(),
-                last_seen_pass: pass_nr,
             }
-        });
-        surface.last_seen_pass = pass_nr;
-        surface
+        })
     }
 }
 
@@ -210,7 +208,7 @@ pub(crate) fn binding<'a>(
     key: ProducerKey,
 ) -> Option<Binding<'a>> {
     let resources = callback_resources.get::<Resources>()?;
-    let surface = resources.surfaces.get(&surface_id)?;
+    let surface = resources.surfaces.get(surface_id)?;
     let range = *surface.ranges.get(&key)?;
     Some(Binding {
         atlas: surface.target.as_ref().unwrap_or(&resources.dummy).read(),
@@ -240,9 +238,10 @@ fn finish_for_pass(
         callback_resources.insert(Resources::new(device));
     }
     let resources: &mut Resources = callback_resources.get_mut().expect("inserted above");
-    resources
-        .surfaces
-        .retain(|_, surface| pass_nr.saturating_sub(surface.last_seen_pass) < SURFACE_TTL_PASSES);
+    // Both touch sites below are deliberate: a producer registering for this
+    // pass keeps its destination alive, and so does this final assembly, which
+    // runs for the surface being drawn whether or not anything registered.
+    resources.surfaces.evict_unseen(pass_nr);
 
     let layouts = resources.layouts.clone();
     let sampler = resources.sampler.clone();
@@ -453,7 +452,7 @@ impl CallbackTrait for FinishCallback {
 pub(crate) fn stats(resources: &CallbackResources, surface_id: u64) -> ScheduleStats {
     resources
         .get::<Resources>()
-        .and_then(|resources| resources.surfaces.get(&surface_id))
+        .and_then(|resources| resources.surfaces.get(surface_id))
         .map_or(ScheduleStats::default(), |surface| surface.stats)
 }
 
@@ -461,7 +460,7 @@ pub(crate) fn stats(resources: &CallbackResources, surface_id: u64) -> ScheduleS
 pub(crate) fn target_allocated(resources: &CallbackResources, surface_id: u64) -> bool {
     resources
         .get::<Resources>()
-        .and_then(|resources| resources.surfaces.get(&surface_id))
+        .and_then(|resources| resources.surfaces.get(surface_id))
         .is_some_and(|surface| surface.target.is_some())
 }
 
@@ -501,6 +500,84 @@ mod tests {
                 atlas_size_offset: 0,
             },
         );
+    }
+
+    /// A destination surface nobody draws to any more gives its atlas back,
+    /// and EITHER of the two things that reach a surface keeps it alive.
+    ///
+    /// Both touch sites are deliberate and neither is redundant. A producer
+    /// registering for the pass reaches its destination before the final
+    /// assembly does, and the assembly runs for the surface being drawn whether
+    /// or not anything registered — so a surface with a live producer and no
+    /// assembly, or an assembly with no producers, is still a surface somebody
+    /// is drawing. Collapse the pair to one and a real arrangement ages out
+    /// mid-run.
+    #[test]
+    fn a_surface_nobody_draws_to_gives_its_atlas_back() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let screen = ScreenDescriptor { size_in_pixels: [64, 64], pixels_per_point: 1.0 };
+        let uniform = || {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("spectral_shadow_retention_test_uniform"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let register_at = |surface_id, pass_nr, resources: &mut CallbackResources| {
+            register_for_pass(
+                &device,
+                resources,
+                surface_id,
+                Submission {
+                    key: ProducerKey::Roll(1),
+                    casters: vec![shadow::Caster {
+                        rect: [8.0, 8.0, 12.0, 12.0],
+                        level: 1.0,
+                        sigma_points: 2.0,
+                        kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+                        falloff: 1.0,
+                        direct_distance: false,
+                    }],
+                    draw: CellDraw::None,
+                    atlas_uniform: uniform(),
+                    atlas_size_offset: 0,
+                },
+                pass_nr,
+            );
+        };
+        let finish_at = |surface_id, pass_nr, resources: &mut CallbackResources| {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            finish_for_pass(&device, &queue, &screen, &mut encoder, resources, surface_id, pass_nr);
+            queue.submit([encoder.finish()]);
+        };
+        let live = |resources: &CallbackResources, id| {
+            resources.get::<Resources>().is_some_and(|r| r.surfaces.get(id).is_some())
+        };
+
+        // Three surfaces come up together: 0 will keep both halves, 1 will be
+        // reached only by its producer, and 2 will stop being reached at all.
+        let mut resources = CallbackResources::default();
+        for surface_id in [0, 1, 2] {
+            register_at(surface_id, 0, &mut resources);
+            finish_at(surface_id, 0, &mut resources);
+        }
+        assert!(
+            [0, 1, 2].iter().all(|&id| live(&resources, id)),
+            "three drawn surfaces should hold three atlases",
+        );
+
+        for pass_nr in 1..=crate::pass_aged::TTL_PASSES {
+            register_at(0, pass_nr, &mut resources);
+            finish_at(0, pass_nr, &mut resources);
+            // Surface 1 is registered against but never assembled.
+            register_at(1, pass_nr, &mut resources);
+        }
+        assert!(live(&resources, 0), "the surface drawn through both paths lost its atlas");
+        assert!(live(&resources, 1), "a registering producer did not keep its destination alive");
+        assert!(!live(&resources, 2), "the surface nobody draws to is still holding its atlas");
     }
 
     #[test]
