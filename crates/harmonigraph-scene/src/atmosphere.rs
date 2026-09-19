@@ -1,4 +1,5 @@
-//! Saved controls for the lattice and spectral atmosphere prototypes.
+//! Saved controls for the lattice atmosphere prototype and for the
+//! spectrogram's cloud texture, which is no longer one.
 
 use harmonigraph_core::LatticePos;
 
@@ -25,6 +26,42 @@ pub enum CloudStyle {
     Watercolor,
 }
 
+/// The band both cloud size dials run over — [`SpectralAtmosphere::scale_size`]
+/// and [`SpectralAtmosphere::wash_size`], which mean the same thing about two
+/// different textures and so are worth one pair of numbers rather than two.
+///
+/// **Exported because the dial and the load-door clamp have to be the SAME
+/// range.** A bar that stops at one number over a clamp that stops at another
+/// is the silent break the persistence rule is about: the blob keeps a size the
+/// pane cannot show, or the pane shows one the blob will not keep.
+///
+/// It is not symmetric about the fresh 1x, and the asymmetry is the point.
+/// Yan's report on the 1/4..4 range it replaces was both ends at once — *"0.25x
+/// is still too big"* and *"4x for both settings is way too big for me to ever
+/// use"* — so the useful band lies below the default, not around it. The top is
+/// where one glob is a tenth of the pane's height, which is already a texture
+/// with about ten things in it.
+///
+/// **The floor is measured rather than chosen.** A texture that is getting
+/// finer raises the mean step between adjacent pixels until its own detail
+/// nears one pixel, and then that number stops moving: past there the dial is
+/// buying noise rather than a smaller texture. Over a 700-point pane — a
+/// 1080p export's — the mosaic's mean adjacent-pixel step runs 0.034 at 1x,
+/// 0.047 at 1/4, 0.058 at 1/8 and 0.062 at 1/16, and then FALLS to 0.061 at
+/// 0.05. 1/16 is where it turns over, which is about 1.6 points to a cell, so
+/// that is where the bar stops.
+///
+/// It is one floor over two textures and a pane whose height varies about
+/// threefold, so it cannot be exactly right everywhere: the watercolour's
+/// globs are averaging toward a flat film by 1/8 already, and on a short
+/// editor pane the last of the travel aliases where on a tall portrait render
+/// it still has room. A bar that goes slightly past useful on the smallest
+/// pane is the right way round — the picture says so immediately, and the
+/// alternative is a bar that cannot reach what the export needs.
+pub const CLOUD_SIZE_MIN: f32 = 0.0625;
+/// See [`CLOUD_SIZE_MIN`].
+pub const CLOUD_SIZE_MAX: f32 = 2.0;
+
 /// Independent spectrogram diffusion, analyzer shading and note light.
 ///
 /// There is no style here. Plain, Blur and Lava were three presets over three
@@ -45,8 +82,8 @@ pub struct SpectralAtmosphere {
     pub contour_softness: f32,
     pub analyzer_softness: f32,
     pub note_glow: f32,
-    /// Refracting scale clouds (prototype): how much of the picture the cloud
-    /// takes over where it is thick, 0 for no clouds at all.
+    /// The cloud texture: how much of the picture it takes over where it is
+    /// thick, 0 for no cloud at all.
     pub cloud_depth: f32,
     /// Drift speed, as a multiplier on a slow crossing like the lattice
     /// nebula's. The cloud FRAME it drifts in is fixed in the shader
@@ -55,6 +92,7 @@ pub struct SpectralAtmosphere {
     /// travel.
     pub cloud_speed: f32,
     /// Size of one scale, as a multiplier on how many of them cross a cloud.
+    /// Runs over [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`].
     pub scale_size: f32,
     /// How much the scales differ in size from each other. 0 is one radius for
     /// every glob in the field, which is the most regular texture there is; 1
@@ -88,7 +126,8 @@ pub struct SpectralAtmosphere {
     /// belongs to it alone.
     pub cloud_style: CloudStyle,
     /// How big one glob is, as a multiplier on how many of them cross the cloud
-    /// frame. Larger is bigger, like `scale_size`.
+    /// frame. Larger is bigger, like `scale_size`, and over the same
+    /// [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`] band.
     pub wash_size: f32,
     /// One dial over everything that dissolves a glob's rim: how far it feathers
     /// into what lies beneath, how far it bleeds into what is about to cover it,
@@ -212,12 +251,12 @@ impl SpectralAtmosphere {
         self.note_glow = clamp(self.note_glow, fresh.note_glow, 0.0, 1.0);
         self.cloud_depth = clamp(self.cloud_depth, fresh.cloud_depth, 0.0, 1.0);
         self.cloud_speed = clamp(self.cloud_speed, fresh.cloud_speed, 0.0, 20.0);
-        self.scale_size = clamp(self.scale_size, fresh.scale_size, 0.25, 4.0);
+        self.scale_size = clamp(self.scale_size, fresh.scale_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
         self.scale_refract = clamp(self.scale_refract, fresh.scale_refract, -1.0, 1.0);
         self.scale_relief = clamp(self.scale_relief, fresh.scale_relief, 0.0, 1.0);
         self.scale_rock = clamp(self.scale_rock, fresh.scale_rock, 0.0, 1.0);
-        self.wash_size = clamp(self.wash_size, fresh.wash_size, 0.25, 4.0);
+        self.wash_size = clamp(self.wash_size, fresh.wash_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.wash_fuzz = clamp(self.wash_fuzz, fresh.wash_fuzz, 0.0, 1.0);
         self.wash_ragged = clamp(self.wash_ragged, fresh.wash_ragged, 0.0, 1.0);
         self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);

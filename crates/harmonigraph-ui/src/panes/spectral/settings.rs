@@ -144,7 +144,7 @@ pub(crate) fn spectrum_settings_pane(
             .percent()
             .show(ui);
     });
-    ui.label(egui::RichText::new("Cloud texture (prototype)").strong());
+    ui.label(egui::RichText::new("Cloud texture").strong());
     ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Cloud depth")
         .percent()
         .show(ui)
@@ -195,7 +195,8 @@ pub(crate) fn spectrum_settings_pane(
         if atmosphere.cloud_style == CloudStyle::Watercolor {
             wash_bars(ui, atmosphere);
         } else {
-            ValueBar::new(&mut atmosphere.scale_size, 0.25..=4.0, "Scale size")
+            ValueBar::new(&mut atmosphere.scale_size, cloud_size_range(), "Scale size")
+                .eased(true)
                 .unit(1.0, "\u{d7}")
                 .show(ui)
                 .on_hover_text(
@@ -462,6 +463,16 @@ pub(crate) fn spectrum_settings_pane(
     });
 }
 
+/// The band both texture size bars run over, taken from the same constants the
+/// load door clamps to rather than written out here.
+///
+/// Two bars for two constructions, but one range: they mean the same thing
+/// about their own texture, and a size the bar can reach but the blob cannot
+/// keep is the silent break the persistence rule is about.
+fn cloud_size_range() -> std::ops::RangeInclusive<f32> {
+    harmonigraph_scene::CLOUD_SIZE_MIN..=harmonigraph_scene::CLOUD_SIZE_MAX
+}
+
 /// The watercolour wash: a field of translucent globs, and no light anywhere in
 /// it.
 ///
@@ -471,13 +482,17 @@ pub(crate) fn spectrum_settings_pane(
 /// of these bars, so the settings are what shipped rather than a choice made
 /// here.
 fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtmosphere) {
-    ValueBar::new(&mut atmosphere.wash_size, 0.25..=4.0, "Glob size")
+    ValueBar::new(&mut atmosphere.wash_size, cloud_size_range(), "Glob size")
+        .eased(true)
         .unit(1.0, "\u{d7}")
         .show(ui)
         .on_hover_text(
             "Size of one glob. At 1\u{d7} a glob is about a twentieth of the pane's height \
              across, which is roughly two harmonic lines; halve it and a glob is one line \
-             wide and the music reads through the paint.",
+             wide and the music reads through the paint. The bar runs a further four \
+             halvings below that, to where the globs stop shrinking and start aliasing \
+             instead; the wash is closer to a flat film than a field of globs well \
+             before the bottom.",
         );
     ValueBar::new(&mut atmosphere.wash_fuzz, 0.0..=1.0, "Fuzz").percent().show(ui).on_hover_text(
         "ONE dial over everything that dissolves a glob's rim: how far it feathers into \

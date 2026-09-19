@@ -1009,10 +1009,25 @@ mod tests {
     /// A quad over the whole surface: `slab` running 0..n left to right, `t`
     /// running 1 at the top down to 0 at the bottom.
     fn full_quad(run_slabs: u32) -> Vec<SpectrogramVertex> {
-        let (w, h) = (SIZE[0] as f32, SIZE[1] as f32);
+        full_quad_in(run_slabs, SIZE)
+    }
+
+    /// [`full_quad`] over a pane of the caller's own size, for a fixture that
+    /// needs one — see [`rough_band_fixture`], which needs a pane the cloud's
+    /// coarsest texture is still coarse on.
+    fn full_quad_in(run_slabs: u32, size: [u32; 2]) -> Vec<SpectrogramVertex> {
+        let (w, h) = (size[0] as f32, size[1] as f32);
         let n = run_slabs as f32;
         let v = |x: f32, y: f32| SpectrogramVertex { pos: [x, y], slab: x / w * n, t: 1.0 - y / h };
         vec![v(0.0, 0.0), v(w, 0.0), v(w, h), v(0.0, 0.0), v(w, h), v(0.0, h)]
+    }
+
+    /// The pane a callback draws over, in pixels — its own rect rather than
+    /// [`SIZE`], so a fixture that wants a bigger pane gets one by saying so.
+    /// Every fixture built by [`callback`] is [`SIZE`] and renders exactly as
+    /// it always did.
+    fn pane_of(cb: &SpectrogramCallback) -> [u32; 2] {
+        [cb.rect.width() as u32, cb.rect.height() as u32]
     }
 
     /// The pitch fraction pixel row `py` of the frame samples, as
@@ -1189,7 +1204,7 @@ mod tests {
         resources: &mut CallbackResources,
         cb: &SpectrogramCallback,
     ) {
-        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+        let screen = ScreenDescriptor { size_in_pixels: pane_of(cb), pixels_per_point: 1.0 };
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(device, queue, &screen, &mut encoder, resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
@@ -1204,22 +1219,22 @@ mod tests {
         cb: &SpectrogramCallback,
     ) -> Vec<u8> {
         prepare_once(device, queue, resources, cb);
-        let rect =
-            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        let size = pane_of(cb);
+        let rect = cb.rect;
         let texture =
-            render_to_texture(device, queue, SIZE, cb.target_format, wgpu::Color::BLACK, |pass| {
+            render_to_texture(device, queue, size, cb.target_format, wgpu::Color::BLACK, |pass| {
                 cb.paint(
                     egui::PaintCallbackInfo {
                         viewport: rect,
                         clip_rect: rect,
                         pixels_per_point: 1.0,
-                        screen_size_px: SIZE,
+                        screen_size_px: size,
                     },
                     pass,
                     resources,
                 );
             });
-        readback(device, queue, &texture, SIZE)
+        readback(device, queue, &texture, size)
     }
 
     /// The same frame from resources that have never seen this pane — the
@@ -2630,6 +2645,22 @@ mod tests {
         assert_eq!(clipped(&clouded), 0, "the cloud layer clipped a channel flat");
     }
 
+    /// The pane [`rough_band_fixture`] draws over: [`SIZE`] made TALLER, and
+    /// deliberately not wider.
+    ///
+    /// The cloud's frame is ten cloud units across the pane's HEIGHT, so the
+    /// height alone decides how coarse the top of `Scale size` can be — on a
+    /// 128-point pane the top of the dial is a ten-point scale, and this
+    /// fixture needs one near twenty for the reason its own comment gives.
+    /// Doubling the height restores exactly the scale the retired 4x drew.
+    ///
+    /// The width is left alone because it is load-bearing in the other
+    /// direction. This fixture's whole subject is a crest that wanders between
+    /// NEIGHBOURING COLUMNS, and the wander is twelve slabs laid across the
+    /// pane's width: widening the pane spreads the same twelve over twice the
+    /// columns and halves the very roughness the test exists to put a sun on.
+    const ROUGH_BAND_SIZE: [u32; 2] = [SIZE[0], SIZE[1] * 2];
+
     /// A loud band with a sharp pitch edge against silence, its level rough
     /// from column to column the way a real spectrogram's is.
     ///
@@ -2642,6 +2673,13 @@ mod tests {
     /// it: a crest that does not move has nothing to tear along.
     fn rough_band_fixture() -> SpectrogramCallback {
         let mut cb = cloud_fixture();
+        cb.rect = egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(ROUGH_BAND_SIZE[0] as f32, ROUGH_BAND_SIZE[1] as f32),
+        );
+        cb.vertices = full_quad_in(12, ROUGH_BAND_SIZE);
+        cb.read.rows = ROUGH_BAND_SIZE[1];
+        cb.atmosphere.as_mut().unwrap().region = cb.rect;
         let mut bytes = vec![0u8; 12 * BINS as usize];
         let mut seed = 0x9e37_79b9u32;
         for slab in 0..12 {
@@ -2665,12 +2703,19 @@ mod tests {
         // `Facet` at 100% then, which read at the centres whatever
         // `Refraction` said: the bottom of the one dial the two became.
         s.scale_refract = -1.0;
-        // Globs about 19 points across on this 128-point pane. At the fresh
-        // size they would be 5, and a texture whose own detail is four pixels
-        // wide has column steps of its own that would drown the thing being
-        // measured. Four times the fresh size, which is where the retired
-        // `cloud_scale` 2 used to put it against a fresh `Scale size`.
-        s.scale_size = 4.0;
+        // Scales about 19 points across, which is what the measurement needs:
+        // a texture whose own detail is a few pixels wide has column steps of
+        // its own, and column steps are exactly what this test counts. At the
+        // fresh size they would be 9 points here and those steps would drown
+        // the thing being measured.
+        //
+        // The number was 4x while the dial ran to 4x. The ceiling came down to
+        // 2x — nothing above it was ever usable on a real pane — so the 19
+        // points now come from `ROUGH_BAND_SIZE` doubling the pane instead,
+        // which is the half of the product this fixture always actually
+        // wanted. Read from the constant rather than copied, so the next move
+        // of the ceiling takes this with it.
+        s.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
         // The shade floor LIFTS a turned-away face, so it hides exactly what
         // this is measuring — and the relief of 1 above already drives it to 0,
         // which is the raw Lambert the defect lived in. It is the same line it
@@ -2703,9 +2748,11 @@ mod tests {
     ///
     /// Non-vacuous, and measured both ways rather than reasoned about: putting
     /// the two old lines back into the shader fails this at 5 against a floor
-    /// of 0. The 5 is small because the pane is 128 points wide with about six
-    /// columns of band on it; the same defect over a 1280-point render of the
-    /// same content is 2666 such steps, and that is the picture Yan saw.
+    /// of 0, on the 128-point pane the fixture used to draw over. The 5 was
+    /// small because that pane had about six columns of band on it; the same
+    /// defect over a 1280-point render of the same content is 2666 such steps,
+    /// and that is the picture Yan saw. The pane is `ROUGH_BAND_SIZE` now, so
+    /// the figure a reverted shader would show here is larger still.
     #[test]
     fn the_sun_leans_across_a_loud_band_without_jumping_sides() {
         let Some((device, queue)) = headless_device() else {
@@ -2715,9 +2762,9 @@ mod tests {
             |p: &[u8]| 0.299 * f32::from(p[0]) + 0.587 * f32::from(p[1]) + 0.114 * f32::from(p[2]);
         let torn = |frame: &[u8]| {
             let mut count = 0u32;
-            for y in 0..SIZE[1] as usize {
-                for x in 1..SIZE[0] as usize {
-                    let a = (y * SIZE[0] as usize + x) * 4;
+            for y in 0..ROUGH_BAND_SIZE[1] as usize {
+                for x in 1..ROUGH_BAND_SIZE[0] as usize {
+                    let a = (y * ROUGH_BAND_SIZE[0] as usize + x) * 4;
                     count +=
                         u32::from((lum(&frame[a..a + 4]) - lum(&frame[a - 4..a])).abs() > 24.0);
                 }
@@ -2894,10 +2941,9 @@ mod tests {
     /// 128-point pane carries fifty cells, so a glob is under six points across
     /// — and a texture whose own detail is a handful of pixels wide measures its
     /// own aliasing rather than the dial being turned, the same trap
-    /// `rough_band_fixture` names for the scales. `Glob size` 4 takes the pane
-    /// down to thirteen cells and the glob up to about twenty-three points —
-    /// four times the fresh size, which is where the retired `cloud_scale` 2
-    /// used to put it against a fresh `Glob size`.
+    /// `rough_band_fixture` names for the scales. The top of the dial takes the
+    /// pane down to twenty-six cells and the glob up to about twelve points,
+    /// which is where every figure below was measured.
     fn wash_fixture() -> SpectrogramCallback {
         let mut cb = cloud_fixture();
         // Off zero, where the retired `Wander` needed it: every figure measured
@@ -2906,7 +2952,7 @@ mod tests {
         let s = &mut cb.atmosphere.as_mut().unwrap().settings;
         s.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
         s.cloud_depth = 1.0;
-        s.wash_size = 4.0;
+        s.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX;
         cb
     }
 
@@ -3115,7 +3161,7 @@ mod tests {
         for (name, turn) in [
             (
                 "Glob size",
-                (|s: &mut harmonigraph_scene::SpectralAtmosphere| s.wash_size = 2.0)
+                (|s: &mut harmonigraph_scene::SpectralAtmosphere| s.wash_size = 1.0)
                     as fn(&mut harmonigraph_scene::SpectralAtmosphere),
             ),
             ("Fuzz", |s| s.wash_fuzz = 0.0),
