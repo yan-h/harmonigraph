@@ -375,7 +375,9 @@ No removal of those four interfaces/tools has been approved.
 | Console | Not used by Yan. | Distinguish the pane from the messages, warnings and diagnostics it exposes. Identify a retained way to observe important faults. |
 | Standalone application | Not used by Yan. | Inventory agent/test/development uses before proposing removal, including the font fallback whose retained consumer is this shell. |
 | Adaptive-tuning laboratory | Not used by Yan. | Distinguish browser exploration UI from simulator/reference-fixture generation and policy checks. Personal non-use alone does not retire the musical oracle. |
-| Video layouts and spectrogram modes | Yan requested an explanation; usage unanswered. | Explain visible outcomes before any keep/remove choice. |
+| Playhead export | Not used by Yan. | Investigate the separate precomputed-history path; preserve Scrolling and Whole video. |
+| Single-pane and custom export layouts | Not used by Yan. | Investigate public presets/file loading; retain internal compositions needed by visual tests. |
+| Combined Lattice/Analyzer arrangement and orientation | Explicitly used by Yan. | Keep normal preview/export layout, proportions, side and orientation controls. |
 
 Video layout means the composition of the exported frame:
 the ordinary Video preview arranges Lattice and Analyzer beside or above one another with a chosen split and aspect.
@@ -388,6 +390,13 @@ Scrolling uses the configured recent-history duration;
 Whole video still scrolls but expands that duration to the render length within existing limits;
 Playhead lays out the recorded spectrogram in advance and moves a cursor through it.
 These export choices do not change Yan's confirmed requirement to retain live spectrogram history while the editor is closed.
+
+The [subsequent feature-retirement trace](feature-retirement-discovery.md) follows these usage leads into production paths,
+tests and development consumers.
+It recommends investigating Playhead removal,
+distinguishes an unused browser interface from a live musical reference model,
+and preserves diagnostic access despite personal non-use of the Console pane.
+No additional product removal has been approved by these usage answers.
 
 ## Next use of this audit
 

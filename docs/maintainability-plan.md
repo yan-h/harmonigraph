@@ -58,9 +58,14 @@ In the subsequent whole-feature inventory,
 Yan reported occasional Spiral use and no personal use of the Notes pane,
 console,
 standalone application or adaptive-tuning laboratory.
+He also reported no use of Playhead,
+single-pane exports or custom export arrangements,
+while explicitly retaining the controls to arrange and orient Lattice and Analyzer together.
 These are [usage leads](requirements-value-audit.md#whole-feature-usage-inventory),
 not additional approved removals;
 check agent, test and diagnostic consumers before recommending a scope.
+The [feature-retirement trace](feature-retirement-discovery.md) now identifies concrete removal boundaries,
+including shared tests, musical reference data and diagnostic sinks that need to remain available.
 
 **How to return:** ask an agent to continue from `docs/maintainability-plan.md`.
 The agent should read the current document and linked work,
