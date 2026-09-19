@@ -62,7 +62,7 @@ pub fn run() {
             started: Instant::now(),
         },
     );
-    shared.lock().editor_graphics().shutdown_startup();
+    shared.lock().picture.editor_graphics().shutdown_startup();
     assert_eq!(observations.completed.load(Ordering::Relaxed), OPENINGS);
     assert_eq!(observations.dropped.load(Ordering::Relaxed), OPENINGS);
     assert_eq!(observations.devices.load(Ordering::Relaxed), 1, "reopen recreated device");
@@ -91,7 +91,7 @@ impl WindowHandler for Host {
             return;
         }
         if self.opening == OPENINGS || self.started.elapsed().as_secs() > 90 {
-            self.shared.lock().editor_graphics().shutdown_startup();
+            self.shared.lock().picture.editor_graphics().shutdown_startup();
             window.close();
             // Wake NSApplication after baseview calls stop() from its timer.
             use objc2::MainThreadMarker;
@@ -184,8 +184,10 @@ impl WindowHandler for Host {
                 }
                 .draw();
                 assert!(requested.is_none(), "startup fixture unexpectedly resized");
-                let interval =
-                    super::target_frame_interval(shared.fps_cap, queue.display_max_fps());
+                let interval = super::target_frame_interval(
+                    shared.workspace.interaction.fps_cap,
+                    queue.display_max_fps(),
+                );
                 if probe.interval != Some(interval) {
                     queue.set_frame_interval(interval);
                     probe.interval = Some(interval);
