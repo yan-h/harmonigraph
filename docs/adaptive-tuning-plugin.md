@@ -139,13 +139,6 @@ With retuning off, the lattice is a picture of the input and should equal the ke
 with it on, the lattice is the target, and Learn moves only the shared C offset and the keyboard tuning.
 Toggling Retune copies nothing in either direction.
 
-The live neighborhood outlines use the same exponential score and unsnapped option.
-For each octave realization, the worker solves where pitch cost exhausts harmonic benefit,
-then intersects that interval with the candidate's keyboard windows and the gaps outside every keyboard window.
-All candidate keys contribute those windows, including ones that cannot themselves earn an assignment.
-Strict convexity makes the difference between two shifted exponential pitch curves monotone;
-the worker bisects their single crossing instead of assuming the old quadratic score's linear intersection.
-Endpoints and interval interiors are checked through the production selector.
 The simulator uses the same score but has no keyboard filter.
 
 One configuration-edit race remains:
@@ -163,24 +156,18 @@ the syntonic comma pump still drifts on a meantone keyboard, because that keyboa
 It is the same comma as the one between the fifths-chain A and the 5-limit A, which is why no pin strength could separate the two;
 see [issue #852](https://github.com/yan-h/harmonigraph/issues/852).
 
-## Controls and live neighborhood
+## Controls
 
 The Tuning pane exposes the keyboard tuning, pitch flexibility, neighborhood radius, allowed axes, half-life, register weight per octave, same-note tolerance, silence timeout and transport reset choices.
 Defaults match the simulator's baseline profile.
 The precision profile used by the paired intentional-E examples is obtained by setting Pitch flexibility to 50 cents.
 
-The live lattice can outline nodes that win for some arbitrary next input in the explicitly labeled C2–C7 register range.
-This is a union across registers and seventh layers, not twelve keyboard mappings or a single-octave sample.
-The count can exceed twenty depending on context and settings.
-Only nodes in the current camera window receive visible outlines; the count includes off-screen winners.
-The outlines are selection-style UI annotations and can overlap foreground geometry.
-They are intentionally absent from preview/export pictures, like live hover and session controls.
-
-The Hub publishes its authoritative next-attack context, including scheduled predecessor assignments, rather than reconstructing it from visual note fades.
-A worker calculates winner intervals and checks their boundaries through the selector.
-Changing context cancels obsolete work and hides its old result while the new result is pending.
-The cache key contains only resolved musical settings, onset references, weights and unwrapped displacement.
-Camera changes, callback time, performance counters and display fades do not restart that calculation.
+Adaptive next-note outlines were retired in [#970](https://github.com/yan-h/harmonigraph/issues/970).
+Musical neighborhood eligibility and the separate Lattice Map assignment outlines remain.
+The removed outline toggle was runtime-only;
+no saved setting or take metadata is removed.
+The Hub adopts current musical configuration before silence expiry on every callback,
+including callbacks with no note input.
 
 ## Resource and persistence contracts
 
@@ -192,7 +179,6 @@ This ceiling bounds individual evaluation work, not the total distance of a musi
 Large onset cohorts can exceed the audio-callback budget well below the ceiling;
 [issue #790](https://github.com/yan-h/harmonigraph/issues/790) tracks that measurement.
 Tune's output delay and missed-correction counter do not bound the Hub's processing time.
-The substantially more expensive winner-range calculation runs outside the audio callback.
 
 Coordinates travel as signed 32-bit lattice coordinates and correction as signed 64-bit microcents.
 They no longer have the former eight-bit coordinate or approximately 2147-cent correction limits.

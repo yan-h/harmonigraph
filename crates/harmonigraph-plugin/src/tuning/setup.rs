@@ -68,7 +68,6 @@ pub struct Shared {
     pub requested_multiplier: AtomicU32,
     pending_multiplier: AtomicU32,
     pub(super) diagnostics: super::diagnostics::Shared,
-    pub(super) neighbourhood: super::neighbourhood::Published,
     /// The Reset counter the editor bumps
     /// and the audio owner turns into one cut for the session.
     reset: AtomicU64,
@@ -110,7 +109,6 @@ impl Shared {
             requested_multiplier: AtomicU32::new(1),
             pending_multiplier: AtomicU32::new(0),
             diagnostics: super::diagnostics::Shared::new(hub),
-            neighbourhood: Default::default(),
             reset: AtomicU64::new(0),
             wake: OnceLock::new(),
             dirty: AtomicBool::new(false),
@@ -185,9 +183,6 @@ impl Shared {
     }
     pub fn is_hub(&self) -> bool {
         self.hub
-    }
-    pub fn neighbourhood(&self) -> Option<harmonigraph_core::policy::reach::Snapshot> {
-        self.neighbourhood.read()
     }
     /// The editor's Reset. Clear the musical context and re-pair, which the
     /// audio owner performs as one cut across every row.

@@ -276,11 +276,6 @@ fn an_unprofitable_keyboard_match_keeps_the_note_unsnapped() {
                 .assignment;
         assert_eq!(assignment.node(), expected);
     }
-    let snapshot = reach::Snapshot { config, reference, context: vec![] };
-    assert!(reach::reachable(&snapshot, 4799.0, 4801.0, || false).unwrap().is_empty());
-    assert!(reach::reachable(&snapshot, 4793.0, 4794.0, || false)
-        .unwrap()
-        .contains(&LatticePos::new(1, 0, 0)));
 }
 
 #[test]
@@ -300,20 +295,6 @@ fn an_unsnapped_attack_preserves_drift_and_interrupts_a_repeated_node() {
     assert_eq!(h.held.last().unwrap().2, 200, "E interrupted the consecutive C attacks");
 }
 
-#[test]
-fn reachability_leaves_gaps_where_snapping_has_no_net_benefit() {
-    let mut config = just();
-    config.policy.axes = 1;
-    config.policy.radius = 1;
-    let snapshot = reach::Snapshot { config, reference: 2 * OCTAVE, context: vec![] };
-    // C, F and G are the only candidates. This range is entirely outside
-    // their windows even though the old unlimited scorer always chose one.
-    assert!(reach::reachable(&snapshot, 7500.0, 7600.0, || false).unwrap().is_empty());
-    assert_eq!(
-        reach::reachable(&snapshot, 7210.0, 7211.0, || false).unwrap(),
-        vec![LatticePos::ORIGIN]
-    );
-}
 #[test]
 fn a_slightly_mislearned_fifth_still_keeps_the_b_sharp_key() {
     // A fifth learned 0.2¢ sharp, as pitch-bend steps can leave it, renders
@@ -336,22 +317,6 @@ fn an_attack_bent_off_every_key_is_scored_against_every_node() {
     h.off("e");
     let bent = sent(&h, 0, 0, 0) - 15_000_000;
     assert_eq!(h.on("c", bent).node, Some(LatticePos::new(0, 3, 0)));
-}
-#[test]
-fn reachability_plays_the_keys_the_unfiltered_sweep_never_reaches() {
-    // With F and C held, the Pythagorean A costs 12 more than the 5-limit one
-    // and never wins by pitch alone; a schismatic keyboard's key three fifths
-    // up admits it and nothing else.
-    let mut h = Harness::new();
-    h.config.policy.keyboard = crate::tuning::fifth_generated(crate::tuning::microcents(701.711));
-    play(&mut h, &[("f", -1, 0, 0), ("c", 0, 0, 1)]);
-    let snapshot = reach::Snapshot {
-        config: h.config,
-        reference: h.memory.reference,
-        context: h.held.iter().map(|(_, v, _)| *v).collect(),
-    };
-    let reachable = reach::reachable(&snapshot, 3600.0, 9600.0, || false).unwrap();
-    assert!(reachable.contains(&LatticePos::new(3, 0, 0)), "{reachable:?}");
 }
 #[test]
 fn memory_refreshes_actual_register_pitch_and_orders_by_attack() {
@@ -448,41 +413,6 @@ fn resource_exhaustion_is_explicit_and_never_truncates_to_a_winner() {
     );
 }
 
-#[test]
-fn analytic_reachability_covers_direct_selection_across_registers() {
-    let mut h = Harness::new();
-    h.on("c", 4_800_000_000);
-    h.on("g", 5_500_000_000);
-    h.on("d", 6_200_000_000);
-    let context: Vec<_> = h.held.iter().map(|(_, v, _)| *v).collect();
-    let snapshot = reach::Snapshot {
-        config: h.config,
-        reference: h.memory.reference,
-        context: context.clone(),
-    };
-    let reachable = reach::reachable(&snapshot, 3600.0, 9600.0, || false).unwrap();
-    for cents in (3600..=9600).step_by(7) {
-        let selected = assign_new_note(
-            h.config,
-            &context,
-            &h.memory,
-            OrderedOnset { pitch: i64::from(cents) * 1_000_000 },
-            &mut h.scratch,
-        )
-        .unwrap();
-        if let Some(node) = selected.assignment.node() {
-            assert!(reachable.contains(&node));
-        }
-    }
-    let shifted = reach::Snapshot {
-        context: context
-            .iter()
-            .map(|v| ContextPitch { pitch: v.pitch + 1_200_000_000, ..*v })
-            .collect(),
-        ..snapshot
-    };
-    assert_eq!(reachable, reach::reachable(&shifted, 4800.0, 10800.0, || false).unwrap());
-}
 #[test]
 fn channel_bend_and_rpn_sensitivity_are_resolved_before_attack() {
     let mut channel = channel::ChannelPitch::default();

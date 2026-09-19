@@ -236,14 +236,10 @@ pub(crate) fn draw_lattice(
         let active_map = maps
             .filter(|_| engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap)
             .and_then(|m| m.playback.map);
-        let adaptive = engine == harmonigraph_core::lattice_map::TuningEngine::Adaptive
-            && state.runtime.neighbourhood.visible
-            && state.runtime.neighbourhood.has_context();
         for node in &scene.nodes {
             let assigned = active_map
                 .and_then(|map| (0..12i64).find(|&midi| map.node(midi) == node.lattice_pos));
-            let outlined = assigned.is_some()
-                || adaptive && state.runtime.neighbourhood.nodes.contains(&node.lattice_pos);
+            let outlined = assigned.is_some();
             let candidate = maps.is_some_and(|m| m.editing())
                 && state.surfaces.hovered == Some(node.lattice_pos);
             if !outlined && !candidate {
@@ -295,14 +291,6 @@ pub(crate) fn draw_lattice(
                 "Audition · next attacks use working map".into()
             } else {
                 format!("Map {} · next attacks", maps.playback.selected + 1)
-            }
-        } else if adaptive {
-            if state.runtime.neighbourhood.computing {
-                "Reachable C2–C7 · computing".to_owned()
-            } else if let Some(error) = &state.runtime.neighbourhood.error {
-                format!("Neighbourhood unavailable: {error}")
-            } else {
-                format!("Reachable C2–C7 · {} nodes", state.runtime.neighbourhood.nodes.len())
             }
         } else {
             String::new()

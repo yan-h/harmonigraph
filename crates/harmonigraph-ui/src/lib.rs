@@ -550,7 +550,6 @@ fn roll_scrolling(state: &SharedState, now: f64) -> bool {
 #[cfg(test)]
 mod tests;
 
-pub mod adaptive;
 pub mod lattice_maps;
 
 mod appearance;
