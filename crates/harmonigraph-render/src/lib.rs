@@ -42,8 +42,6 @@ use harmonigraph_scene::Scene;
 mod ink_history;
 mod lattice_frame;
 mod lattice_prepare;
-/// The one pass-aged map every renderer's per-pane resources live in, and the
-/// sweep that retires a pane nobody draws any more.
 mod pass_aged;
 
 pub mod shader_assets;

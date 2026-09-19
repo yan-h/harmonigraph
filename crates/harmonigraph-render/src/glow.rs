@@ -189,9 +189,9 @@ struct GlowResources {
     target_format: wgpu::TextureFormat,
     /// One chain per live copy of a pane. A copy appears on the first frame
     /// that asks it for a halo — a strength of 0 pays for none of it — and
-    /// leaves on [`GlowPane::evict_unseen`].
-    /// Swept at [`crate::pass_aged::TTL_PASSES`]; what a closed copy would
-    /// otherwise hold is four textures.
+    /// leaves on the sweep in [`crate::pass_aged`], at
+    /// [`crate::pass_aged::TTL_PASSES`]. What a closed copy would otherwise
+    /// hold is four textures.
     panes: PassAged<GlowPane>,
 }
 
@@ -500,7 +500,7 @@ impl CallbackTrait for GlowCallback {
         // the callback — a reader who never turns the bloom on never pays for
         // its five pipelines — and it belongs here, because the caller cannot
         // skip the callback without also stopping the clock `evict_unseen`
-        // runs on (see [`GlowPane::evict_unseen`]).
+        // runs on (see `crate::pass_aged`).
         if !wants && callback_resources.get::<GlowResources>().is_none() {
             return Vec::new();
         }
