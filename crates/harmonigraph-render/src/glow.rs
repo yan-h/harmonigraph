@@ -107,6 +107,13 @@ impl GlowDot {
 /// [`crate::bloom_strength`] for the reason that function exists. 0 skips the
 /// whole thing — no chain is built and no pass runs.
 ///
+/// Added on EVERY frame the pane draws, including the frames with no strength
+/// and no marks: the skipping is this callback's to do, and the sweep that
+/// retires a copy nobody draws any more runs on the clock of these calls (see
+/// [`GlowPane::evict_unseen`]). A caller that gates instead pays a rebuilt
+/// chain on the first frame after a quiet stretch and saves nothing, because
+/// the declined frame allocates nothing here.
+///
 /// `pane_id` must be unique per halo grown in the same frame, and the same
 /// across frames for one live copy of a pane: each id keeps a chain of its own,
 /// so an id minted per frame would build a chain per frame and hold every one
@@ -425,6 +432,13 @@ impl GlowPane {
     /// calling back — there is no teardown to hang this on, so the copies still
     /// preparing are the only evidence of which ones exist. Run from whichever
     /// copy IS preparing, so a lone survivor still clears the others.
+    ///
+    /// Which makes "still drawn" and "still preparing" the same claim, and it
+    /// is the CALLER that has to keep them so: a pane that adds the callback
+    /// only on the frames it wants a halo ages its own chain out over a quiet
+    /// stretch and rebuilds it inside the frame that ends one. That is why
+    /// [`glow_paint_callback`] is added unconditionally and the decisions are
+    /// all made below.
     fn evict_unseen(panes: &mut HashMap<u64, GlowPane>, pass_nr: u64) {
         panes.retain(|_, pane| pass_nr.saturating_sub(pane.last_seen_pass) < PANE_TTL_PASSES);
     }
@@ -489,16 +503,6 @@ impl CallbackTrait for GlowCallback {
         egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let recreate = callback_resources
-            .get::<GlowResources>()
-            .is_none_or(|r| r.target_format != self.target_format);
-        if recreate {
-            callback_resources.insert(GlowResources::new(device, self.target_format));
-        }
-        let resources: &mut GlowResources =
-            callback_resources.get_mut().expect("inserted above when missing");
-        GlowPane::evict_unseen(&mut resources.panes, self.pass_nr);
-
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         // The pane's own rect in device pixels, which is what the chain is
         // sized against. Through epaint's own conversion rather than a rounded
@@ -519,6 +523,25 @@ impl CallbackTrait for GlowCallback {
         );
         let size = [viewport.width_px.max(0) as u32, viewport.height_px.max(0) as u32];
         let wants = self.strength > 0.0 && !self.dots.is_empty() && size.iter().all(|&d| d > 0);
+
+        // Nothing to light and nothing built: the pipelines are not built
+        // either. This is the whole of what the caller used to buy by skipping
+        // the callback — a reader who never turns the bloom on never pays for
+        // its five pipelines — and it belongs here, because the caller cannot
+        // skip the callback without also stopping the clock `evict_unseen`
+        // runs on (see [`GlowPane::evict_unseen`]).
+        if !wants && callback_resources.get::<GlowResources>().is_none() {
+            return Vec::new();
+        }
+        let recreate = callback_resources
+            .get::<GlowResources>()
+            .is_none_or(|r| r.target_format != self.target_format);
+        if recreate {
+            callback_resources.insert(GlowResources::new(device, self.target_format));
+        }
+        let resources: &mut GlowResources =
+            callback_resources.get_mut().expect("inserted above when missing");
+        GlowPane::evict_unseen(&mut resources.panes, self.pass_nr);
 
         // Held whether or not it is wanted this frame, since a strength dialled
         // to 0 and back is one drag: what is skipped is the work, not the
@@ -818,26 +841,43 @@ mod tests {
     }
 
     /// A strength of 0, and a frame with no marks in it, each skip the whole
-    /// thing: no chain is built and no pass runs.
+    /// thing: no pipelines are built, no chain is built, and no pass runs.
     ///
     /// Asked of the RESOURCES rather than of the frame. Both draw the same
     /// bytes however much work went into them, so a `prepare` that started
     /// running the chain and multiplying by zero would leave the picture
     /// untouched and cost the whole thing — which is what "0 skips it whole" is
     /// a claim about.
+    ///
+    /// The PIPELINES are the half that reaches a reader who never turns the
+    /// bloom on. Their absence is what lets the spiral add this callback on
+    /// every frame it draws, silent ones included, so that the sweep's clock
+    /// keeps running — and it has to be read off a first prepare, since
+    /// anything already built is deliberately held through a quiet stretch.
     #[test]
     fn nothing_to_light_builds_no_chain() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let built = |dots: Vec<GlowDot>, strength: f32| {
-            let (_, resources) = draw(&device, &queue, dots, strength);
-            let glow: &GlowResources = resources.get().expect("the callback inserts its resources");
-            glow.panes.contains_key(&ONE_PANE)
+        let resources_of =
+            |dots: Vec<GlowDot>, strength: f32| draw(&device, &queue, dots, strength).1;
+        let chained = |resources: &CallbackResources| {
+            resources.get::<GlowResources>().is_some_and(|glow| glow.panes.contains_key(&ONE_PANE))
         };
-        assert!(!built(vec![centered_dot()], 0.0), "a strength of 0 built the chain anyway");
-        assert!(!built(Vec::new(), 1.5), "an empty frame built the chain anyway");
-        assert!(built(vec![centered_dot()], 1.5), "no chain at a strength that asks for one");
+        for (dots, strength, what) in
+            [(vec![centered_dot()], 0.0, "a strength of 0"), (Vec::new(), 1.5, "an empty frame")]
+        {
+            let resources = resources_of(dots, strength);
+            assert!(!chained(&resources), "{what} built the chain anyway");
+            assert!(
+                resources.get::<GlowResources>().is_none(),
+                "{what} built the pipelines anyway",
+            );
+        }
+        assert!(
+            chained(&resources_of(vec![centered_dot()], 1.5)),
+            "no chain at a strength that asks for one",
+        );
     }
 
     /// A frame that skips the chain paints no halo — including the frame after
