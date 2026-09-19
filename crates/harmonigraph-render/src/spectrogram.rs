@@ -1672,12 +1672,14 @@ mod tests {
     }
 
     #[test]
-    fn spectral_diffusion_softens_faint_detail_with_one_fade_to_black() {
+    fn spectral_diffusion_softens_faint_detail_with_one_fade_to_the_palettes_floor() {
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = cloud_fixture();
         cb.grid.run = Arc::new(cb.grid.run.iter().map(|&v| if v > 0 { 102 } else { 0 }).collect());
-        // An edited palette may start above black. The diffused tail must
-        // still reach actual black rather than leave that first slice glowing.
+        // An edited palette may start above black, and then the diffused tail
+        // has to land on THAT and stop, not carry on down to a black the scheme
+        // never named. What the tail owes is an end, which the monotone check
+        // below is: one fade, no moat, no second floor under the first.
         Arc::make_mut(&mut cb.shades.lut)[0] = [80, 0, 0, 255];
         let soft = fresh_frame(&device, &queue, &cb);
         every_effect_off(&mut cb);
@@ -1690,7 +1692,11 @@ mod tests {
         assert!(pixel(&soft, 63) < 82, "faint grain kept its original contrast");
         assert!(pixel(&soft, 60) > pixel(&plain, 60), "softened body never formed");
         let far = (16 * SIZE[0] as usize + 64) * 4;
-        assert_eq!(&soft[far..far + 4], &[0, 0, 0, 255], "diffusion lifted the black background");
+        assert_eq!(
+            &soft[far..far + 4],
+            &[80, 0, 0, 255],
+            "diffusion left the background off the palette's own floor"
+        );
         for y in 16..63 {
             assert!(
                 pixel(&soft, y) <= pixel(&soft, y + 1).saturating_add(1),
@@ -3004,6 +3010,73 @@ mod tests {
             "the refraction moved a FEATURELESS picture, so the wash is drawing its globs out \
              of the paint rather than reading them out of the light: {over_flat} flat against \
              {over_structure} over structure"
+        );
+    }
+
+    /// The bottom of the picture is the GRADIENT'S bottom, whatever colour that
+    /// is — the claim `palette_color` makes at level 0.
+    ///
+    /// Every other fixture in this file rides a palette that already starts at
+    /// black, which is the fixture-too-small trap exactly: under the old rule,
+    /// where the first half-slice faded to true black, all of them pass
+    /// unchanged and none of them is looking at the thing. So this one authors
+    /// a ramp with NO black anywhere in it, and then a black pixel can only
+    /// have come from the renderer.
+    ///
+    /// `Black point` at 100% is what drives the wash's level to exactly 0, so
+    /// it is the dial that reaches the slice; the same pane with the dial at 0
+    /// sits on the lifted paper well above it and would pass either way.
+    ///
+    /// Both halves, because either alone passes for a bug. A renderer that had
+    /// simply stopped drawing black would satisfy the first; one still ignoring
+    /// the palette would satisfy the second. Together they are the claim: the
+    /// floor of the picture FOLLOWS the floor of the scheme, down to and
+    /// including black when that is what the scheme says.
+    #[test]
+    fn a_quiet_pane_takes_the_gradients_own_floor_rather_than_black() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let floor = [0u8, 153, 140];
+        let mut cb = wash_fixture();
+        cb.atmosphere.as_mut().unwrap().settings.wash_black = 1.0;
+        cb.shades.lut = Arc::new(
+            (0..256)
+                .map(|v| {
+                    let t = v as f32 / 255.0;
+                    let up = |lo: u8| (f32::from(lo) + (255.0 - f32::from(lo)) * t).round() as u8;
+                    [up(floor[0]), up(floor[1]), up(floor[2]), 255]
+                })
+                .collect(),
+        );
+        let share = |frame: &[u8], want: [u8; 3]| {
+            let n = frame.len() / 4;
+            frame.chunks_exact(4).filter(|px| px[..3] == want).count() as f32 / n as f32
+        };
+        let lifted = fresh_frame(&device, &queue, &cb);
+        assert_eq!(
+            share(&lifted, [0, 0, 0]),
+            0.0,
+            "a palette with no black in it still drew black over silence, so the picture has \
+             a floor of its own under the scheme's"
+        );
+        assert!(
+            share(&lifted, floor) > 0.5,
+            "the quiet pane did not settle on the palette's own floor: {} of it",
+            share(&lifted, floor)
+        );
+
+        // And the other direction, on the same fixture: a scheme whose floor IS
+        // black still gets black, which is what keeps the fresh Aurora — the
+        // whole `L*` axis, so `L*` 0 at the bottom — drawing the pane it always
+        // drew.
+        cb.shades.lut =
+            Arc::new((0..256).map(|v| [0, (v as f32 * 0.7) as u8, v as u8, 255]).collect());
+        let dark = fresh_frame(&device, &queue, &cb);
+        assert!(
+            share(&dark, [0, 0, 0]) > 0.5,
+            "a palette that does start at black lost it: {} of the pane",
+            share(&dark, [0, 0, 0])
         );
     }
 

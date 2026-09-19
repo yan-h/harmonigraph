@@ -371,16 +371,31 @@ fn style_level(level: f32) -> f32 {
     return mix(level, terraces, strength);
 }
 // Interpolate the authored palette's center samples only after diffusion.
-// The first half-slice joins true black smoothly, even for an edited ramp
-// whose first sample is nonblack; there is no separate halo color curve.
+//
+// **Level 0 is the gradient's own floor, not black.** The bottom of the range
+// is what the scheme SAYS silence looks like — `Gradient`'s low end is silence
+// here the way its low end is the darkest pitch on the lattice — so a ramp
+// that does not start at black draws a quiet pane in its own colour. This
+// slice used to fade to true black instead, which put a colour under the
+// picture that the scheme never named and that no dial could reach: an
+// isoluminant gradient is a documented setting, and at one the whole point is
+// that the bottom of the range reads as bright as the top.
+//
+// Nothing is lost for a scheme that does want black down there, because how
+// dark the bottom sits is already a gradient knob and only a gradient knob —
+// `Lightness` with `Lightness ramp` place both ends on the `L*` axis, and the
+// fresh Aurora spends the whole of it, so its floor is `L*` 0 and its quiet
+// pane stays byte-for-byte black. Wanting it back is `Lightness ramp` up, not
+// a tenth dial that would say a second time what those two already say.
+//
+// Below the first sample's centre the table is therefore FLAT, which is the
+// answer the TOP has always given: the last entry pairs with itself at a lerp
+// weight of 0, and this is that same rule at the other end.
 fn palette_color(level: f32) -> vec3<f32> {
     let levels = textureDimensions(lut).x;
-    let x = clamp(level, 0.0, 1.0) * f32(levels) - 0.5;
+    let x = max(clamp(level, 0.0, 1.0) * f32(levels) - 0.5, 0.0);
     let i = u32(clamp(floor(x), 0.0, f32(levels - 1u)));
     let a = textureLoad(lut, vec2<u32>(i, 0u), 0).rgb;
-    if x < 0.0 {
-        return a * (x + 0.5) * 2.0;
-    }
     let b = textureLoad(lut, vec2<u32>(min(i + 1u, levels - 1u), 0u), 0).rgb;
     return mix(a, b, fract(x));
 }
