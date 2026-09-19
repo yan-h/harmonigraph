@@ -2114,6 +2114,27 @@ impl ViewConfig {
     pub fn sanitize(&mut self) {
         let fresh = ViewConfig::default();
 
+        // The lattice's own world scale, and the one field through this door
+        // with no bar anywhere — which is why it was the last one left
+        // unrepaired rather than the least worth repairing. Every reader
+        // multiplies by it, and they did not agree about a bad one:
+        // [`scrolled`](Self::scrolled) and [`rebase`](Self::rebase) return
+        // early on `is_nan() || <= 0.0`, while `derive::marker_world` does
+        // not — so a NaN here shipped `marker_unit` to the UI as a NaN, the
+        // number every marker length is read back through.
+        //
+        // The two picture-side guards STAY. They are not this line said twice:
+        // a `ViewConfig` built in code never crosses this door, and `scrolled`
+        // divides by the spacing, so the guard is what a shell with no load
+        // door has (`a_nonsense_camera_still_yields_a_drawable_window` is that
+        // shell). This line is what a blob gets, and it is the only one of the
+        // two that can put a value BACK.
+        //
+        // See [`SPACING_MIN`] for where a range with no bar to name it comes
+        // from.
+        self.spacing =
+            finite_or(self.spacing, fresh.spacing).clamp(crate::SPACING_MIN, crate::SPACING_MAX);
+
         // The window's own integers, which are the one group here that is not
         // a float. `DrawnWindow::count` multiplies the three spans together
         // and `reach` adds each center to its extent, so a blob carrying a
