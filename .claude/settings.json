@@ -25,6 +25,7 @@
   },
   "permissions": {
     "allow": [
+      "Bash(.claude/semantic-breaks.py *)",
       "Bash(cargo --version)",
       "Bash(cargo build *)",
       "Bash(cargo check *)",
@@ -42,7 +43,6 @@
       "Bash(git fetch *)",
       "Bash(ls:*)",
       "Bash(node:*)",
-      "Bash(python3 *)",
       "Bash(rustc --version)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)"
