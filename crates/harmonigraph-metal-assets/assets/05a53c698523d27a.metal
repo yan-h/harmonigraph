@@ -13,7 +13,7 @@ struct Cloud {
     float contours;
     float contour_softness;
     float contour_strength;
-    uint _pad;
+    uint tone_baked;
 };
 struct Vertex {
     metal::float4 position;
