@@ -12,7 +12,7 @@ struct Cloud {
     float spread;
     float contours;
     float contour_softness;
-    uint style;
+    float contour_strength;
     uint _pad;
 };
 struct Vertex {

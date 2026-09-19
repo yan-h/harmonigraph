@@ -3552,9 +3552,7 @@ mod tests {
             |c: &mut SpectrumConfig| c.tilt += 1.0,
             |c: &mut SpectrumConfig| c.roll_seconds *= 1.01,
             |c: &mut SpectrumConfig| c.roll_fraction += 0.01,
-            |c: &mut SpectrumConfig| {
-                c.atmosphere.style = harmonigraph_scene::SpectrogramStyle::Plain
-            },
+            |c: &mut SpectrumConfig| c.atmosphere.contour_strength = 0.0,
             |c: &mut SpectrumConfig| c.atmosphere.pitch_softness = 250.0,
             |c: &mut SpectrumConfig| c.atmosphere.time_softness = 1800.0,
             |c: &mut SpectrumConfig| c.atmosphere.spread = 1.0,
@@ -3562,8 +3560,7 @@ mod tests {
             |c: &mut SpectrumConfig| c.atmosphere.contour_softness = 0.4,
             |c: &mut SpectrumConfig| c.atmosphere.cloud_depth = 0.9,
             |c: &mut SpectrumConfig| c.atmosphere.scale_relief = 0.1,
-            |c: &mut SpectrumConfig| c.atmosphere.scale_refract = 0.8,
-            |c: &mut SpectrumConfig| c.atmosphere.scale_facet = 1.0,
+            |c: &mut SpectrumConfig| c.atmosphere.scale_refract = -0.8,
         ] {
             let mut moved = cfg;
             edit(&mut moved);

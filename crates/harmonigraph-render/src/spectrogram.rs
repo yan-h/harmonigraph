@@ -664,11 +664,10 @@ impl CallbackTrait for SpectrogramCallback {
                 atmosphere.settings = atmosphere.settings.sanitized();
                 atmosphere
             })
-            .filter(|a| {
-                a.settings.style != harmonigraph_scene::SpectrogramStyle::Plain
-                    && ((a.settings.pitch_softness > 0.0 || a.settings.time_softness > 0.0)
-                        || a.settings.style == harmonigraph_scene::SpectrogramStyle::Lava)
-            })
+            // The measured picture is every effect at zero, and it takes the
+            // plain pipeline: no target, no pass, nothing paid for a look that
+            // is not being drawn. This is what the `Plain` style used to say.
+            .filter(|a| !a.settings.effects().none())
         {
             let viewport = egui::epaint::ViewportInPixels::from_points(
                 &self.rect,
@@ -698,10 +697,13 @@ impl CallbackTrait for SpectrogramCallback {
                 }
                 let target = pane.cloud.as_mut().expect("allocated above");
                 target.update(queue, uniforms, rect, ppp, settings);
-                // Lava still needs its transfer/composite at zero widths,
-                // but the one-pixel source would integrate the whole history
-                // only for smoothed_level to discard that expensive result.
-                if settings.settings.pitch_softness > 0.0 || settings.settings.time_softness > 0.0 {
+                // Terraces alone still need their transfer/composite, but the
+                // one-pixel source would integrate the whole history only for
+                // the composite to discard that expensive result. A cloud is
+                // the case that needs the field WITHOUT a blur: it reads its
+                // light out of these targets, so they are filled at zero
+                // softness too, where each filter pass is a one-tap copy.
+                if settings.settings.effects().light() {
                     {
                         #[cfg(test)]
                         target.encoded_passes.fetch_add(1, Ordering::Relaxed);
@@ -1252,9 +1254,10 @@ mod tests {
             // Pin the visible diffusion used by the pixel probes independently
             // of the fresh appearance's gentler setting.
             settings: harmonigraph_scene::SpectralAtmosphere {
-                style: harmonigraph_scene::SpectrogramStyle::Blur,
-                // The probes read the diffusion transfer; a cloud over them
-                // would move the very pixels they measure.
+                // The blur alone. The probes read the diffusion transfer;
+                // terraces or a cloud over them would move the very pixels
+                // they measure.
+                contour_strength: 0.0,
                 cloud_depth: 0.0,
                 ..Default::default()
             },
@@ -1267,11 +1270,21 @@ mod tests {
         cb
     }
 
+    /// Every effect at zero, which is the measured heatmap — what selecting the
+    /// `Plain` style used to mean, now that the three effects are dials.
+    fn every_effect_off(cb: &mut SpectrogramCallback) {
+        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+        settings.pitch_softness = 0.0;
+        settings.time_softness = 0.0;
+        settings.contour_strength = 0.0;
+        settings.cloud_depth = 0.0;
+    }
+
     #[test]
     fn lava_preserves_silence_quiet_fields_and_nested_levels() {
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = cloud_fixture();
-        cb.atmosphere.as_mut().unwrap().settings.style = harmonigraph_scene::SpectrogramStyle::Lava;
+        cb.atmosphere.as_mut().unwrap().settings.contour_strength = 1.0;
         for (smooth, contours) in [(false, 7.0), (true, 7.0), (false, 64.0), (true, 64.0)] {
             cb.atmosphere.as_mut().unwrap().settings.contours = contours;
             cb.atmosphere.as_mut().unwrap().settings.pitch_softness =
@@ -1312,16 +1325,22 @@ mod tests {
     #[test]
     fn float_output_uses_linear_palette_for_every_style() {
         let Some((device, queue)) = headless_device() else { return };
-        for style in [
-            harmonigraph_scene::SpectrogramStyle::Plain,
-            harmonigraph_scene::SpectrogramStyle::Blur,
-            harmonigraph_scene::SpectrogramStyle::Lava,
-        ] {
+        // The three pipelines a float target can be drawn through: the plain
+        // heatmap with every effect at zero, the composite over a blurred
+        // field, and the same composite with the terrace transfer in it.
+        for (style, soft, contour_strength) in
+            [("measured", false, 0.0), ("blurred", true, 0.0), ("terraced", true, 1.0)]
+        {
             let mut cb = cloud_fixture();
             cb.target_format = wgpu::TextureFormat::Rgba16Float;
             cb.grid.run = Arc::new(vec![96; cb.grid.run.len()]);
             cb.shades.lut = Arc::new(vec![[128, 128, 128, 255]; 256]);
-            cb.atmosphere.as_mut().unwrap().settings.style = style;
+            let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+            settings.contour_strength = contour_strength;
+            if !soft {
+                settings.pitch_softness = 0.0;
+                settings.time_softness = 0.0;
+            }
             let mut resources = CallbackResources::default();
             prepare_once(&device, &queue, &mut resources, &cb);
             let texture = render_to_texture(
@@ -1377,7 +1396,7 @@ mod tests {
                 // The fixture must produce positive normal half-floats.
                 assert!((0x0400..0x7c00).contains(&half));
                 let actual = f32::from_bits((u32::from(half) << 13) + 0x3800_0000);
-                assert!((actual - expected).abs() < 0.001, "{style:?}: {actual} != {expected}");
+                assert!((actual - expected).abs() < 0.001, "{style}: {actual} != {expected}");
             }
         }
     }
@@ -1409,7 +1428,7 @@ mod tests {
         cb.grid = grid_of(Arc::new(vec![96; 1024 * bins as usize]), bins, 1024, 0);
         cb.vertices = full_quad(1024);
         cb.read.span = bins as f32 / BINS_PER_SEMITONE;
-        cb.atmosphere.as_mut().unwrap().settings.style = harmonigraph_scene::SpectrogramStyle::Lava;
+        cb.atmosphere.as_mut().unwrap().settings.contour_strength = 1.0;
         for width in [0.0, -1.0] {
             cb.atmosphere.as_mut().unwrap().settings.pitch_softness = width;
             cb.atmosphere.as_mut().unwrap().settings.time_softness = width;
@@ -1527,16 +1546,15 @@ mod tests {
             }
         }
         cb.grid.run = Arc::new(bytes);
-        for (style, name) in [
-            (harmonigraph_scene::SpectrogramStyle::Plain, "spectrogram-style-plain"),
-            (harmonigraph_scene::SpectrogramStyle::Blur, "spectrogram-style-blur"),
-            (harmonigraph_scene::SpectrogramStyle::Lava, "spectrogram-style-lava"),
-        ] {
-            let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
-            settings.style = style;
-            let frame = fresh_frame(&device, &queue, &cb);
-            harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR")).check(name, SIZE, &frame);
-        }
+        // The three looks the retired style enum named, each reached by its
+        // dials, against the frames that enum drew: the blur the fixture pins,
+        // the same with the terraces at full strength, and everything off.
+        let gate = harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR"));
+        gate.check("spectrogram-style-blur", SIZE, &fresh_frame(&device, &queue, &cb));
+        cb.atmosphere.as_mut().unwrap().settings.contour_strength = 1.0;
+        gate.check("spectrogram-style-lava", SIZE, &fresh_frame(&device, &queue, &cb));
+        every_effect_off(&mut cb);
+        gate.check("spectrogram-style-plain", SIZE, &fresh_frame(&device, &queue, &cb));
     }
 
     #[test]
@@ -1612,16 +1630,10 @@ mod tests {
                 }
                 cb.grid = grid_of(Arc::new(bytes), BINS, 128, 0);
                 cb.vertices = full_quad(128);
-                phases.push(
-                    [
-                        harmonigraph_scene::SpectrogramStyle::Plain,
-                        harmonigraph_scene::SpectrogramStyle::Blur,
-                    ]
-                    .map(|style| {
-                        cb.atmosphere.as_mut().unwrap().settings.style = style;
-                        fresh_frame(&device, &queue, &cb)
-                    }),
-                );
+                // The measured grain first, then the same picture softened.
+                let soft = fresh_frame(&device, &queue, &cb);
+                every_effect_off(&mut cb);
+                phases.push([fresh_frame(&device, &queue, &cb), soft]);
             }
             // Stay inside the band, away from the history/filter boundaries.
             let difference = |setting: usize| -> u32 {
@@ -1654,12 +1666,11 @@ mod tests {
         // still reach actual black rather than leave that first slice glowing.
         Arc::make_mut(&mut cb.shades.lut)[0] = [80, 0, 0, 255];
         let soft = fresh_frame(&device, &queue, &cb);
-        cb.atmosphere.as_mut().unwrap().settings.style =
-            harmonigraph_scene::SpectrogramStyle::Plain;
+        every_effect_off(&mut cb);
         let zero = fresh_frame(&device, &queue, &cb);
         cb.atmosphere = None;
         let plain = fresh_frame(&device, &queue, &cb);
-        assert_eq!(zero, plain, "Plain style did not restore the measured heatmap");
+        assert_eq!(zero, plain, "every effect at zero did not restore the measured heatmap");
         let pixel = |frame: &[u8], y| frame[(y * SIZE[0] as usize + 64) * 4 + 2];
         assert_eq!(pixel(&plain, 63), 102, "fixture missed the faint ridge");
         assert!(pixel(&soft, 63) < 82, "faint grain kept its original contrast");
@@ -1844,8 +1855,7 @@ mod tests {
             frame_with(&device, &queue, &mut resources, &cb),
             "unequal pane replaced this cloud target"
         );
-        cb.atmosphere.as_mut().unwrap().settings.style =
-            harmonigraph_scene::SpectrogramStyle::Plain;
+        every_effect_off(&mut cb);
         // Mode or viewport changes can replace the grid while diffusion is
         // disabled. Re-enabling at the same pane size must use that new grid.
         cb.grid.capacity *= 2;
@@ -1856,7 +1866,7 @@ mod tests {
         assert_eq!(
             disabled,
             fresh_frame(&device, &queue, &cb),
-            "Plain style changed the original heatmap"
+            "every effect at zero changed the original heatmap"
         );
         cb.atmosphere = other.atmosphere;
         assert_eq!(
@@ -2444,7 +2454,9 @@ mod tests {
         );
     }
 
-    /// The facet dial QUANTIZES that bend, and adds nothing of its own.
+    /// The NEGATIVE half of `Refraction` QUANTIZES that bend, and adds nothing of
+    /// its own. It was a dial of its own, `Facet`, and "the facet" below is what
+    /// it draws at -1.
     ///
     /// Reading the light at the nearest scale's CENTRE is the other half of
     /// what round 1 had and round 5 removed, and round 5 was right about the
@@ -2466,18 +2478,15 @@ mod tests {
     /// thing to mistake for this effect, because a mosaic drawn over a flat
     /// field looks like a mosaic too.
     #[test]
-    fn the_facet_dial_quantizes_the_bend_rather_than_painting_scales() {
+    fn negative_refraction_quantizes_the_bend_rather_than_painting_scales() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let moved_by_facet = |cb: &mut SpectrogramCallback| {
-            {
-                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-                s.cloud_depth = 1.0;
-                s.scale_facet = 0.0;
-            }
+            // From the fresh bend through the faces to the read at the centres.
+            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
             let bent = fresh_frame(&device, &queue, cb);
-            cb.atmosphere.as_mut().unwrap().settings.scale_facet = 1.0;
+            cb.atmosphere.as_mut().unwrap().settings.scale_refract = -1.0;
             let faceted = fresh_frame(&device, &queue, cb);
             let n = bent.len() / 4;
             let moved = bent
@@ -2654,8 +2663,9 @@ mod tests {
         // The dials Yan had up when he found it: the shading has to be deep
         // enough that a sun on the wrong side of a face is visible.
         s.scale_relief = 1.0;
-        s.scale_refract = 1.0;
-        s.scale_facet = 1.0;
+        // `Facet` at 100% then, which read at the centres whatever
+        // `Refraction` said: the bottom of the one dial the two became.
+        s.scale_refract = -1.0;
         // Globs about 19 points across on this 128-point pane. At the fresh
         // size they would be 5, and a texture whose own detail is four pixels
         // wide has column steps of its own that would drown the thing being
@@ -2859,8 +2869,8 @@ mod tests {
             crate::shadow::tests::shader_const(SPECTROGRAM_SRC, name).parse().expect("a number")
         };
         let slack = number("WASH_JITTER") / 2.0 * std::f32::consts::SQRT_2;
-        let smallest = number("WASH_RADIUS").min(number("WASH_RADIUS_MIN"));
-        let largest = number("WASH_RADIUS").max(number("WASH_RADIUS_MAX"));
+        let smallest = number("WASH_RADIUS_MIN");
+        let largest = number("WASH_RADIUS_MAX");
         let farthest = 0.5 * std::f32::consts::SQRT_2 + slack;
         assert!(
             smallest > farthest,
@@ -2891,9 +2901,8 @@ mod tests {
     /// used to put it against a fresh `Glob size`.
     fn wash_fixture() -> SpectrogramCallback {
         let mut cb = cloud_fixture();
-        // Off zero, because `Wander` is a RATE: it turns each glob's offset on
-        // the cloud clock, so at time 0 every setting of it draws the same
-        // frame and a fixture left there would measure nothing.
+        // Off zero, where the retired `Wander` needed it: every figure measured
+        // over this fixture was taken with the drift three seconds along.
         cb.atmosphere.as_mut().unwrap().now = 3.0;
         let s = &mut cb.atmosphere.as_mut().unwrap().settings;
         s.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
@@ -2969,9 +2978,16 @@ mod tests {
     ///
     /// The second half is byte-exact rather than nearly so. The knee is a
     /// `smoothstep` that reaches exactly 1 at its top, and the flat fixture
-    /// sits at display intensity 0.59 against a knee of 0.35, so a single
+    /// sits at display intensity 0.59 against a knee of 0.175, so a single
     /// moved channel anywhere means the hold is being applied where it has
     /// nothing to hold back.
+    ///
+    /// The third is that the dial has NO STEP in it, which it shipped with. It
+    /// used to set the knee's WIDTH, and a smoothstep is 0 at its lower edge
+    /// however narrow it is — so one notch off zero sent every pixel of exact
+    /// silence from the lifted paper straight to black, and the rest of the
+    /// travel did almost nothing. As an amount, a hundredth of the dial moves
+    /// the silent pane by a hundredth of the lift, which no channel can show.
     #[test]
     fn the_black_point_returns_silence_to_the_palettes_floor() {
         let Some((device, queue)) = headless_device() else {
@@ -2997,6 +3013,14 @@ mod tests {
             "the black point left most of a silent pane off the palette's floor: \
              {held_floor} against {lifted_floor} with the dial at 0",
         );
+        cb.atmosphere.as_mut().unwrap().settings.wash_black = 0.01;
+        let nudged = fresh_frame(&device, &queue, &cb);
+        let step = lifted.iter().zip(&nudged).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(
+            step <= 2,
+            "one notch off zero moved a channel by {step}, so the bottom of the dial is a \
+             switch rather than the start of a travel",
+        );
 
         let mut flat = wash_fixture();
         flat.grid.run = Arc::new(vec![150; flat.grid.run.len()]);
@@ -3011,9 +3035,49 @@ mod tests {
         );
     }
 
+    /// Either texture is drawn over a SHARP picture: a cloud does not need a blur.
+    ///
+    /// It used to vanish with the softness, and at two gates. The draw path
+    /// built the light field only while a softness was above zero, and both
+    /// cloud shaders returned the base wherever the blur's step was zero, so
+    /// with both softness dials at 0 `Cloud depth` moved nothing at all. The
+    /// field is built whenever a cloud is drawn now, and at zero softness it is
+    /// the measured picture copied through.
+    ///
+    /// Over a flat lit field, because the ridge fixture is under one percent
+    /// light once nothing spreads it, and a cloud over silence is black for
+    /// both textures — a fixture that would pass with the gates still shut.
+    #[test]
+    fn a_cloud_is_drawn_over_an_unblurred_picture() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        for (name, mut cb) in [("Mosaic", cloud_fixture()), ("Watercolor", wash_fixture())] {
+            cb.grid.run = Arc::new(vec![150; cb.grid.run.len()]);
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.pitch_softness = 0.0;
+            s.time_softness = 0.0;
+            s.cloud_depth = 1.0;
+            let clouded = fresh_frame(&device, &queue, &cb);
+            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+            let bare = fresh_frame(&device, &queue, &cb);
+            let moved = clouded
+                .chunks_exact(4)
+                .zip(bare.chunks_exact(4))
+                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+                .count() as f32
+                / (bare.len() / 4) as f32;
+            assert!(
+                moved > 0.5,
+                "{name} at full depth moved {moved} of a lit pane with both softness dials at \
+                 0, so the cloud still needs a blur to be drawn",
+            );
+        }
+    }
+
     /// Every wash dial separately reaches the shader.
     ///
-    /// Twelve new `f32`s ride in one uniform read by OFFSET rather than by name,
+    /// Nine `f32`s ride in one uniform read by OFFSET rather than by name,
     /// so a field added in the wrong place swaps two values silently and nothing
     /// in either type system notices. Folded into one test the way
     /// [`the_rock_and_the_variety_each_reach_the_scales`] is, because what each
@@ -3033,16 +3097,13 @@ mod tests {
         let painted = |turn: fn(&mut harmonigraph_scene::SpectralAtmosphere)| {
             let mut cb = wash_fixture();
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-            s.wash_variety = 0.5;
             s.wash_fuzz = 0.5;
             s.wash_ragged = 0.5;
             s.wash_lobe = 0.5;
             s.wash_pool = 0.5;
             s.wash_grain = 0.3;
             s.wash_layers = 0.5;
-            s.wash_soften = 0.3;
-            s.wash_wander = 0.3;
-            // At the fresh 50% most of this fixture is digital silence held on
+            // At the fresh 100% most of this fixture is digital silence held on
             // the palette's floor, and a pigment dial that only paints the dark
             // half of the pane stops being measurable there: `Edge pooling`
             // reaches 1.7% of it, under this test's own bar. So the base is the
@@ -3058,7 +3119,6 @@ mod tests {
                 (|s: &mut harmonigraph_scene::SpectralAtmosphere| s.wash_size = 2.0)
                     as fn(&mut harmonigraph_scene::SpectralAtmosphere),
             ),
-            ("Variety", |s| s.wash_variety = 0.0),
             ("Fuzz", |s| s.wash_fuzz = 0.0),
             ("Ragged", |s| s.wash_ragged = 0.0),
             ("Lobe shape", |s| s.wash_lobe = 0.0),
@@ -3066,8 +3126,6 @@ mod tests {
             ("Edge pooling", |s| s.wash_pool = 1.0),
             ("Grain", |s| s.wash_grain = 1.0),
             ("Layers", |s| s.wash_layers = 0.0),
-            ("Softness", |s| s.wash_soften = 1.0),
-            ("Wander", |s| s.wash_wander = 1.0),
         ] {
             let frame = painted(turn);
             let n = plain.len() / 4;
