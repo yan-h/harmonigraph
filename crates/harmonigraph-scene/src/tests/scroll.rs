@@ -205,23 +205,30 @@ fn a_loaded_view_never_draws_a_node_its_reach_cannot_name() {
 /// sheet, so no orbit lays the lattice edge-on — but bounded is not the same
 /// as under the cap.
 ///
-/// Where the two part is a figure about the DEMAND, which is not the number
-/// read below: [`ViewConfig::scrolled`] runs `fit_to_node_budget` before
-/// handing the window back, so `count()` is the window AFTER the trim. On the
-/// demand — the same sweep with that call skipped — nine sheets deep the
+/// Read off [`ViewConfig::demanded`] rather than [`ViewConfig::scrolled`],
+/// and that is the whole of what makes this a test. `scrolled` ends in
+/// `fit_to_node_budget`, whose loop runs until the count fits, so a trimmed
+/// count is under the cap BY CONSTRUCTION: asking it this question can only
+/// ever answer that the trimmer works. The demand is the number the
+/// projection is responsible for.
+///
+/// It was read the other way from #364 until #916, and that is how a real
+/// crossing went unseen: #896 took the depth from nine sheets to thirteen for
+/// the layer strip's cell width, and thirteen put an ORDINARY pane over the
+/// cap — 16:9 fully zoomed out asking 21021 against 20480, trimmed at the
+/// edges, with this sweep covering that exact case and saying nothing.
+/// `SEVENS_LAYER_LIMIT` is back to four.
+///
+/// So the figures below are the demand at full depth, nine sheets: the
 /// crossing is at about 3.2:1, which is the 3.3:1 [`MAX_DRAWN_NODES`] carries
-/// beside the rest of its cabinet figures. The 3.5:1 this comment used to
-/// give was #357's measurement of the same crossing, superseded by #364's
-/// re-measure everywhere except here.
+/// beside the rest of its cabinet figures, and 3:1 is where the sweep stops
+/// because that is about where the guarantee does. The 3.5:1 this comment
+/// used to give was #357's measurement of the same crossing, superseded by
+/// #364's re-measure everywhere except here.
 ///
-/// At the thirteen sheets `SEVENS_LAYER_LIMIT` now allows, that crossing is
-/// at about 1.8:1 instead, so the guarantee no longer covers the sweep: a
-/// 16:9 cabinet pane fully zoomed out asks for 21021 against a cap of 20480.
-/// What holds the assertion below is the trim rather than the bound — #916.
-///
-/// `Layout::split` will hand the lattice a fifth of a 21:9 frame, which is
-/// 11.7:1. See [`MAX_DRAWN_NODES`] for what the trim costs there and why the
-/// cap is not simply raised past it.
+/// Past it, `Layout::split` will hand the lattice a fifth of a 21:9 frame,
+/// which is 11.7:1. See [`MAX_DRAWN_NODES`] for what the trim costs there and
+/// why the cap is not simply raised past it.
 #[test]
 fn a_cabinet_camera_never_reaches_the_node_budget() {
     let mut worst = 0;
@@ -239,11 +246,11 @@ fn a_cabinet_camera_never_reaches_the_node_budget() {
                         distance: Camera::MAX_DISTANCE,
                         ..Camera::default()
                     };
-                    let count = view.scrolled(&camera, aspect).count();
+                    let count = view.demanded(&camera, aspect).count();
                     assert!(
                         count < MAX_DRAWN_NODES,
                         "a cabinet pane at aspect {aspect}, {sevens} sheets deep, shear \
-                         {cabinet_scale} asked for {count} nodes and was trimmed",
+                         {cabinet_scale} asked for {count} nodes and would be trimmed",
                     );
                     worst = worst.max(count);
                 }
