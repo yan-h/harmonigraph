@@ -2487,8 +2487,8 @@ mod tests {
     ///
     /// At the fixture's fresh relief the scales are barely domed and at its
     /// fresh refraction the lookup hardly moves, which is a fixture too small
-    /// to reach either knob; both are turned up here. Measured at 3.0% of the
-    /// pane for the rock and 2.6% for the variety. Both are smaller than they
+    /// to reach either knob; both are turned up here. Measured at 4.0% of the
+    /// pane for the rock and 6.7% for the variety. Both are smaller than they
     /// were before the glint went: the glint was an ADDITIVE term that carried
     /// a lot of whatever moved the normal, and with it gone everything these
     /// two do has to arrive through `diffuse` and the lookup alone. At rock 0
@@ -2496,11 +2496,21 @@ mod tests {
     /// picture it starts from nothing.
     ///
     /// Variety is in here rather than in its own test because what it changes
-    /// is the same KIND of thing: it redraws each dome's radius, which moves
-    /// every face and so the whole shading, and the property that makes it
-    /// safe — that its smallest radius still covers the plane — is geometry
-    /// rather than pixels and is held by
+    /// is the same KIND of thing: it redraws each dome's radius AND how loudly
+    /// each argues for its own ground, which moves every face and so the whole
+    /// shading. The property that makes it safe — that its smallest radius
+    /// still covers the plane, and that a weight is a share of a mean rather
+    /// than a licence to leave — is geometry rather than pixels and is held by
     /// [`the_dome_grid_covers_the_plane_and_the_ring_holds_it`].
+    ///
+    /// **Variety's floor is 5% rather than the rock's 2% on purpose.** It used
+    /// to move 2.6% here, and that was the complaint: a dial that passed this
+    /// test and still read as doing nothing, because the radius band it opened
+    /// was pinned by the coverage proof to about a sixth either way while the
+    /// cell grid that sets the apparent size never moved at all. A floor set
+    /// just under the old reading is a floor that cannot tell the two apart, so
+    /// it is set above it instead — this fails if the dial ever goes back to
+    /// being a radius band alone.
     ///
     /// What this does NOT say is that the rock is on a CLOCK, and no cheap test
     /// can: the rock's phase advances on `cloud_time`, the same clock that
@@ -2528,15 +2538,16 @@ mod tests {
             fresh_frame(&device, &queue, &cb)
         };
         let plain = lit(|s| s.scale_variety = 0.0);
-        for (name, turn) in [
+        for (name, floor, turn) in [
             (
                 "Rock",
+                0.02,
                 (|s: &mut harmonigraph_scene::SpectralAtmosphere| {
                     s.scale_variety = 0.0;
                     s.scale_rock = 1.0;
                 }) as fn(&mut harmonigraph_scene::SpectralAtmosphere),
             ),
-            ("Variety", |s| s.scale_variety = 1.0),
+            ("Variety", 0.05, |s| s.scale_variety = 1.0),
         ] {
             let frame = lit(turn);
             let n = plain.len() / 4;
@@ -2546,7 +2557,7 @@ mod tests {
                 .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
                 .count() as f32
                 / n as f32;
-            assert!(moved > 0.02, "{name} moved almost none of the pane: {moved}");
+            assert!(moved > floor, "{name} moved almost none of the pane: {moved}");
         }
     }
 
@@ -2621,12 +2632,13 @@ mod tests {
         // Globs about 19 points across on this 128-point pane. At the fresh
         // size they would be 5, and a texture whose own detail is four pixels
         // wide has column steps of its own that would drown the thing being
-        // measured.
-        s.cloud_scale = 2.0;
-        // The floor is a taste dial that LIFTS a turned-away face, so it hides
-        // exactly what this is measuring. At 0 the shading is the raw Lambert
-        // the defect lived in.
-        s.scale_shade_floor = 0.0;
+        // measured. Four times the fresh size, which is where the retired
+        // `cloud_scale` 2 used to put it against a fresh `Scale size`.
+        s.scale_size = 4.0;
+        // The shade floor LIFTS a turned-away face, so it hides exactly what
+        // this is measuring — and the relief of 1 above already drives it to 0,
+        // which is the raw Lambert the defect lived in. It is the same line it
+        // always was, now spelled by the dial that absorbed it.
         cb
     }
 
@@ -2716,6 +2728,13 @@ mod tests {
     ///
     /// Round 5's jitter of 0.75 failed BOTH (it needed a radius at once above
     /// 1.237 and below 1.125), and both failures were live in the picture.
+    ///
+    /// `DOME_VARIETY_GAIN` is deliberately absent from both. It scales a dome's
+    /// WEIGHT, and the union is a weighted mean over whichever domes already
+    /// cover the pixel: a gain changes whose face is read and never whether a
+    /// face is there to read, so it moves neither radius and appears in neither
+    /// inequality. What bounds it instead is smoothness, which is measured
+    /// where the constant is declared.
     #[test]
     fn the_dome_grid_covers_the_plane_and_the_ring_holds_it() {
         let number = |name: &str| -> f32 {
@@ -2736,6 +2755,43 @@ mod tests {
             "a dome of {largest} reaches {unvisited} into a pixel the 3x3 ring never visits \
              it from, so the union gains and loses it as `floor(r)` crosses a cell"
         );
+    }
+
+    /// `Relief` carries the retired `Shade floor` through the pair Yan had set.
+    ///
+    /// The two dials were one product — both of them only decide how far
+    /// `diffuse` dips below 1 — so the floor became a function of the relief.
+    /// The exponent is the whole of that merge, and it is not a taste: it is
+    /// fixed by the requirement that the merged dial pass through the defaults
+    /// the pair shipped with, a relief of 0.35 against a floor of 0.25.
+    ///
+    /// Held here rather than in a rendered frame because a frame cannot see it.
+    /// The floor only reaches the picture where a face is turned far enough off
+    /// the sun for the Lambert term to approach zero, which is a small and
+    /// fixture-dependent corner of any pane; a pixel test that turned `Relief`
+    /// would be measuring the TILT, which moves the same picture much harder
+    /// and would pass just as well with the exponent wrong. The arithmetic is
+    /// the claim, so the arithmetic is what is checked — against the shipped
+    /// shader's text and the shipped default, not a transcription of either.
+    #[test]
+    fn the_relief_dial_carries_the_retired_shade_floor() {
+        let fall: f32 = crate::shadow::tests::shader_const(SPECTROGRAM_SRC, "RELIEF_FLOOR_FALL")
+            .parse()
+            .expect("a number");
+        let fresh = harmonigraph_scene::SpectralAtmosphere::default();
+        let floor = (1.0 - fresh.scale_relief).powf(fall);
+        assert!(
+            (floor - 0.25).abs() < 0.005,
+            "the fresh relief of {} floors at {floor}, not the 0.25 the retired dial shipped, \
+             so this build restyles a look Yan had already settled",
+            fresh.scale_relief
+        );
+        // The two ends the dial promises, which the exponent only holds while
+        // it is positive: nothing to floor where there is no tilt, and nothing
+        // held back at the top.
+        assert!(fall > 0.0, "a floor that does not fall as the relief rises is not a merge");
+        assert_eq!(1.0_f32.powf(fall), 1.0);
+        assert_eq!(0.0_f32.powf(fall), 0.0);
     }
 
     /// The same two inequalities for the WASH's glob grid, which pushes on them
@@ -2802,8 +2858,10 @@ mod tests {
     /// 128-point pane carries fifty cells, so a glob is under six points across
     /// — and a texture whose own detail is a handful of pixels wide measures its
     /// own aliasing rather than the dial being turned, the same trap
-    /// `rough_band_fixture` names for the scales. `cloud_scale` 2 takes the pane
-    /// down to thirteen cells and the glob up to about twenty-three points.
+    /// `rough_band_fixture` names for the scales. `Glob size` 4 takes the pane
+    /// down to thirteen cells and the glob up to about twenty-three points —
+    /// four times the fresh size, which is where the retired `cloud_scale` 2
+    /// used to put it against a fresh `Glob size`.
     fn wash_fixture() -> SpectrogramCallback {
         let mut cb = cloud_fixture();
         // Off zero, because `Wander` is a RATE: it turns each glob's offset on
@@ -2813,7 +2871,7 @@ mod tests {
         let s = &mut cb.atmosphere.as_mut().unwrap().settings;
         s.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
         s.cloud_depth = 1.0;
-        s.cloud_scale = 2.0;
+        s.wash_size = 4.0;
         cb
     }
 
@@ -2992,6 +3050,7 @@ mod tests {
                 .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
                 .count() as f32
                 / n as f32;
+            eprintln!("MEASURE {name} = {moved}");
             assert!(moved > 0.02, "{name} moved almost none of the pane: {moved}");
         }
     }

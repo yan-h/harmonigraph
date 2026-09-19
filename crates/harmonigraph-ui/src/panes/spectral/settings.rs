@@ -176,20 +176,12 @@ pub(crate) fn spectrum_settings_pane(
                  showing under their own washed copy. It needs some softness above: the \
                  softened field is the light either texture reads.",
             );
-        ValueBar::new(&mut atmosphere.cloud_scale, 0.25..=4.0, "Cloud size")
-            .unit(1.0, "\u{d7}")
-            .show(ui)
-            .on_hover_text(
-                "The frame the texture is measured and drifted in. Five of these cross the \
-                 pane's height at 1\u{d7}. With Scale size or Glob size it decides how big \
-                 one of them is, and on its own it decides how far the texture travels as \
-                 it drifts.",
-            );
         ValueBar::new(&mut atmosphere.cloud_speed, 0.0..=20.0, "Cloud speed")
             .unit(1.0, "\u{d7}")
             .show(ui)
             .on_hover_text(
-                "1\u{d7} crosses the pane in about two minutes. 0 holds the texture still.",
+                "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds \
+                 it still, and holds Rock with it.",
             );
         // Two constructions, so two sets of dials: nothing a wash carries means
         // anything to a lit scale, and a page listing both would be mostly
@@ -201,20 +193,21 @@ pub(crate) fn spectrum_settings_pane(
                 .unit(1.0, "\u{d7}")
                 .show(ui)
                 .on_hover_text(
-                    "Size of one scale, as a share of the frame above. Small is a fine grain \
-                 over the whole pane; large is a few broad faces. Changing it does not \
-                 change how far the light bends \u{2014} Refraction is measured in scale \
-                 widths.",
+                    "Size of one scale. Small is a fine grain over the whole pane; large is a \
+                 few broad faces. Changing it does not change how far the light bends \
+                 \u{2014} Refraction is measured in scale widths \u{2014} nor how fast the \
+                 texture drifts, which is Cloud speed's alone.",
                 );
             ValueBar::new(&mut atmosphere.scale_variety, 0.0..=1.0, "Variety")
                 .percent()
                 .show(ui)
                 .on_hover_text(
-                    "How much the scales differ in size from EACH OTHER. 0 gives every glob in \
-                 the field one radius, which is the most regular texture there is; turning \
-                 it up draws each glob its own, so big ones swallow their neighbours and \
-                 small ones sit in the gaps. It never opens a hole: the smallest radius it \
-                 can draw still covers the plane.",
+                    "How much the scales differ in size from EACH OTHER. 0 is one scale per \
+                 cell of an even grid, which is the most regular texture there is. Turning \
+                 it up both redraws each glob's width and lets a loud one take its \
+                 neighbour's ground, so the biggest scales run about four times the \
+                 smallest at 100%. It never opens a hole \u{2014} a scale that loses its \
+                 cell loses it to a neighbour already covering it.",
                 );
             ValueBar::new(&mut atmosphere.scale_refract, 0.0..=1.0, "Refraction")
                 .percent()
@@ -239,18 +232,12 @@ pub(crate) fn spectrum_settings_pane(
                 .percent()
                 .show(ui)
                 .on_hover_text(
-                    "How domed the scales are, which is what gives them faces to catch the \
-                 light with. 0 is a smooth body with no scales in it; high picks each face \
-                 out separately.",
-                );
-            ValueBar::new(&mut atmosphere.scale_shade_floor, 0.0..=1.0, "Shade floor")
-                .percent()
-                .show(ui)
-                .on_hover_text(
-                    "How much light a face turned AWAY from the sun still keeps. 0 lets it go \
-                 black, which is where the shading gets harsh over a loud band; 100% \
-                 flattens the shading off altogether. The lit end is untouched either way, \
-                 so this only lifts what was already dark.",
+                    "How domed the scales are, and so how much shading the light casts on \
+                 them. 0 is a smooth body with no scales in it at all; the top of the dial \
+                 is every face picked out separately and a face turned away going black. \
+                 It carries the old Shade floor with it \u{2014} how dark a turned-away face \
+                 may get falls as the relief rises, because a floor decides nothing where \
+                 there is no tilt to shade.",
                 );
             ValueBar::new(&mut atmosphere.scale_rock, 0.0..=1.0, "Rock")
                 .percent()
