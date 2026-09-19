@@ -538,7 +538,12 @@ check_submodule_dirty_is_kept() {
   # Both halves, as in the orphan tier: that the clean check is the gate that
   # names the reason, and that the file is still there afterwards. Survival
   # alone would pass just as happily on a fixture that never reached the gate.
-  if grep -q "no-remove w1: .*uncommitted/untracked" <<<"$dry" &&
+  #
+  # The COUNT is pinned as well, because this fixture dirties exactly one
+  # thing and the superproject reports it as exactly one porcelain line
+  # (` M .shared-skills`) — which is the one width at which the off-by-one of
+  # #900 was visible as a contradiction, "kept for 0 file(s)".
+  if grep -q "no-remove w1: 1 uncommitted/untracked" <<<"$dry" &&
     [ -f "$wt/.shared-skills/scratch.md" ]; then
     echo "✓ $desc"
   else
