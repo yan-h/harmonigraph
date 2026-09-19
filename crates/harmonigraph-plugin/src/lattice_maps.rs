@@ -125,7 +125,8 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
             }
         }
         // Every document mutation goes through a `MapDocument` method, because
-        // each one has to move the revision `MapEditor::names` is keyed on.
+        // each one has to move the revision two derived values are keyed on:
+        // `MapEditor::names` here, and `AudioMaps::bank` on the audio thread.
         MapEdit::Rename(id, name) => params.maps.write().rename(id, name),
         MapEdit::Delete(id) => params.maps.write().delete(id),
         MapEdit::MoveEarlier(id) => params.maps.write().move_earlier(id),
@@ -158,6 +159,9 @@ pub struct AudioMaps {
     editor: Arc<Mutex<MapEditor>>,
     published: Arc<Mutex<MapPlayback>>,
     bank: [Option<LatticeMap>; MAP_CAPACITY],
+    /// Which document state `bank` was built from, or `None` before the first
+    /// read — see [`AudioMaps::adopt`] for what that key does and does not say.
+    bank_revision: Option<Revision>,
     working: Option<LatticeMap>,
     pub playback: MapPlayback,
     history: VecDeque<Entry>,
@@ -176,6 +180,7 @@ impl AudioMaps {
             editor: params.map_editor.clone(),
             published: params.map_playback.clone(),
             bank: [None; MAP_CAPACITY],
+            bank_revision: None,
             working: None,
             playback: MapPlayback::default(),
             history: VecDeque::with_capacity(HISTORY),
@@ -208,9 +213,25 @@ impl AudioMaps {
         self.adopted = false;
     }
     pub fn adopt(&mut self, config: ResolvedConfig) {
-        // Copies only fixed geometry, never names or heap storage, on audio.
+        // Copies only fixed geometry, never names or heap storage, on audio —
+        // and only when the document is a state this bank was not built from.
+        //
+        // The key is [`MapDocument::revision`], the same ticket
+        // `MapEditor::names` memoizes against, rather than a second counter
+        // beside it. Nothing that decides a slot's geometry can move without
+        // moving it: geometry reaches a slot only through `capture`, a slot
+        // leaves only through `delete`, both bump it, and a document LOADED
+        // from saved state is a whole new value whose revision is minted at
+        // deserialization. What the key carries beyond this value is a rename
+        // and a reorder, neither of which decides any `map(id)`; each costs one
+        // extra rebuild at the next callback, which is bounded by the rate a
+        // hand types rather than by the rate the host calls this.
         if let Some(doc) = self.document.try_read() {
-            self.bank = std::array::from_fn(|id| doc.map(id));
+            let revision = doc.revision();
+            if self.bank_revision != Some(revision) {
+                self.bank = std::array::from_fn(|id| doc.map(id));
+                self.bank_revision = Some(revision);
+            }
         }
         if let Some(mut editor) = self.editor.try_lock() {
             editor.restore(self.restore_id);
@@ -361,6 +382,40 @@ mod tests {
         );
         // Adjacent ends: the interval is open, so neither entry qualifies.
         assert_eq!(maps.changes(4000, 4001).count(), 0);
+    }
+
+    /// A slot written behind the revision's back is the instrument: a bank that
+    /// was rebuilt shows it and a bank that was reused cannot, which no timing
+    /// or counter claim could say as directly. The fixture needs two occupied
+    /// slots holding three distinct shapes, so that "unchanged" and "changed"
+    /// are told apart by geometry rather than by a slot's mere existence.
+    #[test]
+    fn the_bank_is_rebuilt_only_when_the_documents_revision_moves() {
+        let params = crate::HarmonigraphParams::default();
+        let config = ConfigReducer::default().resolved();
+        let mut second = LatticeMap::default();
+        assert!(second.replace(LatticePos::new(4, 0, 0)), "slot 1 must differ from the default");
+        let mut third = LatticeMap::default();
+        assert!(third.replace(LatticePos::new(-3, 0, 0)), "the poked shape must differ from both");
+        assert_eq!(params.maps.write().capture(second, "Passage".into()), Some(1));
+
+        let mut maps = AudioMaps::new(&params);
+        maps.adopt(config);
+        assert_eq!(maps.bank[0], Some(LatticeMap::default()));
+        assert_eq!(maps.bank[1], Some(second), "the fixture never reached a second slot");
+
+        // A write that skips every `MapDocument` method, so the revision stays
+        // where it was. Only a rebuild could see it.
+        params.maps.write().slots[1].geometry = third.into();
+        maps.adopt(config);
+        assert_eq!(maps.bank[1], Some(second), "an unchanged revision must not rebuild the bank");
+
+        // A real mutation moves the revision, and the rebuild it forces is
+        // wholesale: it picks up the poke as well as the deletion.
+        params.maps.write().delete(0);
+        maps.adopt(config);
+        assert_eq!(maps.bank[0], None, "a delete must reach the audio thread's bank");
+        assert_eq!(maps.bank[1], Some(third), "the rebuild must re-read every slot");
     }
 
     #[test]

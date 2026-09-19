@@ -83,9 +83,11 @@ pub struct MapDocument {
     /// Slot index is the host identity. Slots are never removed or recycled.
     ///
     /// Public for READING — the plugin's `lattice-map` parameter formats a slot
-    /// name through it. Every mutation goes through a method below, because
-    /// [`names`](Self::names) is memoized against [`revision`](Self::revision)
-    /// and a write that skips the bump serves a stale name in the UI forever.
+    /// name through it. Every mutation goes through a method below, because two
+    /// derived values are keyed on [`revision`](Self::revision) and a write that
+    /// skips the bump is invisible to both: [`names`](Self::names) serves a
+    /// stale name in the UI forever, and the audio thread's map bank serves a
+    /// stale shape — a capture or a delete that never reaches playback at all.
     pub slots: Vec<NamedMap>,
     pub order: Vec<usize>,
     /// Skipped rather than persisted: a loaded document is a new state, and
@@ -99,8 +101,17 @@ impl Default for MapDocument {
     }
 }
 impl MapDocument {
-    /// Which state this is. Everything [`names`](Self::names) derives from —
-    /// a slot's existence, its name, its deleted flag, and `order` — moves this.
+    /// Which state this is, for both values derived from a document:
+    /// [`MapEditor::names`]'s memo, and the audio thread's map bank in the
+    /// plugin's `AudioMaps::adopt`. Everything either one reads — a slot's
+    /// existence, its name, its deleted flag, its GEOMETRY, and `order` —
+    /// moves this.
+    ///
+    /// Geometry is the entry the methods below cover by their shape rather
+    /// than by a bump of their own: it reaches a slot only through
+    /// [`capture`](Self::capture), and nothing rewrites an existing slot's.
+    /// A method that ever does has to move this too, or the bank goes stale
+    /// where the names would not — the one direction this key can be wrong in.
     pub fn revision(&self) -> Revision {
         self.revision
     }

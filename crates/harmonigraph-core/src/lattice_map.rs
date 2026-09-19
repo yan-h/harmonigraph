@@ -12,6 +12,14 @@ pub enum TuningEngine {
     LatticeMap,
 }
 
+/// `Copy` here is load-bearing rather than a convenience. `MapEditor::undo` is
+/// a `Vec` of these, and the AUDIO thread clears it — `AudioMaps::adopt` calls
+/// `MapEditor::restore`. `Vec::clear` drops its elements in place and never
+/// frees the buffer, so the only way that clear could reach an allocator is a
+/// `Drop` impl on the element type; `Copy` forbids one, and forbids the owned
+/// field (a `String`, a `Box`) that would need one. The invariant is therefore
+/// compiler-enforced, and what breaks it is removing `Copy` from this struct —
+/// not an undo entry growing a heap field, which would not compile (#893, #924).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LatticeMap {
     /// One coordinate per base MIDI class, relative to C at the shape origin.
