@@ -30,7 +30,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{LatticeSide, Pane};
+use crate::{LatticeSide, Pane, RenderFrame};
 
 /// Default export density: roughly 1280 logical points across the frame.
 /// Shared with the Video preview so point-sized effects shrink with the shot.
@@ -146,7 +146,7 @@ impl Layout {
     /// gets the complement — so the preview divider keeps meaning one thing when the
     /// side changes under it.
     pub fn split(side: LatticeSide, fraction: f32) -> Layout {
-        let f = fraction.clamp(0.05, 0.95);
+        let f = fraction.clamp(RenderFrame::SPLIT_MIN, RenderFrame::SPLIT_MAX);
         let rest = 1.0 - f;
         let (lattice, spectral) = match side {
             LatticeSide::Left => ((0.0, 0.0, f, 1.0), (f, 0.0, 1.0, 1.0)),

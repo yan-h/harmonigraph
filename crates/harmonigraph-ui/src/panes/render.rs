@@ -17,7 +17,7 @@ use egui::Sense;
 
 use super::section;
 use crate::widgets::{button_row, choice_row, option_label, record_button};
-use crate::{theme, LatticeSide, Layout, Pane, PictureState};
+use crate::{theme, LatticeSide, Layout, Pane, PictureState, RenderFrame};
 
 /// The surface this preview's panes draw on. Every copy of a pane holds
 /// something between frames keyed on its surface — a GPU buffer, a bloom chain,
@@ -213,7 +213,8 @@ fn preview_layout_controls(
     if resizing.dragged() {
         if let Some(pointer) = resizing.interact_pointer_pos() {
             let offset = ui.data(|d| d.get_temp::<f32>(grab_id)).unwrap_or(0.0);
-            frame.split = (fraction_at(pointer) + offset).clamp(0.05, 0.95);
+            frame.split = (fraction_at(pointer) + offset)
+                .clamp(RenderFrame::SPLIT_MIN, RenderFrame::SPLIT_MAX);
             ui.ctx().request_repaint();
         }
     }
