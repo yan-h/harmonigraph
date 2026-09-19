@@ -667,7 +667,7 @@ Locked 12-TET produces zero adaptive correction;
 choose **Just** with **Auto** and **Learn** off for a first independent-tuning check.
 The moving-neighborhood defaults match the simulator's baseline profile;
 the [implementation record](adaptive-tuning-plugin.md#controls) describes every control and the precision profile used by its paired intentional-E examples.
-5. Play a phrase across several tracks and check the instrument's actual pitch as well as the displayed notes and live neighborhood.
+5. Play a phrase across several tracks and check the instrument's actual pitch as well as the displayed notes.
 For reproducible policy checks use the versioned fixtures linked from the [implementation record](adaptive-tuning-plugin.md#validation).
 Destination conversion still matters:
 the [historical pitch-conversion measurements](tuning-probe-bitwig.md#pitch-conversion) include Vital's required matching MPE settings and bend ranges.

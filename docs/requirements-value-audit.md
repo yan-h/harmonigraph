@@ -119,9 +119,12 @@ The exact-versus-eligible analysis remains evidence of what the existing feature
 not a recommendation to build a replacement he does not need.
 
 The [design's reachability section](adaptive-tuning-design.md#lattice-reachability-indicator-retired) explicitly distinguishes eligible candidates from actual winners.
-The current [UI contract](adaptive-tuning-plugin.md#controls) outlines the latter over C2–C7,
+At the audited `2a5595fd` revision,
+the [then-current UI contract](https://github.com/yan-h/harmonigraph/blob/2a5595fd770f02108206592f3dee2bab328a8053/docs/adaptive-tuning-plugin.md#controls-and-live-neighborhood) outlined the latter over C2–C7,
 including off-screen winners in the count.
-It intentionally excludes these annotations from preview/export pictures.
+It intentionally excluded these annotations from preview/export pictures.
+The implementation and obligations below describe that pre-retirement feature;
+the [current controls](adaptive-tuning-plugin.md#controls) record its removal.
 
 The obligations are concrete:
 `policy/reach.rs` contains 189 lines of analytic interval computation,
