@@ -111,12 +111,11 @@ struct Uniforms {
     wash_pool: f32,
     wash_grain: f32,
     wash_layers: f32,
-    wash_black: f32,
-    /// The tail the assert below needs, since the members above stop 4 bytes
+    /// The tail the assert below needs, since the members above stop 8 bytes
     /// short of a whole 16-byte row. WGSL rounds its own copy of the struct up
     /// to the same length, so this is space the shader is entitled to read and
     /// Rust has to own.
-    _tail: [u32; 1],
+    _tail: [u32; 2],
 }
 
 /// The `Cloud` struct's size in the uniform address space, which WGSL rounds up
@@ -483,8 +482,7 @@ impl Targets {
             wash_pool: settings.wash_pool,
             wash_grain: settings.wash_grain,
             wash_layers: settings.wash_layers,
-            wash_black: settings.wash_black,
-            _tail: [0; 1],
+            _tail: [0; 2],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }

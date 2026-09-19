@@ -148,15 +148,6 @@ pub struct SpectralAtmosphere {
     /// How opaque the finer octave's wash is over the coarse one. 0 draws the
     /// coarse octave alone and skips the finer one's work.
     pub wash_layers: f32,
-    /// How much of the picture's own black the wash gives back at the dark end.
-    /// The paper is lifted by a constant so a glob over a ridge does not read as
-    /// a shadow on it, and that same constant is what keeps silence off the
-    /// palette's floor; this scales the tone away again where the glob found no
-    /// light, and leaves every brighter tone exactly where it is. 0 is the
-    /// lifted paper everywhere, 1 is silence on the palette's floor, and
-    /// everything between is a share of the way — an AMOUNT, so the dial has no
-    /// step anywhere on it.
-    pub wash_black: f32,
 }
 
 /// Which of the three spectrogram effects a setting actually draws — what the
@@ -221,12 +212,6 @@ impl Default for SpectralAtmosphere {
             wash_pool: 0.5,
             wash_grain: 0.0,
             wash_layers: 0.5,
-            // Not J2's: the prototype was stills over one loud passage and
-            // never showed what the lift does to a quiet pane. All of it puts
-            // silence back on the palette's floor and leaves the bands alone —
-            // the same picture the dial drew at 50% while it was a knee width,
-            // since the knee it had there is the one the shader now keeps.
-            wash_black: 1.0,
         }
     }
 }
@@ -264,7 +249,6 @@ impl SpectralAtmosphere {
         self.wash_pool = clamp(self.wash_pool, fresh.wash_pool, 0.0, 1.0);
         self.wash_grain = clamp(self.wash_grain, fresh.wash_grain, 0.0, 1.0);
         self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
-        self.wash_black = clamp(self.wash_black, fresh.wash_black, 0.0, 1.0);
         self
     }
 

@@ -3023,9 +3023,9 @@ mod tests {
     /// a ramp with NO black anywhere in it, and then a black pixel can only
     /// have come from the renderer.
     ///
-    /// `Black point` at 100% is what drives the wash's level to exactly 0, so
-    /// it is the dial that reaches the slice; the same pane with the dial at 0
-    /// sits on the lifted paper well above it and would pass either way.
+    /// The wash is where it is reachable at all, because its hold is the one
+    /// thing that drives a level to exactly 0 — the lifted paper alone sits
+    /// well above the slice and would pass either way.
     ///
     /// Both halves, because either alone passes for a bug. A renderer that had
     /// simply stopped drawing black would satisfy the first; one still ignoring
@@ -3039,7 +3039,6 @@ mod tests {
         };
         let floor = [0u8, 153, 140];
         let mut cb = wash_fixture();
-        cb.atmosphere.as_mut().unwrap().settings.wash_black = 1.0;
         cb.shades.lut = Arc::new(
             (0..256)
                 .map(|v| {
@@ -3080,34 +3079,34 @@ mod tests {
         );
     }
 
-    /// The wash's paper has a black point, and it is the picture's own.
+    /// The wash returns silence to the palette's floor, and reaches no further
+    /// up than the knee to do it.
     ///
     /// The lift under `paper` is an OFFSET — written out it is
-    /// `1.15 * light + 0.0925` — so the quietest tone a glob could draw was
-    /// palette level 0.09 whatever the picture held, and `Cloud depth` turned a
-    /// silent pane from black to mid-tone as it came up. The scales beside it
-    /// never did that: their light reaches 0 and the palette's bottom is black.
+    /// `1.15 * light + 0.0925` — so the quietest tone a glob could draw is
+    /// palette level 0.09 whatever the picture holds, and `Cloud depth` would
+    /// turn a quiet pane from the palette's floor to mid-tone as it came up.
+    /// The scales beside it never do that: their light reaches 0. The hold is
+    /// what puts the wash back on terms with them.
     ///
-    /// Both halves, because either one alone passes for a bug. A dial that
-    /// darkened the whole picture would satisfy the first; a dial soldered to
-    /// nothing would satisfy the second. Together they are the claim actually
-    /// made — silence goes to the floor and every tone above the knee is left
-    /// where it was.
+    /// Both halves, because either one alone passes for a bug. A hold that
+    /// darkened the whole picture would satisfy the first; one soldered to
+    /// nothing would satisfy the second.
     ///
-    /// The second half is byte-exact rather than nearly so. The knee is a
-    /// `smoothstep` that reaches exactly 1 at its top, and the flat fixture
-    /// sits at display intensity 0.59 against a knee of 0.175, so a single
-    /// moved channel anywhere means the hold is being applied where it has
-    /// nothing to hold back.
-    ///
-    /// The third is that the dial has NO STEP in it, which it shipped with. It
-    /// used to set the knee's WIDTH, and a smoothstep is 0 at its lower edge
-    /// however narrow it is — so one notch off zero sent every pixel of exact
-    /// silence from the lifted paper straight to black, and the rest of the
-    /// travel did almost nothing. As an amount, a hundredth of the dial moves
-    /// the silent pane by a hundredth of the lift, which no channel can show.
+    /// **The second half is weaker than it was, and deliberately.** It used to
+    /// be byte-exact, by drawing the flat fixture twice with the retired
+    /// `Black point` at each end and demanding the two match. That dial is gone
+    /// — its
+    /// whole travel parked silence at a colour the gradient never named, so its
+    /// only correct position was the maximum it shipped at — and with it went
+    /// the only lever that could turn the hold off. `WASH_BLACK_KNEE` is a
+    /// const, so what is left is the light itself: the flat fixture sits at
+    /// display intensity 0.59 against a knee of 0.175, and a hold that had
+    /// become a tone control over the whole ramp would drag it down. That is
+    /// what is measured, at the resolution of the palette rather than of a
+    /// single byte.
     #[test]
-    fn the_black_point_returns_silence_to_the_palettes_floor() {
+    fn the_wash_returns_silence_to_the_palettes_floor() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
@@ -3115,40 +3114,24 @@ mod tests {
             let n = frame.len() / 4;
             frame.chunks_exact(4).filter(|px| px[..3] == [0, 0, 0]).count() as f32 / n as f32
         };
-        let mut cb = wash_fixture();
-        cb.atmosphere.as_mut().unwrap().settings.wash_black = 0.0;
-        let lifted = fresh_frame(&device, &queue, &cb);
-        cb.atmosphere.as_mut().unwrap().settings.wash_black = 1.0;
-        let held = fresh_frame(&device, &queue, &cb);
-        let (lifted_floor, held_floor) = (floor(&lifted), floor(&held));
-        assert!(
-            lifted_floor < 0.01,
-            "the fixture is mostly digital silence and the unlifted wash already drew it \
-             black, so this measures nothing: {lifted_floor} of the pane",
-        );
+        let held = fresh_frame(&device, &queue, &wash_fixture());
+        let held_floor = floor(&held);
         assert!(
             held_floor > 0.5,
-            "the black point left most of a silent pane off the palette's floor: \
-             {held_floor} against {lifted_floor} with the dial at 0",
-        );
-        cb.atmosphere.as_mut().unwrap().settings.wash_black = 0.01;
-        let nudged = fresh_frame(&device, &queue, &cb);
-        let step = lifted.iter().zip(&nudged).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
-        assert!(
-            step <= 2,
-            "one notch off zero moved a channel by {step}, so the bottom of the dial is a \
-             switch rather than the start of a travel",
+            "the wash left most of a silent pane off the palette's floor: {held_floor} of it",
         );
 
+        // Nowhere near black, and it has to stay that way. The fixture's ramp
+        // puts the palette index straight in the blue channel, so the darkest
+        // blue in the pane IS the lowest level the wash drew.
         let mut flat = wash_fixture();
         flat.grid.run = Arc::new(vec![150; flat.grid.run.len()]);
-        flat.atmosphere.as_mut().unwrap().settings.wash_black = 0.0;
         let open = fresh_frame(&device, &queue, &flat);
-        flat.atmosphere.as_mut().unwrap().settings.wash_black = 1.0;
-        let closed = fresh_frame(&device, &queue, &flat);
-        assert_eq!(
-            open, closed,
-            "the black point moved a picture that is nowhere near black, so it is a tone \
+        assert_eq!(floor(&open), 0.0, "the hold reached a pane that is nowhere near black");
+        let darkest = open.chunks_exact(4).map(|px| px[2]).min().unwrap();
+        assert!(
+            darkest > 96,
+            "the darkest tone over a flat 0.59 pane fell to {darkest}, so the hold is a tone \
              control over the whole ramp rather than a floor under the dark end",
         );
     }
@@ -3214,6 +3197,14 @@ mod tests {
         };
         let painted = |turn: fn(&mut harmonigraph_scene::SpectralAtmosphere)| {
             let mut cb = wash_fixture();
+            // Lift the whole fixture clear of the knee. Most of it is digital
+            // silence, which the hold pins to the palette's floor, and a
+            // pigment dial that only paints the dark half of the pane stops
+            // being measurable there — `Edge pooling` reached 1.7% of it, under
+            // this test's own bar. 80/255 is display intensity 0.31 against a
+            // knee of 0.175, so the hold is exactly 1 over the whole pane and
+            // what moves is the pigment, which is what each dial is here for.
+            cb.grid.run = Arc::new(cb.grid.run.iter().map(|&v| v.max(80)).collect());
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
             s.wash_fuzz = 0.5;
             s.wash_ragged = 0.5;
@@ -3221,12 +3212,6 @@ mod tests {
             s.wash_pool = 0.5;
             s.wash_grain = 0.3;
             s.wash_layers = 0.5;
-            // At the fresh 100% most of this fixture is digital silence held on
-            // the palette's floor, and a pigment dial that only paints the dark
-            // half of the pane stops being measurable there: `Edge pooling`
-            // reaches 1.7% of it, under this test's own bar. So the base is the
-            // unheld paper, which is also where every figure below was taken.
-            s.wash_black = 0.0;
             turn(s);
             fresh_frame(&device, &queue, &cb)
         };
@@ -3240,7 +3225,6 @@ mod tests {
             ("Fuzz", |s| s.wash_fuzz = 0.0),
             ("Ragged", |s| s.wash_ragged = 0.0),
             ("Lobe shape", |s| s.wash_lobe = 0.0),
-            ("Black point", |s| s.wash_black = 1.0),
             ("Edge pooling", |s| s.wash_pool = 1.0),
             ("Grain", |s| s.wash_grain = 1.0),
             ("Layers", |s| s.wash_layers = 0.0),

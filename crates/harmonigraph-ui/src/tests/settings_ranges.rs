@@ -209,14 +209,14 @@ fn scenarios() -> Vec<Scenario> {
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
     // The wash's own inventory: it takes the five scale bars off the Analyzer
-    // page and puts nine of its own there, and nothing else on the page moves.
+    // page and puts eight of its own there, and nothing else on the page moves.
     // Its own scenario rather than a flag on the loop above because the fresh
-    // state selects the scales, so without this the nine are drawn by no case
+    // state selects the scales, so without this the eight are drawn by no case
     // here at all.
     cases.push(Scenario {
         pane: SettingsPane::Page(DisplayPage::Analyzer),
         wash: true,
-        visits: 31,
+        visits: 30,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
