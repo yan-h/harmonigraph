@@ -715,7 +715,15 @@ impl NoteTracker {
                     self.restored_sources.clear();
                 }
                 self.roll.gap(gap.source, gap.time);
-                self.held.retain(|key, _| gap.source.is_some_and(|source| key.source != source));
+                // The same reach the roll's own gap has, and the same exit every
+                // other departure takes: what publication lost is no longer known
+                // to be held, so those voices LEAVE — with the stamps a mark eases
+                // out of and a fade the picture can follow — rather than being
+                // dropped between two frames. A stream-wide gap is the one
+                // production emits, and it takes every source with it.
+                self.release_held(gap.time, |key, _| {
+                    gap.source.is_none_or(|source| key.source == source)
+                });
                 self.gaps.push(gap);
                 if self.gaps.len() > NoteRoll::MAX_NOTES {
                     self.gaps.remove(0);
@@ -811,11 +819,8 @@ impl NoteTracker {
                 self.held.insert(event.key(), voice);
             }
             NoteEventKind::Off => {
-                if let Some(mut voice) = self.held.remove(&event.key()) {
-                    self.stamp_ends_worn(&mut voice);
-                    voice.state = VoiceState::Released { at: event.time };
-                    voice.history_eligible = !self.hidden_sources.contains(&voice.source);
-                    self.released.push(voice);
+                if let Some(voice) = self.held.remove(&event.key()) {
+                    self.release_voice(voice, event.time);
                     self.roll.note_off(event.key(), event.time);
                 }
             }
@@ -854,6 +859,43 @@ impl NoteTracker {
         };
         voice.wore_high = worn(self.high_end);
         voice.wore_low = worn(self.low_end);
+    }
+
+    /// The one way a voice leaves the held set: stamped with whatever ends it
+    /// was wearing, released at `at`, and handed to the tail that fades it out.
+    ///
+    /// One function because every exit owes the same three things, and a copy
+    /// per exit is how one of them comes to be missing from one of them: the
+    /// stamps a mark eases out of, a release the fade can run, and the
+    /// visibility this voice had at its FACTUAL release rather than at whatever
+    /// frame the prune lands on (see [`Voice::history_eligible`]).
+    ///
+    /// Leaves [`restamp_ends`](Self::restamp_ends) to the caller, which every
+    /// exit calls once when its whole batch has left rather than per voice.
+    fn release_voice(&mut self, mut voice: Voice, at: Time) {
+        self.stamp_ends_worn(&mut voice);
+        voice.state = VoiceState::Released { at };
+        voice.history_eligible = !self.hidden_sources.contains(&voice.source);
+        self.released.push(voice);
+    }
+
+    /// Release every held voice `leaving` picks out, at `at`, and keep the rest
+    /// held.
+    ///
+    /// A `retain` cannot carry the sequence above, and that is why it was
+    /// written out at each exit: the closure wants `&self` for the ends and
+    /// `&mut self` for the tail while `held` is already borrowed. Taking the map
+    /// out and putting the survivors back costs a rebuild of a chord, and it
+    /// keeps the order a `retain` has — key order, which the released tail then
+    /// holds for the whole fade.
+    fn release_held(&mut self, at: Time, leaving: impl Fn(&VoiceKey, &Voice) -> bool) {
+        for (key, voice) in std::mem::take(&mut self.held) {
+            if leaving(&key, &voice) {
+                self.release_voice(voice, at);
+            } else {
+                self.held.insert(key, voice);
+            }
+        }
     }
 
     /// Re-read the two ends, keeping a `since` for as long as the SAME voice
@@ -972,15 +1014,7 @@ impl NoteTracker {
         self.uncertain_sources.clear();
         self.restored_sources.clear();
         self.roll.all_off(now);
-        // Key order into `released`, which keeps its own order stable too —
-        // a Vec built by draining a map inherits whatever order the map
-        // iterated in, and then holds it for the whole fade.
-        for mut voice in std::mem::take(&mut self.held).into_values() {
-            self.stamp_ends_worn(&mut voice);
-            voice.state = VoiceState::Released { at: now };
-            voice.history_eligible = !self.hidden_sources.contains(&voice.source);
-            self.released.push(voice);
-        }
+        self.release_held(now, |_, _| true);
         self.restamp_ends(now);
     }
 
@@ -990,24 +1024,7 @@ impl NoteTracker {
         self.uncertain_sources.remove(&source);
         self.restored_sources.insert(source);
         self.roll.source_off(source, now);
-        let high = self.high_end;
-        let low = self.low_end;
-        let released = &mut self.released;
-        self.held.retain(|key, voice| {
-            if key.source != source {
-                return true;
-            }
-            let mut voice = *voice;
-            let worn = |end: Option<HeldEnd>| {
-                end.filter(|e| e.key == *key && e.since >= voice.on_time).map(|e| e.since)
-            };
-            voice.wore_high = worn(high);
-            voice.wore_low = worn(low);
-            voice.state = VoiceState::Released { at: now };
-            voice.history_eligible = !self.hidden_sources.contains(&voice.source);
-            released.push(voice);
-            false
-        });
+        self.release_held(now, |key, _| key.source == source);
         self.restamp_ends(now);
     }
 }
@@ -1610,6 +1627,53 @@ mod tests {
         tracker.handle_event(on(1.0, 60));
         assert_eq!(tracker.voices().count(), 1);
         assert_eq!(tracker.voices().next().unwrap().on_time, 1.0);
+    }
+
+    /// A publication outage is not a note ending, but it IS a voice leaving the
+    /// held set — and a voice leaves it one way, carrying the ends it was
+    /// wearing and fading out behind them. The gap production reaches is the
+    /// stream-wide one (`publication::Publisher::lost`), so this is what a full
+    /// lane does to the whole picture: every held note used to vanish between
+    /// two frames, with no stamp to ease a mark out of and no trail mark left
+    /// where it had been sounding.
+    #[test]
+    fn a_publication_gap_releases_its_voices_rather_than_dropping_them() {
+        let gap = |time: Time, source: Option<SourceId>| {
+            CanonicalEvent::Gap(PublicationGap {
+                source,
+                time,
+                through: time,
+                first: 1,
+                last: 1,
+                reason: crate::canonical::GapReason::PublicationFull,
+            })
+        };
+        let (a, b) = (SourceId(1), SourceId(2));
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent::on(0.0, a, 0, 60, 0.8));
+        tracker.handle_event(NoteEvent::on(0.0, b, 0, 55, 0.8));
+
+        assert_eq!(tracker.handle_canonical(gap(1.0, Some(a))), Ok(true));
+        assert_eq!(tracker.held_count(), 1, "a gap still clears the lost source's held state");
+        let lost = *tracker.voices().find(|v| v.source == a).unwrap();
+        assert_eq!(lost.state, VoiceState::Released { at: 1.0 }, "it fades rather than popping");
+        assert_eq!(lost.wore_high, Some(0.0), "and leaves wearing the end it held");
+
+        // The whole-stream gap takes every source at once, through the same
+        // sequence — it is the arm a full publication lane actually takes.
+        assert_eq!(tracker.handle_canonical(gap(2.0, None)), Ok(true));
+        assert_eq!(tracker.held_count(), 0);
+        assert_eq!(
+            tracker.voices().find(|v| v.source == b).unwrap().state,
+            VoiceState::Released { at: 2.0 }
+        );
+
+        // And the fade ends in the trail, where a pitch that was drawn right up
+        // to the gap belongs.
+        tracker.prune(4.0, &Envelope::default());
+        assert_eq!(tracker.voices().count(), 0);
+        let visited: Vec<_> = tracker.history().visits().map(|visit| visit.pitch).collect();
+        assert_eq!(visited, vec![55.0, 60.0]);
     }
 
     #[test]
