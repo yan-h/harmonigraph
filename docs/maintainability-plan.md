@@ -25,9 +25,9 @@ Creating this plan does not launch the investigation or authorize all the propos
 
 These preferences come from the planning conversation with Yan on 2026-09-19:
 
-- The project is entirely LLM coded; Yan evaluates it through use and agents' explanations rather than direct code review.
+- The project is entirely LLM coded; Yan relies on agents' explanations to understand the code.
 - Many bugfixes are invisible in ordinary use: correctness, tests, comments and edge cases.
-- Long-term maintainability matters, and substantial upfront agent work is acceptable.
+- Long-term maintainability matters; upfront cost is not a major concern.
 - LLM quota is available; Yan's attention is the scarce resource.
 - Paying an independent engineer is out of scope. Investigation, implementation and technical review will be performed by agents.
 - A central concern is that an agent's assumption becomes a comment, then a requirement, then an architecture that preserves something Yan never valued.
@@ -36,6 +36,10 @@ The [README](../README.md) describes the product's purpose:
 composing microtonal music and making videos.
 The current compatibility policy and development obligations live in [CLAUDE.md](../CLAUDE.md).
 Read their current versions when work resumes.
+Product assumptions in repository prose are still claims to investigate;
+their presence does not prove Yan requested every behavior they describe.
+Existing operational instructions govern how sessions work,
+and proposed changes to those instructions should be explicit.
 
 The methods below are proposals from this discussion,
 not additional user-approved requirements or amendments to the project contract.
@@ -194,6 +198,9 @@ its date and the circumstances that would justify revisiting it.
 Label agent suggestions as proposals until they have the appropriate authority.
 Technical findings remain tied to their evidence and revision;
 they do not become permanent product policy through repetition.
+Carry that distinction into acceptance criteria,
+tests and comments:
+a characterization of current behavior does not by itself make that behavior a product requirement.
 
 ## Completion and resumption
 
