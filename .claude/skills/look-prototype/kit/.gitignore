@@ -1,0 +1,7 @@
+# Copy this kit into a scratch directory before using it. This is here so that
+# running it in place by mistake cannot dirty the tree: the caches and renders
+# land beside the scripts.
+*.npy
+*.raw
+*.png
+__pycache__/
