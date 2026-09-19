@@ -17,8 +17,16 @@ use harmonigraph_core::LatticePos;
 /// not new and is not an oversight: the variant was `Water` over `scale_*`
 /// fields before it was `Mosaic` over them. A menu entry names a look and may
 /// be renamed whenever the look is better described; a field names the thing
-/// the arithmetic builds, and renaming one silently resets it to its default
-/// in every blob that carries it.
+/// the arithmetic builds.
+///
+/// Renaming either is allowed and neither is free, but do not read that as the
+/// two costing the same. They are not symmetric, and the cheap-looking one is
+/// the expensive one: renaming a FIELD drops a key, which the container-level
+/// `serde(default)` absorbs, so that one field resets and nothing else moves.
+/// Renaming a VARIANT fails the parse and takes the whole persist with it --
+/// layout and camera included -- because `UI_PERSIST_VERSION` is a floor and a
+/// floor cannot guard a variant. #913 renamed these two and said so in its PR
+/// body with the measured refusal, which is the bar for doing it again.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CloudStyle {
     #[default]
@@ -91,7 +99,8 @@ pub struct SpectralAtmosphere {
     /// `scale_size`/`wash_size` for the texture's size and of this one for its
     /// travel.
     pub cloud_speed: f32,
-    /// Size of one scale, as a multiplier on how many of them cross a cloud.
+    /// Size of one scale, as a multiplier on that size: how many of them cross
+    /// a cloud moves the other way, because the count is divided by this.
     /// Runs over [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`].
     pub scale_size: f32,
     /// How much the scales differ in size from each other. 0 is one radius for
@@ -125,8 +134,9 @@ pub struct SpectralAtmosphere {
     /// above; `Watercolor` is the glob field below, and every `wash_` setting
     /// belongs to it alone.
     pub cloud_style: CloudStyle,
-    /// How big one glob is, as a multiplier on how many of them cross the cloud
-    /// frame. Larger is bigger, like `scale_size`, and over the same
+    /// How big one glob is, as a multiplier on that size: how many of them
+    /// cross the cloud frame moves the other way, because the count is divided
+    /// by this. Larger is bigger, like `scale_size`, and over the same
     /// [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`] band.
     pub wash_size: f32,
     /// One dial over everything that dissolves a glob's rim: how far it feathers

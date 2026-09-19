@@ -154,6 +154,21 @@ impl Motion {
             // others instead of spanning 0.9.
             self.levels[i] = approach(self.levels[i], self.targets[i], dt, env);
         }
+        // A departure that has run out of ink is over, whatever its slices are
+        // still holding. The reveal reaches the shader multiplied by this
+        // node's presence, so a slice caught mid-retraction behind a zero level
+        // draws nothing -- but it is not nothing to the NEXT press, which reads
+        // `progress` to tell a reversal from a fresh ordered arrival. Under
+        // #885 the two ended together, because a slice's reveal ran
+        // `1 - stagger_spread` of a fade and finished exactly when the level
+        // did. Once the spread became a start offset instead of a compression,
+        // the slices outlived the ink by `stagger_spread` of a fade, and a
+        // re-press inside that window took the reversal branch: no order at
+        // all, from leftover poses ranked opposite to the entrance they owed.
+        if !self.gate && !self.audio_waiting && self.levels.iter().all(|&l| l <= 0.0) {
+            self.progress = [0.0; 11];
+            self.delay = [0.0; 11];
+        }
         self.melody.advance(dt, env);
         self.bass.advance(dt, env);
     }
@@ -514,6 +529,59 @@ mod tests {
     }
     fn off(t: f64, note: u8) -> NoteEvent {
         NoteEvent::off(t, SourceId::DIRECT, 0, note)
+    }
+    /// A slice's reveal used to end exactly when its node's ink did, because
+    /// the spread COMPRESSED each piece into `1 - stagger_spread` of a fade.
+    /// Once the spread became a start offset instead -- right for the arrival,
+    /// and applied to the settled departure with it -- the slices outlived the
+    /// ink by `stagger_spread` of a fade. A press inside that window found
+    /// `progress` not all zero and took the reversal branch, which cancels
+    /// every delay and starts from leftover poses ranked OPPOSITE to the
+    /// entrance they owe: the same repeated note animating two different ways
+    /// depending on invisible state.
+    #[test]
+    fn a_faded_departure_leaves_no_pose_for_the_next_press_to_reverse() {
+        for order in AnimationOrder::ALL {
+            let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..Default::default() };
+            view.note_animation.order = order;
+            view.note_animation.stagger_spread = 0.9;
+            // One press inside the window the slices used to outlive the ink
+            // by, and one well past it. Both owe the same fresh entrance.
+            let mut poses = Vec::new();
+            for repress in [6.25, 7.5] {
+                let mut tracker = NoteTracker::new();
+                let mut motion = NodeMotion::default();
+                tracker.handle_event(on(0.0, 60));
+                draw(&mut motion, &mut tracker, &view, 0.0, false);
+                draw(&mut motion, &mut tracker, &view, 5.0, false);
+                tracker.handle_event(off(5.0, 60));
+                let dark = draw(&mut motion, &mut tracker, &view, 6.0, false);
+                assert_eq!(origin(&dark).activation, 0.0, "{order:?}: one fade after the off");
+                assert_eq!(
+                    origin(&dark).slice_progress,
+                    [0.0; 11],
+                    "{order:?}: the ink is gone and the poses are not",
+                );
+                draw(&mut motion, &mut tracker, &view, repress, false);
+                tracker.handle_event(on(repress, 60));
+                let back = draw(&mut motion, &mut tracker, &view, repress + 0.01, false);
+                poses.push(origin(&back).slice_progress);
+            }
+            // Sorted, because `RandomStagger` mints a seed per press and owes
+            // the same SHAPE of entrance rather than the same permutation of
+            // it: as many slices under way, by as much. A press that reversed
+            // leftover poses instead sorts to a spread of them, not to one
+            // tick's worth.
+            let shape = |mut p: [f32; 11]| {
+                p.sort_by(f32::total_cmp);
+                p
+            };
+            assert_eq!(
+                shape(poses[0]),
+                shape(poses[1]),
+                "{order:?}: the earlier press did not start a fresh entrance",
+            );
+        }
     }
     #[test]
     fn late_delivered_short_notes_recover_the_factual_timeline_once() {
