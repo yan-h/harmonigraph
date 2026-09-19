@@ -168,17 +168,14 @@ metal::float3 palette_color(
     metal::texture2d<float, metal::access::sample> lut
 ) {
     uint levels = metal::uint2(lut.get_width(), lut.get_height()).x;
-    float x_1 = (metal::clamp(level_1, 0.0, 1.0) * static_cast<float>(levels)) - 0.5;
+    float x_1 = metal::max((metal::clamp(level_1, 0.0, 1.0) * static_cast<float>(levels)) - 0.5, 0.0);
     uint i_2 = naga_f2u32(metal::clamp(metal::floor(x_1), 0.0, static_cast<float>(levels - 1u)));
-    uint clamped_lod_e22 = metal::min(uint(0), lut.get_num_mip_levels() - 1);
-    metal::float4 _e22 = lut.read(metal::min(metal::uint2(metal::uint2(i_2, 0u)), metal::uint2(lut.get_width(clamped_lod_e22), lut.get_height(clamped_lod_e22)) - 1), clamped_lod_e22);
-    metal::float3 a = _e22.xyz;
-    if (x_1 < 0.0) {
-        return (a * (x_1 + 0.5)) * 2.0;
-    }
-    uint clamped_lod_e40 = metal::min(uint(0), lut.get_num_mip_levels() - 1);
-    metal::float4 _e40 = lut.read(metal::min(metal::uint2(metal::uint2(metal::min(i_2 + 1u, levels - 1u), 0u)), metal::uint2(lut.get_width(clamped_lod_e40), lut.get_height(clamped_lod_e40)) - 1), clamped_lod_e40);
-    metal::float3 b = _e40.xyz;
+    uint clamped_lod_e24 = metal::min(uint(0), lut.get_num_mip_levels() - 1);
+    metal::float4 _e24 = lut.read(metal::min(metal::uint2(metal::uint2(i_2, 0u)), metal::uint2(lut.get_width(clamped_lod_e24), lut.get_height(clamped_lod_e24)) - 1), clamped_lod_e24);
+    metal::float3 a = _e24.xyz;
+    uint clamped_lod_e35 = metal::min(uint(0), lut.get_num_mip_levels() - 1);
+    metal::float4 _e35 = lut.read(metal::min(metal::uint2(metal::uint2(metal::min(i_2 + 1u, levels - 1u), 0u)), metal::uint2(lut.get_width(clamped_lod_e35), lut.get_height(clamped_lod_e35)) - 1), clamped_lod_e35);
+    metal::float3 b = _e35.xyz;
     return metal::mix(a, b, metal::fract(x_1));
 }
 
