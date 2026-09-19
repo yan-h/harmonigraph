@@ -18,8 +18,6 @@
 //! height sets how finely the image is sampled and not how bright it is. The
 //! vertex rule feeding the two slab taps is `heatmap_mesh`'s.
 
-use std::collections::HashMap;
-
 use crate::pass_aged::PassAged;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -917,6 +915,7 @@ impl SpectrogramHeadless {
 mod tests {
     use super::*;
     use crate::gpu_harness::{headless_device, readback, render_to_texture};
+    use std::collections::HashMap;
 
     /// 128 x 128 at one point per pixel. Every coordinate below is a dyadic
     /// fraction of that, so the rasterizer's interpolation of `slab` and `t`

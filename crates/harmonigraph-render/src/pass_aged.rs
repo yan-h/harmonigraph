@@ -120,12 +120,6 @@ impl<T> PassAged<T> {
         self.entries.remove(&id);
     }
 
-    /// Mutable access without stamping, for a caller that has already stamped
-    /// this pass and needs the value again after a borrow split.
-    pub(crate) fn get_mut(&mut self, id: u64) -> Option<&mut T> {
-        self.entries.get_mut(&id).map(|entry| &mut entry.value)
-    }
-
     /// Every live value, without stamping any of them — for the shared state a
     /// pane holds a copy of, which has to reach the panes that have already
     /// prepared this pass as well as the ones that have not.
