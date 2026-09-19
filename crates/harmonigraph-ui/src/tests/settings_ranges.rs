@@ -13,7 +13,7 @@ use crate::widgets::range_probe::collect;
 use crate::*;
 use harmonigraph_core::configuration::{ConfigMutation, ConfigReducer, PolicyConfig, TuningModes};
 use harmonigraph_scene::{
-    Projection, ShadowKernel, SpectralAtmosphere, SpectralReading, ViewConfig, SEVENS_LAYER_LIMIT,
+    Projection, ShadowKernel, SpectralAtmosphere, SpectralReading, SEVENS_LAYER_LIMIT,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -420,27 +420,18 @@ fn top_level(serialized: &str) -> Vec<(&str, &str)> {
     fields.into_iter().map(|field| field.split_once(':').expect("a pair has a colon")).collect()
 }
 
-/// The `poison!` block above is hand-written, so a float added to `ViewConfig`
-/// joins this guard only if somebody remembers to name it there — `spacing`
-/// and `spectral_ring_width` were both simply missing, and the second of those
-/// is a handle on the Layers bar.
-///
-/// So the list is checked against the struct's OWN serialized form rather than
-/// against a second list: every top-level key whose fresh value is a decimal
-/// number is a dialled float, and the guard has to have moved it. Integers
-/// (the sevens stack, the naming reach, the octave wheel) and choices carry no
-/// decimal point, and a nested struct is not a number — the curve, the note
-/// animation, the atmosphere, the gradient and the four shadow groups are each
-/// poisoned or excluded on their own terms above.
-#[test]
-fn the_loaded_state_guard_poisons_every_dialled_view_float() {
-    let mut saved = fresh();
-    poison(&mut saved, Edge::High);
-    let opened = ron::to_string(&ViewConfig::default()).expect("a view serializes");
-    let poisoned = ron::to_string(&saved.picture.appearance.view).expect("a view serializes");
+/// Compare one owner's direct float fields against its own serialized shape,
+/// so the hand-written poison inventory cannot silently leave one at default.
+/// RON decimal spelling is a heuristic, not type reflection: integers, choices,
+/// nested values and floats without a decimal point are not recognized here.
+fn assert_poisoned_float_fields<T: serde::Serialize>(label: &str, opened: &T, poisoned: &T) {
+    let opened = ron::to_string(opened).expect("settings serialize");
+    let poisoned = ron::to_string(poisoned).expect("settings serialize");
+    let (before, after) = (top_level(&opened), top_level(&poisoned));
+    assert_eq!(before.len(), after.len(), "two serializations of {label} differ in length");
     let (mut dialled, mut missed) = (0, Vec::new());
-    for ((key, was), (again, now)) in top_level(&opened).into_iter().zip(top_level(&poisoned)) {
-        assert_eq!(key, again, "two serializations of one struct named different fields");
+    for ((key, was), (again, now)) in before.into_iter().zip(after) {
+        assert_eq!(key, again, "two serializations of {label} named different fields");
         if !was.contains('.') || was.parse::<f32>().is_err() {
             continue;
         }
@@ -449,8 +440,41 @@ fn the_loaded_state_guard_poisons_every_dialled_view_float() {
             missed.push(key);
         }
     }
-    assert!(missed.is_empty(), "the loaded-state guard never poisons {missed:?}");
-    // What counts as a dialled float is read off the spelling, so a change in
-    // RON's would otherwise leave this passing over nothing at all.
-    assert!(dialled > 30, "only {dialled} of the view's fields read as dialled floats");
+    assert!(missed.is_empty(), "the loaded-state guard never poisons {label} {missed:?}");
+    // Detect an owner going wholly unrecognized if RON's spelling changes.
+    // This does not prove that every float spelling was recognized.
+    assert!(dialled > 0, "none of {label}'s fields read as dialled floats");
+}
+
+/// Every direct float in these owners belongs in the poison fixture. The
+/// nested owners also contain choices/booleans; only their floats are checked.
+/// Owners mixing dialled and non-dialled floats (such as gradients) need their
+/// own treatment, and future nested owners must be added explicitly. This is
+/// fixture completeness, not discovery of controls: the conditional scenarios,
+/// real bar probes and visit assertions above still establish UI coverage.
+#[test]
+fn the_loaded_state_guard_poisons_every_dialled_view_float() {
+    let opened = fresh();
+    let mut saved = fresh();
+    poison(&mut saved, Edge::High);
+    let old = &opened.picture.appearance;
+    let new = &saved.picture.appearance;
+    assert_poisoned_float_fields("view", &old.view, &new.view);
+    assert_poisoned_float_fields(
+        "view.note_animation",
+        &old.view.note_animation,
+        &new.view.note_animation,
+    );
+    assert_poisoned_float_fields("view.glow_curve", &old.view.glow_curve, &new.view.glow_curve);
+    assert_poisoned_float_fields("view.atmosphere", &old.view.atmosphere, &new.view.atmosphere);
+    assert_poisoned_float_fields(
+        "spectrum.atmosphere",
+        &old.spectrum.atmosphere,
+        &new.spectrum.atmosphere,
+    );
+    for (index, (before, after)) in
+        old.view.shadow.groups().into_iter().zip(new.view.shadow.groups()).enumerate()
+    {
+        assert_poisoned_float_fields(&format!("view.shadow[{index}]"), &before, &after);
+    }
 }
