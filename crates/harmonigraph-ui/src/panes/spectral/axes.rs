@@ -60,9 +60,10 @@ pub(super) const LABEL_INSET_PT: f32 = 2.0;
 ///
 /// The spectrum's CEILING end, which is the edge its peaks reach, rather than
 /// the baseline they stand on. The baseline is the busiest line the pane has:
-/// joined, it is the now-line, with the spectrogram's newest column arriving on
-/// one side of it and every sounding note's ribbon reaching through it from the
-/// other, so a number written there is read against three pictures at once and
+/// joined, it is the now-line, with the spectrogram's leading edge stopping
+/// half an analysis window short of it on one side (#914) and every sounding
+/// note's ribbon reaching through it from the other, so a number written there
+/// is read against three pictures at once and
 /// competes with the one line on the pane that divides two of them. The
 /// ceiling end is the quiet one — only a peak at full scale reaches it — and
 /// it is the end of the ruling nearest what the number is being looked up

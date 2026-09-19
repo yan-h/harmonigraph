@@ -237,8 +237,8 @@ fn a_live_column_is_stamped_at_the_middle_of_its_window() {
         "a column measured over [{:.3}, {now}] was stamped {stamped}, not its middle",
         now - window,
     );
-    // And the pane's own idea of that lag agrees, which is what keeps the
-    // strip's near edge on the now-line rather than half a window short.
+    // And the pane's own idea of that lag agrees, which is what the heatmap's
+    // near edge stops short of the now-line BY (#914).
     assert!((spectrum.column_lag() - window * 0.5).abs() < 1e-9);
 }
 
