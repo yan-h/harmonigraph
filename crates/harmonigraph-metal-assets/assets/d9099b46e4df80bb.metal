@@ -37,8 +37,6 @@ struct Cloud {
     float wash_pool;
     float wash_grain;
     float wash_layers;
-    float wash_black;
-    char _pad27[4];
 };
 constant float CLOUD_UNITS = 10.0;
 constant float SCALE_CELLS = 2.7272727;

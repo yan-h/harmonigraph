@@ -62,8 +62,6 @@ struct Cloud {
     float wash_pool;
     float wash_grain;
     float wash_layers;
-    float wash_black;
-    char _pad27[4];
 };
 struct Pile {
     metal::float2 face;
@@ -878,11 +876,7 @@ Painted wash_tone(
     float _e131 = pigment;
     float pig = metal::max(_e131, 0.0);
     float tone = paper - (pig * (WASH_PIG_DEPTH + (0.65 * paper)));
-    float knee = metal::smoothstep(0.0, WASH_BLACK_KNEE, _e88);
-    float _e145 = cloud.wash_black;
-    float _e150 = cloud.wash_black;
-    float hold = (1.0 - _e145) + (_e150 * knee);
-    return Painted {tone, hold};
+    return Painted {tone, metal::smoothstep(0.0, WASH_BLACK_KNEE, _e88)};
 }
 
 float wash_average_pile(
