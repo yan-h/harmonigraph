@@ -1850,7 +1850,7 @@ impl ViewConfig {
     /// camera). Drawing the reach window there is a picture; an arbitrary huge
     /// number is a stall.
     /// This is the DEMAND — what the geometry asks for, before
-    /// [`MAX_DRAWN_NODES`](crate::MAX_DRAWN_NODES) holds it down.
+    /// [`MAX_DRAWN_NODES`] holds it down.
     /// [`scrolled`](Self::scrolled) is the same window trimmed to fit, and the
     /// two part company exactly where the cap is reached.
     ///
@@ -1955,7 +1955,7 @@ impl ViewConfig {
     }
 
     /// The sheets and steps one pane draws, held to
-    /// [`MAX_DRAWN_NODES`](crate::MAX_DRAWN_NODES).
+    /// [`MAX_DRAWN_NODES`].
     ///
     /// Every reader wants this one: the trim is what keeps a frame's cost
     /// bounded whatever the camera is asked for. [`demanded`](Self::demanded)
