@@ -35,22 +35,25 @@ struct VertexOut {
     float t;
     char _pad3[8];
 };
+constant float CLOUD_UNITS = 10.0;
+constant float SCALE_CELLS = 2.7272727;
 constant float DOME_RADIUS = 1.15;
 constant float DOME_JITTER = 0.3;
 constant float DOME_RADIUS_MIN = 0.95;
 constant float DOME_RADIUS_MAX = 1.32;
 constant float DOME_UNION = 9.0;
+constant float DOME_VARIETY_GAIN = 5.0;
 constant float DOME_FACE = 1.5122874;
 constant float ROCK_TILT = 0.3;
 constant float SUN_LEAN = 1.0;
 constant float SUN_KNEE = 0.03;
+constant float RELIEF_FLOOR_FALL = 3.22;
 constant float DOME_LACUNARITY = 2.1;
 constant float DOME_FINE_GAIN = 0.22;
 constant float CLOUD_SHADE = 0.64;
 constant int WASH_RING = 2;
 constant float WASH_JITTER = 0.4;
 constant float WASH_RAGGED = 0.3;
-constant float WASH_RADIUS = 1.18;
 constant float WASH_RADIUS_MIN = 1.02;
 constant float WASH_RADIUS_MAX = 1.66;
 constant float WASH_CELLS = 5.25;
@@ -68,7 +71,7 @@ constant float WASH_TONE_FLOOR = 0.05;
 constant float WASH_PIVOT = 0.45;
 constant float WASH_LIFT_A = 1.15;
 constant float WASH_LIFT_B = 0.16;
-constant float WASH_BLACK_KNEE = 0.35;
+constant float WASH_BLACK_KNEE = 0.175;
 
 uint stored(
     uint slot,
@@ -78,9 +81,9 @@ uint stored(
     constant _mslBufferSizes& _buffer_sizes
 ) {
     uint _e4 = locals.stride;
-    uint i_1 = (slot * _e4) + bucket;
-    uint _e11 = grid[metal::min(unsigned(i_1 >> 2u), (_buffer_sizes.size1 - 0 - 4) / 4)];
-    return (_e11 >> ((i_1 & 3u) * 8u)) & 255u;
+    uint i = (slot * _e4) + bucket;
+    uint _e11 = grid[metal::min(unsigned(i >> 2u), (_buffer_sizes.size1 - 0 - 4) / 4)];
+    return (_e11 >> ((i & 3u) * 8u)) & 255u;
 }
 
 float bucket_x(
@@ -230,89 +233,47 @@ float field_level(
     return metal::mix(_e47, _e49, fx);
 }
 
-struct fs_density_sourceInput {
+float heatmap_level(
+    VertexOut in_2,
+    constant Locals& locals,
+    device type_3 const& grid,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    float _e2 = field_level(in_2, false, locals, grid, _buffer_sizes);
+    return _e2;
+}
+
+metal::float4 heatmap_color(
+    VertexOut in_3,
+    constant Locals& locals,
+    device type_3 const& grid,
+    metal::texture2d<float, metal::access::sample> lut,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    float _e1 = heatmap_level(in_3, locals, grid, _buffer_sizes);
+    uint levels = metal::uint2(lut.get_width(), lut.get_height()).x;
+    uint i_1 = metal::min(naga_f2u32(_e1 * static_cast<float>(levels)), levels - 1u);
+    uint clamped_lod_e15 = metal::min(uint(0), lut.get_num_mip_levels() - 1);
+    metal::float4 c = lut.read(metal::min(metal::uint2(metal::uint2(i_1, 0u)), metal::uint2(lut.get_width(clamped_lod_e15), lut.get_height(clamped_lod_e15)) - 1), clamped_lod_e15);
+    return metal::float4(c.xyz, 1.0);
+}
+
+struct fs_heatmap_gammaInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_density_sourceOutput {
+struct fs_heatmap_gammaOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_density_sourceOutput fs_density_source(
-  fs_density_sourceInput varyings [[stage_in]]
+fragment fs_heatmap_gammaOutput fs_heatmap_gamma(
+  fs_heatmap_gammaInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , constant Locals& locals [[buffer(0)]]
 , device type_3 const& grid [[buffer(1)]]
+, metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
 , constant _mslBufferSizes& _buffer_sizes [[buffer(2)]]
 ) {
     const VertexOut in = { position, varyings.slab, varyings.t };
-    float at = {};
-    VertexOut tap = {};
-    float left = {};
-    float integral = 0.0;
-    uint i = 0u;
-    float next = {};
-    float width = metal::fwidth(in.slab);
-    if (width < 0.0001) {
-        float _e6 = field_level(in, true, locals, grid, _buffer_sizes);
-        return fs_density_sourceOutput { metal::float4(_e6, 0.0, 0.0, 1.0) };
-    }
-    float high = in.slab + (width * 0.5);
-    at = in.slab - (width * 0.5);
-    float _e20 = at;
-    float covered = high - _e20;
-    if (covered <= 0.0) {
-        float _e25 = field_level(in, true, locals, grid, _buffer_sizes);
-        return fs_density_sourceOutput { metal::float4(_e25, 0.0, 0.0, 1.0) };
-    }
-    tap = in;
-    float _e32 = at;
-    tap.slab = _e32;
-    VertexOut _e33 = tap;
-    float _e35 = field_level(_e33, true, locals, grid, _buffer_sizes);
-    left = _e35;
-    uint _e41 = locals.run_slabs;
-    float last_center = static_cast<float>(_e41) - 0.5;
-    uint2 loop_bound_1 = uint2(4294967295u);
-    bool loop_init_1 = true;
-    while(true) {
-        if (metal::all(loop_bound_1 == uint2(0u))) { break; }
-        loop_bound_1 -= uint2(loop_bound_1.y == 0u, 1u);
-        if (!loop_init_1) {
-            uint _e84 = i;
-            i = _e84 + 1u;
-        }
-        loop_init_1 = false;
-        uint _e47 = i;
-        uint _e50 = locals.run_slabs;
-        if (_e47 < (_e50 + 2u)) {
-        } else {
-            break;
-        }
-        {
-            float _e54 = at;
-            if (_e54 >= high) {
-                break;
-            }
-            float _e56 = at;
-            next = metal::min(high, metal::max(0.5, metal::floor(_e56 - 0.5) + 1.5));
-            float _e66 = at;
-            if (_e66 >= last_center) {
-                next = high;
-            }
-            float _e69 = next;
-            tap.slab = _e69;
-            VertexOut _e70 = tap;
-            float _e72 = field_level(_e70, true, locals, grid, _buffer_sizes);
-            float _e73 = integral;
-            float _e74 = left;
-            float _e78 = next;
-            float _e79 = at;
-            integral = _e73 + (((_e74 + _e72) * 0.5) * (_e78 - _e79));
-            left = _e72;
-            float _e83 = next;
-            at = _e83;
-        }
-    }
-    float _e87 = integral;
-    return fs_density_sourceOutput { metal::float4(_e87 / covered, 0.0, 0.0, 1.0) };
+    metal::float4 _e1 = heatmap_color(in, locals, grid, lut, _buffer_sizes);
+    return fs_heatmap_gammaOutput { _e1 };
 }

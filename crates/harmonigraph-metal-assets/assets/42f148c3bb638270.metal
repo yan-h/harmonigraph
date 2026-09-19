@@ -12,7 +12,7 @@ struct Cloud {
     float spread;
     float contours;
     float contour_softness;
-    uint style;
+    float contour_strength;
     uint _pad;
 };
 struct Vertex {
@@ -94,14 +94,14 @@ metal::float4 filtered(
     return metal::float4(_e99 / _e100, 0.0, 0.0, 1.0);
 }
 
-struct fs_wide_hInput {
+struct fs_close_hInput {
     metal::float2 uv [[user(loc0), center_perspective]];
 };
-struct fs_wide_hOutput {
+struct fs_close_hOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_wide_hOutput fs_wide_h(
-  fs_wide_hInput varyings [[stage_in]]
+fragment fs_close_hOutput fs_close_h(
+  fs_close_hInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , metal::texture2d<float, metal::access::sample> source [[texture(0)]]
 , metal::sampler linear_sampler [[sampler(0)]]
@@ -109,6 +109,6 @@ fragment fs_wide_hOutput fs_wide_h(
 ) {
     const Vertex in = { position, varyings.uv };
     float _e5 = cloud.step.x;
-    metal::float4 _e11 = filtered(in.uv, metal::float2(_e5 * 5.0, 0.0), false, source, linear_sampler);
-    return fs_wide_hOutput { _e11 };
+    metal::float4 _e9 = filtered(in.uv, metal::float2(_e5, 0.0), true, source, linear_sampler);
+    return fs_close_hOutput { _e9 };
 }

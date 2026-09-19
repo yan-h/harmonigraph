@@ -34,22 +34,25 @@ struct VertexOut {
     float t;
     char _pad3[8];
 };
+constant float CLOUD_UNITS = 10.0;
+constant float SCALE_CELLS = 2.7272727;
 constant float DOME_RADIUS = 1.15;
 constant float DOME_JITTER = 0.3;
 constant float DOME_RADIUS_MIN = 0.95;
 constant float DOME_RADIUS_MAX = 1.32;
 constant float DOME_UNION = 9.0;
+constant float DOME_VARIETY_GAIN = 5.0;
 constant float DOME_FACE = 1.5122874;
 constant float ROCK_TILT = 0.3;
 constant float SUN_LEAN = 1.0;
 constant float SUN_KNEE = 0.03;
+constant float RELIEF_FLOOR_FALL = 3.22;
 constant float DOME_LACUNARITY = 2.1;
 constant float DOME_FINE_GAIN = 0.22;
 constant float CLOUD_SHADE = 0.64;
 constant int WASH_RING = 2;
 constant float WASH_JITTER = 0.4;
 constant float WASH_RAGGED = 0.3;
-constant float WASH_RADIUS = 1.18;
 constant float WASH_RADIUS_MIN = 1.02;
 constant float WASH_RADIUS_MAX = 1.66;
 constant float WASH_CELLS = 5.25;
@@ -67,7 +70,7 @@ constant float WASH_TONE_FLOOR = 0.05;
 constant float WASH_PIVOT = 0.45;
 constant float WASH_LIFT_A = 1.15;
 constant float WASH_LIFT_B = 0.16;
-constant float WASH_BLACK_KNEE = 0.35;
+constant float WASH_BLACK_KNEE = 0.175;
 metal::float2 unpackFloat32x2_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint b6, uint b7) {
     return metal::float2(as_type<float>(b3 << 24 | b2 << 16 | b1 << 8 | b0), as_type<float>(b7 << 24 | b6 << 16 | b5 << 8 | b4));
 }
