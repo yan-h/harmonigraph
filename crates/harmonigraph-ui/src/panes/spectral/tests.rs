@@ -1878,7 +1878,10 @@ fn analyzer_softness_is_independent_and_keeps_the_measured_contour() {
     };
     let soft = meshes(cfg);
     assert_eq!(soft.len(), 2, "fixture must draw the halo and body, without an outline");
-    cfg.atmosphere.style = harmonigraph_scene::SpectrogramStyle::Plain;
+    cfg.atmosphere.pitch_softness = 0.0;
+    cfg.atmosphere.time_softness = 0.0;
+    cfg.atmosphere.contour_strength = 0.0;
+    cfg.atmosphere.cloud_depth = 0.0;
     cfg.atmosphere.note_glow = 0.0;
     assert_eq!(meshes(cfg), soft, "other effects changed the analyzer");
     cfg.atmosphere.analyzer_softness = 0.5;

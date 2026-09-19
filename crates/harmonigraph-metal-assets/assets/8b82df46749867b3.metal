@@ -18,7 +18,7 @@ struct Cloud {
     float spread;
     float contours;
     float contour_softness;
-    uint style;
+    float contour_strength;
     uint _pad;
     metal::float2 drift;
     float time;
@@ -27,11 +27,9 @@ struct Cloud {
     float scale_variety;
     float scale_refract;
     float scale_relief;
-    float scale_facet;
     float scale_rock;
     uint cloud_style;
     float wash_size;
-    float wash_variety;
     float wash_fuzz;
     float wash_ragged;
     float wash_lobe;
@@ -39,10 +37,8 @@ struct Cloud {
     float wash_pool;
     float wash_grain;
     float wash_layers;
-    float wash_soften;
-    float wash_wander;
     float wash_black;
-    char _pad31[4];
+    char _pad27[4];
 };
 constant float CLOUD_UNITS = 10.0;
 constant float SCALE_CELLS = 2.7272727;
@@ -63,7 +59,6 @@ constant float CLOUD_SHADE = 0.64;
 constant int WASH_RING = 2;
 constant float WASH_JITTER = 0.4;
 constant float WASH_RAGGED = 0.3;
-constant float WASH_RADIUS = 1.18;
 constant float WASH_RADIUS_MIN = 1.02;
 constant float WASH_RADIUS_MAX = 1.66;
 constant float WASH_CELLS = 5.25;
@@ -81,7 +76,7 @@ constant float WASH_TONE_FLOOR = 0.05;
 constant float WASH_PIVOT = 0.45;
 constant float WASH_LIFT_A = 1.15;
 constant float WASH_LIFT_B = 0.16;
-constant float WASH_BLACK_KNEE = 0.35;
+constant float WASH_BLACK_KNEE = 0.175;
 
 float density_decode(
     float value
