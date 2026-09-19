@@ -28,7 +28,10 @@ Timestamp minimums are often zero and mean nothing.
 
 **Every stamp is the END of a pass.** A tile-based GPU runs a later pass's vertex stage ahead of an earlier pass's fragments,
 so a beginning-of-pass stamp after `prepare` landed before the light field's fragment work and billed it to the paint pass.
-Fragment stages finish in order.
+End stamps are better and still not a clean split:
+the stamp between `prepare` and `paint` is an independent one-texel pass that nothing orders against its neighbours,
+and the tone pass below — encoded in `prepare` — reads out under `paint`.
+**The sum of the two columns is the figure to trust**, and the split is a hint.
 
 ## Readings on Apple M1 Pro (14-core) / Metal
 
@@ -100,6 +103,18 @@ These are proposals; only the first has a measured bound.
 **Lever 1 is built**, as the `Cloud pixel size` dial:
 it runs 0.5 to 4 points per sample, is native at the fresh 0.5 on a Retina pane, and swallows lever 3 by being a dial rather than one fixed reduction.
 `PROBE_CLOUD_PIXEL` re-reads the table above at any of its settings.
+Measured at 3840x2160 and 2 px/pt, light plus paint, median ms per frame:
+
+| `Cloud pixel size` | Mosaic | Watercolor |
+| --- | --- | --- |
+| 0.5 pt (native) | 13.6 | 38.0 |
+| 1 pt | 4.9 | 12.9 |
+| 1.5 pt | 2.7 | 5.0 |
+| 2 pt | 2.2 | 3.5 |
+| 4 pt | 1.7 | 2.1 |
+
+Mosaic is inside the 6.9 ms frame from 1 pt and Watercolor from 1.5 pt.
+Past 2 pt there is little left to buy: the floor is the 1.4 to 3 ms that is not the walk.
 
 | Priority | Change | Expected | What it costs |
 | --- | --- | --- | --- |
