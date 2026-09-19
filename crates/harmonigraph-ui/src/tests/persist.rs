@@ -8,6 +8,29 @@ use crate::*;
 use harmonigraph_scene::{Camera, NoteNames};
 
 #[test]
+fn retired_spacing_preserves_appearance_and_workspace() {
+    let mut state = fresh();
+    state.picture.appearance.view.label_scale = 0.7;
+    state.picture.appearance.camera.distance = 18.0;
+    state.workspace.interaction.ui_scale = 1.25;
+    let saved = state.save_persist();
+    let appearance = state.picture.appearance.serialize();
+    assert!(!appearance.contains("spacing:"));
+    for spacing in ["3.0", "0.0", "NaN"] {
+        let old = saved.replacen("view:(", &format!("view:(spacing:{spacing},"), 1);
+        assert_ne!(old, saved, "the fixture must insert the retired key");
+        let mut restored = fresh();
+        assert!(restored.load_persist(&old));
+        assert_eq!(restored.save_persist(), saved);
+
+        // Take replay and explicit export replacements share this parser.
+        let old = appearance.replacen("view:(", &format!("view:(spacing:{spacing},"), 1);
+        assert_ne!(old, appearance);
+        assert_eq!(AppearanceDocument::parse(&old).unwrap().serialize(), appearance);
+    }
+}
+
+#[test]
 fn persist_round_trips_camera_and_view() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
@@ -2073,7 +2096,7 @@ fn animation_controls_round_trip_and_retired_choice_does_not_discard_appearance(
         }
     }
     let mut state = fresh();
-    state.picture.appearance.view.spacing = 3.0;
+    state.picture.appearance.view.label_scale = 0.7;
     state.picture.appearance.view.note_animation.order =
         harmonigraph_scene::AnimationOrder::Circular;
     state.picture.appearance.view.note_animation.stagger_spread = 0.63;
@@ -2085,7 +2108,7 @@ fn animation_controls_round_trip_and_retired_choice_does_not_discard_appearance(
         state.picture.appearance.view.note_animation.stagger_spread,
         harmonigraph_scene::NoteAnimationConfig::default().stagger_spread
     );
-    assert_eq!(state.picture.appearance.view.spacing, 3.0);
+    assert_eq!(state.picture.appearance.view.label_scale, 0.7);
     assert_eq!(
         state.picture.appearance.view.note_animation.order,
         harmonigraph_scene::AnimationOrder::Circular
@@ -2097,5 +2120,5 @@ fn animation_controls_round_trip_and_retired_choice_does_not_discard_appearance(
     assert!(saved.contains("note_transition:DrawAndRetract"));
     assert!(state.load_persist(&saved));
     assert_eq!(state.picture.appearance.view.note_animation, Default::default());
-    assert_eq!(state.picture.appearance.view.spacing, 3.0);
+    assert_eq!(state.picture.appearance.view.label_scale, 0.7);
 }

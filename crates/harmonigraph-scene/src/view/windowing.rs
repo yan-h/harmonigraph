@@ -62,25 +62,14 @@ impl ViewConfig {
     pub(crate) fn demanded(&self, camera: &Camera, aspect: f32) -> DrawnWindow {
         let center = self.center();
         let (low, high) = self.sevens_window();
-        let flat = |threes: i32, fives: i32| DrawnWindow {
-            min: LatticePos::new(center.threes - threes, center.fives - fives, low),
-            max: LatticePos::new(center.threes + threes, center.fives + fives, high),
-        };
-        let spacing = self.spacing;
-        // A spacing of zero divides by nothing and a NaN one poisons the
-        // rectangle; both leave every step at the same place, where one node
-        // is the whole picture there is to draw.
-        if spacing.is_nan() || spacing <= 0.0 {
-            return flat(0, 0);
-        }
         // The slab the sheets occupy, in world depth about the home sheet —
         // `lattice_to_world` puts the sevens axis on z, and the window's
         // center sheet is drawn at the origin. Measured from HOME rather than
         // symmetrically about it: an asymmetric stack leans to one side of the
         // origin, and a slab taken as ±(the deeper end) would ask the camera
         // for a depth with no sheet in it.
-        let back = (low - center.sevens) as f32 * spacing;
-        let front = (high - center.sevens) as f32 * spacing;
+        let back = (low - center.sevens) as f32;
+        let front = (high - center.sevens) as f32;
         let Some(sheet) = camera.visible_world_bounds(aspect, back, front) else {
             return self.reach();
         };
@@ -109,10 +98,10 @@ impl ViewConfig {
         // growing at the edge: its own radius, plus a step for the NAME, which
         // is drawn beside the node and so reaches onto the pane from a node
         // that is not on it.
-        let margin = spacing * (1.0 + NODE_RADIUS_FACTOR);
+        let margin = 1.0 + NODE_RADIUS_FACTOR;
         // Each end of the rectangle taken on its own, in steps from the WORLD
         // ORIGIN — which is where `derive_scene` draws the center node, so a
-        // world coordinate divided by the spacing IS an offset from the
+        // world coordinate IS an offset from the
         // center, and the block is anchored where the picture is.
         //
         // Taking each end separately is the whole of what keeps the block off
@@ -125,7 +114,7 @@ impl ViewConfig {
         // rather than wrapping. (A NaN casts to 0, which is the center node —
         // also drawable.)
         let offset = |world: f32, round: fn(f32) -> f32| {
-            let steps = round(world / spacing);
+            let steps = round(world);
             let steps = if steps.is_nan() { 0 } else { steps as i32 };
             steps.clamp(-MAX_DRAWN_EXTENT, MAX_DRAWN_EXTENT)
         };
@@ -203,7 +192,7 @@ impl ViewConfig {
 
     /// Keep the window's center under the camera, moving both together so the
     /// picture does not stir: a whole step added to the center subtracts one
-    /// spacing from every node's world position, and taking the same off the
+    /// world unit from every node's world position, and taking the same off the
     /// camera's target leaves each node exactly where it was on screen.
     ///
     /// This is what puts the picture under the camera at all, and both windows
@@ -223,7 +212,7 @@ impl ViewConfig {
     /// sheet is home is [`center_sevens`](Self::center_sevens), a setting with
     /// a bar, not somewhere a sideways drag should arrive — and left to
     /// accumulate it is unbounded: 2500 pan gestures under perspective put the
-    /// target 747 spacings off the sheet, with the lattice long gone from the
+    /// target 747 world units off the sheet, with the lattice long gone from the
     /// pane and every frame still deriving twenty thousand nodes for it.
     /// Zeroing it makes a pan mean the same thing under all three
     /// projections, which is a slide ACROSS the sheet.
@@ -237,7 +226,7 @@ impl ViewConfig {
     /// target already inside its cell, so the extra call costs a render
     /// nothing and its frames stay reproducible.
     pub fn follow_camera(&mut self, camera: &mut Camera) {
-        if self.spacing.is_nan() || self.spacing <= 0.0 || !camera.target.is_finite() {
+        if !camera.target.is_finite() {
             return;
         }
         // Bounded well inside `i32`, because the center is added to an extent
@@ -249,9 +238,8 @@ impl ViewConfig {
         // step: an absurd target walks back a bound's worth per frame and
         // arrives.
         let steps = |world: f32| {
-            let steps = world / self.spacing;
-            if steps.is_finite() {
-                steps.round().clamp(-(MAX_CENTER as f32), MAX_CENTER as f32) as i32
+            if world.is_finite() {
+                world.round().clamp(-(MAX_CENTER as f32), MAX_CENTER as f32) as i32
             } else {
                 0
             }
@@ -264,8 +252,8 @@ impl ViewConfig {
         self.center_fives = self.center_fives.saturating_add(fives).clamp(-MAX_CENTER, MAX_CENTER);
         self.center_threes =
             self.center_threes.saturating_add(threes).clamp(-MAX_CENTER, MAX_CENTER);
-        camera.target.x -= fives as f32 * self.spacing;
-        camera.target.y -= threes as f32 * self.spacing;
+        camera.target.x -= fives as f32;
+        camera.target.y -= threes as f32;
         camera.target.z = 0.0;
     }
 }

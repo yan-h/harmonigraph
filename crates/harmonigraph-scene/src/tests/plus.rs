@@ -83,31 +83,6 @@ fn the_marker_unit_is_what_reads_a_markers_world_back_as_its_bars() {
     assert!(unit > 0.0, "the field must have a unit to be measured in");
     let arm = pluses_of(&view)[0].radius;
     assert!((arm / unit - 0.2).abs() < 1e-4, "an arm of 0.2 read back as {}", arm / unit,);
-    // The spacing is the one view bar under it, and it scales the field whole:
-    // both lengths move with the unit, so the bars read the same at either.
-    let wide = ViewConfig { spacing: view.spacing * 3.0, ..view.clone() };
-    assert!(
-        (unit_of(&wide) - unit * 3.0).abs() < 1e-4,
-        "trebling the spacing moved the unit to {}",
-        unit_of(&wide),
-    );
-    assert!(
-        (pluses_of(&wide)[0].radius / unit_of(&wide) - 0.2).abs() < 1e-4,
-        "a wider lattice read its own arm back as {}",
-        pluses_of(&wide)[0].radius / unit_of(&wide),
-    );
-    // ...and a step the BAR would not allow, which is the case this pair can
-    // only be broken at. `sanitize` owns that range, so a shell may hand the
-    // picture a step outside it, and the two lengths above have to keep coming
-    // off ONE reading of that step. A repair that bounded the unit and not the
-    // radius beside it would read this arm back at a fraction of its bar and
-    // grow every marker's quad by a Shadow no node has.
-    let past_bar = ViewConfig { spacing: SPACING_MAX * 2.5, ..view.clone() };
-    assert!(
-        (pluses_of(&past_bar)[0].radius / unit_of(&past_bar) - 0.2).abs() < 1e-4,
-        "a lattice stepped past the bar read its own arm back as {}",
-        pluses_of(&past_bar)[0].radius / unit_of(&past_bar),
-    );
 }
 
 #[test]
@@ -222,60 +197,19 @@ fn the_arm_bar_sets_how_far_a_marker_reaches_and_0_takes_it_away() {
 /// would ship whole at a size the shader cannot draw — the resting structure
 /// gone with nothing on screen saying why.
 ///
-/// Both factors, because they arrive by different routes: the arm is a bar's
-/// value and the spacing is a stored field with no bar at all. Each has a
-/// repair at the blob's door; this is the picture's own, for the shells that
-/// never cross it.
+/// The arm has a repair at the blob's door; this is the picture's own,
+/// for shells that never cross it.
 #[test]
 fn a_marker_radius_that_is_not_a_number_takes_the_field_away() {
-    for (field, view) in [
-        ("arm", ViewConfig { plus_arm: f32::NAN, ..plus_view() }),
-        ("spacing", ViewConfig { spacing: f32::NAN, ..plus_view() }),
-    ] {
+    for arm in [f32::NAN, f32::NEG_INFINITY] {
+        let view = ViewConfig { plus_arm: arm, ..plus_view() };
         let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
-        // The window is what a NaN spacing costs first (`scrolled` reads it as
-        // one node's worth of picture), so this says the fixture still reached
-        // a position for a marker to stand at.
+        // The fixture must reach a position for a marker to stand at.
         assert!(
             scene.nodes.iter().any(|n| n.on_home),
-            "a NaN {field} left no home position to mark, so the field below proves nothing",
+            "an arm of {arm} left no home position to mark, so the field below proves nothing",
         );
-        assert!(scene.pluses.is_empty(), "a NaN {field} shipped a marker field");
-    }
-}
-
-/// ...and the same spacing arriving through the blob's DOOR comes out a size,
-/// which is what makes the case above the shell's case rather than the loaded
-/// one's.
-///
-/// `sanitize` is the only thing that can put a value BACK — the picture can
-/// refuse to draw a number it cannot use, but it cannot invent the number the
-/// file should have held — and `spacing` was the field with no bar to be put
-/// back to, so it had no repair at all (#912). `marker_unit` is the half that
-/// reached the UI: `derive_scene` ships `marker_world(view, 1.0)` whatever it
-/// is, and every marker length on screen is read back through it.
-#[test]
-fn a_loaded_spacing_is_a_size_and_so_is_the_marker_unit() {
-    // Both shapes, because only one of them needs `finite_or`: NaN and the
-    // infinities answer no to every comparison a clamp makes, while 0, a
-    // negative, and a number far outside the world the camera measures in are
-    // ordinary comparisons the clamp settles on its own.
-    for broken in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -4.0, 1.0e9] {
-        let mut view = ViewConfig { spacing: broken, ..plus_view() };
-        view.sanitize();
-        // A range test rather than `is_finite() && > 0.0`: NaN fails
-        // `contains` the same way, and this also says the repair landed on a
-        // spacing the picture can be drawn at rather than merely on a number.
-        assert!(
-            (SPACING_MIN..=SPACING_MAX).contains(&view.spacing),
-            "a spacing of {broken} came through the door as {}",
-            view.spacing,
-        );
-        let unit = unit_of(&view);
-        assert!(unit.is_finite() && unit > 0.0, "a spacing of {broken} left marker_unit at {unit}");
-        // The fixture still has to derive a marker field, or the unit above is
-        // the unit of nothing and this passes over an empty picture.
-        assert!(!pluses_of(&view).is_empty(), "a spacing of {broken} left no marker field");
+        assert!(scene.pluses.is_empty(), "an arm of {arm} shipped a marker field");
     }
 }
 
