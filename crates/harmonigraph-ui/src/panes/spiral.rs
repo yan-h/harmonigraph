@@ -581,20 +581,20 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64,
     // has that the others do not is a difference between them that says
     // nothing. Through the renderer's own bound for the same reason.
     //
-    // Skipped whole when there is nothing to light, which is what keeps a
-    // reader who never turns the bloom on from paying for its pipelines at all
-    // — the callback would decline the work, but not before building them.
+    // Unconditionally, including on the frames with no strength and nothing
+    // sounding. The callback declines those itself without allocating, and it
+    // is the only thing that can: its sweep retires a chain on the clock of
+    // these calls, so a gate here aged the disc's own chain out after two
+    // silent seconds and rebuilt it inside the frame the next note arrived in.
     let bloom = harmonigraph_render::bloom_strength(state.appearance.view.bloom_strength);
-    if bloom > 0.0 && !marks.is_empty() {
-        painter.add(harmonigraph_render::glow_paint_callback(
-            rect,
-            marks,
-            bloom,
-            state.surfaces.target_format,
-            crate::panes::lattice::pane_id(surface),
-            painter.ctx().cumulative_pass_nr(),
-        ));
-    }
+    painter.add(harmonigraph_render::glow_paint_callback(
+        rect,
+        marks,
+        bloom,
+        state.surfaces.target_format,
+        crate::panes::lattice::pane_id(surface),
+        painter.ctx().cumulative_pass_nr(),
+    ));
     // The names last, and outside the disc, so nothing in the picture is over
     // them and they are over nothing in it — the halo above included, which is
     // the lattice's rule for a label as well.
@@ -1448,16 +1448,25 @@ mod tests {
         assert!(marks.iter().all(|mark| mark.color[3] > 0));
     }
 
-    /// Nothing to light asks for no halo: the pane adds the callback for a lit
-    /// dot at a strength above zero and for nothing else.
+    /// The halo's callback goes in on every frame this pane draws, the silent
+    /// ones included.
     ///
-    /// Counted as a DIFFERENCE rather than by picking the glow's callback out
-    /// of the frame, because the names are a callback of their own and the two
-    /// are the same shape from here. What the count is worth is that the
-    /// callback carries GPU pipelines built on first sight of it, so a reader
-    /// with the bloom off pays for none of them.
+    /// Its renderer retires a chain on the clock of these calls and has no
+    /// other evidence that a copy is still on screen, so a caller that asked
+    /// only on the frames it wanted a halo aged the disc's OWN chain out after
+    /// two silent seconds and rebuilt it, textures and all, inside the frame
+    /// the next note arrived in.
+    ///
+    /// What a declining frame costs is answered where the pipelines are —
+    /// `harmonigraph_render::glow`'s `nothing_to_light_builds_no_chain`, which
+    /// is why this can be unconditional: a frame with nothing to light builds
+    /// nothing, so a reader with the bloom off still pays for none of it.
+    ///
+    /// Counted rather than picked out of the frame, because the names and the
+    /// shadows are callbacks of their own and all of them are the same shape
+    /// from here.
     #[test]
-    fn nothing_to_light_asks_for_no_halo() {
+    fn the_halo_is_asked_for_on_every_frame_the_disc_draws() {
         let callbacks = |bloom: f32, sounding: bool| {
             let mut state = fresh();
             state.appearance.view.bloom_strength = bloom;
@@ -1477,13 +1486,22 @@ mod tests {
         };
         assert_eq!(
             callbacks(1.2, true),
-            callbacks(0.0, true) + 1,
-            "a lit dot at a strength above zero asks for exactly one more callback",
+            callbacks(0.0, true),
+            "the bloom strength decided whether the callback went in",
+        );
+        // The emptiest frame the pane can draw — no strength, nothing
+        // sounding, so no dots, no shadow and no names. What is left is the
+        // halo's callback and the spectral shadow's finish, which is likewise
+        // unconditional. A gate on either would read 1 here.
+        assert_eq!(
+            callbacks(0.0, false),
+            2,
+            "a silent frame asks for something other than the halo and the shadow finish",
         );
         assert_eq!(
             callbacks(1.2, false),
             callbacks(0.0, false),
-            "a strength above zero asked for a halo with nothing sounding",
+            "the bloom strength decided whether the callback went in with nothing sounding",
         );
     }
 
