@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Canonical full CI gate: formatting, markdown clause breaks and local links, workspace clippy with warnings denied,
 # workspace tests, the plugin package check, the release all-targets check, harmonigraph-render's own tests,
-# vendored GUI crates' tests, the optional CLAP probe fixture, doc links, the harmonigraph-core dependency
+# vendored GUI crates' tests, the optional CLAP probe fixture and the gated startup-probe example, doc links, the harmonigraph-core dependency
 # guard, the security-audit trigger split, the CI group split, pinned shared
 # skills in fresh worktrees, worktree reclaim safety, and the registered-worktree bundle swap.
 #
@@ -104,6 +104,20 @@ run cargo check -p harmonigraph-plugin
 
 # The default CLAP configuration owner is exercised without enabling the probe.
 run cargo test -p harmonigraph-plugin --features nice-plug/assert_process_allocs configuration::tests::
+
+# ...and this is the probe ON, which no other gate here reaches: `startup-probe`
+# is off by default and `editor-startup` carries it as a `required-features`, so
+# every check above — including the `--all-targets` release one — skips the
+# example entirely. That is how #875 happened: three state accesses in
+# `startup_probe.rs` went stale across two refactors of `SharedState` and the
+# tree stayed green, and the probe was found broken at the moment it was wanted,
+# which is the only moment anyone runs it. The cost of a native editor timing
+# nobody could take is what this 37s is buying.
+#
+# `check` rather than `build`, and the example rather than the package: the
+# failure mode is a compile break, and nothing here can RUN a parented native
+# editor anyway — that needs a window server and takes 90s of frames.
+run cargo check -p harmonigraph-plugin --example editor-startup --features startup-probe
 
 # Every other gate here runs the dev profile, and the profile hides a class of
 # break by itself. `nice-assert-no-alloc` compiles its allocation guard out when
@@ -275,7 +289,7 @@ sccache --show-stats 2>/dev/null \
 
 echo
 if [ "$CI_GROUP" = all ]; then
-  echo "✅ full CI passed (fmt + markdown breaks + markdown links + workspace clippy + workspace tests + plugin check + release check + render tests + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + shared-skills worktrees + reclaim safety + plugin swap)"
+  echo "✅ full CI passed (fmt + markdown breaks + markdown links + workspace clippy + workspace tests + plugin check + startup probe + release check + render tests + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + shared-skills worktrees + reclaim safety + plugin swap)"
 else
   echo "✅ CI group '$CI_GROUP' passed — one of: ${CI_GROUPS[*]}"
 fi
