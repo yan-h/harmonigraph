@@ -359,6 +359,36 @@ Custom camera perspective (#964) and note-naming search reach (#963) remain less
 show which pictures or names change before asking Yan to value an unfamiliar hidden setting.
 Non-use of the standalone application also would not by itself establish that its agent/development consumers can be removed.
 
+## Whole-feature usage inventory
+
+Yan subsequently reported using Spiral occasionally,
+and never personally using the Notes pane,
+console,
+standalone application or adaptive-tuning laboratory.
+This is direct current usage evidence.
+No removal of those four interfaces/tools has been approved.
+
+| Feature | Current evidence | Next audit boundary |
+| --- | --- | --- |
+| Spiral | Occasionally used by Yan. | Retain; do not infer disuse of its render path. |
+| Notes pane | Not used by Yan. | Trace pane-specific presentation and development inspection before proposing retirement; retain shared note tracking and naming. |
+| Console | Not used by Yan. | Distinguish the pane from the messages, warnings and diagnostics it exposes. Identify a retained way to observe important faults. |
+| Standalone application | Not used by Yan. | Inventory agent/test/development uses before proposing removal, including the font fallback whose retained consumer is this shell. |
+| Adaptive-tuning laboratory | Not used by Yan. | Distinguish browser exploration UI from simulator/reference-fixture generation and policy checks. Personal non-use alone does not retire the musical oracle. |
+| Video layouts and spectrogram modes | Yan requested an explanation; usage unanswered. | Explain visible outcomes before any keep/remove choice. |
+
+Video layout means the composition of the exported frame:
+the ordinary Video preview arranges Lattice and Analyzer beside or above one another with a chosen split and aspect.
+Offline presets additionally include each picture pane alone,
+and a custom layout file can place or overlap panes.
+Those extra interfaces are separate from retaining the normal preview controls.
+
+The Video page's spectrogram modes change how time is presented:
+Scrolling uses the configured recent-history duration;
+Whole video still scrolls but expands that duration to the render length within existing limits;
+Playhead lays out the recorded spectrogram in advance and moves a cursor through it.
+These export choices do not change Yan's confirmed requirement to retain live spectrogram history while the editor is closed.
+
 ## Next use of this audit
 
 Keep the choice list small:

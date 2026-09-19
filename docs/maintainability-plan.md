@@ -54,6 +54,13 @@ and explicitly requires an accurate current lattice plus spectrogram history fro
 within the existing history limits.
 The [follow-up value decisions](requirements-value-audit.md#follow-up-value-decisions) record the answers to this batch;
 none of its four questions remains unresolved.
+In the subsequent whole-feature inventory,
+Yan reported occasional Spiral use and no personal use of the Notes pane,
+console,
+standalone application or adaptive-tuning laboratory.
+These are [usage leads](requirements-value-audit.md#whole-feature-usage-inventory),
+not additional approved removals;
+check agent, test and diagnostic consumers before recommending a scope.
 
 **How to return:** ask an agent to continue from `docs/maintainability-plan.md`.
 The agent should read the current document and linked work,
