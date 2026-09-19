@@ -17,7 +17,6 @@ fn blank_settings_fall_back_rather_than_passing_empty_arguments() {
     let config = RenderConfig { renderer_path: "  ".into(), ..Default::default() };
     let request = RenderRequest::from_config(&config).unwrap();
     assert_eq!(request.program, default_renderer_path());
-    assert_eq!(request.audio, None);
     assert_eq!(request.size, config.frame.pixels(config.short_edge));
 }
 
@@ -149,8 +148,6 @@ fn a_second_request_kills_the_render_in_flight() {
         spawn_render(
             RenderRequest {
                 program: fake.clone(),
-                audio: None,
-                align: None,
                 appearance: None,
                 size: [16, 16],
                 playhead: None,
@@ -223,8 +220,6 @@ fn cancelling_a_render_kills_it_and_deletes_what_it_had_written() {
     spawn_render(
         RenderRequest {
             program: fake.clone(),
-            audio: None,
-            align: None,
             appearance: Some("(dummy)".into()),
             size: [16, 16],
             playhead: None,
@@ -295,8 +290,6 @@ fn a_render_of_another_take_waits_rather_than_replacing_this_one() {
         spawn_render(
             RenderRequest {
                 program: fake.clone(),
-                audio: None,
-                align: None,
                 appearance: None,
                 size: [16, 16],
                 playhead: None,

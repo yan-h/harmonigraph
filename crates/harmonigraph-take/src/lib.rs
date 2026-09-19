@@ -69,16 +69,9 @@ pub struct Header {
     pub version: u32,
     /// The audio clock the event times are in.
     pub sample_rate: f32,
-    /// Transport position (samples from song start) of time 0, when the
-    /// host told us. Lets the take be lined up against a bounced WAV that
-    /// starts somewhere else.
-    pub start_samples: Option<u64>,
     /// Opaque serialized appearance at capture start. The UI owns its schema;
     /// take/record transport it without depending on UI or graphics types.
     pub appearance: Option<String>,
-    /// Editor size in logical points when recorded, as a hint for
-    /// choosing the render aspect ratio.
-    pub window_points: Option<(f32, f32)>,
     /// Free-form: which shell wrote this, and out of what.
     pub source: String,
     /// File name (not path) of the audio recorded with this take, if
@@ -99,9 +92,7 @@ impl Default for Header {
         Header {
             version: FORMAT_VERSION,
             sample_rate: 48_000.0,
-            start_samples: None,
             appearance: None,
-            window_points: None,
             source: String::new(),
             audio_file: None,
             audio_start: None,
@@ -223,6 +214,16 @@ pub struct Take {
     /// and usable; callers should say so rather than pretend the take is
     /// whole.
     pub truncated: bool,
+    /// The hole in the note history this take carries, if it has one: the
+    /// FIRST gap the file names, whether it named it as an `Incomplete` marker
+    /// or as a `Gap` among the events.
+    ///
+    /// First rather than last because that is the rule the WRITER already
+    /// applies — `Open::mark_incomplete` in `harmonigraph-record` writes its
+    /// marker once per recording and every later gap leaves it alone — and the
+    /// two have to agree. They did not: the reader took the last line, so a
+    /// take with two gaps was exported with a warning naming a different gap
+    /// from the one its own marker held (#895, correctness item 4).
     pub incomplete: Option<IncompleteRecord>,
 }
 
@@ -330,7 +331,9 @@ impl Take {
                 Record::Canonical(record) => {
                     record.validate().map_err(|_| ReadError::InvalidCanonical(i + 1))?;
                     if let CanonicalRecord::Gap(gap) = &record {
-                        take.incomplete = Some(IncompleteRecord {
+                        // First gap wins, like the writer's marker; see
+                        // [`Take::incomplete`].
+                        take.incomplete.get_or_insert(IncompleteRecord {
                             first_publication: gap.first,
                             last_publication: gap.last,
                             reason: gap.reason,
@@ -339,7 +342,9 @@ impl Take {
                     event_lines.push(i + 1);
                     take.events.push(record);
                 }
-                Record::Incomplete(incomplete) => take.incomplete = Some(incomplete),
+                Record::Incomplete(incomplete) => {
+                    take.incomplete.get_or_insert(incomplete);
+                }
                 Record::Param(param) => take.params.push(param),
                 Record::Configuration(config) => take.configurations.push(config),
             }
@@ -570,9 +575,7 @@ mod tests {
     fn sample() -> (Header, Vec<NoteRecord>, Vec<ParamRecord>) {
         let header = Header {
             sample_rate: 44_100.0,
-            start_samples: Some(1024),
             appearance: Some("(some:\"ron\")".into()),
-            window_points: Some((1000.0, 700.0)),
             source: "test".into(),
             ..Default::default()
         };
@@ -625,9 +628,8 @@ mod tests {
         let (header, notes, params) = sample();
         let take = round_trip("round-trip");
         assert_eq!(take.header.sample_rate, header.sample_rate);
-        assert_eq!(take.header.start_samples, header.start_samples);
         assert_eq!(take.header.appearance, header.appearance);
-        assert_eq!(take.header.window_points, header.window_points);
+        assert_eq!(take.header.source, header.source);
         assert_eq!(take.notes().collect::<Vec<_>>(), notes);
         assert_eq!(take.params, params);
     }
@@ -836,8 +838,14 @@ mod tests {
     /// The keys below are the real ones and in the real shape the pre-prune
     /// writer emitted them in — `coverage_start` after `t`, sixteen `channels`
     /// of 128 controllers after `voices`, `configuration_revision` first inside
-    /// an assignment. A hand-shortened stand-in would prove nothing about the
-    /// nested vector RON actually has to skip.
+    /// an assignment, `start_samples` after `sample_rate` and `window_points`
+    /// after `appearance` (#895 dropped those two). A hand-shortened stand-in
+    /// would prove nothing about the nested vector RON actually has to skip.
+    ///
+    /// The HEADER's two matter for a second reason the others do not have: the
+    /// version check reads out of the header, so a header that failed to parse
+    /// would be refused as a bad line rather than defaulted, and every take
+    /// already on disk carries both keys.
     #[test]
     fn a_take_carrying_a_since_pruned_field_still_reads() {
         use harmonigraph_core::canonical::*;
@@ -879,16 +887,22 @@ mod tests {
             .replace(")))", &format!("{channels})))"));
         let aged_note =
             note.replace("assignment:Some((", "assignment:Some((configuration_revision:9,");
+        let aged_header = header
+            .replace("sample_rate:48000.0,", "sample_rate:48000.0,start_samples:Some(1024),")
+            .replace("appearance:None,", "appearance:None,window_points:Some((1000.0,700.0)),");
         // Each key named separately, because one `assert_ne!` over the whole
-        // line passes when only one of the three replacements landed — and
-        // each of the three was checked alone against `deny_unknown_fields`.
+        // line passes when only one of the replacements landed — and each was
+        // checked alone against `deny_unknown_fields`.
         assert!(aged_frame.contains("coverage_start:2.0"), "{aged_frame}");
         assert!(aged_frame.contains(",channels:[(controllers:[0,"), "{aged_frame}");
         assert!(aged_note.contains("configuration_revision:9"), "{aged_note}");
+        assert!(aged_header.contains("start_samples:Some(1024)"), "{aged_header}");
+        assert!(aged_header.contains("window_points:Some((1000.0,700.0))"), "{aged_header}");
         let aged =
-            Take::parse(std::io::Cursor::new(format!("{header}\n{aged_frame}\n{aged_note}")))
+            Take::parse(std::io::Cursor::new(format!("{aged_header}\n{aged_frame}\n{aged_note}")))
                 .expect("a take carrying pruned keys still opens");
         assert_eq!(aged.events, current.events, "and draws exactly what it drew");
+        assert_eq!(aged.header.version, current.header.version, "and its header still reads");
     }
 
     #[test]

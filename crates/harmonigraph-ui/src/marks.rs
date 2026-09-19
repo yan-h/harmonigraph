@@ -444,6 +444,17 @@ pub(crate) struct MarkKey {
     size_px: u32,
     /// Stroke weight in physical pixels x16, so the cache key stays integral
     /// without quantizing the weight to something visible.
+    ///
+    /// Taken against `size_px` and not against the size that was asked for,
+    /// which is what keeps this field from widening the key past the grid the
+    /// bitmap is built on. Off the raw size it slides continuously while the
+    /// bitmap's own dimensions step, so two sizes a rounding apart — two rungs
+    /// of the ladder inside one pixel, which is the ordinary case below a few
+    /// tens of pixels (see [`crate::text::snap_scale`]) — pack two bitmaps of
+    /// identical extent whose strokes differ by a sixteenth of a pixel, and
+    /// each one re-publishes the whole mark sheet. Off `size_px` the pair is
+    /// one bitmap, and the mark's ink steps with its box rather than breathing
+    /// between the steps.
     weight_16: u32,
 }
 
@@ -812,7 +823,11 @@ pub(crate) fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> Mark
     // The shimmer is the variation, not the softness, which is why this is
     // the fix and a sharper bitmap is not. The reading is the one
     // `a_drawn_accidental_breathes_less_than_the_type_it_replaced` takes.
-    let thick = (weight * size * ppp).max(1.0);
+    //
+    // Against `size_px` rather than the raw `size * ppp`, so the stroke is a
+    // function of the bitmap this key names and of nothing else -- see
+    // [`MarkKey::weight_16`].
+    let thick = (weight * size_px).max(1.0);
     MarkKey { kind, size_px: size_px as u32, weight_16: (thick * 16.0).round() as u32 }
 }
 
@@ -1221,14 +1236,27 @@ mod tests {
     /// bitmap is placed rather than rebuilt.
     #[test]
     fn a_mark_is_one_bitmap_wherever_it_lands() {
-        // All within one rounding bucket: 8.25..8.37 points is 17 physical
+        // All within one rounding bucket: 8.25..8.75 points is 17 physical
         // pixels at 2x. Sizes that straddle a bucket edge SHOULD differ --
         // that is the bitmap stepping by a pixel as the camera zooms, the
         // same thing a glyph atlas does.
+        //
+        // The WHOLE bucket, to its far edge, because the near end of it is
+        // where this passes for the wrong reason: the weight is keyed at a
+        // sixteenth of a pixel, so a fixture that only walks the first tenth
+        // of a bucket stays inside one sixteenth of stroke and reads as one
+        // key however the weight is derived. 8.74 is where it parts company
+        // -- 0.12 em of 17.48 px is 2.10, of 17 px is 2.04, and those are
+        // different sixteenths.
         let a = mark_key(MarkKind::Minus, 8.25, 0.12, 2.0);
-        for size in [8.25_f32, 8.26, 8.30, 8.36] {
+        for size in [8.25_f32, 8.26, 8.30, 8.36, 8.50, 8.74] {
             assert_eq!(mark_key(MarkKind::Minus, size, 0.12, 2.0), a, "{size}");
         }
+        assert_ne!(
+            mark_key(MarkKind::Minus, 8.76, 0.12, 2.0),
+            a,
+            "the next bucket up is the same bitmap, so the walk proves nothing",
+        );
         // A minus is a single bar, so it too is its own mirror.
         let img = rasterize_mark(a);
         let [w, h] = img.size;
@@ -1299,7 +1327,8 @@ mod tests {
     fn the_weight_floor_is_a_physical_pixel() {
         assert_eq!(mark_key(MarkKind::Minus, 4.0, 0.0001, 2.0).weight_16, 16);
         assert_eq!(mark_key(MarkKind::Minus, 4.0, 0.0001, 1.0).weight_16, 16);
-        // Above the floor the weight is what decides it: 0.1 * 20 * 2 = 4px.
+        // Above the floor the weight is what decides it, against the bitmap's
+        // own size: 0.1 em of a 40 px mark is 4 px.
         assert_eq!(mark_key(MarkKind::Minus, 20.0, 0.1, 2.0).weight_16, 64);
     }
 

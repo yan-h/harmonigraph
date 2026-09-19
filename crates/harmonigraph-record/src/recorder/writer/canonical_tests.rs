@@ -46,9 +46,9 @@ fn stopped_export_restore_keeps_the_unpublished_notes_original_route() {
     let address = recorder.configuration_address().unwrap();
     recorder.mark_audio_start(origin);
     recorder.audio(&mut std::iter::repeat_n(0.25, 128), 128);
-    assert_eq!(recorder.captured.load(Ordering::Relaxed), 0);
+    assert_eq!(recorder.latches.captured.load(Ordering::Relaxed), 0);
     assert!(!recorder.observe_transport(5.0, false, duration));
-    assert!(recorder.hit_rewind.load(Ordering::Relaxed));
+    assert!(recorder.latches.hit_rewind.load(Ordering::Relaxed));
     let note = accepted(NoteEvent::on(origin, SourceId(1), 0, 60, 0.8), 1);
     let route = publication::Route { address: Some(address), time_offset: 0.0 };
     assert!(recorder.publish_note(note, route).take.is_ok());
@@ -881,6 +881,69 @@ fn a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports() {
         "coalesced over both outages, and 4097 inside it is routed to pass 2"
     );
     assert!(!fence.failed.load(Ordering::Acquire), "a hole warns, it does not refuse");
+    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}
+
+/// #895, correctness item 4: with TWO gaps, the file's marker and the reader's
+/// answer must be the same gap.
+///
+/// The two encodings of "this take is incomplete" used to coalesce in opposite
+/// directions — `Open::mark_incomplete` keeps the first, `Take::parse` took the
+/// last line it saw — so the export warned about a range the file's own marker
+/// did not hold. One gap cannot show that: the first and the last are the same
+/// record, and the assertion passes under either rule. So the fixture carries
+/// two gaps with DISJOINT ranges, and the count below is what proves it did.
+///
+/// Each gap is written as an ordinary `Gap` record as well as being marked,
+/// because that is what the fanout does with an addressed one, and it is the
+/// later `Gap` LINE that the reader used to prefer over the marker above it.
+#[test]
+fn a_second_gap_leaves_the_reader_naming_the_gap_the_file_marked() {
+    use harmonigraph_take::canonical::{GapReasonRecord, GapRecord};
+    let file = path("two-gaps");
+    let status = Mutex::new(String::new());
+    let mut open = Open::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+    let first = harmonigraph_take::IncompleteRecord {
+        first_publication: 7,
+        last_publication: 9,
+        reason: GapReasonRecord::PublicationFull,
+    };
+    let second = harmonigraph_take::IncompleteRecord {
+        first_publication: 40,
+        last_publication: 44,
+        reason: GapReasonRecord::InvalidRecord,
+    };
+    for (record, t) in [(first, 1.0), (second, 2.0)] {
+        let gap = GapRecord {
+            source: None,
+            t,
+            through: t,
+            first: record.first_publication,
+            last: record.last_publication,
+            reason: record.reason,
+        };
+        open.writer.canonical(harmonigraph_take::CanonicalRecord::Gap(gap)).unwrap();
+        open.mark_incomplete(record).unwrap();
+    }
+    let sealed = open.finish().unwrap();
+
+    let text = std::fs::read_to_string(&sealed).unwrap();
+    let markers: Vec<_> = text.lines().filter(|line| line.starts_with("Incomplete(")).collect();
+    assert_eq!(markers.len(), 1, "the writer marks the recording once: {markers:?}");
+    let take = harmonigraph_take::Take::read(&sealed).unwrap();
+    assert_eq!(
+        take.events
+            .iter()
+            .filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Gap(_)))
+            .count(),
+        2,
+        "the fixture must actually carry two gaps, or it proves nothing about which wins",
+    );
+    assert_eq!(
+        take.incomplete,
+        Some(first),
+        "the reader names the gap the marker holds, not the last Gap line in the file",
+    );
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }
 

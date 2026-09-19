@@ -34,6 +34,19 @@ compile_error!(
     "The 'assert_process_allocs' feature does not work correctly in combination with the 'x86_64-pc-windows-gnu' target, see https://github.com/Windfisch/rust-assert-no-alloc/issues/7"
 );
 
+// `clap-boundary-tests` REPLACES the guard below rather than adding to it: it
+// installs `MeasuredAllocator`, whose base is `AllocDisabler` only when
+// `assert_process_allocs` is on and `std::alloc::System` otherwise. Enabling
+// the boundary tests alone therefore counts every allocation an audio callback
+// makes and permits all of them — a suite that looks like it measures a guarded
+// callback while guarding nothing. The pairing is not expressible as a Cargo
+// feature dependency here without editing the vendored manifest, so it is held
+// at compile time instead.
+#[cfg(all(feature = "clap-boundary-tests", not(feature = "assert_process_allocs")))]
+compile_error!(
+    "The 'clap-boundary-tests' feature replaces the 'assert_process_allocs' global allocator with a counting one, whose base allocator is the plain system allocator unless 'assert_process_allocs' is also enabled. Enable both features together, or neither."
+);
+
 #[cfg(all(debug_assertions, feature = "assert_process_allocs", not(feature = "clap-boundary-tests")))]
 #[global_allocator]
 static A: nice_assert_no_alloc::AllocDisabler = nice_assert_no_alloc::AllocDisabler;

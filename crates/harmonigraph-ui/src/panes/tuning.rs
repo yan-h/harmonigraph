@@ -777,7 +777,10 @@ fn map_controls(
     let Some(view) = params.lattice_maps() else {
         return TuningEngine::Adaptive;
     };
-    state.runtime.lattice_maps = Some(view.clone());
+    // Stored first and read back by reference: this pane and the rest of the
+    // editor want the same view, and cloning it copies the name list again.
+    state.runtime.lattice_maps = Some(view);
+    let view = state.runtime.lattice_maps.as_ref().expect("just stored");
     section(ui, "Tuning mode");
     let mut mode = view.playback.engine;
     ui.horizontal_wrapped(|ui| {
@@ -806,7 +809,7 @@ fn map_controls(
         .names
         .iter()
         .find(|(id, _)| *id == selected)
-        .map(|(_, name)| name.as_str())
+        .map(|(_, name)| &**name)
         .unwrap_or("unavailable");
     egui::ComboBox::from_id_salt("saved-lattice-map")
         .selected_text(format!("{} · {name}", selected + 1))

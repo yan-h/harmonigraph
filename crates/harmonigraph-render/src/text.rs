@@ -1299,23 +1299,7 @@ impl CallbackTrait for TextCallback {
 
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let style = self.shadow.map(|style| style.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX));
-        let sigma =
-            style.filter(|style| style.casts()).map_or(0.0, crate::shadow::spectral_sigma_points);
         let kernel = style.map_or(harmonigraph_scene::ShadowKernel::Distance, |s| s.kernel);
-        let falloff =
-            style.map_or(harmonigraph_scene::ShadowStyle::default().falloff, |s| s.falloff);
-        let casters: Vec<crate::shadow::Caster> = self
-            .glyphs
-            .iter()
-            .map(|glyph| crate::shadow::Caster {
-                rect: glyph.sdf_rect,
-                level: f32::from(glyph.rim[3] > 0),
-                sigma_points: sigma,
-                kernel,
-                falloff,
-                direct_distance: false,
-            })
-            .collect();
         let sizes = resources.atlas_sizes();
         let uniforms = TextUniforms {
             screen_points: [
@@ -1332,13 +1316,24 @@ impl CallbackTrait for TextCallback {
             _pad: [0.0; 3],
         };
 
-        let view = resources.atlas.view().expect("checked above");
-        let mark_view = resources.marks.view_or(&resources.blank);
-        let sdf_view = shared_sdf
-            .texture
-            .as_ref()
-            .unwrap_or(&resources.blank_sdf)
-            .create_view(&Default::default());
+        // Every one of these mints a wgpu `TextureView`, and the only thing
+        // that reads them is a pane being bound for the first time —
+        // `bind_sheets` above has already rebound every pane that was bound
+        // against a texture since replaced. So they are built where they are
+        // used, not beside the rest of the frame's setup.
+        let views = |resources: &TextResources| {
+            (
+                resources.atlas.view().expect("checked above"),
+                resources.marks.view_or(&resources.blank),
+                shared_sdf
+                    .texture
+                    .as_ref()
+                    .unwrap_or(&resources.blank_sdf)
+                    .create_view(&Default::default()),
+            )
+        };
+        let pane_views = resources.panes.get(&self.pane_id).is_none_or(|p| p.bind_group.is_none());
+        let pane_views = pane_views.then(|| views(resources));
         let (layout, sampler) = (&resources.layout, &resources.sampler);
         let pane = resources.panes.entry(self.pane_id).or_insert_with(|| TextPane {
             uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
@@ -1359,6 +1354,7 @@ impl CallbackTrait for TextCallback {
         });
         pane.last_seen_pass = self.pass_nr;
         if pane.bind_group.is_none() {
+            let (view, mark_view, sdf_view) = pane_views.expect("built above when unbound");
             pane.bind_group = Some(bind_group(
                 device,
                 layout,
@@ -1381,6 +1377,27 @@ impl CallbackTrait for TextCallback {
         }
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
         if let Some(surface_id) = self.shadow_surface_id {
+            // A `Caster` per glyph, built here rather than above because this
+            // is the only thing that reads them: unshadowed chrome passes no
+            // surface, and a batch of a few hundred names was allocating and
+            // filling the vector every frame for nobody.
+            let sigma = style
+                .filter(|style| style.casts())
+                .map_or(0.0, crate::shadow::spectral_sigma_points);
+            let falloff =
+                style.map_or(harmonigraph_scene::ShadowStyle::default().falloff, |s| s.falloff);
+            let casters: Vec<crate::shadow::Caster> = self
+                .glyphs
+                .iter()
+                .map(|glyph| crate::shadow::Caster {
+                    rect: glyph.sdf_rect,
+                    level: f32::from(glyph.rim[3] > 0),
+                    sigma_points: sigma,
+                    kernel,
+                    falloff,
+                    direct_distance: false,
+                })
+                .collect();
             let submission = crate::spectral_shadow::Submission {
                 key: crate::spectral_shadow::ProducerKey::Text(self.pane_id),
                 casters,

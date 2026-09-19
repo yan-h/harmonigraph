@@ -15,12 +15,18 @@ pub(crate) type SpectrumBuckets = [f32; harmonigraph_core::spectrum::SPECTRUM_BI
 /// mock synth). Analysis advances on the sample clock without drawing. Runtime-only.
 pub struct AudioSpectrum {
     /// Changed only when the smoothed grid changes. This identity lives beside
-    /// its one-frame measurement, so replacing/resetting the analyzer drops both.
+    /// the measurement keyed on it, so replacing or resetting the analyzer
+    /// drops both together and no fold outlives the display it was measured
+    /// from.
     display_revision: u64,
-    /// One lazy Fold for matching draws at the same logical frame time.
-    /// Time prevents cross-frame reuse; width and revision preserve edits and
-    /// new audio within repeated egui passes. Geometry and palettes are not inputs.
-    frame_fold: Option<(f64, u64, u32, crate::panes::spectral_fold::Fold)>,
+    /// One lazy Fold, keyed on everything its value is measured from and
+    /// nothing else. `Fold::measure` is a pure function of `display` and the
+    /// clamped width: `display_revision` stands for the first — the only two
+    /// writes to `display` bump it on the adjacent line — and the width is
+    /// carried by bits. Geometry, palettes and TIME are not inputs; a frame
+    /// with no new column measures the same numbers the last one did, so `now`
+    /// only decided how often the memo was thrown away.
+    frame_fold: Option<(u64, u32, crate::panes::spectral_fold::Fold)>,
     #[cfg(test)]
     pub(crate) fold_measurements: usize,
     /// One analyzer per input channel, combined in the power domain — see
@@ -719,19 +725,21 @@ impl SpectrogramSurfaces {
 }
 
 impl AudioSpectrum {
+    /// The folded grid, or `None` while no audio is flowing.
+    ///
+    /// `now` decides only whether there is a curve to fold at all — the hold
+    /// window in [`display`](Self::display) — and never what the fold measures,
+    /// so it is not part of the memo's key. It was, and that made the memo a
+    /// one-frame one: it restarted on every repaint, which is often enough to
+    /// hide anything the carry-forward path gets wrong.
     pub(crate) fn folded(&mut self, now: f64, width: f32) -> Option<&SpectrumBuckets> {
         self.display(now)?;
         let width = crate::panes::spectral_fold::Fold::clamped_width(width);
-        let key = (now, self.display_revision, width.to_bits());
-        if self
-            .frame_fold
-            .as_ref()
-            .is_none_or(|(time, revision, width, _)| (*time, *revision, *width) != key)
-        {
+        let key = (self.display_revision, width.to_bits());
+        if self.frame_fold.as_ref().is_none_or(|(revision, bits, _)| (*revision, *bits) != key) {
             self.frame_fold = Some((
                 key.0,
                 key.1,
-                key.2,
                 crate::panes::spectral_fold::Fold::measure(&self.display, width),
             ));
             #[cfg(test)]
@@ -739,6 +747,49 @@ impl AudioSpectrum {
                 self.fold_measurements += 1;
             }
         }
-        self.frame_fold.as_ref().map(|(_, _, _, fold)| fold.grid())
+        self.frame_fold.as_ref().map(|(_, _, fold)| fold.grid())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AudioSpectrum;
+    use crate::SpectrumConfig;
+
+    /// The behavior `now` in the key made unreachable: a repaint that brought
+    /// no new column reuses the measurement instead of taking it again.
+    ///
+    /// Beside its siblings in `tests::spectrum`, which cover the key's other
+    /// two inputs (a width edit and same-frame audio) and its hold-window
+    /// early return.
+    #[test]
+    fn a_fold_outlives_a_frame_that_brought_no_new_column() {
+        let cfg = SpectrumConfig::default();
+        let mut spectrum = AudioSpectrum::default();
+        let tone = |frequency: f32| {
+            (0..cfg.window.samples() * 2)
+                .map(|i| (std::f32::consts::TAU * frequency * i as f32 / 48_000.0).sin() * 0.5)
+                .collect::<Vec<_>>()
+        };
+        spectrum.push_samples(&tone(440.0), 1, 48_000.0, 1.0, &cfg);
+        let first = spectrum.folded(1.0, 2.0).unwrap().to_vec();
+        assert!(first.iter().any(|v| *v > 0.0), "the fixture must contain measured energy");
+        assert_eq!(spectrum.fold_measurements, 1);
+
+        // Ten 60 Hz frames, all inside HOLD_SECONDS so the curve is still
+        // drawn, and none of them pushing audio. Under a key carrying `now`
+        // each one measured the same numbers again.
+        for frame in 1..=10 {
+            let now = 1.0 + f64::from(frame) / 60.0;
+            assert!(now - 1.0 < AudioSpectrum::HOLD_SECONDS, "the fixture must stay in hold");
+            assert_eq!(spectrum.folded(now, 2.0).unwrap().as_slice(), first);
+        }
+        assert_eq!(spectrum.fold_measurements, 1, "a new frame is not a new measurement");
+
+        // A new column at a new frame time still invalidates it.
+        spectrum.push_samples(&tone(660.0), 1, 48_000.0, 1.2, &cfg);
+        let next = spectrum.folded(1.25, 2.0).unwrap().to_vec();
+        assert_ne!(next, first, "new audio must be measured");
+        assert_eq!(spectrum.fold_measurements, 2);
     }
 }
