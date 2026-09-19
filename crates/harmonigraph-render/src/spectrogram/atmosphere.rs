@@ -89,12 +89,10 @@ struct Uniforms {
     drift: [f32; 2],
     time: f32,
     cloud_depth: f32,
-    cloud_scale: f32,
     scale_size: f32,
     scale_variety: f32,
     scale_refract: f32,
     scale_relief: f32,
-    scale_shade_floor: f32,
     scale_facet: f32,
     scale_rock: f32,
     /// 0 for the refracting scales, 1 for the watercolour wash. The wash reads
@@ -113,11 +111,11 @@ struct Uniforms {
     wash_soften: f32,
     wash_wander: f32,
     wash_black: f32,
-    /// The tail the assert below needs, since the members above stop 12 bytes
+    /// The tail the assert below needs, since the members above stop 4 bytes
     /// short of a whole 16-byte row. WGSL rounds its own copy of the struct up
     /// to the same length, so this is space the shader is entitled to read and
     /// Rust has to own.
-    _tail: [u32; 3],
+    _tail: [u32; 1],
 }
 
 /// The `Cloud` struct's size in the uniform address space, which WGSL rounds up
@@ -443,9 +441,12 @@ impl Targets {
         let pitch = settings.pitch_softness * atmosphere.points_per_cent;
         let time = settings.time_softness * atmosphere.points_per_ms;
         let radius = if pitch_vertical { [time, pitch] } else { [pitch, time] };
-        // A steady crossing plus the lattice nebula's wander, in cloud units
-        // (five across the pane's height at scale 1): at 1x a cloud crosses
-        // the pane in about two minutes.
+        // A steady crossing plus the lattice nebula's wander, in cloud units —
+        // ten across the pane's height, now that `CLOUD_UNITS` is fixed there.
+        // The rates are unchanged, so the drift is the one the shipped `Cloud
+        // size` of 0.5x already drew: about four minutes to carry the texture a
+        // pane-height at 1x, not the two the comment used to claim for a frame
+        // nothing shipped at.
         let cloud_time = atmosphere.now * f64::from(settings.cloud_speed);
         let drift = [
             (cloud_time * 0.04 + (cloud_time * 0.071).sin() * 0.6) as f32,
@@ -468,12 +469,10 @@ impl Targets {
             drift,
             time: (cloud_time % 1000.0) as f32,
             cloud_depth: settings.cloud_depth,
-            cloud_scale: settings.cloud_scale,
             scale_size: settings.scale_size,
             scale_variety: settings.scale_variety,
             scale_refract: settings.scale_refract,
             scale_relief: settings.scale_relief,
-            scale_shade_floor: settings.scale_shade_floor,
             scale_facet: settings.scale_facet,
             scale_rock: settings.scale_rock,
             cloud_style: match settings.cloud_style {
@@ -492,7 +491,7 @@ impl Targets {
             wash_soften: settings.wash_soften,
             wash_wander: settings.wash_wander,
             wash_black: settings.wash_black,
-            _tail: [0; 3],
+            _tail: [0; 1],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }

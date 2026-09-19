@@ -49,9 +49,11 @@ pub struct SpectralAtmosphere {
     /// Refracting scale clouds (prototype): how much of the picture the cloud
     /// takes over where it is thick, 0 for no clouds at all.
     pub cloud_depth: f32,
-    /// Cloud size and drift speed, as multipliers of a reference size and a
-    /// slow drift, like the lattice nebula's.
-    pub cloud_scale: f32,
+    /// Drift speed, as a multiplier on a slow crossing like the lattice
+    /// nebula's. The cloud FRAME it drifts in is fixed in the shader
+    /// (`CLOUD_UNITS`): it used to be a dial, and it was a second copy of
+    /// `scale_size`/`wash_size` for the texture's size and of this one for its
+    /// travel.
     pub cloud_speed: f32,
     /// Size of one scale, as a multiplier on how many of them cross a cloud.
     pub scale_size: f32,
@@ -69,15 +71,15 @@ pub struct SpectralAtmosphere {
     /// smoothly.
     pub scale_facet: f32,
     /// How domed the scales are, which is what gives them faces to catch the
-    /// light with. 0 is a smooth body with no scales in it at all.
+    /// light with. 0 is a smooth body with no scales in it at all. It also sets
+    /// how dark a face turned away from the sun may get, which used to be its
+    /// own `shade_floor` dial: the floor falls as the relief rises, since a
+    /// floor decides nothing where there is no tilt to shade.
     pub scale_relief: f32,
     /// How far each scale rocks on its own slow clock, so the shading on its
     /// face sways even under a picture that is holding still. 0 leaves every
     /// face where the sound puts it.
     pub scale_rock: f32,
-    /// How much light a face turned away from the sun still keeps: 0 lets it go
-    /// black, 1 flattens the shading away entirely.
-    pub scale_shade_floor: f32,
     /// Which texture the layer draws. `Mosaic` is the refracting scale clouds
     /// above; `Watercolor` is the glob field below, and every `wash_` setting
     /// belongs to it alone.
@@ -136,15 +138,15 @@ impl Default for SpectralAtmosphere {
             analyzer_softness: 0.5,
             note_glow: 0.5,
             cloud_depth: 1.0,
-            cloud_scale: 0.5,
             cloud_speed: 1.0,
-            scale_size: 2.2,
+            // 1.0x now draws what `cloud_scale` 0.5 against `scale_size` 2.2
+            // drew, because `SCALE_CELLS` carries the retired dial's default.
+            scale_size: 1.0,
             scale_variety: 0.5,
             scale_refract: 0.30,
             scale_facet: 0.0,
             scale_relief: 0.35,
             scale_rock: 0.0,
-            scale_shade_floor: 0.25,
             cloud_style: CloudStyle::Mosaic,
             // J2 "dissolved" from the prototype's sheet J, translated: globs
             // about two harmonic lines across, the rim fully dissolved, the
@@ -187,7 +189,6 @@ impl SpectralAtmosphere {
         self.analyzer_softness = clamp(self.analyzer_softness, fresh.analyzer_softness, 0.0, 1.0);
         self.note_glow = clamp(self.note_glow, fresh.note_glow, 0.0, 1.0);
         self.cloud_depth = clamp(self.cloud_depth, fresh.cloud_depth, 0.0, 1.0);
-        self.cloud_scale = clamp(self.cloud_scale, fresh.cloud_scale, 0.25, 4.0);
         self.cloud_speed = clamp(self.cloud_speed, fresh.cloud_speed, 0.0, 20.0);
         self.scale_size = clamp(self.scale_size, fresh.scale_size, 0.25, 4.0);
         self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
@@ -195,7 +196,6 @@ impl SpectralAtmosphere {
         self.scale_facet = clamp(self.scale_facet, fresh.scale_facet, 0.0, 1.0);
         self.scale_relief = clamp(self.scale_relief, fresh.scale_relief, 0.0, 1.0);
         self.scale_rock = clamp(self.scale_rock, fresh.scale_rock, 0.0, 1.0);
-        self.scale_shade_floor = clamp(self.scale_shade_floor, fresh.scale_shade_floor, 0.0, 1.0);
         self.wash_size = clamp(self.wash_size, fresh.wash_size, 0.25, 4.0);
         self.wash_variety = clamp(self.wash_variety, fresh.wash_variety, 0.0, 1.0);
         self.wash_fuzz = clamp(self.wash_fuzz, fresh.wash_fuzz, 0.0, 1.0);

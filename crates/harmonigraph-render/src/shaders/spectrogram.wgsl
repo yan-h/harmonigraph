@@ -270,12 +270,10 @@ struct Cloud {
     drift: vec2<f32>,
     time: f32,
     cloud_depth: f32,
-    cloud_scale: f32,
     scale_size: f32,
     scale_variety: f32,
     scale_refract: f32,
     scale_relief: f32,
-    scale_shade_floor: f32,
     scale_facet: f32,
     scale_rock: f32,
     // Which texture the layer draws: 0 the refracting scales above, 1 the
@@ -447,27 +445,50 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 // `DOME_FACE` takes that out, and takes out the same effect WITHIN one field now
 // that `Variety` gives each glob its own radius.
 //
-// Cloud space is the pane's, aspect-corrected and independent of DPI: five
-// cloud units across the pane's height at size 1, like the lattice nebula.
+// Cloud space is the pane's, aspect-corrected and independent of DPI, and it is
+// FIXED: ten cloud units across the pane's height, which is what the shipped
+// `Cloud size` of 0.5x drew before the dial was retired.
 //
-// Four qualities are on DIALS rather than decided here, because describing which
-// of them Yan wants has failed in words repeatedly: `Facet` carries the lookup
-// from this round's continuous slope onto round 1's flat per-glob patch, `Rock`
-// is round 1's per-dome clock, `Variety` is how much the globs differ in size,
-// and `Shade floor` is how dark a face turned away from the sun may get — the
-// one quantity in the fix below that is taste rather than correctness.
+// It was a dial, and it was a second copy of `Scale size` and `Glob size`. The
+// texture's size on the pane came out as a PRODUCT — `cloud_scale * scale_size`
+// reached the dome grid and nothing read either on its own — so the two dials
+// named one number between them, and the picture could not tell which of them
+// had set it. What `Cloud size` did own was the drift, since `drift` is measured
+// in cloud units and a larger unit carries the texture further per second; but
+// that is `Cloud speed` again, one multiplication later. Three dials, two
+// observables. Pinning the frame here leaves each texture one size dial that
+// means its own size, and leaves the drift to the dial named after it.
+//
+// Three qualities are on DIALS rather than decided here, because describing
+// which of them Yan wants has failed in words repeatedly: `Facet` carries the
+// lookup from this round's continuous slope onto round 1's flat per-glob patch,
+// `Rock` is round 1's per-dome clock, and `Variety` is how much the globs differ
+// in size.
+const CLOUD_UNITS: f32 = 10.0;
+// How many dome cells cross one cloud unit at `Scale size` 1x. Carries the
+// retired `Cloud size` default: the shipped picture was 6 cells per unit over a
+// frame half this one's, and `6 / 2.2` at the old `Scale size` default is what
+// puts the same scales on the pane with the dial reading a plain 1x.
+const SCALE_CELLS: f32 = 6.0 / 2.2;
 
-// One cell's dome, as three 10-bit fractions: where its centre sits inside the
-// cell, and how wide it is.
-fn cloud_hash3(cell: vec2<i32>) -> vec3<f32> {
+// One cell's dome, as four 10-bit fractions: where its centre sits inside the
+// cell, how wide it is, and how loudly it argues for its own territory.
+//
+// The first word is only good for three of them — the top two bits are too
+// coarse to draw anything from — so the fourth comes from a second avalanche
+// over the finished word rather than from bits the other three already spent.
+fn cloud_hash4(cell: vec2<i32>) -> vec4<f32> {
     var n = (bitcast<u32>(cell.x) * 0x9e3779b9u) ^ (bitcast<u32>(cell.y) * 0x85ebca6bu);
     n = (n ^ (n >> 16u)) * 0x7feb352du;
     n = (n ^ (n >> 15u)) * 0x846ca68bu;
     n = n ^ (n >> 16u);
-    return vec3<f32>(
+    var m = (n ^ 0xb5297a4du) * 0x68e31da4u;
+    m = m ^ (m >> 15u);
+    return vec4<f32>(
         f32(n & 0x3ffu) / 1023.0,
         f32((n >> 10u) & 0x3ffu) / 1023.0,
         f32((n >> 20u) & 0x3ffu) / 1023.0,
+        f32(m & 0x3ffu) / 1023.0,
     );
 }
 
@@ -503,6 +524,29 @@ const DOME_RADIUS_MAX: f32 = 1.32;
 // Hardness of the soft union. Low is putty, high is a crease; this is where a
 // pile of domes still has faces and does not yet have edges.
 const DOME_UNION: f32 = 9.0;
+// How many octaves of weight `Variety` may give or take from one dome, and the
+// reason the dial is worth turning at all.
+//
+// **The radius band above is not what `Variety` reads as.** What the eye calls
+// one scale here is the TERRITORY a dome wins from the soft union, and the grid
+// that sets the territory is one dome per cell however wide each dome is drawn.
+// Measured over an interior patch of the field, the shipped radius band moved
+// the 10th-to-90th-percentile territory from 1.22:1 at `Variety` 0 to 1.51:1 at
+// `Variety` 1 — a band already nearly uniform, opened by a quarter. That is the
+// whole of what the dial used to buy, and it is why it read as doing nothing.
+//
+// A weight gain moves the BISECTORS instead, which is the same measurement's
+// 4.2:1 at the constant below. It is outside the coverage proof entirely: the
+// union is a weighted MEAN, every weight stays positive, and no radius changes,
+// so neither inequality above is touched and a suppressed dome cannot open a
+// hole — it can only lose its cell to a neighbour that already reached across
+// it.
+//
+// The ceiling is smoothness, not coverage. The steepest single-pixel step in
+// the face field is 9.3 per cell here, BELOW the 9.8 the shipped dial already
+// drew at `Variety` 1; at 7 octaves it is 15.4 and at 8 it is 21.3, which is a
+// swallowed dome's influence ending in a visible ring rather than fading.
+const DOME_VARIETY_GAIN: f32 = 5.0;
 // What turns a dome's analytic slope into the FACE the light is bent by.
 //
 // `h = q^1.5` gives `dh/dr = -3 * root * d / R`, whose steepest point is
@@ -523,6 +567,10 @@ const ROCK_TILT: f32 = 0.30;
 // where the sun stood before it was allowed to stand up.
 const SUN_LEAN: f32 = 1.0;
 const SUN_KNEE: f32 = 0.03;
+// How fast the shade floor falls as `Relief` rises — see `diffuse` below, where
+// the merge of the two dials is spelled out. `ln(0.25) / ln(0.65)`, which is the
+// exponent that carries the retired pair's defaults.
+const RELIEF_FLOOR_FALL: f32 = 3.22;
 
 struct Pile {
     // The face the scales here present to the light: each covering dome's own
@@ -545,8 +593,14 @@ struct Pile {
 //
 // EVERY cell has a dome. There used to be an `occupancy` draw that left 22% of
 // them empty, which is where the sky between the clouds came from; Yan wants the
-// texture everywhere, so the draw is gone and `h3.z` went with it — freed, and
-// spent on the radius below.
+// texture everywhere, so the draw is gone and the hash word it spent went with
+// it — freed, and spent on the radius below.
+//
+// A dome the WEIGHT gain suppresses is not that draw coming back. An empty cell
+// left a hole, because a hole is what `occupancy` skipped the dome to make; a
+// suppressed dome still covers its own cell and still has a face, it has just
+// lost the argument about whose face this pixel reads. The union is continuous
+// across the whole plane either way.
 fn dome_octave(r: vec2<f32>) -> Pile {
     let base = floor(r);
     var weight = 0.0;
@@ -556,15 +610,15 @@ fn dome_octave(r: vec2<f32>) -> Pile {
     for (var j = -1; j <= 1; j += 1) {
         for (var i = -1; i <= 1; i += 1) {
             let cell = vec2<i32>(base) + vec2<i32>(i, j);
-            let h3 = cloud_hash3(cell);
+            let h4 = cloud_hash4(cell);
             let centre = base + vec2<f32>(f32(i), f32(j)) + 0.5
-                + (h3.xy - 0.5) * DOME_JITTER;
+                + (h4.xy - 0.5) * DOME_JITTER;
             // Each dome's own width. `Variety` opens the band from the single
             // shared radius, never below `DOME_RADIUS_MIN`, so every step of the
             // dial is still a proof that the plane is covered.
             let radius = mix(
                 DOME_RADIUS,
-                mix(DOME_RADIUS_MIN, DOME_RADIUS_MAX, h3.z),
+                mix(DOME_RADIUS_MIN, DOME_RADIUS_MAX, h4.z),
                 cloud.scale_variety,
             );
             let d = (r - centre) / radius;
@@ -574,7 +628,24 @@ fn dome_octave(r: vec2<f32>) -> Pile {
             }
             let root = sqrt(q);
             let h = q * root;
-            let w = exp(DOME_UNION * h);
+            // Each dome's own say in the union, log-symmetric about the shared
+            // weight so `Variety` gives one dome a neighbour's cell exactly as
+            // often as it takes its own away. Behind the knob for the same
+            // reason the rock is: an `exp2` per dome per pixel is real work for
+            // a gain that is exactly 1, and the branch is on a uniform.
+            var gain = 1.0;
+            if cloud.scale_variety > 0.0 {
+                gain = exp2(DOME_VARIETY_GAIN * cloud.scale_variety * (2.0 * h4.w - 1.0));
+            }
+            // `- 1.0` is what lets the gain exist. A dome ENTERS the ring at
+            // `q = 0`, where `exp(0)` is 1 rather than 0 — a step, tiny against
+            // a dominant dome's `exp(6.3)` and invisible while every dome
+            // weighs the same, but multiplied by a gain of 32 it is a fifth of
+            // the union arriving at once, which draws the hard ring this whole
+            // construction exists not to draw. Subtracting the pedestal lets a
+            // rim contribution fade to nothing however loud the dome is, and it
+            // retires the old step at `Variety` 0 as well.
+            let w = gain * (exp(DOME_UNION * h) - 1.0);
             weight += w;
             face += w * (-(DOME_FACE * root * radius)) * d;
             to_centre += w * (centre - r);
@@ -585,8 +656,8 @@ fn dome_octave(r: vec2<f32>) -> Pile {
             // uniform, so no two lanes ever disagree about taking it.
             if cloud.scale_rock > 0.0 {
                 rock += w * vec2<f32>(
-                    sin(cloud.time * (0.2 + 0.3 * h3.x) + h3.y * 6.2831853),
-                    cos(cloud.time * (0.25 + 0.2 * h3.y) + h3.x * 6.2831853),
+                    sin(cloud.time * (0.2 + 0.3 * h4.x) + h4.y * 6.2831853),
+                    cos(cloud.time * (0.25 + 0.2 * h4.y) + h4.x * 6.2831853),
                 );
             }
         }
@@ -679,13 +750,12 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
         return base;
     }
     let pt = position / cloud.ppp - cloud.origin;
-    let units = 5.0 / cloud.cloud_scale;
-    let q = (pt - cloud.size * 0.5) / cloud.size.y * units + cloud.drift;
+    let q = (pt - cloud.size * 0.5) / cloud.size.y * CLOUD_UNITS + cloud.drift;
 
     // The scales. `scale_size` is how many of them cross one cloud unit, so the
     // knob reads as a size rather than as a frequency.
-    let scale_units = 6.0 / cloud.scale_size;
-    let scale_points = cloud.size.y / units / scale_units;
+    let scale_units = SCALE_CELLS / cloud.scale_size;
+    let scale_points = cloud.size.y / CLOUD_UNITS / scale_units;
     let pile = cloud_domes(q * scale_units);
 
     // THE REFRACTION. `DOME_FACE` has already put the offset in scale widths
@@ -753,12 +823,35 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     }
     let normal = normalize(vec3<f32>(-tilt * relief, 1.0));
     // Diffuse is 1 on a flat face, so a relief of 0 leaves the light alone.
-    // `scale_shade_floor` is how much a face turned right away still keeps: the
-    // top of the range is untouched by it, so it darkens nothing that was not
-    // already dark.
+    //
+    // The floor — how much a face turned right away still keeps — is DERIVED
+    // from the relief and used to be its own dial. The two were never
+    // independent: both of them only ever decide how far `diffuse` dips below
+    // 1, relief by shrinking the tilt the light is read against and the floor by
+    // lifting the bottom of the range it lands in, and near the flat end they
+    // multiply. Two dials for one product read as one dial spread over two,
+    // which is what Yan found when he said the shading knobs all did the same
+    // thing.
+    //
+    // They differ in exactly one place, and the law below is chosen to keep it.
+    // A floor stops mattering where the light never reaches a face turned right
+    // away, and that is the whole of the low end; it starts mattering as the
+    // tilt grows, which is the high end. So it FALLS as relief rises: 1 at a
+    // relief of 0, where there is nothing to floor, and 0 at a relief of 1,
+    // where the scales are meant to be harsh. The exponent is not a taste — it
+    // is fixed by making the merged dial pass exactly through the pair Yan had
+    // dialled in, a relief of 0.35 against a floor of 0.25, so `0.65 ^ 3.22`.
+    // The top of the dial is harsher than the pair could reach and the bottom is
+    // flatter, which is the range he asked the four sliders to cover.
+    //
+    // What the merge costs is strong relief over LIFTED blacks: a relief of 0.7
+    // now floors at 0.02 where the pair could hold it at 0.25. The dark end
+    // still only reaches 0.45 of the light there, because a face turned right
+    // away is rare, but it is a look the two dials could draw and this one
+    // cannot.
     let sun = normalize(vec3<f32>(lean, 1.0));
     let lambert = max(dot(normal, sun), 0.0) / sun.z;
-    let diffuse = mix(cloud.scale_shade_floor, 1.0, lambert);
+    let diffuse = mix(pow(1.0 - relief, RELIEF_FLOOR_FALL), 1.0, lambert);
 
     let lit = bent * diffuse * CLOUD_SHADE;
     let body = palette_color(clamp(lit, 0.0, 1.0));
@@ -1250,8 +1343,7 @@ fn wash_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
         return base;
     }
     let pt = position / cloud.ppp - cloud.origin;
-    let units = 5.0 / cloud.cloud_scale;
-    let q = (pt - cloud.size * 0.5) / cloud.size.y * units + cloud.drift;
+    let q = (pt - cloud.size * 0.5) / cloud.size.y * CLOUD_UNITS + cloud.drift;
 
     // `wash_size` is how big one GLOB is, so the knob reads as a size.
     //
@@ -1263,7 +1355,7 @@ fn wash_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     // the DIAMETER instead puts 40 * 1.18 / 0.90 ≈ 52 cells up the pane at the
     // fresh cloud size, which is `WASH_CELLS` per cloud unit.
     let cells = WASH_CELLS / cloud.wash_size;
-    let pane_per_cell = cloud.size.y / units / cells;
+    let pane_per_cell = cloud.size.y / CLOUD_UNITS / cells;
     let r = q * cells;
 
     // Two shared fields, one evaluation each per pixel and then read by every

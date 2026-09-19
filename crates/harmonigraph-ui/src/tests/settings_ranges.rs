@@ -197,7 +197,7 @@ fn scenarios() -> Vec<Scenario> {
             SettingsPane::Tab(panes::Tab::Tuning) => 7,
             SettingsPane::Page(DisplayPage::Colors) => 2,
             SettingsPane::Page(DisplayPage::Lattice) => 26,
-            SettingsPane::Page(DisplayPage::Analyzer) => 29,
+            SettingsPane::Page(DisplayPage::Analyzer) => 27,
             SettingsPane::Page(DisplayPage::Lighting) => 26,
             SettingsPane::Page(DisplayPage::System) => 2,
             SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console | panes::Tab::Notes) => 0,
@@ -208,7 +208,7 @@ fn scenarios() -> Vec<Scenario> {
         // marks, audio reading, sevens, roll/note names, glow and shadow falloff.
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
-    // The wash's own inventory: it takes the seven scale bars off the Analyzer
+    // The wash's own inventory: it takes the six scale bars off the Analyzer
     // page and puts twelve of its own there, and nothing else on the page moves.
     // Its own scenario rather than a flag on the loop above because the fresh
     // state selects the scales, so without this the twelve are drawn by no case
@@ -216,7 +216,7 @@ fn scenarios() -> Vec<Scenario> {
     cases.push(Scenario {
         pane: SettingsPane::Page(DisplayPage::Analyzer),
         wash: true,
-        visits: 34,
+        visits: 33,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
