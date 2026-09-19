@@ -20,8 +20,17 @@ The [follow-up index](https://github.com/yan-h/harmonigraph/issues/954#follow-up
 with proposals and uncertain investigations distinguished.
 Continued discovery found stale current-state documentation,
 conflicting old dispatch instructions and a newly met dependency-upgrade investigation trigger.
-The next deeper discovery is [#968](https://github.com/yan-h/harmonigraph/issues/968):
-map the current GUI fork's patches against the published candidate and test the smallest possible retirements before proposing a migration.
+Yan then authorized a requirements-value audit aimed directly at his stale-constraints concern,
+and asked for broader coverage instead of a small representative sample.
+The [requirements audit](requirements-value-audit.md) inventories the major requirement clusters,
+traces consequential claims through history and current code,
+and distinguishes worthwhile simplifications from constraints already retired or deliberately retained.
+The GUI dependency investigation [#968](https://github.com/yan-h/harmonigraph/issues/968) remains a separate lead;
+its newly met version trigger does not supersede this broader scope.
+The audit found stale requirements that could revive a retired tuning protocol ([#969](https://github.com/yan-h/harmonigraph/issues/969)).
+Yan directly confirmed that he does not use next-note outlines,
+making retirement of that feature the strongest new candidate ([#970](https://github.com/yan-h/harmonigraph/issues/970));
+its implementation is not yet approved.
 
 **Session scope:** discovery only,
 as Yan requested on 2026-09-19.
@@ -45,6 +54,7 @@ He then authorized the settings investigation and keeping its documentation in t
 accepted future spacing removal,
 and asked for systematic discovery instead of implementation.
 He then requested individual issues for the leads and continued investigation on the same date.
+He subsequently authorized the requirements-value audit and broadened its coverage beyond a sample.
 Those issues preserve evidence and deferred scope;
 opening one does not begin its implementation.
 Continue that discovery scope unless Yan changes it.
@@ -113,7 +123,7 @@ The pilot and Yan's discovery-only direction have changed the sequence below.
 | --- | --- | --- | --- |
 | 1. Pilot | Examine recent fixes and one area with recurring maintenance work; trace requirements and challenge the strongest findings. | Twelve-case assessment and three recommendations in [#950](https://github.com/yan-h/harmonigraph/issues/950). | Complete |
 | 2. Worked discovery case | Trace persisted spacing and settings validation; inspect saved examples and render a keep/remove comparison. | Evidence in [#952](https://github.com/yan-h/harmonigraph/issues/952); Yan accepted the custom-input loss. | Complete; implementation deferred |
-| 3. Broader discovery and prioritization | Survey the areas below, trace realistic changes, challenge the best leads and compare their value. | Detailed results in [#954](https://github.com/yan-h/harmonigraph/issues/954); runtime probes and negative controls for three groups. | Current phase; first detailed batch and continued constraints/dependency inventory complete |
+| 3. Broader discovery and prioritization | Survey the areas below, trace realistic changes, challenge the best leads and compare their value. | Detailed results in [#954](https://github.com/yan-h/harmonigraph/issues/954); runtime probes and negative controls; [requirements-value audit](requirements-value-audit.md). | Current phase; broad requirements inventory and targeted history/code audit added |
 | 4. Selected simplification | After Yan requests implementation, sequence the most valuable accepted changes by dependencies and file overlap. | Focused PRs showing which maintenance obligations disappeared and what behavior was verified. | Deferred |
 | 5. Verification and handoff | Check the resulting workflows and update the explanations future agents need. | Evidence of preserved or explicitly changed behavior, remaining issues and a clear stopping point. | Follows implementation |
 

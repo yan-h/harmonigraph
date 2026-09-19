@@ -1,6 +1,6 @@
 # Maintainability discovery probes
 
-These are unapplied experiment patches,
+These are unapplied experiment patches and one standalone discovery probe,
 not production changes or an additional test suite.
 They preserve the costly reproduction work behind [#954](https://github.com/yan-h/harmonigraph/issues/954),
 [#955](https://github.com/yan-h/harmonigraph/issues/955) and [#957](https://github.com/yan-h/harmonigraph/issues/957).
@@ -188,3 +188,48 @@ The support audit found the narrow macOS/Bitwig scope already explicit.
 Its portable-code and generic-feature-name hypotheses did not establish a new support obligation.
 [#967](https://github.com/yan-h/harmonigraph/issues/967) separately records the concrete conflict between old audit dispatch instructions and current worktree ownership.
 The full issue index and retained/rejected hypotheses remain in [#954](https://github.com/yan-h/harmonigraph/issues/954).
+
+## Eligible neighborhood versus exact winners
+
+This continuation was run on 2026-09-19 at `2a5595fd`,
+with product sources still at `1786c5ba`.
+[reachability-probe.rs](reachability-probe.rs) compares current production candidate preparation with the exact reachable-winner solver.
+It supplies the context immediately before the final onset in the existing `minor` and `fifths-high` examples in `crates/harmonigraph-core/src/policy/fixtures.txt`.
+The snapshots use the fixture oracle's integer pitches and coordinates,
+not a live Hub capture or a new sequential-policy run.
+All context weights are one;
+the fifth-chain reference is its last onset's output-minus-input.
+Configuration uses the default policy with just tuning and no tempered commas.
+
+Run from the repository root at that revision:
+
+```sh
+probe_dir=$(mktemp -d)
+rustc --crate-name harmonigraph_core --crate-type rlib --edition=2021 -O crates/harmonigraph-core/src/lib.rs --out-dir "$probe_dir"
+rustc --edition=2021 -O docs/evidence/maintainability-discovery/reachability-probe.rs --extern harmonigraph_core="$probe_dir/libharmonigraph_core.rlib" -o "$probe_dir/probe"
+"$probe_dir/probe"
+```
+
+This builds only the dependency-free core and scratch executable;
+no tracked product files or Cargo manifests/locks are modified.
+The probe asserts every winner belongs to the eligible set and prints set sizes plus example extra coordinates.
+Observed with the production solver over 3600–9600 cents (C2–C7):
+
+| Snapshot | Eligible | Winners | Extra eligible outlines |
+| --- | --- | --- | --- |
+| minor-before-bb | 36 | 23 | 13 |
+| fifths-high-before-e | 46 | 24 | 22 |
+
+For example,
+`(-3, 0, 0)` and `(-2, -1, 0)` belong to the eligible set but not the winner set in both snapshots.
+Coordinates identify lattice spellings;
+letter names alone can hide comma differences.
+These counts include nodes outside the current camera,
+so they are not screen counts.
+No production UI change was made.
+
+The existing JavaScript simulator independently returned the same counts on these two examples,
+but it lacks the production keyboard filter and therefore is not evidence of general plugin parity.
+The compiled production probe is the evidence used in the [requirements audit](../../requirements-value-audit.md).
+It establishes a visible semantic tradeoff at two named contexts,
+not a CPU improvement, worker deletion or complete reachability validation.
