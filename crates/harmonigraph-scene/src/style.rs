@@ -4,6 +4,8 @@
 //! `lattice.wgsl`; the gradient reaches the shader as a color table instead,
 //! and needs no branch there at all.
 
+use crate::view::finite_or;
+
 /// A low-to-high color gradient, as six things a reader of the picture can
 /// name: WHICH colors it walks through (an arc of the OKLAB hue circle), how
 /// bright the middle of the range sits, how much brightness separates the ends
@@ -796,12 +798,22 @@ impl ShadowStyle {
     /// ([`SHADOW_FALLOFF_MIN`]) rather than a taste, so a number under it is a
     /// visible edge at a fixed radius. The kernel takes no clamp: an enum is in
     /// range or the blob did not parse.
+    ///
+    /// A `clamp` is no door on its own, NaN answering no to every comparison
+    /// one makes, so each bound is reached through [`finite_or`] and lands on
+    /// its own low end. For the two geometric fields that is 0, which is this
+    /// group's shadow gone
+    /// ([`casts`](Self::casts)) — the picture refusing to draw a number it
+    /// cannot use rather than inventing the one the file should have held. The
+    /// falloff's low end is a window rather than an off position, so a NaN
+    /// there is the tightest window instead.
     pub fn clamped(self, width_max: f32) -> ShadowStyle {
         ShadowStyle {
             kernel: self.kernel,
-            width: self.width.clamp(0.0, width_max),
-            depth: self.depth.clamp(0.0, 1.0),
-            falloff: self.falloff.clamp(SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX),
+            width: finite_or(self.width, 0.0).clamp(0.0, width_max),
+            depth: finite_or(self.depth, 0.0).clamp(0.0, 1.0),
+            falloff: finite_or(self.falloff, SHADOW_FALLOFF_MIN)
+                .clamp(SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX),
         }
     }
 }

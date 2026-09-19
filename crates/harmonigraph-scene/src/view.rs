@@ -363,6 +363,25 @@ impl NoteAnimationConfig {
     pub fn staggers(self) -> bool {
         self.order != AnimationOrder::Simultaneous && self.stagger_spread > 0.0
     }
+    /// The finite, bounded pose the renderer is handed, for the shells that
+    /// never cross the persist door — `derive_scene` copies this config into
+    /// the scene whole, so a NaN in it is a node the shader places nowhere.
+    ///
+    /// The fallback is the FRESH value rather than each range's low bound,
+    /// which is the departure the rest of the picture's repairs do not make
+    /// and is the same one [`GlowCurve::sanitized`] makes. These three are a
+    /// POSE rather than a size: `radial_start`'s range is signed and
+    /// `start_size`'s neutral is 1, so a low bound here would be one extreme
+    /// of an animation rather than the least of one. Fresh is also the answer
+    /// [`ViewConfig::sanitize`] gives each of them, so the door and the
+    /// picture cannot disagree about what a broken pose looks like.
+    pub fn sanitized(mut self) -> Self {
+        let fresh = NoteAnimationConfig::default();
+        self.stagger_spread = finite_or(self.stagger_spread, fresh.stagger_spread).clamp(0.0, 0.9);
+        self.radial_start = finite_or(self.radial_start, fresh.radial_start).clamp(-1.0, 1.0);
+        self.start_size = finite_or(self.start_size, fresh.start_size).clamp(0.0, 2.0);
+        self
+    }
     /// Fixed delays of complete displayed sectors; shared by live/export and
     /// renderer fixtures, including wheels with unequal outer sectors.
     ///
@@ -2463,13 +2482,26 @@ impl ViewConfig {
 ///
 /// No range: the caller's own clamp is the range, and this only has to hand
 /// it something a clamp can act on.
-fn finite_or(value: f32, fallback: f32) -> f32 {
+///
+/// Reached from [`derive`](crate::derive) and [`style`](crate::style) as well
+/// as from the door below, for the same reason [`size`] is: the drawing code
+/// is reached by more routes than the persist door — the offline layout, take
+/// replay and the harness each build a view in code — and one answer to "this
+/// is not a number" is what keeps the picture from being assembled out of two
+/// readings of one bar.
+pub(crate) fn finite_or(value: f32, fallback: f32) -> f32 {
     if value.is_finite() {
         value
     } else {
         fallback
     }
 }
+
+/// The world step a fresh [`ViewConfig::spacing`] opens on, named for
+/// [`DEFAULT_RING_GROUND`]'s reason: [`derive`](crate::derive) repairs a step
+/// that is not a real number once per frame and would otherwise build a whole
+/// fresh view to read one field off it.
+pub(crate) const DEFAULT_SPACING: f32 = 1.0;
 
 /// The `L*` a fresh [`ViewConfig::lattice_ground`] opens on. Named because the
 /// `_lightness` accessor needs it without building a whole fresh view to read
@@ -2502,7 +2534,7 @@ const DEFAULT_SOUNDING_INK: f32 = 100.0;
 impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
-            spacing: 1.0,
+            spacing: DEFAULT_SPACING,
             // The naming reach: how far out a played pitch is hunted for a
             // spelling before it counts as off the lattice. Oblong, like the
             // panes it has to cover — `lattice_to_world` puts the FIFTHS axis
