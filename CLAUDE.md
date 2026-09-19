@@ -71,8 +71,27 @@ a release build in a brand-new worktree takes 1m28s instead of 3m36s.
 
 `crates/harmonigraph-metal-assets/assets` holds precompiled Metal libraries keyed on shader hashes,
 so **editing any `.wgsl` invalidates it, and the edit is not finished until the corpus is regenerated in the SAME commit**.
-`git log -- crates/harmonigraph-metal-assets/assets` is the check:
-every shader PR in the tree is in that log.
+
+The `.wgsl` in the title is the common case rather than the whole key, and treating it as the whole key is this repo's own too-narrow-key mistake written in prose.
+The hash is over the **generated MSL** and the compiler options, which carry `hal::BACKEND_VERSION` —
+so a bind-group or pipeline-layout change in Rust, a `vendor/wgpu-hal` bump or a `Cargo.lock` move invalidates the corpus with no `.wgsl` anywhere in the diff.
+The workflow's own `paths:` filter already names the real set (`crates/harmonigraph-render/**`, `Cargo.lock`, `vendor/wgpu-hal/**`, `crates/harmonigraph-offline/**` and more);
+read that, not the title of this section.
+`232d750e..24952475` is the worked example of the gap: 665 insertions across eight `harmonigraph-render` files, zero `.wgsl`, and by the title's rule none of it owed anything.
+
+It is also too coarse the other way: a COMMENT-only `.wgsl` edit owes nothing at all, because naga strips comments and the generated MSL is byte-identical.
+`916c2429` is the worked example — it edited a comment in `spectrogram.wgsl` with no asset commit, and the corpus stayed valid.
+So `git log -- crates/harmonigraph-metal-assets/assets` is a cheap check rather than the definition:
+a shader PR absent from that log is a question, not yet a verdict.
+
+The definition is the corpus itself, and it answers locally in about a second:
+
+```
+cargo test -p harmonigraph-render golden 2>&1 | grep "compiling from source"
+```
+
+Silence means every library resolved from the corpus.
+That is the same signal as the line below, asked on purpose instead of noticed by luck.
 
 What makes this worth a section is that NOTHING LOCAL GOES RED.
 `cargo test --workspace`, `cargo fmt --all --check` and `cargo clippy` all pass against a stale corpus, because the renderer quietly falls back to compiling from source, and `ci.sh` does not gate it either.
@@ -95,7 +114,7 @@ gh workflow run "Metal shader assets" --ref <branch> -f regenerate=true
 
 then `tools/shader-assets.py import` the `production-metal-assets` artifact.
 `tools/shader-assets.py generate` does work locally and is the slow way to learn that it is the wrong path —
-it rebuilds the renderer eight times over, against the production corpus and then against five deliberately broken variants of it, and on this machine it had produced nothing after twenty minutes.
+it rebuilds the renderer eight times over, against the production corpus and then against three deliberately broken variants of it, and on this machine it had produced nothing after twenty minutes.
 PR #918 is the worked example, and it cost a full CI cycle on a diff whose own tests were green the whole time.
 
 ## Pausing = a loadable build exists (sessions build, Yan loads)

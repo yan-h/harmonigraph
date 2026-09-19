@@ -1,5 +1,15 @@
 # Spectrogram rendering audit and implementation plan
 
+This audit describes a time aggregation that no longer exists.
+PR #884 replaced the bytewise MAX fold with a count-weighted linear-power mean:
+`SpectrumHistory` holds `power_sum` and `count` rather than dB bytes,
+`SpectrogramAgg` holds a `PowerMean` with a `dirty` flag,
+and a merged column's timestamp is a count-weighted mean rather than a midpoint.
+Every "MAX" below — including line 80's "preserving a peak that was actually analyzed within each slab" — is the retired design,
+and the test that asserted that peak (`a_peak_survives_being_merged_into_the_coarse_tiers`) was deleted with it and replaced by `coarse_tiers_conserve_linear_power_and_sample_count`.
+A fixture written to line 80's contract would be measuring the wrong property.
+The memory figure in the component table is stale by the same change.
+
 ## Status, evidence, and scope
 
 Audited on 2026-09-05 from current `origin/main`, `70e9f48dddb3c14e5cb2d2173d5604f8a4c34e84`, in the Codex-managed `codex/spectrogram-rendering-audit` worktree.

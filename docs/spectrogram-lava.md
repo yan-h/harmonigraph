@@ -1,6 +1,17 @@
 # Spectrogram power averaging and lava
 
-The spectrogram now averages linear power in time.
+The three styles this file names are a historical record.
+PR #928 retired the Plain/Blur/Lava selector and its transfer-stage switch,
+making the blur, the terraces and the cloud independent dials whose zero is off,
+so every sentence below naming a style or "its selector" describes a control that is gone.
+The measured numbers (35 ct, 120 ms, 25%, seven contours, 15%) are still the shipped defaults,
+and the three `spectrogram-style-{plain,blur,lava}` goldens survived the retirement — they are now reached by dialling rather than by selecting.
+One measured claim did not survive:
+"when both widths are zero the renderer uses the detailed field directly, skipping source integration, all four filters and the material bake" is false once a cloud is drawn,
+because `SpectralEffects::light()` is `soft || cloud`,
+so the Measured cost section understates its own worst case.
+
+The spectrogram averages linear power in time.
 Plain shows the mapped field;
 Blur smooths it;
 Lava adds smoothly edged intensity terraces before the palette.
