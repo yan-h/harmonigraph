@@ -106,6 +106,7 @@ There is no automatic retuning and no special-case branch for any musical fixtur
 The baseline uses pitch flexibility 100 cents, half-life 0.5 seconds and register weight 0.7 per octave.
 The paired precision examples use pitch flexibility 50 cents with the same explicit seeded context and zero initial displacement.
 The flexibility replaces both old scoring controls; it is the displacement where pitch cost equals the maximum possible harmonic benefit, so an entire flexibility-unit move cannot beat staying unsnapped.
+The fifths-only example cuts the lattice to one axis and radius 1, which is the profile in which an onset can fall outside every node's window and stay unsnapped.
 All other fixtures use the baseline.
 
 ### Bends, resets and memory
@@ -178,8 +179,8 @@ Browser state is not otherwise persisted automatically.
 node --test tools/adaptive-tuning-simulator/model.test.mjs
 ```
 
-The suite checks the seventeen musical fixtures with declared profiles, 101 full major-third cycles with over three octaves of unwrapped drift, octave transposition, release-recency replacement, repeated pitches, frozen corrections and player bends, reset settings, axis eligibility and analytic reachability against direct selection.
-The browser also offers **Musical checks** for running the seventeen fixture outcomes interactively.
+The suite checks the eighteen musical fixtures with declared profiles, 101 full major-third cycles with over three octaves of unwrapped drift, octave transposition, release-recency replacement, repeated pitches, frozen corrections and player bends, reset settings, axis eligibility, an onset no node is worth snapping to, and analytic reachability against direct selection.
+The browser also offers **Musical checks** for running the eighteen fixture outcomes interactively.
 Changing parameters may produce a different result and the current example reports that difference rather than declaring every run a pass.
 
 This verifies the model's mechanics and the stated fixtures, not perceptual quality or suitability for every progression.

@@ -92,7 +92,33 @@ fn simulator_fixture_parity_includes_register_memory_and_precision() {
             "case" => {
                 h = Harness::new();
                 case = w[1];
-                h.config.policy.pitch_flexibility = num(2) as u16;
+                // Every setting the example declared, in the plugin's units.
+                // Replaying an example at anything but its own profile agrees
+                // for the wrong reason, so an unknown name is a failure here
+                // rather than a value quietly left at the default.
+                for setting in &w[2..] {
+                    let (name, value) =
+                        setting.split_once('=').unwrap_or_else(|| panic!("{case}: {line}"));
+                    let value = value.parse::<i64>().unwrap();
+                    let policy = &mut h.config.policy;
+                    match name {
+                        "radius" => policy.radius = value.try_into().unwrap(),
+                        "axes" => policy.axes = value.try_into().unwrap(),
+                        "flexibility" => policy.pitch_flexibility = value.try_into().unwrap(),
+                        "half-life-ms" => policy.half_life_ms = value.try_into().unwrap(),
+                        "register" => policy.register = value.try_into().unwrap(),
+                        "tolerance" => policy.tolerance = value.try_into().unwrap(),
+                        // Elapsed silence and transport are the sequencer's,
+                        // and this harness replays onsets alone.
+                        "silence-ms" | "reset-stop" | "reset-loop" => {
+                            assert_eq!(value, 0, "{case}: {setting} is not replayed here")
+                        }
+                        other => panic!("{case}: unhandled fixture setting {other}"),
+                    }
+                }
+                // The simulator's bounds are not the plugin's: a profile the
+                // plugin would clamp is numbers the plugin never runs.
+                assert_eq!(h.config.policy, h.config.policy.sanitize(), "{case}");
             }
             "seed" => h.held.push((
                 w[1].into(),

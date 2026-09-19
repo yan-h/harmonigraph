@@ -88,6 +88,16 @@ export const EXAMPLES = [
     description: 'Bend E by 30 cents. Its audible pitch moves, but its onset context and adaptive correction stay fixed. Enable sound to listen.',
     program: 'on C3 c\non E3 e\nbend e 30\non G3 g',
     check: sim => sim.held.get('e')?.bend === 30 && keyOf(sim.held.get('e')?.node || []) === '0,1,0', expected: 'E has a +30-cent bend and an unchanged onset position.' },
+  { id: 'fifths-only', name: 'A drone note the chain cannot spell', category: 'Lattice',
+    settings: { axes: 1, radius: 1 },
+    description: 'A C–G drone under a slow melody, on a lattice cut back to the chain of fifths one step wide: F, C, G and D are the whole of it. D and A belong to that chain, but the E between them is 94 cents from the nearest place the chain has, so snapping costs more than it is worth and the note sounds exactly as struck. It still counts as context, through the node nearest it, and the drone’s drift survives it untouched.',
+    program: 'on C3 c\non G3 g\nwait 1\non D4 d\nwait 0.5\noff d\non E4 e\nwait 0.5\non A4 a',
+    check: sim => {
+      const [c, g, d, e, a] = sim.history;
+      return [c, g, d, a].every((v, i) => keyOf(v.node) === `${i},0,0`)
+        && e.node === null && e.output === e.input + d.correction;
+    },
+    expected: 'C, G, D and A along the chain at [0, 0, 0] through [3, 0, 0]; E unsnapped, keeping the drift the chain had already reached.' },
 ];
 export function runExample(example, overrides = {}, transpose = 0) {
   const sim = new Simulator({ ...example.settings, ...overrides });
