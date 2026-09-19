@@ -402,20 +402,6 @@ mod tests {
             .expect("baked dot_shadow.wgsl must parse and validate");
     }
 
-    /// A style that casts nothing, and a frame with no dots in it, each skip
-    /// the whole thing: no pipelines are built, no pane is built, and nothing
-    /// is registered with the shadow surface.
-    ///
-    /// Asked of the RESOURCES rather than of the frame, because both draw the
-    /// same bytes however much work went into them — a `prepare` that built its
-    /// two pipelines and then registered casters at a sigma of 0 would leave
-    /// the picture untouched and cost the whole thing. The PIPELINES are the
-    /// half that reaches a reader whose spectral geometry casts nothing, and
-    /// their absence is what lets the spiral add this callback on every frame
-    /// it draws, silent ones included, so that the sweep's clock keeps running.
-    ///
-    /// Read off a FIRST prepare, since anything already built is deliberately
-    /// held through a quiet stretch.
     /// A pane that DECLINES every frame keeps its buffers; a pane that stops
     /// calling back at all loses them.
     ///
@@ -473,6 +459,20 @@ mod tests {
         assert!(!live(&resources, 1), "the pane that stopped calling back is still holding them");
     }
 
+    /// A style that casts nothing, and a frame with no dots in it, each skip
+    /// the whole thing: no pipelines are built, no pane is built, and nothing
+    /// is registered with the shadow surface.
+    ///
+    /// Asked of the RESOURCES rather than of the frame, because both draw the
+    /// same bytes however much work went into them — a `prepare` that built its
+    /// two pipelines and then registered casters at a sigma of 0 would leave
+    /// the picture untouched and cost the whole thing. The PIPELINES are the
+    /// half that reaches a reader whose spectral geometry casts nothing, and
+    /// their absence is what lets the spiral add this callback on every frame
+    /// it draws, silent ones included, so that the sweep's clock keeps running.
+    ///
+    /// Read off a FIRST prepare, since anything already built is deliberately
+    /// held through a quiet stretch.
     #[test]
     fn nothing_to_shadow_builds_no_pipelines() {
         let Some((device, queue)) = headless_device() else {

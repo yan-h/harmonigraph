@@ -33,10 +33,9 @@
 //! keeps its scene-order compositor; only the field producing their coverage
 //! is shared.
 
-use crate::pass_aged::PassAged;
-
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
+use crate::pass_aged::PassAged;
 use crate::{create_vertex_buffer, wgpu};
 
 pub(crate) const TEXT_SRC: &str = include_str!("shaders/text.wgsl");
@@ -2265,30 +2264,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// A pane whose text is already prepared keeps it when a LATER pane in the
-    /// same frame brings a grown atlas.
-    ///
-    /// Which pane brings one is not a property of the pane: it is whichever
-    /// happened to lay out a glyph nobody had drawn before, so on any frame the
-    /// panes ahead of it in paint order have already had their `prepare` and
-    /// will not get another before they are painted. Both halves of what
-    /// [`TextResources::bind_sheets`] hands them are checked here, and each
-    /// fails on its own — dropping the bind group paints nothing at all, and
-    /// leaving the old `atlas_size` in the uniforms normalizes the glyph's
-    /// texels by the wrong height, which lands the sample below the patch,
-    /// where the atlas is empty. Both are a pane's whole text gone for a frame,
-    /// and on a pane that is scrolling that is text flickering.
-    ///
-    /// The last frame is what makes the second one mean anything. A pane left
-    /// holding BOTH its old bind group and its old uniforms is stale but
-    /// self-consistent: it samples the retired texture by the size that texture
-    /// really is, so it draws the right pixels and passes any assertion about
-    /// the frame it was stranded on. What it can never do is read a glyph
-    /// rasterized into the region the atlas grew INTO, since its texture stops
-    /// short of it — and it never recovers on its own, because `prepare`
-    /// rebuilds a bind group only when there is none. So the third frame draws
-    /// off a patch that exists solely in the grown half, which no pane still
-    /// bound to the old texture can reach.
     /// A text pane that stops drawing gives its glyph buffer back, and one
     /// still drawing beside it keeps its own.
     ///
@@ -2342,6 +2317,30 @@ pub(crate) mod tests {
         assert!(live(&resources, 1), "the sweep took the pane that never stopped drawing");
     }
 
+    /// A pane whose text is already prepared keeps it when a LATER pane in the
+    /// same frame brings a grown atlas.
+    ///
+    /// Which pane brings one is not a property of the pane: it is whichever
+    /// happened to lay out a glyph nobody had drawn before, so on any frame the
+    /// panes ahead of it in paint order have already had their `prepare` and
+    /// will not get another before they are painted. Both halves of what
+    /// [`TextResources::bind_sheets`] hands them are checked here, and each
+    /// fails on its own — dropping the bind group paints nothing at all, and
+    /// leaving the old `atlas_size` in the uniforms normalizes the glyph's
+    /// texels by the wrong height, which lands the sample below the patch,
+    /// where the atlas is empty. Both are a pane's whole text gone for a frame,
+    /// and on a pane that is scrolling that is text flickering.
+    ///
+    /// The last frame is what makes the second one mean anything. A pane left
+    /// holding BOTH its old bind group and its old uniforms is stale but
+    /// self-consistent: it samples the retired texture by the size that texture
+    /// really is, so it draws the right pixels and passes any assertion about
+    /// the frame it was stranded on. What it can never do is read a glyph
+    /// rasterized into the region the atlas grew INTO, since its texture stops
+    /// short of it — and it never recovers on its own, because `prepare`
+    /// rebuilds a bind group only when there is none. So the third frame draws
+    /// off a patch that exists solely in the grown half, which no pane still
+    /// bound to the old texture can reach.
     #[test]
     fn a_prepared_pane_survives_a_later_pane_growing_the_atlas() {
         let Some((device, queue)) = headless_device() else {

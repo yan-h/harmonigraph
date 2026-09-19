@@ -18,12 +18,12 @@
 //! height sets how finely the image is sampled and not how bright it is. The
 //! vertex rule feeding the two slab taps is `heatmap_mesh`'s.
 
-use crate::pass_aged::PassAged;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
+use crate::pass_aged::PassAged;
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 const SPECTROGRAM_SRC: &str = include_str!("shaders/spectrogram.wgsl");
