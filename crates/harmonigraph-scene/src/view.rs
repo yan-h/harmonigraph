@@ -1601,7 +1601,12 @@ fn slot_start(cursor: f32, inner: f32, gap: f32) -> f32 {
 /// A size bar's value as the picture may use it: inside `0..=high`, and 0 —
 /// the off position every one of them has — where a hand-edited blob holds a
 /// NaN or an infinity, which no clamp of its own would catch.
-fn size(value: f32, high: f32) -> f32 {
+///
+/// Reached from [`derive`](crate::derive) as well as from the stack here,
+/// because the answer a size gets when it is not a number has to be one
+/// answer: a marker's arm read as NaN in one derivation and as 0 in the next
+/// is a picture assembled out of two readings of one bar.
+pub(crate) fn size(value: f32, high: f32) -> f32 {
     if value.is_finite() {
         value.clamp(0.0, high)
     } else {
