@@ -166,6 +166,58 @@ pub(super) fn heatmap_vertices(
     vertices
 }
 
+/// The depths the drawn strip spans, near edge first — **both ends stop where
+/// the data stops**, so the strip GROWS from its edges as history accumulates
+/// rather than being stretched to fill the region. Without either cap, the
+/// clamp that holds the run's outermost slab smears a handful of columns across
+/// everything as trails, which is what startup and a cleared spectrogram look
+/// like.
+///
+/// **Live**, the near edge is the newest column's own depth. A spectrum is not
+/// an instant: it describes the `fft_size` samples behind it and is stamped at
+/// the middle of them, so the newest column is HALF AN ANALYSIS WINDOW old by
+/// construction and nothing nearer than it has been measured at all. Drawing to
+/// the region boundary anyway left that half-window filled by the newest column
+/// held flat — a band of identical levels at the now-line that reads as the
+/// spectrum curve leaking into the heatmap (#914). What shows there now is the
+/// bed, which is what the far edge already shows while history is still filling
+/// rather than a new kind of hole. Its width is the analyzer's alone: 9 px on
+/// Fast, 19 on Balanced, 37 on Precise at a 1.5 s Span over 326 px, and
+/// narrower as the Span lengthens.
+///
+/// Never nearer than `split`: a column stamped at or past `now` (a clock hiccup,
+/// or an offline feed running ahead) would otherwise put the near edge inside
+/// the spectrum region, which the heatmap does not own. `depth_of` clamps into
+/// the region too, and the `max` is this rule stated where it is meant rather
+/// than borrowed from that one.
+///
+/// The edge steps by one FFT hop (8 ms, under 2 px at the tightest Span) rather
+/// than sliding, because columns arrive 125x a second while the pane scrolls
+/// continuously. A grace period used to hold the edge at `split` until a stream
+/// looked stale, which hid that step — and filled the band with held data to do
+/// it. Stopping at the newest column always is what `7f2b3d38` already did for
+/// a stale stream, now that there is nothing to be graceful about.
+///
+/// **Whole-song** (offline playhead) takes the other branch entirely: the take
+/// is present from the first frame, so the strip fills the run end to end and
+/// only the playhead moves. [`precompute`](crate::WholeSong::precompute) feeds
+/// half a window past the far edge for exactly this reason, so its last
+/// measurement is centred on that edge and there is no sliver to leave out.
+pub(super) fn strip_depths(
+    time: &TimeAxis,
+    split: f32,
+    layout: &TexLayout,
+    newest: f64,
+) -> (f32, f32) {
+    if time.whole_song() {
+        (time.depth_of(layout.t_origin), time.depth_of(layout.t_origin + layout.tex_span))
+    } else {
+        // Far edge: the oldest slab's depth, which is 1 once history spans the
+        // window (depth_of clamps there) and nearer while it is still filling.
+        (time.depth_of(newest).max(split), time.depth_of(layout.t_origin))
+    }
+}
+
 /// Draw the spectrogram across the roll's depth region (`split..1`), sharing
 /// the roll's `depth_of` time mapping so its columns register with the notes.
 ///
@@ -242,35 +294,7 @@ pub(crate) fn draw_spectrogram(
         return;
     };
 
-    // The quad only spans the depths the data actually reaches, so the drawn
-    // strip GROWS from the now-line as history accumulates rather than being
-    // stretched to fill the whole region. Without the far cap, clearing the
-    // spectrogram (or startup) leaves a handful of fresh columns smeared across
-    // everything as trails, by the clamp that holds the run's outermost slab.
-    //
-    // Near edge: to the split while fresh columns keep arriving, but stopping
-    // at the newest data once it goes stale — most visibly when switching the
-    // window algorithm, which empties the ring for a window's worth of samples
-    // and would otherwise smear the last pre-switch slice over the growing gap.
-    // The grace keeps the ordinary ~one-FFT lag from opening a flickering
-    // sliver. Far edge: the oldest slab's depth, which is 1 once history spans
-    // the window (depth_of clamps there) and nearer while it is still filling.
-    let (d_near, d_far) = if time.whole_song() {
-        // The whole take is present from the first frame, so the strip fills the
-        // region edge to edge; only the playhead moves.
-        (time.depth_of(layout.t_origin), time.depth_of(layout.t_origin + layout.tex_span))
-    } else {
-        // Plus the lag every healthy column has by construction: it is stamped
-        // at the middle of the window it measured, so the newest one is always
-        // half a window old. Without that term the strip stops short of the
-        // now-line whenever the window is long, and the gap changes size with
-        // the window setting.
-        const FRESH: f64 = 0.12;
-        let stale_after = FRESH + spectrum.column_lag();
-        let near =
-            if now - columns.newest <= stale_after { split } else { time.depth_of(columns.newest) };
-        (near, time.depth_of(layout.t_origin))
-    };
+    let (d_near, d_far) = strip_depths(&time, split, &layout, columns.newest);
 
     let vertices = heatmap_vertices(axes, &time, &layout, d_near, d_far);
     let Some((grid, shades)) = frame_data(surfaces, surface, &cfg) else {

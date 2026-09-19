@@ -6,7 +6,7 @@ use super::gestures::*;
 use super::settings::*;
 use super::*;
 use crate::tests::probe::{fresh_picture as fresh, painted_full, painted_into, themed};
-use crate::{SpectralOrientation, SpectrumConfig};
+use crate::{SpectralOrientation, SpectrumConfig, SpectrumWindow};
 use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
 /// A 300x100 pane at an offset origin, so a mistake that assumes the
@@ -2019,9 +2019,13 @@ fn the_pane_paints_in_every_orientation() {
     }
 }
 
-/// The strip reaches the now-line, but the newest column is older than that
-/// — half an analysis window, by construction — so its leading sliver has no
-/// data of its own and holds the newest slab's centre instead.
+/// The near edge the caller hands in can sit past the newest slab's CENTRE —
+/// half a slab of it live, where the newest column falls inside its own slab
+/// (see `strip_depths`), and the whole take's trailing overhang offline — and
+/// past that centre there is no second tap to blend towards. So the leading
+/// sliver has no data of its own and holds the centre's value instead. The
+/// fixture makes it several slabs wide so the split is unambiguous; the live
+/// path's is narrower than that, not wider.
 ///
 /// Where the slab coordinate stops, the mesh SPLITS: a quad spanning the
 /// corner would interpolate it across itself, and since this is a vertex
@@ -2069,6 +2073,116 @@ fn the_strip_holds_its_leading_sliver_instead_of_running_past_the_run() {
     let mut ts: Vec<f32> = vertices.iter().map(|v| v.t).collect();
     ts.sort_by(f32::total_cmp);
     assert_eq!(ts, [0.0; 6].into_iter().chain([1.0; 6]).collect::<Vec<f32>>());
+}
+
+/// **The live strip stops where the data stops** (#914). A spectrum describes
+/// the window it measured and is stamped at the middle of it, so the newest
+/// column is half an analysis window old by construction and nothing nearer to
+/// the now-line than that has been measured at all. Drawing to the region
+/// boundary anyway filled the rest with the newest column held flat — the band
+/// of identical levels Yan read as the spectrum curve leaking into the heatmap.
+///
+/// What makes the fixture arrive is that these are HEALTHY streams: the newest
+/// column lags `now` by exactly half a window and by nothing else, which is
+/// what the removed grace called fresh (it allowed that lag plus 120 ms on
+/// top). Under the old rule all three of these answered `split`, the now-line,
+/// so the assertion fails on the old code at every window rather than passing
+/// for the wrong reason.
+///
+/// Three windows because the shortfall is the analyzer's own and tracks its
+/// setting — Fast to Precise is a 4x change in how much of the leading edge is
+/// bed, and that is what moving that dial now does to the picture.
+#[test]
+fn the_live_strip_stops_half_a_window_short_of_the_now_line() {
+    let mut state = fresh();
+    state.appearance.spectrum.orientation = SpectralOrientation::Left;
+    state.appearance.spectrum.roll_seconds = 1.5; // the Span #914 measured at
+    let axes = Axes::new(WIDE, &state.appearance.spectrum);
+    let (split, now) = (0.35, 90.0);
+    let time = super::axes::TimeAxis::new(&state, split, now);
+    // A run whose last slab holds the newest column half a bucket past its
+    // centre: the widest leading sliver `heatmap_vertices` can be left with,
+    // and still a fraction of the gap this test is about.
+    let run = |newest: f64| crate::spectrogram::TexLayout {
+        bucket: 0.016,
+        t_origin: newest - 0.64,
+        tex_span: 0.64,
+    };
+
+    for window in [SpectrumWindow::Fast, SpectrumWindow::Balanced, SpectrumWindow::Precise] {
+        // Half the analysis window at the rate the analyzer runs at — what
+        // `AudioSpectrum::column_lag` reads back out of it, computed here the
+        // way the plugin's own background tests compute it.
+        let lag = 0.5 * window.samples() as f64 / 48_000.0;
+        let newest = now - lag;
+        let (near, far) = super::spectrogram::strip_depths(&time, split, &run(newest), newest);
+
+        // In pixels of the pane, because the depth it came back as is an f32
+        // and the round trip through it is only ever exact to that.
+        let per_point = time.seconds_per_point(&axes);
+        let off = (time.time_at(near) - newest).abs() / per_point;
+        assert!(
+            off < 0.01,
+            "{window:?}: the near edge sits {off:.3} px off the newest column at {newest}",
+        );
+        // A gap anyone can see rather than a rounding error: 5.5 px of this
+        // pane on Fast, 22 on Precise.
+        let px = lag / per_point;
+        assert!(px > 2.0, "{window:?}: {px:.1} px of bed is not the strip this measures");
+        assert!(far > near, "{window:?}: the strip spans no depth at all");
+    }
+
+    // And never nearer than the region boundary. A column stamped at or past
+    // `now` — a clock hiccup, or an offline feed running ahead — would put the
+    // near edge inside the spectrum region, which the heatmap does not own.
+    let ahead = now + 0.5;
+    let (near, _) = super::spectrogram::strip_depths(&time, split, &run(ahead), ahead);
+    assert_eq!(near, split, "a column from the future dragged the strip over the divider");
+}
+
+/// A whole-song pane takes the other branch of `strip_depths` entirely, so
+/// #914's leading gap belongs to the live picture alone and an export still
+/// draws its run end to end. `WholeSong::precompute` feeds half a window past
+/// the far edge for exactly this reason — the last measurement is centred ON
+/// that edge, so offline has no unmeasured sliver to leave out.
+///
+/// The fixture arrives by making the two branches answer as differently as they
+/// can: the newest column is at the take's END, so the live branch would put
+/// the near edge at the far end of the region where this one puts it at the
+/// region's own near edge. A fixture with the newest column near the start
+/// would pass under either branch.
+#[test]
+fn a_whole_song_strip_still_spans_its_run_end_to_end() {
+    let mut state = fresh();
+    let (start, span) = (10.0, 8.0);
+    let roll = state.runtime.tracker.roll().clone();
+    state.runtime.whole_song = Some(crate::WholeSong {
+        start,
+        span,
+        columns: (0..=80)
+            .map(|i| {
+                crate::SpectrogramColumn::from_power(
+                    start + i as f64 * 0.1,
+                    &[0.25; harmonigraph_core::spectrum::SPECTRUM_BINS],
+                )
+            })
+            .collect(),
+        roll,
+    });
+    let time = super::axes::TimeAxis::new(&state, 0.0, start + 3.0);
+    assert!(time.whole_song(), "the fixture never reached the whole-song layout");
+    let layout = crate::spectrogram::TexLayout { bucket: 0.1, t_origin: start, tex_span: span };
+    let newest = start + span;
+
+    assert_eq!(
+        super::spectrogram::strip_depths(&time, 0.0, &layout, newest),
+        (0.0, 1.0),
+        "the export's strip no longer spans the run it folded",
+    );
+    assert!(
+        time.depth_of(newest) > 0.9,
+        "the live branch would have answered the same depth here, so this proves nothing",
+    );
 }
 
 /// The now-line is painted after the roll that arrives at it.
