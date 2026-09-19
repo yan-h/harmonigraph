@@ -2214,6 +2214,23 @@ impl ViewConfig {
         // the four of them into radii (`rings`).
         self.spectral_ring_width = finite_or(self.spectral_ring_width, fresh.spectral_ring_width)
             .clamp(0.0, RING_WIDTH_MAX);
+        // The three handles BESIDE it on the same bar, against the same hole
+        // and repaired for the same reason. Each is held to its own ceiling in
+        // [`rings`](Self::rings) for the picture, and the Layers bar reads the
+        // stored field back raw, so a blob past a ceiling leaves one handle out
+        // on the axis at a width no layer of the node matches — the ring's own
+        // case, three more times, and the one the bar is least able to report
+        // since the stack it draws under the handles is already the clamped one.
+        //
+        // To the fresh value rather than to 0, which is the ring's rule and not
+        // the delay's: 0 is a legal width on all four handles, but a layer
+        // silently absent is no safer a reading of a broken number than a layer
+        // at the wrong size, and the fresh stack is the one arrangement in the
+        // file known to seat all four.
+        self.ring_inner = finite_or(self.ring_inner, fresh.ring_inner).clamp(0.0, RING_INNER_MAX);
+        self.band_width = finite_or(self.band_width, fresh.band_width).clamp(0.0, RING_WIDTH_MAX);
+        self.mark_thickness =
+            finite_or(self.mark_thickness, fresh.mark_thickness).clamp(0.0, MARK_THICKNESS_MAX);
         // The two paddings, against the same hole and for the reason the width
         // above is repaired rather than left to the picture: [`GAP_MAX`] is a
         // ceiling the two bars are BUILT from, so a blob written when it stood

@@ -45,7 +45,8 @@ fn loaded(edge: Edge) -> SharedState {
     poison!(a.view; render_scale, bloom_strength, sevens_size, label_scale, sounding_ink,
         octave_center, octave_extra_size, octave_extra_blend, mark_delay, fade_shape,
         spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
-        spectral_width, spectral_ring_range, ring_gap, octave_gap, lattice_ground, marker_ink,
+        spectral_width, spectral_ring_range, ring_gap, octave_gap, ring_inner, band_width,
+        mark_thickness, lattice_ground, marker_ink,
         plus_arm, plus_taper, plus_width, glow_reach, glow_strength, glow_accumulation,
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
