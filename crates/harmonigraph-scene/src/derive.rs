@@ -6,7 +6,7 @@ use crate::camera::Camera;
 use crate::color::{pitch_lut_color, pitch_ramp_lut};
 use crate::octaves::octave_layout;
 use crate::trail::TrailField;
-use crate::view::{DrawnWindow, FrameParams, ViewConfig};
+use crate::view::{size, DrawnWindow, FrameParams, ViewConfig};
 use crate::{
     lattice_to_world, GlowStep, NodeInstance, PlusInstance, Scene, SpectralPaint, MARK_DELAY_MAX,
     NODE_RADIUS_FACTOR, OCTAVE_SLOTS, PLUS_SIZE_MAX,
@@ -577,7 +577,7 @@ fn wrapped_cents(from: harmonigraph_core::PitchClass, to: harmonigraph_core::Pit
 /// This is the one place that conversion happens, and the one place the square
 /// at the top of the width bar is decided.
 pub(crate) fn derive_plus_half_width(view: &ViewConfig) -> f32 {
-    let arm = view.plus_arm.clamp(0.0, PLUS_SIZE_MAX);
+    let arm = size(view.plus_arm, PLUS_SIZE_MAX);
     // An arm of 0 draws no markers at all, so this is only ever asked of one
     // with length — answer a proportion the shader can use rather than divide
     // by nothing, and leave the emptiness to `derive_pluses`.
@@ -586,7 +586,7 @@ pub(crate) fn derive_plus_half_width(view: &ViewConfig) -> f32 {
     }
     // Half, because the bar is the WHOLE thickness across an arm and the
     // shader measures out from the arm's centre line.
-    let half = view.plus_width.clamp(0.0, PLUS_SIZE_MAX) * 0.5;
+    let half = size(view.plus_width, PLUS_SIZE_MAX) * 0.5;
     // At 1 the cross has filled its own square: every fragment inside the quad
     // is inside one arm or the other, and a wider one has nowhere left to
     // spread. Clamped rather than left to the shader so the square is a stated
@@ -613,14 +613,20 @@ const TAPER_START_MAX: f32 = 0.999;
 /// shader wants the POINT on an axis whose 1 is the tip. This is the one place
 /// that conversion happens.
 pub(crate) fn derive_plus_taper_start(view: &ViewConfig) -> f32 {
-    let reach = view.plus_arm.clamp(0.0, PLUS_SIZE_MAX);
+    // `size` and not a bare `clamp`, and this is the site where the difference
+    // is a CRASH rather than a wrong picture: a NaN reach survives `clamp`,
+    // survives `reach <= 0.0`, and then becomes the `max` of the taper's own
+    // clamp below — which panics on a NaN bound. `sanitize` repairs the arm at
+    // the blob's door, so what reaches this is every shell that has no such
+    // door: the offline renderer's layout, a take replay, the harness.
+    let reach = size(view.plus_arm, PLUS_SIZE_MAX);
     // A reach of 0 draws no markers at all, so this is only ever asked of an
     // arm that has length — answer the square end rather than dividing by
     // nothing, and leave the emptiness to `derive_pluses`.
     if reach <= 0.0 {
         return TAPER_START_MAX;
     }
-    let taper = view.plus_taper.clamp(0.0, reach);
+    let taper = size(view.plus_taper, reach);
     ((reach - taper) / reach).clamp(0.0, TAPER_START_MAX)
 }
 
@@ -677,11 +683,24 @@ pub(crate) fn derive_pluses(
     nodes: &[NodeInstance],
     ink: Vec4,
 ) -> Vec<PlusInstance> {
-    let radius = marker_world(view, view.plus_arm.clamp(0.0, PLUS_SIZE_MAX));
+    let radius = marker_world(view, size(view.plus_arm, PLUS_SIZE_MAX));
     // 0 takes the markers away, and with them everything a resting lattice
     // draws but the node rings. Skipping the instances is the same picture the
     // shader would discard to, one draw earlier.
-    if radius <= 0.0 {
+    //
+    // A radius that is not a real number takes them away too, and has to be
+    // asked for BY NAME: NaN answers no to `<= 0.0` the way it answers no to
+    // every comparison, so the whole field would ship with every cross sized
+    // NaN — a quad the shader cannot draw, the lattice's resting structure
+    // gone, and nothing on screen saying why. `clamp` is no guard against it
+    // either, NaN being its own answer, which is the shape `sanitize` answers
+    // with `finite_or` at the blob's door; this is the picture's own, for the
+    // shells that never come through that door.
+    //
+    // Either factor can carry it in: the arm, which is a bar's value, or the
+    // lattice's `spacing` inside `marker_world`, which is a stored field with
+    // no bar and no repair anywhere.
+    if !radius.is_finite() || radius <= 0.0 {
         return Vec::new();
     }
     // The markers' own grey, handed in already resolved from the Marker ink

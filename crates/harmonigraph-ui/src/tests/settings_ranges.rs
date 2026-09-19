@@ -12,49 +12,52 @@ use super::probe::{fresh, themed};
 use crate::widgets::range_probe::collect;
 use crate::*;
 use harmonigraph_core::configuration::{ConfigMutation, ConfigReducer, PolicyConfig, TuningModes};
-use harmonigraph_scene::{Projection, ShadowKernel, SpectralReading, SEVENS_LAYER_LIMIT};
+use harmonigraph_scene::{
+    Projection, ShadowKernel, SpectralAtmosphere, SpectralReading, ViewConfig, SEVENS_LAYER_LIMIT,
+};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Edge {
     Low,
     High,
-}
-impl Edge {
-    fn float(self) -> f32 {
-        match self {
-            Self::Low => -1.0e6,
-            Self::High => 1.0e6,
-        }
-    }
-    fn integer(self) -> i32 {
-        match self {
-            Self::Low => i32::MIN,
-            Self::High => i32::MAX,
-        }
-    }
+    /// Nothing poisoned at all: the FRESH values cross the same load door and
+    /// are held to the same bars.
+    ///
+    /// The one case the two edges above can never see, because each overwrites
+    /// every field it then checks. A default outside its own bar is the same
+    /// defect a poisoned value is — a number the file holds that the control
+    /// cannot show — and it arrives the way `64f7d41e` arrived, by a capture
+    /// from the DAW moving a default rather than by anyone hand-editing a
+    /// blob.
+    Fresh,
 }
 
-/// All stored fields feeding the recorded appearance/editor bars, including
-/// the reach/fade pairs whose bar displays a subtraction. Values are poisoned
-/// BEFORE serialization, never clamped by a fixture beside the production door.
-fn loaded(edge: Edge) -> SharedState {
-    let mut saved = fresh();
+/// Poison all stored fields feeding the recorded appearance/editor bars,
+/// including the reach/fade pairs whose bar displays a subtraction. Values are
+/// written BEFORE serialization, never clamped by a fixture beside the
+/// production door.
+fn poison(saved: &mut SharedState, edge: Edge) {
+    let (v, n) = match edge {
+        Edge::Low => (-1.0e6, i32::MIN),
+        Edge::High => (1.0e6, i32::MAX),
+        Edge::Fresh => return,
+    };
     let a = &mut saved.picture.appearance;
-    let v = edge.float();
     macro_rules! poison { ($owner:expr; $($field:ident),+ $(,)?) => { $( $owner.$field = v; )+ }; }
-    poison!(a.view; render_scale, bloom_strength, sevens_size, label_scale, sounding_ink,
+    poison!(a.view; spacing, render_scale, bloom_strength, sevens_size, label_scale, sounding_ink,
         octave_center, octave_extra_size, octave_extra_blend, mark_delay, fade_shape,
         spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
-        spectral_width, spectral_ring_range, ring_gap, octave_gap, lattice_ground, marker_ink,
+        spectral_width, spectral_ring_range, spectral_ring_width, ring_gap, octave_gap,
+        ring_inner, band_width, mark_thickness, lattice_ground, marker_ink,
         plus_arm, plus_taper, plus_width, glow_reach, glow_strength, glow_accumulation,
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
     poison!(a.view.note_animation; radial_start, start_size, stagger_spread);
     poison!(a.view.atmosphere; nebula_depth, nebula_scale, nebula_speed,
         breath_amount, breath_speed);
-    a.view.min_sevens = edge.integer();
-    a.view.max_sevens = edge.integer();
-    a.view.center_sevens = edge.integer();
+    a.view.min_sevens = n;
+    a.view.max_sevens = n;
+    a.view.center_sevens = n;
     for shadow in a.view.shadow.groups_mut() {
         poison!(shadow; width, depth, falloff);
     }
@@ -71,6 +74,13 @@ fn loaded(edge: Edge) -> SharedState {
     a.spiral.look = glam::Vec2::splat(v);
     a.render.stop_bar = v as f64;
     a.render.frame.split = v;
+}
+
+/// The poisoned state through its real shared load boundary, with the owners
+/// that have no recorded bar checked on the way out.
+fn loaded(edge: Edge) -> SharedState {
+    let mut saved = fresh();
+    poison(&mut saved, edge);
     let serialized = saved.save_persist();
     let mut state = fresh();
     assert!(state.load_persist(&serialized));
@@ -121,13 +131,18 @@ impl ParamBackend for Backend {
 }
 fn backend(edge: Edge, meantone: bool, marvel: bool) -> Backend {
     let mut policy = PolicyConfig::default();
-    let high = matches!(edge, Edge::High);
-    macro_rules! poison { ($($field:ident),+ $(,)?) => { $( policy.$field = if high { std::primitive::u16::MAX as _ } else { 0 }; )+ }; }
-    poison!(pitch_flexibility, half_life_ms, register);
-    policy.radius = if high { u8::MAX } else { 0 };
-    policy.tolerance = if high { u32::MAX } else { 0 };
-    policy.silence_ms = if high { u32::MAX } else { 0 };
-    policy.keyboard = [edge.integer(); 3];
+    // `Fresh` leaves the host's own defaults standing, for the reason `poison`
+    // leaves the appearance standing: what it asks is whether a first-ever
+    // load reads out values its bars can show.
+    if edge != Edge::Fresh {
+        let high = edge == Edge::High;
+        macro_rules! poison { ($($field:ident),+ $(,)?) => { $( policy.$field = if high { std::primitive::u16::MAX as _ } else { 0 }; )+ }; }
+        poison!(pitch_flexibility, half_life_ms, register);
+        policy.radius = if high { u8::MAX } else { 0 };
+        policy.tolerance = if high { u32::MAX } else { 0 };
+        policy.silence_ms = if high { u32::MAX } else { 0 };
+        policy.keyboard = [if high { i32::MAX } else { i32::MIN }; 3];
+    }
     let mut reducer = ConfigReducer::default();
     let modes = TuningModes {
         tempered: harmonigraph_core::Tempered { syntonic: meantone, septimal_kleisma: marvel },
@@ -283,6 +298,7 @@ fn check(edge: Edge) {
                     vec![match edge {
                         Edge::Low => 2.0,
                         Edge::High => 64.0,
+                        Edge::Fresh => SpectralAtmosphere::default().contours,
                     }]
                 );
             }
@@ -303,4 +319,94 @@ fn loaded_settings_low_fit_real_bars() {
 #[test]
 fn loaded_settings_high_fit_real_bars() {
     check(Edge::High);
+}
+#[test]
+fn fresh_settings_fit_real_bars() {
+    check(Edge::Fresh);
+}
+
+/// A fresh appearance is a fixed point of the door it loads through: nothing
+/// `normalize` does moves a default.
+///
+/// Five owners, because that is what `AppearanceDocument::normalize` calls,
+/// and one assertion because a document that survived its own sanitizer
+/// serializes back to itself. A default that did NOT survive would be repaired
+/// on the way in with nothing on screen saying so — the picture a fresh
+/// install draws would not be the picture `impl Default` names — and the
+/// existing edge guards cannot see it, each of them overwriting every field it
+/// checks.
+///
+/// The way that arrives here is not a hand-edited blob: it is a capture from
+/// the DAW writing a dialled value in as a default (`64f7d41e`, PRs #717/#834/
+/// #836), past a range only `sanitize` knows about.
+#[test]
+fn a_fresh_appearance_is_a_fixed_point_of_its_own_normalize() {
+    let opened = AppearanceDocument::default();
+    let normalized = opened.clone().normalize().expect("the fresh appearance normalizes");
+    assert_eq!(
+        opened.serialize(),
+        normalized.serialize(),
+        "the load door repairs a value the fresh appearance ships with",
+    );
+}
+
+/// Every `key:value` at the top level of one serialized struct, in order. The
+/// depth count is what keeps a nested struct's own commas out of the split.
+///
+/// A narrower walk than `tests::persist`'s `top_level_pairs`, which takes a
+/// whole blob apart and is that module's own.
+fn top_level(serialized: &str) -> Vec<(&str, &str)> {
+    let inner = serialized
+        .strip_prefix('(')
+        .and_then(|rest| rest.strip_suffix(')'))
+        .expect("a serialized struct is parenthesized");
+    let (mut fields, mut depth, mut start) = (Vec::new(), 0i32, 0usize);
+    for (at, c) in inner.char_indices() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                fields.push(&inner[start..at]);
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    fields.push(&inner[start..]);
+    fields.into_iter().map(|field| field.split_once(':').expect("a pair has a colon")).collect()
+}
+
+/// The `poison!` block above is hand-written, so a float added to `ViewConfig`
+/// joins this guard only if somebody remembers to name it there — `spacing`
+/// and `spectral_ring_width` were both simply missing, and the second of those
+/// is a handle on the Layers bar.
+///
+/// So the list is checked against the struct's OWN serialized form rather than
+/// against a second list: every top-level key whose fresh value is a decimal
+/// number is a dialled float, and the guard has to have moved it. Integers
+/// (the sevens stack, the naming reach, the octave wheel) and choices carry no
+/// decimal point, and a nested struct is not a number — the curve, the note
+/// animation, the atmosphere, the gradient and the four shadow groups are each
+/// poisoned or excluded on their own terms above.
+#[test]
+fn the_loaded_state_guard_poisons_every_dialled_view_float() {
+    let mut saved = fresh();
+    poison(&mut saved, Edge::High);
+    let opened = ron::to_string(&ViewConfig::default()).expect("a view serializes");
+    let poisoned = ron::to_string(&saved.picture.appearance.view).expect("a view serializes");
+    let (mut dialled, mut missed) = (0, Vec::new());
+    for ((key, was), (again, now)) in top_level(&opened).into_iter().zip(top_level(&poisoned)) {
+        assert_eq!(key, again, "two serializations of one struct named different fields");
+        if !was.contains('.') || was.parse::<f32>().is_err() {
+            continue;
+        }
+        dialled += 1;
+        if was == now {
+            missed.push(key);
+        }
+    }
+    assert!(missed.is_empty(), "the loaded-state guard never poisons {missed:?}");
+    // What counts as a dialled float is read off the spelling, so a change in
+    // RON's would otherwise leave this passing over nothing at all.
+    assert!(dialled > 30, "only {dialled} of the view's fields read as dialled floats");
 }

@@ -98,12 +98,19 @@ impl MarkMotion {
     }
 }
 pub(super) fn apply(scene: &mut Scene, state: &mut crate::PictureState, surface: usize, now: f64) {
+    // The pane's own envelope, assembled where every other one is
+    // (`ViewConfig::envelope`) rather than rebuilt from the two halves here.
+    // The shape is a blob field and the duration a host parameter, and the
+    // single assembly point is what keeps a caller from pairing one with the
+    // wrong other — the Fade bar's preview is the one exception the doc there
+    // names, and this was a second, undeclared one.
+    let env = state.appearance.view.envelope(&state.runtime.frame_params);
     state.surfaces.node_motion.entry(surface).or_default().step(
         scene,
         &state.runtime.tracker,
         &state.runtime.tuning,
         &state.appearance.view,
-        state.runtime.frame_params.fade_time,
+        &env,
         now,
     );
 }
@@ -119,7 +126,12 @@ fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
     }
 }
 impl Motion {
-    fn advance(&mut self, dt: f64, duration: f32, env: &Envelope) {
+    fn advance(&mut self, dt: f64, env: &Envelope) {
+        // The slice reveal runs the envelope's own length rather than a second
+        // duration handed in beside it: `ViewConfig::envelope` puts one time on
+        // both ends, so the two were always the same number and a parameter
+        // for each is a pair that can be made to disagree.
+        let duration = env.fade_time;
         for i in 0..11 {
             let moving = (dt as f32 - self.delay[i]).max(0.0);
             self.delay[i] = (self.delay[i] - dt as f32).max(0.0);
@@ -161,9 +173,10 @@ impl NodeMotion {
         scene: &Scene,
         tuning: &Tuning,
         view: &ViewConfig,
-        duration: f32,
+        env: &Envelope,
         seed_settled: bool,
     ) {
+        let duration = env.fade_time;
         let high = self.held.values().map(|v| v.pitch).max_by(f32::total_cmp);
         let low = self.held.values().map(|v| v.pitch).min_by(f32::total_cmp);
         for node in &scene.nodes {
@@ -257,16 +270,14 @@ impl NodeMotion {
                 motion.progress = [1.0; 11];
                 motion.delay = [0.0; 11];
                 motion.levels = motion.targets;
-                let env =
-                    Envelope { attack_time: duration, fade_time: duration, shape: view.fade_shape };
-                motion.melody.advance(f64::from(duration + view.mark_delay), &env);
-                motion.bass.advance(f64::from(duration + view.mark_delay), &env);
+                motion.melody.advance(f64::from(duration + view.mark_delay), env);
+                motion.bass.advance(f64::from(duration + view.mark_delay), env);
             }
         }
     }
-    fn advance(&mut self, dt: f64, duration: f32, env: &Envelope) {
+    fn advance(&mut self, dt: f64, env: &Envelope) {
         for motion in self.nodes.values_mut() {
-            motion.advance(dt.max(0.0), duration, env);
+            motion.advance(dt.max(0.0), env);
         }
     }
     fn step(
@@ -275,12 +286,13 @@ impl NodeMotion {
         tracker: &NoteTracker,
         tuning: &Tuning,
         view: &ViewConfig,
-        duration: f32,
+        env: &Envelope,
         now: f64,
     ) {
         if !now.is_finite() {
             return;
         }
+        let duration = env.fade_time;
         // The 2.0 is not a round number: one animation now spans
         // `duration * (1 + stagger_spread)`, so the horizon has to exceed that
         // or a gap longer than it seeds a MID-FLIGHT arrival as settled and the
@@ -371,11 +383,10 @@ impl NodeMotion {
             // observed_until is loss of observation, not a factual key-up.
             // Current voices reconcile it below without inventing an off time.
         }
-        let env = Envelope { attack_time: duration, fade_time: duration, shape: view.fade_shape };
         // The checkpoint already has the previous frame's targets. Recompute
         // them only for initial seeding, an event, or current-state reconciliation.
         if initial {
-            self.gates(scene, tuning, view, duration, true);
+            self.gates(scene, tuning, view, env, true);
         }
         // Each ended lifetime finishes absent, including an equal-time bend.
         // A replacement has a different identity and remains in the held union.
@@ -393,7 +404,7 @@ impl NodeMotion {
         }
         while index < edges.len() {
             let time = edges[index].at;
-            self.advance(time - at, duration, &env);
+            self.advance(time - at, env);
             // Equal-time off/on edges form one gate update, so a replacement
             // key cannot falsely end an otherwise continuous node presence.
             while index < edges.len() && edges[index].at == time {
@@ -408,18 +419,18 @@ impl NodeMotion {
                 }
                 index += 1;
             }
-            self.gates(scene, tuning, view, duration, false);
+            self.gates(scene, tuning, view, env, false);
             at = time;
         }
-        self.advance(now - at, duration, &env);
+        self.advance(now - at, env);
         // Current-state reconciliation handles retuning/baselines and gaps,
         // whose missing history must not be treated as fabricated note-offs.
         self.held.clear();
         for voice in tracker.voices().filter(|v| matches!(v.state, VoiceState::Held)) {
             self.held.insert((voice.key(), voice.on_time.to_bits()), Held { pitch: voice.pitch });
         }
-        self.gates(scene, tuning, view, duration, false);
-        self.advance(0.0, duration, &env);
+        self.gates(scene, tuning, view, env, false);
+        self.advance(0.0, env);
         self.at = Some(now);
         let visible: HashSet<_> = scene.nodes.iter().map(|n| n.lattice_pos).collect();
         self.nodes.retain(|pos, _| visible.contains(pos));
@@ -473,7 +484,8 @@ mod tests {
         duration: f32,
     ) -> Scene {
         let frame = FrameParams { fade_time: duration, ..Default::default() };
-        tracker.prune(now, &view.envelope(&frame));
+        let env = view.envelope(&frame);
+        tracker.prune(now, &env);
         let mut scene = derive_scene(
             tracker,
             &Tuning::default(),
@@ -491,7 +503,7 @@ mod tests {
                 n.audio_ring = 1.0;
             }
         }
-        motion.step(&mut scene, tracker, &Tuning::default(), view, duration, now);
+        motion.step(&mut scene, tracker, &Tuning::default(), view, &env, now);
         scene
     }
     fn origin(scene: &Scene) -> &harmonigraph_scene::NodeInstance {
@@ -560,7 +572,8 @@ mod tests {
         tracker.handle_event(on(0.0, 60));
         let mut scene = draw(&mut motion, &mut tracker, &view, 1.1, false);
         scene.nodes.retain(|node| node.lattice_pos != LatticePos::ORIGIN);
-        motion.step(&mut scene, &tracker, &Tuning::default(), &view, 1.0, 1.2);
+        let env = view.envelope(&FrameParams { fade_time: 1.0, ..Default::default() });
+        motion.step(&mut scene, &tracker, &Tuning::default(), &view, &env, 1.2);
         assert!(!motion.nodes.contains_key(&LatticePos::ORIGIN));
         let returned = draw(&mut motion, &mut tracker, &view, 1.3, false);
         assert_eq!(origin(&returned).slice_progress, [1.0; 11]);

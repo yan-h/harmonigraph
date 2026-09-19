@@ -205,6 +205,32 @@ fn the_arm_bar_sets_how_far_a_marker_reaches_and_0_takes_it_away() {
     );
 }
 
+/// A radius that is not a real number takes the field away, the way 0 does.
+/// `radius <= 0.0` is the off test and NaN answers no to it, so the field
+/// would ship whole at a size the shader cannot draw — the resting structure
+/// gone with nothing on screen saying why.
+///
+/// Both factors, because they arrive by different routes: the arm is a bar's
+/// value with a repair at the blob's door, and the spacing is a stored field
+/// with neither.
+#[test]
+fn a_marker_radius_that_is_not_a_number_takes_the_field_away() {
+    for (field, view) in [
+        ("arm", ViewConfig { plus_arm: f32::NAN, ..plus_view() }),
+        ("spacing", ViewConfig { spacing: f32::NAN, ..plus_view() }),
+    ] {
+        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+        // The window is what a NaN spacing costs first (`scrolled` reads it as
+        // one node's worth of picture), so this says the fixture still reached
+        // a position for a marker to stand at.
+        assert!(
+            scene.nodes.iter().any(|n| n.on_home),
+            "a NaN {field} left no home position to mark, so the field below proves nothing",
+        );
+        assert!(scene.pluses.is_empty(), "a NaN {field} shipped a marker field");
+    }
+}
+
 /// The view keeps the width as a LENGTH beside the arm, because that is what
 /// makes the two bars independent; the shader needs HALF of it as a share of
 /// the arm, its uv being the arm's own units. This pins that conversion —

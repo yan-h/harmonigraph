@@ -264,7 +264,25 @@ pub enum NoteAnimation {
     Pop,
 }
 impl NoteAnimation {
-    pub const ALL: [Self; 2] = [Self::Fade, Self::Pop];
+    /// Every easing, for the settings picker and the sweeps that compare them.
+    ///
+    /// Built through an exhaustive `match` rather than written out as a bare
+    /// literal, so the list cannot fall behind the enum — the same guard every
+    /// other `ALL` here uses ([`AnimationOrder::ALL`] below,
+    /// `SpectralOrientation::ALL`, `DisplayPage::ALL`), and the reason a test
+    /// that sweeps this list is a claim about the enum rather than about the
+    /// names someone typed.
+    pub const ALL: [Self; 2] = {
+        // Exhaustive, and the compiler checks it. The arm is `()` because what
+        // is wanted is the coverage error, not the value.
+        const fn covered(animation: NoteAnimation) {
+            match animation {
+                NoteAnimation::Fade | NoteAnimation::Pop => (),
+            }
+        }
+        covered(NoteAnimation::Fade);
+        [Self::Fade, Self::Pop]
+    };
     pub fn label(self) -> &'static str {
         match self {
             Self::Fade => "Fade",
@@ -282,13 +300,24 @@ pub enum AnimationOrder {
     OddEvenStagger,
 }
 impl AnimationOrder {
-    pub const ALL: [Self; 5] = [
-        Self::Simultaneous,
-        Self::Circular,
-        Self::Bidirectional,
-        Self::RandomStagger,
-        Self::OddEvenStagger,
-    ];
+    /// Every order, for the settings picker and the sweeps that compare them.
+    /// Guarded the way [`NoteAnimation::ALL`] above is, and for its reason.
+    pub const ALL: [Self; 5] = {
+        const fn covered(order: AnimationOrder) {
+            use AnimationOrder::*;
+            match order {
+                Simultaneous | Circular | Bidirectional | RandomStagger | OddEvenStagger => (),
+            }
+        }
+        covered(AnimationOrder::Simultaneous);
+        [
+            Self::Simultaneous,
+            Self::Circular,
+            Self::Bidirectional,
+            Self::RandomStagger,
+            Self::OddEvenStagger,
+        ]
+    };
     pub fn label(self) -> &'static str {
         match self {
             Self::Simultaneous => "Simultaneous",
@@ -1572,7 +1601,12 @@ fn slot_start(cursor: f32, inner: f32, gap: f32) -> f32 {
 /// A size bar's value as the picture may use it: inside `0..=high`, and 0 —
 /// the off position every one of them has — where a hand-edited blob holds a
 /// NaN or an infinity, which no clamp of its own would catch.
-fn size(value: f32, high: f32) -> f32 {
+///
+/// Reached from [`derive`](crate::derive) as well as from the stack here,
+/// because the answer a size gets when it is not a number has to be one
+/// answer: a marker's arm read as NaN in one derivation and as 0 in the next
+/// is a picture assembled out of two readings of one bar.
+pub(crate) fn size(value: f32, high: f32) -> f32 {
     if value.is_finite() {
         value.clamp(0.0, high)
     } else {
@@ -2207,13 +2241,38 @@ impl ViewConfig {
         // what it costs is the SETTING: the ring is not drawn while the bar
         // reads out a number, and dragging the bar is then the only way to find
         // out that the number was never a size. Repaired to the fresh width, so
-        // a blob that has been through this door holds a ring somebody can see.
+        // the field and the picture agree about which it is.
+        //
+        // The fresh width is now 0 — the DAW capture at `64f7d41e` dialled the
+        // ring off — so this repair and `rings`' own reading of a NaN land in
+        // the same place today, and the sentence that used to stand here (a
+        // blob through this door "holds a ring somebody can see") stopped being
+        // true then. What the repair still buys is the agreement rather than
+        // the ring: the stored field stops being a number no layer matches.
+        // Should the fresh ring ever come back on, this line follows it.
         //
         // Where the ring SITS is not repaired here, because it is not stored: a
         // width is a width whatever is inside it, and the stack is what turns
         // the four of them into radii (`rings`).
         self.spectral_ring_width = finite_or(self.spectral_ring_width, fresh.spectral_ring_width)
             .clamp(0.0, RING_WIDTH_MAX);
+        // The three handles BESIDE it on the same bar, against the same hole
+        // and repaired for the same reason. Each is held to its own ceiling in
+        // [`rings`](Self::rings) for the picture, and the Layers bar reads the
+        // stored field back raw, so a blob past a ceiling leaves one handle out
+        // on the axis at a width no layer of the node matches — the ring's own
+        // case, three more times, and the one the bar is least able to report
+        // since the stack it draws under the handles is already the clamped one.
+        //
+        // To the fresh value rather than to 0, which is the ring's rule and not
+        // the delay's: 0 is a legal width on all four handles, but a layer
+        // silently absent is no safer a reading of a broken number than a layer
+        // at the wrong size, and the fresh stack is the one arrangement in the
+        // file known to seat all four.
+        self.ring_inner = finite_or(self.ring_inner, fresh.ring_inner).clamp(0.0, RING_INNER_MAX);
+        self.band_width = finite_or(self.band_width, fresh.band_width).clamp(0.0, RING_WIDTH_MAX);
+        self.mark_thickness =
+            finite_or(self.mark_thickness, fresh.mark_thickness).clamp(0.0, MARK_THICKNESS_MAX);
         // The two paddings, against the same hole and for the reason the width
         // above is repaired rather than left to the picture: [`GAP_MAX`] is a
         // ceiling the two bars are BUILT from, so a blob written when it stood
