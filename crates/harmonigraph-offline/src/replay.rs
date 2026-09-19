@@ -139,6 +139,9 @@ impl Replay {
 }
 
 #[cfg(test)]
+mod recorder_parity;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use harmonigraph_render::wgpu::TextureFormat;
