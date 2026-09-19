@@ -25,7 +25,6 @@ pub struct VisualRuntime {
     pub(crate) config_reducer: harmonigraph_core::configuration::ConfigReducer,
     /// Offline replay supplies recorded resolved boundaries, never frame-driven detection.
     pub replayed_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
-    pub neighbourhood: crate::adaptive::Neighbourhood,
     pub adaptive_policy: harmonigraph_core::configuration::PolicyConfig,
     pub configuration_status: u32,
     pub configuration_pending: bool,
@@ -82,7 +81,6 @@ impl Default for VisualRuntime {
             learn_active: false,
             config_reducer: Default::default(),
             replayed_configuration: None,
-            neighbourhood: Default::default(),
             adaptive_policy: Default::default(),
             configuration_status: 0,
             configuration_pending: false,

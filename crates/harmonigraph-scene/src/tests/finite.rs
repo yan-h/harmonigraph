@@ -36,7 +36,6 @@ fn poisoned_view() -> ViewConfig {
         falloff: nan,
     };
     ViewConfig {
-        spacing: nan,
         extent_threes: 3,
         extent_fives: 3,
         min_sevens: -1,
@@ -402,7 +401,7 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
     // did. What says the poison arrives is that this test was written and run
     // against the unrepaired tree first, where it failed naming every site
     // below and 147 nodes besides.
-    let step = crate::view::DEFAULT_SPACING * crate::NODE_RADIUS_FACTOR;
+    let step = crate::NODE_RADIUS_FACTOR;
     let shadow = scene.shadow;
     for (site, got, want) in [
         ("node_radius", scene.node_radius, step),
@@ -429,16 +428,15 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
     assert!(names.is_empty(), "a NaN view reached the scene at: {}", names.join(", "));
 
     // ...and the same sweep over a picture that still has MARKERS in it, which
-    // the pass above cannot have. A NaN step makes the marker radius NaN and a
-    // NaN arm reads as 0 through `size`, so `derive_pluses` ships an empty
-    // field either way (#910) and the walk's `pluses` loop runs zero times —
+    // the pass above cannot have. A NaN arm reads as 0 through `size`, so
+    // `derive_pluses` ships an empty field and the walk's `pluses` loop runs zero times —
     // leaving a marker's position, colour and strength unmeasured by the one
-    // test that claims the whole scene. Two floats real is what it takes to
+    // test that claims the whole scene. One real arm is what it takes to
     // get a marker drawn at all; everything the marker's own geometry and ink
     // are derived from stays poisoned around it.
-    let drawable = ViewConfig { spacing: 1.0, plus_arm: 0.5, ..poisoned_view() };
+    let drawable = ViewConfig { plus_arm: 0.5, ..poisoned_view() };
     let scene = scene_of(&sounding(), &Tuning::default(), &drawable, &plain_frame(), 0.0);
-    assert!(!scene.pluses.is_empty(), "a real step and a real arm still shipped no marker field");
+    assert!(!scene.pluses.is_empty(), "a real arm still shipped no marker field");
     let names = broken(&scene);
     assert!(names.is_empty(), "a NaN view reached the marked scene at: {}", names.join(", "));
 }

@@ -84,6 +84,51 @@ pub const CLOUD_PIXEL_MIN: f32 = 0.5;
 /// See [`CLOUD_PIXEL_MIN`].
 pub const CLOUD_PIXEL_MAX: f32 = 4.0;
 
+/// Bounds shared by the [`SpectralAtmosphere::pitch_softness`] control and sanitizer.
+pub const PITCH_SOFTNESS_MIN: f32 = 0.0;
+/// See [`PITCH_SOFTNESS_MIN`].
+pub const PITCH_SOFTNESS_MAX: f32 = 300.0;
+
+/// Bounds shared by the [`SpectralAtmosphere::time_softness`] control and sanitizer.
+pub const TIME_SOFTNESS_MIN: f32 = 0.0;
+/// See [`TIME_SOFTNESS_MIN`].
+pub const TIME_SOFTNESS_MAX: f32 = 2000.0;
+
+/// Bounds shared by the [`SpectralAtmosphere::contours`] control and sanitizer.
+pub const CONTOURS_MIN: f32 = 2.0;
+/// See [`CONTOURS_MIN`].
+pub const CONTOURS_MAX: f32 = 64.0;
+
+/// Bounds shared by the [`SpectralAtmosphere::contour_softness`] control and sanitizer.
+pub const CONTOUR_SOFTNESS_MIN: f32 = 0.01;
+/// See [`CONTOUR_SOFTNESS_MIN`].
+pub const CONTOUR_SOFTNESS_MAX: f32 = 0.5;
+
+/// Bounds shared by the [`SpectralAtmosphere::cloud_speed`] control and sanitizer.
+pub const CLOUD_SPEED_MIN: f32 = 0.0;
+/// See [`CLOUD_SPEED_MIN`].
+pub const CLOUD_SPEED_MAX: f32 = 20.0;
+
+/// Bounds shared by the [`SpectralAtmosphere::scale_refract`] control and sanitizer.
+pub const SCALE_REFRACT_MIN: f32 = -1.0;
+/// See [`SCALE_REFRACT_MIN`].
+pub const SCALE_REFRACT_MAX: f32 = 1.0;
+
+/// Bounds shared by the [`AtmosphereSettings::nebula_scale`] control and sanitizer.
+pub const NEBULA_SCALE_MIN: f32 = 0.25;
+/// See [`NEBULA_SCALE_MIN`].
+pub const NEBULA_SCALE_MAX: f32 = 4.0;
+
+/// Bounds shared by the [`AtmosphereSettings::nebula_speed`] control and sanitizer.
+pub const NEBULA_SPEED_MIN: f32 = 0.0;
+/// See [`NEBULA_SPEED_MIN`].
+pub const NEBULA_SPEED_MAX: f32 = 20.0;
+
+/// Bounds shared by the [`AtmosphereSettings::breath_speed`] control and sanitizer.
+pub const BREATH_SPEED_MIN: f32 = 0.0;
+/// See [`BREATH_SPEED_MIN`].
+pub const BREATH_SPEED_MAX: f32 = 4.0;
+
 /// Independent spectrogram diffusion, analyzer shading and note light.
 ///
 /// There is no style here. Plain, Blur and Lava were three presets over three
@@ -276,16 +321,28 @@ impl SpectralAtmosphere {
                 fallback
             }
         };
-        self.pitch_softness = clamp(self.pitch_softness, fresh.pitch_softness, 0.0, 300.0);
-        self.time_softness = clamp(self.time_softness, fresh.time_softness, 0.0, 2000.0);
+        self.pitch_softness = clamp(
+            self.pitch_softness,
+            fresh.pitch_softness,
+            PITCH_SOFTNESS_MIN,
+            PITCH_SOFTNESS_MAX,
+        );
+        self.time_softness =
+            clamp(self.time_softness, fresh.time_softness, TIME_SOFTNESS_MIN, TIME_SOFTNESS_MAX);
         self.spread = clamp(self.spread, fresh.spread, 0.0, 1.0);
         self.contour_strength = clamp(self.contour_strength, fresh.contour_strength, 0.0, 1.0);
-        self.contours = clamp(self.contours, fresh.contours, 2.0, 64.0).round();
-        self.contour_softness = clamp(self.contour_softness, fresh.contour_softness, 0.01, 0.5);
+        self.contours = clamp(self.contours, fresh.contours, CONTOURS_MIN, CONTOURS_MAX).round();
+        self.contour_softness = clamp(
+            self.contour_softness,
+            fresh.contour_softness,
+            CONTOUR_SOFTNESS_MIN,
+            CONTOUR_SOFTNESS_MAX,
+        );
         self.analyzer_softness = clamp(self.analyzer_softness, fresh.analyzer_softness, 0.0, 1.0);
         self.note_glow = clamp(self.note_glow, fresh.note_glow, 0.0, 1.0);
         self.cloud_depth = clamp(self.cloud_depth, fresh.cloud_depth, 0.0, 1.0);
-        self.cloud_speed = clamp(self.cloud_speed, fresh.cloud_speed, 0.0, 20.0);
+        self.cloud_speed =
+            clamp(self.cloud_speed, fresh.cloud_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
         // Snapped to halves, so the dial is a handful of RESOLUTIONS to compare
         // rather than a continuum: 0.5 native, 1 a quarter of the work, 1.5,
         // 2 a sixteenth, and so on to 4. Half a point is also the finest step
@@ -296,7 +353,8 @@ impl SpectralAtmosphere {
                 / 2.0;
         self.scale_size = clamp(self.scale_size, fresh.scale_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
-        self.scale_refract = clamp(self.scale_refract, fresh.scale_refract, -1.0, 1.0);
+        self.scale_refract =
+            clamp(self.scale_refract, fresh.scale_refract, SCALE_REFRACT_MIN, SCALE_REFRACT_MAX);
         self.scale_relief = clamp(self.scale_relief, fresh.scale_relief, 0.0, 1.0);
         self.scale_rock = clamp(self.scale_rock, fresh.scale_rock, 0.0, 1.0);
         self.wash_size = clamp(self.wash_size, fresh.wash_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
@@ -357,10 +415,13 @@ impl AtmosphereSettings {
             }
         };
         self.nebula_depth = clamp(self.nebula_depth, fresh.nebula_depth, 0.0, 1.0);
-        self.nebula_scale = clamp(self.nebula_scale, fresh.nebula_scale, 0.25, 4.0);
-        self.nebula_speed = clamp(self.nebula_speed, fresh.nebula_speed, 0.0, 20.0);
+        self.nebula_scale =
+            clamp(self.nebula_scale, fresh.nebula_scale, NEBULA_SCALE_MIN, NEBULA_SCALE_MAX);
+        self.nebula_speed =
+            clamp(self.nebula_speed, fresh.nebula_speed, NEBULA_SPEED_MIN, NEBULA_SPEED_MAX);
         self.breath_amount = clamp(self.breath_amount, fresh.breath_amount, 0.0, 1.0);
-        self.breath_speed = clamp(self.breath_speed, fresh.breath_speed, 0.0, 4.0);
+        self.breath_speed =
+            clamp(self.breath_speed, fresh.breath_speed, BREATH_SPEED_MIN, BREATH_SPEED_MAX);
         self
     }
 

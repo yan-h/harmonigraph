@@ -18,13 +18,13 @@ const PROJECTIONS: [Projection; 3] =
 /// is `|x| <= 1 && |y| <= 1` — or `None` behind the camera.
 ///
 /// `view` must be the one the scene is DERIVED from, because the placement is
-/// relative to its center (`derive_scene` draws at `(pos - center) * spacing`)
+/// relative to its center (`derive_scene` draws at `pos - center`)
 /// and passing a different one silently moves every node. A coverage test that
 /// projected through the reach view while the renderer drew through the
 /// scrolled one had both sides of its assertion carrying the same offset,
 /// which cancelled — and it passed over a picture with sixty-four holes in it.
 fn ndc(camera: &Camera, view: &ViewConfig, aspect: f32, pos: LatticePos) -> Option<Vec2> {
-    let world = crate::lattice_to_world(pos - view.center(), view.spacing);
+    let world = crate::lattice_to_world(pos - view.center());
     let clip = camera.view_proj(aspect) * world.extend(1.0);
     (clip.w > 0.0).then(|| Vec2::new(clip.x / clip.w, clip.y / clip.w))
 }
@@ -522,7 +522,7 @@ fn panning_a_long_way_keeps_the_window_full() {
         // depth is the one that would otherwise grow without bound, since a
         // tilted camera's pan carries one — and the target is persisted.
         assert!(
-            camera.target.abs().max_element() <= view.spacing,
+            camera.target.abs().max_element() <= 1.0,
             "{projection:?}: the target walked off with the window: {:?}",
             camera.target,
         );
@@ -552,7 +552,7 @@ fn panning_a_long_way_keeps_the_window_full() {
 
 /// Following the camera moves the window and the camera together, so the
 /// picture does not stir: a whole step added to the center subtracts one
-/// spacing from every node's world position, and the target has to lose the
+/// world unit from every node's world position, and the target has to lose the
 /// same or the lattice jumps a node's width as you drag past a cell boundary.
 #[test]
 fn following_the_camera_does_not_move_the_picture() {
@@ -688,21 +688,19 @@ fn a_target_no_gesture_can_reach_still_names_and_draws() {
 /// from whatever they left.
 #[test]
 fn a_nonsense_camera_still_yields_a_drawable_window() {
-    for spacing in [1.0, 0.0, -1.0, f32::NAN] {
-        let view = ViewConfig { spacing, ..ViewConfig::default() };
-        for target in [Vec3::ZERO, Vec3::splat(1e9), Vec3::splat(f32::NAN)] {
-            for aspect in [1.5, 0.0, f32::NAN] {
-                let camera = Camera { target, ..Camera::default() };
-                let drawn = view.scrolled(&camera, aspect);
-                assert!(
-                    drawn.min.threes <= drawn.max.threes && drawn.min.fives <= drawn.max.fives,
-                    "spacing {spacing}, target {target:?}, aspect {aspect} gave an inverted \
-                     window: {:?}..{:?}",
-                    drawn.min,
-                    drawn.max,
-                );
-                assert!(drawn.count() <= MAX_DRAWN_NODES);
-            }
+    let view = ViewConfig::default();
+    for target in [Vec3::ZERO, Vec3::splat(1e9), Vec3::splat(f32::NAN)] {
+        for aspect in [1.5, 0.0, f32::NAN] {
+            let camera = Camera { target, ..Camera::default() };
+            let drawn = view.scrolled(&camera, aspect);
+            assert!(
+                drawn.min.threes <= drawn.max.threes && drawn.min.fives <= drawn.max.fives,
+                "target {target:?}, aspect {aspect} gave an inverted \
+                 window: {:?}..{:?}",
+                drawn.min,
+                drawn.max,
+            );
+            assert!(drawn.count() <= MAX_DRAWN_NODES);
         }
     }
 }

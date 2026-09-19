@@ -89,7 +89,7 @@ use std::mem;
 use std::num::NonZeroU32;
 use std::os::raw::c_char;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::thread::{self, ThreadId};
 use std::time::Duration;
@@ -100,30 +100,7 @@ use super::util::ClapPtr;
 use crate::event_loop::{BackgroundThread, EventLoop, MainThreadExecutor, TASK_QUEUE_CAPACITY};
 use crate::midi::MidiResult;
 use crate::util::permit_alloc;
-use crate::wrapper::clap::{ClapPlugin, ProcessTrace};
-
-// Lives on the enclosing process stack. Only the host's original output list
-// receives events; the hook observes the actual result of its try_push call.
-// It takes the plugin lock, so it is only ever reached from wrapper code that
-// holds none: the owned performance boundary hands the plugin the host's
-// original list instead, and reads acceptance back through `Output::push`.
-struct TracedOutput<'a, P: ClapPlugin> {
-    wrapper: &'a Wrapper<P>,
-    original: *const clap_output_events,
-}
-
-impl<P: ClapPlugin> TracedOutput<'_, P> {
-    unsafe extern "C" fn push(list: *const clap_output_events, event: *const clap_event_header) -> bool {
-        // SAFETY: Both pointers and the forwarding context live for this CLAP call.
-        let this = unsafe { &*((*list).ctx as *const Self) };
-        let accepted = unsafe { (*this.original).try_push.is_some_and(|push| push(this.original, event)) };
-        this.wrapper.plugin.lock().clap_process_trace(ProcessTrace::Output {
-            event: unsafe { &*event },
-            accepted,
-        });
-        accepted
-    }
-}
+use crate::wrapper::clap::ClapPlugin;
 use crate::wrapper::clap::context::RemoteControlPages;
 use crate::wrapper::clap::util::{read_stream, write_stream};
 use crate::wrapper::state::{self};
@@ -209,7 +186,6 @@ pub struct Wrapper<P: ClapPlugin> {
     /// this activation is actually running until the next one adopts the
     /// replacement. Every number the host can read is therefore one it was told.
     pending_latency: AtomicU32,
-    trace_latency_queries: AtomicU64,
     /// A data structure that helps manage and create buffers for all of the plugin's inputs and
     /// outputs based on channel pointers provided by the host.
     buffer_manager: AtomicRefCell<BufferManager>,
@@ -517,13 +493,6 @@ impl<P: ClapPlugin> MainThreadExecutor<Task<P>> for Wrapper<P> {
                         && self.pending_latency.load(Ordering::SeqCst)
                             != self.current_latency.load(Ordering::SeqCst)
                     {
-                        if P::CLAP_PROCESS_TRACE {
-                            eprintln!(
-                                "[clap-probe lifecycle] pid={} class={} instance={:p} request_restart reason=latency_changed processing={}",
-                                std::process::id(), P::CLAP_ID, self,
-                                self.is_processing.load(Ordering::SeqCst),
-                            );
-                        }
                         unsafe_clap_call! { &*self.host_callback=>request_restart(&*self.host_callback) };
                     }
                 }
@@ -736,7 +705,6 @@ impl<P: ClapPlugin> Wrapper<P> {
             last_process_status: AtomicCell::new(ProcessStatus::Normal),
             current_latency: AtomicU32::new(0),
             pending_latency: AtomicU32::new(0),
-            trace_latency_queries: AtomicU64::new(0),
             // This is initialized just before calling `Plugin::initialize()` so that during the
             // process call buffers can be initialized without any allocations
             buffer_manager: AtomicRefCell::new(BufferManager::for_audio_io_layout(
@@ -2227,9 +2195,6 @@ impl<P: ClapPlugin> Wrapper<P> {
         });
 
         if P::CLAP_PERFORMANCE { process_wrapper(|| wrapper.plugin.lock().clap_performance_start()); }
-        if P::CLAP_PROCESS_TRACE {
-            wrapper.plugin.lock().clap_process_trace(ProcessTrace::Start);
-        }
         true
     }
 
@@ -2239,9 +2204,6 @@ impl<P: ClapPlugin> Wrapper<P> {
 
         wrapper.is_processing.store(false, Ordering::SeqCst);
         if P::CLAP_PERFORMANCE { process_wrapper(|| wrapper.plugin.lock().clap_performance_stop()); }
-        if P::CLAP_PROCESS_TRACE {
-            wrapper.plugin.lock().clap_process_trace(ProcessTrace::Stop);
-        }
     }
 
     unsafe extern "C" fn reset(plugin: *const clap_plugin) {
@@ -2272,33 +2234,13 @@ impl<P: ClapPlugin> Wrapper<P> {
         );
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        // Keep the original host address and clock before substituting the output observer.
-        let host_process = unsafe { &*process };
-        if P::CLAP_PROCESS_TRACE {
-            let at = std::time::Instant::now();
-            wrapper.plugin.lock().clap_process_trace(ProcessTrace::Enter {
-                process: host_process, at,
-                latency_queries: wrapper.trace_latency_queries.load(Ordering::Acquire),
-                reported_latency: wrapper.current_latency.load(Ordering::Acquire),
-            });
-        }
-        let output_context = TracedOutput { wrapper, original: host_process.out_events };
-        let output_list = clap_output_events {
-            ctx: &output_context as *const TracedOutput<'_, P> as *mut c_void,
-            try_push: Some(TracedOutput::<P>::push),
-        };
-        let mut observed_process = *host_process;
-        if P::CLAP_PROCESS_TRACE && !host_process.out_events.is_null() {
-            observed_process.out_events = &output_list;
-        }
-
         // Panic on allocations if the `assert_process_allocs` feature has been enabled, and make
         // sure that FTZ is set up correctly
-        let result = process_wrapper(|| {
+        process_wrapper(|| {
             // We need to handle incoming automation and MIDI events. Since we don't support sample
             // accuration automation yet and there's no way to get the last event for a parameter,
             // we'll process every incoming event.
-            let process = &observed_process;
+            let process = unsafe { &*process };
             let total_buffer_len = process.frames_count as usize;
             let boundary_valid = process.steady_time >= 0 && process.frames_count > 0
                 && process.steady_time.checked_add(i64::from(process.frames_count)).is_some()
@@ -2313,8 +2255,8 @@ impl<P: ClapPlugin> Wrapper<P> {
             } else { performance::InputStatus::Complete };
             let callback = performance::Callback { steady_time: process.steady_time, frames: process.frames_count,
                 transport: unsafe { process.transport.as_ref().copied() }, input_status,
-                output_available: unsafe { host_process.out_events.as_ref() }.is_some_and(|o| o.try_push.is_some()) };
-            if P::CLAP_PERFORMANCE { unsafe { wrapper.begin_performance(callback, host_process.out_events); } }
+                output_available: unsafe { process.out_events.as_ref() }.is_some_and(|o| o.try_push.is_some()) };
+            if P::CLAP_PERFORMANCE { unsafe { wrapper.begin_performance(callback, process.out_events); } }
             if P::CLAP_CONFIGURATION && boundary_valid {
                 let transport = unsafe { process.transport.as_ref() };
                 wrapper.process_configuration(super::configuration::ConfigurationBoundary {
@@ -2337,7 +2279,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                 if P::CLAP_CONFIGURATION { wrapper.plugin.lock().clap_configuration_fault(); }
                 if P::CLAP_PERFORMANCE {
                     if boundary_valid { wrapper.finish_owned_walk(); }
-                    unsafe { wrapper.finish_performance(callback, process.out_events, host_process.out_events, CLAP_PROCESS_ERROR); }
+                    unsafe { wrapper.finish_performance(callback, process.out_events, CLAP_PROCESS_ERROR); }
                 }
                 return CLAP_PROCESS_ERROR;
             }
@@ -2578,23 +2520,13 @@ impl<P: ClapPlugin> Wrapper<P> {
                     };
                     let mut context = wrapper.make_process_context(transport);
                     if P::CLAP_CONFIGURATION { plugin.clap_configuration_segment(block_start as u32, block_len as u32); }
-                    if P::CLAP_PROCESS_TRACE {
-                        plugin.clap_process_trace(ProcessTrace::SubBlockEnter {
-                            start: block_start as u32, length: block_len as u32,
-                        });
-                    }
                     let result = if P::CLAP_PERFORMANCE {
-                        let mut output = unsafe { performance::Output::new(host_process.out_events, &wrapper.output_high_water, true) };
+                        let mut output = unsafe { performance::Output::new(process.out_events, &wrapper.output_high_water, true) };
                         plugin.clap_performance_process(buffers.main_buffer, &mut aux, &mut context,
                             performance::Block { callback, start: block_start as u32, frames: block_len as u32,
                                 transport: unsafe { transport_info.as_ref().copied() } },
                             &mut output)
                     } else { plugin.process(buffers.main_buffer, &mut aux, &mut context) };
-                    if P::CLAP_PROCESS_TRACE {
-                        plugin.clap_process_trace(ProcessTrace::SubBlockExit {
-                            start: block_start as u32, length: block_len as u32,
-                        });
-                    }
                     wrapper.last_process_status.store(result);
                     result
                 } else {
@@ -2639,7 +2571,7 @@ impl<P: ClapPlugin> Wrapper<P> {
 
             if P::CLAP_PERFORMANCE {
                 wrapper.finish_owned_walk();
-                unsafe { wrapper.finish_performance(callback, process.out_events, host_process.out_events, result); }
+                unsafe { wrapper.finish_performance(callback, process.out_events, result); }
             }
 
             // After processing audio, we'll check if the editor has sent us updated plugin state.
@@ -2663,11 +2595,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             }
 
             result
-        });
-        if P::CLAP_PROCESS_TRACE {
-            wrapper.plugin.lock().clap_process_trace(ProcessTrace::Exit { status: result });
-        }
-        result
+        })
     }
 
     unsafe extern "C" fn get_extension(
@@ -3268,9 +3196,6 @@ impl<P: ClapPlugin> Wrapper<P> {
         check_null_ptr!(0, plugin, unsafe { (*plugin).plugin_data });
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        if P::CLAP_PROCESS_TRACE {
-            wrapper.trace_latency_queries.fetch_add(1, Ordering::Release);
-        }
         wrapper.current_latency.load(Ordering::SeqCst)
     }
 
@@ -3584,14 +3509,6 @@ impl<P: ClapPlugin> Wrapper<P> {
 
         let previous_mode = wrapper.current_process_mode.swap(mode);
         let activated = wrapper.is_activated.load(Ordering::SeqCst);
-        if P::CLAP_PROCESS_TRACE {
-            // This CLAP main-thread call must not share the audio producer's trace ring.
-            eprintln!(
-                "[clap-probe lifecycle] pid={} class={} instance={:p} render_set previous={:?} mode={:?} activated={} processing={} request_restart={}",
-                std::process::id(), P::CLAP_ID, wrapper, previous_mode, mode, activated,
-                wrapper.is_processing.load(Ordering::SeqCst), previous_mode != mode && activated,
-            );
-        }
         if previous_mode != mode && activated {
             // We may change process mode while activated. In that case, restart the audio processor
             // so the plugin can react to the process mode change in `Plugin::initialize`.

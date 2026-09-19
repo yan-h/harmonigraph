@@ -24,14 +24,7 @@ See [production assets](docs/metal-shader-assets.md) for generation, validation 
 ## nice-plug — vendored at `vendor/nice-plug/`
 
 - **Upstream base**: crates.io nice-plug 0.1.10, with its normalized standalone manifest, original manifest, README, sources and tests, plus the ISC `LICENSE` from pinned upstream commit `a80e0e267e52027be4bc07480bef77e798d3342c`.
-- **Patch**: an opt-in `ClapPlugin::CLAP_PROCESS_TRACE` hook in `src/wrapper/clap.rs` and `src/wrapper/clap/wrapper.rs` exposes enclosing callback entry/exit, raw CLAP clocks, exact sub-block boundaries, processing start/stop and final host output acceptance.
-An atomic counter records actual latency queries without calling the plugin under a potentially reentrant latency query.
-Ordinary plugins keep the flag false, compiling out processing observations.
-Probe-only `eprintln!` lifecycle diagnostics in `Task::LatencyChanged` and `ext_render_set` record latency/restart decisions and offline-mode switches outside the processing callback.
-- **Why**: #615 cannot infer a shared clock or callback boundaries from Rust `Plugin::process()` counters.
-The [disposable probe](docs/tuning-probe.md) that first consumed the hook has been deleted;
-the vendored `clap_boundary` fixture and the wrapper's own tracing sites keep it live.
-- **Patch 2** (`src/wrapper/clap/wrapper.rs`, `activate`): drop the plugin lock and initialization context before marking the wrapper active.
+- **Activation notification ordering** (`src/wrapper/clap/wrapper.rs`, `activate`): drop the plugin lock and initialization context before marking the wrapper active.
 The context publishes the initial latency while activation is still in progress, as the CLAP latency contract requires, instead of requesting a redundant restart from an already-active wrapper.
 This fixes the Bitwig offline-export stall measured by #615;
 the exported-factory fixture checks one initial latency notification and no restart for a nonzero delay.
@@ -43,7 +36,6 @@ The output side allocates nothing: `Output` is a borrow of the host's `clap_outp
 Keeping the list sorted is the caller's contract rather than the wrapper's:
 both halves raise a per-callback high-water mark, the plugin never reads it, and the wrapper floors its own parameter and configuration output at it so that traffic follows the plugin's rather than interleaving with it by time.
 `PARAMETER_OUTPUT_ATTEMPTS` bounds that half at 512 pushes per callback; the plugin bounds its own.
-The process trace observes the wrapper's output only, since its hook takes the plugin lock and an opted-in plugin pushes while holding it.
 Prepared nonautomatable setup validates and reserves capacity before parameter/state mutation, then adopts at the enclosing input boundary.
 Main-thread registration, setup service and joined lifecycle hooks keep registry locking and endpoint reclamation outside audio callbacks.
 Joined wrapper destruction takes the configuration runtime and calls `clap_configuration_retire(unfinished)` before `clap_main_destroy` transfers recording ownership.
@@ -65,7 +57,7 @@ it is necessary for #638's silent-input fallback to remain safe across variable 
 - **VST3 bus arrangements** (`src/wrapper/vst3/wrapper.rs`): auxiliary arrangements begin after the main bus when it exists, and at zero otherwise (#741).
 Only read a main output arrangement when the layout declares one.
 `tests/vst3_auxiliary.rs` checks matching and incompatible auxiliary channel counts and auxiliary-only layouts through the COM negotiation interface, with valid canary storage beyond declared counts.
-- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics, activation notification ordering, auxiliary descriptor bounds and storage sizing, VST3 arrangement matching, production configuration/performance/setup seams, root wrapper and state glue, manifest features, and all three boundary fixtures.
+- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply activation notification ordering, auxiliary descriptor bounds and storage sizing, VST3 arrangement matching, production configuration/performance/setup seams, root wrapper and state glue, manifest features, and all three boundary fixtures.
 No tuning or sequencing policy belongs in this framework patch.
 
 ## baseview — vendored at `vendor/baseview/`

@@ -1,0 +1,39 @@
+--- a/crates/harmonigraph-record/src/recorder/render_job/tests.rs
++++ b/crates/harmonigraph-record/src/recorder/render_job/tests.rs
+@@ -587,3 +587,36 @@
+     assert!(path.is_absolute(), "resolved against the host's cwd: {path:?}");
+     assert!(path.starts_with(&home), "{path:?} is not under {home}");
+ }
++
++
++#[test]
++fn discovery_dormant_export_controls_are_inert_with_active_control() {
++    fn signature(r: RenderRequest) -> (std::path::PathBuf, Option<String>, [u32; 2], Option<bool>) {
++        (r.program, r.appearance, r.size, r.playhead)
++    }
++    let base = RenderConfig::default();
++    let automatic = signature(RenderRequest::from_config(&base).unwrap());
++    let manual = signature(RenderRequest::render_now(&base, "discovery appearance".into()));
++    let mut checked = 0;
++    for record_audio in [false, true] {
++        for auto_render in [false, true] {
++            for audio_path in ["", "/discovery/nonexistent.wav"] {
++                for audio_offset in ["", "123.75"] {
++                    let config = RenderConfig {
++                        record_audio, auto_render,
++                        audio_path: audio_path.into(), audio_offset: audio_offset.into(),
++                        ..RenderConfig::default()
++                    };
++                    assert_eq!(signature(RenderRequest::from_config(&config).unwrap()), automatic);
++                    assert_eq!(signature(RenderRequest::render_now(&config, "discovery appearance".into())), manual);
++                    checked += 1;
++                }
++            }
++        }
++    }
++    let changed = RenderConfig { short_edge: base.short_edge * 2, ..base };
++    assert_ne!(signature(RenderRequest::from_config(&changed).unwrap()), automatic,
++        "active control: changing output resolution must change the request");
++    assert_eq!(checked, 16);
++    eprintln!("discovery: 16 dormant-field combinations match automatic/manual requests; resolution control differs");
++}

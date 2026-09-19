@@ -119,8 +119,8 @@ struct App {
 /// verify on its own.
 ///
 /// The harness has no audio worth recording (the spectrum runs off a mock
-/// synth), so takes from here are note-only; pass the real bounce to
-/// `harmonigraph-offline --audio` at render time.
+/// synth), so takes from here are note-only and render without a soundtrack.
+/// Record in the plugin to capture audio alongside the notes.
 struct Recorder {
     writer: harmonigraph_take::Writer,
     /// Last value seen for each parameter, so only changes are written.

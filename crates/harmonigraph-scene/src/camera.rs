@@ -298,7 +298,7 @@ impl Camera {
     ///
     /// This is what makes the drawn lattice window derivable rather than a
     /// setting: the lattice's x/y plane is the fifths/thirds sheet, so the
-    /// rectangle divided by the spacing IS the range of lattice steps worth
+    /// rectangle IS the range of lattice steps worth
     /// building instances for.
     ///
     /// It reads the answer out of [`view_proj`](Self::view_proj) rather than

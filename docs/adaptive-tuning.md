@@ -4,7 +4,10 @@ Harmonigraph retunes a performance as it is played.
 A lightweight **Harmonigraph Tune** note effect sits before each instrument, holds its track's MIDI for a fixed delay, and asks one full Harmonigraph —
 the **Hub**, normally on Master —
 what pitch each new note should have.
-The Hub sees every track's notes in one chronological order, so a chord spread across three tracks is tuned as one chord rather than three independent guesses.
+The Hub sequences the notes received from those tracks within each callback by sample,
+so their assignments share one musical context.
+Later arrivals are assigned when received;
+there is no wait for complete global chronological context.
 The chosen adaptive correction is composed into a CLAP per-note tuning expression and never moves again for the life of that note;
 the player's later per-note expression and MIDI channel bend remain live.
 
@@ -279,7 +282,7 @@ The `ConfigReducer` owns the semantics and ordering of combined edits, presets, 
 a preset must not become a mixture of old locks and new axes —
 and it publishes one resolved configuration containing the effective tuning, tempered commas and policy-v3 controls.
 Those controls cover the keyboard tuning, neighborhood radius and axes, pitch flexibility, register weight per octave, a shared half-life, repetition tolerance, silence timeout and transport resets;
-their exact ranges and defaults live in the [implementation record](adaptive-tuning-plugin.md#controls-and-live-neighborhood).
+their exact ranges and defaults live in the [implementation record](adaptive-tuning-plugin.md#controls).
 The UI mirrors that resolved configuration rather than running a competing authority, and restoring state or automating tuning works with the editor never opened.
 
 Adoption is **block-level**.
@@ -512,13 +515,13 @@ Silence, Stop and loop/seek resets follow the controls described in the implemen
 
 Selection uses preallocated scratch and refuses resource exhaustion instead of scoring a truncated candidate set.
 The policy never reads camera reach or display tolerance.
-The live lattice's C2–C7 winner outlines are an off-audio-thread view of the Hub's authoritative next-attack context, not an input to the score and not part of preview or export pictures.
+Adaptive next-note outlines were retired in [#970](https://github.com/yan-h/harmonigraph/issues/970);
+musical candidate selection and separate Lattice Map assignment outlines remain.
 
 ## Capacities and memory
 
 These are selected ceilings sized for 16 tracks and 100+ simultaneous notes, not measured throughput.
-Audio transport and policy-selection storage is preallocated;
-the more expensive live-neighborhood calculation runs off the audio thread.
+Audio transport and policy-selection storage is preallocated.
 Every ceiling has an explicit failure.
 A full local delay line or held set refuses the incoming event;
 copy, reply or policy exhaustion can leave an admitted onset uncorrected.
@@ -663,8 +666,8 @@ each one then requests its own reactivation.
 Locked 12-TET produces zero adaptive correction;
 choose **Just** with **Auto** and **Learn** off for a first independent-tuning check.
 The moving-neighborhood defaults match the simulator's baseline profile;
-the [implementation record](adaptive-tuning-plugin.md#controls-and-live-neighborhood) describes every control and the precision profile used by its paired intentional-E examples.
-5. Play a phrase across several tracks and check the instrument's actual pitch as well as the displayed notes and live neighborhood.
+the [implementation record](adaptive-tuning-plugin.md#controls) describes every control and the precision profile used by its paired intentional-E examples.
+5. Play a phrase across several tracks and check the instrument's actual pitch as well as the displayed notes.
 For reproducible policy checks use the versioned fixtures linked from the [implementation record](adaptive-tuning-plugin.md#validation).
 Destination conversion still matters:
 the [historical pitch-conversion measurements](tuning-probe-bitwig.md#pitch-conversion) include Vital's required matching MPE settings and bend ranges.

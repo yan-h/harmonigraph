@@ -294,7 +294,12 @@ No score formula, weights or slider endpoints have been agreed.
 #865 settled it as a single Pitch flexibility control with an exponential pitch cost;
 the [implementation record](adaptive-tuning-plugin.md) holds the formula.
 
-### Lattice reachability indicator
+### Lattice reachability indicator (retired)
+
+The following indicator proposal and its related checks below are historical.
+Yan approved retiring the production adaptive next-note outlines in [#970](https://github.com/yan-h/harmonigraph/issues/970).
+Musical neighborhood eligibility remains;
+the browser lab and headless model remain separate verification tools.
 
 Show the nodes that can actually be selected by any arbitrary next input pitch with the present context held fixed.
 Distinguish eligible candidates from reachable winners: an eligible node may never win for any input pitch.

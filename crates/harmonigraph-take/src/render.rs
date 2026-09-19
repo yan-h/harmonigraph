@@ -183,23 +183,6 @@ pub enum SpectrogramRender {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RenderConfig {
-    /// Record the plugin's selected analysis input into the take. Dormant, and
-    /// nothing reads it: the recorder captures audio unconditionally and every
-    /// render uses the take's own recording as soundtrack and spectrum,
-    /// aligned to the picture by construction — see `RenderRequest::build` in
-    /// `harmonigraph-record`, which has no `--audio` or `--align` to pass.
-    /// (Named rather than linked: that crate depends on this one, not the
-    /// other way round.)
-    ///
-    /// Kept, with `auto_render`, `audio_path` and `audio_offset`, so the
-    /// bounced-audio drop-in the four belong to can be revived without
-    /// re-deciding its shape. NOT kept for the blob: serde ignores a key it
-    /// has no field for, so removing one costs nothing at load — which is
-    /// what `a_persist_blob_carrying_a_since_removed_field_still_loads`
-    /// holds, and what five removed spectrogram keys already relied on.
-    pub record_audio: bool,
-    /// Run the renderer as soon as a take finishes.
-    pub auto_render: bool,
     /// What "finishes" means; see [`RenderTrigger`].
     pub trigger: RenderTrigger,
     /// The bar [`AtBar`](RenderTrigger::AtBar) ends the take at, counted the
@@ -212,14 +195,6 @@ pub struct RenderConfig {
     /// Path to the `harmonigraph-offline` binary. Empty means the
     /// conventional install location, which `update-plugin.sh` writes to.
     pub renderer_path: String,
-    /// Bounced audio to pass as `--audio`: it feeds the spectrum curve
-    /// and is muxed into the video. Empty renders silent, with no
-    /// spectrum — the roll and the lattice are unaffected.
-    pub audio_path: String,
-    /// Take-time (seconds) where the bounce starts — empty leaves it at take
-    /// zero, a number passes `--align`. A string so "empty = the default"
-    /// reads naturally and it matches the other free-text fields.
-    pub audio_offset: String,
     /// Which spectrogram the render bakes; see [`SpectrogramRender`]. Read by
     /// the offline renderer from the take.
     pub spectrogram: SpectrogramRender,
@@ -241,8 +216,6 @@ pub struct RenderConfig {
 impl Default for RenderConfig {
     fn default() -> Self {
         RenderConfig {
-            record_audio: false,
-            auto_render: false,
             trigger: RenderTrigger::OnDisarm,
             // Off-trigger by default, so this only ever matters once `AtBar`
             // is chosen. 65 rather than 1: a stop bar equal to the song start
@@ -250,8 +223,6 @@ impl Default for RenderConfig {
             // end and the trigger would look broken on first use.
             stop_bar: 65.0,
             renderer_path: String::new(),
-            audio_path: String::new(),
-            audio_offset: String::new(),
             spectrogram: SpectrogramRender::WholeVideo,
             frame: RenderFrame::default(),
             // 1440 on the short edge — 2560x1440 at the default 16:9 frame,
@@ -386,6 +357,11 @@ pub struct RenderFrame {
 }
 
 impl RenderFrame {
+    /// Smallest lattice share offered by the preview divider and composed layout.
+    pub const SPLIT_MIN: f32 = 0.05;
+    /// Largest lattice share; the spectral pane retains the same minimum share.
+    pub const SPLIT_MAX: f32 = 0.95;
+
     /// Output pixels for this aspect with its SHORT edge at `short_edge`: 16:9
     /// at 1080 is 1920x1080, 9:16 at 1080 is 1080x1920.
     ///
@@ -419,15 +395,16 @@ impl RenderFrame {
     /// nothing here that isn't already caught where it is used.
     ///
     /// `split` is different: the Video pane's preview divider holds it to
-    /// `0.05..=0.95`, and `Layout::split` clamps into that same literal
-    /// range — which cannot itself panic (the bounds are constants, not a
-    /// second field), but does not repair a NaN either, `clamp` losing every
+    /// [`SPLIT_MIN`](Self::SPLIT_MIN)..=[`SPLIT_MAX`](Self::SPLIT_MAX),
+    /// and `Layout::split` clamps into that same range — which cannot itself
+    /// panic (the bounds are constants, not a second field), but does not repair
+    /// a NaN either, `clamp` losing every
     /// comparison against one. A NaN split would then reach `Layout::resolve`
     /// as a rect with no finite side — not a crash, but a frame with a torn
     /// composition and nothing in the picture to say why.
     pub fn sanitize(&mut self) {
         self.split = if self.split.is_finite() {
-            self.split.clamp(0.05, 0.95)
+            self.split.clamp(Self::SPLIT_MIN, Self::SPLIT_MAX)
         } else {
             RenderFrame::default().split
         };
@@ -473,5 +450,27 @@ impl RenderProgress {
     /// which is not the same as zero, and must not draw as it.
     pub fn fraction(self) -> Option<f32> {
         (self.total > 0).then(|| (self.done as f32 / self.total as f32).clamp(0.0, 1.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retired_export_fields_are_ignored_and_not_saved_again() {
+        let config: RenderConfig = ron::from_str(
+            r#"(record_audio:true,auto_render:false,audio_path:"old.wav",audio_offset:"12.5",
+                renderer_path:"/renderer",short_edge:2160,trigger:AtBar,stop_bar:17.0)"#,
+        )
+        .unwrap();
+        assert_eq!(config.renderer_path, "/renderer");
+        assert_eq!(config.short_edge, 2160);
+        assert_eq!(config.trigger, RenderTrigger::AtBar);
+        assert_eq!(config.stop_bar, 17.0);
+        let saved = ron::to_string(&config).unwrap();
+        for removed in ["record_audio", "auto_render", "audio_path", "audio_offset"] {
+            assert!(!saved.contains(removed), "retired field saved again: {removed}");
+        }
     }
 }
