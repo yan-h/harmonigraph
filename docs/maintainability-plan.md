@@ -11,11 +11,12 @@ while reducing the attention Yan must spend understanding and supervising those 
 **Current focus:** systematically discover and compare maintainability opportunities across the project before selecting implementation work.
 Spacing was a worked example of the method,
 not the start of a sequence of immediate fixes.
-The [first broader inventory](https://github.com/yan-h/harmonigraph/issues/954) records ranked leads,
-potential behavior losses and the strongest reasons to keep each candidate.
-Next,
-challenge the retained-apparatus and settings-inventory leads with bounded checks,
-and finish the fixture inventory for live-versus-recorded parity.
+The [broader discovery report](https://github.com/yan-h/harmonigraph/issues/954) now includes detailed checks of retained export/diagnostic machinery,
+repeated settings knowledge and live-versus-recorded events.
+The [reproduction evidence](evidence/maintainability-discovery/README.md) preserves the passing probes,
+deliberately failing controls and their limits.
+The next useful discovery batch is written constraints and host/platform support promises,
+followed by a realistic dependency-upgrade walkthrough.
 
 **Session scope:** discovery only,
 as Yan requested on 2026-09-19.
@@ -104,7 +105,7 @@ The pilot and Yan's discovery-only direction have changed the sequence below.
 | --- | --- | --- | --- |
 | 1. Pilot | Examine recent fixes and one area with recurring maintenance work; trace requirements and challenge the strongest findings. | Twelve-case assessment and three recommendations in [#950](https://github.com/yan-h/harmonigraph/issues/950). | Complete |
 | 2. Worked discovery case | Trace persisted spacing and settings validation; inspect saved examples and render a keep/remove comparison. | Evidence in [#952](https://github.com/yan-h/harmonigraph/issues/952); Yan accepted the custom-input loss. | Complete; implementation deferred |
-| 3. Broader discovery and prioritization | Survey the areas below, trace realistic changes, challenge the best leads and compare their value. | Initial inventory in [#954](https://github.com/yan-h/harmonigraph/issues/954); deepen the best leads into verified proposals. | Current phase; first breadth pass complete |
+| 3. Broader discovery and prioritization | Survey the areas below, trace realistic changes, challenge the best leads and compare their value. | Detailed results in [#954](https://github.com/yan-h/harmonigraph/issues/954); runtime probes and negative controls for three groups. | Current phase; first detailed batch complete |
 | 4. Selected simplification | After Yan requests implementation, sequence the most valuable accepted changes by dependencies and file overlap. | Focused PRs showing which maintenance obligations disappeared and what behavior was verified. | Deferred |
 | 5. Verification and handoff | Check the resulting workflows and update the explanations future agents need. | Evidence of preserved or explicitly changed behavior, remaining issues and a clear stopping point. | Follows implementation |
 
@@ -310,14 +311,29 @@ camera checks,
 node budgets and renderer units retain their separate purposes.
 
 Active discovery report: [#954 — ranked leads, retained mechanisms and coverage](https://github.com/yan-h/harmonigraph/issues/954).
-The first breadth pass groups opportunities around retained diagnostic/export machinery,
-duplicated setting ranges and test inventories,
-and live-versus-recorded event semantics.
-Hidden naming reach and camera FOV are secondary leads.
-The report records prior decisions and reasons to keep shared appearance ownership,
-independent realtime queues,
-core/wire type separation and useful tooling.
-These source-inspected leads have not received spacing's level of runtime verification and are not accepted implementation tasks.
+The first detailed batch ran against product revision `1786c5ba`,
+after incorporating #946 and #953's note-history changes.
+Its findings are:
+
+- Four dormant export fields do not alter either render-request constructor across 16 tested combinations; changing active resolution does. Removal remains a small proposal to revisit the intentional keep decision in #895, not an already approved change.
+- Retired CLAP tracing has no production opt-in or payload-checking consumer found. Turning it off exposed a fixture mutex initialization dependency, recorded in [#955](https://github.com/yan-h/harmonigraph/issues/955). Explicit initialization lets all 21 boundary tests pass with tracing off and allocation assertions intact. Retiring the hook is a supported proposal, with this prerequisite.
+- Remaining range duplication favors reusing existing sanitizers and a few shared bounds. Some rendering defenses intentionally differ from UI ranges and should stay separate. A nested hostile-input omission passes existing settings tests; a small extension catches it while retaining all five real range tests. [#957](https://github.com/yan-h/harmonigraph/issues/957) records the measured coverage gap.
+- Ordinary and canonical Recorder → display versus actual file → Replay comparisons both pass. They detect independently injected timestamp and pitch-conversion errors. Preserve the separate event representations and queue ownership; a focused parity fixture is better supported than an architectural rewrite.
+
+All applied scratch source,
+manifest and lockfile changes were restored.
+The [unapplied evidence patches](evidence/maintainability-discovery/README.md) preserve the work without installing new tests or product behavior.
+These are bounded observations,
+not proof of complete live/export parity,
+cross-platform tracing behavior or absence of other settings gaps.
+Spacing remains the only newly accepted product removal;
+implementation stays deferred.
+
+Hidden naming reach and camera FOV remain secondary leads.
+Broader work still includes tracing costly written constraints to their authority,
+understanding current host/platform support obligations,
+and following a realistic dependency upgrade across the affected files and checks.
+Compare these opportunities before asking Yan to decide another batch of product tradeoffs.
 
 Do not create a parallel backlog or a second copy of the architectural documentation.
 

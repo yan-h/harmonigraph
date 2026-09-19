@@ -1,0 +1,19 @@
+--- a/vendor/nice-plug/tests/clap_boundary.rs
++++ b/vendor/nice-plug/tests/clap_boundary.rs
+@@ -198,7 +198,7 @@
+     const CLAP_CONFIGURATION: bool = C;
+     const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] = &["axis"];
+     const CLAP_PERFORMANCE: bool = P;
+-    const CLAP_PROCESS_TRACE: bool = true;
++    const CLAP_PROCESS_TRACE: bool = false;
+     fn clap_configuration_prepare(
+         state: &nice_plug::plugin::PluginState,
+     ) -> Result<ConfigurationEdit, SubmitError> {
+@@ -944,6 +944,7 @@
+                 CLAP_EVENT_PARAM_GESTURE_END
+             ]
+         );
++        assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).traces > 0, false, "discovery witness: trace opt-in actually takes effect");
+         assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).legacy, 0);
+         // Configuration-only keeps its existing configuration snapshot readback;
+         // inspect the generic Param directly to prove the legacy output applies.

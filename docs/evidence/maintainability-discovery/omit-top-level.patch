@@ -1,0 +1,11 @@
+--- a/crates/harmonigraph-ui/src/tests/settings_ranges.rs
++++ b/crates/harmonigraph-ui/src/tests/settings_ranges.rs
+@@ -44,7 +44,7 @@
+     };
+     let a = &mut saved.picture.appearance;
+     macro_rules! poison { ($owner:expr; $($field:ident),+ $(,)?) => { $( $owner.$field = v; )+ }; }
+-    poison!(a.view; spacing, render_scale, bloom_strength, sevens_size, label_scale, sounding_ink,
++    poison!(a.view; spacing, bloom_strength, sevens_size, label_scale, sounding_ink,
+         octave_center, octave_extra_size, octave_extra_blend, mark_delay, fade_shape,
+         spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
+         spectral_width, spectral_ring_range, spectral_ring_width, ring_gap, octave_gap,
