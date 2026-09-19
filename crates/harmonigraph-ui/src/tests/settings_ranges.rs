@@ -67,15 +67,15 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         roll_lead_fade, roll_lead_release, note_name_scale, volume_floor_db, volume_ceiling_db);
     // Every dialled float on the atmosphere, not just the eight that predate
     // the cloud. #888, #909, #913, #918, #928 and #933 each added, retired or
-    // re-ranged bars here and each walked past this list, so the sixteen cloud
-    // dials loaded at their fresh values and the `range.contains` check below
-    // passed over them vacuously -- sixteen bars reported green by a guard that
-    // could not reach them. #933's contract is that a size the bar can offer is
-    // a size the blob keeps; this is what holds the bar and the clamp to one
-    // pair of numbers.
+    // re-ranged bars here and each walked past this list, so the cloud dials
+    // loaded at their fresh values and the `range.contains` check below passed
+    // over them vacuously -- bars reported green by a guard that could not
+    // reach them. #933's contract is that a size the bar can offer is a size
+    // the blob keeps; this is what holds the bar and the clamp to one pair of
+    // numbers.
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, contour_strength, contours, contour_softness, analyzer_softness, note_glow,
         cloud_depth, cloud_speed, scale_size, scale_variety, scale_refract, scale_relief, scale_rock,
-        wash_size, wash_fuzz, wash_ragged, wash_lobe, wash_refract, wash_pool, wash_grain, wash_layers, wash_black);
+        wash_size, wash_fuzz, wash_ragged, wash_lobe, wash_refract, wash_pool, wash_grain, wash_layers);
     saved.workspace.interaction.ui_scale = v;
     // These owners have NO ValueBar/RangeBar today. Still pass through their
     // real shared load boundary; zero Video visits below explicitly records
