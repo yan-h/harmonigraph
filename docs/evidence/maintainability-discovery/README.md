@@ -141,3 +141,50 @@ The patches are evidence for a later selected change;
 they are not maintained as a second green test suite.
 The full allocation backtrace and the relevant failing outputs are summarized in the linked issues,
 and the discovery report states the limits of every conclusion.
+
+## Continued constraints and dependency inventory
+
+The next pass inspected `fcea7dd11e133de50ccd02e2999ad79f5fe5f30f` on 2026-09-19,
+without changing product source.
+It reused two existing regressions to challenge current prose in `docs/visual-runtime.md`:
+
+```sh
+RUSTC_WRAPPER='' cargo test --offline -p harmonigraph-ui a_fold_outlives_a_frame_that_brought_no_new_column -- --nocapture
+RUSTC_WRAPPER='' cargo test --offline -p harmonigraph-plugin a_take_ends_itself_while_the_editor_window_is_shut -- --nocapture
+```
+
+**Observed:** one test passed in each command.
+The first proves ten later frames reuse the Fold measurement until new audio arrives;
+the second reaches the closed-window completion poll.
+[#966](https://github.com/yan-h/harmonigraph/issues/966) holds the stale-guide corrections.
+No new test or source mutation was needed.
+
+The dependency check used the [official registry entry](https://index.crates.io/eg/ui/egui-baseview) and [published 0.7.2 archive](https://static.crates.io/crates/egui-baseview/egui-baseview-0.7.2.crate).
+The registry marks 0.7.2 non-yanked and requires egui/egui-wgpu `^0.36.1`,
+wgpu `^30` and baseview `^0.3.4`.
+Downloaded archive SHA-256 equals its registry checksum:
+
+```text
+f197eade3efd9bfe76b9cbf8357beb6a48e0a2ac262901b0f52c736e2710fdaf
+```
+
+The crates.io API returned 403;
+the sparse index and verified archive supplied the release evidence.
+Moving upstream main was separately observed at `877d3bba377ce194d1dda8599377ed667bc2d6d7`,
+but comparisons use the published archive.
+Source was extracted for inspection only,
+not compiled or installed.
+
+[#968](https://github.com/yan-h/harmonigraph/issues/968) records the bounded comparison:
+physical/logical resize looks structurally replaced,
+texture-delta handling needs a runtime probe,
+and occluded upload submission,
+MSAA reconfiguration and presentation retry remain adaptation questions.
+The old “reconsider when egui 0.36 is published” trigger is met;
+the cost and value of the whole migration remain unmeasured.
+No upstream issue or PR was submitted.
+
+The support audit found the narrow macOS/Bitwig scope already explicit.
+Its portable-code and generic-feature-name hypotheses did not establish a new support obligation.
+[#967](https://github.com/yan-h/harmonigraph/issues/967) separately records the concrete conflict between old audit dispatch instructions and current worktree ownership.
+The full issue index and retained/rejected hypotheses remain in [#954](https://github.com/yan-h/harmonigraph/issues/954).

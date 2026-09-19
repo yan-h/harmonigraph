@@ -15,8 +15,13 @@ The [broader discovery report](https://github.com/yan-h/harmonigraph/issues/954)
 repeated settings knowledge and live-versus-recorded events.
 The [reproduction evidence](evidence/maintainability-discovery/README.md) preserves the passing probes,
 deliberately failing controls and their limits.
-The next useful discovery batch is written constraints and host/platform support promises,
-followed by a realistic dependency-upgrade walkthrough.
+Yan subsequently asked for issues covering the leads and for further investigation.
+The [follow-up index](https://github.com/yan-h/harmonigraph/issues/954#follow-up-issues) now links nine new issues,
+with proposals and uncertain investigations distinguished.
+Continued discovery found stale current-state documentation,
+conflicting old dispatch instructions and a newly met dependency-upgrade investigation trigger.
+The next deeper discovery is [#968](https://github.com/yan-h/harmonigraph/issues/968):
+map the current GUI fork's patches against the published candidate and test the smallest possible retirements before proposing a migration.
 
 **Session scope:** discovery only,
 as Yan requested on 2026-09-19.
@@ -39,6 +44,9 @@ Yan authorized the first pilot and its expanded sample on 2026-09-19.
 He then authorized the settings investigation and keeping its documentation in the open draft PR #951,
 accepted future spacing removal,
 and asked for systematic discovery instead of implementation.
+He then requested individual issues for the leads and continued investigation on the same date.
+Those issues preserve evidence and deferred scope;
+opening one does not begin its implementation.
 Continue that discovery scope unless Yan changes it.
 
 ## Confirmed preferences and the concern behind this work
@@ -105,7 +113,7 @@ The pilot and Yan's discovery-only direction have changed the sequence below.
 | --- | --- | --- | --- |
 | 1. Pilot | Examine recent fixes and one area with recurring maintenance work; trace requirements and challenge the strongest findings. | Twelve-case assessment and three recommendations in [#950](https://github.com/yan-h/harmonigraph/issues/950). | Complete |
 | 2. Worked discovery case | Trace persisted spacing and settings validation; inspect saved examples and render a keep/remove comparison. | Evidence in [#952](https://github.com/yan-h/harmonigraph/issues/952); Yan accepted the custom-input loss. | Complete; implementation deferred |
-| 3. Broader discovery and prioritization | Survey the areas below, trace realistic changes, challenge the best leads and compare their value. | Detailed results in [#954](https://github.com/yan-h/harmonigraph/issues/954); runtime probes and negative controls for three groups. | Current phase; first detailed batch complete |
+| 3. Broader discovery and prioritization | Survey the areas below, trace realistic changes, challenge the best leads and compare their value. | Detailed results in [#954](https://github.com/yan-h/harmonigraph/issues/954); runtime probes and negative controls for three groups. | Current phase; first detailed batch and continued constraints/dependency inventory complete |
 | 4. Selected simplification | After Yan requests implementation, sequence the most valuable accepted changes by dependencies and file overlap. | Focused PRs showing which maintenance obligations disappeared and what behavior was verified. | Deferred |
 | 5. Verification and handoff | Check the resulting workflows and update the explanations future agents need. | Evidence of preserved or explicitly changed behavior, remaining issues and a clear stopping point. | Follows implementation |
 
@@ -329,11 +337,56 @@ cross-platform tracing behavior or absence of other settings gaps.
 Spacing remains the only newly accepted product removal;
 implementation stays deferred.
 
-Hidden naming reach and camera FOV remain secondary leads.
-Broader work still includes tracing costly written constraints to their authority,
-understanding current host/platform support obligations,
-and following a realistic dependency upgrade across the affected files and checks.
-Compare these opportunities before asking Yan to decide another batch of product tradeoffs.
+### Follow-ups opened at Yan's request
+
+The detailed report remains the evidence and prioritization index.
+These individual issues make the leads independently returnable without converting them into an implementation wave:
+
+| Lead | Issue | Scope |
+| --- | --- | --- |
+| Dormant export fields | [#959](https://github.com/yan-h/harmonigraph/issues/959) | Revisit the earlier keep decision. |
+| Retired tracing | [#960](https://github.com/yan-h/harmonigraph/issues/960) | Supported proposal; coordinate with fixture issue #955. |
+| Repeated ranges | [#961](https://github.com/yan-h/harmonigraph/issues/961) | Bounded sanitizer/range reuse; coordinate with #957. |
+| Recorder/display/replay parity | [#962](https://github.com/yan-h/harmonigraph/issues/962) | Promote focused coverage when implementation is requested. |
+| Hidden naming reach | [#963](https://github.com/yan-h/harmonigraph/issues/963) | Investigate actual naming loss before a decision. |
+| Custom camera FOV | [#964](https://github.com/yan-h/harmonigraph/issues/964) | Investigate visual value; spacing equivalence does not establish FOV equivalence. |
+| Current architecture guide | [#966](https://github.com/yan-h/harmonigraph/issues/966) | Correct verified Fold-cache and closed-window completion descriptions. |
+| Old dispatch plans | [#967](https://github.com/yan-h/harmonigraph/issues/967) | Reconcile dated mechanics with current worktree ownership. |
+| GUI dependency cohort | [#968](https://github.com/yan-h/harmonigraph/issues/968) | Investigate the newly eligible published version before deciding on a rebase. |
+
+Continued discovery ran at `fcea7dd1`,
+with product sources still at `1786c5ba`.
+Two existing regression tests passed and demonstrate that the visual-runtime guide's present-tense claims are stale:
+Fold reuse already crosses frames,
+and a closed editor already polls take completion.
+The old benchmark numbers remain historical evidence;
+they should not be rewritten as new measurements.
+#940's hand-made worktree dispatch text conflicts with the current ownership policy,
+while its linked #855 bootstrap defect remains open and should not be rediscovered as a new issue.
+
+The support inventory found no broad Windows/Linux/host promise to retire.
+README and the deferred-work decisions already identify macOS and Bitwig as the tested personal environment.
+Portable dependency code and a generally named Video feature do not establish a support commitment.
+No extra platform CI,
+installer or deletion campaign follows from this inventory.
+
+The [official published egui-baseview archive](https://static.crates.io/crates/egui-baseview/egui-baseview-0.7.2.crate),
+verified against its registry checksum,
+now meets #409's egui 0.36+ investigation trigger.
+Source comparison suggests the old resize conversion patch may be structurally replaced;
+texture-delta handling needs a runtime check,
+and several other renderer fixes still appear to need adaptation.
+#968 records the exact version,
+checksum,
+source sites and limits.
+This is a reason to reassess the rebase's value,
+not a conclusion that upgrading is worthwhile or safe.
+
+Prioritize that bounded feasibility work for further discovery,
+then compare it with the smaller settings and tracing proposals.
+Hidden knobs remain secondary.
+Product choices should still arrive as a small batch with concrete losses;
+implementation remains deferred.
 
 Do not create a parallel backlog or a second copy of the architectural documentation.
 
