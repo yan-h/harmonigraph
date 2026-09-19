@@ -251,6 +251,28 @@ run .claude/tests/reclaim-locks.sh
 # DAW still draws the previous build.
 run .claude/tests/plugin-swap.sh
 
+# What the compile cache actually did, which nothing else here reports and
+# which is most of this script's wall clock. Every cargo command above goes
+# through sccache (`.cargo/config.toml` sets the wrapper; ci.yml adds the
+# GitHub Actions backend), and a hit costs 0.003s against a 13.6s average
+# miss — so on the compile-bound gates the hit RATE is the runtime, and it was
+# unmeasured on both sides until this line.
+#
+# Read the size against the max, not just the rate. Both backends evict by
+# LRU at a cap — 10 GB per repo on Actions, `SCCACHE_CACHE_SIZE` locally — and
+# at the cap a run's own writes evict what the next run wanted, so the rate
+# stops being a function of this tree and starts being a function of what
+# every other run wrote. Both caches were sitting exactly at their cap when
+# this line was added.
+#
+# Never a gate: it reports and cannot fail. A genuinely missing sccache has
+# already killed every cargo command above it.
+echo
+echo "▶ sccache stats"
+sccache --show-stats 2>/dev/null \
+  | grep -E 'Compile requests|Cache hits rate|Cache misses|^Cache size|Max cache size' \
+  || echo "  (sccache reported nothing)"
+
 echo
 if [ "$CI_GROUP" = all ]; then
   echo "✅ full CI passed (fmt + markdown breaks + markdown links + workspace clippy + workspace tests + plugin check + release check + render tests + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + shared-skills worktrees + reclaim safety + plugin swap)"

@@ -100,6 +100,12 @@ against HEAD rather than against the plugin dylib beside it, which is the tempti
 The warning is a backstop, not the contract —
 build both.
 
+**Push before you build, not after.** CI reads the pushed commit and never reads `target/`, so the release build and the checks are independent and can overlap.
+Building first serializes them for no reason:
+a 1m28s build followed by a 6-7 minute CI run is eight minutes where pushing first is seven.
+Commit, push, open the draft PR, then build while the checks run —
+the handover message still goes out when the build lands, so nothing about the contract below changes except its cost.
+
 Then end your message telling Yan it's `loadable via ./load-plugin.sh
 <branch>`, and name the tag the overlay will show (see the `build-handover`
 skill).

@@ -42,9 +42,26 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: v0.16.0
+      # Restore Full CI's ~/.cargo archive instead of minting one of this job's
+      # own. Without `shared-key` the key carries the JOB NAME, so this step
+      # wrote a separate `v0-rust-compile-*` archive from Full CI's
+      # `v0-rust-full-ci-*`, and without `save-if` it wrote one PER BRANCH:
+      # fifteen 106 MB copies of the same crates were live at once, 1.6 GB
+      # against GitHub's 10 GB per-repo cap, for a job whose dependency set is
+      # the workspace's. Everything past that cap evicts by LRU, and what was
+      # being evicted was sccache's ~6000 entries — so a cache nobody read was
+      # charged to every OTHER run's compile time.
+      #
+      # `save-if: false` rather than the main-only form Full CI uses, because
+      # this workflow has no `push:` trigger at all: main never runs it, so a
+      # main-gated save is one that can never fire. Restoring still works, and
+      # is the whole point — a PR ref reads the default branch's caches, which
+      # is exactly where the `full-ci` key is written.
       - uses: Swatinem/rust-cache@v2
         with:
           cache-targets: false
+          shared-key: full-ci
+          save-if: false
       - name: Check the committed production corpus
         if: ${{ !inputs.regenerate }}
         run: python3 tools/shader-assets.py check
