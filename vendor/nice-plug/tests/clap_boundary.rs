@@ -7,7 +7,7 @@ use clap_sys::{
     version::CLAP_VERSION,
 };
 use nice_plug::prelude::*;
-use nice_plug::wrapper::clap::{ProcessTrace, configuration::*, performance as perf};
+use nice_plug::wrapper::clap::{configuration::*, performance as perf};
 use std::{
     ffi::{CStr, c_char, c_void},
     ptr,
@@ -67,7 +67,6 @@ struct Observed {
     applies: Vec<i64>,
     legacy: usize,
     finals: usize,
-    traces: usize,
     faults: usize,
 }
 impl Default for Control {
@@ -198,7 +197,6 @@ impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
     const CLAP_CONFIGURATION: bool = C;
     const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] = &["axis"];
     const CLAP_PERFORMANCE: bool = P;
-    const CLAP_PROCESS_TRACE: bool = true;
     fn clap_configuration_prepare(
         state: &nice_plug::plugin::PluginState,
     ) -> Result<ConfigurationEdit, SubmitError> {
@@ -307,9 +305,6 @@ impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
     }
     fn clap_performance_end(&mut self, _: perf::Callback, summary: perf::Summary) {
         self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).summaries.push(summary);
-    }
-    fn clap_process_trace(&mut self, _: ProcessTrace<'_>) {
-        self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).traces += 1;
     }
 }
 nice_export_clap!(Fixture<true, true>, Fixture<false, true>, Fixture<false, false>, Fixture<true, false>);
@@ -560,6 +555,9 @@ impl Device {
     }
     fn new(control: Control, id: &CStr) -> Self {
         let control = Arc::new(control);
+        // Some platforms lazily allocate the std mutex on its first lock. Initialize this
+        // fixture-only observation storage before any allocation-guarded audio callback.
+        drop(control.observed.lock().unwrap_or_else(|e| e.into_inner()));
         *CONSTRUCTION.lock().unwrap_or_else(|e| e.into_inner()) = Some(control.clone());
         let host = Box::new(clap_host {
             clap_version: CLAP_VERSION,

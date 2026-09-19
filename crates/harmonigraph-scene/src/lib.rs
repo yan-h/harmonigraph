@@ -71,11 +71,12 @@ use harmonigraph_core::{Envelope, LatticePos};
 
 /// Axis mapping, matching v1's orientation: major thirds run horizontally
 /// (x), fifths vertically (y), and harmonic sevenths in depth (z).
-fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
-    Vec3::new(pos.fives as f32 * spacing, pos.threes as f32 * spacing, pos.sevens as f32 * spacing)
+/// Each lattice step is one world unit.
+fn lattice_to_world(pos: LatticePos) -> Vec3 {
+    Vec3::new(pos.fives as f32, pos.threes as f32, pos.sevens as f32)
 }
 
-/// Node radius as a fraction of the lattice spacing.
+/// Node radius in world units; adjacent lattice positions are one unit apart.
 const NODE_RADIUS_FACTOR: f32 = 0.25;
 
 /// The most nodes one drawn window may hold, and the backstop on a lattice
@@ -130,36 +131,6 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// over 273 nodes, 0.06ms over 875 (a 16:9 pane fully zoomed out, flat), and
 /// 1.2ms over 14877.
 pub const MAX_DRAWN_NODES: usize = 20480;
-
-/// The narrowest and widest a [`ViewConfig::spacing`] may be, and the one
-/// clamp on the tree's only persisted float that NO bar edits.
-///
-/// Which is what makes these two unlike every other pair here: the rest state
-/// a range a control already offers, so the constant and the bar are one fact.
-/// Nothing shows this one. A range with no readout cannot be wrong about what
-/// the user sees, and it has nothing to be right about either — so it is not a
-/// taste boundary at all, it is the bracket outside which the number has
-/// stopped being a lattice spacing. Both ends come off the camera, which is
-/// the only other thing in the tree measured in world units.
-///
-/// The ceiling is the pane at its tallest. Fully zoomed out the viewport is
-/// `MAX_DISTANCE * tan(fov/2) * 2` = 19.9 world units high (see
-/// [`Camera::MAX_DISTANCE`]), so past 20 there is no zoom the camera offers at
-/// which two adjacent nodes are on screen together: one node, and the lattice
-/// it belongs to somewhere off the pane.
-///
-/// The floor is where the picture stops being a function of the camera at all.
-/// `scrolled` saturates its `MAX_DRAWN_EXTENT` (4096 steps per sheet axis) at
-/// a spacing of 0.0043 on a 16:9 pane fully zoomed out, and below that the
-/// window is the clamp rather than the view — every frame asking for the cap's
-/// worth of sub-pixel nodes, whatever the camera does.
-///
-/// Deliberately wide, for the same reason it exists at all. With no bar to
-/// contradict, a narrow repair would be this file inventing a look; what the
-/// door owes is only that the number it lets through is a size.
-pub const SPACING_MIN: f32 = 0.005;
-/// The other end of [`SPACING_MIN`]; see there for both.
-pub const SPACING_MAX: f32 = 20.0;
 
 /// The longest wait the Delay bar offers before a melody/bass mark starts
 /// easing in ([`ViewConfig::mark_delay`]), and the clamps both load sanitation
@@ -763,7 +734,7 @@ pub struct PlusInstance {
 pub struct Scene {
     pub nodes: Vec<NodeInstance>,
     pub camera: Camera,
-    /// Base node radius in world units (scales with lattice spacing).
+    /// Base node radius in world units.
     pub node_radius: f32,
     pub note_animation: NoteAnimationConfig,
     /// The outer octave layer's radial band (quad UV units), already

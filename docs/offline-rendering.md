@@ -67,6 +67,12 @@ Take formats v1–v4 are refused with a version error and must be recorded again
 An unreadable or unsupported appearance document is reported on stderr and export continues at the default appearance;
 a refused replacement does not fall back to the recorded look.
 A missing appearance or missing settings groups use their normal defaults.
+Lattice steps are fixed at one world unit.
+Old appearance files' `spacing` keys are ignored without discarding their other settings;
+custom-spacing looks are lost,
+and the appearance generator rejects new `spacing=` input.
+Camera,
+zoom and label controls remain available.
 No older format is migrated or partially recovered.
 
 ## Audio input memory

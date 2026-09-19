@@ -44,7 +44,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     };
     let a = &mut saved.picture.appearance;
     macro_rules! poison { ($owner:expr; $($field:ident),+ $(,)?) => { $( $owner.$field = v; )+ }; }
-    poison!(a.view; spacing, render_scale, bloom_strength, sevens_size, label_scale, sounding_ink,
+    poison!(a.view; render_scale, bloom_strength, sevens_size, label_scale, sounding_ink,
         octave_center, octave_extra_size, octave_extra_blend, mark_delay, fade_shape,
         spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
         spectral_width, spectral_ring_range, spectral_ring_width, ring_gap, octave_gap,
@@ -97,19 +97,6 @@ fn loaded(edge: Edge) -> SharedState {
     // Spiral and take-render settings share the load boundary but currently
     // have no recorded bar. Check their own normalization directly so adding
     // zero-visit panes to the matrix does not pretend the bar guard covers them.
-    //
-    // `view.spacing` joins them for the same reason and one more: it is in the
-    // `poison!` block above because the completeness guard below demands every
-    // dialled float be poisoned, and until #912 nothing read the result — the
-    // one field in that block whose value was written and then never looked
-    // at. This is what reads it, and it is the only place that can: no bar in
-    // the recorded set shows a spacing.
-    assert!(
-        (harmonigraph_scene::SPACING_MIN..=harmonigraph_scene::SPACING_MAX)
-            .contains(&state.picture.appearance.view.spacing),
-        "a poisoned spacing loaded as {}",
-        state.picture.appearance.view.spacing,
-    );
     assert!((1.0..=8.0).contains(&state.picture.appearance.spiral.zoom));
     assert!(state.picture.appearance.spiral.look.length() <= 1.0);
     assert!(

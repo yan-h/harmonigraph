@@ -178,26 +178,6 @@ pub fn derive_scene(
     // recompute each node's pitch class to do it.
     let mut node_pcs = Vec::with_capacity(window.count());
     let center = view.center();
-    // The lattice's step as the picture may use it, resolved once for the
-    // frame: every world length below is this times something, so a step that
-    // is not a real number is the whole picture gone rather than one layer of
-    // it.
-    //
-    // Repaired and NOT bounded, which is the whole of why this is one line and
-    // not two. `sanitize` owns that bar, and the step is read outside this
-    // function as well — `ViewConfig::demanded` budgets the window off it and
-    // `ViewConfig::follow_camera` recenters the camera in it — so a range
-    // imposed here would draw the lattice at one step while two other readers
-    // sized its window and moved its camera by another. The fresh step and not
-    // the bar's low end for the matching reason: that is the door's own
-    // answer, so a broken step looks the same whichever route it arrived by.
-    //
-    // What that leaves is one difference and no more. The repaired step and
-    // the raw field part company ONLY where the field is not a real number,
-    // which is exactly the case #910 settled: `derive_pluses` reads the raw
-    // field so that a marker SIZE nobody can draw takes the field away, and
-    // this is the one place the two are allowed to disagree.
-    let spacing = finite_or(view.spacing, crate::view::DEFAULT_SPACING);
     // The NODE at rest, resolved once for the frame: what both of a node's
     // rings stand on where nothing is lit, and the neutral an unplayed node
     // falls back to. One resolve rather than two, so the two cannot answer
@@ -448,7 +428,7 @@ pub fn derive_scene(
         // World positions are relative to the window center, keeping the
         // displayed region under the camera wherever the window pans.
         let centered = pos - center;
-        let world_pos = lattice_to_world(centered, spacing);
+        let world_pos = lattice_to_world(centered);
 
         // The sevens layer: how far off the home sheet this node sits
         // decides how small it draws and whether it carries a comma.
@@ -530,7 +510,7 @@ pub fn derive_scene(
     Scene {
         nodes,
         camera,
-        node_radius: spacing * NODE_RADIUS_FACTOR,
+        node_radius: NODE_RADIUS_FACTOR,
         note_animation: view.note_animation.sanitized(),
         outer_inner: rings.band.0,
         outer_outer: rings.band.1,
@@ -573,12 +553,9 @@ pub fn derive_scene(
         // number from outside the bar is a quad nothing can fill.
         shadow: view.shadow.clamped(),
         glow_wash: finite_or(view.glow_wash, 0.0).clamp(0.0, 1.0),
-        // The repaired step, not the raw field: this is the SCALE every marker
-        // length on screen is read back through — the shader divides a
-        // marker's world radius BY it to recover the arm its bar was dialled
-        // at — so a step that is not a real number is every arm read back as
-        // nothing, and 0 would be every arm read back as an infinity.
-        marker_unit: marker_world(spacing, 1.0),
+        // The shader divides each marker's world radius by this fixed unit
+        // to recover the arm its bar was dialled at.
+        marker_unit: marker_world(1.0),
         glow_blend: finite_or(view.glow_blend, 0.0).clamp(0.0, 1.0),
         // Shells may bypass `sanitize`; a mix factor outside this range would
         // extrapolate beyond the two glow treatments instead of blending them,
@@ -678,18 +655,8 @@ pub(crate) fn derive_plus_taper_start(view: &ViewConfig) -> f32 {
 /// resolve here, once, rather than the shader carrying a second copy of the
 /// convention for one more layer. The home sheet has no scale of its own, which
 /// is the sheet every marker stands on ([`derive_pluses`]).
-///
-/// The step is a PARAMETER rather than read off the view, because its two
-/// callers want opposite answers out of a `spacing` that is not a real number,
-/// and NOTHING ELSE. The frame's repaired step differs from the raw field only
-/// there, so [`Scene::marker_unit`](crate::Scene::marker_unit) taking the
-/// repaired one and [`derive_pluses`] the raw one is a disagreement about
-/// exactly one input: a marker SIZE nobody can draw takes the field away
-/// (#910), while the UNIT that reads every arm back is repaired instead. For
-/// every step a picture can be drawn at, the two are the same number, and the
-/// quotient the shader takes of them is the arm its bar was dialled to.
-fn marker_world(spacing: f32, uv: f32) -> f32 {
-    spacing * NODE_RADIUS_FACTOR * 1.8 * uv
+fn marker_world(uv: f32) -> f32 {
+    NODE_RADIUS_FACTOR * 1.8 * uv
 }
 
 /// The lattice's resting picture: idle positions draw no disc, so a small
@@ -734,7 +701,7 @@ pub(crate) fn derive_pluses(
     nodes: &[NodeInstance],
     ink: Vec4,
 ) -> Vec<PlusInstance> {
-    let radius = marker_world(view.spacing, size(view.plus_arm, PLUS_SIZE_MAX));
+    let radius = marker_world(size(view.plus_arm, PLUS_SIZE_MAX));
     // 0 takes the markers away, and with them everything a resting lattice
     // draws but the node rings. Skipping the instances is the same picture the
     // shader would discard to, one draw earlier.
@@ -747,10 +714,6 @@ pub(crate) fn derive_pluses(
     // either, NaN being its own answer, which is the shape `sanitize` answers
     // with `finite_or` at the blob's door; this is the picture's own, for the
     // shells that never come through that door.
-    //
-    // Either factor can carry it in: the arm, which is a bar's value, or the
-    // lattice's `spacing` inside `marker_world`, which is a stored field with
-    // no bar and no repair anywhere.
     if !radius.is_finite() || radius <= 0.0 {
         return Vec::new();
     }

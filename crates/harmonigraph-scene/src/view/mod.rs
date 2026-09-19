@@ -80,8 +80,6 @@ pub const SEVENS_LAYER_LIMIT: i32 = 4;
 // the camera, the dock and every other setting — down with it.
 #[serde(default)]
 pub struct ViewConfig {
-    /// World-space distance between adjacent nodes.
-    pub spacing: f32,
     /// How far out along the fifths and thirds axes a played pitch is looked
     /// for a name and a node — the REACH, not a boundary, and not what is
     /// drawn: see [`reach`](Self::reach) for who reads them, and
@@ -138,7 +136,7 @@ pub struct ViewConfig {
     // what its own ink casts, at any extent and on every sheet.
     //
     // The problem all three settings answer: the 5-limit sheet wants its
-    // pitch classes as large as they will go, and at the default spacing a
+    // pitch classes as large as they will go, and at one world unit per step a
     // node's visible edge already reaches 0.376 of the way to its neighbor.
     // Turning depth on asks the same rectangle to hold three times the
     // nodes. Something has to give, and it must not be the home sheet — that
@@ -1305,27 +1303,6 @@ impl ViewConfig {
     pub fn sanitize(&mut self) {
         let fresh = ViewConfig::default();
 
-        // The lattice's own world scale, and the one field through this door
-        // with no bar anywhere — which is why it was the last one left
-        // unrepaired rather than the least worth repairing. Every reader
-        // multiplies by it, and they did not agree about a bad one:
-        // [`scrolled`](Self::scrolled) and [`rebase`](Self::rebase) return
-        // early on `is_nan() || <= 0.0`, while `derive::marker_world` does
-        // not — so a NaN here shipped `marker_unit` to the UI as a NaN, the
-        // number every marker length is read back through.
-        //
-        // The two picture-side guards STAY. They are not this line said twice:
-        // a `ViewConfig` built in code never crosses this door, and `scrolled`
-        // divides by the spacing, so the guard is what a shell with no load
-        // door has (`a_nonsense_camera_still_yields_a_drawable_window` is that
-        // shell). This line is what a blob gets, and it is the only one of the
-        // two that can put a value BACK.
-        //
-        // See [`SPACING_MIN`] for where a range with no bar to name it comes
-        // from.
-        self.spacing =
-            finite_or(self.spacing, fresh.spacing).clamp(crate::SPACING_MIN, crate::SPACING_MAX);
-
         // The window's own integers, which are the one group here that is not
         // a float. `DrawnWindow::count` multiplies the three spans together
         // and `reach` adds each center to its extent, so a blob carrying a
@@ -1639,12 +1616,6 @@ pub(crate) fn finite_or(value: f32, fallback: f32) -> f32 {
     }
 }
 
-/// The world step a fresh [`ViewConfig::spacing`] opens on, named for
-/// [`DEFAULT_RING_GROUND`]'s reason: [`derive`](crate::derive) repairs a step
-/// that is not a real number once per frame and would otherwise build a whole
-/// fresh view to read one field off it.
-pub(crate) const DEFAULT_SPACING: f32 = 1.0;
-
 /// The `L*` a fresh [`ViewConfig::lattice_ground`] opens on. Named because the
 /// `_lightness` accessor needs it without building a whole fresh view to read
 /// one field off. Named, and not a second value: the `Default` below is written
@@ -1676,7 +1647,6 @@ const DEFAULT_SOUNDING_INK: f32 = 100.0;
 impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
-            spacing: DEFAULT_SPACING,
             // The naming reach: how far out a played pitch is hunted for a
             // spelling before it counts as off the lattice. Oblong, like the
             // panes it has to cover — `lattice_to_world` puts the FIFTHS axis
