@@ -1266,12 +1266,16 @@ mod tests {
             // of the fresh appearance's gentler setting.
             settings: harmonigraph_scene::SpectralAtmosphere {
                 style: harmonigraph_scene::SpectrogramStyle::Blur,
+                // The probes read the diffusion transfer; a cloud over them
+                // would move the very pixels they measure.
+                cloud_depth: 0.0,
                 ..Default::default()
             },
             region: cb.rect,
             pitch_vertical: true,
             points_per_cent: 0.03,
             points_per_ms: 0.01,
+            now: 0.0,
         });
         cb
     }
@@ -2334,6 +2338,404 @@ mod tests {
             .expect("this machine has an adapter, the harness above just used it")
             .frame(0, SIZE, full_quad(6), grid.clone(), read.clone(), shades());
         assert_eq!(through_entry, through_callback);
+    }
+
+    /// A pane carrying plenty of energy with no CONCENTRATION anywhere in it:
+    /// the same level in every bin of every slab.
+    ///
+    /// It used to be the fixture the cloud layer was measured over, because a
+    /// pile of puffs draws its own texture against a flat picture as readily
+    /// as against any other. It is the negative control now: everything that
+    /// moves the LOOKUP has to leave this pane alone, because a displaced
+    /// constant is that constant.
+    fn flat_cloud_fixture() -> SpectrogramCallback {
+        let mut cb = cloud_fixture();
+        cb.grid.run = Arc::new(vec![150; cb.grid.run.len()]);
+        cb
+    }
+
+    /// The layer BENDS the picture rather than painting over it.
+    ///
+    /// This is the whole of what Yan asked for twice and what rounds 2 through
+    /// 6 removed: the light is read where each scale's face points, so the
+    /// spectrogram is seen THROUGH the cloud, displaced. Round 6 painted
+    /// palette colour over the picture instead, and that is what made it read
+    /// as *"some wisps overlaying the spectrogram"*.
+    ///
+    /// The measurement is the defining property of a lens, and it needs both
+    /// halves or it passes for the wrong reason. **A lens over a featureless
+    /// field is invisible** — bending a flat picture samples the same value
+    /// from somewhere else and returns it unchanged — while over a structured
+    /// one it moves a great deal. A layer that merely brightened or tinted
+    /// would move BOTH, and a layer that did nothing would move neither.
+    ///
+    /// Everything but the refraction is held still between the two frames:
+    /// same field, same relief, same glint, same ambient. Only `scale_refract`
+    /// moves, so what is measured is the displacement alone.
+    ///
+    /// Measured: 6.6% of the pane over the ridge fixture, and EXACTLY zero
+    /// over the flat one. The 6.6 is not small for the wrong reason — this
+    /// fixture is one narrow ridge in a mostly dark pane, and bending black
+    /// gives black, so only the neighbourhood of the ridge can move at all.
+    /// The zero is the half that carries the claim, and it is exact rather
+    /// than merely small because a displaced constant IS that constant.
+    #[test]
+    fn the_layer_bends_the_picture_rather_than_painting_over_it() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let moved_by_refraction = |cb: &mut SpectrogramCallback| {
+            {
+                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                s.cloud_depth = 1.0;
+                s.scale_refract = 0.0;
+            }
+            let straight = fresh_frame(&device, &queue, cb);
+            cb.atmosphere.as_mut().unwrap().settings.scale_refract = 1.0;
+            let bent = fresh_frame(&device, &queue, cb);
+            let n = straight.len() / 4;
+            let moved = straight
+                .chunks_exact(4)
+                .zip(bent.chunks_exact(4))
+                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+                .count();
+            moved as f32 / n as f32
+        };
+        let over_structure = moved_by_refraction(&mut cloud_fixture());
+        let over_flat = moved_by_refraction(&mut flat_cloud_fixture());
+        assert!(
+            over_structure > 0.02,
+            "turning the refraction from nothing to full moved almost none of the pane over \
+             a picture with structure in it, so the lookup is not being displaced at all: \
+             {over_structure}"
+        );
+        assert!(
+            over_flat < over_structure / 5.0,
+            "the refraction moved a FEATURELESS picture nearly as much as a structured one, \
+             so it is adding something of its own rather than bending what is behind it: \
+             {over_flat} flat against {over_structure} over structure"
+        );
+    }
+
+    /// The facet dial QUANTIZES that bend, and adds nothing of its own.
+    ///
+    /// Reading the light at the nearest scale's CENTRE is the other half of
+    /// what round 1 had and round 5 removed, and round 5 was right about the
+    /// defect: a nearest-cell pick STEPS across the bisector between two
+    /// scales, which is a straight edge through a cloud. The soft union keeps
+    /// the reading and loses the step. `Pile::to_centre` is the union's own
+    /// weights against each dome's offset to its own centre, so inside a dome
+    /// one weight runs away with the sum and the reading is that dome's centre
+    /// — one value for the whole interior, which is the flat patch — while on a
+    /// bisector the two weights are equal and the reading crosses over
+    /// continuously.
+    ///
+    /// Measured exactly as the refraction above, and for the same reason: the
+    /// dial moves 7.1% of the pane over the ridge fixture and EXACTLY zero over
+    /// the flat one. The zero is the half that carries the claim. A displaced
+    /// lookup over a constant field returns that constant wherever it reads, so
+    /// a facet that moved a featureless picture would be PAINTING its scales
+    /// on rather than quantizing what is behind them — and paint is the easy
+    /// thing to mistake for this effect, because a mosaic drawn over a flat
+    /// field looks like a mosaic too.
+    #[test]
+    fn the_facet_dial_quantizes_the_bend_rather_than_painting_scales() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let moved_by_facet = |cb: &mut SpectrogramCallback| {
+            {
+                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                s.cloud_depth = 1.0;
+                s.scale_facet = 0.0;
+            }
+            let bent = fresh_frame(&device, &queue, cb);
+            cb.atmosphere.as_mut().unwrap().settings.scale_facet = 1.0;
+            let faceted = fresh_frame(&device, &queue, cb);
+            let n = bent.len() / 4;
+            let moved = bent
+                .chunks_exact(4)
+                .zip(faceted.chunks_exact(4))
+                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+                .count();
+            moved as f32 / n as f32
+        };
+        let over_structure = moved_by_facet(&mut cloud_fixture());
+        let over_flat = moved_by_facet(&mut flat_cloud_fixture());
+        assert!(
+            over_structure > 0.02,
+            "carrying the lookup from the scales' faces to their centres moved almost none of \
+             the pane over a picture with structure in it, so the facet is not reaching the \
+             lookup at all: {over_structure}"
+        );
+        assert_eq!(
+            over_flat, 0.0,
+            "the facet moved a FEATURELESS picture, so it is drawing its scales rather than \
+             quantizing what is behind them: {over_flat} flat against {over_structure} over \
+             structure"
+        );
+    }
+
+    /// The dials that do not move the LOOKUP reach the shader, each on its own.
+    ///
+    /// None of them changes where the light is read, so none shows up in the
+    /// measurement above — and all ride in the same uniform, which is read by
+    /// OFFSET rather than by name. A field added in the wrong place there swaps
+    /// two values silently and nothing in either type system notices, so what
+    /// this holds is that each of them separately moves the picture it is
+    /// supposed to move.
+    ///
+    /// At the fixture's fresh relief the scales are barely domed and at its
+    /// fresh refraction the lookup hardly moves, which is a fixture too small
+    /// to reach either knob; both are turned up here. Measured at 3.0% of the
+    /// pane for the rock and 2.6% for the variety. Both are smaller than they
+    /// were before the glint went: the glint was an ADDITIVE term that carried
+    /// a lot of whatever moved the normal, and with it gone everything these
+    /// two do has to arrive through `diffuse` and the lookup alone. At rock 0
+    /// the difference is EXACTLY zero, which is what says the knob costs the
+    /// picture it starts from nothing.
+    ///
+    /// Variety is in here rather than in its own test because what it changes
+    /// is the same KIND of thing: it redraws each dome's radius, which moves
+    /// every face and so the whole shading, and the property that makes it
+    /// safe — that its smallest radius still covers the plane — is geometry
+    /// rather than pixels and is held by
+    /// [`the_dome_grid_covers_the_plane_and_the_ring_holds_it`].
+    ///
+    /// What this does NOT say is that the rock is on a CLOCK, and no cheap test
+    /// can: the rock's phase advances on `cloud_time`, the same clock that
+    /// drives the drift, so there is no setting that runs one and holds the
+    /// other — at `cloud_speed` 0 both stop. Over half a second the drift alone
+    /// moves 8.1% of this pane and the rock changes that to 8.0%, which is
+    /// noise. The wander is visible in a render and not in a pair of frames.
+    #[test]
+    fn the_rock_and_the_variety_each_reach_the_scales() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // The fixture's own relief is too small to reach either: a scale barely
+        // domed has hardly any face for the shading to find.
+        let lit = |turn: fn(&mut harmonigraph_scene::SpectralAtmosphere)| {
+            let mut cb = cloud_fixture();
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.cloud_depth = 1.0;
+            s.scale_relief = 1.0;
+            // Refraction up as well: `Variety` redraws each dome's RADIUS,
+            // which reaches the picture through the lookup as much as through
+            // the shading, and at the fresh 30% the lookup barely moves.
+            s.scale_refract = 1.0;
+            turn(s);
+            fresh_frame(&device, &queue, &cb)
+        };
+        let plain = lit(|s| s.scale_variety = 0.0);
+        for (name, turn) in [
+            (
+                "Rock",
+                (|s: &mut harmonigraph_scene::SpectralAtmosphere| {
+                    s.scale_variety = 0.0;
+                    s.scale_rock = 1.0;
+                }) as fn(&mut harmonigraph_scene::SpectralAtmosphere),
+            ),
+            ("Variety", |s| s.scale_variety = 1.0),
+        ] {
+            let frame = lit(turn);
+            let n = plain.len() / 4;
+            let moved = plain
+                .chunks_exact(4)
+                .zip(frame.chunks_exact(4))
+                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+                .count() as f32
+                / n as f32;
+            assert!(moved > 0.02, "{name} moved almost none of the pane: {moved}");
+        }
+    }
+
+    /// The layer saturates no channel the picture had not saturated already.
+    ///
+    /// A clipped channel is a flat patch with a hard edge in a shifted hue —
+    /// the metallic patches of round (4), which needed a tone map to hold back
+    /// because the shading was a PRODUCT of transmission, relief and sheen and
+    /// ran past what the palette could hold. There is no such product now:
+    /// every wash is a `mix` between the picture and a palette colour, both
+    /// already inside the ramp, so this cannot clip by construction. The test
+    /// stays as the guard on that construction — an additive term
+    /// reintroduced anywhere in the paint would trip it.
+    ///
+    /// Run at the deepest layer and the most pigment the dials reach, which is
+    /// where the old one went over.
+    #[test]
+    fn the_layer_saturates_no_channel_the_picture_had_not() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let mut cb = cloud_fixture();
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+        let bare = fresh_frame(&device, &queue, &cb);
+        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+        settings.cloud_depth = 1.0;
+        settings.scale_relief = 1.0;
+        // Undiluted: the most pigment there is, and the least water to pale it.
+        settings.scale_refract = 1.0;
+        let clouded = fresh_frame(&device, &queue, &cb);
+        let clipped = |frame: &[u8]| {
+            frame.chunks_exact(4).filter(|p| p[..3].iter().any(|&c| c >= 254)).count()
+        };
+        assert_eq!(clipped(&bare), 0, "the fixture clips on its own and measures nothing");
+        assert_eq!(clipped(&clouded), 0, "the cloud layer clipped a channel flat");
+    }
+
+    /// A loud band with a sharp pitch edge against silence, its level rough
+    /// from column to column the way a real spectrogram's is.
+    ///
+    /// Both halves are load-bearing and neither is decoration. The BAND is what
+    /// puts a crest in the light field, and a crest is where the picture's
+    /// gradient reverses. The per-column ROUGHNESS is what makes the crest
+    /// wander between neighbouring columns instead of sitting on one row, which
+    /// is what turned a seam into the row of vertical tears Yan photographed.
+    /// `cloud_fixture`'s own band is four slabs of a flat 255 and cannot show
+    /// it: a crest that does not move has nothing to tear along.
+    fn rough_band_fixture() -> SpectrogramCallback {
+        let mut cb = cloud_fixture();
+        let mut bytes = vec![0u8; 12 * BINS as usize];
+        let mut seed = 0x9e37_79b9u32;
+        for slab in 0..12 {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            // The band's upper edge wanders by up to three rows between one
+            // column and the next, which is what makes its crest a ragged line
+            // rather than a straight one.
+            let top = 560 - ((seed >> 26) as usize);
+            for b in 240..top {
+                bytes[slab * BINS as usize + b] = 255;
+            }
+        }
+        cb.grid = grid_of(Arc::new(bytes), BINS, 12, 0);
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        s.cloud_depth = 1.0;
+        // The dials Yan had up when he found it: the shading has to be deep
+        // enough that a sun on the wrong side of a face is visible.
+        s.scale_relief = 1.0;
+        s.scale_refract = 1.0;
+        s.scale_facet = 1.0;
+        // Globs about 19 points across on this 128-point pane. At the fresh
+        // size they would be 5, and a texture whose own detail is four pixels
+        // wide has column steps of its own that would drown the thing being
+        // measured.
+        s.cloud_scale = 2.0;
+        // The floor is a taste dial that LIFTS a turned-away face, so it hides
+        // exactly what this is measuring. At 0 the shading is the raw Lambert
+        // the defect lived in.
+        s.scale_shade_floor = 0.0;
+        cb
+    }
+
+    /// The sun leans with the picture but never JUMPS across it.
+    ///
+    /// Yan, on the build before this one: *"There are some areas with high
+    /// contrast which looks really rough. Can't seem to get rid of it by
+    /// adjusting the settings."* — a row of near-black vertical tears along the
+    /// top of a loud band, and he was right that no dial reached it, because
+    /// the flip was in the SUN rather than in the scales.
+    ///
+    /// The sun's direction used to be `normalize(grad / magnitude)`, a unit
+    /// vector aimed along the picture's gradient. A gradient reverses across
+    /// every crest, so the sun crossed to the opposite side of the sky along
+    /// the top of every band and every face that had been lit turned away in
+    /// one pixel step. Scaling the gradient instead of normalising it takes the
+    /// lean smoothly through zero at a crest — overhead there, and back down
+    /// the other side — so there is no step left to draw.
+    ///
+    /// Measured as the count of adjacent-COLUMN luminance steps past 24/255,
+    /// which is the shape a row of vertical tears makes. The bare picture under
+    /// this fixture has NONE, so any the layer shows are its own; on the old
+    /// sun it shows 5 and on this one 0. The check is on columns rather than on
+    /// rows because the tears run down the band, and a row-wise measure would
+    /// find the band's own sharp edges instead.
+    ///
+    /// Non-vacuous, and measured both ways rather than reasoned about: putting
+    /// the two old lines back into the shader fails this at 5 against a floor
+    /// of 0. The 5 is small because the pane is 128 points wide with about six
+    /// columns of band on it; the same defect over a 1280-point render of the
+    /// same content is 2666 such steps, and that is the picture Yan saw.
+    #[test]
+    fn the_sun_leans_across_a_loud_band_without_jumping_sides() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let lum =
+            |p: &[u8]| 0.299 * f32::from(p[0]) + 0.587 * f32::from(p[1]) + 0.114 * f32::from(p[2]);
+        let torn = |frame: &[u8]| {
+            let mut count = 0u32;
+            for y in 0..SIZE[1] as usize {
+                for x in 1..SIZE[0] as usize {
+                    let a = (y * SIZE[0] as usize + x) * 4;
+                    count +=
+                        u32::from((lum(&frame[a..a + 4]) - lum(&frame[a - 4..a])).abs() > 24.0);
+                }
+            }
+            count
+        };
+        let mut bare = rough_band_fixture();
+        bare.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+        let floor = torn(&fresh_frame(&device, &queue, &bare));
+        let layered = torn(&fresh_frame(&device, &queue, &rough_band_fixture()));
+        assert!(
+            layered <= floor,
+            "the layer tore {layered} column steps past 24/255 over a loud band where the bare \
+             picture has {floor}, so it is adding roughness of its own — which is the sun \
+             crossing sides along the band's crest"
+        );
+    }
+
+    /// Every point of the plane is inside some dome, and every dome that
+    /// reaches a point is inside the ring the union walks.
+    ///
+    /// This is the one property the whole "texture everywhere" change rests on,
+    /// and it is NOT observable in a frame — an uncovered point draws a face of
+    /// zero, which is also what the top of a dome draws. What it would cost is a
+    /// discontinuity rather than a hole: `to_centre` falls from most of a radius
+    /// to nothing at the rim of the last dome, so a pinhole is a hard edge in a
+    /// picture whose entire construction is about not having one. So the claim
+    /// is checked where it lives, in the geometry, against the constants the
+    /// SHIPPED shader spells rather than a transcription of them.
+    ///
+    /// **Coverage.** A centre sits at its cell's middle give or take
+    /// `JITTER / 2`. The point hardest to reach is a lattice corner with all
+    /// four cells touching it pushed diagonally away,
+    /// `(0.5 + JITTER / 2) * sqrt(2)` from every one of them, so the smallest
+    /// radius any dome can draw has to clear that. At variety 0 that radius is
+    /// `DOME_RADIUS`; at variety 1 it is `DOME_RADIUS_MIN`, and every setting
+    /// between is a `mix` of the two and so never below the smaller.
+    ///
+    /// **Reach.** A cell two out can put its centre no nearer than
+    /// `2.5 - JITTER / 2` from the pixel's own cell origin, and the pixel is at
+    /// most 1 past that origin, so the largest radius has to stay under
+    /// `1.5 - JITTER / 2` or a dome the 3x3 ring never visits can touch the
+    /// pixel — which is a step on the cell grid every time `floor(r)` moves.
+    ///
+    /// Round 5's jitter of 0.75 failed BOTH (it needed a radius at once above
+    /// 1.237 and below 1.125), and both failures were live in the picture.
+    #[test]
+    fn the_dome_grid_covers_the_plane_and_the_ring_holds_it() {
+        let number = |name: &str| -> f32 {
+            crate::shadow::tests::shader_const(SPECTROGRAM_SRC, name).parse().expect("a number")
+        };
+        let jitter = number("DOME_JITTER");
+        let smallest = number("DOME_RADIUS").min(number("DOME_RADIUS_MIN"));
+        let largest = number("DOME_RADIUS").max(number("DOME_RADIUS_MAX"));
+        let farthest = (0.5 + jitter / 2.0) * std::f32::consts::SQRT_2;
+        assert!(
+            smallest > farthest,
+            "a dome of {smallest} cannot reach a corner {farthest} away, so at some corner of \
+             the cell grid no dome covers the pane and `to_centre` steps to nothing there"
+        );
+        let unvisited = 1.5 - jitter / 2.0;
+        assert!(
+            largest < unvisited,
+            "a dome of {largest} reaches {unvisited} into a pixel the 3x3 ring never visits \
+             it from, so the union gains and loses it as `floor(r)` crosses a cell"
+        );
     }
 }
 

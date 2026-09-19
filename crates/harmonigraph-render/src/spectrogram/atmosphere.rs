@@ -18,6 +18,9 @@ pub struct SpectrogramAtmosphere {
     /// Physical display points per cent and per millisecond, before clipping.
     pub points_per_cent: f32,
     pub points_per_ms: f32,
+    /// The pane's clock, which drives the cloud drift. Offline it is the
+    /// frame's time, so a render is deterministic.
+    pub now: f64,
 }
 
 /// Bound filter work by reducing each axis only as its musical radius grows.
@@ -76,6 +79,24 @@ struct Uniforms {
     contour_softness: f32,
     style: u32,
     _pad: u32,
+    /// Cloud-space offset of the scale clouds and a bounded clock. Both are
+    /// reduced from f64 on the CPU.
+    ///
+    /// The order below is the WGSL `Cloud` struct's order and has to stay that
+    /// way: these are read by OFFSET, not by name, so transposing two `f32`
+    /// fields swaps their values silently and nothing in the type system
+    /// notices.
+    drift: [f32; 2],
+    time: f32,
+    cloud_depth: f32,
+    cloud_scale: f32,
+    scale_size: f32,
+    scale_variety: f32,
+    scale_refract: f32,
+    scale_relief: f32,
+    scale_shade_floor: f32,
+    scale_facet: f32,
+    scale_rock: f32,
 }
 
 pub(super) struct Pipelines {
@@ -388,6 +409,14 @@ impl Targets {
         let pitch = settings.pitch_softness * atmosphere.points_per_cent;
         let time = settings.time_softness * atmosphere.points_per_ms;
         let radius = if pitch_vertical { [time, pitch] } else { [pitch, time] };
+        // A steady crossing plus the lattice nebula's wander, in cloud units
+        // (five across the pane's height at scale 1): at 1x a cloud crosses
+        // the pane in about two minutes.
+        let cloud_time = atmosphere.now * f64::from(settings.cloud_speed);
+        let drift = [
+            (cloud_time * 0.04 + (cloud_time * 0.071).sin() * 0.6) as f32,
+            (cloud_time * -0.025 + (cloud_time * 0.053).cos() * 0.6) as f32,
+        ];
         let uniforms = Uniforms {
             origin: rect.min.into(),
             size: rect.size().into(),
@@ -402,6 +431,17 @@ impl Targets {
                 harmonigraph_scene::SpectrogramStyle::Blur => 1,
                 harmonigraph_scene::SpectrogramStyle::Lava => 2,
             },
+            drift,
+            time: (cloud_time % 1000.0) as f32,
+            cloud_depth: settings.cloud_depth,
+            cloud_scale: settings.cloud_scale,
+            scale_size: settings.scale_size,
+            scale_variety: settings.scale_variety,
+            scale_refract: settings.scale_refract,
+            scale_relief: settings.scale_relief,
+            scale_shade_floor: settings.scale_shade_floor,
+            scale_facet: settings.scale_facet,
+            scale_rock: settings.scale_rock,
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }

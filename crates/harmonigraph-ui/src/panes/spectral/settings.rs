@@ -139,6 +139,94 @@ pub(crate) fn spectrum_settings_pane(
                 .percent()
                 .show(ui);
         }
+        ui.label(egui::RichText::new("Refracting scale clouds (prototype)").strong());
+        ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Cloud depth")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "A drifting texture of reflective scales over the WHOLE pane, each scale \
+                 bending the sound's light behind it so the picture is seen THROUGH it \
+                 rather than under something painted over it. 0% removes it and anything \
+                 below full lets the plain picture back through. It needs some softness \
+                 above: the softened field is the light it bends.",
+            );
+        ValueBar::new(&mut atmosphere.cloud_scale, 0.25..=4.0, "Cloud size")
+            .unit(1.0, "\u{d7}")
+            .show(ui)
+            .on_hover_text(
+                "The frame the scales are measured and drifted in. Five of these cross the \
+                 pane's height at 1\u{d7}. With Scale size it decides how big a scale is, \
+                 and on its own it decides how far the texture travels as it drifts.",
+            );
+        ValueBar::new(&mut atmosphere.cloud_speed, 0.0..=20.0, "Cloud speed")
+            .unit(1.0, "\u{d7}")
+            .show(ui)
+            .on_hover_text(
+                "1\u{d7} crosses the pane in about two minutes. 0 holds the texture still.",
+            );
+        ValueBar::new(&mut atmosphere.scale_size, 0.25..=4.0, "Scale size")
+            .unit(1.0, "\u{d7}")
+            .show(ui)
+            .on_hover_text(
+                "Size of one scale, as a share of the frame above. Small is a fine grain \
+                 over the whole pane; large is a few broad faces. Changing it does not \
+                 change how far the light bends \u{2014} Refraction is measured in scale \
+                 widths.",
+            );
+        ValueBar::new(&mut atmosphere.scale_variety, 0.0..=1.0, "Variety")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "How much the scales differ in size from EACH OTHER. 0 gives every glob in \
+                 the field one radius, which is the most regular texture there is; turning \
+                 it up draws each glob its own, so big ones swallow their neighbours and \
+                 small ones sit in the gaps. It never opens a hole: the smallest radius it \
+                 can draw still covers the plane.",
+            );
+        ValueBar::new(&mut atmosphere.scale_refract, 0.0..=1.0, "Refraction")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "How far a scale bends the light behind it, as a share of its own width. \
+                 This is the dial that makes the layer a LENS: the spectrogram is read \
+                 where each scale's face points, so the bands break and bend through the \
+                 cloud. 0 leaves the light where it is and the cloud is just a lit body.",
+            );
+        ValueBar::new(&mut atmosphere.scale_facet, 0.0..=1.0, "Facet")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "WHERE a scale reads the light. 0 reads it where the scale's own face points, \
+                 so the picture bends through the cloud. 100% reads it at the scale's centre \
+                 instead \u{2014} one value for the whole scale, so the cloud comes apart into \
+                 flat quantized patches. Refraction scales the first of those and not the \
+                 second.",
+            );
+        ValueBar::new(&mut atmosphere.scale_relief, 0.0..=1.0, "Scale relief")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "How domed the scales are, which is what gives them faces to catch the \
+                 light with. 0 is a smooth body with no scales in it; high picks each face \
+                 out separately.",
+            );
+        ValueBar::new(&mut atmosphere.scale_shade_floor, 0.0..=1.0, "Shade floor")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "How much light a face turned AWAY from the sun still keeps. 0 lets it go \
+                 black, which is where the shading gets harsh over a loud band; 100% \
+                 flattens the shading off altogether. The lit end is untouched either way, \
+                 so this only lifts what was already dark.",
+            );
+        ValueBar::new(&mut atmosphere.scale_rock, 0.0..=1.0, "Rock")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "Each scale rocks on its own slow clock, so the shading on its face sways \
+                 even under a picture holding still. It runs on the same clock as the \
+                 drift, so Cloud speed at 0 holds it too.",
+            );
     }
     ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")
         .percent().show(ui).on_hover_text("Blend the live analyzer from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram style and outline opacity.");
