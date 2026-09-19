@@ -264,7 +264,25 @@ pub enum NoteAnimation {
     Pop,
 }
 impl NoteAnimation {
-    pub const ALL: [Self; 2] = [Self::Fade, Self::Pop];
+    /// Every easing, for the settings picker and the sweeps that compare them.
+    ///
+    /// Built through an exhaustive `match` rather than written out as a bare
+    /// literal, so the list cannot fall behind the enum — the same guard every
+    /// other `ALL` here uses ([`AnimationOrder::ALL`] below,
+    /// `SpectralOrientation::ALL`, `DisplayPage::ALL`), and the reason a test
+    /// that sweeps this list is a claim about the enum rather than about the
+    /// names someone typed.
+    pub const ALL: [Self; 2] = {
+        // Exhaustive, and the compiler checks it. The arm is `()` because what
+        // is wanted is the coverage error, not the value.
+        const fn covered(animation: NoteAnimation) {
+            match animation {
+                NoteAnimation::Fade | NoteAnimation::Pop => (),
+            }
+        }
+        covered(NoteAnimation::Fade);
+        [Self::Fade, Self::Pop]
+    };
     pub fn label(self) -> &'static str {
         match self {
             Self::Fade => "Fade",
@@ -282,13 +300,24 @@ pub enum AnimationOrder {
     OddEvenStagger,
 }
 impl AnimationOrder {
-    pub const ALL: [Self; 5] = [
-        Self::Simultaneous,
-        Self::Circular,
-        Self::Bidirectional,
-        Self::RandomStagger,
-        Self::OddEvenStagger,
-    ];
+    /// Every order, for the settings picker and the sweeps that compare them.
+    /// Guarded the way [`NoteAnimation::ALL`] above is, and for its reason.
+    pub const ALL: [Self; 5] = {
+        const fn covered(order: AnimationOrder) {
+            use AnimationOrder::*;
+            match order {
+                Simultaneous | Circular | Bidirectional | RandomStagger | OddEvenStagger => (),
+            }
+        }
+        covered(AnimationOrder::Simultaneous);
+        [
+            Self::Simultaneous,
+            Self::Circular,
+            Self::Bidirectional,
+            Self::RandomStagger,
+            Self::OddEvenStagger,
+        ]
+    };
     pub fn label(self) -> &'static str {
         match self {
             Self::Simultaneous => "Simultaneous",
