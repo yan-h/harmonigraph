@@ -209,14 +209,14 @@ fn scenarios() -> Vec<Scenario> {
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
     // The wash's own inventory: it takes the seven scale bars off the Analyzer
-    // page and puts eleven of its own there, and nothing else on the page moves.
+    // page and puts twelve of its own there, and nothing else on the page moves.
     // Its own scenario rather than a flag on the loop above because the fresh
-    // state selects the scales, so without this the eleven are drawn by no case
+    // state selects the scales, so without this the twelve are drawn by no case
     // here at all.
     cases.push(Scenario {
         pane: SettingsPane::Page(DisplayPage::Analyzer),
         wash: true,
-        visits: 33,
+        visits: 34,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
@@ -255,9 +255,9 @@ fn check(edge: Edge) {
         a.spectrum.show_spectrogram = scenario.enabled;
         a.spectrum.note_names = scenario.enabled;
         a.spectrum.atmosphere.cloud_style = if scenario.wash {
-            harmonigraph_scene::CloudStyle::Wash
+            harmonigraph_scene::CloudStyle::Watercolor
         } else {
-            harmonigraph_scene::CloudStyle::Water
+            harmonigraph_scene::CloudStyle::Mosaic
         };
         a.view.show_perf = scenario.enabled;
         a.view.atmosphere.enabled = scenario.enabled;

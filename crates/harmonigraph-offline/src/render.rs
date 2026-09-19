@@ -456,6 +456,28 @@ mod tests {
         Audio::from_samples(48_000.0, samples, 2)
     }
 
+    /// Two seconds of broadband noise: a pane with light in every row of it.
+    ///
+    /// [`transient_audio`] is one sample of ±1 in an otherwise empty buffer,
+    /// which draws a pane that is 97% digital silence. That is the right
+    /// fixture for the sample-grid tests that read it, and the wrong one for
+    /// any test about what the cloud layer DRAWS — over silence there is
+    /// nothing for a texture to bend.
+    ///
+    /// A plain LCG rather than `rand`, for the reason the golden set gives:
+    /// a stream this crate does not own could re-baseline a picture on a
+    /// version bump.
+    fn lit_audio() -> Audio {
+        let mut step = 0x5eed_4321u32;
+        let samples = (0..96_000 * 2)
+            .map(|_| {
+                step = step.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                ((step >> 8) as f32 / (1 << 23) as f32 - 1.0) * 0.25
+            })
+            .collect();
+        Audio::from_samples(48_000.0, samples, 2)
+    }
+
     fn transient_take(origin: f64) -> Take {
         let onset = origin + 0.8;
         Take {
@@ -909,21 +931,33 @@ mod tests {
     /// wash has to be REACHED — the texture sits behind an enum whose fresh
     /// value is the other one, so the frame is held against the same take drawn
     /// with the scales — and the wander has to MOVE something, or this is the
-    /// test above with one more uniform in it.
+    /// test above with one more uniform in it. The second is held against the
+    /// same run with `Wander` alone at 0 and NOT against another frame of the
+    /// run itself: over a fixture with light in it the spectrogram scrolls, so
+    /// any two frames differ whatever the cloud clock does, and a frame-to-frame
+    /// comparison would pass with the whole layer frozen.
+    ///
+    /// Both of those rest on the pane HAVING LIGHT IN IT, which is the third
+    /// assert and the one this test shipped without. Its first fixture was one
+    /// sample of ±1 read a second past the end of its own buffer, a pane 97%
+    /// digital silence; the two textures drew it apart only because the wash
+    /// lifted black to mid-tone, so the moment that lift got a floor under it
+    /// they agreed pixel for pixel. A guard that a change of LOOK can turn
+    /// vacuous is worth no more than the fixture behind it.
     #[test]
     fn rendering_a_stirring_wash_twice_is_byte_identical() {
-        let clouded = |wash: bool| {
+        let clouded = |wash: bool, wander: f32| {
             let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
             let a = &mut state.appearance.spectrum.atmosphere;
             if wash {
-                a.cloud_style = harmonigraph_scene::CloudStyle::Wash;
-                a.wash_wander = 1.0;
+                a.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
+                a.wash_wander = wander;
             }
             // Fast enough that a second of render is a visible turn of the
             // field: at the fresh 1x the slowest globs would cross a twentieth
             // of a revolution over the whole run.
             a.cloud_speed = 8.0;
-            let mut take = transient_take(7.125);
+            let mut take = transient_take(0.0);
             take.header.appearance = Some(state.appearance.serialize());
             take
         };
@@ -932,13 +966,10 @@ mod tests {
             // spectrogram and nothing else — a layout that gives it a third of
             // a 320-point frame measures the other two thirds.
             layout: Layout::preset("spectral").unwrap(),
-            start: 7.125,
-            end: 7.125 + 1.0,
-            audio_start: 7.125,
             ..settings()
         };
         let run = |take: &Take| {
-            let mut audio = transient_audio();
+            let mut audio = lit_audio();
             let mut frames = Vec::new();
             let result = render(
                 &mut Replay::new(take.clone()),
@@ -959,12 +990,27 @@ mod tests {
                 Err(e) => panic!("{e}"),
             }
         };
-        let Some(first) = run(&clouded(true)) else { return };
-        assert_eq!(first, run(&clouded(true)).expect("a second GPU run"));
-        let scales = run(&clouded(false)).expect("a third GPU run");
+        let Some(first) = run(&clouded(true, 1.0)) else { return };
+        assert_eq!(first, run(&clouded(true, 1.0)).expect("a second GPU run"));
+        let scales = run(&clouded(false, 0.0)).expect("a third GPU run");
+        let still = run(&clouded(true, 0.0)).expect("a fourth GPU run");
         let mid = first.len() / 2;
+        // The pane has light in it, which is the assumption under BOTH asserts
+        // below and the one that quietly stopped holding: with `Black point`
+        // fresh at 50% a silent pane is on the palette's floor for either
+        // texture, so a dark fixture makes them agree and makes a stirred frame
+        // identical to a still one. The old fixture was one sample of ±1 read a
+        // second past the end of its own buffer — 97% digital silence, which
+        // both asserts passed over only because the unheld wash painted it.
+        let lit = first[mid].chunks_exact(4).filter(|px| px[..3] != [0, 0, 0]).count();
+        let pane = first[mid].len() / 4;
+        assert!(
+            lit * 2 > pane,
+            "the fixture draws a mostly black pane, so neither assert below is about the \
+             wash: {lit} of {pane} pixels lit",
+        );
         assert!(first[mid] != scales[mid], "the wash drew the scales' frame {mid}");
-        assert!(first[0] != first[mid], "the wander moved nothing between frame 0 and {mid}");
+        assert!(first[mid] != still[mid], "`Wander` moved nothing in frame {mid}");
     }
 
     #[test]

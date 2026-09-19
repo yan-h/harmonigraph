@@ -43,6 +43,8 @@ struct Cloud {
     float wash_layers;
     float wash_soften;
     float wash_wander;
+    float wash_black;
+    char _pad33[4];
 };
 constant float DOME_RADIUS = 1.15;
 constant float DOME_JITTER = 0.3;
@@ -77,6 +79,7 @@ constant float WASH_TONE_FLOOR = 0.05;
 constant float WASH_PIVOT = 0.45;
 constant float WASH_LIFT_A = 1.15;
 constant float WASH_LIFT_B = 0.16;
+constant float WASH_BLACK_KNEE = 0.35;
 
 float density_decode(
     float value

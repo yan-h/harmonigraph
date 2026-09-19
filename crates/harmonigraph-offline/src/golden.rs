@@ -383,7 +383,7 @@ fn the_whole_song_layout_draws_the_frame_on_record() {
 fn the_watercolour_wash_draws_the_frame_on_record() {
     let shot = Shot { size: TALL, range: whole_axis(), whole: false };
     let take = shot.dialled(|a| {
-        a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Wash;
+        a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
     });
     check_take("spectrogram-watercolour-wash", shot, take);
 }

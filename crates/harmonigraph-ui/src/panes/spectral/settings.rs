@@ -151,17 +151,17 @@ pub(crate) fn spectrum_settings_pane(
             &mut atmosphere.cloud_style,
             &[
                 (
-                    CloudStyle::Water,
-                    "Water",
+                    CloudStyle::Mosaic,
+                    "Mosaic",
                     "A pile of soft domes, lit by a sun that leans with the sound and \
                      refracting the picture through their faces",
                 ),
                 (
-                    CloudStyle::Wash,
-                    "Wash",
-                    "A field of translucent watercolour globs laid over each other, each \
-                     reading the picture at its own centre. No light in it at all: tone is \
-                     paper minus pigment",
+                    CloudStyle::Watercolor,
+                    "Watercolor",
+                    "A field of translucent globs laid over each other, each reading the \
+                     picture at its own centre. No light in it at all: tone is paper minus \
+                     pigment",
                 ),
             ],
         );
@@ -172,7 +172,7 @@ pub(crate) fn spectrum_settings_pane(
                 "A drifting texture over the WHOLE pane, reading the sound's light so the \
                  picture is seen THROUGH it rather than under something painted over it. \
                  0% removes it and anything below full lets the plain picture back through \
-                 \u{2014} under the Wash that reads as a double exposure, the sharp bands \
+                 \u{2014} under Watercolor that reads as a double exposure, the sharp bands \
                  showing under their own washed copy. It needs some softness above: the \
                  softened field is the light either texture reads.",
             );
@@ -194,7 +194,7 @@ pub(crate) fn spectrum_settings_pane(
         // Two constructions, so two sets of dials: nothing a wash carries means
         // anything to a lit scale, and a page listing both would be mostly
         // controls that do nothing wherever it stands.
-        if atmosphere.cloud_style == CloudStyle::Wash {
+        if atmosphere.cloud_style == CloudStyle::Watercolor {
             wash_bars(ui, atmosphere);
         } else {
             ValueBar::new(&mut atmosphere.scale_size, 0.25..=4.0, "Scale size")
@@ -534,17 +534,27 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
              glob, so the bands come apart into the field. 0 reads the light exactly under \
              the pixel and moves nothing at all.",
         );
+    ValueBar::new(&mut atmosphere.wash_black, 0.0..=1.0, "Black point")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How far up the dark end the paint is pulled back to the picture's own black. \
+             The paper is lifted so a glob over a loud band glows like the band rather than \
+             shadowing it, and that lift is also why silence comes out mid-tone instead of \
+             black. This takes the tone away again where the glob found no light and leaves \
+             every brighter tone untouched. 0 is the lifted paper everywhere.",
+        );
     ValueBar::new(&mut atmosphere.wash_pool, 0.0..=1.0, "Edge pooling")
         .percent()
         .show(ui)
         .on_hover_text(
             "How dark the pigment pools along the edge a later glob lays over this one \
-             \u{2014} the one edge cue the watercolour reference has. Fuzz fades it as the \
+             \u{2014} the one edge cue the watercolor reference has. Fuzz fades it as the \
              rim dissolves, so this is its strength before that.",
         );
     ValueBar::new(&mut atmosphere.wash_grain, 0.0..=1.0, "Grain").percent().show(ui).on_hover_text(
         "Extra pigment settling where the washes are piled deepest, which is the \
-             granulation a heavy watercolour leaves in the paper's tooth.",
+             granulation a heavy watercolor leaves in the paper's tooth.",
     );
     ValueBar::new(&mut atmosphere.wash_layers, 0.0..=1.0, "Layers")
         .percent()

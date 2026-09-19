@@ -67,6 +67,7 @@ constant float WASH_TONE_FLOOR = 0.05;
 constant float WASH_PIVOT = 0.45;
 constant float WASH_LIFT_A = 1.15;
 constant float WASH_LIFT_B = 0.16;
+constant float WASH_BLACK_KNEE = 0.35;
 metal::float2 unpackFloat32x2_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint b6, uint b7) {
     return metal::float2(as_type<float>(b3 << 24 | b2 << 16 | b1 << 8 | b0), as_type<float>(b7 << 24 | b6 << 16 | b5 << 8 | b4));
 }

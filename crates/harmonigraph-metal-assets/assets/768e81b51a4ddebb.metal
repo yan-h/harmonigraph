@@ -68,6 +68,8 @@ struct Cloud {
     float wash_layers;
     float wash_soften;
     float wash_wander;
+    float wash_black;
+    char _pad33[4];
 };
 struct Pile {
     metal::float2 face;
@@ -87,6 +89,10 @@ struct Wash {
     float edge;
     float cover;
     float tau;
+};
+struct Painted {
+    float tone;
+    float hold;
 };
 constant float DOME_RADIUS = 1.15;
 constant float DOME_JITTER = 0.3;
@@ -121,6 +127,7 @@ constant float WASH_TONE_FLOOR = 0.05;
 constant float WASH_PIVOT = 0.45;
 constant float WASH_LIFT_A = 1.15;
 constant float WASH_LIFT_B = 0.16;
+constant float WASH_BLACK_KNEE = 0.35;
 
 uint stored(
     uint slot,
@@ -297,15 +304,6 @@ float heatmap_level(
 ) {
     float _e2 = field_level(in_2, false, locals, grid, _buffer_sizes);
     return _e2;
-}
-
-metal::float3 linear_from_gamma_rgb(
-    metal::float3 srgb
-) {
-    metal::bool3 cutoff = srgb < metal::float3(0.04045);
-    metal::float3 lower = srgb / metal::float3(12.92);
-    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
-    return metal::select(higher, lower, cutoff);
 }
 
 float baked_density(
@@ -848,7 +846,7 @@ float wash_light(
     return metal::mix(material_2, _e20, _e23);
 }
 
-float wash_tone(
+Painted wash_tone(
     Wash f,
     metal::float2 r_4,
     float pane_per_cell,
@@ -863,6 +861,7 @@ float wash_tone(
     float fa = {};
     float bl = {};
     float pigment = {};
+    float hold = 1.0;
     float fuzz = cloud.wash_fuzz;
     float feather = 0.1 + (0.8 * fuzz);
     float bleed = 0.12 + (0.78 * fuzz);
@@ -900,7 +899,14 @@ float wash_tone(
     pigment = _e119 + ((WASH_GRAIN * _e123) * metal::max(f.tau - average_pile, 0.0));
     float _e131 = pigment;
     float pig = metal::max(_e131, 0.0);
-    return paper - (pig * (WASH_PIG_DEPTH + (0.65 * paper)));
+    float tone = paper - (pig * (WASH_PIG_DEPTH + (0.65 * paper)));
+    float _e144 = cloud.wash_black;
+    if (_e144 > 0.0) {
+        float _e150 = cloud.wash_black;
+        hold = metal::smoothstep(0.0, WASH_BLACK_KNEE * _e150, _e88);
+    }
+    float _e154 = hold;
+    return Painted {tone, _e154};
 }
 
 float wash_average_pile(
@@ -926,7 +932,7 @@ metal::float3 wash_clouds(
     bool local_1 = {};
     metal::float2 warped = {};
     float wob_2 = 0.0;
-    float tone = {};
+    Painted paint = {};
     float _e4 = cloud.cloud_depth;
     if (!((_e4 <= 0.0))) {
         metal::float2 _e12 = cloud.step;
@@ -973,8 +979,8 @@ metal::float3 wash_clouds(
     Wash _e118 = wash_scan(_e114, 1u, 1.0, _e117, cloud);
     metal::float2 _e119 = warped;
     float _e121 = wash_average_pile(1.0, cloud);
-    float _e122 = wash_tone(_e118, _e119, pane_per_cell_1, pt_4, _e121, close_light, wide_light, cloud_sampler, cloud);
-    tone = _e122;
+    Painted _e122 = wash_tone(_e118, _e119, pane_per_cell_1, pt_4, _e121, close_light, wide_light, cloud_sampler, cloud);
+    paint = _e122;
     float _e126 = cloud.wash_layers;
     if (_e126 > 0.0) {
         metal::float2 _e129 = warped;
@@ -982,15 +988,19 @@ metal::float3 wash_clouds(
         float _e138 = wob_2;
         Wash _e139 = wash_scan(fine_r, 2u, WASH_FINE_OCCUPANCY, _e138, cloud);
         float _e143 = wash_average_pile(WASH_FINE_OCCUPANCY, cloud);
-        float _e144 = wash_tone(_e139, fine_r, pane_per_cell_1 / WASH_LACUNARITY, pt_4, _e143, close_light, wide_light, cloud_sampler, cloud);
-        float _e145 = tone;
-        float _e148 = cloud.wash_layers;
-        tone = metal::mix(_e145, _e144, _e148 * _e139.cover);
+        Painted _e144 = wash_tone(_e139, fine_r, pane_per_cell_1 / WASH_LACUNARITY, pt_4, _e143, close_light, wide_light, cloud_sampler, cloud);
+        float _e147 = cloud.wash_layers;
+        float over = _e147 * _e139.cover;
+        float _e152 = paint.tone;
+        paint.tone = metal::mix(_e152, _e144.tone, over);
+        float _e157 = paint.hold;
+        paint.hold = metal::mix(_e157, _e144.hold, over);
     }
-    float _e152 = tone;
-    metal::float3 _e156 = palette_color(metal::clamp(_e152, WASH_TONE_FLOOR, 1.0), lut);
-    float _e159 = cloud.cloud_depth;
-    return metal::mix(base_1, _e156, _e159);
+    float _e161 = paint.tone;
+    float _e166 = paint.hold;
+    metal::float3 _e168 = palette_color(metal::clamp(_e161, WASH_TONE_FLOOR, 1.0) * _e166, lut);
+    float _e171 = cloud.cloud_depth;
+    return metal::mix(base_1, _e168, _e171);
 }
 
 metal::float4 clouded(
@@ -1030,15 +1040,15 @@ metal::float4 cloud_color(
     return _e8;
 }
 
-struct fs_cloud_linearInput {
+struct fs_cloud_gammaInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_linearOutput {
+struct fs_cloud_gammaOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_linearOutput fs_cloud_linear(
-  fs_cloud_linearInput varyings [[stage_in]]
+fragment fs_cloud_gammaOutput fs_cloud_gamma(
+  fs_cloud_gammaInput varyings [[stage_in]]
 , metal::float4 position_4 [[position]]
 , constant Locals& locals [[buffer(0)]]
 , device type_3 const& grid [[buffer(1)]]
@@ -1051,6 +1061,5 @@ fragment fs_cloud_linearOutput fs_cloud_linear(
 ) {
     const VertexOut in = { position_4, varyings.slab, varyings.t };
     metal::float4 _e1 = cloud_color(in, locals, grid, lut, close_light, wide_light, cloud_sampler, cloud, _buffer_sizes);
-    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
-    return fs_cloud_linearOutput { metal::float4(_e3, _e1.w) };
+    return fs_cloud_gammaOutput { _e1 };
 }
