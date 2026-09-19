@@ -202,3 +202,6 @@ platform scope and upgrade notes live in [`PATCHES.md`](../PATCHES.md).
 formatting,
 build handoff and draft pull requests.
 Almost all implementation is written through LLM coding sessions under Yan's direction and review.
+
+The [long-term maintainability plan](maintainability-plan.md) records the proposed investigation,
+current focus and decisions for work intended to reduce the attention that future maintenance needs from Yan.
