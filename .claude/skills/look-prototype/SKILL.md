@@ -93,7 +93,6 @@ three picked looks that are one construction at different settings is a build pl
   Compare structure, not colour — the kit's palette is not the plugin's.
 - What the existing look's golden frames prove is that the new style did not disturb it: they pass UNBLESSED or something is wrong.
 - Measure cost against the look it sits beside, back to back, and report it rather than quietly trading the look for speed.
-- A `.wgsl` edit owes a Metal corpus regeneration before CI can go green (`metal-precompile-probe.yml` with `regenerate=true`, then `tools/shader-assets.py import`).
 
 Then the ordinary contract applies: both release packages built, draft PR, the `build-handover` skill for the load line.
 After he has turned the dials in Bitwig, read the values back with the `capture-daw-state` skill rather than asking him to describe where they ended up.

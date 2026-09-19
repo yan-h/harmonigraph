@@ -67,6 +67,37 @@ That is what the cache is for:
 a release build in a brand-new worktree takes 1m28s instead of 3m36s.
 `sccache --show-stats` reports the hit rate.
 
+## A `.wgsl` edit owes a regenerated Metal corpus
+
+`crates/harmonigraph-metal-assets/assets` holds precompiled Metal libraries keyed on shader hashes,
+so **editing any `.wgsl` invalidates it, and the edit is not finished until the corpus is regenerated in the SAME commit**.
+`git log -- crates/harmonigraph-metal-assets/assets` is the check:
+every shader PR in the tree is in that log.
+
+What makes this worth a section is that NOTHING LOCAL GOES RED.
+`cargo test --workspace`, `cargo fmt --all --check` and `cargo clippy` all pass against a stale corpus, because the renderer quietly falls back to compiling from source, and `ci.sh` does not gate it either.
+The single local signal is a line that scrolls past inside PASSING test output:
+
+```
+Harmonigraph: Metal asset <hash> unavailable; compiling from source
+```
+
+On the PR it arrives as a separate workflow —
+`Metal shader assets` fails with `strict-catalog failed` while `Full CI` passes —
+so a branch honestly reported as "Full CI green" can still be `UNSTABLE` and unmergeable.
+Read `mergeStateStatus` rather than the one workflow whose name sounds like it covers everything.
+
+Regenerate on the runner, not here:
+
+```
+gh workflow run "Metal shader assets" --ref <branch> -f regenerate=true
+```
+
+then `tools/shader-assets.py import` the `production-metal-assets` artifact.
+`tools/shader-assets.py generate` does work locally and is the slow way to learn that it is the wrong path —
+it rebuilds the renderer eight times over, against the production corpus and then against five deliberately broken variants of it, and on this machine it had produced nothing after twenty minutes.
+PR #918 is the worked example, and it cost a full CI cycle on a diff whose own tests were green the whole time.
+
 ## Pausing = a loadable build exists (sessions build, Yan loads)
 
 Bitwig loads exactly ONE plugin build:
