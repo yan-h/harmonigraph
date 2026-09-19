@@ -27,6 +27,7 @@
 //!   between two of them instead. Its half-bucket centre offset is one of the
 //!   things #503's own trap list calls easy to lose in the port, and no
 //!   zoomed-out frame executes it at all.
+//!
 //! Each frame was held against the read it claims, by breaking that read and
 //! measuring what moved. Flattening the minifying arm to a plain max over its
 //! run moves the short pane by a mean of 32.0/255, the tall by 14.8,
