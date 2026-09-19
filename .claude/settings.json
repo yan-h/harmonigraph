@@ -26,15 +26,23 @@
   "permissions": {
     "allow": [
       "Bash(cargo --version)",
+      "Bash(cargo build *)",
       "Bash(cargo check *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo fmt *)",
       "Bash(cargo test *)",
+      "Bash(gh issue create *)",
       "Bash(gh pr view *)",
+      "Bash(gh run download *)",
+      "Bash(gh run view *)",
+      "Bash(gh workflow run *)",
       "Bash(git add *)",
       "Bash(git checkout *)",
       "Bash(git commit *)",
       "Bash(git fetch *)",
       "Bash(ls:*)",
       "Bash(node:*)",
+      "Bash(python3 *)",
       "Bash(rustc --version)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)"
