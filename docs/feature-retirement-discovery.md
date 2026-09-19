@@ -3,7 +3,8 @@
 Date: 2026-09-19.
 Source inspected: `0b6868a8`;
 product sources remain at `1786c5ba1a4e2994c20dc2672eb7d200fd605d9b`.
-Continuation of the [requirements-value audit](requirements-value-audit.md) in draft PR #951.
+Continuation of the [requirements-value audit](requirements-value-audit.md),
+prepared in PR #951.
 Read-only source and consumer trace;
 no removal prototype, new tests, timings or product changes.
 

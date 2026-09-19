@@ -4,7 +4,8 @@ These are unapplied experiment patches and one standalone discovery probe,
 not production changes or an additional test suite.
 They preserve the costly reproduction work behind [#954](https://github.com/yan-h/harmonigraph/issues/954),
 [#955](https://github.com/yan-h/harmonigraph/issues/955) and [#957](https://github.com/yan-h/harmonigraph/issues/957).
-Implementation remains deferred in [draft PR #951](https://github.com/yan-h/harmonigraph/pull/951).
+Evidence was prepared in [PR #951](https://github.com/yan-h/harmonigraph/pull/951);
+product implementation is separate.
 
 The subsequent [historical inventory](history-inventory.md) records file/line scope for 100 merged changes.
 It is read-only history evidence,

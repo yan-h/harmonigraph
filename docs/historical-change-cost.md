@@ -2,7 +2,7 @@
 
 Date: 2026-09-19.
 Discovery checkpoint for the [maintainability plan](maintainability-plan.md),
-in draft PR #951.
+prepared in PR #951.
 Yan requested historical analysis instead of making trial changes,
 and approved future Playhead and extra public export-layout retirement.
 No product changes,

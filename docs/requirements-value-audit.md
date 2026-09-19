@@ -4,7 +4,7 @@ Date: 2026-09-19.
 Inspected revision: `2a5595fd770f02108206592f3dee2bab328a8053`;
 product sources remain at `1786c5ba1a4e2994c20dc2672eb7d200fd605d9b`.
 Part of the [maintainability discovery](maintainability-plan.md),
-in open draft [PR #951](https://github.com/yan-h/harmonigraph/pull/951).
+prepared in [PR #951](https://github.com/yan-h/harmonigraph/pull/951).
 Discovery only; no implementation.
 Yan directly confirmed during this audit that he does not use the next-note outlines,
 then explicitly approved removing them while continuing to discuss other candidates.

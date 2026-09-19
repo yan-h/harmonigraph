@@ -1,12 +1,21 @@
 # Long-term maintainability
 
 Last updated: 2026-09-19.
-Status: discovery checkpoint reached; spacing, adaptive next-note outlines, separate-WAV replacement, four dormant export fields, Playhead and extra public export layouts accepted for future removal; implementation deferred.
+Status: discovery complete for this checkpoint; coordinator handoff prepared; six product removals accepted; implementation has not started.
 
 ## Start here
 
 **Aim:** make Harmonigraph easier for future agents to change correctly,
 while reducing the attention Yan must spend understanding and supervising those changes.
+
+**Hand off the implementation:** use [the single-coordinator handoff](maintainability-handoff.md).
+It contains the bounded batch,
+package dependencies,
+overlap constraints,
+verification and completion criteria,
+and a copyable launch request that can authorize implementation and merging once for the batch.
+The launch request is a template for Yan to send,
+not permission granted by reading this file.
 
 **Current position:** the recommended historical change-cost analysis and developer-tool investigation are complete for this checkpoint.
 The [historical report](historical-change-cost.md) inventories 100 merged changes and traces representative repairs,
@@ -43,12 +52,11 @@ Yan directly confirmed that he does not use next-note outlines,
 then approved removing that feature ([#970](https://github.com/yan-h/harmonigraph/issues/970)).
 Implementation remains deferred while he asks about other removable requirements.
 
-**Session scope:** discovery only,
-as Yan requested on 2026-09-19.
-Read-only code/history inspection,
-scratch experiments and updates to this documentation are in scope.
-Do not change product behavior or start implementation merely because a candidate is accepted.
-Keep [draft PR #951](https://github.com/yan-h/harmonigraph/pull/951) open for the discovery record.
+**Latest instruction:** Yan requested a complete coordinator handoff and merging [PR #951](https://github.com/yan-h/harmonigraph/pull/951).
+This supersedes his earlier request to keep the discovery PR open.
+The discovery session changed documentation and evidence only.
+Implementation and future code merges follow the actual launch request given to the coordinator;
+accepting a removal or publishing this handoff alone does not start that work.
 
 **Accepted decisions:** Yan is comfortable removing custom lattice spacing,
 including its custom-appearance capability loss,
@@ -82,9 +90,10 @@ The later explicit approval settles Playhead and extra public export layouts onl
 The [feature-retirement trace](feature-retirement-discovery.md) now identifies concrete removal boundaries,
 including shared tests, musical reference data and diagnostic sinks that need to remain available.
 
-**How to return:** ask an agent to continue from `docs/maintainability-plan.md`.
-The agent should read the current document and linked work,
-then summarize the current position and take the next unblocked step within the requested scope.
+**How to return:** send the [handoff's launch request](maintainability-handoff.md#start-and-authority) to one coordinator,
+or specify a narrower scope.
+It should inspect current status and proceed through the batch within that authority,
+without repeating the discovery or the accepted product questions.
 Yan authorized the first pilot and its expanded sample on 2026-09-19.
 He then authorized the settings investigation and keeping its documentation in the open draft PR #951,
 accepted future spacing removal,
@@ -93,7 +102,8 @@ He then requested individual issues for the leads and continued investigation on
 He subsequently authorized the requirements-value audit and broadened its coverage beyond a sample.
 Those issues preserve evidence and deferred scope;
 opening one does not begin its implementation.
-Continue that discovery scope unless Yan changes it.
+Yan later requested the handoff and documentation merge;
+the implementation boundary now lives in the handoff and its actual launch request.
 
 ## Confirmed preferences and the concern behind this work
 
@@ -340,11 +350,10 @@ current focus,
 consequential product decisions and links to active work.
 Keep the opening section current so returning does not require reading the whole history.
 
-Yan chose on 2026-09-19 to keep [draft PR #951](https://github.com/yan-h/harmonigraph/pull/951) open for this investigation phase.
-Update that PR as the findings develop;
-do not open a documentation PR for each step.
-Merge the phase at a meaningful checkpoint when Yan asks,
-and keep implementation changes in their own focused PRs.
+The investigation accumulated in [PR #951](https://github.com/yan-h/harmonigraph/pull/951).
+Yan subsequently requested its merge together with a complete coordinator handoff.
+Keep later implementation changes in focused PRs,
+with current issue status and the handoff governing the selected batch.
 
 Use GitHub issues for concrete investigations or implementation work once justified.
 Keep reproduction steps,
@@ -483,11 +492,7 @@ linked work and next step.
 If code or requirements have changed since an investigation,
 recheck its relevant premises before implementing it.
 
-Suggested resumption request:
-
-> Continue the maintainability work from `docs/maintainability-plan.md`.
-> Check the current status and linked evidence first.
-> If the pilot has not run, start with that read-only investigation.
-> Keep this session discovery-only; record accepted changes for later implementation.
-> Use agents to gather and challenge evidence, and bring me only concrete product decisions with recommendations.
-> Do not treat unconfirmed suggestions in the plan as requirements.
+For implementation resumption,
+use the [single-coordinator handoff](maintainability-handoff.md#start-and-authority).
+The historical pilot and discovery phases are complete;
+do not restart them from an older resumption prompt.
