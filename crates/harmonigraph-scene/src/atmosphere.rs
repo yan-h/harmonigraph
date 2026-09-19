@@ -106,6 +106,13 @@ pub struct SpectralAtmosphere {
     /// the jitter already gave it, so the field can never stir a glob out of the
     /// neighbourhood a pixel searches.
     pub wash_wander: f32,
+    /// How far up the dark end the wash is pulled back to the picture's own
+    /// black. The paper is lifted by a constant so a glob over a ridge does not
+    /// read as a shadow on it, and that same constant is what keeps silence off
+    /// the palette's floor; this scales the tone away again where the glob found
+    /// no light, and leaves every brighter tone exactly where it is. 0 is the
+    /// lifted paper everywhere.
+    pub wash_black: f32,
 }
 
 impl Default for SpectralAtmosphere {
@@ -144,6 +151,11 @@ impl Default for SpectralAtmosphere {
             wash_layers: 0.5,
             wash_soften: 0.0,
             wash_wander: 0.0,
+            // Not J2's: the prototype was stills over one loud passage and
+            // never showed what the lift does to a quiet pane. Half the band
+            // puts silence back on the palette's floor and leaves the bands
+            // alone.
+            wash_black: 0.5,
         }
     }
 }
@@ -186,6 +198,7 @@ impl SpectralAtmosphere {
         self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
         self.wash_soften = clamp(self.wash_soften, fresh.wash_soften, 0.0, 1.0);
         self.wash_wander = clamp(self.wash_wander, fresh.wash_wander, 0.0, 1.0);
+        self.wash_black = clamp(self.wash_black, fresh.wash_black, 0.0, 1.0);
         self
     }
 }

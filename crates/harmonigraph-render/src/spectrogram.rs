@@ -2868,9 +2868,67 @@ mod tests {
         );
     }
 
+    /// The wash's paper has a black point, and it is the picture's own.
+    ///
+    /// The lift under `paper` is an OFFSET — written out it is
+    /// `1.15 * light + 0.0925` — so the quietest tone a glob could draw was
+    /// palette level 0.09 whatever the picture held, and `Cloud depth` turned a
+    /// silent pane from black to mid-tone as it came up. The scales beside it
+    /// never did that: their light reaches 0 and the palette's bottom is black.
+    ///
+    /// Both halves, because either one alone passes for a bug. A dial that
+    /// darkened the whole picture would satisfy the first; a dial soldered to
+    /// nothing would satisfy the second. Together they are the claim actually
+    /// made — silence goes to the floor and every tone above the knee is left
+    /// where it was.
+    ///
+    /// The second half is byte-exact rather than nearly so. The knee is a
+    /// `smoothstep` that reaches exactly 1 at its top, and the flat fixture
+    /// sits at display intensity 0.59 against a knee of 0.35, so a single
+    /// moved channel anywhere means the hold is being applied where it has
+    /// nothing to hold back.
+    #[test]
+    fn the_black_point_returns_silence_to_the_palettes_floor() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let floor = |frame: &[u8]| {
+            let n = frame.len() / 4;
+            frame.chunks_exact(4).filter(|px| px[..3] == [0, 0, 0]).count() as f32 / n as f32
+        };
+        let mut cb = wash_fixture();
+        cb.atmosphere.as_mut().unwrap().settings.wash_black = 0.0;
+        let lifted = fresh_frame(&device, &queue, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.wash_black = 1.0;
+        let held = fresh_frame(&device, &queue, &cb);
+        let (lifted_floor, held_floor) = (floor(&lifted), floor(&held));
+        assert!(
+            lifted_floor < 0.01,
+            "the fixture is mostly digital silence and the unlifted wash already drew it \
+             black, so this measures nothing: {lifted_floor} of the pane",
+        );
+        assert!(
+            held_floor > 0.5,
+            "the black point left most of a silent pane off the palette's floor: \
+             {held_floor} against {lifted_floor} with the dial at 0",
+        );
+
+        let mut flat = wash_fixture();
+        flat.grid.run = Arc::new(vec![150; flat.grid.run.len()]);
+        flat.atmosphere.as_mut().unwrap().settings.wash_black = 0.0;
+        let open = fresh_frame(&device, &queue, &flat);
+        flat.atmosphere.as_mut().unwrap().settings.wash_black = 1.0;
+        let closed = fresh_frame(&device, &queue, &flat);
+        assert_eq!(
+            open, closed,
+            "the black point moved a picture that is nowhere near black, so it is a tone \
+             control over the whole ramp rather than a floor under the dark end",
+        );
+    }
+
     /// Every wash dial separately reaches the shader.
     ///
-    /// Eleven new `f32`s ride in one uniform read by OFFSET rather than by name,
+    /// Twelve new `f32`s ride in one uniform read by OFFSET rather than by name,
     /// so a field added in the wrong place swaps two values silently and nothing
     /// in either type system notices. Folded into one test the way
     /// [`the_rock_and_the_variety_each_reach_the_scales`] is, because what each
@@ -2899,6 +2957,12 @@ mod tests {
             s.wash_layers = 0.5;
             s.wash_soften = 0.3;
             s.wash_wander = 0.3;
+            // At the fresh 50% most of this fixture is digital silence held on
+            // the palette's floor, and a pigment dial that only paints the dark
+            // half of the pane stops being measurable there: `Edge pooling`
+            // reaches 1.7% of it, under this test's own bar. So the base is the
+            // unheld paper, which is also where every figure below was taken.
+            s.wash_black = 0.0;
             turn(s);
             fresh_frame(&device, &queue, &cb)
         };
@@ -2913,6 +2977,7 @@ mod tests {
             ("Fuzz", |s| s.wash_fuzz = 0.0),
             ("Ragged", |s| s.wash_ragged = 0.0),
             ("Lobe shape", |s| s.wash_lobe = 0.0),
+            ("Black point", |s| s.wash_black = 1.0),
             ("Edge pooling", |s| s.wash_pool = 1.0),
             ("Grain", |s| s.wash_grain = 1.0),
             ("Layers", |s| s.wash_layers = 0.0),

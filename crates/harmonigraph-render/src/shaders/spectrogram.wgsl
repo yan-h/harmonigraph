@@ -293,6 +293,7 @@ struct Cloud {
     wash_layers: f32,
     wash_soften: f32,
     wash_wander: f32,
+    wash_black: f32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -912,6 +913,31 @@ const WASH_PIVOT: f32 = 0.45;
 const WASH_LIFT_A: f32 = 1.15;
 const WASH_LIFT_B: f32 = 0.16;
 
+// How far up the dark end `Black point` 100% reaches.
+//
+// The lift above is an OFFSET, not a gain: written out it is
+// `1.15 * light + 0.0925`, so the paper over silence is palette level 0.0925
+// and no dial in the texture can put it back on the floor. `Cloud depth` only
+// decides how much of that is mixed in, so the quiet half of the pane goes
+// from black to mid-tone as the layer comes up — which is the one thing the
+// scales beside it never do, since their own light reaches 0 and the palette's
+// bottom is black.
+//
+// So the whole tone is scaled by how much light the glob found, over a band
+// that runs from nothing to `light` this high. Scaled and not clipped: a
+// subtracted floor would drive `paper - pigment` through zero and leave the
+// tide lines as flat black holes, where a scale walks the tone down the
+// palette's own ramp and the texture fades with it. Above the band the factor
+// is exactly 1, so every tone the picture actually spends its contrast on is
+// left byte for byte where it was, which is the whole point of a knee rather
+// than a smaller `LIFT_B`.
+//
+// The light it reads is the REFRACTED one — the same value `paper` is built
+// from, at the glob's own centre. Gating on the light under the PIXEL instead
+// would cut every glob off at the picture's own silhouette and undo the
+// displacement that is the look.
+const WASH_BLACK_KNEE: f32 = 0.35;
+
 // Three 10-bit fractions off a salted cell hash. Two of these per cell: one for
 // the centre and the radius, one for the paint order, the occupancy draw and the
 // wander phase. Six channels is what the construction needs and no fewer.
@@ -1134,11 +1160,22 @@ fn wash_light(pt: vec2<f32>) -> f32 {
     return mix(material, wide, cloud.wash_soften);
 }
 
+// One wash's tone, and how much of the picture's own black it has to keep.
+//
+// The two travel together because `hold` is read off the same refracted light
+// `tone` is built from, and an octave's tone means nothing without the hold
+// that goes with it: a coarse glob over silence and a fine one over a band
+// must each carry their own.
+struct Painted {
+    tone: f32,
+    hold: f32,
+};
+
 // One wash's tone: paper minus pigment, and nothing that adds light.
 //
 // `pane_per_cell` converts this octave's cell units to pane points, so a lookup
 // offset measured in cells lands where the glob's centre really is.
-fn wash_tone(f: Wash, r: vec2<f32>, pane_per_cell: f32, pt: vec2<f32>, average_pile: f32) -> f32 {
+fn wash_tone(f: Wash, r: vec2<f32>, pane_per_cell: f32, pt: vec2<f32>, average_pile: f32) -> Painted {
     // ONE dial over the rim. The tide line has to fade as the edge dissolves: a
     // crisp dark crescent drawn on a boundary that is no longer there reads as a
     // line floating in fog, and at small glob sizes it is what turns a field into
@@ -1187,7 +1224,15 @@ fn wash_tone(f: Wash, r: vec2<f32>, pane_per_cell: f32, pt: vec2<f32>, average_p
     // that took the same bite out of a dark tone as out of a light one turns
     // every crevice black, which is mortar between stones rather than paint.
     let pig = max(pigment, 0.0);
-    return paper - pig * (WASH_PIG_DEPTH + (1.0 - WASH_PIG_DEPTH) * paper);
+    let tone = paper - pig * (WASH_PIG_DEPTH + (1.0 - WASH_PIG_DEPTH) * paper);
+
+    // The paper's black point. At `Black point` 0 this is 1 everywhere and the
+    // tone is the lifted one above, unchanged.
+    var hold = 1.0;
+    if cloud.wash_black > 0.0 {
+        hold = smoothstep(0.0, WASH_BLACK_KNEE * cloud.wash_black, light);
+    }
+    return Painted(tone, hold);
 }
 
 // How deep the washes are piled on average, which is what `Grain` measures the
@@ -1244,7 +1289,7 @@ fn wash_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     }
 
     let coarse = wash_scan(warped, 1u, 1.0, wob);
-    var tone = wash_tone(coarse, warped, pane_per_cell, pt, wash_average_pile(1.0));
+    var paint = wash_tone(coarse, warped, pane_per_cell, pt, wash_average_pile(1.0));
     // Coarse to fine, the finer octave a translucent wash over the one below and
     // sparse, so a big wash sometimes carries a small one and sometimes sits
     // beside it. At `Layers` 0 it is not drawn at all, which is also the cheapest
@@ -1252,17 +1297,23 @@ fn wash_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     if cloud.wash_layers > 0.0 {
         let fine_r = warped * WASH_LACUNARITY + vec2<f32>(17.3, 5.9);
         let fine = wash_scan(fine_r, 2u, WASH_FINE_OCCUPANCY, wob);
-        let fine_tone = wash_tone(
+        let fine_paint = wash_tone(
             fine,
             fine_r,
             pane_per_cell / WASH_LACUNARITY,
             pt,
             wash_average_pile(WASH_FINE_OCCUPANCY),
         );
-        tone = mix(tone, fine_tone, cloud.wash_layers * fine.cover);
+        let over = cloud.wash_layers * fine.cover;
+        paint.tone = mix(paint.tone, fine_paint.tone, over);
+        paint.hold = mix(paint.hold, fine_paint.hold, over);
     }
 
-    let body = palette_color(clamp(tone, WASH_TONE_FLOOR, 1.0));
+    // The floor is what stops pigment alone reading as mortar between stones,
+    // so it is a floor on the PAINT and not on the picture: the hold scales it
+    // too, or the tone the wash draws over silence would be `TONE_FLOOR`
+    // whatever the black point says.
+    let body = palette_color(clamp(paint.tone, WASH_TONE_FLOOR, 1.0) * paint.hold);
     return mix(base, body, cloud.cloud_depth);
 }
 
