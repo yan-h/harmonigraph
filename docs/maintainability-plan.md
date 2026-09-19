@@ -1,17 +1,19 @@
 # Long-term maintainability
 
 Last updated: 2026-09-19.
-Status: planning; investigation and implementation have not started.
+Status: first pilot complete; implementation has not started.
 
 ## Start here
 
 **Aim:** make Harmonigraph easier for future agents to change correctly,
 while reducing the attention Yan must spend understanding and supervising those changes.
 
-**Current focus:** establish a bounded first investigation before scheduling a broad cleanup.
-The next proposed step is a read-only pilot that examines a small sample of past fixes and one area with recurring maintenance work.
-It should produce at most three actionable recommendations,
-including the option to leave the code alone.
+**Current focus:** turn the [completed twelve-change pilot](https://github.com/yan-h/harmonigraph/issues/950) into a small settings investigation.
+The next proposed step is to establish whether persisted lattice spacing serves a supported workflow,
+prepare the consequences of removing or retaining it,
+and record the actual paths that validate settings.
+The pilot found reasons to question some explanations and requirements,
+but did not justify a broad rewrite or removal of the existing safety guards.
 
 **Decisions needed from Yan now:** none.
 Agents should investigate enough to make any eventual product tradeoff concrete before asking.
@@ -19,7 +21,8 @@ Agents should investigate enough to make any eventual product tradeoff concrete 
 **How to return:** ask an agent to continue from `docs/maintainability-plan.md`.
 The agent should read the current document and linked work,
 then summarize the current position and take the next unblocked step within the requested scope.
-Creating this plan does not launch the investigation or authorize all the proposed changes.
+Yan authorized the first pilot and its expanded sample on 2026-09-19.
+That authorization does not cover implementation of all the proposed changes.
 
 ## Confirmed preferences and the concern behind this work
 
@@ -82,15 +85,19 @@ The pilot can change this sequence.
 
 | Stage | Agent work | Useful result | State |
 | --- | --- | --- | --- |
-| 1. Pilot | Examine six recent fixes and one area with recurring maintenance work; trace requirements and challenge the strongest findings. | At most three recommendations, with evidence, cost and user-visible tradeoffs. | Next proposed step |
-| 2. Intent and reference cases | Resolve consequential requirement questions; identify representative existing projects, takes and outputs. | A small set of desired behaviors and reusable reference workflows. | Proposed |
+| 1. Pilot | Examine recent fixes and one area with recurring maintenance work; trace requirements and challenge the strongest findings. | Twelve-case assessment and three recommendations in [#950](https://github.com/yan-h/harmonigraph/issues/950). | Complete |
+| 2. Intent and reference cases | Start with persisted spacing and the settings validation paths; prepare a concrete keep/remove comparison using supported workflows and existing reference cases. | A justified requirement or deletion proposal, with observable consequences. | Next proposed step |
 | 3. Architecture through changes | Trace a few plausible future changes through state ownership and data flow. | Specific sources of duplicated knowledge, coordination or hidden assumptions. | Proposed |
 | 4. Simplification | Implement the most valuable justified removals or structural repairs in a coherent order. | Reviewable PRs showing what complexity disappeared and what behavior was verified. | Proposed |
 | 5. Verification and handoff | Check the resulting workflows and update the explanations future agents need. | Evidence of preserved or explicitly changed behavior, remaining issues and a clear stopping point. | Proposed |
 
 ### Pilot: assess whether the improvement process is working
 
-Select six merged fixes from a stated recent range,
+The first pilot expanded from six to twelve cases at Yan's suggestion,
+with a cheaper agent handling the additional sample.
+Its selection,
+findings and limits are recorded in [#950](https://github.com/yan-h/harmonigraph/issues/950).
+The initial method was to select merged fixes from a stated recent range,
 using a mix of production behavior,
 test or documentation work,
 and structural changes where the range contains them.
@@ -187,8 +194,11 @@ acceptance criteria and detailed results with the relevant issue or PR.
 Use the repository's existing evidence locations when an artifact belongs in the tree.
 Link those sources here rather than duplicating their status or full contents.
 
-No investigation issues or implementation PRs have been created for this plan yet.
-Add links when that work starts.
+Completed investigation: [#950 — twelve-change maintainability pilot](https://github.com/yan-h/harmonigraph/issues/950).
+It recommends the bounded settings investigation above,
+repairing the already-filed misleading shader-corpus check in [#947](https://github.com/yan-h/harmonigraph/issues/947),
+and retaining the useful cache ownership and diagnostic CI changes.
+No implementation work was performed by the pilot.
 Do not create a parallel backlog or a second copy of the architectural documentation.
 
 For a consequential product decision,
