@@ -836,6 +836,19 @@ impl NoteTracker {
         self.held.retain(|key, voice| {
             key.source != frame.source || voices.iter().any(|row| baseline_matches(row, voice))
         });
+        // The same identity question asked of the tail, and the reason it has
+        // to be asked there too is that a departure can be WITHDRAWN. A
+        // publication gap releases what it could not see, because what it
+        // cannot see may have ended and a fade is the guess the picture
+        // recovers from; this frame is the source saying the note never
+        // stopped. Leaving the released copy in place would draw the note
+        // twice and then, at the end of a fade it is not having, hand a
+        // still-sounding pitch to [`NoteHistory`] — a trail mark on a node the
+        // music has not left (#936). A row the baseline does NOT list is a
+        // genuine departure and keeps its fade.
+        self.released.retain(|voice| {
+            voice.source != frame.source || !voices.iter().any(|row| baseline_matches(row, voice))
+        });
         for row in voices {
             let onset = self.roll.live_onset(row.key(frame.source)).unwrap();
             let voice = self.held.entry(row.key(frame.source)).or_insert_with(|| {
@@ -1006,7 +1019,11 @@ impl NoteTracker {
     /// lands in the history even if its source is hidden mid-fade. (A
     /// retrigger without an off replaces its voice outright — see
     /// `handle_event` — so that voice is never recorded; the retrigger's own
-    /// release covers the pitch.)
+    /// release covers the pitch. A resuming baseline withdraws a release the
+    /// same way, see [`replace_source`](Self::replace_source): a note a
+    /// publication gap let go of and the source then says is still sounding
+    /// never reaches here at all, so the trail cannot mark a node the music
+    /// has not left.)
     /// Asks the RELEASE rather than the full activation, because the question
     /// here is whether the fade is over and not whether anything is currently
     /// on screen. The two part company for the whole of a note's arrival,
@@ -1809,6 +1826,76 @@ mod tests {
         assert_eq!(tracker.voices().count(), 0);
         let visited: Vec<_> = tracker.history().visits().map(|visit| visit.pitch).collect();
         assert_eq!(visited, vec![55.0, 60.0]);
+    }
+
+    /// The other half of the outage above: publication comes BACK, and the
+    /// repair baseline says the note never stopped (#936).
+    ///
+    /// The gap has to guess — what it cannot see may have ended — and it
+    /// guesses the way the picture can recover from, releasing the voice into
+    /// a fade. The baseline that follows is the source stating what it is
+    /// sounding NOW, same lifetime, same onset, and that overrules the guess:
+    /// the note is held again, resumed out of the roll's past rather than
+    /// re-attacked. What must not survive that is the released COPY of it,
+    /// which would otherwise draw the note a second time and then, at the end
+    /// of a fade it is not having, hand a still-sounding pitch to the trail —
+    /// [`NoteHistory`] marking a node the music has not left yet.
+    ///
+    /// The lifetime is what makes this fixture reach the resume at all: a
+    /// voice from a bare note-on carries none, so a baseline would attach a
+    /// fresh voice beside it instead of resuming this one, and every
+    /// assertion below would pass on the wrong shape.
+    #[test]
+    fn a_resuming_baseline_takes_back_the_release_the_gap_handed_out() {
+        let env = Envelope::default();
+        let source = SourceId(1);
+        let row = VoiceBaseline {
+            note: 60,
+            lifetime: 61,
+            actual_onset: 1.0,
+            onset: Some(crate::canonical::EventTiming {
+                clock: crate::canonical::ClockId::default(),
+                input: 0,
+                planned: None,
+                sample: 48_000,
+                sample_rate: 48_000.0,
+            }),
+            pitch_microcents: 6_000_000_000,
+            velocity: 0.8,
+            provenance: crate::confirmed::PitchProvenance::AcceptedOutput,
+            ..Default::default()
+        };
+        let mut tracker = NoteTracker::new();
+        let published = SourceBaseline::new(source, 1, 2.0, 0, true, &[row]).unwrap();
+        assert_eq!(tracker.replace_source(&published), Ok(true));
+        assert_eq!(
+            tracker.held.values().next().map(|voice| voice.lifetime),
+            Some(Some(61)),
+            "a published voice carries the lifetime the resume matches on"
+        );
+
+        assert_eq!(tracker.handle_canonical(gap(3.0, None)), Ok(true));
+        assert_eq!(tracker.released.len(), 1, "the outage released it rather than dropping it");
+        assert!(tracker.released[0].visible_at_release, "on screen when it went, so recordable");
+
+        // The repair: `tuning::Hub` republishes every live row's baseline once
+        // an outage sets its `repair` flag, and those rows keep the lifetime
+        // and onset they attacked with.
+        let repair = SourceBaseline::new(source, 2, 3.2, 0, true, &[row]).unwrap();
+        assert_eq!(tracker.replace_source(&repair), Ok(true));
+        assert_eq!(tracker.held_count(), 1, "the note is sounding again");
+        assert_eq!(tracker.voices().count(), 1, "one note, drawn once");
+        assert_eq!(tracker.roll().notes().count(), 1, "and one note in the roll to match");
+
+        tracker.prune(4.5, &env);
+        assert_eq!(tracker.held_count(), 1, "still down a fade-length later");
+        assert!(tracker.history().is_empty(), "so the trail has nowhere to mark yet");
+
+        // And it still arrives in the trail on the release it really has.
+        tracker.source_notes_off(source, 5.0);
+        tracker.prune(6.5, &env);
+        let visits: Vec<_> = tracker.history().visits().map(|v| (v.pitch, v.last_off)).collect();
+        assert_eq!(visits, [(60.0, 5.0)], "picked up where its own fade let go");
     }
 
     /// Certainty is a DEFAULT and its exceptions, and the stream-wide gap is
