@@ -101,10 +101,15 @@ for skill in $owned; do
   esac
 
   # A gate naming a skill this tree does not have is dead text that reads as
-  # protection. The skills are symlinks as often as directories, so test the
-  # manifest rather than the directory.
-  [ -f "$ROOT/.claude/skills/$skill/SKILL.md" ] || {
-    echo "✗ OWNER_ONLY names '$skill', which has no .claude/skills/$skill/SKILL.md" >&2
+  # protection. Test for the ENTRY, not for a readable SKILL.md behind it:
+  # `audit-merges` is a symlink into the .shared-skills submodule, CI checks
+  # this repository out without initialising it, and a dangling symlink is
+  # exactly what the gate should still cover — the name is what it matches on,
+  # and the harness resolves the body later or not at all. Reading through the
+  # link instead failed only on the runner, where the submodule is absent and
+  # a locally-prepared worktree cannot see it.
+  [ -e "$ROOT/.claude/skills/$skill" ] || [ -L "$ROOT/.claude/skills/$skill" ] || {
+    echo "✗ OWNER_ONLY names '$skill', which has no .claude/skills/$skill entry at all" >&2
     fail=1
   }
 done
