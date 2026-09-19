@@ -588,7 +588,9 @@ remove_worktree() {
   # Clean? --porcelain lists untracked files too, so a stray scratch file saves it.
   status=$(git -C "$path" status --porcelain 2>/dev/null) || return 1
   if [ -n "$status" ]; then
-    note "no-remove $name: $(printf '%s' "$status" | wc -l | tr -d ' ') uncommitted/untracked file(s)"
+    # grep -c counts LINES; wc -l would count newlines, and $( ) has already
+    # stripped the trailing one, so a single dirty file reported as 0.
+    note "no-remove $name: $(printf '%s\n' "$status" | grep -c '') uncommitted/untracked file(s)"
     return 1
   fi
 
