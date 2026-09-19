@@ -169,19 +169,21 @@ pub(crate) fn spectrum_settings_pane(
             .percent()
             .show(ui)
             .on_hover_text(
-                "A drifting texture of reflective scales over the WHOLE pane, each scale \
-                 bending the sound's light behind it so the picture is seen THROUGH it \
-                 rather than under something painted over it. 0% removes it and anything \
-                 below full lets the plain picture back through. It needs some softness \
-                 above: the softened field is the light it bends.",
+                "A drifting texture over the WHOLE pane, reading the sound's light so the \
+                 picture is seen THROUGH it rather than under something painted over it. \
+                 0% removes it and anything below full lets the plain picture back through \
+                 \u{2014} under the Wash that reads as a double exposure, the sharp bands \
+                 showing under their own washed copy. It needs some softness above: the \
+                 softened field is the light either texture reads.",
             );
         ValueBar::new(&mut atmosphere.cloud_scale, 0.25..=4.0, "Cloud size")
             .unit(1.0, "\u{d7}")
             .show(ui)
             .on_hover_text(
-                "The frame the scales are measured and drifted in. Five of these cross the \
-                 pane's height at 1\u{d7}. With Scale size it decides how big a scale is, \
-                 and on its own it decides how far the texture travels as it drifts.",
+                "The frame the texture is measured and drifted in. Five of these cross the \
+                 pane's height at 1\u{d7}. With Scale size or Glob size it decides how big \
+                 one of them is, and on its own it decides how far the texture travels as \
+                 it drifts.",
             );
         ValueBar::new(&mut atmosphere.cloud_speed, 0.0..=20.0, "Cloud speed")
             .unit(1.0, "\u{d7}")

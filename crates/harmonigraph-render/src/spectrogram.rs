@@ -2756,9 +2756,15 @@ mod tests {
     /// narrower `Variety` band for the same picture.
     ///
     /// And the ring is `WASH_RING` cells rather than a hard-coded 1, because at
-    /// 3x3 these inequalities leave a radius band of about 1.19:1 at a jitter of
+    /// 3x3 these inequalities leave a radius band of about 1.2:1 at a jitter of
     /// 0.20 — a nearly regular grid of nearly equal globs, which is the one thing
-    /// a field of DIFFERENT SIZED globs cannot be.
+    /// a field of DIFFERENT SIZED globs cannot be. At 5x5 they leave 1.63:1 at a
+    /// jitter of 0.40, with 3.0% of a radius spare on coverage and 2.7% on reach.
+    ///
+    /// Both bounds are about globs that COVER the pixel. The tide line reads a
+    /// glob it is OUTSIDE, over a window that runs past the rim and so past this
+    /// ring; what holds that is the top-two-nearest rule in `wash_scan` rather
+    /// than the ring, and the comment there says so.
     ///
     /// Read off the shipped shader text, not a transcription: an uncovered point
     /// is not visible as a hole, it is a pixel whose lookup falls from most of a
@@ -2792,10 +2798,12 @@ mod tests {
     /// watercolour texture selected and its globs made big enough to BE a
     /// texture on a 128-point pane.
     ///
-    /// The size is the part that has to be said. At the fresh cloud size a glob
-    /// is about three points across here, and a texture whose own detail is
-    /// three pixels wide measures its own aliasing rather than the dial being
-    /// turned — the same trap `rough_band_fixture` names for the scales.
+    /// The size is the part that has to be said. At the fresh cloud size this
+    /// 128-point pane carries fifty cells, so a glob is under six points across
+    /// — and a texture whose own detail is a handful of pixels wide measures its
+    /// own aliasing rather than the dial being turned, the same trap
+    /// `rough_band_fixture` names for the scales. `cloud_scale` 2 takes the pane
+    /// down to thirteen cells and the glob up to about twenty-three points.
     fn wash_fixture() -> SpectrogramCallback {
         let mut cb = cloud_fixture();
         // Off zero, because `Wander` is a RATE: it turns each glob's offset on
