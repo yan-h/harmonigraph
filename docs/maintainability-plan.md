@@ -1,7 +1,7 @@
 # Long-term maintainability
 
 Last updated: 2026-09-19.
-Status: discovery in progress; spacing removal accepted for future implementation; no product changes in this session.
+Status: discovery in progress; spacing and adaptive next-note-outline removal accepted for future implementation; no product changes in this session.
 
 ## Start here
 
@@ -29,8 +29,8 @@ The GUI dependency investigation [#968](https://github.com/yan-h/harmonigraph/is
 its newly met version trigger does not supersede this broader scope.
 The audit found stale requirements that could revive a retired tuning protocol ([#969](https://github.com/yan-h/harmonigraph/issues/969)).
 Yan directly confirmed that he does not use next-note outlines,
-making retirement of that feature the strongest new candidate ([#970](https://github.com/yan-h/harmonigraph/issues/970));
-its implementation is not yet approved.
+then approved removing that feature ([#970](https://github.com/yan-h/harmonigraph/issues/970)).
+Implementation remains deferred while he asks about other removable requirements.
 
 **Session scope:** discovery only,
 as Yan requested on 2026-09-19.
@@ -39,12 +39,14 @@ scratch experiments and updates to this documentation are in scope.
 Do not change product behavior or start implementation merely because a candidate is accepted.
 Keep [draft PR #951](https://github.com/yan-h/harmonigraph/pull/951) open for the discovery record.
 
-**Accepted decision:** Yan is comfortable removing custom lattice spacing,
+**Accepted decisions:** Yan is comfortable removing custom lattice spacing,
 including its custom-appearance capability loss,
 based on [#952](https://github.com/yan-h/harmonigraph/issues/952).
-Implementation is deferred.
-No product decision is needed now;
-gather and compare further candidates before bringing back a small batch of consequential choices.
+He also approved removing adaptive next-note outlines,
+while retaining musical tuning and separate Lattice Map outlines.
+Both implementations are deferred.
+The [remaining value questions](requirements-value-audit.md#remaining-value-questions) identify additional tradeoffs worth discussing;
+no answer has yet been recorded for them.
 
 **How to return:** ask an agent to continue from `docs/maintainability-plan.md`.
 The agent should read the current document and linked work,
@@ -344,7 +346,9 @@ The [unapplied evidence patches](evidence/maintainability-discovery/README.md) p
 These are bounded observations,
 not proof of complete live/export parity,
 cross-platform tracing behavior or absence of other settings gaps.
-Spacing remains the only newly accepted product removal;
+At that earlier checkpoint,
+spacing was the only newly accepted product removal.
+Yan subsequently accepted adaptive next-note-outline removal too;
 implementation stays deferred.
 
 ### Follow-ups opened at Yan's request

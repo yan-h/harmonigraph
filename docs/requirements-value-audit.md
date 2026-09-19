@@ -5,8 +5,9 @@ Inspected revision: `2a5595fd770f02108206592f3dee2bab328a8053`;
 product sources remain at `1786c5ba1a4e2994c20dc2672eb7d200fd605d9b`.
 Part of the [maintainability discovery](maintainability-plan.md),
 in open draft [PR #951](https://github.com/yan-h/harmonigraph/pull/951).
-Discovery only; no implementation or newly approved removal.
-Yan directly confirmed during this audit that he does not use the next-note outlines.
+Discovery only; no implementation.
+Yan directly confirmed during this audit that he does not use the next-note outlines,
+then explicitly approved removing them while continuing to discuss other candidates.
 
 ## Findings for Yan
 
@@ -16,8 +17,8 @@ The audit also found live requirements worth questioning,
 but did not establish that they were invented by an agent or unwanted.
 
 - **Retiring unused next-note outlines is the strongest new candidate.** Yan answered the concrete comparison with “I don't use these outlines.”
-That is direct current evidence of low value,
-and favors investigating whole-feature retirement over replacing the exact winner display with another guide.
+That is direct current evidence of low value;
+he subsequently approved whole-feature retirement rather than replacing the exact winner display with another guide.
 The existing design explicitly asks for winners,
 so this revisits a recorded choice using a current preference;
 it does not prove an agent invented the original feature.
@@ -33,8 +34,8 @@ Its explicit trigger is a crackling dense downbeat, with the radius setting chec
 The previous simplification deliberately removed options.
 The four dormant saved fields remain the small, separate [#959](https://github.com/yan-h/harmonigraph/issues/959) proposal.
 
-No additional removal was approved during this audit.
-Spacing remains the only accepted product removal from this discovery phase.
+Spacing and adaptive next-note-outline removal are accepted for future implementation.
+No other removal has been approved.
 
 ## Method and limits
 
@@ -92,7 +93,7 @@ UI `adaptive.rs`;
 | Moving reference and register-aware context | Attributed motivating musical examples and explicit reversal of earlier register deferral. | Keep the musical behavior; exact reference/scoring formula remains revisable. |
 | Held/released hierarchy and recent memory | #861 records two weighted alternatives, observed drawbacks and accepted musical loss. Fixed 24-entry memory is explicitly temporary. | Keep the smaller hard rule. Do not fossilize a storage capacity as musical truth. |
 | Hard local harmonic eligibility | Attributed requirement; complete candidate construction refuses exhaustion rather than silently truncating. | Keep unless the musical vocabulary changes. Exact union construction is an implementation choice. |
-| Exact reachable-next-input outlines | Recorded desired winners, with register range/computation initially open; analytic solver and separate worker now implement it. Yan directly says he does not use the outlines. | Investigate retiring the whole feature in #970. No implementation yet. |
+| Exact reachable-next-input outlines | Recorded desired winners, with register range/computation initially open; analytic solver and separate worker now implement it. Yan directly says he does not use the outlines and approves removal. | Whole-feature retirement accepted in #970. Implementation deferred. |
 | Large cohorts, all-context scoring, generous growth capacity | Recorded growth target; historical v2 timing in closed #790; current code still evaluates each collected onset to completion. | Keep parked. No current v3 timing or heard crackle was established by this audit. |
 | Simulator parity and musical fixtures | Named parameter profiles; design explicitly permits outputs to change with settings/policy. | Keep agreement with the claimed model. Intentional musical changes may update fixtures. |
 | One Hub, in-process CLAP session, global lifecycle cuts | Attributed simplifications in #786, with known audible consequences. | Keep. More hubs/backends and graceful settlement are additional capabilities, not robustness fixes. |
@@ -101,8 +102,9 @@ UI `adaptive.rs`;
 
 After the comparison below,
 Yan said on 2026-09-19: “I don't use these outlines.” This supersedes the need to ask him whether the cheaper approximation is good enough.
-Whole-feature retirement is now the proposed direction;
-non-use is recorded separately from authorization to implement it.
+Yan subsequently approved removing the feature.
+Whole-feature retirement is accepted;
+starting implementation remains separate from that product decision under this session's discovery scope.
 The exact-versus-eligible analysis remains evidence of what the existing feature promises,
 not a recommendation to build a replacement he does not need.
 
@@ -301,7 +303,7 @@ No new dependency build, platform certification, security audit or legal conclus
 | --- | --- | --- |
 | macOS/Bitwig and in-process CLAP scope | README/deferred records identify the personal tested environment. | Keep narrow scope. Portable upstream code does not imply a Windows/Linux/other-host support promise. |
 | GUI vendor patches and version coupling | #968 verified published egui-baseview 0.7.2 meets the old investigation trigger; some patch topologies changed and others remain. | Continue that bounded feasibility issue separately. No automatic upgrade or broad fork retirement. |
-| Precompiled Metal startup | Dated production-path evidence compares about 4.77 s source startup with 0.77 s strict assets; corpus follows generated MSL/options. | Keep measured startup benefit for now. Shipping a corpus is a product/implementation choice; validating it is necessary once chosen. |
+| Precompiled Metal startup | Dated native-probe evidence with the cache deliberately blocked compares about 4.77 s source readiness with 0.77 s strict assets; warm readiness was about 96 ms either way. Corpus follows generated MSL/options. | Retain pending the value question below. Shipping a corpus is a choice; validating it is necessary once chosen. The cold probe is not a prediction of every Bitwig opening. |
 | Pure dependency-free core | CI guards accidental dependency changes but explicitly permits deliberate intended permissive additions with a guard/rationale update. Analysis already lives separately with RealFFT. | Do not interpret the guard as an immutable ban or a reason to reimplement libraries. No useful deletion established. |
 | Exact golden pixels | Shared gate produces differences and permits deliberate blessing with an explanation. | Keep detection of unintended picture changes. Byte-exact comparison is not a promise to freeze every pixel forever. |
 | Standalone harness and font fallback | Prior #895 traces actual standalone consumers and unavailable same-frame font-sharing insertion point. | Keep; production plugin font reuse alone does not retire the fallback. |
@@ -309,10 +311,29 @@ No new dependency build, platform certification, security audit or legal conclus
 | Owner worktrees, draft PRs, paired plugin/offline builds | Current instructions supplied by Yan explicitly require these; old #940 mechanics conflict and #967 tracks that. | Direct current authority. Audit current costs without silently overriding the workflow. |
 | Assumed surface format and “upstreaming off the table” | Constant remains live; vendor renderer knows its actual format but exposes no plugin accessor. No current direct prohibition on proposing upstream work recovered. | Current accessor limitation is real; old policy wording is not a permanent ban. No failure or benefit justifies new work here now. |
 
+## Remaining value questions
+
+Yan asked whether other potentially removable requirements had been withheld from the question list.
+The initial shortlist prioritized demonstrated savings,
+but an early answer about actual use can cheaply rule a capability in or out before a removal prototype.
+These are unanswered value questions,
+not conclusions that the capabilities are unwanted.
+
+| Requirement to reconsider | Concrete loss to discuss | Maintenance evidence and recommendation |
+| --- | --- | --- |
+| Retain four dormant settings for a possible future export UI | Discard currently inactive saved audio/render options. Existing capture, automatic rendering and manual replacement audio continue. | #959's 16-combination probe found no request changes. Recommend removal if retaining the dormant saved values has no value; savings are small. Future UI can define its settings when needed. |
+| Reconstruct live visual history while the editor is closed | Reopening starts a fresh visual history instead of showing what happened while closed; recording still completes normally. | A real product choice, but whole-worker deletion is unsupported. Ask whether unseen history matters before investing in a smaller implementation. |
+| Rerender a take using a separate WAV and explicit alignment | Lose the ability to replace crackly captured audio with a clean bounce or another soundtrack. | Reachable CLI workflow was deliberately retained. If unused by Yan or his agents, trace a bounded deletion; do not remove it just because he does not type the command himself. |
+| Fast readiness when the shader cache is cold | Potentially wait longer for the first fully drawn editor instead of maintaining precompiled Metal assets. | Historical cache-blocked native probe: about 4.77 s source versus 0.77 s assets; warm readiness about 96 ms either way. Source compilation already exists. Accepting the delay could retire corpus generation/validation and provider-specific integration, but net scope needs a dedicated trace and current host cost is unmeasured. |
+
+Custom camera perspective (#964) and note-naming search reach (#963) remain less ready for a product question:
+show which pictures or names change before asking Yan to value an unfamiliar hidden setting.
+Non-use of the standalone application also would not by itself establish that its agent/development consumers can be removed.
+
 ## Next use of this audit
 
 Keep the choice list small:
-Yan's direct non-use answer makes whole-feature retirement of next-note outlines the first new candidate;
+Yan's direct non-use answer and removal approval make adaptive next-note outlines an accepted simplification;
 consider unseen visual history only if the user values that tradeoff enough to justify a bounded prototype.
 Carry forward the earlier accepted spacing removal and existing concrete issues.
 Do not reopen #790 or explicitly parked spectrogram campaigns merely because audit capacity is available.
