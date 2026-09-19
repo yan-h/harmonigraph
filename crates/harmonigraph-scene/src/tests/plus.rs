@@ -96,6 +96,18 @@ fn the_marker_unit_is_what_reads_a_markers_world_back_as_its_bars() {
         "a wider lattice read its own arm back as {}",
         pluses_of(&wide)[0].radius / unit_of(&wide),
     );
+    // ...and a step the BAR would not allow, which is the case this pair can
+    // only be broken at. `sanitize` owns that range, so a shell may hand the
+    // picture a step outside it, and the two lengths above have to keep coming
+    // off ONE reading of that step. A repair that bounded the unit and not the
+    // radius beside it would read this arm back at a fraction of its bar and
+    // grow every marker's quad by a Shadow no node has.
+    let past_bar = ViewConfig { spacing: SPACING_MAX * 2.5, ..view.clone() };
+    assert!(
+        (pluses_of(&past_bar)[0].radius / unit_of(&past_bar) - 0.2).abs() < 1e-4,
+        "a lattice stepped past the bar read its own arm back as {}",
+        pluses_of(&past_bar)[0].radius / unit_of(&past_bar),
+    );
 }
 
 #[test]

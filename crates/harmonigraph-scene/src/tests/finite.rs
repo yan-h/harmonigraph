@@ -328,6 +328,15 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("glow_blend", *glow_blend);
     f.one("glow_accumulation", *glow_accumulation);
 
+    // Nothing to walk here, and that is worth saying rather than leaving as a
+    // silent pass: `derive_scene` ships `glow_timing: None` unconditionally,
+    // the ballistics being the SHELL's glow pass to fill, so the view's
+    // `glow_attack` and `glow_release` reach the picture there and not through
+    // this function. Read as coverage of a `GlowTiming` the arm below would be
+    // a green light with nothing behind it. It stays for the one thing it does
+    // buy — a field added to `GlowTiming` breaks this build — and the test
+    // asserts the emptiness, so the day `derive_scene` starts filling it this
+    // comment goes red instead of going stale.
     if let Some(GlowTiming { now, attack, release }) = glow_timing {
         f.one("glow_timing.now", *now as f32);
         f.one("glow_timing.attack", *attack);
@@ -351,6 +360,16 @@ fn scene_floats(scene: &Scene) -> Floats {
     f
 }
 
+/// Every float the scene ships, by name, that is not a real number.
+fn broken(scene: &Scene) -> Vec<String> {
+    scene_floats(scene)
+        .0
+        .into_iter()
+        .filter(|(_, value)| !value.is_finite())
+        .map(|(name, value)| format!("{name} = {value}"))
+        .collect()
+}
+
 #[test]
 fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
     let scene = scene_of(&sounding(), &Tuning::default(), &poisoned_view(), &plain_frame(), 0.0);
@@ -368,16 +387,22 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         .find(|n| !n.on_home)
         .expect("the fixture has sevens layers, so the sevens scale below has something to size")
         .scale;
+    // The emptiness the walk's `glow_timing` arm rests on, stated where it can
+    // go red: the ballistics are the shell's to fill, and nothing here covers
+    // a `GlowTiming`.
+    assert!(
+        scene.glow_timing.is_none(),
+        "`derive_scene` filled the glow timing, so the walk's empty arm is no longer honest",
+    );
 
-    // Each site's chosen fallback, pinned — and the reach proof as much as the
-    // value. Every fresh value behind these is a number of its own, so a field
-    // the poisoned view had not actually driven would read back as that rather
-    // than as this: a fresh glow reaches 4.79, a fresh lattice shadow is
-    // 0.80 wide, and a fresh sevens scale leaves an off-sheet node at 1.
-    // `glow_accumulation` and `render_scale` are the two whose fresh value is
-    // their fallback as well, and they stand on the line beside their
-    // neighbours in the same literal rather than on a claim of their own.
-    let step = crate::SPACING_MIN * crate::NODE_RADIUS_FACTOR;
+    // Each site's chosen fallback, pinned — the VALUE, and no more than that.
+    // Several of these fallbacks are the fresh value as well (all three poses,
+    // and `render_scale`), so the line cannot tell a repair from a field the
+    // poison never reached, and none of them is offered as evidence that it
+    // did. What says the poison arrives is that this test was written and run
+    // against the unrepaired tree first, where it failed naming every site
+    // below and 147 nodes besides.
+    let step = crate::view::DEFAULT_SPACING * crate::NODE_RADIUS_FACTOR;
     let shadow = scene.shadow;
     for (site, got, want) in [
         ("node_radius", scene.node_radius, step),
@@ -400,11 +425,20 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         assert_eq!(got, want, "{site} came out {got}, not the fallback this pass chose");
     }
 
-    let broken: Vec<String> = scene_floats(&scene)
-        .0
-        .into_iter()
-        .filter(|(_, value)| !value.is_finite())
-        .map(|(name, value)| format!("{name} = {value}"))
-        .collect();
-    assert!(broken.is_empty(), "a NaN view reached the scene at: {}", broken.join(", "));
+    let names = broken(&scene);
+    assert!(names.is_empty(), "a NaN view reached the scene at: {}", names.join(", "));
+
+    // ...and the same sweep over a picture that still has MARKERS in it, which
+    // the pass above cannot have. A NaN step makes the marker radius NaN and a
+    // NaN arm reads as 0 through `size`, so `derive_pluses` ships an empty
+    // field either way (#910) and the walk's `pluses` loop runs zero times —
+    // leaving a marker's position, colour and strength unmeasured by the one
+    // test that claims the whole scene. Two floats real is what it takes to
+    // get a marker drawn at all; everything the marker's own geometry and ink
+    // are derived from stays poisoned around it.
+    let drawable = ViewConfig { spacing: 1.0, plus_arm: 0.5, ..poisoned_view() };
+    let scene = scene_of(&sounding(), &Tuning::default(), &drawable, &plain_frame(), 0.0);
+    assert!(!scene.pluses.is_empty(), "a real step and a real arm still shipped no marker field");
+    let names = broken(&scene);
+    assert!(names.is_empty(), "a NaN view reached the marked scene at: {}", names.join(", "));
 }

@@ -2497,6 +2497,12 @@ pub(crate) fn finite_or(value: f32, fallback: f32) -> f32 {
     }
 }
 
+/// The world step a fresh [`ViewConfig::spacing`] opens on, named for
+/// [`DEFAULT_RING_GROUND`]'s reason: [`derive`](crate::derive) repairs a step
+/// that is not a real number once per frame and would otherwise build a whole
+/// fresh view to read one field off it.
+pub(crate) const DEFAULT_SPACING: f32 = 1.0;
+
 /// The `L*` a fresh [`ViewConfig::lattice_ground`] opens on. Named because the
 /// `_lightness` accessor needs it without building a whole fresh view to read
 /// one field off. Named, and not a second value: the `Default` below is written
@@ -2528,7 +2534,7 @@ const DEFAULT_SOUNDING_INK: f32 = 100.0;
 impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
-            spacing: 1.0,
+            spacing: DEFAULT_SPACING,
             // The naming reach: how far out a played pitch is hunted for a
             // spelling before it counts as off the lattice. Oblong, like the
             // panes it has to cover — `lattice_to_world` puts the FIFTHS axis
