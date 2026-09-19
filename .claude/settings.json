@@ -25,10 +25,18 @@
   },
   "permissions": {
     "allow": [
+      "Bash(.claude/semantic-breaks.py *)",
       "Bash(cargo --version)",
+      "Bash(cargo build *)",
       "Bash(cargo check *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo fmt *)",
       "Bash(cargo test *)",
+      "Bash(gh issue create *)",
       "Bash(gh pr view *)",
+      "Bash(gh run download *)",
+      "Bash(gh run view *)",
+      "Bash(gh workflow run *)",
       "Bash(git add *)",
       "Bash(git checkout *)",
       "Bash(git commit *)",
