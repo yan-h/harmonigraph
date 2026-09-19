@@ -5,8 +5,8 @@ use harmonigraph_take::RenderConfig;
 #[test]
 fn a_finished_take_always_renders() {
     // Auto-render is not gated: stopping a take always kicks off a
-    // render (recorded audio + playhead), so from_config is always `Some`.
-    let config = RenderConfig { auto_render: false, ..Default::default() };
+    // render using recorded audio, so from_config is always `Some`.
+    let config = RenderConfig::default();
     assert!(RenderRequest::from_config(&config).is_some());
 }
 
@@ -20,16 +20,25 @@ fn blank_settings_fall_back_rather_than_passing_empty_arguments() {
     assert_eq!(request.size, config.frame.pixels(config.short_edge));
 }
 
-/// The pane's Aspect and Resolution are the whole of what sizes the video.
+/// Automatic and manual requests retain the active renderer and sizing
+/// settings; only a manual request replaces the recorded appearance.
 #[test]
-fn the_frame_sizes_the_render() {
-    let portrait_4k = RenderConfig {
+fn automatic_and_manual_requests_keep_the_active_settings() {
+    let config = RenderConfig {
+        renderer_path: " /custom/harmonigraph-offline ".into(),
         frame: harmonigraph_take::RenderFrame { aspect_w: 9, aspect_h: 16, ..Default::default() },
         short_edge: 2160,
         ..Default::default()
     };
-    let request = RenderRequest::from_config(&portrait_4k).unwrap();
-    assert_eq!(request.size, [2160, 3840]);
+    let automatic = RenderRequest::from_config(&config).unwrap();
+    let manual = RenderRequest::render_now(&config, "current appearance".into());
+    for request in [&automatic, &manual] {
+        assert_eq!(request.program, std::path::Path::new("/custom/harmonigraph-offline"));
+        assert_eq!(request.size, [2160, 3840]);
+        assert_eq!(request.playhead, None);
+    }
+    assert_eq!(automatic.appearance, None);
+    assert_eq!(manual.appearance.as_deref(), Some("current appearance"));
 }
 
 /// The renderer is never told to use the whole-song playhead.
