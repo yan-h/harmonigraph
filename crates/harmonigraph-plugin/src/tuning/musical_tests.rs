@@ -429,8 +429,8 @@ fn an_unsnapped_onset_emits_existing_drift_without_claiming_a_node_or_the_refere
 }
 
 /// Both reset controls act on released memory only. Held voices keep the
-/// choice they were given whatever the transport does, and the neighbourhood
-/// the Hub publishes is what says whether the memory survived.
+/// choice they were given whatever the transport does. Inspect the Hub's
+/// retained musical context to check whether the memory survived.
 #[test]
 fn production_silence_and_stop_reset_settings_clear_only_the_musical_memory() {
     let _scope = crate::test_scope::enter();
@@ -463,6 +463,46 @@ fn production_silence_and_stop_reset_settings_clear_only_the_musical_memory() {
             let expired = inspect_hub(&phrase.hub, |hub| hub.test_next_context());
             assert!(expired.context.is_empty());
             assert_eq!(expired.reference, 0);
+        }
+    }
+}
+
+/// An editor policy edit must govern expiry on this callback even when no
+/// source sends a note. Observe after expiry, rather than the old outline
+/// mailbox's pre-expiry snapshot, so one callback of stale policy fails.
+#[test]
+fn silence_policy_edits_apply_before_expiry_without_note_input() {
+    let _scope = crate::test_scope::enter();
+    for enable in [false, true] {
+        let mut phrase = Phrase::new();
+        configure_policy(
+            &phrase.hub,
+            PolicyConfig { silence_ms: if enable { 0 } else { 1000 }, ..Default::default() },
+        );
+        phrase.step(
+            [vec![note(1, 0, 48, 0, true), note(2, 0, 52, 1, true)], vec![], vec![]],
+            [0, 1, 2],
+        );
+        phrase.idle();
+        phrase.release_all();
+        let before = inspect_hub(&phrase.hub, |hub| hub.test_next_context());
+        assert!(!before.context.is_empty(), "the fixture must retain released notes");
+        assert_ne!(before.reference, 0, "the fixture must retain actual tuning drift");
+        phrase.raw += 2 * 44100;
+        configure_policy(
+            &phrase.hub,
+            PolicyConfig { silence_ms: if enable { 1000 } else { 0 }, ..Default::default() },
+        );
+        // Only the Hub runs: no note, controller or source input can incidentally
+        // adopt the edited policy in input_boundary before this observation.
+        phrase.hub.run_format(phrase.raw, vec![], None, None, 512);
+        let after = inspect_hub(&phrase.hub, |hub| hub.test_next_context());
+        if enable {
+            assert!(after.context.is_empty(), "the newly enabled timeout expires now");
+            assert_eq!(after.reference, 0);
+        } else {
+            assert_eq!(after.context, before.context, "disabling expiry preserves memory now");
+            assert_eq!(after.reference, before.reference);
         }
     }
 }

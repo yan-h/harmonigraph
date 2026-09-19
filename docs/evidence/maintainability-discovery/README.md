@@ -198,6 +198,10 @@ The full issue index and retained/rejected hypotheses remain in [#954](https://g
 
 ## Eligible neighborhood versus exact winners
 
+The production reachability API was subsequently retired in #970.
+Run this historical probe against the audited pre-retirement revision named below,
+not current sources.
+
 This continuation was run on 2026-09-19 at `2a5595fd`,
 with product sources still at `1786c5ba`.
 [reachability-probe.rs](reachability-probe.rs) compares current production candidate preparation with the exact reachable-winner solver.

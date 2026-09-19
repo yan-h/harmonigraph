@@ -872,8 +872,8 @@ fn a_reset_with_an_attach_behind_it_still_clears_released_memory() {
     for _ in 0..2 {
         pair.idle();
     }
-    // Nothing is held any more, so what the Hub still publishes as context is
-    // exactly the released memory a Reset is meant to clear.
+    // Nothing is held any more, so the Hub's retained context is exactly the
+    // released memory a Reset is meant to clear.
     let remembered = inspect_hub(&pair.hub, |hub| hub.test_next_context());
     assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0, "no voice is still held");
     assert!(

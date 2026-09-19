@@ -467,10 +467,6 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     section(ui, "Adaptive tuning");
     let mut p = state.runtime.adaptive_policy;
     let before = p;
-    ui.checkbox(
-        &mut state.runtime.neighbourhood.visible,
-        "Show reachable neighbourhood (input C2–C7)",
-    );
     p.pitch_flexibility = adaptive_value(
         ui, p.pitch_flexibility.into(), 1..=100, 1.0, "Pitch flexibility", "¢",
         "Cents of displacement beyond accumulated drift that cost one point. The exponential penalty rises increasingly quickly; a note stays unsnapped when its harmonic benefit cannot cover that cost.",

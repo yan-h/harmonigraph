@@ -515,13 +515,13 @@ Silence, Stop and loop/seek resets follow the controls described in the implemen
 
 Selection uses preallocated scratch and refuses resource exhaustion instead of scoring a truncated candidate set.
 The policy never reads camera reach or display tolerance.
-The live lattice's C2–C7 winner outlines are an off-audio-thread view of the Hub's authoritative next-attack context, not an input to the score and not part of preview or export pictures.
+Adaptive next-note outlines were retired in [#970](https://github.com/yan-h/harmonigraph/issues/970);
+musical candidate selection and separate Lattice Map assignment outlines remain.
 
 ## Capacities and memory
 
 These are selected ceilings sized for 16 tracks and 100+ simultaneous notes, not measured throughput.
-Audio transport and policy-selection storage is preallocated;
-the more expensive live-neighborhood calculation runs off the audio thread.
+Audio transport and policy-selection storage is preallocated.
 Every ceiling has an explicit failure.
 A full local delay line or held set refuses the incoming event;
 copy, reply or policy exhaustion can leave an admitted onset uncorrected.

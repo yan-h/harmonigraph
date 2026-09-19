@@ -395,11 +395,6 @@ pub fn harmonic_benefit(
 ) -> f64 {
     1.0 / (1.0 + harmonic_distance(config, node, output, context))
 }
-/// The radius where a candidate's pitch cost equals its harmonic benefit.
-/// Used to find the display envelope, not as a separate selection cutoff.
-pub fn benefit_radius(flexibility: u16, benefit: f64) -> f64 {
-    f64::from(flexibility) * (benefit * 1.0f64.exp_m1()).ln_1p().sqrt()
-}
 /// Where the keyboard tuning renders `node`, in microcents above the lattice's
 /// C offset, within one octave.
 pub fn keyboard_class(keyboard: [i32; 3], node: LatticePos) -> i64 {
@@ -470,4 +465,3 @@ pub fn assign_new_note(
 mod tests;
 
 pub mod channel;
-pub mod reach;

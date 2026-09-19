@@ -10,7 +10,6 @@ pub(crate) mod hub;
 pub(crate) mod instances;
 #[cfg(target_os = "macos")]
 mod native;
-mod neighbourhood;
 pub(crate) mod plugin;
 mod queue;
 pub(crate) mod session;

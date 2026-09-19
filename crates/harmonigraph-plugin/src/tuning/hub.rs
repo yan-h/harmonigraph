@@ -124,9 +124,6 @@ struct Sequencer {
     config: policy::MusicalConfig,
     scratch: Box<policy::PolicyScratch>,
     working: Vec<policy::ContextPitch>,
-    published: Vec<policy::ContextPitch>,
-    published_config: Option<policy::MusicalConfig>,
-    published_reference: i64,
     last_release: Option<i64>,
     decision: u64,
     /// A loop or seek was detected and the next attack clears memory, if the
@@ -146,9 +143,6 @@ impl Default for Sequencer {
             config: harmonigraph_core::configuration::ConfigReducer::default().resolved().into(),
             scratch: Box::default(),
             working: Vec::with_capacity(policy::MAX_CONTEXT + policy::MAX_MEMORY),
-            published: Vec::with_capacity(policy::MAX_CONTEXT + policy::MAX_MEMORY),
-            published_config: None,
-            published_reference: 0,
             last_release: None,
             decision: 0,
             loop_pending: false,
@@ -244,27 +238,6 @@ impl Sequencer {
         {
             self.memory.clear();
             self.last_release = None;
-        }
-    }
-    fn publish_neighbourhood(
-        &mut self,
-        shared: &setup::Shared,
-        config: policy::MusicalConfig,
-        rate: f64,
-    ) {
-        self.config = config;
-        self.fill(rate);
-        // Keyed only by values that decide the next assignment. Display
-        // tolerance, callback time and camera movement must not restart work.
-        if self.published_config != Some(config)
-            || self.published_reference != self.memory.reference
-            || self.published != self.working
-        {
-            shared.neighbourhood.publish(config, self.memory.reference, &self.working);
-            self.published_config = Some(config);
-            self.published_reference = self.memory.reference;
-            self.published.clear();
-            self.published.extend_from_slice(&self.working);
         }
     }
 }
@@ -387,11 +360,9 @@ impl Hub {
             Self::confirm(row, identity(source as u8), &mut owner.confirmed);
         }
         self.detect_loop(callback);
-        self.sequencer.publish_neighbourhood(
-            &self.shared,
-            owner.reducer.resolved().into(),
-            self.rate,
-        );
+        // Adopt even on callbacks with no note input: silence expiry below
+        // must use the current policy, not the last onset's configuration.
+        self.sequencer.config = owner.reducer.resolved().into();
         // Silence expires released memory against the completed input
         // frontier, which is this callback's start: everything before it has
         // been sequenced, and nothing after it has arrived.
@@ -1166,9 +1137,18 @@ impl Hub {
     pub fn test_context(&self) -> usize {
         self.sequencer.context.iter().flatten().count()
     }
+    /// Observe retained musical state after the callback, including any silence
+    /// expiry. The retired display mailbox observed it before expiry instead.
     #[cfg(test)]
-    pub fn test_next_context(&self) -> policy::reach::Snapshot {
-        self.shared.neighbourhood.read().expect("published next-attack context")
+    pub fn test_next_context(&self) -> TestContext {
+        let mut observed = Sequencer {
+            context: self.sequencer.context.clone(),
+            memory: self.sequencer.memory.clone(),
+            config: self.sequencer.config,
+            ..Default::default()
+        };
+        observed.fill(self.rate);
+        TestContext { reference: observed.memory.reference, context: observed.working }
     }
     /// Released notes remembered, whatever is held: the next-attack context
     /// shows memory only when nothing is.
@@ -1178,6 +1158,13 @@ impl Hub {
         self.sequencer.memory.append(&mut context, self.sequencer.config.policy, self.rate);
         context.len()
     }
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+pub struct TestContext {
+    pub reference: i64,
+    pub context: Vec<policy::ContextPitch>,
 }
 
 const _: () = assert!(std::mem::size_of::<Record>() <= 88);
