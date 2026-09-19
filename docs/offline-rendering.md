@@ -11,10 +11,10 @@ That is the whole idea:
    arm "Record take" in the Video pane, play the piece once
                     │
                     ├──> take-<stamp>.take   what the plugin saw
-   export audio ────┴──> piece.wav           the bounce, as always
+                    └──> take-<stamp>.wav    the captured audio
                     │
                     ▼
-        harmonigraph-offline take.take --audio piece.wav --out piece.mp4
+        harmonigraph-offline take.take --out piece.mp4
                     │
                     ▼
                piece.mp4  (exact CFR, any size, audio muxed)
@@ -28,11 +28,10 @@ Nothing is captured from a screen, so nothing is limited by your monitor, your r
 
 ```sh
 # 1. In Bitwig: arm "Record take" (Video pane), play the piece, disarm.
-#    Export audio as usual for the soundtrack.
+#    The take captures the selected Main or Sidechain audio as its soundtrack.
 # 2. Render:
 cargo build --release -p harmonigraph-offline
 ./target/release/harmonigraph-offline ~/Music/"Harmonigraph Takes"/take-2026-08-25_14-32-08.take \
-    --audio ~/bounces/piece.wav \
     --out piece.mp4 \
     --size 3840x2160
 ```
@@ -67,6 +66,9 @@ Take formats v1–v4 are refused with a version error and must be recorded again
 An unreadable or unsupported appearance document is reported on stderr and export continues at the default appearance;
 a refused replacement does not fall back to the recorded look.
 A missing appearance or missing settings groups use their normal defaults.
+The retired `record_audio`, `auto_render`, `audio_path` and `audio_offset` saved settings are ignored and are not saved again.
+They were inactive;
+capture and automatic rendering remain unconditional for a finished take.
 Lattice steps are fixed at one world unit.
 Old appearance files' `spacing` keys are ignored without discarding their other settings;
 custom-spacing looks are lost,
@@ -113,7 +115,7 @@ so arming part-way into a song still lines the sound up with the picture, in bot
 Three things to know:
 
 - **Nothing is recorded until the transport rolls.** Events are stamped
-with *transport position*, not a plugin-local clock, so a take lines up with a bounce of the same song automatically —
+with *transport position*, not a plugin-local clock, so the recorded notes and audio line up automatically —
 no offset to work out.
 While the transport is stopped the status line says so.
 - **The look is captured when you arm**, from what is on screen at that
@@ -123,7 +125,8 @@ the trap `read-plugin-state.py` documents.
 You can also override it at render time with `--appearance`.)
 - **The device has to receive both the notes and the selected audio input.**
 The notes drive the lattice, and the WAV recorded from Main or Sidechain drives the spectrum and soundtrack in the automatic render.
-A manual render can replace that recording with `--audio`, but a device on a pure note track records silence unless the wanted audio is routed to its sidechain.
+A device on a pure note track records silence unless the wanted audio is routed to its sidechain.
+Manual renders use this same captured WAV.
 
 > **Why a button and not automatic.** The first version armed itself when
 > nice-plug reported `ProcessMode::Offline`, on the theory that exporting
@@ -227,8 +230,8 @@ LATTICE_TAKE=/tmp/piece.take cargo run --release -p harmonigraph-standalone
 Records every note the harness sees —
 the mock progression, a MIDI keyboard, or the DAW over an IAC bus —
 plus any parameter you move.
-The harness's audio is a mock synth and is not recorded;
-pass the real bounce to `--audio` at render time.
+The harness's audio is a mock synth and is not recorded, so these takes render without a soundtrack.
+Record in the plugin to capture audio alongside the notes.
 
 ## Pass 2 — rendering
 
@@ -241,7 +244,6 @@ The flags worth knowing (`--help` lists them all):
 | flag | what it does |
 |---|---|
 | `--out` | `.mp4`/`.mov`/`.mkv` → ffmpeg; `.png` → numbered stills; `.rgba` → raw |
-| `--audio` | audio to use instead of the take's own: feeds the spectrum **and** is muxed in |
 | `--align` | where the soundtrack's first sample falls, in seconds of take time; `off` (the default) leaves it where its own clock says |
 | `--layout` | preset name or a `.ron` file (see below) |
 | `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect and Resolution, whose fresh short edge is 1440 |
@@ -310,34 +312,25 @@ timing: a 5442-frame export in 774.6 s, 718.9 s of it drawing at 7.6 fps — ui+
 The shares are of the drawing clock;
 the gap between it and the total is setup plus the encoder's backlog after the last frame.
 
-## Replacing crackly audio with a clean bounce
+## Recorded audio and manual alignment
 
-Live playback can crackle, so the audio a take records is not always good enough to ship.
-Bounce a clean WAV of the same performance and pass it as `--audio`:
+The renderer uses the WAV named in the take header, beside the `.take` file, for both spectrum analysis and the soundtrack.
+Keep the two files together when moving a take.
+If the named WAV is missing, the renderer warns and exports without audio or spectrum.
+Separate-WAV replacement is no longer supported;
+`-a` and `--audio` are rejected as unknown options.
 
-```sh
-harmonigraph-offline take.take --audio clean-bounce.wav --out piece.mp4
-```
-
-The catch a naive swap hits is where the bounce starts.
-The take's own recording is stamped to the same clock as the notes — its header says when it armed — so it is *already* aligned to the visualization.
-A bounce carries no such stamp, and is assumed to start at **take zero**.
-That is right for the usual case: take times are the host's transport position, so a bounce exported from the top of the song does start at zero, whatever point in the arrangement the recording armed at.
-
-When it isn't right — plugin-delay compensation shifting the file, or a bounce of a section rather than the whole song — say where it starts:
+The recording's first sample is stamped with its take time in the header, so sound and picture normally align without an offset to work out.
+If manual correction is needed, set the take-time position of that first sample:
 
 ```sh
-harmonigraph-offline take.take --audio clean-bounce.wav --align 12.5 --out piece.mp4
+harmonigraph-offline take.take --align 12.5 --out piece.mp4
 ```
 
-`--align` is take-time seconds for the soundtrack's first sample, and it overrides the take's own recording just as readily as a replacement.
-`--align off` is that default spelled out: every soundtrack starts where its own clock says.
-
+This changes placement for both the spectrum and the muxed soundtrack, including when `--start` crops the render.
+`--align off` restores the header's recorded start, or zero if no start was saved.
 Nothing measures the offset for you.
-The drift is a constant, so one number fixes the whole render —
-read it off the first clear attack and pass it.
-(`--align auto` used to cross-correlate the bounce against the take's recording;
-it was deleted in #895, unused.)
+`--align auto` remains unsupported.
 
 ## Layouts
 
