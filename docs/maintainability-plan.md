@@ -1,7 +1,7 @@
 # Long-term maintainability
 
 Last updated: 2026-09-19.
-Status: discovery in progress; spacing and adaptive next-note-outline removal accepted for future implementation; no product changes in this session.
+Status: discovery in progress; spacing, adaptive next-note outlines and separate-WAV replacement accepted for future removal; no product changes in this session.
 
 ## Start here
 
@@ -44,9 +44,14 @@ including its custom-appearance capability loss,
 based on [#952](https://github.com/yan-h/harmonigraph/issues/952).
 He also approved removing adaptive next-note outlines,
 while retaining musical tuning and separate Lattice Map outlines.
-Both implementations are deferred.
+He subsequently approved removing separate-WAV replacement for take exports ([#972](https://github.com/yan-h/harmonigraph/issues/972)).
+The take's own captured audio remains supported.
+These implementations are deferred.
+He chose to keep the cold-start shader optimization,
+and explicitly requires an accurate current lattice plus spectrogram history from while the editor was closed,
+within the existing history limits.
 The [remaining value questions](requirements-value-audit.md#remaining-value-questions) identify additional tradeoffs worth discussing;
-no answer has yet been recorded for them.
+the four dormant export fields still await a decision after explanation.
 
 **How to return:** ask an agent to continue from `docs/maintainability-plan.md`.
 The agent should read the current document and linked work,

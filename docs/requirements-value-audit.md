@@ -8,6 +8,9 @@ in open draft [PR #951](https://github.com/yan-h/harmonigraph/pull/951).
 Discovery only; no implementation.
 Yan directly confirmed during this audit that he does not use the next-note outlines,
 then explicitly approved removing them while continuing to discuss other candidates.
+He subsequently approved separate-WAV replacement removal,
+chose to keep cold-start optimization,
+and confirmed that reopening must show accurate current lattice state and spectrogram history from while closed.
 
 ## Findings for Yan
 
@@ -23,10 +26,10 @@ The existing design explicitly asks for winners,
 so this revisits a recorded choice using a current preference;
 it does not prove an agent invented the original feature.
 [#970](https://github.com/yan-h/harmonigraph/issues/970) preserves the scope and remaining checks.
-- **Closed-window visual history is a weaker choice to revisit.** Reopening currently fills in the notes and spectrum from the time the editor was shut.
-Starting fresh would permit less background analysis,
-but would not remove recording completion, current-state draining or the whole background worker.
-Keep it unless the missed history is unimportant and a concrete deletion or runtime saving justifies the change.
+- **Keep closed-window analysis.** Yan explicitly values accurate current lattice state and spectrogram history from while the editor was shut.
+Starting fresh on reopening would lose wanted behavior.
+Preserve these outcomes within the existing history limits;
+this does not require drawing invisible frames or freeze the current worker implementation.
 - **Do not revive an extreme-load tuning project.** The 100+ note target is not a mandate to build a scheduler for every maximum setting.
 The existing performance issue was closed as not planned because no crackle had been heard.
 Its explicit trigger is a crackling dense downbeat, with the radius setting checked first.
@@ -34,7 +37,9 @@ Its explicit trigger is a crackling dense downbeat, with the radius setting chec
 The previous simplification deliberately removed options.
 The four dormant saved fields remain the small, separate [#959](https://github.com/yan-h/harmonigraph/issues/959) proposal.
 
-Spacing and adaptive next-note-outline removal are accepted for future implementation.
+Spacing, adaptive next-note outlines and separate-WAV replacement ([#972](https://github.com/yan-h/harmonigraph/issues/972)) are accepted for future removal.
+The take's own recorded audio remains supported.
+Cold-start optimization is explicitly retained.
 No other removal has been approved.
 
 ## Method and limits
@@ -236,7 +241,7 @@ history #523, #608, #712, #817, #903 and existing discovery #959/#962.
 | Observable gaps and incomplete records across rollover | Bounded queues cannot promise losslessness; replay must clear false held state and exports warn about known loss. | Keep visible loss and durable markers. Conservative attribution to the next take is an implementation tradeoff. |
 | Selected audio source and no callback blocking | Main/Sidechain identity, original time, whole-frame drops and gap marking. | Keep stream identity and nonblocking capture. Format/precision is a separate quality choice. |
 | Always capture adjacent audio and auto-render a finished take | Recorded arm/play workflow; prior simplification deleted capture/bounce toggles and related branches. | Keep. An opt-out adds policy and tests without retiring capture, finalization or rendering. |
-| Manual replacement audio and alignment | Reachable CLI capability deliberately retained when #903 removed auto-correlation. | Keep absent workflow evidence. Removing it loses clean-bounce replacement; dormant fields do not prove the CLI unused. |
+| Manual replacement audio and alignment | Reachable CLI capability deliberately retained when #903 removed auto-correlation; Yan now explicitly approves separate-WAV replacement removal. | Remove replacement when implementation starts (#972). Preserve recorded-audio placement; manual alignment can also affect the take's own audio and needs a separate consumer trace. |
 | Snapshot appearance, explicit rerender overrides | One shared appearance document; settings/camera gestures during a take are deliberately not all recorded. | Keep the represented-input contract. Do not promise recording of every live edit. |
 | Deterministic replay/preview correspondence | Replay orders represented events/configs and uses the shared picture path. Existing #962 has bounded positive and negative-control evidence. | Keep semantic agreement. Full window, cadence, host chrome and universal pixel parity were not established. |
 | Format refusal and normalization | Current instructions supplied by Yan allow breaking old saves with disclosure and forbid compatibility shims; container defaults and sanitizers keep accepted values coherent. | Direct current authority. No migration framework or general backward-compatibility project. |
@@ -244,7 +249,8 @@ history #523, #608, #712, #817, #903 and existing discovery #959/#962.
 The always-capture suggestion was challenged during this audit:
 default-on plus opt-out would increase maintained behavior,
 so the initial investigator's suggestion was rejected.
-The retained manual CLI is also not a recommended deletion just because its direct user transcript is unavailable.
+The initial audit did not recommend deleting the manual CLI merely because its original user transcript was unavailable.
+Yan's subsequent explicit removal decision now supersedes that provisional keep judgment for separate-WAV replacement.
 The existing [dormant-fields probe](https://github.com/yan-h/harmonigraph/issues/959) remains the concrete small opportunity.
 
 ## Visualization, settings and persistence coverage
@@ -257,7 +263,7 @@ This does not assess the artistic value of every shader effect or every control 
 
 | Requirement cluster | Evidence and obligation | Disposition |
 | --- | --- | --- |
-| Full live visual history while the editor is closed | #305 records the note/spectrum mismatch; one drainer/analyzer now keeps them aligned. No direct request recovered. | Conditional product question below, with limited demonstrated maintenance savings. |
+| Full live visual history while the editor is closed | #305 records the note/spectrum mismatch; Yan now directly requires accurate current lattice state and the spectrogram from while closed. | Keep these outcomes within current history limits. Do not expand this into unlimited history or invisible rendering. |
 | Adopt saved analysis settings before first open | Same closed-window feature otherwise creates columns with the wrong analysis window. | Required if closed-window history is retained. Not a separate demand for another synchronization layer. |
 | Preserve active unsaved UI edits | Saved host blob is not continuously authoritative over active appearance. Restore guard protects live edits. | Keep current behavior unless redesigning the save/restore authority intentionally. |
 | Bounded queues, explicit analyzer discontinuities and source timestamps | Current ingress already permits drops and resets on gaps/epochs; notes and columns must share coordinates. | Keep honest timing/loss. No lossless-history guarantee to retire. |
@@ -269,6 +275,10 @@ This does not assess the artistic value of every shader effect or every control 
 | GPU/CPU caches and history ownership | Earlier cache evidence distinguishes stale values from unnecessary invalidation; existing ownership reductions already landed. | Keep useful reuse. Test newly reachable carry-forward behavior when narrowing keys. |
 
 ### Closed-window history: distinguish feature cost from removable architecture
+
+**Current decision:** keep accurate current lattice state and spectrogram history from while closed,
+as Yan directly requested after reading this comparison.
+The fresh-history counterfactual below was considered and is not selected.
 
 [PR #305](https://github.com/yan-h/harmonigraph/pull/305) added background analysis so reopening would not show filled note history over a missing spectrogram.
 Its report explains the mechanism and cost,
@@ -303,7 +313,7 @@ No new dependency build, platform certification, security audit or legal conclus
 | --- | --- | --- |
 | macOS/Bitwig and in-process CLAP scope | README/deferred records identify the personal tested environment. | Keep narrow scope. Portable upstream code does not imply a Windows/Linux/other-host support promise. |
 | GUI vendor patches and version coupling | #968 verified published egui-baseview 0.7.2 meets the old investigation trigger; some patch topologies changed and others remain. | Continue that bounded feasibility issue separately. No automatic upgrade or broad fork retirement. |
-| Precompiled Metal startup | Dated native-probe evidence with the cache deliberately blocked compares about 4.77 s source readiness with 0.77 s strict assets; warm readiness was about 96 ms either way. Corpus follows generated MSL/options. | Retain pending the value question below. Shipping a corpus is a choice; validating it is necessary once chosen. The cold probe is not a prediction of every Bitwig opening. |
+| Precompiled Metal startup | Dated native-probe evidence with the cache deliberately blocked compares about 4.77 s source readiness with 0.77 s strict assets; warm readiness was about 96 ms either way. Corpus follows generated MSL/options. | Yan explicitly chose to keep this optimization. The cold probe is not a prediction of every Bitwig opening. |
 | Pure dependency-free core | CI guards accidental dependency changes but explicitly permits deliberate intended permissive additions with a guard/rationale update. Analysis already lives separately with RealFFT. | Do not interpret the guard as an immutable ban or a reason to reimplement libraries. No useful deletion established. |
 | Exact golden pixels | Shared gate produces differences and permits deliberate blessing with an explanation. | Keep detection of unintended picture changes. Byte-exact comparison is not a promise to freeze every pixel forever. |
 | Standalone harness and font fallback | Prior #895 traces actual standalone consumers and unavailable same-frame font-sharing insertion point. | Keep; production plugin font reuse alone does not retire the fallback. |
@@ -316,15 +326,31 @@ No new dependency build, platform certification, security audit or legal conclus
 Yan asked whether other potentially removable requirements had been withheld from the question list.
 The initial shortlist prioritized demonstrated savings,
 but an early answer about actual use can cheaply rule a capability in or out before a removal prototype.
-These are unanswered value questions,
-not conclusions that the capabilities are unwanted.
+The table now records his answers as well as the remaining question.
+His request for an explanation of the dormant fields does not itself approve their removal.
 
 | Requirement to reconsider | Concrete loss to discuss | Maintenance evidence and recommendation |
 | --- | --- | --- |
-| Retain four dormant settings for a possible future export UI | Discard currently inactive saved audio/render options. Existing capture, automatic rendering and manual replacement audio continue. | #959's 16-combination probe found no request changes. Recommend removal if retaining the dormant saved values has no value; savings are small. Future UI can define its settings when needed. |
-| Reconstruct live visual history while the editor is closed | Reopening starts a fresh visual history instead of showing what happened while closed; recording still completes normally. | A real product choice, but whole-worker deletion is unsupported. Ask whether unseen history matters before investing in a smaller implementation. |
-| Rerender a take using a separate WAV and explicit alignment | Lose the ability to replace crackly captured audio with a clean bounce or another soundtrack. | Reachable CLI workflow was deliberately retained. If unused by Yan or his agents, trace a bounded deletion; do not remove it just because he does not type the command himself. |
-| Fast readiness when the shader cache is cold | Potentially wait longer for the first fully drawn editor instead of maintaining precompiled Metal assets. | Historical cache-blocked native probe: about 4.77 s source versus 0.77 s assets; warm readiness about 96 ms either way. Source compilation already exists. Accepting the delay could retire corpus generation/validation and provider-specific integration, but net scope needs a dedicated trace and current host cost is unmeasured. |
+| Retain four dormant settings for a possible future export UI | Discard currently inactive saved audio/render options. Existing capture and automatic rendering continue; active separate-WAV replacement is a distinct removal. | #959's 16-combination probe found no request changes. Recommend removal; Yan requested more explanation and has not yet decided. Savings are small. |
+| Reconstruct live visual history while the editor is closed | Reopening starts a fresh visual history instead of showing what happened while closed; recording still completes normally. | Keep. Yan explicitly wants accurate current lattice state and closed-window spectrogram history. Whole-worker deletion was never established. |
+| Rerender a take using a separate WAV | Lose the ability to replace captured audio with a clean bounce or another soundtrack. | Removal accepted in #972; implementation deferred. Retain the take's own WAV and recorded-audio alignment. |
+| Fast readiness when the shader cache is cold | Potentially wait longer for the first fully drawn editor instead of maintaining precompiled Metal assets. | Keep by explicit user decision. No corpus/provider deletion follows from this audit. |
+
+The dormant fields are `record_audio`, `auto_render`, `audio_path` and `audio_offset` in `RenderConfig`.
+They persist the nominal choices to capture audio,
+automatically render,
+select replacement audio and offset it,
+but current capture and render-request construction ignore them.
+Recording captures audio when a take is armed,
+and a completed take renders according to its active trigger,
+regardless of the two saved booleans.
+The comment explicitly retained all four so a future bounced-audio interface could return without re-deciding its shape.
+This is a recorded future-design commitment,
+not a present feature consumer.
+Removing the fields would discard dormant saved values and their defaults/descriptions;
+it would not remove active recording/rendering behavior or internal audio placement math.
+Yan's decision to remove the actual replacement workflow strengthens the recommendation,
+but does not silently decide the separate four-field question.
 
 Custom camera perspective (#964) and note-naming search reach (#963) remain less ready for a product question:
 show which pictures or names change before asking Yan to value an unfamiliar hidden setting.
@@ -334,12 +360,13 @@ Non-use of the standalone application also would not by itself establish that it
 
 Keep the choice list small:
 Yan's direct non-use answer and removal approval make adaptive next-note outlines an accepted simplification;
-consider unseen visual history only if the user values that tradeoff enough to justify a bounded prototype.
-Carry forward the earlier accepted spacing removal and existing concrete issues.
+separate-WAV replacement is accepted too,
+while closed-window analysis and cold-start optimization are explicitly retained.
+Explain and resolve the dormant-field question,
+then carry forward the accepted removals and existing concrete issues.
 Do not reopen #790 or explicitly parked spectrogram campaigns merely because audit capacity is available.
 
 The main remaining coverage gaps are original user conversations behind attributed choices,
-value of unseen visual history,
 current extreme-workload timing if its trigger occurs,
 and aesthetic judgments about effects/settings that require comparison pictures.
 The major subsystem inventory does not eliminate those gaps.
