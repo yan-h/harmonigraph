@@ -1762,6 +1762,26 @@ mod tests {
         assert!(tracker.source_current_certain(a) && tracker.source_current_certain(b));
     }
 
+    /// The gap list is bounded, and what it drops is the OLDEST — the same way
+    /// the roll bounds its own past (`NoteRoll::MAX_NOTES`, which this shares).
+    /// Worth pinning because nothing else can see it: the cap is reached one
+    /// publication outage at a time, and the export warning and the pane badge
+    /// that read `publication_gaps` both take the list as given.
+    #[test]
+    fn the_gap_list_keeps_the_newest_and_forgets_past_its_cap() {
+        let mut tracker = NoteTracker::new();
+        // Past the cap rather than up to it, so the eviction runs more than the
+        // once that an off-by-one would also satisfy.
+        let pushed = NoteRoll::MAX_NOTES + 8;
+        for i in 0..pushed {
+            tracker.handle_canonical(gap(i as Time, Some(SourceId(1)))).unwrap();
+        }
+        let times: Vec<Time> = tracker.publication_gaps().iter().map(|gap| gap.time).collect();
+        assert_eq!(times.len(), NoteRoll::MAX_NOTES);
+        assert_eq!(times.first(), Some(&8.0), "the first eight outages are the ones forgotten");
+        assert_eq!(times.last(), Some(&((pushed - 1) as Time)), "and the newest is still there");
+    }
+
     #[test]
     fn all_off_releases_every_channel() {
         let mut tracker = NoteTracker::new();
