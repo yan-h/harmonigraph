@@ -1,6 +1,6 @@
 //! Map timing through real CLAP ingress, Hub ordering and Tune output.
 use super::*;
-use harmonigraph_core::lattice_map::LatticeMap;
+use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
 use harmonigraph_core::{LatticePos, Tuning};
 
 fn parameter(id: &str, value: f64, time: u32) -> Input {
@@ -248,4 +248,57 @@ fn lattice_map_shared_axes_and_audition_apply_to_new_attacks_only() {
         }
     }
     assert_eq!(found, ids.len());
+}
+
+/// A record the Hub holds over to the next callback carries a sample from
+/// before this callback began, and a backward locate clears the map history
+/// out from under it: `at` then has nothing to answer with. Holding one over
+/// is routine rather than exotic — any Tune the host runs after the Hub is a
+/// callback behind by construction, and `collect` leaves whatever passes
+/// `BATCH_EVENTS` in the ring on top of that.
+///
+/// Lattice Map is right to refuse there: the map that sample ran under is
+/// exactly what was lost. Adaptive has no per-sample map state to be missing
+/// and decides from the block configuration, which is still in hand, so the
+/// same refusal would uncorrect the onset for nothing.
+#[test]
+fn a_locate_that_outruns_a_retained_onset_refuses_only_in_lattice_map() {
+    for engine in [TuningEngine::Adaptive, TuningEngine::LatticeMap] {
+        // The same onset twice: once with the next callback in sequence, which
+        // is the control, and once with it located behind the sample the
+        // retained record carries.
+        let mut landed: [(Option<LatticePos>, i64, bool); 2] = Default::default();
+        for (slot, backward) in [false, true].into_iter().enumerate() {
+            let _scope = crate::test_scope::enter();
+            let mut hub = Device::new(false);
+            hub.activate_format(44100.0, 512);
+            install(&hub);
+            let mut source = Device::new(true);
+            source.activate_format(44100.0, 512);
+            let selected = if engine == TuningEngine::LatticeMap { 2.0 } else { 1.0 };
+            hub.run_format(0, vec![parameter("tuning-engine", selected, 0)], None, None, 512);
+            for raw in [512, 1024] {
+                source.run_format(raw, vec![], None, None, 512);
+                hub.run_format(raw, vec![], None, None, 512);
+            }
+            // The Hub runs first in this block, so the copy of the note lands
+            // in the ring behind the drain that would have taken it.
+            hub.run_format(1536, vec![], None, None, 512);
+            source.run_format(1536, vec![note(1, 0, 50, 0, true)], None, None, 512);
+            assert_eq!(inspect_hub(&hub, |hub| hub.test_held(0)), 0, "the copy is still in flight");
+            hub.run_format(if backward { 1024 } else { 2048 }, vec![], None, None, 512);
+            let voice = voice(&hub, 0, 50);
+            let status = hub.shared().status.load(Ordering::Relaxed);
+            landed[slot] =
+                (voice.attack_node, voice.frozen_offset_microcents, status & session::POLICY != 0);
+        }
+        let (node, correction, policy) = landed[0];
+        assert!(node.is_some() && correction != 0, "{engine:?} corrects a record it caught up to");
+        assert!(!policy, "{engine:?} refuses nothing when the history is still there");
+        if engine == TuningEngine::LatticeMap {
+            assert_eq!(landed[1], (None, 0, true), "the map that sample ran under was lost");
+        } else {
+            assert_eq!(landed[1], landed[0], "a lost map history is not Adaptive's to refuse");
+        }
+    }
 }
