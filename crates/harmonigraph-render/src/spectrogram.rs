@@ -2702,11 +2702,11 @@ mod tests {
     ///
     /// **Coverage.** A centre sits at its cell's middle give or take
     /// `JITTER / 2`. The point hardest to reach is a lattice corner with all
-    /// four cells touching it pushed diagonally away, `(0.5 + JITTER / 2)
-    /// * sqrt(2)` from every one of them, so the smallest radius any dome can
-    /// draw has to clear that. At variety 0 that radius is `DOME_RADIUS`; at
-    /// variety 1 it is `DOME_RADIUS_MIN`, and every setting between is a `mix`
-    /// of the two and so never below the smaller.
+    /// four cells touching it pushed diagonally away,
+    /// `(0.5 + JITTER / 2) * sqrt(2)` from every one of them, so the smallest
+    /// radius any dome can draw has to clear that. At variety 0 that radius is
+    /// `DOME_RADIUS`; at variety 1 it is `DOME_RADIUS_MIN`, and every setting
+    /// between is a `mix` of the two and so never below the smaller.
     ///
     /// **Reach.** A cell two out can put its centre no nearer than
     /// `2.5 - JITTER / 2` from the pixel's own cell origin, and the pixel is at
