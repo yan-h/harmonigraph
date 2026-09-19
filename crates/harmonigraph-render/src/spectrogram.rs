@@ -2811,7 +2811,7 @@ mod tests {
         // frame and a fixture left there would measure nothing.
         cb.atmosphere.as_mut().unwrap().now = 3.0;
         let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-        s.cloud_style = harmonigraph_scene::CloudStyle::Wash;
+        s.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
         s.cloud_depth = 1.0;
         s.cloud_scale = 2.0;
         cb

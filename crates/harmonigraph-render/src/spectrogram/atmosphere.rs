@@ -477,8 +477,8 @@ impl Targets {
             scale_facet: settings.scale_facet,
             scale_rock: settings.scale_rock,
             cloud_style: match settings.cloud_style {
-                harmonigraph_scene::CloudStyle::Water => 0,
-                harmonigraph_scene::CloudStyle::Wash => 1,
+                harmonigraph_scene::CloudStyle::Mosaic => 0,
+                harmonigraph_scene::CloudStyle::Watercolor => 1,
             },
             wash_size: settings.wash_size,
             wash_variety: settings.wash_variety,

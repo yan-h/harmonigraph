@@ -13,16 +13,25 @@ pub enum SpectrogramStyle {
 
 /// Which texture the atmosphere layer draws over the spectrogram.
 ///
-/// Two constructions, not two presets of one: [`CloudStyle::Water`] is a pile of
-/// soft domes joined by a soft union and lit by a leaning sun, and
-/// [`CloudStyle::Wash`] is a field of translucent watercolour globs whose tone is
+/// Two constructions, not two presets of one: [`CloudStyle::Mosaic`] is a pile
+/// of soft domes joined by a soft union and lit by a leaning sun, and
+/// [`CloudStyle::Watercolor`] is a field of translucent globs whose tone is
 /// paper minus pigment and which has no light in it at all. They share the
 /// blurred light field, the palette and the drift clock, and nothing else.
+///
+/// **These name what Yan sees on the page, and the code under each keeps the
+/// name of its own CONSTRUCTION** — `scale_*` and `dome_*` for the mosaic's
+/// lit relief, `wash_*` for the watercolour's laid-over globs. That split is
+/// not new and is not an oversight: the variant was `Water` over `scale_*`
+/// fields before it was `Mosaic` over them. A menu entry names a look and may
+/// be renamed whenever the look is better described; a field names the thing
+/// the arithmetic builds, and renaming one silently resets it to its default
+/// in every blob that carries it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CloudStyle {
     #[default]
-    Water,
-    Wash,
+    Mosaic,
+    Watercolor,
 }
 
 /// Independent spectrogram diffusion, analyzer shading and note light.
@@ -69,9 +78,9 @@ pub struct SpectralAtmosphere {
     /// How much light a face turned away from the sun still keeps: 0 lets it go
     /// black, 1 flattens the shading away entirely.
     pub scale_shade_floor: f32,
-    /// Which texture the layer draws. `Water` is the refracting scale clouds
-    /// above; `Wash` is the watercolour glob field below, and every `wash_`
-    /// setting belongs to it alone.
+    /// Which texture the layer draws. `Mosaic` is the refracting scale clouds
+    /// above; `Watercolor` is the glob field below, and every `wash_` setting
+    /// belongs to it alone.
     pub cloud_style: CloudStyle,
     /// How big one glob is, as a multiplier on how many of them cross the cloud
     /// frame. Larger is bigger, like `scale_size`.
@@ -136,7 +145,7 @@ impl Default for SpectralAtmosphere {
             scale_relief: 0.35,
             scale_rock: 0.0,
             scale_shade_floor: 0.25,
-            cloud_style: CloudStyle::Water,
+            cloud_style: CloudStyle::Mosaic,
             // J2 "dissolved" from the prototype's sheet J, translated: globs
             // about two harmonic lines across, the rim fully dissolved, the
             // wobble at the top of what the coverage proof allows.

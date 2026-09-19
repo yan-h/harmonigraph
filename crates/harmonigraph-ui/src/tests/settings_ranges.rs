@@ -255,9 +255,9 @@ fn check(edge: Edge) {
         a.spectrum.show_spectrogram = scenario.enabled;
         a.spectrum.note_names = scenario.enabled;
         a.spectrum.atmosphere.cloud_style = if scenario.wash {
-            harmonigraph_scene::CloudStyle::Wash
+            harmonigraph_scene::CloudStyle::Watercolor
         } else {
-            harmonigraph_scene::CloudStyle::Water
+            harmonigraph_scene::CloudStyle::Mosaic
         };
         a.view.show_perf = scenario.enabled;
         a.view.atmosphere.enabled = scenario.enabled;

@@ -950,7 +950,7 @@ mod tests {
             let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
             let a = &mut state.appearance.spectrum.atmosphere;
             if wash {
-                a.cloud_style = harmonigraph_scene::CloudStyle::Wash;
+                a.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
                 a.wash_wander = wander;
             }
             // Fast enough that a second of render is a visible turn of the
