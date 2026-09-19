@@ -65,7 +65,17 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
         attack, release, keyline, roll_seconds, roll_thickness, roll_opacity, roll_lead,
         roll_lead_fade, roll_lead_release, note_name_scale, volume_floor_db, volume_ceiling_db);
-    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, contour_strength, contours, contour_softness, analyzer_softness, note_glow);
+    // Every dialled float on the atmosphere, not just the eight that predate
+    // the cloud. #888, #909, #913, #918, #928 and #933 each added, retired or
+    // re-ranged bars here and each walked past this list, so the sixteen cloud
+    // dials loaded at their fresh values and the `range.contains` check below
+    // passed over them vacuously -- sixteen bars reported green by a guard that
+    // could not reach them. #933's contract is that a size the bar can offer is
+    // a size the blob keeps; this is what holds the bar and the clamp to one
+    // pair of numbers.
+    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, contour_strength, contours, contour_softness, analyzer_softness, note_glow,
+        cloud_depth, cloud_speed, scale_size, scale_variety, scale_refract, scale_relief, scale_rock,
+        wash_size, wash_fuzz, wash_ragged, wash_lobe, wash_refract, wash_pool, wash_grain, wash_layers, wash_black);
     saved.workspace.interaction.ui_scale = v;
     // These owners have NO ValueBar/RangeBar today. Still pass through their
     // real shared load boundary; zero Video visits below explicitly records
@@ -87,6 +97,19 @@ fn loaded(edge: Edge) -> SharedState {
     // Spiral and take-render settings share the load boundary but currently
     // have no recorded bar. Check their own normalization directly so adding
     // zero-visit panes to the matrix does not pretend the bar guard covers them.
+    //
+    // `view.spacing` joins them for the same reason and one more: it is in the
+    // `poison!` block above because the completeness guard below demands every
+    // dialled float be poisoned, and until #912 nothing read the result — the
+    // one field in that block whose value was written and then never looked
+    // at. This is what reads it, and it is the only place that can: no bar in
+    // the recorded set shows a spacing.
+    assert!(
+        (harmonigraph_scene::SPACING_MIN..=harmonigraph_scene::SPACING_MAX)
+            .contains(&state.picture.appearance.view.spacing),
+        "a poisoned spacing loaded as {}",
+        state.picture.appearance.view.spacing,
+    );
     assert!((1.0..=8.0).contains(&state.picture.appearance.spiral.zoom));
     assert!(state.picture.appearance.spiral.look.length() <= 1.0);
     assert!(

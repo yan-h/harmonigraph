@@ -175,7 +175,9 @@ not its delayed output time.
 History retains 8192 distinct effective states without audio allocation.
 It survives song-time seeks and resets on steady-clock discontinuities.
 Late records can use previous callbacks' states;
-records outside retained or known history pass through with the existing policy-fault status.
+a record outside retained or known history raises the policy fault only under Lattice Map,
+where the map that sample ran under is exactly what was lost and guessing at one would retune the onset to a shape nobody selected.
+Adaptive decides from the block configuration, which is still in hand, so it assigns from that and raises nothing.
 This does not extend the transport's existing correction deadline or callback-order latency requirements.
 
 Map attacks use this timestamped shared tuning;

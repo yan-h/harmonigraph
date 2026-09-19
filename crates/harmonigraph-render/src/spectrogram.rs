@@ -3180,7 +3180,6 @@ mod tests {
                 .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
                 .count() as f32
                 / n as f32;
-            eprintln!("MEASURE {name} = {moved}");
             assert!(moved > 0.02, "{name} moved almost none of the pane: {moved}");
         }
     }

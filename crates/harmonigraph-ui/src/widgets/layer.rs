@@ -213,7 +213,7 @@ impl Grab {
 ///
 /// **A cell per sheet rather than a continuous axis**, which is what makes the
 /// ends reachable at all. Three handles on one bar have to be told apart by a
-/// hand, and the axis they share is thirteen steps wide; drawn as cells each
+/// hand, and the axis they share is nine steps wide; drawn as cells each
 /// one is a target about as wide as a button, and a drag lands on a sheet
 /// instead of near one.
 ///
@@ -696,7 +696,7 @@ mod tests {
             300.0,
             |bar| {
                 // Over the low end's border, which is two and a half cells left
-                // of the middle of a thirteen-cell axis.
+                // of the middle of a nine-cell axis.
                 let slot = bar.width() / CELLS as f32;
                 vec![vec![egui::Event::PointerMoved(egui::pos2(
                     bar.center().x - 2.5 * slot,

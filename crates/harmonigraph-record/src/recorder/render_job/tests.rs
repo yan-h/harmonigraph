@@ -346,24 +346,38 @@ fn the_renderers_own_output_is_what_puts_numbers_on_the_bar() {
     // instead of quietly moving the bar. A path with a slash in it is the
     // one that could be mistaken for a done/total pair.
     assert!(parse_report("harmonigraph-offline: no take file given").is_none());
-    assert!(parse_report("note: no scratch recording, assuming take zero").is_none());
+    assert!(
+        parse_report("warning: take names \"take-1.wav\" but it is not beside the take").is_none()
+    );
     assert!(parse_report("/music/odd frames/take.take: could not be read").is_none());
     assert!(parse_report("").is_none());
 }
 
 /// A whole run of a real render's stderr, captured verbatim from
 /// `harmonigraph-offline` (the paths shortened, nothing else): the opening
-/// line, the counter rewritten in place four times, and the closing line.
+/// line, the counter rewritten in place four times, the closing line, and
+/// the two segments #903 added after it.
 ///
 /// The `\r`s are the point. They mean the counter is one terminal line
 /// being overwritten, so splitting on newlines alone delivers the whole run
 /// of it as a single line, once, at the end — a progress bar that fills
 /// only when the render is already over.
+///
+/// The tail matters for a second reason. `Stages::summary`'s doc calls
+/// avoiding the substring `" frames"` a CONTRACT rather than a style choice,
+/// because the timing line prints AFTER `done: N frames` and would otherwise
+/// be the last word on the subject and retarget the bar. That contract was
+/// asserted only on the renderer's side, against a remembered rule; this is
+/// the parser that the rule is about, and it never saw the line.
 const REAL_RENDER_STDERR: &str = "probe.take: 1.6s of events -> 108 frames at 30 fps, \
          320x180 @ 1.00x -> probe.rgba\n\
          \r  30/108 frames (28%)\r  60/108 frames (56%)\r  90/108 frames (83%)\
          \r  108/108 frames (100%)\n\
-         done: 108 frames -> probe.rgba\n";
+         done: 108 frames -> probe.rgba\n\
+         timing: a 108-frame export in 3.2 s, 2.8 s of it drawing at 38.6 fps — \
+         ui+tess 5.20 ms/frame (20%), submit 3.10 ms/frame (12%), \
+         readback 12.40 ms/frame (48%), encode 4.90 ms/frame (19%)\n\
+           encode with: ffmpeg -f rawvideo -pix_fmt rgba -s 320x180 -r 30 -i probe.rgba out.mp4\n";
 
 #[test]
 fn the_rewritten_counter_reaches_the_bar_as_the_render_goes() {

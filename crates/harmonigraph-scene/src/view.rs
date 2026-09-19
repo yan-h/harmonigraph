@@ -217,7 +217,7 @@ impl DrawnWindow {
         // the count is — the count goes as their product, so that is the
         // factor that lands near the cap in one step whatever shape the block
         // is. The sevens axis is left alone: it is a setting rather than a
-        // consequence of the camera, and it is at most thirteen sheets (see
+        // consequence of the camera, and it is at most nine sheets (see
         // `SEVENS_LAYER_LIMIT`).
         let shrink = (MAX_DRAWN_NODES as f32 / count as f32).sqrt();
         // Spent as a RADIUS about the center that the block is clipped into,

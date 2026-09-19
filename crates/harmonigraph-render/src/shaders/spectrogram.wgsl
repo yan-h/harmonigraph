@@ -761,8 +761,8 @@ fn scale_clouds(base: vec3<f32>, position: vec2<f32>) -> vec3<f32> {
     let pt = position / cloud.ppp - cloud.origin;
     let q = (pt - cloud.size * 0.5) / cloud.size.y * CLOUD_UNITS + cloud.drift;
 
-    // The scales. `scale_size` is how many of them cross one cloud unit, so the
-    // knob reads as a size rather than as a frequency.
+    // The scales. `scale_size` DIVIDES how many of them cross one cloud unit,
+    // so the knob reads as a size rather than as a frequency.
     let scale_units = SCALE_CELLS / cloud.scale_size;
     let scale_points = cloud.size.y / CLOUD_UNITS / scale_units;
     let pile = cloud_domes(q * scale_units);
