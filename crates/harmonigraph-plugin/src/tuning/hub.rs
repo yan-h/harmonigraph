@@ -568,15 +568,34 @@ impl Hub {
                     self.apply(position, index, end, timed_config);
                 }
             } else {
-                // Outside retained/known configuration: refuse correction visibly.
-                // Keep controller/release processing and publication truthful.
-                self.status |= session::POLICY;
-                let engine = self.sequencer.engine;
-                self.sequencer.engine = TuningEngine::Off;
+                // Outside retained/known configuration, which is routine rather
+                // than exotic: a record the ring holds over carries a sample
+                // from before this callback, and a backward locate clears the
+                // history out from under it.
+                //
+                // Only Lattice Map has per-sample state to be missing, and its
+                // refusal is the point — the map that sample ran under is
+                // exactly what was lost, and guessing at one would retune the
+                // onset to a shape nobody selected. Adaptive decides from the
+                // block configuration, which is still in hand, so the same
+                // refusal would uncorrect the onset and raise a fault for
+                // nothing. `at` is also what would have said which engine that
+                // sample ran under, so the live selection is the only one left
+                // to read; it is restored after the group either way, because
+                // adopting an engine is the `Some` arm's job.
+                let restore = self.sequencer.engine;
+                self.sequencer.engine = owner.maps.playback.engine;
+                if self.sequencer.engine == TuningEngine::LatticeMap {
+                    // Keep controller/release processing and publication truthful.
+                    self.status |= session::POLICY;
+                    self.sequencer.engine = TuningEngine::Off;
+                } else {
+                    self.sequencer.config = config.into();
+                }
                 for position in index..end {
                     self.apply(position, index, end, config);
                 }
-                self.sequencer.engine = engine;
+                self.sequencer.engine = restore;
             }
             index = end;
         }
