@@ -31,6 +31,18 @@ struct Cloud {
     float scale_shade_floor;
     float scale_facet;
     float scale_rock;
+    uint cloud_style;
+    float wash_size;
+    float wash_variety;
+    float wash_fuzz;
+    float wash_ragged;
+    float wash_lobe;
+    float wash_refract;
+    float wash_pool;
+    float wash_grain;
+    float wash_layers;
+    float wash_soften;
+    float wash_wander;
 };
 constant float DOME_RADIUS = 1.15;
 constant float DOME_JITTER = 0.3;
@@ -44,6 +56,27 @@ constant float SUN_KNEE = 0.03;
 constant float DOME_LACUNARITY = 2.1;
 constant float DOME_FINE_GAIN = 0.22;
 constant float CLOUD_SHADE = 0.64;
+constant int WASH_RING = 2;
+constant float WASH_JITTER = 0.4;
+constant float WASH_RAGGED = 0.3;
+constant float WASH_RADIUS = 1.18;
+constant float WASH_RADIUS_MIN = 1.02;
+constant float WASH_RADIUS_MAX = 1.66;
+constant float WASH_CELLS = 5.25;
+constant float WASH_LACUNARITY = 2.1;
+constant float WASH_FINE_OCCUPANCY = 0.2;
+constant float WASH_WARP = 0.45;
+constant float WASH_WARP_SCALE = 0.9;
+constant float WASH_RAGGED_SCALE = 2.8;
+constant float WASH_POOL = 0.44;
+constant float WASH_GRAIN = 0.1;
+constant float WASH_POOL_WIDTH = 0.55;
+constant float WASH_SURF = 0.07;
+constant float WASH_PIG_DEPTH = 0.35;
+constant float WASH_TONE_FLOOR = 0.05;
+constant float WASH_PIVOT = 0.45;
+constant float WASH_LIFT_A = 1.15;
+constant float WASH_LIFT_B = 0.16;
 
 float density_decode(
     float value

@@ -895,6 +895,78 @@ mod tests {
         assert!(first[mid] != dark[mid], "the glow changed no pixel of frame {mid}");
     }
 
+    /// A STIRRING watercolour wash renders to the same bytes twice.
+    ///
+    /// The spectrogram's cloud layer is the one place in the draw path with a
+    /// clock of its own, and `Wander` is the part of it a reader cannot check
+    /// by eye: it turns each glob about its own cell at its own hashed rate, so
+    /// it is not one offset the frame index computes but a rotation per glob
+    /// per pixel, and all that keeps it reproducible is that the angle comes off
+    /// `atmosphere.now * cloud_speed` rather than a wall clock. The shader text
+    /// reads the same either way, so this is measured.
+    ///
+    /// Both halves are non-vacuous, and either could be silently absent. The
+    /// wash has to be REACHED — the texture sits behind an enum whose fresh
+    /// value is the other one, so the frame is held against the same take drawn
+    /// with the scales — and the wander has to MOVE something, or this is the
+    /// test above with one more uniform in it.
+    #[test]
+    fn rendering_a_stirring_wash_twice_is_byte_identical() {
+        let clouded = |wash: bool| {
+            let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
+            let a = &mut state.appearance.spectrum.atmosphere;
+            if wash {
+                a.cloud_style = harmonigraph_scene::CloudStyle::Wash;
+                a.wash_wander = 1.0;
+            }
+            // Fast enough that a second of render is a visible turn of the
+            // field: at the fresh 1x the slowest globs would cross a twentieth
+            // of a revolution over the whole run.
+            a.cloud_speed = 8.0;
+            let mut take = transient_take(7.125);
+            take.header.appearance = Some(state.appearance.serialize());
+            take
+        };
+        let settings = Settings {
+            // The full-pane preset, because the cloud layer is drawn over the
+            // spectrogram and nothing else — a layout that gives it a third of
+            // a 320-point frame measures the other two thirds.
+            layout: Layout::preset("spectral").unwrap(),
+            start: 7.125,
+            end: 7.125 + 1.0,
+            audio_start: 7.125,
+            ..settings()
+        };
+        let run = |take: &Take| {
+            let mut audio = transient_audio();
+            let mut frames = Vec::new();
+            let result = render(
+                &mut Replay::new(take.clone()),
+                Some(&mut audio),
+                &settings,
+                appearance_for(take, None),
+                |bytes| {
+                    frames.push(bytes);
+                    Ok(Some(Vec::new()))
+                },
+            );
+            match result {
+                Ok(_) => Some(frames),
+                Err(e) if e.contains("no usable GPU adapter") => {
+                    eprintln!("skipping: {e}");
+                    None
+                }
+                Err(e) => panic!("{e}"),
+            }
+        };
+        let Some(first) = run(&clouded(true)) else { return };
+        assert_eq!(first, run(&clouded(true)).expect("a second GPU run"));
+        let scales = run(&clouded(false)).expect("a third GPU run");
+        let mid = first.len() / 2;
+        assert!(first[mid] != scales[mid], "the wash drew the scales' frame {mid}");
+        assert!(first[0] != first[mid], "the wander moved nothing between frame 0 and {mid}");
+    }
+
     #[test]
     fn lattice_atmosphere_requires_note_light_in_export() {
         let settings = Settings {

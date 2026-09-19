@@ -47,6 +47,27 @@ constant float SUN_KNEE = 0.03;
 constant float DOME_LACUNARITY = 2.1;
 constant float DOME_FINE_GAIN = 0.22;
 constant float CLOUD_SHADE = 0.64;
+constant int WASH_RING = 2;
+constant float WASH_JITTER = 0.4;
+constant float WASH_RAGGED = 0.3;
+constant float WASH_RADIUS = 1.18;
+constant float WASH_RADIUS_MIN = 1.02;
+constant float WASH_RADIUS_MAX = 1.66;
+constant float WASH_CELLS = 5.25;
+constant float WASH_LACUNARITY = 2.1;
+constant float WASH_FINE_OCCUPANCY = 0.2;
+constant float WASH_WARP = 0.45;
+constant float WASH_WARP_SCALE = 0.9;
+constant float WASH_RAGGED_SCALE = 2.8;
+constant float WASH_POOL = 0.44;
+constant float WASH_GRAIN = 0.1;
+constant float WASH_POOL_WIDTH = 0.55;
+constant float WASH_SURF = 0.07;
+constant float WASH_PIG_DEPTH = 0.35;
+constant float WASH_TONE_FLOOR = 0.05;
+constant float WASH_PIVOT = 0.45;
+constant float WASH_LIFT_A = 1.15;
+constant float WASH_LIFT_B = 0.16;
 
 uint stored(
     uint slot,
@@ -233,15 +254,24 @@ metal::float4 heatmap_color(
     return metal::float4(c.xyz, 1.0);
 }
 
-struct fs_heatmap_gammaInput {
+metal::float3 linear_from_gamma_rgb(
+    metal::float3 srgb
+) {
+    metal::bool3 cutoff = srgb < metal::float3(0.04045);
+    metal::float3 lower = srgb / metal::float3(12.92);
+    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
+    return metal::select(higher, lower, cutoff);
+}
+
+struct fs_heatmap_linearInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_heatmap_gammaOutput {
+struct fs_heatmap_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_heatmap_gammaOutput fs_heatmap_gamma(
-  fs_heatmap_gammaInput varyings [[stage_in]]
+fragment fs_heatmap_linearOutput fs_heatmap_linear(
+  fs_heatmap_linearInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , constant Locals& locals [[buffer(0)]]
 , device type_3 const& grid [[buffer(1)]]
@@ -250,5 +280,6 @@ fragment fs_heatmap_gammaOutput fs_heatmap_gamma(
 ) {
     const VertexOut in = { position, varyings.slab, varyings.t };
     metal::float4 _e1 = heatmap_color(in, locals, grid, lut, _buffer_sizes);
-    return fs_heatmap_gammaOutput { _e1 };
+    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
+    return fs_heatmap_linearOutput { metal::float4(_e3, _e1.w) };
 }

@@ -139,24 +139,51 @@ pub(crate) fn spectrum_settings_pane(
                 .percent()
                 .show(ui);
         }
-        ui.label(egui::RichText::new("Refracting scale clouds (prototype)").strong());
+        ui.label(egui::RichText::new("Cloud texture (prototype)").strong());
+        // Two constructions rather than two presets of one, so the dials below
+        // the shared three are per style: nothing a wash carries means anything
+        // to a lit scale, and the page would otherwise be a list of controls
+        // most of which do nothing.
+        use harmonigraph_scene::CloudStyle;
+        choice_row(
+            ui,
+            "Texture",
+            &mut atmosphere.cloud_style,
+            &[
+                (
+                    CloudStyle::Water,
+                    "Water",
+                    "A pile of soft domes, lit by a sun that leans with the sound and \
+                     refracting the picture through their faces",
+                ),
+                (
+                    CloudStyle::Wash,
+                    "Wash",
+                    "A field of translucent watercolour globs laid over each other, each \
+                     reading the picture at its own centre. No light in it at all: tone is \
+                     paper minus pigment",
+                ),
+            ],
+        );
         ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Cloud depth")
             .percent()
             .show(ui)
             .on_hover_text(
-                "A drifting texture of reflective scales over the WHOLE pane, each scale \
-                 bending the sound's light behind it so the picture is seen THROUGH it \
-                 rather than under something painted over it. 0% removes it and anything \
-                 below full lets the plain picture back through. It needs some softness \
-                 above: the softened field is the light it bends.",
+                "A drifting texture over the WHOLE pane, reading the sound's light so the \
+                 picture is seen THROUGH it rather than under something painted over it. \
+                 0% removes it and anything below full lets the plain picture back through \
+                 \u{2014} under the Wash that reads as a double exposure, the sharp bands \
+                 showing under their own washed copy. It needs some softness above: the \
+                 softened field is the light either texture reads.",
             );
         ValueBar::new(&mut atmosphere.cloud_scale, 0.25..=4.0, "Cloud size")
             .unit(1.0, "\u{d7}")
             .show(ui)
             .on_hover_text(
-                "The frame the scales are measured and drifted in. Five of these cross the \
-                 pane's height at 1\u{d7}. With Scale size it decides how big a scale is, \
-                 and on its own it decides how far the texture travels as it drifts.",
+                "The frame the texture is measured and drifted in. Five of these cross the \
+                 pane's height at 1\u{d7}. With Scale size or Glob size it decides how big \
+                 one of them is, and on its own it decides how far the texture travels as \
+                 it drifts.",
             );
         ValueBar::new(&mut atmosphere.cloud_speed, 0.0..=20.0, "Cloud speed")
             .unit(1.0, "\u{d7}")
@@ -164,69 +191,76 @@ pub(crate) fn spectrum_settings_pane(
             .on_hover_text(
                 "1\u{d7} crosses the pane in about two minutes. 0 holds the texture still.",
             );
-        ValueBar::new(&mut atmosphere.scale_size, 0.25..=4.0, "Scale size")
-            .unit(1.0, "\u{d7}")
-            .show(ui)
-            .on_hover_text(
-                "Size of one scale, as a share of the frame above. Small is a fine grain \
+        // Two constructions, so two sets of dials: nothing a wash carries means
+        // anything to a lit scale, and a page listing both would be mostly
+        // controls that do nothing wherever it stands.
+        if atmosphere.cloud_style == CloudStyle::Wash {
+            wash_bars(ui, atmosphere);
+        } else {
+            ValueBar::new(&mut atmosphere.scale_size, 0.25..=4.0, "Scale size")
+                .unit(1.0, "\u{d7}")
+                .show(ui)
+                .on_hover_text(
+                    "Size of one scale, as a share of the frame above. Small is a fine grain \
                  over the whole pane; large is a few broad faces. Changing it does not \
                  change how far the light bends \u{2014} Refraction is measured in scale \
                  widths.",
-            );
-        ValueBar::new(&mut atmosphere.scale_variety, 0.0..=1.0, "Variety")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "How much the scales differ in size from EACH OTHER. 0 gives every glob in \
+                );
+            ValueBar::new(&mut atmosphere.scale_variety, 0.0..=1.0, "Variety")
+                .percent()
+                .show(ui)
+                .on_hover_text(
+                    "How much the scales differ in size from EACH OTHER. 0 gives every glob in \
                  the field one radius, which is the most regular texture there is; turning \
                  it up draws each glob its own, so big ones swallow their neighbours and \
                  small ones sit in the gaps. It never opens a hole: the smallest radius it \
                  can draw still covers the plane.",
-            );
-        ValueBar::new(&mut atmosphere.scale_refract, 0.0..=1.0, "Refraction")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "How far a scale bends the light behind it, as a share of its own width. \
+                );
+            ValueBar::new(&mut atmosphere.scale_refract, 0.0..=1.0, "Refraction")
+                .percent()
+                .show(ui)
+                .on_hover_text(
+                    "How far a scale bends the light behind it, as a share of its own width. \
                  This is the dial that makes the layer a LENS: the spectrogram is read \
                  where each scale's face points, so the bands break and bend through the \
                  cloud. 0 leaves the light where it is and the cloud is just a lit body.",
-            );
-        ValueBar::new(&mut atmosphere.scale_facet, 0.0..=1.0, "Facet")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "WHERE a scale reads the light. 0 reads it where the scale's own face points, \
+                );
+            ValueBar::new(&mut atmosphere.scale_facet, 0.0..=1.0, "Facet")
+                .percent()
+                .show(ui)
+                .on_hover_text(
+                    "WHERE a scale reads the light. 0 reads it where the scale's own face points, \
                  so the picture bends through the cloud. 100% reads it at the scale's centre \
                  instead \u{2014} one value for the whole scale, so the cloud comes apart into \
                  flat quantized patches. Refraction scales the first of those and not the \
                  second.",
-            );
-        ValueBar::new(&mut atmosphere.scale_relief, 0.0..=1.0, "Scale relief")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "How domed the scales are, which is what gives them faces to catch the \
+                );
+            ValueBar::new(&mut atmosphere.scale_relief, 0.0..=1.0, "Scale relief")
+                .percent()
+                .show(ui)
+                .on_hover_text(
+                    "How domed the scales are, which is what gives them faces to catch the \
                  light with. 0 is a smooth body with no scales in it; high picks each face \
                  out separately.",
-            );
-        ValueBar::new(&mut atmosphere.scale_shade_floor, 0.0..=1.0, "Shade floor")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "How much light a face turned AWAY from the sun still keeps. 0 lets it go \
+                );
+            ValueBar::new(&mut atmosphere.scale_shade_floor, 0.0..=1.0, "Shade floor")
+                .percent()
+                .show(ui)
+                .on_hover_text(
+                    "How much light a face turned AWAY from the sun still keeps. 0 lets it go \
                  black, which is where the shading gets harsh over a loud band; 100% \
                  flattens the shading off altogether. The lit end is untouched either way, \
                  so this only lifts what was already dark.",
-            );
-        ValueBar::new(&mut atmosphere.scale_rock, 0.0..=1.0, "Rock")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "Each scale rocks on its own slow clock, so the shading on its face sways \
+                );
+            ValueBar::new(&mut atmosphere.scale_rock, 0.0..=1.0, "Rock")
+                .percent()
+                .show(ui)
+                .on_hover_text(
+                    "Each scale rocks on its own slow clock, so the shading on its face sways \
                  even under a picture holding still. It runs on the same clock as the \
                  drift, so Cloud speed at 0 holds it too.",
-            );
+                );
+        }
     }
     ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")
         .percent().show(ui).on_hover_text("Blend the live analyzer from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram style and outline opacity.");
@@ -440,6 +474,105 @@ pub(crate) fn spectrum_settings_pane(
                 );
         });
     });
+}
+
+/// The watercolour wash: a field of translucent globs, and no light anywhere in
+/// it.
+///
+/// Its own function because the two textures share only the three dials above,
+/// and because describing this look in words has failed repeatedly — the
+/// prototype's three keepers (J1, J2, J5) are one construction at three settings
+/// of these bars, so the settings are what shipped rather than a choice made
+/// here.
+fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtmosphere) {
+    ValueBar::new(&mut atmosphere.wash_size, 0.25..=4.0, "Glob size")
+        .unit(1.0, "\u{d7}")
+        .show(ui)
+        .on_hover_text(
+            "Size of one glob, as a share of the frame above. At 1\u{d7} and the fresh cloud \
+             size a glob is about a twentieth of the pane's height across, which is roughly \
+             two harmonic lines; halve it and a glob is one line wide and the music reads \
+             through the paint.",
+        );
+    ValueBar::new(&mut atmosphere.wash_variety, 0.0..=1.0, "Variety")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How much the globs differ in size from EACH OTHER. 0 gives every glob one \
+             radius; turning it up draws each its own, out of the widest band that still \
+             covers the plane with no pinhole in it.",
+        );
+    ValueBar::new(&mut atmosphere.wash_fuzz, 0.0..=1.0, "Fuzz").percent().show(ui).on_hover_text(
+        "ONE dial over everything that dissolves a glob's rim: how far it feathers into \
+             what lies beneath, how far it bleeds into what is about to cover it, and \u{2014} \
+             falling as those rise \u{2014} how much of the dark edge is left. They move \
+             together because a crisp dark crescent on an edge that is no longer there reads \
+             as a line floating in fog. 0 is hard-edged pebbles, 100% is dissolved paint.",
+    );
+    ValueBar::new(&mut atmosphere.wash_ragged, 0.0..=1.0, "Ragged")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How far a fine shared wobble carries each glob's rim off its circle. A shape \
+             control, not a softness one: the edge stays exactly as sharp, it just stops \
+             being an arc. Its top is where the layer's own coverage proof stops it.",
+        );
+    ValueBar::new(&mut atmosphere.wash_lobe, 0.0..=1.0, "Lobe shape")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How far a slow shared warp carries glob space off its grid. 0 is a bath of \
+             round bubbles; halfway is lobes leaning into each other; the top shears them \
+             into streaks.",
+        );
+    ValueBar::new(&mut atmosphere.wash_refract, 0.0..=1.0, "Refraction")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How far each glob's tone is pulled to the light at its OWN CENTRE. This is what \
+             makes the layer a lens rather than paint: the spectrogram is read one value per \
+             glob, so the bands come apart into the field. 0 reads the light exactly under \
+             the pixel and moves nothing at all.",
+        );
+    ValueBar::new(&mut atmosphere.wash_pool, 0.0..=1.0, "Edge pooling")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How dark the pigment pools along the edge a later glob lays over this one \
+             \u{2014} the one edge cue the watercolour reference has. Fuzz fades it as the \
+             rim dissolves, so this is its strength before that.",
+        );
+    ValueBar::new(&mut atmosphere.wash_grain, 0.0..=1.0, "Grain").percent().show(ui).on_hover_text(
+        "Extra pigment settling where the washes are piled deepest, which is the \
+             granulation a heavy watercolour leaves in the paper's tooth.",
+    );
+    ValueBar::new(&mut atmosphere.wash_layers, 0.0..=1.0, "Layers")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How opaque a second, finer and sparser wash is over the first. It is where the \
+             field gets its small lobes crowding the big ones, and where two washes meet the \
+             tone steps. 0 draws the coarse field alone, which is also the cheapest this \
+             texture runs.",
+        );
+    ValueBar::new(&mut atmosphere.wash_soften, 0.0..=1.0, "Softness")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How far the light a glob reads is carried from the close picture toward the \
+             wide blur above. At these glob sizes little or none is right \u{2014} the paint \
+             reads a POINT, so pre-blurring it only costs detail.",
+        );
+    ValueBar::new(&mut atmosphere.wash_wander, 0.0..=1.0, "Wander")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How fast each glob turns about its own cell, on its own rate, so the field stirs \
+             rather than sliding as one sheet. A glob near the middle of its cell barely moves \
+             and one out at the edge sweeps a circle. Which glob is on top never changes \
+             \u{2014} that would pop. It runs on the same clock as the drift, so Cloud speed \
+             at 0 holds it.",
+        );
 }
 
 #[cfg(test)]
