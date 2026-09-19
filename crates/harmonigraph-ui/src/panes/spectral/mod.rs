@@ -326,9 +326,9 @@ pub(crate) fn spectral_pane(
     // which on an axis logarithmic in frequency is not where the eye puts it.
     //
     // They stop at the now-line because that is where the spectrum stops. Run
-    // the full depth they would outrun the spectrogram's heatmap — which only
-    // grows out from the now-line as history accumulates — and sit bare on the
-    // bed ahead of it.
+    // the full depth they would outrun the spectrogram's heatmap — which starts
+    // half an analysis window back from the now-line and grows out from there
+    // as history accumulates (#914) — and sit bare on the bed ahead of it.
     //
     // The guard is that same rule at its limit rather than a crash guard: a
     // `split` of 0 is a pane with no spectrum on it at all (whole-song mode,

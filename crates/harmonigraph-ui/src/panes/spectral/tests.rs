@@ -2132,10 +2132,21 @@ fn the_live_strip_stops_half_a_window_short_of_the_now_line() {
         assert!(far > near, "{window:?}: the strip spans no depth at all");
     }
 
-    // And never nearer than the region boundary. A column stamped at or past
-    // `now` — a clock hiccup, or an offline feed running ahead — would put the
-    // near edge inside the spectrum region, which the heatmap does not own.
+    // And never nearer than the region boundary: a column stamped at or past
+    // `now` — a clock hiccup, or an offline feed running ahead — has a depth
+    // inside the spectrum region, which the heatmap does not own.
+    //
+    // Read this as the RULE being pinned and not as cover for the `max(split)`
+    // that states it. Two clamps stand between this fixture and a failure —
+    // `depth_of`'s own and the `max` — and deleting either one alone leaves
+    // this passing byte for byte. `depth_of_unclamped` is what says the fixture
+    // reaches the situation at all rather than being a column the rule never
+    // had an opinion about.
     let ahead = now + 0.5;
+    assert!(
+        time.depth_of_unclamped(ahead) < split,
+        "the future column is not actually over the divider, so nothing here is clamped",
+    );
     let (near, _) = super::spectrogram::strip_depths(&time, split, &run(ahead), ahead);
     assert_eq!(near, split, "a column from the future dragged the strip over the divider");
 }

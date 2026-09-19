@@ -179,24 +179,52 @@ pub(super) fn heatmap_vertices(
 /// construction and nothing nearer than it has been measured at all. Drawing to
 /// the region boundary anyway left that half-window filled by the newest column
 /// held flat — a band of identical levels at the now-line that reads as the
-/// spectrum curve leaking into the heatmap (#914). What shows there now is the
-/// bed, which is what the far edge already shows while history is still filling
-/// rather than a new kind of hole. Its width is the analyzer's alone: 9 px on
-/// Fast, 19 on Balanced, 37 on Precise at a 1.5 s Span over 326 px, and
+/// spectrum curve leaking into the heatmap (#914). What is left out instead is
+/// the same thing the far edge already leaves out while history is still
+/// filling, rather than a new kind of hole. Its width is the analyzer's alone:
+/// 9 px on Fast, 19 on Balanced, 37 on Precise at a 1.5 s Span over 326 px, and
 /// narrower as the Span lengthens.
 ///
-/// Never nearer than `split`: a column stamped at or past `now` (a clock hiccup,
-/// or an offline feed running ahead) would otherwise put the near edge inside
-/// the spectrum region, which the heatmap does not own. `depth_of` clamps into
-/// the region too, and the `max` is this rule stated where it is meant rather
-/// than borrowed from that one.
+/// **What lands in that width depends on the atmosphere, and at the shipped
+/// defaults it is not a plain strip.** `time_softness` is 120 ms out of the
+/// box, which is WIDER than the band being left out on Fast or Balanced, so the
+/// blur and the cloud reach forward over it and what remains is a leading-edge
+/// DIMMING: on the `spectrogram-short-pane` golden the lit rows near the edge
+/// fall from `(43, 84, 112)` to `(39, 68, 99)` while a cloud-lit row moves by a
+/// couple of levels and the column mean by about 1.5/255. Take Time softness to
+/// 0 — the Plain configuration #914 was measured in — and it is the plain strip
+/// the width above describes, a hard heatmap-to-bed boundary: the same frame
+/// then moves by up to 140/255 and only in its last 19 columns. Both are the
+/// intended picture; which one is on screen is the softness dial's answer, not
+/// this function's.
 ///
-/// The edge steps by one FFT hop (8 ms, under 2 px at the tightest Span) rather
-/// than sliding, because columns arrive 125x a second while the pane scrolls
-/// continuously. A grace period used to hold the edge at `split` until a stream
-/// looked stale, which hid that step — and filled the band with held data to do
-/// it. Stopping at the newest column always is what `7f2b3d38` already did for
-/// a stale stream, now that there is nothing to be graceful about.
+/// Never nearer than `split`: a column stamped at or past `now` (a clock hiccup,
+/// or an offline feed running ahead) has a depth inside the spectrum region,
+/// which the heatmap does not own. The `max` **cannot fail today** — `depth_of`
+/// already clamps into the region, so it is a second clamp over a first — and
+/// it is kept as the rule stated where it is meant rather than borrowed from a
+/// helper that is free to stop clamping. Read it as declaration, not as a
+/// guard anything measures; the test beside it says the same.
+///
+/// **The edge steps rather than sliding**, and nothing damps it: columns arrive
+/// on the analyzer's 8 ms hop while the pane scrolls continuously, so `now -
+/// newest` sawtooths across one hop every frame and the edge wobbles by a hop's
+/// worth of depth. Quote that with the pane it is measured on, the way the
+/// widths above are: 1.7 points over 326, but a docked Spectral pane is around
+/// 950 points of depth region on a 1200-point pane at the fresh `roll_fraction`,
+/// and at the Span dial's floor of 1 s that is **about 7.6 points of wobble at
+/// 60 fps** — on a hard heatmap-to-bed boundary, in exactly the Time-softness-0
+/// configuration where the boundary is hard.
+///
+/// That is the flickering sliver the `FRESH` grace was suppressing, and nothing
+/// replaces it. What makes the trade worth taking at every Span rather than at
+/// some of them is that both quantities are times: the wobble is one
+/// [`FFT_INTERVAL`](crate::AudioSpectrum::FFT_INTERVAL) and the band it was
+/// hiding is half an analysis window, so the wobble is a fifth of the artefact
+/// on Fast and a twentieth on Precise whatever the Span converts them to. The
+/// grace bought that fifth by filling the band with held data, which is the bug
+/// above. Stopping at the newest column always is what `7f2b3d38` already did
+/// for a stale stream, now that there is nothing to be graceful about.
 ///
 /// **Whole-song** (offline playhead) takes the other branch entirely: the take
 /// is present from the first frame, so the strip fills the run end to end and
