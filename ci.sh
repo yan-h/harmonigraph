@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Canonical full CI gate: formatting, markdown clause breaks and local links, workspace clippy with warnings denied,
 # workspace tests with harmonigraph-render excluded, the plugin package check, the release all-targets check, harmonigraph-render's own tests,
+# the committed Metal corpus under strict resolution,
 # vendored GUI crates' tests, the optional CLAP probe fixture and the gated startup-probe example, doc links, the harmonigraph-core dependency
 # guard, the security-audit trigger split, the CI group split, pinned shared
 # skills in fresh worktrees, worktree reclaim safety, and the registered-worktree bundle swap.
@@ -184,6 +185,74 @@ run cargo check --release --workspace --all-targets
 # two the `cfg` deletes — narrowing it to a filter would silently drop the rest.
 run cargo test -p harmonigraph-render
 
+# ...and the one question none of the runs above can ask: is the committed Metal
+# corpus still valid for THIS tree's shaders? A key the corpus is missing makes
+# the renderer compile that library from source and carry on, so every gate here
+# passes against a stale corpus. The only local trace was an `eprintln!` that
+# libtest replays for FAILING tests, which on a green run is never — so the
+# documented grep for it answered "fine" in both states, and did that for a
+# whole batch of sessions before anyone ran it against a corpus known to be
+# stale (#947). The real verdict arrived on the PR, as a `Metal shader assets`
+# workflow failing `strict-catalog` beside a green Full CI.
+#
+# `strict` is what turns that into a red test here: it drops the
+# compile-from-source fallback, so a missing key becomes a rejected library and
+# a pipeline that fails naming the key and the pass it was for. The test is the
+# CATALOG rather than the golden frames, because the catalog is the enumeration
+# of production constructors the corpus is generated FROM — so it covers every
+# library in the corpus, where the goldens cover only what they happen to draw
+# (6 of them, on the stale tree this was measured against). It is the same test
+# in the same mode that the workflow reports as `strict-catalog`, so the verdict
+# here and the verdict there are one thing.
+#
+# The cost is one more compilation of harmonigraph-render, under
+# `shader-assets-tools` — 12.8s on an 8-core M-series, and no dependency: the
+# feature only admits the catalog, the per-pane `asset_catalog` constructors it
+# calls, and the `Export` mode — plus 0.9s to run. Folding the feature into the
+# run ABOVE would make it free, and is deliberately not done: that gate's whole
+# argument is that it runs render's tests in the feature set the bundle ships,
+# and this feature is not in it. `isolated` is the group with room, having
+# finished ~47s ahead of `workspace` on the run #922 landed against.
+#
+# Two ways this gate could pass while guarding nothing, both checked here rather
+# than assumed, since a guard that cannot fail is the defect it exists to catch.
+# A libtest filter that matches NO test exits 0, so a renamed or moved test
+# would make this a green no-op — hence the count. And the corpus is a Metal
+# artifact whose module is `cfg(target_os = "macos")`, so off Darwin the count
+# could never be met and the gate would go red for a reason that is not a
+# defect; there it skips instead. A macOS machine with no Metal adapter still
+# FAILS, deliberately, on the same policy as HARMONIGRAPH_REQUIRE_GPU.
+if in_group; then
+  echo
+  echo "▶ HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render production_metal_asset_catalog"
+  if [ "$(uname -s)" != Darwin ]; then
+    echo "  skipped — the Metal corpus exists only on macOS"
+  else
+    corpus_status=0
+    corpus=$(HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render \
+      --features shader-assets-tools -- --ignored --exact \
+      shader_assets::catalog::production_metal_asset_catalog 2>&1) || corpus_status=$?
+    echo "$corpus"
+    if [ "$corpus_status" != 0 ]; then
+      echo "✗ the committed Metal corpus does not cover this tree's shaders." >&2
+      echo "  Regenerate it on the runner, into the SAME commit as the change:" >&2
+      echo "    gh workflow run \"Metal shader assets\" --ref <branch> -f regenerate=true" >&2
+      echo "  then import the production-metal-assets artifact with tools/shader-assets.py." >&2
+      exit 1
+    fi
+    case "$corpus" in
+      *"test result: ok. 1 passed"*)
+        echo "  ok — every production library resolved from the committed corpus"
+        ;;
+      *)
+        echo "✗ the strict-catalog filter matched no test, so this gate guarded nothing." >&2
+        echo "  Did shader_assets::catalog::production_metal_asset_catalog move or get renamed?" >&2
+        exit 1
+        ;;
+    esac
+  fi
+fi
+
 # The vendored crates are `exclude`d from the workspace (the `[workspace]`
 # table's own key, in Cargo.toml), so `--workspace` compiles them as
 # dependencies and runs none of their tests. The GUI patches carry focused
@@ -315,7 +384,7 @@ sccache --show-stats 2>/dev/null \
 
 echo
 if [ "$CI_GROUP" = all ]; then
-  echo "✅ full CI passed (fmt + markdown breaks + markdown links + workspace clippy + workspace tests + plugin check + startup probe + release check + render tests + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + shared-skills worktrees + reclaim safety + plugin swap)"
+  echo "✅ full CI passed (fmt + markdown breaks + markdown links + workspace clippy + workspace tests + plugin check + startup probe + release check + render tests + strict Metal corpus + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + shared-skills worktrees + reclaim safety + plugin swap)"
 else
   echo "✅ CI group '$CI_GROUP' passed — one of: ${CI_GROUPS[*]}"
 fi

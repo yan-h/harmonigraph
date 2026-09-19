@@ -141,6 +141,15 @@ mod metal {
                     "missing Metal asset {key:016x}; regenerate the production catalog"
                 ));
             }
+            // A diagnostic, and deliberately not the check for a stale corpus,
+            // however much it reads like one. libtest captures stderr per test
+            // and replays it only for a test that FAILS, so inside a green
+            // `cargo test` this line is swallowed and a grep for it reports the
+            // same silence whether the corpus is complete or not — which is
+            // what CLAUDE.md called the definition until #947. The check is
+            // `production_metal_asset_catalog` under
+            // `HARMONIGRAPH_SHADER_ASSETS=strict`, where the branch above
+            // rejects instead of falling back and ci.sh gates it.
             if self.reported.lock().expect("asset diagnostic lock").insert(key) {
                 eprintln!(
                     "Harmonigraph: Metal asset {key:016x} unavailable; compiling from source"
