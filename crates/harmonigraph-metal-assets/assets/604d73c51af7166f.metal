@@ -23,12 +23,10 @@ struct Cloud {
     metal::float2 drift;
     float time;
     float cloud_depth;
-    float cloud_scale;
     float scale_size;
     float scale_variety;
     float scale_refract;
     float scale_relief;
-    float scale_shade_floor;
     float scale_facet;
     float scale_rock;
     uint cloud_style;
@@ -44,7 +42,7 @@ struct Cloud {
     float wash_soften;
     float wash_wander;
     float wash_black;
-    char _pad33[4];
+    char _pad31[4];
 };
 struct Pile {
     metal::float2 face;
@@ -69,15 +67,19 @@ struct Painted {
     float tone;
     float hold;
 };
+constant float CLOUD_UNITS = 10.0;
+constant float SCALE_CELLS = 2.7272727;
 constant float DOME_RADIUS = 1.15;
 constant float DOME_JITTER = 0.3;
 constant float DOME_RADIUS_MIN = 0.95;
 constant float DOME_RADIUS_MAX = 1.32;
 constant float DOME_UNION = 9.0;
+constant float DOME_VARIETY_GAIN = 5.0;
 constant float DOME_FACE = 1.5122874;
 constant float ROCK_TILT = 0.3;
 constant float SUN_LEAN = 1.0;
 constant float SUN_KNEE = 0.03;
+constant float RELIEF_FLOOR_FALL = 3.22;
 constant float DOME_LACUNARITY = 2.1;
 constant float DOME_FINE_GAIN = 0.22;
 constant float CLOUD_SHADE = 0.64;
@@ -199,10 +201,11 @@ metal::float4 density_color(
     return metal::float4(_e2, 1.0);
 }
 
-metal::float3 cloud_hash3_(
+metal::float4 cloud_hash4_(
     metal::int2 cell
 ) {
     uint n = {};
+    uint m = {};
     n = (as_type<uint>(cell.x) * 2654435769u) ^ (as_type<uint>(cell.y) * 2246822507u);
     uint _e11 = n;
     uint _e12 = n;
@@ -214,9 +217,15 @@ metal::float3 cloud_hash3_(
     uint _e26 = n;
     n = _e25 ^ (_e26 >> 16u);
     uint _e30 = n;
-    uint _e36 = n;
-    uint _e44 = n;
-    return metal::float3(static_cast<float>(_e30 & 1023u) / 1023.0, static_cast<float>((_e36 >> 10u) & 1023u) / 1023.0, static_cast<float>((_e44 >> 20u) & 1023u) / 1023.0);
+    m = (_e30 ^ 3039394381u) * 1759714724u;
+    uint _e36 = m;
+    uint _e37 = m;
+    m = _e36 ^ (_e37 >> 15u);
+    uint _e41 = n;
+    uint _e47 = n;
+    uint _e55 = n;
+    uint _e63 = m;
+    return metal::float4(static_cast<float>(_e41 & 1023u) / 1023.0, static_cast<float>((_e47 >> 10u) & 1023u) / 1023.0, static_cast<float>((_e55 >> 20u) & 1023u) / 1023.0, static_cast<float>(_e63 & 1023u) / 1023.0);
 }
 
 metal::int2 naga_f2i32(metal::float2 value) {
@@ -233,6 +242,7 @@ Pile dome_octave(
     metal::float2 rock = metal::float2(0.0);
     int j = -1;
     int i = {};
+    float gain = {};
     Pile out = {};
     metal::float2 base_2 = metal::floor(r);
     uint2 loop_bound = uint2(4294967295u);
@@ -241,8 +251,8 @@ Pile dome_octave(
         if (metal::all(loop_bound == uint2(0u))) { break; }
         loop_bound -= uint2(loop_bound.y == 0u, 1u);
         if (!loop_init) {
-            int _e121 = j;
-            j = as_type<int>(as_type<uint>(_e121) + as_type<uint>(1));
+            int _e144 = j;
+            j = as_type<int>(as_type<uint>(_e144) + as_type<uint>(1));
         }
         loop_init = false;
         int _e15 = j;
@@ -258,8 +268,8 @@ Pile dome_octave(
                 if (metal::all(loop_bound_1 == uint2(0u))) { break; }
                 loop_bound_1 -= uint2(loop_bound_1.y == 0u, 1u);
                 if (!loop_init_1) {
-                    int _e118 = i;
-                    i = as_type<int>(as_type<uint>(_e118) + as_type<uint>(1));
+                    int _e141 = i;
+                    i = as_type<int>(as_type<uint>(_e141) + as_type<uint>(1));
                 }
                 loop_init_1 = false;
                 int _e20 = i;
@@ -271,7 +281,7 @@ Pile dome_octave(
                     int _e24 = i;
                     int _e25 = j;
                     metal::int2 cell_3 = as_type<metal::int2>(as_type<metal::uint2>(naga_f2i32(base_2)) + as_type<metal::uint2>(metal::int2(_e24, _e25)));
-                    metal::float3 _e28 = cloud_hash3_(cell_3);
+                    metal::float4 _e28 = cloud_hash4_(cell_3);
                     int _e29 = i;
                     int _e31 = j;
                     metal::float2 centre = ((base_2 + metal::float2(static_cast<float>(_e29), static_cast<float>(_e31))) + metal::float2(0.5)) + ((_e28.xy - metal::float2(0.5)) * DOME_JITTER);
@@ -284,43 +294,50 @@ Pile dome_octave(
                     }
                     float root = metal::sqrt(q);
                     float h = q * root;
-                    float w = metal::exp(DOME_UNION * h);
-                    float _e67 = weight;
-                    weight = _e67 + w;
-                    metal::float2 _e69 = face;
-                    face = _e69 + ((w * -(((DOME_FACE * root) * radius))) * d);
-                    metal::float2 _e77 = to_centre;
-                    to_centre = _e77 + (w * (centre - r));
-                    float _e83 = cloud.scale_rock;
-                    if (_e83 > 0.0) {
-                        metal::float2 _e86 = rock;
-                        float _e89 = cloud.time;
-                        float _e103 = cloud.time;
-                        rock = _e86 + (w * metal::float2(metal::sin((_e89 * (0.2 + (0.3 * _e28.x))) + (_e28.y * 6.2831855)), metal::cos((_e103 * (0.25 + (0.2 * _e28.y))) + (_e28.x * 6.2831855))));
+                    gain = 1.0;
+                    float _e68 = cloud.scale_variety;
+                    if (_e68 > 0.0) {
+                        float _e74 = cloud.scale_variety;
+                        gain = metal::exp2((DOME_VARIETY_GAIN * _e74) * ((2.0 * _e28.w) - 1.0));
+                    }
+                    float _e83 = gain;
+                    float w = _e83 * (metal::exp(DOME_UNION * h) - 1.0);
+                    float _e90 = weight;
+                    weight = _e90 + w;
+                    metal::float2 _e92 = face;
+                    face = _e92 + ((w * -(((DOME_FACE * root) * radius))) * d);
+                    metal::float2 _e100 = to_centre;
+                    to_centre = _e100 + (w * (centre - r));
+                    float _e106 = cloud.scale_rock;
+                    if (_e106 > 0.0) {
+                        metal::float2 _e109 = rock;
+                        float _e112 = cloud.time;
+                        float _e126 = cloud.time;
+                        rock = _e109 + (w * metal::float2(metal::sin((_e112 * (0.2 + (0.3 * _e28.x))) + (_e28.y * 6.2831855)), metal::cos((_e126 * (0.25 + (0.2 * _e28.y))) + (_e28.x * 6.2831855))));
                     }
                 }
             }
         }
     }
-    float _e125 = weight;
-    if (_e125 <= 0.0) {
+    float _e148 = weight;
+    if (_e148 <= 0.0) {
         out.face = metal::float2(0.0);
         out.to_centre = metal::float2(0.0);
         out.rock = metal::float2(0.0);
-        Pile _e137 = out;
-        return _e137;
+        Pile _e160 = out;
+        return _e160;
     }
-    metal::float2 _e139 = face;
-    float _e140 = weight;
-    out.face = _e139 / metal::float2(_e140);
-    metal::float2 _e144 = to_centre;
-    float _e145 = weight;
-    out.to_centre = _e144 / metal::float2(_e145);
-    metal::float2 _e149 = rock;
-    float _e150 = weight;
-    out.rock = _e149 / metal::float2(_e150);
-    Pile _e153 = out;
-    return _e153;
+    metal::float2 _e162 = face;
+    float _e163 = weight;
+    out.face = _e162 / metal::float2(_e163);
+    metal::float2 _e167 = to_centre;
+    float _e168 = weight;
+    out.to_centre = _e167 / metal::float2(_e168);
+    metal::float2 _e172 = rock;
+    float _e173 = weight;
+    out.rock = _e172 / metal::float2(_e173);
+    Pile _e176 = out;
+    return _e176;
 }
 
 Pile cloud_domes(
@@ -378,48 +395,45 @@ metal::float3 scale_clouds(
     float _e21 = cloud.ppp;
     metal::float2 _e26 = cloud.origin;
     metal::float2 pt_3 = (position_1 / metal::float2(_e21)) - _e26;
-    float _e30 = cloud.cloud_scale;
-    float units = 5.0 / _e30;
-    metal::float2 _e35 = cloud.size;
-    float _e42 = cloud.size.y;
-    metal::float2 _e48 = cloud.drift;
-    metal::float2 q_1 = (((pt_3 - (_e35 * 0.5)) / metal::float2(_e42)) * units) + _e48;
-    float _e52 = cloud.scale_size;
-    float scale_units = 6.0 / _e52;
-    float _e58 = cloud.size.y;
-    float scale_points = (_e58 / units) / scale_units;
-    Pile _e62 = cloud_domes(q_1 * scale_units, cloud);
-    metal::float2 face_1 = _e62.face;
-    float _e66 = cloud.scale_refract;
-    float bend = _e66 * scale_points;
-    float _e74 = cloud.scale_facet;
-    metal::float2 lookup = metal::mix(-(face_1) * bend, _e62.to_centre * scale_points, _e74);
-    float _e77 = cloud_light(pt_3 + lookup, close_light, wide_light, cloud_sampler, cloud);
+    metal::float2 _e30 = cloud.size;
+    float _e37 = cloud.size.y;
+    metal::float2 _e44 = cloud.drift;
+    metal::float2 q_1 = (((pt_3 - (_e30 * 0.5)) / metal::float2(_e37)) * CLOUD_UNITS) + _e44;
+    float _e49 = cloud.scale_size;
+    float scale_units = SCALE_CELLS / _e49;
+    float _e54 = cloud.size.y;
+    float scale_points = (_e54 / CLOUD_UNITS) / scale_units;
+    Pile _e59 = cloud_domes(q_1 * scale_units, cloud);
+    metal::float2 face_1 = _e59.face;
+    float _e63 = cloud.scale_refract;
+    float bend = _e63 * scale_points;
+    float _e71 = cloud.scale_facet;
+    metal::float2 lookup = metal::mix(-(face_1) * bend, _e59.to_centre * scale_points, _e71);
+    float _e74 = cloud_light(pt_3 + lookup, close_light, wide_light, cloud_sampler, cloud);
     metal::float2 reach = metal::float2(scale_points * 0.75, 0.0);
-    float _e84 = cloud_light(pt_3 + reach.xy, close_light, wide_light, cloud_sampler, cloud);
-    float _e87 = cloud_light(pt_3 - reach.xy, close_light, wide_light, cloud_sampler, cloud);
-    float _e91 = cloud_light(pt_3 + reach.yx, close_light, wide_light, cloud_sampler, cloud);
-    float _e94 = cloud_light(pt_3 - reach.yx, close_light, wide_light, cloud_sampler, cloud);
-    metal::float2 grad = metal::float2(_e84 - _e87, _e91 - _e94);
+    float _e81 = cloud_light(pt_3 + reach.xy, close_light, wide_light, cloud_sampler, cloud);
+    float _e84 = cloud_light(pt_3 - reach.xy, close_light, wide_light, cloud_sampler, cloud);
+    float _e88 = cloud_light(pt_3 + reach.yx, close_light, wide_light, cloud_sampler, cloud);
+    float _e91 = cloud_light(pt_3 - reach.yx, close_light, wide_light, cloud_sampler, cloud);
+    metal::float2 grad = metal::float2(_e81 - _e84, _e88 - _e91);
     metal::float2 lean = grad * (SUN_LEAN / (SUN_KNEE + metal::length(grad)));
     float relief = cloud.scale_relief;
     tilt = face_1;
-    float _e109 = cloud.scale_rock;
-    if (_e109 > 0.0) {
-        metal::float2 _e112 = tilt;
-        float _e116 = cloud.scale_rock;
-        tilt = _e112 + (_e62.rock * (_e116 * ROCK_TILT));
+    float _e106 = cloud.scale_rock;
+    if (_e106 > 0.0) {
+        metal::float2 _e109 = tilt;
+        float _e113 = cloud.scale_rock;
+        tilt = _e109 + (_e59.rock * (_e113 * ROCK_TILT));
     }
-    metal::float2 _e121 = tilt;
-    metal::float3 normal = metal::normalize(metal::float3(-(_e121) * relief, 1.0));
+    metal::float2 _e118 = tilt;
+    metal::float3 normal = metal::normalize(metal::float3(-(_e118) * relief, 1.0));
     metal::float3 sun = metal::normalize(metal::float3(lean, 1.0));
     float lambert = metal::max(metal::dot(normal, sun), 0.0) / sun.z;
-    float _e137 = cloud.scale_shade_floor;
-    float diffuse = metal::mix(_e137, 1.0, lambert);
-    float lit = (_e77 * diffuse) * CLOUD_SHADE;
-    metal::float3 _e146 = palette_color(metal::clamp(lit, 0.0, 1.0), lut);
-    float _e149 = cloud.cloud_depth;
-    return metal::mix(base, _e146, _e149);
+    float diffuse = metal::mix(metal::pow(1.0 - relief, RELIEF_FLOOR_FALL), 1.0, lambert);
+    float lit = (_e74 * diffuse) * CLOUD_SHADE;
+    metal::float3 _e144 = palette_color(metal::clamp(lit, 0.0, 1.0), lut);
+    float _e147 = cloud.cloud_depth;
+    return metal::mix(base, _e144, _e147);
 }
 
 metal::float3 wash_hash(
@@ -765,60 +779,58 @@ metal::float3 wash_clouds(
     float _e21 = cloud.ppp;
     metal::float2 _e26 = cloud.origin;
     metal::float2 pt_4 = (position_2 / metal::float2(_e21)) - _e26;
-    float _e30 = cloud.cloud_scale;
-    float units_1 = 5.0 / _e30;
-    metal::float2 _e35 = cloud.size;
-    float _e42 = cloud.size.y;
-    metal::float2 _e48 = cloud.drift;
-    metal::float2 q_2 = (((pt_4 - (_e35 * 0.5)) / metal::float2(_e42)) * units_1) + _e48;
-    float _e53 = cloud.wash_size;
-    float cells = WASH_CELLS / _e53;
-    float _e58 = cloud.size.y;
-    float pane_per_cell_1 = (_e58 / units_1) / cells;
+    metal::float2 _e30 = cloud.size;
+    float _e37 = cloud.size.y;
+    metal::float2 _e44 = cloud.drift;
+    metal::float2 q_2 = (((pt_4 - (_e30 * 0.5)) / metal::float2(_e37)) * CLOUD_UNITS) + _e44;
+    float _e49 = cloud.wash_size;
+    float cells = WASH_CELLS / _e49;
+    float _e54 = cloud.size.y;
+    float pane_per_cell_1 = (_e54 / CLOUD_UNITS) / cells;
     metal::float2 r_5 = q_2 * cells;
     warped = r_5;
-    float _e65 = cloud.wash_lobe;
-    if (_e65 > 0.0) {
-        float _e71 = cloud.wash_lobe;
-        float amp = WASH_WARP * _e71;
-        metal::float2 _e73 = warped;
-        float _e79 = wash_fbm(r_5 * WASH_WARP_SCALE, 71u);
-        float _e89 = wash_fbm((r_5 * WASH_WARP_SCALE) + metal::float2(37.0, -19.0), 73u);
-        warped = _e73 + ((amp * 2.0) * metal::float2(_e79 - 0.5, _e89 - 0.5));
+    float _e62 = cloud.wash_lobe;
+    if (_e62 > 0.0) {
+        float _e68 = cloud.wash_lobe;
+        float amp = WASH_WARP * _e68;
+        metal::float2 _e70 = warped;
+        float _e76 = wash_fbm(r_5 * WASH_WARP_SCALE, 71u);
+        float _e86 = wash_fbm((r_5 * WASH_WARP_SCALE) + metal::float2(37.0, -19.0), 73u);
+        warped = _e70 + ((amp * 2.0) * metal::float2(_e76 - 0.5, _e86 - 0.5));
     }
-    float _e99 = cloud.wash_ragged;
-    if (_e99 > 0.0) {
-        float _e105 = cloud.wash_ragged;
-        float _e110 = wash_fbm(r_5 * WASH_RAGGED_SCALE, 41u);
-        wob_2 = (WASH_RAGGED * _e105) * (_e110 - 1.0);
+    float _e96 = cloud.wash_ragged;
+    if (_e96 > 0.0) {
+        float _e102 = cloud.wash_ragged;
+        float _e107 = wash_fbm(r_5 * WASH_RAGGED_SCALE, 41u);
+        wob_2 = (WASH_RAGGED * _e102) * (_e107 - 1.0);
     }
-    metal::float2 _e114 = warped;
-    float _e117 = wob_2;
-    Wash _e118 = wash_scan(_e114, 1u, 1.0, _e117, cloud);
-    metal::float2 _e119 = warped;
-    float _e121 = wash_average_pile(1.0, cloud);
-    Painted _e122 = wash_tone(_e118, _e119, pane_per_cell_1, pt_4, _e121, close_light, wide_light, cloud_sampler, cloud);
-    paint = _e122;
-    float _e126 = cloud.wash_layers;
-    if (_e126 > 0.0) {
-        metal::float2 _e129 = warped;
-        metal::float2 fine_r = (_e129 * WASH_LACUNARITY) + metal::float2(17.3, 5.9);
-        float _e138 = wob_2;
-        Wash _e139 = wash_scan(fine_r, 2u, WASH_FINE_OCCUPANCY, _e138, cloud);
-        float _e143 = wash_average_pile(WASH_FINE_OCCUPANCY, cloud);
-        Painted _e144 = wash_tone(_e139, fine_r, pane_per_cell_1 / WASH_LACUNARITY, pt_4, _e143, close_light, wide_light, cloud_sampler, cloud);
-        float _e147 = cloud.wash_layers;
-        float over = _e147 * _e139.cover;
-        float _e152 = paint.tone;
-        paint.tone = metal::mix(_e152, _e144.tone, over);
-        float _e157 = paint.hold;
-        paint.hold = metal::mix(_e157, _e144.hold, over);
+    metal::float2 _e111 = warped;
+    float _e114 = wob_2;
+    Wash _e115 = wash_scan(_e111, 1u, 1.0, _e114, cloud);
+    metal::float2 _e116 = warped;
+    float _e118 = wash_average_pile(1.0, cloud);
+    Painted _e119 = wash_tone(_e115, _e116, pane_per_cell_1, pt_4, _e118, close_light, wide_light, cloud_sampler, cloud);
+    paint = _e119;
+    float _e123 = cloud.wash_layers;
+    if (_e123 > 0.0) {
+        metal::float2 _e126 = warped;
+        metal::float2 fine_r = (_e126 * WASH_LACUNARITY) + metal::float2(17.3, 5.9);
+        float _e135 = wob_2;
+        Wash _e136 = wash_scan(fine_r, 2u, WASH_FINE_OCCUPANCY, _e135, cloud);
+        float _e140 = wash_average_pile(WASH_FINE_OCCUPANCY, cloud);
+        Painted _e141 = wash_tone(_e136, fine_r, pane_per_cell_1 / WASH_LACUNARITY, pt_4, _e140, close_light, wide_light, cloud_sampler, cloud);
+        float _e144 = cloud.wash_layers;
+        float over = _e144 * _e136.cover;
+        float _e149 = paint.tone;
+        paint.tone = metal::mix(_e149, _e141.tone, over);
+        float _e154 = paint.hold;
+        paint.hold = metal::mix(_e154, _e141.hold, over);
     }
-    float _e161 = paint.tone;
-    float _e166 = paint.hold;
-    metal::float3 _e168 = palette_color(metal::clamp(_e161, WASH_TONE_FLOOR, 1.0) * _e166, lut);
-    float _e171 = cloud.cloud_depth;
-    return metal::mix(base_1, _e168, _e171);
+    float _e158 = paint.tone;
+    float _e163 = paint.hold;
+    metal::float3 _e165 = palette_color(metal::clamp(_e158, WASH_TONE_FLOOR, 1.0) * _e163, lut);
+    float _e168 = cloud.cloud_depth;
+    return metal::mix(base_1, _e165, _e168);
 }
 
 metal::float4 clouded(
