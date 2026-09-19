@@ -13,7 +13,7 @@ use crate::widgets::range_probe::collect;
 use crate::*;
 use harmonigraph_core::configuration::{ConfigMutation, ConfigReducer, PolicyConfig, TuningModes};
 use harmonigraph_scene::{
-    Projection, ShadowKernel, SpectralAtmosphere, SpectralReading, SEVENS_LAYER_LIMIT,
+    Projection, ShadowKernel, SpectralAtmosphere, SpectralReading, ViewConfig, SEVENS_LAYER_LIMIT,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -44,10 +44,10 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     };
     let a = &mut saved.picture.appearance;
     macro_rules! poison { ($owner:expr; $($field:ident),+ $(,)?) => { $( $owner.$field = v; )+ }; }
-    poison!(a.view; render_scale, bloom_strength, sevens_size, label_scale, sounding_ink,
+    poison!(a.view; spacing, render_scale, bloom_strength, sevens_size, label_scale, sounding_ink,
         octave_center, octave_extra_size, octave_extra_blend, mark_delay, fade_shape,
         spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
-        spectral_width, spectral_ring_range, ring_gap, octave_gap,
+        spectral_width, spectral_ring_range, spectral_ring_width, ring_gap, octave_gap,
         ring_inner, band_width, mark_thickness, lattice_ground, marker_ink,
         plus_arm, plus_taper, plus_width, glow_reach, glow_strength, glow_accumulation,
         glow_blend, glow_wash, glow_attack, glow_release);
@@ -348,4 +348,65 @@ fn a_fresh_appearance_is_a_fixed_point_of_its_own_normalize() {
         normalized.serialize(),
         "the load door repairs a value the fresh appearance ships with",
     );
+}
+
+/// Every `key:value` at the top level of one serialized struct, in order. The
+/// depth count is what keeps a nested struct's own commas out of the split.
+///
+/// A narrower walk than `tests::persist`'s `top_level_pairs`, which takes a
+/// whole blob apart and is that module's own.
+fn top_level(serialized: &str) -> Vec<(&str, &str)> {
+    let inner = serialized
+        .strip_prefix('(')
+        .and_then(|rest| rest.strip_suffix(')'))
+        .expect("a serialized struct is parenthesized");
+    let (mut fields, mut depth, mut start) = (Vec::new(), 0i32, 0usize);
+    for (at, c) in inner.char_indices() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                fields.push(&inner[start..at]);
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    fields.push(&inner[start..]);
+    fields.into_iter().map(|field| field.split_once(':').expect("a pair has a colon")).collect()
+}
+
+/// The `poison!` block above is hand-written, so a float added to `ViewConfig`
+/// joins this guard only if somebody remembers to name it there — `spacing`
+/// and `spectral_ring_width` were both simply missing, and the second of those
+/// is a handle on the Layers bar.
+///
+/// So the list is checked against the struct's OWN serialized form rather than
+/// against a second list: every top-level key whose fresh value is a decimal
+/// number is a dialled float, and the guard has to have moved it. Integers
+/// (the sevens stack, the naming reach, the octave wheel) and choices carry no
+/// decimal point, and a nested struct is not a number — the curve, the note
+/// animation, the atmosphere, the gradient and the four shadow groups are each
+/// poisoned or excluded on their own terms above.
+#[test]
+fn the_loaded_state_guard_poisons_every_dialled_view_float() {
+    let mut saved = fresh();
+    poison(&mut saved, Edge::High);
+    let opened = ron::to_string(&ViewConfig::default()).expect("a view serializes");
+    let poisoned = ron::to_string(&saved.picture.appearance.view).expect("a view serializes");
+    let (mut dialled, mut missed) = (0, Vec::new());
+    for ((key, was), (again, now)) in top_level(&opened).into_iter().zip(top_level(&poisoned)) {
+        assert_eq!(key, again, "two serializations of one struct named different fields");
+        if !was.contains('.') || was.parse::<f32>().is_err() {
+            continue;
+        }
+        dialled += 1;
+        if was == now {
+            missed.push(key);
+        }
+    }
+    assert!(missed.is_empty(), "the loaded-state guard never poisons {missed:?}");
+    // What counts as a dialled float is read off the spelling, so a change in
+    // RON's would otherwise leave this passing over nothing at all.
+    assert!(dialled > 30, "only {dialled} of the view's fields read as dialled floats");
 }
