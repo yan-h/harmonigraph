@@ -106,15 +106,6 @@ float density_decode(
     return (2.0 * y) / (0.1 + metal::sqrt(0.01 + (3.6 * y)));
 }
 
-metal::float3 linear_from_gamma_rgb(
-    metal::float3 srgb
-) {
-    metal::bool3 cutoff = srgb < metal::float3(0.04045);
-    metal::float3 lower = srgb / metal::float3(12.92);
-    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
-    return metal::select(higher, lower, cutoff);
-}
-
 float baked_density(
     metal::float2 position,
     metal::texture2d<float, metal::access::sample> close_light,
@@ -476,7 +467,7 @@ Glob wash_glob(
     Glob out_2 = {};
     metal::float3 _e7 = wash_hash(cell_2, salt_3 + 77u);
     out_2.order = _e7.x;
-    if (_e7.y >= occupancy) {
+    if (_e7.y > occupancy) {
         out_2.centre = r_2;
         out_2.edge = 1000000000.0;
         Glob _e16 = out_2;
@@ -804,15 +795,15 @@ metal::float4 backdrop_color(
     return _e6;
 }
 
-struct fs_cloud_backdrop_linearInput {
+struct fs_cloud_backdrop_gammaInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_backdrop_linearOutput {
+struct fs_cloud_backdrop_gammaOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_backdrop_linearOutput fs_cloud_backdrop_linear(
-  fs_cloud_backdrop_linearInput varyings [[stage_in]]
+fragment fs_cloud_backdrop_gammaOutput fs_cloud_backdrop_gamma(
+  fs_cloud_backdrop_gammaInput varyings [[stage_in]]
 , metal::float4 position_5 [[position]]
 , metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
 , metal::texture2d<float, metal::access::sample> close_light [[texture(1)]]
@@ -822,6 +813,5 @@ fragment fs_cloud_backdrop_linearOutput fs_cloud_backdrop_linear(
 ) {
     const VertexOut in = { position_5, varyings.slab, varyings.t };
     metal::float4 _e3 = backdrop_color(in.position.xy, lut, close_light, wide_light, cloud_sampler, cloud);
-    metal::float3 _e5 = linear_from_gamma_rgb(_e3.xyz);
-    return fs_cloud_backdrop_linearOutput { metal::float4(_e5, 1.0) };
+    return fs_cloud_backdrop_gammaOutput { _e3 };
 }
