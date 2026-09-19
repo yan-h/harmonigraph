@@ -526,16 +526,6 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
              glob, so the bands come apart into the field. 0 reads the light exactly under \
              the pixel and moves nothing at all.",
         );
-    ValueBar::new(&mut atmosphere.wash_black, 0.0..=1.0, "Black point")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How much of the picture's own black the paint gives back. The paper is lifted \
-             so a glob over a loud band glows like the band rather than shadowing it, and \
-             that lift is also why silence comes out mid-tone instead of black. This takes \
-             the tone away again where the glob found no light and leaves every brighter \
-             tone untouched. 0 is the lifted paper everywhere, 100% is silence drawn black.",
-        );
     ValueBar::new(&mut atmosphere.wash_pool, 0.0..=1.0, "Edge pooling")
         .percent()
         .show(ui)

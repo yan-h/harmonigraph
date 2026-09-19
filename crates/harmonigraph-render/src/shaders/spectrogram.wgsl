@@ -290,7 +290,6 @@ struct Cloud {
     wash_pool: f32,
     wash_grain: f32,
     wash_layers: f32,
-    wash_black: f32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -371,16 +370,31 @@ fn style_level(level: f32) -> f32 {
     return mix(level, terraces, strength);
 }
 // Interpolate the authored palette's center samples only after diffusion.
-// The first half-slice joins true black smoothly, even for an edited ramp
-// whose first sample is nonblack; there is no separate halo color curve.
+//
+// **Level 0 is the gradient's own floor, not black.** The bottom of the range
+// is what the scheme SAYS silence looks like — `Gradient`'s low end is silence
+// here the way its low end is the darkest pitch on the lattice — so a ramp
+// that does not start at black draws a quiet pane in its own colour. This
+// slice used to fade to true black instead, which put a colour under the
+// picture that the scheme never named and that no dial could reach: an
+// isoluminant gradient is a documented setting, and at one the whole point is
+// that the bottom of the range reads as bright as the top.
+//
+// Nothing is lost for a scheme that does want black down there, because how
+// dark the bottom sits is already a gradient knob and only a gradient knob —
+// `Lightness` with `Lightness ramp` place both ends on the `L*` axis, and the
+// fresh Aurora spends the whole of it, so its floor is `L*` 0 and its quiet
+// pane stays byte-for-byte black. Wanting it back is `Lightness ramp` up, not
+// a tenth dial that would say a second time what those two already say.
+//
+// Below the first sample's centre the table is therefore FLAT, which is the
+// answer the TOP has always given: the last entry pairs with itself at a lerp
+// weight of 0, and this is that same rule at the other end.
 fn palette_color(level: f32) -> vec3<f32> {
     let levels = textureDimensions(lut).x;
-    let x = clamp(level, 0.0, 1.0) * f32(levels) - 0.5;
+    let x = max(clamp(level, 0.0, 1.0) * f32(levels) - 0.5, 0.0);
     let i = u32(clamp(floor(x), 0.0, f32(levels - 1u)));
     let a = textureLoad(lut, vec2<u32>(i, 0u), 0).rgb;
-    if x < 0.0 {
-        return a * (x + 0.5) * 2.0;
-    }
     let b = textureLoad(lut, vec2<u32>(min(i + 1u, levels - 1u), 0u), 0).rgb;
     return mix(a, b, fract(x));
 }
@@ -1018,15 +1032,14 @@ const WASH_PIVOT: f32 = 0.45;
 const WASH_LIFT_A: f32 = 1.15;
 const WASH_LIFT_B: f32 = 0.16;
 
-// How far up the dark end `Black point` 100% reaches.
+// How far up the dark end the hold that returns silence to the palette reaches.
 //
 // The lift above is an OFFSET, not a gain: written out it is
 // `1.15 * light + 0.0925`, so the paper over silence is palette level 0.0925
-// and no dial in the texture can put it back on the floor. `Cloud depth` only
-// decides how much of that is mixed in, so the quiet half of the pane goes
-// from black to mid-tone as the layer comes up — which is the one thing the
-// scales beside it never do, since their own light reaches 0 and the palette's
-// bottom is black.
+// and nothing in the texture puts it back on the floor. `Cloud depth` only
+// decides how much of that is mixed in, so the quiet half of the pane would go
+// from the palette's floor to mid-tone as the layer came up — which is the one
+// thing the scales beside it never do, since their own light reaches 0.
 //
 // So the whole tone is scaled by how much light the glob found, over a band
 // that runs from nothing to `light` this high. Scaled and not clipped: a
@@ -1042,18 +1055,15 @@ const WASH_LIFT_B: f32 = 0.16;
 // would cut every glob off at the picture's own silhouette and undo the
 // displacement that is the look.
 //
-// **The dial is how MUCH of that hold is applied, not how wide the knee is.** It
-// used to set the width — `smoothstep(0, 0.35 * dial, light)` — and that has a
-// step in it at the bottom: a smoothstep is 0 at its lower edge however narrow
-// it is, so with the dial one notch off zero every pixel whose light is EXACTLY
-// 0 went from the lifted paper straight to black, and exact zero is most of a
-// quiet pane, since everything under the level window's floor clamps there. The
-// rest of the travel then only slid the knee up through tones that were already
-// dark. An amount has no such edge: silence falls from the lift to the floor in
-// proportion, and 100% is the hold in full.
-//
-// The knee that is kept is the one the dial shipped at, half of 0.35, so the
-// fresh picture is the one it always was.
+// **This is not a dial and should not become one again.** It was one, and its
+// travel was a fade between the lifted paper and the palette's floor: measured
+// over the wash fixture, silence drew `[0, 14, 21]` at 0, `[0, 7, 10]` halfway
+// and the floor at 100%. Every setting but the top therefore parked the quiet
+// half of the pane at a colour the gradient never named, which is the one thing
+// the layer is not allowed to decide — how light the bottom of the range sits
+// is `Lightness` with `Lightness ramp` and nothing else. A knob whose only
+// correct position is its maximum is a knob to delete, and the earlier one
+// shipped at exactly that maximum.
 const WASH_BLACK_KNEE: f32 = 0.175;
 
 // Three 10-bit fractions off a salted cell hash. Two of these per cell: one for
@@ -1335,14 +1345,9 @@ fn wash_tone(f: Wash, r: vec2<f32>, pane_per_cell: f32, pt: vec2<f32>, average_p
     let pig = max(pigment, 0.0);
     let tone = paper - pig * (WASH_PIG_DEPTH + (1.0 - WASH_PIG_DEPTH) * paper);
 
-    // The paper's black point. At `Black point` 0 this is 1 everywhere and the
-    // tone is the lifted one above, unchanged.
-    // Spelled out rather than `mix`, which a GPU evaluates as `x + (y - x) * a`
-    // and so lands a last bit off the knee at 100% — this form is exact at both
-    // ends of the dial.
-    let knee = smoothstep(0.0, WASH_BLACK_KNEE, light);
-    let hold = (1.0 - cloud.wash_black) + cloud.wash_black * knee;
-    return Painted(tone, hold);
+    // The hold that returns silence to the palette's own floor, undoing the
+    // lift where the glob found no light and leaving every brighter tone alone.
+    return Painted(tone, smoothstep(0.0, WASH_BLACK_KNEE, light));
 }
 
 // How deep the washes are piled on average, which is what `Grain` measures the

@@ -991,12 +991,12 @@ mod tests {
         let still = run(&clouded(true, 0.0)).expect("a fourth GPU run");
         let mid = first.len() / 2;
         // The pane has light in it, which is the assumption under BOTH asserts
-        // below and the one that quietly stopped holding: with `Black point`
-        // fresh at 50% a silent pane is on the palette's floor for either
-        // texture, so a dark fixture makes them agree and makes a stirred frame
-        // identical to a still one. The old fixture was one sample of ±1 read a
-        // second past the end of its own buffer — 97% digital silence, which
-        // both asserts passed over only because the unheld wash painted it.
+        // below and the one that quietly stopped holding: a silent pane sits on
+        // the palette's floor for either texture, so a dark fixture makes them
+        // agree and makes a stirred frame identical to a still one. The old
+        // fixture was one sample of ±1 read a second past the end of its own
+        // buffer — 97% digital silence, which both asserts passed over only
+        // because the wash then painted it with a lift nothing held back.
         let lit = first[mid].chunks_exact(4).filter(|px| px[..3] != [0, 0, 0]).count();
         let pane = first[mid].len() / 4;
         assert!(
