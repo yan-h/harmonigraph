@@ -31,17 +31,27 @@ const MAX_CENTER: i32 = 1 << 30;
 ///
 /// A PICTURE limit rather than an arithmetic one, and the only one of the
 /// three axes to have one: the strip draws a cell per sheet, so its axis is
-/// what a reader can actually take hold of, and thirteen cells on a settings
-/// column is where a cell is still wide enough to grab. The bound it replaced
-/// was twenty steps of home travel against a count of at most four each side —
-/// two numbers that could not be shown on one axis without either the ends
-/// being unreachable or the cells being a few points wide.
+/// what a reader can actually take hold of, and the cells have to stay wide
+/// enough to grab. The bound it replaced was twenty steps of home travel
+/// against a count of at most four each side — two numbers that could not be
+/// shown on one axis without either the ends being unreachable or the cells
+/// being a few points wide.
 ///
-/// Thirteen sheets is more depth than the old pair could ask for (nine), not
-/// less; what narrows is how far from C the stack may be PARKED. Six septimal
-/// steps is already a spelling with six marks on it, and
-/// [`DrawnWindow::fit_to_node_budget`] is what bounds the work either way.
-pub const SEVENS_LAYER_LIMIT: i32 = 6;
+/// FOUR, and the nine sheets it allows, because one axis now answers what
+/// those two numbers used to answer separately: this bounds the depth and the
+/// parking at once, and the depth is the half with a picture behind it. #896
+/// set it at six for the cell width alone, and the thirteen sheets that bought
+/// put an ORDINARY pane over the node budget — a 16:9 lattice fully zoomed out
+/// asks 21021 against [`MAX_DRAWN_NODES`]'s 20480 and is trimmed at the edges,
+/// where nine sheets asks 12555 and is not (#916). Nine was also the old pair's
+/// own maximum, so what this gives up against #896 is parking range, not depth
+/// anyone had before.
+///
+/// Fewer cells are also wider ones, so the strip's own constraint pushes the
+/// same way: nine cells on a settings column grab more easily than thirteen.
+/// [`DrawnWindow::fit_to_node_budget`] still bounds the work, but it is a
+/// backstop here rather than the thing that holds the picture together.
+pub const SEVENS_LAYER_LIMIT: i32 = 4;
 
 /// A block of lattice positions, as explicit inclusive bounds.
 ///
@@ -1839,7 +1849,17 @@ impl ViewConfig {
     /// one camera that does that — and it is a degenerate matrix, not a steep
     /// camera). Drawing the reach window there is a picture; an arbitrary huge
     /// number is a stall.
-    pub fn scrolled(&self, camera: &Camera, aspect: f32) -> DrawnWindow {
+    /// This is the DEMAND — what the geometry asks for, before
+    /// [`MAX_DRAWN_NODES`](crate::MAX_DRAWN_NODES) holds it down.
+    /// [`scrolled`](Self::scrolled) is the same window trimmed to fit, and the
+    /// two part company exactly where the cap is reached.
+    ///
+    /// Split out because a test of whether a projection STAYS under the cap
+    /// cannot read the trimmed count: `fit_to_node_budget` loops until that
+    /// count fits, so it is under the cap by construction and answers about
+    /// the trimmer rather than about the projection (#916, which is what
+    /// happened).
+    pub(crate) fn demanded(&self, camera: &Camera, aspect: f32) -> DrawnWindow {
         let center = self.center();
         let (low, high) = self.sevens_window();
         let flat = |threes: i32, fives: i32| DrawnWindow {
@@ -1920,7 +1940,7 @@ impl ViewConfig {
         // cell, several times per drag. The center is
         // [`follow_camera`](Self::follow_camera)'s alone, which moves it and
         // the camera together. Only the BOUNDS move here.
-        let mut window = DrawnWindow {
+        DrawnWindow {
             min: LatticePos::new(
                 center.threes + offset(min.y - margin, f32::floor),
                 center.fives + offset(min.x - margin, f32::floor),
@@ -1931,8 +1951,18 @@ impl ViewConfig {
                 center.fives + offset(max.x + margin, f32::ceil),
                 high,
             ),
-        };
-        window.fit_to_node_budget(center);
+        }
+    }
+
+    /// The sheets and steps one pane draws, held to
+    /// [`MAX_DRAWN_NODES`](crate::MAX_DRAWN_NODES).
+    ///
+    /// Every reader wants this one: the trim is what keeps a frame's cost
+    /// bounded whatever the camera is asked for. [`demanded`](Self::demanded)
+    /// is the window before it, and only a measurement wants that.
+    pub fn scrolled(&self, camera: &Camera, aspect: f32) -> DrawnWindow {
+        let mut window = self.demanded(camera, aspect);
+        window.fit_to_node_budget(self.center());
         window
     }
 
