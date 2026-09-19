@@ -467,8 +467,8 @@ fn production_silence_and_stop_reset_settings_clear_only_the_musical_memory() {
     }
 }
 
-/// An editor policy edit must govern expiry on this callback even when no
-/// source sends a note. Observe after expiry, rather than the old outline
+/// A reduced policy edit must govern expiry at the next Hub begin even when
+/// no source sends a note. Observe after expiry, rather than the old outline
 /// mailbox's pre-expiry snapshot, so one callback of stale policy fails.
 #[test]
 fn silence_policy_edits_apply_before_expiry_without_note_input() {
@@ -488,11 +488,21 @@ fn silence_policy_edits_apply_before_expiry_without_note_input() {
         let before = inspect_hub(&phrase.hub, |hub| hub.test_next_context());
         assert!(!before.context.is_empty(), "the fixture must retain released notes");
         assert_ne!(before.reference, 0, "the fixture must retain actual tuning drift");
-        phrase.raw += 2 * 44100;
         configure_policy(
             &phrase.hub,
             PolicyConfig { silence_ms: if enable { 1000 } else { 0 }, ..Default::default() },
         );
+        // The wrapper begins performance before reducing queued editor edits.
+        // Reduce this edit while still below either timeout, then cross the
+        // timeout on the next begin, when the reducer already holds the edit.
+        phrase.hub.run_format(phrase.raw, vec![], None, None, 512);
+        let (visible, pending) = hub_wrapper(&phrase.hub).configuration_handle().unwrap().visible();
+        assert!(!pending, "the editor edit must already be reduced before the expiry callback");
+        assert_eq!(
+            crate::configuration::view(visible, false).resolved.policy.silence_ms,
+            if enable { 1000 } else { 0 }
+        );
+        phrase.raw += 2 * 44100;
         // Only the Hub runs: no note, controller or source input can incidentally
         // adopt the edited policy in input_boundary before this observation.
         phrase.hub.run_format(phrase.raw, vec![], None, None, 512);
