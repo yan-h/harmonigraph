@@ -35,9 +35,9 @@ The existing performance issue was closed as not planned because no crackle had 
 Its explicit trigger is a crackling dense downbeat, with the radius setting checked first.
 - **Keep simple automatic recording and rendering.** Adding opt-outs creates more branches while preserving the same machinery.
 The previous simplification deliberately removed options.
-The four dormant saved fields remain the small, separate [#959](https://github.com/yan-h/harmonigraph/issues/959) proposal.
+Yan approved the small, separate removal of four dormant saved fields in [#959](https://github.com/yan-h/harmonigraph/issues/959).
 
-Spacing, adaptive next-note outlines and separate-WAV replacement ([#972](https://github.com/yan-h/harmonigraph/issues/972)) are accepted for future removal.
+Spacing, adaptive next-note outlines, separate-WAV replacement ([#972](https://github.com/yan-h/harmonigraph/issues/972)) and the four dormant export fields ([#959](https://github.com/yan-h/harmonigraph/issues/959)) are accepted for future removal.
 The take's own recorded audio remains supported.
 Cold-start optimization is explicitly retained.
 No other removal has been approved.
@@ -321,17 +321,19 @@ No new dependency build, platform certification, security audit or legal conclus
 | Owner worktrees, draft PRs, paired plugin/offline builds | Current instructions supplied by Yan explicitly require these; old #940 mechanics conflict and #967 tracks that. | Direct current authority. Audit current costs without silently overriding the workflow. |
 | Assumed surface format and “upstreaming off the table” | Constant remains live; vendor renderer knows its actual format but exposes no plugin accessor. No current direct prohibition on proposing upstream work recovered. | Current accessor limitation is real; old policy wording is not a permanent ban. No failure or benefit justifies new work here now. |
 
-## Remaining value questions
+## Follow-up value decisions
 
 Yan asked whether other potentially removable requirements had been withheld from the question list.
 The initial shortlist prioritized demonstrated savings,
 but an early answer about actual use can cheaply rule a capability in or out before a removal prototype.
-The table now records his answers as well as the remaining question.
-His request for an explanation of the dormant fields does not itself approve their removal.
+The table now records his answers to all four questions.
+After the dormant-field explanation,
+Yan explicitly approved removing them,
+saying they can be added back if needed.
 
 | Requirement to reconsider | Concrete loss to discuss | Maintenance evidence and recommendation |
 | --- | --- | --- |
-| Retain four dormant settings for a possible future export UI | Discard currently inactive saved audio/render options. Existing capture and automatic rendering continue; active separate-WAV replacement is a distinct removal. | #959's 16-combination probe found no request changes. Recommend removal; Yan requested more explanation and has not yet decided. Savings are small. |
+| Retain four dormant settings for a possible future export UI | Discard currently inactive saved audio/render options. Existing capture and automatic rendering continue; active separate-WAV replacement is a distinct removal. | Removal accepted in #959 after explanation; implementation deferred. Its 16-combination probe found no request changes. Savings are small. |
 | Reconstruct live visual history while the editor is closed | Reopening starts a fresh visual history instead of showing what happened while closed; recording still completes normally. | Keep. Yan explicitly wants accurate current lattice state and closed-window spectrogram history. Whole-worker deletion was never established. |
 | Rerender a take using a separate WAV | Lose the ability to replace captured audio with a clean bounce or another soundtrack. | Removal accepted in #972; implementation deferred. Retain the take's own WAV and recorded-audio alignment. |
 | Fast readiness when the shader cache is cold | Potentially wait longer for the first fully drawn editor instead of maintaining precompiled Metal assets. | Keep by explicit user decision. No corpus/provider deletion follows from this audit. |
@@ -349,8 +351,9 @@ This is a recorded future-design commitment,
 not a present feature consumer.
 Removing the fields would discard dormant saved values and their defaults/descriptions;
 it would not remove active recording/rendering behavior or internal audio placement math.
-Yan's decision to remove the actual replacement workflow strengthens the recommendation,
-but does not silently decide the separate four-field question.
+Yan's decision to remove the actual replacement workflow strengthened the recommendation;
+his subsequent explicit four-field approval settles this separate question too.
+Future needs can define settings when they arise rather than retaining this inactive design in advance.
 
 Custom camera perspective (#964) and note-naming search reach (#963) remain less ready for a product question:
 show which pictures or names change before asking Yan to value an unfamiliar hidden setting.
@@ -362,8 +365,9 @@ Keep the choice list small:
 Yan's direct non-use answer and removal approval make adaptive next-note outlines an accepted simplification;
 separate-WAV replacement is accepted too,
 while closed-window analysis and cold-start optimization are explicitly retained.
-Explain and resolve the dormant-field question,
-then carry forward the accepted removals and existing concrete issues.
+The dormant-field removal is accepted too.
+This batch of value questions is resolved;
+carry forward the accepted removals and existing concrete issues when Yan requests implementation.
 Do not reopen #790 or explicitly parked spectrogram campaigns merely because audit capacity is available.
 
 The main remaining coverage gaps are original user conversations behind attributed choices,

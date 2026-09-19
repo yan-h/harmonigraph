@@ -1,7 +1,7 @@
 # Long-term maintainability
 
 Last updated: 2026-09-19.
-Status: discovery in progress; spacing, adaptive next-note outlines and separate-WAV replacement accepted for future removal; no product changes in this session.
+Status: discovery in progress; spacing, adaptive next-note outlines, separate-WAV replacement and four dormant export fields accepted for future removal; no product changes in this session.
 
 ## Start here
 
@@ -46,12 +46,14 @@ He also approved removing adaptive next-note outlines,
 while retaining musical tuning and separate Lattice Map outlines.
 He subsequently approved removing separate-WAV replacement for take exports ([#972](https://github.com/yan-h/harmonigraph/issues/972)).
 The take's own captured audio remains supported.
+He also approved removing the four dormant export fields ([#959](https://github.com/yan-h/harmonigraph/issues/959)),
+saying they can be added back if needed.
 These implementations are deferred.
 He chose to keep the cold-start shader optimization,
 and explicitly requires an accurate current lattice plus spectrogram history from while the editor was closed,
 within the existing history limits.
-The [remaining value questions](requirements-value-audit.md#remaining-value-questions) identify additional tradeoffs worth discussing;
-the four dormant export fields still await a decision after explanation.
+The [follow-up value decisions](requirements-value-audit.md#follow-up-value-decisions) record the answers to this batch;
+none of its four questions remains unresolved.
 
 **How to return:** ask an agent to continue from `docs/maintainability-plan.md`.
 The agent should read the current document and linked work,
@@ -340,7 +342,7 @@ The first detailed batch ran against product revision `1786c5ba`,
 after incorporating #946 and #953's note-history changes.
 Its findings are:
 
-- Four dormant export fields do not alter either render-request constructor across 16 tested combinations; changing active resolution does. Removal remains a small proposal to revisit the intentional keep decision in #895, not an already approved change.
+- Four dormant export fields do not alter either render-request constructor across 16 tested combinations; changing active resolution does. Yan subsequently approved their removal in #959, superseding the intentional keep decision in #895. Implementation remains deferred.
 - Retired CLAP tracing has no production opt-in or payload-checking consumer found. Turning it off exposed a fixture mutex initialization dependency, recorded in [#955](https://github.com/yan-h/harmonigraph/issues/955). Explicit initialization lets all 21 boundary tests pass with tracing off and allocation assertions intact. Retiring the hook is a supported proposal, with this prerequisite.
 - Remaining range duplication favors reusing existing sanitizers and a few shared bounds. Some rendering defenses intentionally differ from UI ranges and should stay separate. A nested hostile-input omission passes existing settings tests; a small extension catches it while retaining all five real range tests. [#957](https://github.com/yan-h/harmonigraph/issues/957) records the measured coverage gap.
 - Ordinary and canonical Recorder → display versus actual file → Replay comparisons both pass. They detect independently injected timestamp and pitch-conversion errors. Preserve the separate event representations and queue ownership; a focused parity fixture is better supported than an architectural rewrite.
