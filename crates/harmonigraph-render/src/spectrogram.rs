@@ -3240,6 +3240,8 @@ mod tests {
             assert!(moved > 0.02, "{name} moved almost none of the pane: {moved}");
         }
     }
+
+    mod timing;
 }
 
 #[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
