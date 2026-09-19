@@ -4,15 +4,13 @@
 //! before them and draws only their black knockout, so the pane keeps its
 //! shape-level geometry tests and its bloom can still be laid over the fill.
 
-use std::collections::HashMap;
-
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
+use crate::pass_aged::PassAged;
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 pub(crate) const SRC: &str = include_str!("shaders/dot_shadow.wgsl");
 const INITIAL_CAPACITY: usize = 16;
-const PANE_TTL_PASSES: u64 = 120;
 
 #[cfg(any(test, feature = "hot-reload"))]
 pub(crate) const ENTRY_POINTS: &[&str] =
@@ -24,7 +22,7 @@ pub(crate) const ENTRY_POINTS: &[&str] =
 ///
 /// Added on EVERY frame the pane draws, including the frames with no dots and
 /// the frames whose style casts nothing: the skipping is this callback's to do,
-/// and the [`PANE_TTL_PASSES`] sweep that retires a pane nobody draws any more
+/// and the [`crate::pass_aged`] sweep that retires a pane nobody draws any more
 /// runs on the clock of these calls. A caller that gates instead ages its own
 /// pane out over a quiet stretch and rebuilds it inside the frame that ends
 /// one, and saves nothing — a declining frame allocates nothing here.
@@ -71,7 +69,9 @@ struct Resources {
     format: wgpu::TextureFormat,
     #[cfg(feature = "hot-reload")]
     generation: u64,
-    panes: HashMap<u64, Pane>,
+    /// Swept at [`crate::pass_aged::TTL_PASSES`]; what a closed pane would
+    /// otherwise hold is its two buffers.
+    panes: PassAged<Pane>,
 }
 
 struct Pane {
@@ -80,7 +80,6 @@ struct Pane {
     dots: wgpu::Buffer,
     dot_capacity: usize,
     count: u32,
-    last_seen_pass: u64,
 }
 
 fn locals_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -193,13 +192,13 @@ impl Resources {
             format,
             #[cfg(feature = "hot-reload")]
             generation: crate::reload::generation(),
-            panes: HashMap::new(),
+            panes: PassAged::new(),
         }
     }
 
     fn pane(&mut self, device: &wgpu::Device, pane_id: u64, pass_nr: u64) -> &mut Pane {
         let locals_layout = &self.locals_layout;
-        let pane = self.panes.entry(pane_id).or_insert_with(|| {
+        self.panes.touched_or_insert_with(pane_id, pass_nr, || {
             let locals = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("spiral_dot_shadow_locals"),
                 size: std::mem::size_of::<Locals>() as u64,
@@ -224,11 +223,8 @@ impl Resources {
                 ),
                 dot_capacity: INITIAL_CAPACITY,
                 count: 0,
-                last_seen_pass: pass_nr,
             }
-        });
-        pane.last_seen_pass = pass_nr;
-        pane
+        })
     }
 }
 
@@ -266,9 +262,7 @@ impl CallbackTrait for DotShadowCallback {
         // ones are still on screen — which makes "still drawn" and "still
         // preparing" one claim, and it is the CALLER that has to keep them so
         // (see [`dot_shadow_paint_callback`]).
-        resources
-            .panes
-            .retain(|_, pane| self.pass_nr.saturating_sub(pane.last_seen_pass) < PANE_TTL_PASSES);
+        resources.panes.evict_unseen(self.pass_nr);
 
         // Held through a quiet stretch rather than dropped, since a depth
         // dialled to 0 and back is one drag: what a declining frame skips is
@@ -279,9 +273,8 @@ impl CallbackTrait for DotShadowCallback {
         // goes to 0 so `paint` returns before it even asks, rather than on the
         // strength of last frame's dots still sitting in the buffer.
         if !wants {
-            if let Some(pane) = resources.panes.get_mut(&self.pane_id) {
+            if let Some(pane) = resources.panes.touch(self.pane_id, self.pass_nr) {
                 pane.count = 0;
-                pane.last_seen_pass = self.pass_nr;
             }
             return Vec::new();
         }
@@ -364,7 +357,7 @@ impl CallbackTrait for DotShadowCallback {
         let Some(resources) = callback_resources.get::<Resources>() else {
             return;
         };
-        let Some(pane) = resources.panes.get(&self.pane_id) else {
+        let Some(pane) = resources.panes.get(self.pane_id) else {
             return;
         };
         if pane.count == 0 {
@@ -407,6 +400,63 @@ mod tests {
         let seam = crate::common_lines(crate::COMMON_SRC);
         crate::validate_wgsl("dot_shadow.wgsl", &crate::with_common(SRC), seam, ENTRY_POINTS)
             .expect("baked dot_shadow.wgsl must parse and validate");
+    }
+
+    /// A pane that DECLINES every frame keeps its buffers; a pane that stops
+    /// calling back at all loses them.
+    ///
+    /// The two halves are one claim about where the decision belongs. The
+    /// spiral adds this callback on every frame it draws, silent ones included,
+    /// and the declining arm of `prepare` stamps the pane WITHOUT building
+    /// anything — so a quiet stretch costs nothing and rebuilds nothing at the
+    /// end of it. Route the same silence through a caller that skips the
+    /// callback and the pane takes the second half of this test instead,
+    /// rebuilding its buffers inside the frame the next note arrives in. That
+    /// is the bug the unconditional call exists to prevent, and this is the
+    /// test that would catch it coming back.
+    #[test]
+    fn a_declining_pane_is_held_and_one_that_stops_calling_is_not() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let casting = harmonigraph_scene::ShadowStyle {
+            width: 0.5,
+            depth: 1.0,
+            kernel: harmonigraph_scene::ShadowKernel::Distance,
+            ..Default::default()
+        };
+        let declining = harmonigraph_scene::ShadowStyle { depth: 0.0, ..casting };
+        let dot = || crate::GlowDot { center: [32.0, 32.0], radius: 4.0, color: [255; 4] };
+        let screen = ScreenDescriptor { size_in_pixels: [64, 64], pixels_per_point: 1.0 };
+        let prepare = |pane_id, shadow, pass_nr, resources: &mut CallbackResources| {
+            let cb = DotShadowCallback {
+                dots: vec![dot()],
+                shadow,
+                target_format: wgpu::TextureFormat::Rgba8Unorm,
+                pane_id,
+                shadow_surface_id: 0,
+                pass_nr,
+            };
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
+            queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        };
+        let live = |resources: &CallbackResources, id| {
+            resources.get::<Resources>().is_some_and(|r| r.panes.contains_key(id))
+        };
+
+        // Both panes build on a casting frame, then pane 0 goes silent while
+        // still calling back and pane 1 stops calling back entirely.
+        let mut resources = CallbackResources::default();
+        prepare(0, casting, 0, &mut resources);
+        prepare(1, casting, 0, &mut resources);
+        assert!(live(&resources, 0) && live(&resources, 1), "two panes, two pairs of buffers");
+
+        for pass_nr in 1..=crate::pass_aged::TTL_PASSES {
+            prepare(0, declining, pass_nr, &mut resources);
+        }
+        assert!(live(&resources, 0), "a pane that kept calling back lost its buffers");
+        assert!(!live(&resources, 1), "the pane that stopped calling back is still holding them");
     }
 
     /// A style that casts nothing, and a frame with no dots in it, each skip
@@ -468,7 +518,7 @@ mod tests {
         assert!(
             prepared(vec![dot()], casting)
                 .get::<Resources>()
-                .is_some_and(|resources| resources.panes.contains_key(&PANE)),
+                .is_some_and(|resources| resources.panes.contains_key(PANE)),
             "a dot under a casting style built no pane",
         );
     }

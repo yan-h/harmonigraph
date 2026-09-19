@@ -42,6 +42,7 @@ use harmonigraph_scene::Scene;
 mod ink_history;
 mod lattice_frame;
 mod lattice_prepare;
+mod pass_aged;
 
 pub mod shader_assets;
 /// Progress for interactive editor initialization; offline rendering remains synchronous.

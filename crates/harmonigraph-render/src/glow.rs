@@ -44,10 +44,9 @@
 //! chain stands until something asks for a halo again. That holds one chain,
 //! not one per tab ever opened, which is what makes the sweep worth its map.
 
-use std::collections::HashMap;
-
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
+use crate::pass_aged::PassAged;
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 const GLOW_SRC: &str = include_str!("shaders/glow.wgsl");
@@ -110,7 +109,7 @@ impl GlowDot {
 /// Added on EVERY frame the pane draws, including the frames with no strength
 /// and no marks: the skipping is this callback's to do, and the sweep that
 /// retires a copy nobody draws any more runs on the clock of these calls (see
-/// [`GlowPane::evict_unseen`]). A caller that gates instead pays a rebuilt
+/// [`crate::pass_aged`]). A caller that gates instead pays a rebuilt
 /// chain on the first frame after a quiet stretch and saves nothing, because
 /// the declined frame allocates nothing here.
 ///
@@ -190,17 +189,11 @@ struct GlowResources {
     target_format: wgpu::TextureFormat,
     /// One chain per live copy of a pane. A copy appears on the first frame
     /// that asks it for a halo — a strength of 0 pays for none of it — and
-    /// leaves on [`GlowPane::evict_unseen`].
-    panes: HashMap<u64, GlowPane>,
+    /// leaves on the sweep in [`crate::pass_aged`], at
+    /// [`crate::pass_aged::TTL_PASSES`]. What a closed copy would otherwise
+    /// hold is four textures.
+    panes: PassAged<GlowPane>,
 }
-
-/// How many egui passes a copy may go unseen before its chain is dropped.
-///
-/// A copy prepares once per pass while it is on screen, so this is about two
-/// seconds at 60 fps however many copies are live. Long enough that a pane
-/// hidden for a frame keeps its textures, short enough that a closed one is not
-/// still holding four of them a minute later.
-const PANE_TTL_PASSES: u64 = 120;
 
 /// The picture to bloom and the lattice's own [`crate::BloomChain`] over it:
 /// the marks rendered again offscreen, thresholded, blurred separably, and
@@ -234,10 +227,6 @@ struct GlowPane {
     /// a pane too small to have pixels — cannot lay down the one the frame
     /// before it left in quarter A.
     ready: bool,
-    /// Egui's cumulative pass number when this copy last prepared, whether or
-    /// not it asked for a halo: a strength dialled to 0 and back is one drag,
-    /// and the copy is on screen throughout it.
-    last_seen_pass: u64,
 }
 
 /// Starting size of the instance buffer; it grows by `next_power_of_two` when a
@@ -340,7 +329,7 @@ impl GlowResources {
                 ..Default::default()
             }),
             target_format,
-            panes: HashMap::new(),
+            panes: PassAged::new(),
         }
     }
 }
@@ -350,7 +339,7 @@ impl GlowPane {
     /// and quarter of THAT, so the halo is a constant share of the pane's own
     /// screen size — the rule the lattice's chain follows, which is what makes
     /// one bloom strength mean the same thing in every picture that grows one.
-    fn new(device: &wgpu::Device, resources: &GlowResources, size: [u32; 2], pass_nr: u64) -> Self {
+    fn new(device: &wgpu::Device, resources: &GlowResources, size: [u32; 2]) -> Self {
         let (hw, hh) = (size[0].div_ceil(2).max(1), size[1].div_ceil(2).max(1));
         let discs_view = device
             .create_texture(&wgpu::TextureDescriptor {
@@ -422,25 +411,7 @@ impl GlowPane {
             strength_buffer,
             size,
             ready: false,
-            last_seen_pass: pass_nr,
         }
-    }
-
-    /// Drop every copy that has not prepared for [`PANE_TTL_PASSES`].
-    ///
-    /// A copy's id is its surface, and one that is no longer drawn simply stops
-    /// calling back — there is no teardown to hang this on, so the copies still
-    /// preparing are the only evidence of which ones exist. Run from whichever
-    /// copy IS preparing, so a lone survivor still clears the others.
-    ///
-    /// Which makes "still drawn" and "still preparing" the same claim, and it
-    /// is the CALLER that has to keep them so: a pane that adds the callback
-    /// only on the frames it wants a halo ages its own chain out over a quiet
-    /// stretch and rebuilds it inside the frame that ends one. That is why
-    /// [`glow_paint_callback`] is added unconditionally and the decisions are
-    /// all made below.
-    fn evict_unseen(panes: &mut HashMap<u64, GlowPane>, pass_nr: u64) {
-        panes.retain(|_, pane| pass_nr.saturating_sub(pane.last_seen_pass) < PANE_TTL_PASSES);
     }
 }
 
@@ -529,7 +500,7 @@ impl CallbackTrait for GlowCallback {
         // the callback — a reader who never turns the bloom on never pays for
         // its five pipelines — and it belongs here, because the caller cannot
         // skip the callback without also stopping the clock `evict_unseen`
-        // runs on (see [`GlowPane::evict_unseen`]).
+        // runs on (see `crate::pass_aged`).
         if !wants && callback_resources.get::<GlowResources>().is_none() {
             return Vec::new();
         }
@@ -541,28 +512,34 @@ impl CallbackTrait for GlowCallback {
         }
         let resources: &mut GlowResources =
             callback_resources.get_mut().expect("inserted above when missing");
-        GlowPane::evict_unseen(&mut resources.panes, self.pass_nr);
+        // A copy's id is its surface, and one that is no longer drawn simply
+        // stops calling back — so the copies still preparing are the only
+        // evidence of which ones exist. Swept from whichever copy IS preparing,
+        // so a lone survivor still clears the others.
+        resources.panes.evict_unseen(self.pass_nr);
 
         // Held whether or not it is wanted this frame, since a strength dialled
         // to 0 and back is one drag: what is skipped is the work, not the
         // textures. They go when the pane's size changes, which is the one
         // thing that invalidates them.
-        if resources.panes.get(&self.pane_id).is_some_and(|p| p.size != size) {
-            resources.panes.remove(&self.pane_id);
+        if resources.panes.get(self.pane_id).is_some_and(|p| p.size != size) {
+            resources.panes.remove(self.pane_id);
         }
         if !wants {
-            if let Some(pane) = resources.panes.get_mut(&self.pane_id) {
+            // Stamped without being built: the copy is still on screen — a
+            // strength dialled to 0 and back is one drag — and a frame that
+            // draws no halo has no business allocating one.
+            if let Some(pane) = resources.panes.touch(self.pane_id, self.pass_nr) {
                 pane.ready = false;
-                pane.last_seen_pass = self.pass_nr;
             }
             return Vec::new();
         }
-        if !resources.panes.contains_key(&self.pane_id) {
+        if !resources.panes.contains_key(self.pane_id) {
             // Built and then stored, rather than assigned in one expression:
             // the constructor reads the layouts and the sampler beside the map
             // it lands in.
-            let pane = GlowPane::new(device, resources, size, self.pass_nr);
-            resources.panes.insert(self.pane_id, pane);
+            let pane = GlowPane::new(device, resources, size);
+            resources.panes.insert(self.pane_id, pane, self.pass_nr);
         }
 
         // Split apart so the pane can be borrowed mutably while the pipelines
@@ -576,8 +553,7 @@ impl CallbackTrait for GlowCallback {
             panes,
             ..
         } = resources;
-        let pane = panes.get_mut(&self.pane_id).expect("built above when missing");
-        pane.last_seen_pass = self.pass_nr;
+        let pane = panes.touch(self.pane_id, self.pass_nr).expect("built above when missing");
 
         if self.dots.len() > pane.capacity {
             pane.capacity = self.dots.len().next_power_of_two();
@@ -659,7 +635,7 @@ impl CallbackTrait for GlowCallback {
         let Some(resources) = callback_resources.get::<GlowResources>() else {
             return;
         };
-        let Some(pane) = resources.panes.get(&self.pane_id).filter(|p| p.ready) else {
+        let Some(pane) = resources.panes.get(self.pane_id).filter(|p| p.ready) else {
             return;
         };
         // Over the pane's rect rather than the surface: quarter A covers
@@ -862,7 +838,7 @@ mod tests {
         let resources_of =
             |dots: Vec<GlowDot>, strength: f32| draw(&device, &queue, dots, strength).1;
         let chained = |resources: &CallbackResources| {
-            resources.get::<GlowResources>().is_some_and(|glow| glow.panes.contains_key(&ONE_PANE))
+            resources.get::<GlowResources>().is_some_and(|glow| glow.panes.contains_key(ONE_PANE))
         };
         for (dots, strength, what) in
             [(vec![centered_dot()], 0.0, "a strength of 0"), (Vec::new(), 1.5, "an empty frame")]
@@ -1012,7 +988,7 @@ mod tests {
 
         let vp = egui::epaint::ViewportInPixels::from_points(&rect, ppp, SIZE);
         let glow: &GlowResources = resources.get().expect("prepare inserts its resources");
-        let pane = glow.panes.get(&ONE_PANE).expect("a strength of 1.5 asks for a chain");
+        let pane = glow.panes.get(ONE_PANE).expect("a strength of 1.5 asks for a chain");
         assert_eq!(
             pane.size,
             [vp.width_px as u32, vp.height_px as u32],
@@ -1077,7 +1053,7 @@ mod tests {
 
         {
             let glow: &GlowResources = resources.get().expect("prepare inserts its resources");
-            let size_of = |id| glow.panes.get(&id).map(|p: &GlowPane| p.size);
+            let size_of = |id| glow.panes.get(id).map(|p: &GlowPane| p.size);
             assert_eq!(
                 size_of(0),
                 Some([76, SIZE[1]]),
@@ -1150,7 +1126,7 @@ mod tests {
         };
         let live = |resources: &CallbackResources, id| {
             let glow: &GlowResources = resources.get().expect("prepare inserts its resources");
-            glow.panes.contains_key(&id)
+            glow.panes.contains_key(id)
         };
 
         prepare(0, 0, &mut resources);
@@ -1159,7 +1135,7 @@ mod tests {
 
         // Only one of them keeps drawing, past the age the other's chain is
         // held for.
-        for pass_nr in 1..=PANE_TTL_PASSES {
+        for pass_nr in 1..=crate::pass_aged::TTL_PASSES {
             prepare(1, pass_nr, &mut resources);
         }
         assert!(!live(&resources, 0), "the retired copy is still holding a chain");
@@ -1195,7 +1171,7 @@ mod tests {
         };
         let pane_of = |resources: &CallbackResources| {
             let glow: &GlowResources = resources.get().expect("prepare inserts its resources");
-            let pane = glow.panes.get(&ONE_PANE).expect("a strength of 1.5 asks for a chain");
+            let pane = glow.panes.get(ONE_PANE).expect("a strength of 1.5 asks for a chain");
             (pane.size, pane.capacity, pane.count)
         };
 

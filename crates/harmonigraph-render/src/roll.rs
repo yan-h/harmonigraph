@@ -33,10 +33,9 @@
 //! Rebuilding per frame keeps the geometry a pure function of `now` — which
 //! is also what keeps the offline render deterministic.
 
-use std::collections::HashMap;
-
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
+use crate::pass_aged::PassAged;
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 pub(crate) const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
@@ -324,19 +323,12 @@ struct RollResources {
     target_format: wgpu::TextureFormat,
     #[cfg(feature = "hot-reload")]
     generation: u64,
-    panes: HashMap<u64, RollPane>,
+    /// What a closed roll would otherwise hold: its buffers and its bloom
+    /// chain, three textures the size of the pane it was shown at. That is the
+    /// reason there is a sweep here at all rather than a map that only ever
+    /// grows; the age it sweeps at is [`crate::pass_aged::TTL_PASSES`].
+    panes: PassAged<RollPane>,
 }
-
-/// How many egui passes a pane may go unseen before its buffers and its
-/// bloom chain are dropped.
-///
-/// A pane is prepared once per pass while it is on screen, so this is about
-/// two seconds at 60 fps however many placements are live. Long
-/// enough that a pane hidden for a frame keeps everything, short enough that
-/// a closed one is not still holding a bloom chain a minute later: three
-/// textures the size of the pane it was shown at, which is the reason there is
-/// a sweep here at all rather than a map that only ever grows.
-const PANE_TTL_PASSES: u64 = 120;
 
 struct RollPane {
     uniform_buffer: wgpu::Buffer,
@@ -348,8 +340,6 @@ struct RollPane {
     /// asks for bloom, and rebuilt when the rect resizes — a roll with the
     /// strength at 0 pays for none of it.
     bloom: Option<RollBloom>,
-    /// Egui's cumulative pass number when this pane was last drawn.
-    last_seen_pass: u64,
 }
 
 /// The roll's picture to bloom, and the lattice's own [`crate::BloomChain`] over it:
@@ -521,7 +511,7 @@ impl RollResources {
             target_format,
             #[cfg(feature = "hot-reload")]
             generation: crate::reload::generation(),
-            panes: HashMap::new(),
+            panes: PassAged::new(),
         }
     }
 }
@@ -540,16 +530,16 @@ struct RollBloomShared<'a> {
 
 impl RollPane {
     /// This pane's buffers, made on first sight of its id and stamped with
-    /// `pass_nr` so [`RollPane::evict_unseen`] can tell a live pane from one
-    /// whose tab was closed.
+    /// `pass_nr` so the sweep can tell a live pane from one whose tab was
+    /// closed.
     fn get<'a>(
-        panes: &'a mut HashMap<u64, RollPane>,
+        panes: &'a mut PassAged<RollPane>,
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         pane_id: u64,
         pass_nr: u64,
     ) -> &'a mut RollPane {
-        let pane = panes.entry(pane_id).or_insert_with(|| {
+        panes.touched_or_insert_with(pane_id, pass_nr, || {
             let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("roll_uniforms"),
                 size: std::mem::size_of::<RollUniforms>() as u64,
@@ -575,22 +565,8 @@ impl RollPane {
                 capacity: INITIAL_NOTE_CAPACITY,
                 count: 0,
                 bloom: None,
-                last_seen_pass: pass_nr,
             }
-        });
-        pane.last_seen_pass = pass_nr;
-        pane
-    }
-
-    /// Drop every pane that has not been drawn for [`PANE_TTL_PASSES`].
-    ///
-    /// A roll's id is its surface (the docked pane, the Render preview), and a
-    /// closed tab simply stops calling back — there is no teardown to hang
-    /// this on, so the panes still being prepared are the only evidence of
-    /// which ones exist. Run from whichever pane IS preparing, so a lone
-    /// survivor still clears the others.
-    fn evict_unseen(panes: &mut HashMap<u64, RollPane>, pass_nr: u64) {
-        panes.retain(|_, pane| pass_nr.saturating_sub(pane.last_seen_pass) < PANE_TTL_PASSES);
+        })
     }
 }
 
@@ -914,7 +890,12 @@ impl CallbackTrait for RollCallback {
             sampler,
             format: *target_format,
         };
-        RollPane::evict_unseen(panes, self.pass_nr);
+        // A roll's id is its surface (the docked pane, the Render preview), and
+        // a closed tab simply stops calling back — so the panes still being
+        // prepared are the only evidence of which ones exist. Swept from
+        // whichever pane IS preparing, so a lone survivor still clears the
+        // others.
+        panes.evict_unseen(self.pass_nr);
         let pane = RollPane::get(panes, device, layout, self.pane_id, self.pass_nr);
         if self.instances.len() > pane.capacity {
             pane.capacity = self.instances.len().next_power_of_two();
@@ -1014,7 +995,7 @@ impl CallbackTrait for RollCallback {
         let Some(resources) = callback_resources.get::<RollResources>() else {
             return;
         };
-        let Some(pane) = resources.panes.get(&self.pane_id) else {
+        let Some(pane) = resources.panes.get(self.pane_id) else {
             return;
         };
         if pane.count == 0 {
@@ -2073,7 +2054,7 @@ mod tests {
             let (_, resources) =
                 draw_bloomed_resourced(&device, &queue, vec![note], TOP, strength, black);
             let roll: &RollResources = resources.get().expect("the callback inserts its resources");
-            roll.panes[&0].bloom.is_some()
+            roll.panes.get(0).expect("the roll prepared a pane").bloom.is_some()
         };
         assert!(!bloom_of(0.0), "a strength of 0 built the bloom chain anyway");
         assert!(bloom_of(1.5), "no chain was built at a strength that asks for one");
@@ -2134,7 +2115,13 @@ mod tests {
 
         let vp = egui::epaint::ViewportInPixels::from_points(&rect, ppp, SIZE);
         let roll: &RollResources = resources.get().expect("prepare inserts its resources");
-        let bloom = roll.panes[&0].bloom.as_ref().expect("a strength of 1.5 asks for a chain");
+        let bloom = roll
+            .panes
+            .get(0)
+            .expect("the roll prepared a pane")
+            .bloom
+            .as_ref()
+            .expect("a strength of 1.5 asks for a chain");
         assert_eq!(
             bloom.size,
             [vp.width_px as u32, vp.height_px as u32],
@@ -2176,14 +2163,14 @@ mod tests {
         prepare_once(&device, &queue, &mut resources, 1.0, &preview);
         let live = |resources: &CallbackResources| {
             let roll: &RollResources = resources.get().expect("prepare inserts its resources");
-            let mut ids: Vec<u64> = roll.panes.keys().copied().collect();
+            let mut ids: Vec<u64> = roll.panes.keys().collect();
             ids.sort_unstable();
             ids
         };
         assert_eq!(live(&resources), vec![0, 1], "both rolls should be holding buffers");
 
         // The preview's tab closes: the docked roll goes on drawing alone.
-        for pass_nr in 1..=PANE_TTL_PASSES {
+        for pass_nr in 1..=crate::pass_aged::TTL_PASSES {
             docked.pass_nr = pass_nr;
             prepare_once(&device, &queue, &mut resources, 1.0, &docked);
         }
@@ -2203,14 +2190,14 @@ mod tests {
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
         let mut resources = CallbackResources::default();
 
-        for pane_id in 0..=PANE_TTL_PASSES {
+        for pane_id in 0..=crate::pass_aged::TTL_PASSES {
             let pane = bloomed_callback(rect, pane_id);
             prepare_once(&device, &queue, &mut resources, 1.0, &pane);
         }
 
         let roll: &RollResources = resources.get().expect("prepare inserts its resources");
         assert!(
-            roll.panes.contains_key(&0),
+            roll.panes.contains_key(0),
             "the first live pane was evicted before egui reached its paint callback",
         );
     }
