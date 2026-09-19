@@ -8,7 +8,7 @@ struct Cloud {
     spread: f32,
     contours: f32,
     contour_softness: f32,
-    style: u32,
+    contour_strength: f32,
     _pad: u32,
 };
 @group(0) @binding(0) var source: texture_2d<f32>;

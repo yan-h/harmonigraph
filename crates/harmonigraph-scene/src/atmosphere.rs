@@ -2,15 +2,6 @@
 
 use harmonigraph_core::LatticePos;
 
-/// Display transfer after shared measurement and optional smoothing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SpectrogramStyle {
-    Plain,
-    Blur,
-    #[default]
-    Lava,
-}
-
 /// Which texture the atmosphere layer draws over the spectrogram.
 ///
 /// Two constructions, not two presets of one: [`CloudStyle::Mosaic`] is a pile
@@ -35,13 +26,21 @@ pub enum CloudStyle {
 }
 
 /// Independent spectrogram diffusion, analyzer shading and note light.
+///
+/// There is no style here. Plain, Blur and Lava were three presets over three
+/// effects that never depended on each other — the blur, the terraces and the
+/// cloud — so each is a dial whose zero is OFF, and [`Self::effects`] is what
+/// the renderer reads to pay for exactly the ones that are on. The measured
+/// picture is all of them at zero.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SpectralAtmosphere {
-    pub style: SpectrogramStyle,
     pub pitch_softness: f32,
     pub time_softness: f32,
     pub spread: f32,
+    /// How far the levels are gathered into terraces, 0 for none. What the
+    /// `Lava` style used to switch on whole.
+    pub contour_strength: f32,
     pub contours: f32,
     pub contour_softness: f32,
     pub analyzer_softness: f32,
@@ -61,15 +60,19 @@ pub struct SpectralAtmosphere {
     /// every glob in the field, which is the most regular texture there is; 1
     /// draws each from the whole band the layer's coverage proof allows.
     pub scale_variety: f32,
-    /// How far a scale bends the light behind it, in SCALE WIDTHS — the
+    /// How far a scale carries the light behind it, and which way — the
     /// refraction, and the whole reason the layer reads as a lens rather than
     /// as something painted over the picture. 0 leaves the light where it is.
+    ///
+    /// ABOVE 0 the light is read where the scale's own face POINTS, in scale
+    /// widths, so the picture bends smoothly through the cloud. BELOW 0 it is
+    /// pulled toward the scale's CENTRE, and at -1 it is read there — one value
+    /// across the whole scale, so the picture comes apart into flat quantized
+    /// patches. That second half used to be its own `scale_facet` dial, a blend
+    /// between the two readings; the pair spanned a plane and the looks worth
+    /// having lie on this line through it, which is also exactly what the
+    /// watercolour's `wash_refract` has always meant by the word.
     pub scale_refract: f32,
-    /// Where a scale reads the light: at 0 where its own face POINTS, at 1 at
-    /// the scale's CENTRE — which is one value across the whole scale, so the
-    /// picture comes apart into flat quantized patches instead of bending
-    /// smoothly.
-    pub scale_facet: f32,
     /// How domed the scales are, which is what gives them faces to catch the
     /// light with. 0 is a smooth body with no scales in it at all. It also sets
     /// how dark a face turned away from the sun may get, which used to be its
@@ -87,9 +90,6 @@ pub struct SpectralAtmosphere {
     /// How big one glob is, as a multiplier on how many of them cross the cloud
     /// frame. Larger is bigger, like `scale_size`.
     pub wash_size: f32,
-    /// How much the globs differ in size from each other, over the band the
-    /// layer's coverage proof allows.
-    pub wash_variety: f32,
     /// One dial over everything that dissolves a glob's rim: how far it feathers
     /// into what lies beneath, how far it bleeds into what is about to cover it,
     /// and — falling as those rise — how much of the tide line is left.
@@ -109,30 +109,54 @@ pub struct SpectralAtmosphere {
     /// How opaque the finer octave's wash is over the coarse one. 0 draws the
     /// coarse octave alone and skips the finer one's work.
     pub wash_layers: f32,
-    /// How far the light a glob reads is carried from the close material toward
-    /// the wide blur.
-    pub wash_soften: f32,
-    /// How fast each glob's centre turns about its own cell, on its own hashed
-    /// rate. A rate rather than a distance: the centre swings round the offset
-    /// the jitter already gave it, so the field can never stir a glob out of the
-    /// neighbourhood a pixel searches.
-    pub wash_wander: f32,
-    /// How far up the dark end the wash is pulled back to the picture's own
-    /// black. The paper is lifted by a constant so a glob over a ridge does not
-    /// read as a shadow on it, and that same constant is what keeps silence off
-    /// the palette's floor; this scales the tone away again where the glob found
-    /// no light, and leaves every brighter tone exactly where it is. 0 is the
-    /// lifted paper everywhere.
+    /// How much of the picture's own black the wash gives back at the dark end.
+    /// The paper is lifted by a constant so a glob over a ridge does not read as
+    /// a shadow on it, and that same constant is what keeps silence off the
+    /// palette's floor; this scales the tone away again where the glob found no
+    /// light, and leaves every brighter tone exactly where it is. 0 is the
+    /// lifted paper everywhere, 1 is silence on the palette's floor, and
+    /// everything between is a share of the way — an AMOUNT, so the dial has no
+    /// step anywhere on it.
     pub wash_black: f32,
+}
+
+/// Which of the three spectrogram effects a setting actually draws — what the
+/// retired style enum used to say in one word, read off the dials instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpectralEffects {
+    /// Either softness is above zero, so the picture is the blurred field.
+    pub soft: bool,
+    /// The levels are gathered into terraces.
+    pub contours: bool,
+    /// A cloud texture is drawn over the picture.
+    pub cloud: bool,
+}
+
+impl SpectralEffects {
+    /// Nothing is on: the measured heatmap, on the renderer's plain path.
+    pub fn none(self) -> bool {
+        !(self.soft || self.contours || self.cloud)
+    }
+
+    /// Whether the scalar light field has to be built. The blur IS that field,
+    /// and the cloud reads it — at zero softness it is the measured picture
+    /// carried through unblurred, which is what lets a cloud be drawn over a
+    /// sharp spectrogram. The terraces alone read the level under the pixel and
+    /// need none of it.
+    pub fn light(self) -> bool {
+        self.soft || self.cloud
+    }
 }
 
 impl Default for SpectralAtmosphere {
     fn default() -> Self {
         Self {
-            style: SpectrogramStyle::Lava,
             pitch_softness: 35.0,
             time_softness: 120.0,
             spread: 0.25,
+            // Full strength is what the `Lava` style drew, and that style was
+            // the fresh one.
+            contour_strength: 1.0,
             contours: 7.0,
             contour_softness: 0.15,
             analyzer_softness: 0.5,
@@ -144,7 +168,6 @@ impl Default for SpectralAtmosphere {
             scale_size: 1.0,
             scale_variety: 0.5,
             scale_refract: 0.30,
-            scale_facet: 0.0,
             scale_relief: 0.35,
             scale_rock: 0.0,
             cloud_style: CloudStyle::Mosaic,
@@ -152,7 +175,6 @@ impl Default for SpectralAtmosphere {
             // about two harmonic lines across, the rim fully dissolved, the
             // wobble at the top of what the coverage proof allows.
             wash_size: 1.0,
-            wash_variety: 1.0,
             wash_fuzz: 1.0,
             wash_ragged: 1.0,
             wash_lobe: 0.55,
@@ -160,13 +182,12 @@ impl Default for SpectralAtmosphere {
             wash_pool: 0.5,
             wash_grain: 0.0,
             wash_layers: 0.5,
-            wash_soften: 0.0,
-            wash_wander: 0.0,
             // Not J2's: the prototype was stills over one loud passage and
-            // never showed what the lift does to a quiet pane. Half the band
-            // puts silence back on the palette's floor and leaves the bands
-            // alone.
-            wash_black: 0.5,
+            // never showed what the lift does to a quiet pane. All of it puts
+            // silence back on the palette's floor and leaves the bands alone —
+            // the same picture the dial drew at 50% while it was a knee width,
+            // since the knee it had there is the one the shader now keeps.
+            wash_black: 1.0,
         }
     }
 }
@@ -184,6 +205,7 @@ impl SpectralAtmosphere {
         self.pitch_softness = clamp(self.pitch_softness, fresh.pitch_softness, 0.0, 300.0);
         self.time_softness = clamp(self.time_softness, fresh.time_softness, 0.0, 2000.0);
         self.spread = clamp(self.spread, fresh.spread, 0.0, 1.0);
+        self.contour_strength = clamp(self.contour_strength, fresh.contour_strength, 0.0, 1.0);
         self.contours = clamp(self.contours, fresh.contours, 2.0, 64.0).round();
         self.contour_softness = clamp(self.contour_softness, fresh.contour_softness, 0.01, 0.5);
         self.analyzer_softness = clamp(self.analyzer_softness, fresh.analyzer_softness, 0.0, 1.0);
@@ -192,12 +214,10 @@ impl SpectralAtmosphere {
         self.cloud_speed = clamp(self.cloud_speed, fresh.cloud_speed, 0.0, 20.0);
         self.scale_size = clamp(self.scale_size, fresh.scale_size, 0.25, 4.0);
         self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
-        self.scale_refract = clamp(self.scale_refract, fresh.scale_refract, 0.0, 1.0);
-        self.scale_facet = clamp(self.scale_facet, fresh.scale_facet, 0.0, 1.0);
+        self.scale_refract = clamp(self.scale_refract, fresh.scale_refract, -1.0, 1.0);
         self.scale_relief = clamp(self.scale_relief, fresh.scale_relief, 0.0, 1.0);
         self.scale_rock = clamp(self.scale_rock, fresh.scale_rock, 0.0, 1.0);
         self.wash_size = clamp(self.wash_size, fresh.wash_size, 0.25, 4.0);
-        self.wash_variety = clamp(self.wash_variety, fresh.wash_variety, 0.0, 1.0);
         self.wash_fuzz = clamp(self.wash_fuzz, fresh.wash_fuzz, 0.0, 1.0);
         self.wash_ragged = clamp(self.wash_ragged, fresh.wash_ragged, 0.0, 1.0);
         self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);
@@ -205,10 +225,19 @@ impl SpectralAtmosphere {
         self.wash_pool = clamp(self.wash_pool, fresh.wash_pool, 0.0, 1.0);
         self.wash_grain = clamp(self.wash_grain, fresh.wash_grain, 0.0, 1.0);
         self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
-        self.wash_soften = clamp(self.wash_soften, fresh.wash_soften, 0.0, 1.0);
-        self.wash_wander = clamp(self.wash_wander, fresh.wash_wander, 0.0, 1.0);
         self.wash_black = clamp(self.wash_black, fresh.wash_black, 0.0, 1.0);
         self
+    }
+
+    /// Which effects these settings draw. Read off SANITIZED values — a NaN
+    /// compares false to everything and would switch an effect off that the
+    /// sanitizer is about to give its fresh value back to.
+    pub fn effects(self) -> SpectralEffects {
+        SpectralEffects {
+            soft: self.pitch_softness > 0.0 || self.time_softness > 0.0,
+            contours: self.contour_strength > 0.0,
+            cloud: self.cloud_depth > 0.0,
+        }
     }
 }
 

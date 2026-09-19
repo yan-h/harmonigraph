@@ -65,7 +65,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
         attack, release, keyline, roll_seconds, roll_thickness, roll_opacity, roll_lead,
         roll_lead_fade, roll_lead_release, note_name_scale, volume_floor_db, volume_ceiling_db);
-    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, contours, contour_softness, analyzer_softness, note_glow);
+    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, contour_strength, contours, contour_softness, analyzer_softness, note_glow);
     saved.workspace.interaction.ui_scale = v;
     // These owners have NO ValueBar/RangeBar today. Still pass through their
     // real shared load boundary; zero Video visits below explicitly records
@@ -208,15 +208,15 @@ fn scenarios() -> Vec<Scenario> {
         // marks, audio reading, sevens, roll/note names, glow and shadow falloff.
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
-    // The wash's own inventory: it takes the six scale bars off the Analyzer
-    // page and puts twelve of its own there, and nothing else on the page moves.
+    // The wash's own inventory: it takes the five scale bars off the Analyzer
+    // page and puts nine of its own there, and nothing else on the page moves.
     // Its own scenario rather than a flag on the loop above because the fresh
-    // state selects the scales, so without this the twelve are drawn by no case
+    // state selects the scales, so without this the nine are drawn by no case
     // here at all.
     cases.push(Scenario {
         pane: SettingsPane::Page(DisplayPage::Analyzer),
         wash: true,
-        visits: 33,
+        visits: 31,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
