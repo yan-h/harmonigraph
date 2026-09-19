@@ -428,7 +428,7 @@ mod tests {
     fn the_strip_draws_a_cell_per_sheet_on_a_fixed_axis() {
         let bar = filled_rects(&paint_strip(0, 0, 0, 1.0))[0].0;
         let slot = bar.width() / CELLS as f32;
-        for (low, home, high) in [(0, 0, 0), (-1, 0, 1), (0, 0, 2), (-6, -6, 6), (2, 4, 4)] {
+        for (low, home, high) in [(0, 0, 0), (-1, 0, 1), (0, 0, 2), (-4, -4, 4), (2, 4, 4)] {
             let drawn = cells(&paint_strip(low, home, high, 1.0));
             assert_eq!(
                 drawn.len(),
@@ -581,10 +581,14 @@ mod tests {
         let grab = Grab::at(1.2, (-1, 0, 2));
         assert!(matches!(grab, Grab::Stack { .. }), "a press in the middle did not take the stack");
         assert_eq!(grab.apply(1.2), (-1, 0, 2), "the press alone moved the stack");
-        assert_eq!(grab.apply(3.2), (1, 2, 4), "the slide did not carry the shape");
+        // One cell short of the wall, deliberately: at `SEVENS_LAYER_LIMIT`
+        // this stack's high end reaches the axis after two, so a drag of two
+        // would answer the same triple as the slam below and the stop would
+        // stop being what is measured.
+        assert_eq!(grab.apply(2.2), (0, 1, 3), "the slide did not carry the shape");
         assert_eq!(
             grab.apply(90.0),
-            (3, 4, 6),
+            (1, 2, 4),
             "the slide did not stop with its high end on the axis",
         );
         assert_eq!(grab.apply(1.2), (-1, 0, 2), "the slide did not come home");

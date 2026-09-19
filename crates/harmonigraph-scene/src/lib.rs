@@ -106,12 +106,15 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// there is a pane that gets there without hand-editing anything, since
 /// `Layout::split` will give the lattice a fifth of a 21:9 frame. What the
 /// trim costs there is 5634 nodes at 4:1 and 15912 at 6:1, off all four
-/// edges. Nine sheets is no longer the deepest a view can be set to, and at
-/// the thirteen `SEVENS_LAYER_LIMIT` now allows the crossing is at about
-/// 1.8:1 rather than 3.3:1 — see #916, which also carries what the test named
-/// for this bound, `a_cabinet_camera_never_reaches_the_node_budget`, actually
-/// reads. A cap that covered it would have to be twice this one, for a band
+/// edges. A cap that covered it would have to be twice this one, for a band
 /// of lattice eight steps tall.
+///
+/// Nine sheets is full depth, and this cap is why: #896 briefly took
+/// [`SEVENS_LAYER_LIMIT`] to six for the layer strip's cell width, and the
+/// thirteen sheets that allowed moved the crossing from 3.3:1 down to 1.8:1 —
+/// putting a plain 16:9 pane over the cap at 21021 nodes. It went unseen
+/// because the test named for this bound read a count the trim had already
+/// held down; both halves are #916.
 ///
 /// Cabinet's figures are the same under a window with bounds of its own as
 /// under the mirrored one it replaced — measured equal at every aspect, depth
