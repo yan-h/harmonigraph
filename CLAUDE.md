@@ -84,27 +84,34 @@ It is also too coarse the other way: a COMMENT-only `.wgsl` edit owes nothing at
 So `git log -- crates/harmonigraph-metal-assets/assets` is a cheap check rather than the definition:
 a shader PR absent from that log is a question, not yet a verdict.
 
-The definition is the corpus itself, and it answers locally in about a second:
+The definition is the corpus itself, it is a `ci.sh` gate, and it answers locally in about fifteen seconds:
 
 ```
-cargo test -p harmonigraph-render golden 2>&1 | grep "compiling from source"
+HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render \
+  --features shader-assets-tools -- --ignored --exact \
+  shader_assets::catalog::production_metal_asset_catalog
 ```
 
-Silence means every library resolved from the corpus.
-That is the same signal as the line below, asked on purpose instead of noticed by luck.
+`strict` drops the compile-from-source fallback, so a missing library fails the pipeline that wanted it and names its key.
+The catalog is the enumeration of production constructors the corpus is generated FROM, so this covers every library in it rather than whatever the golden frames happen to draw —
+and it is the same test in the same mode the `Metal shader assets` workflow reports as `strict-catalog`.
 
-What makes this worth a section is that NOTHING LOCAL GOES RED.
-`cargo test --workspace`, `cargo fmt --all --check` and `cargo clippy` all pass against a stale corpus, because the renderer quietly falls back to compiling from source, and `ci.sh` does not gate it either.
-The single local signal is a line that scrolls past inside PASSING test output:
+**Do not grep the fallback notice instead**, however much it looks like the signal:
 
 ```
 Harmonigraph: Metal asset <hash> unavailable; compiling from source
 ```
 
-On the PR it arrives as a separate workflow —
-`Metal shader assets` fails with `strict-catalog failed` while `Full CI` passes —
-so a branch honestly reported as "Full CI green" can still be `UNSTABLE` and unmergeable.
-Read `mergeStateStatus` rather than the one workflow whose name sounds like it covers everything.
+That is an `eprintln!`, and libtest replays a test's captured output only when the test FAILS, so a green run swallows it whether the corpus is stale or not.
+`cargo test -p harmonigraph-render golden 2>&1 | grep "compiling from source"` stood in this section as the definition and was silent in BOTH states;
+a whole batch of sessions read that silence as a pass (#947).
+`cargo test -p harmonigraph-render golden -- --nocapture` is what makes it visible, and is worth reading once the gate is already red, because it names every key that run missed where the gate stops at the first.
+
+`cargo test --workspace`, `cargo fmt --all --check` and `cargo clippy` still pass against a stale corpus.
+The gate is in `ci.sh`'s `isolated` group, so `Full CI` fails on one now —
+but `Metal shader assets` still runs what it does not, the offline renderer's own pipelines and the corpus's recorded compiler flags and fallback controls, and still arrives as a separate workflow.
+A branch honestly reported as "Full CI green" can still be `UNSTABLE` and unmergeable;
+read `mergeStateStatus` rather than the one workflow whose name sounds like it covers everything.
 
 Regenerate on the runner, not here:
 
