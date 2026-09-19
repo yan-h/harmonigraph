@@ -14,8 +14,11 @@ fn persist_round_trips_camera_and_view() {
     state.picture.appearance.camera.distance = 18.0;
     state.picture.appearance.view.max_sevens = 3;
     // Non-default values throughout, so the fields prove they
-    // round-trip rather than matching the defaults by luck.
-    state.picture.appearance.view.band_width = 0.7;
+    // round-trip rather than matching the defaults by luck. Inside their own
+    // bars too: `sanitize` holds the Layers widths to the ranges their handles
+    // offer, so a width past a ceiling would be testing the repair rather than
+    // the round trip (the band's ceiling is `RING_WIDTH_MAX`, 0.6).
+    state.picture.appearance.view.band_width = 0.5;
     state.picture.appearance.view.spectral_ring_width = 0.1;
     state.picture.appearance.view.ring_gap = 0.02;
     // Melody alone: both marks on is the default, and this test's whole
@@ -79,7 +82,7 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
     assert_eq!(restored.picture.appearance.camera.distance, 18.0);
     assert_eq!(restored.picture.appearance.view.max_sevens, 3);
-    assert_eq!(restored.picture.appearance.view.band_width, 0.7);
+    assert_eq!(restored.picture.appearance.view.band_width, 0.5);
     assert_eq!(restored.picture.appearance.view.spectral_ring_width, 0.1);
     assert_eq!(restored.picture.appearance.view.ring_gap, 0.02);
     assert!(restored.picture.appearance.view.mark_melody);

@@ -526,6 +526,53 @@ fn a_gap_dialled_past_its_ceiling_reads_back_as_the_padding_it_draws() {
     }
 }
 
+/// The three handles beside the audio ring on the Layers bar, on the paddings'
+/// rule above and for the same reason: [`ViewConfig::rings`] holds each to its
+/// own ceiling for the picture while the field keeps whatever the blob wrote,
+/// so the bar reads out one node and the stack under it draws another. The
+/// ring's own width was already repaired at this door; these three were not.
+#[test]
+fn a_stack_width_dialled_past_its_ceiling_reads_back_as_the_layer_it_draws() {
+    for wild in [1.5, 4.0, -0.1, f32::NAN, f32::INFINITY] {
+        // The stack's start and the mark strip are handed out whatever the
+        // layers between them do, so both read back off `rings` directly.
+        let mut view =
+            ViewConfig { ring_inner: wild, mark_thickness: wild, ..ViewConfig::default() };
+        view.sanitize();
+        let rings = view.rings();
+        assert_eq!(
+            view.ring_inner, rings.inner,
+            "the bar reads an inner edge of {} and the stack starts at {}",
+            view.ring_inner, rings.inner,
+        );
+        assert_eq!(
+            view.mark_thickness, rings.mark_thickness,
+            "the bar reads a mark depth of {} and the strip is {} deep",
+            view.mark_thickness, rings.mark_thickness,
+        );
+        // The band is the one of the three that can be REFUSED, so it is
+        // measured on a node with nothing inside it: seated on the centre with
+        // no ring and no padding in front of it, a clamped band always fits and
+        // the span it comes back with is the width the bar reads.
+        let mut view = ViewConfig {
+            band_width: wild,
+            ring_inner: 0.0,
+            ring_gap: 0.0,
+            spectral_ring_width: 0.0,
+            ..ViewConfig::default()
+        };
+        view.sanitize();
+        let (inner, outer) = view.rings().band;
+        assert_eq!(
+            view.band_width,
+            outer - inner,
+            "the bar reads a band of {} and the stack draws {}",
+            view.band_width,
+            outer - inner,
+        );
+    }
+}
+
 #[test]
 fn the_ring_geometry_is_sanitized_into_the_scene() {
     // A stack dialled past the quad's own edge: each width is held to the bar's
