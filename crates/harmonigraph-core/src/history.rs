@@ -5,7 +5,10 @@
 //! release fade completes and the tracker drops it (see
 //! [`NoteTracker::prune`](crate::NoteTracker::prune)). History and the live
 //! voices therefore never describe the same note at the same time, and a
-//! trail picks a note up precisely where its fade lets go.
+//! trail picks a note up precisely where its fade lets go. Every voice that
+//! was ever DRAWN lands here; one whose source was hidden when it let go was
+//! never drawn and never arrives, which is the same rule read the other way
+//! (`Voice::visible_at_release`).
 //!
 //! Deliberately thin: one entry per distinct pitch, holding only what a
 //! mark on the lattice needs. The scene draws from this; nothing here knows

@@ -552,17 +552,21 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64,
         .shadow
         .spectral_geometry
         .clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
-    if dot_shadow.casts() && !marks.is_empty() {
-        painter.add(harmonigraph_render::dot_shadow_paint_callback(
-            rect,
-            marks.clone(),
-            dot_shadow,
-            state.surfaces.target_format,
-            crate::panes::lattice::pane_id(surface),
-            crate::text::spiral_shadow_surface(surface),
-            painter.ctx().cumulative_pass_nr(),
-        ));
-    }
+    // Unconditionally, for the halo's reason below and by the same mechanism:
+    // the callback declines a frame with nothing to shadow itself, without
+    // building its pipelines, and it is the only thing that can — its sweep
+    // retires this pane's buffers on the clock of these calls, so a gate here
+    // aged them out after two silent seconds and rebuilt them inside the frame
+    // the next note arrived in.
+    painter.add(harmonigraph_render::dot_shadow_paint_callback(
+        rect,
+        marks.clone(),
+        dot_shadow,
+        state.surfaces.target_format,
+        crate::panes::lattice::pane_id(surface),
+        crate::text::spiral_shadow_surface(surface),
+        painter.ctx().cumulative_pass_nr(),
+    ));
     for mark in &marks {
         painter.circle_filled(
             egui::pos2(mark.center[0], mark.center[1]),
@@ -1490,13 +1494,16 @@ mod tests {
             "the bloom strength decided whether the callback went in",
         );
         // The emptiest frame the pane can draw — no strength, nothing
-        // sounding, so no dots, no shadow and no names. What is left is the
-        // halo's callback and the spectral shadow's finish, which is likewise
-        // unconditional. A gate on either would read 1 here.
+        // sounding, so nothing to light, nothing to shadow and no names. What
+        // is left is three callbacks that all go in unconditionally and all
+        // decline inside their own `prepare`: the dot shadow's, the halo's,
+        // and the spectral shadow's finish. Each of the three keeps a clock
+        // running that retires state the pane is still using, so a gate on any
+        // one of them would read 2 here.
         assert_eq!(
             callbacks(0.0, false),
-            2,
-            "a silent frame asks for something other than the halo and the shadow finish",
+            3,
+            "a silent frame asks for something other than the shadow, the halo and the finish",
         );
         assert_eq!(
             callbacks(1.2, false),

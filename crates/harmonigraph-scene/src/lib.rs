@@ -102,11 +102,15 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// above the largest one a pane of ordinary shape reaches: 19251 nodes, at
 /// 3:1, fully zoomed out, nine sheets deep, at cavalier scale. Bounded is not
 /// the same as under the cap, and the difference is measured rather than
-/// assumed — past about 3.3:1 with full depth cabinet does reach this, and
+/// assumed — past about 3.3:1 at that depth cabinet does reach this, and
 /// there is a pane that gets there without hand-editing anything, since
 /// `Layout::split` will give the lattice a fifth of a 21:9 frame. What the
 /// trim costs there is 5634 nodes at 4:1 and 15912 at 6:1, off all four
-/// edges. A cap that covered it would have to be twice this one, for a band
+/// edges. Nine sheets is no longer the deepest a view can be set to, and at
+/// the thirteen `SEVENS_LAYER_LIMIT` now allows the crossing is at about
+/// 1.8:1 rather than 3.3:1 — see #916, which also carries what the test named
+/// for this bound, `a_cabinet_camera_never_reaches_the_node_budget`, actually
+/// reads. A cap that covered it would have to be twice this one, for a band
 /// of lattice eight steps tall.
 ///
 /// Cabinet's figures are the same under a window with bounds of its own as
@@ -120,6 +124,36 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// over 273 nodes, 0.06ms over 875 (a 16:9 pane fully zoomed out, flat), and
 /// 1.2ms over 14877.
 pub const MAX_DRAWN_NODES: usize = 20480;
+
+/// The narrowest and widest a [`ViewConfig::spacing`] may be, and the one
+/// clamp on the tree's only persisted float that NO bar edits.
+///
+/// Which is what makes these two unlike every other pair here: the rest state
+/// a range a control already offers, so the constant and the bar are one fact.
+/// Nothing shows this one. A range with no readout cannot be wrong about what
+/// the user sees, and it has nothing to be right about either — so it is not a
+/// taste boundary at all, it is the bracket outside which the number has
+/// stopped being a lattice spacing. Both ends come off the camera, which is
+/// the only other thing in the tree measured in world units.
+///
+/// The ceiling is the pane at its tallest. Fully zoomed out the viewport is
+/// `MAX_DISTANCE * tan(fov/2) * 2` = 19.9 world units high (see
+/// [`Camera::MAX_DISTANCE`]), so past 20 there is no zoom the camera offers at
+/// which two adjacent nodes are on screen together: one node, and the lattice
+/// it belongs to somewhere off the pane.
+///
+/// The floor is where the picture stops being a function of the camera at all.
+/// `scrolled` saturates its `MAX_DRAWN_EXTENT` (4096 steps per sheet axis) at
+/// a spacing of 0.0043 on a 16:9 pane fully zoomed out, and below that the
+/// window is the clamp rather than the view — every frame asking for the cap's
+/// worth of sub-pixel nodes, whatever the camera does.
+///
+/// Deliberately wide, for the same reason it exists at all. With no bar to
+/// contradict, a narrow repair would be this file inventing a look; what the
+/// door owes is only that the number it lets through is a size.
+pub const SPACING_MIN: f32 = 0.005;
+/// The other end of [`SPACING_MIN`]; see there for both.
+pub const SPACING_MAX: f32 = 20.0;
 
 /// The longest wait the Delay bar offers before a melody/bass mark starts
 /// easing in ([`ViewConfig::mark_delay`]), and the clamps both load sanitation
