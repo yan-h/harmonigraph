@@ -301,6 +301,15 @@ float heatmap_level(
     return _e2;
 }
 
+metal::float3 linear_from_gamma_rgb(
+    metal::float3 srgb
+) {
+    metal::bool3 cutoff = srgb < metal::float3(0.04045);
+    metal::float3 lower = srgb / metal::float3(12.92);
+    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
+    return metal::select(higher, lower, cutoff);
+}
+
 float baked_density(
     metal::float2 position,
     metal::texture2d<float, metal::access::sample> close_light,
@@ -658,7 +667,7 @@ Glob wash_glob(
     Glob out_2 = {};
     metal::float3 _e7 = wash_hash(cell_2, salt_3 + 77u);
     out_2.order = _e7.x;
-    if (_e7.y >= occupancy) {
+    if (_e7.y > occupancy) {
         out_2.centre = r_2;
         out_2.edge = 1000000000.0;
         Glob _e16 = out_2;
@@ -992,15 +1001,15 @@ metal::float4 cloud_color(
     return _e10;
 }
 
-struct fs_cloud_gammaInput {
+struct fs_cloud_linearInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_gammaOutput {
+struct fs_cloud_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_gammaOutput fs_cloud_gamma(
-  fs_cloud_gammaInput varyings [[stage_in]]
+fragment fs_cloud_linearOutput fs_cloud_linear(
+  fs_cloud_linearInput varyings [[stage_in]]
 , metal::float4 position_4 [[position]]
 , constant Locals& locals [[buffer(0)]]
 , device type_3 const& grid [[buffer(1)]]
@@ -1013,5 +1022,6 @@ fragment fs_cloud_gammaOutput fs_cloud_gamma(
 ) {
     const VertexOut in = { position_4, varyings.slab, varyings.t };
     metal::float4 _e1 = cloud_color(in, locals, grid, lut, close_light, wide_light, cloud_sampler, cloud, _buffer_sizes);
-    return fs_cloud_gammaOutput { _e1 };
+    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
+    return fs_cloud_linearOutput { metal::float4(_e3, _e1.w) };
 }

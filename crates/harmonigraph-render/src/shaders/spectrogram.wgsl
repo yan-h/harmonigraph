@@ -1125,7 +1125,16 @@ fn wash_glob(cell: vec2<i32>, salt: u32, r: vec2<f32>, wob: f32, occupancy: f32)
     // value every running nearest starts at and no `>` passes, and it adds a
     // clamped zero to the cover and the pile. So the early return draws the
     // picture the uniform loop drew, bit for bit.
-    if g.y >= occupancy {
+    //
+    // The compare takes the boundary because `wash_hash` returns
+    // `(n & 0x3ff) / 1023`, which is a CLOSED range: a channel can be exactly
+    // 1.0, and the base octave is scanned at an occupancy of exactly 1.0. Under
+    // a strict `>=` those two 1.0s met and the base octave dropped about one
+    // cell in 1024 — a hole the coverage half of the proof above forbids, since
+    // its hardest point is a lattice corner reached by all four cells touching
+    // it. The finer octave cannot tell the two compares apart: `0.20 * 1023` is
+    // 204.6, so no hash value lands on `WASH_FINE_OCCUPANCY` at all.
+    if g.y > occupancy {
         out.centre = r;
         out.edge = 1.0e9;
         return out;
