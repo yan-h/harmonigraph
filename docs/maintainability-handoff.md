@@ -15,10 +15,17 @@ The last historical audit ended at `8b4edf4e`;
 it is evidence tied to that revision,
 not a reason to start new implementation from an old checkout.
 
-Yan requested this handoff and merging documentation PR [#951](https://github.com/yan-h/harmonigraph/pull/951).
-That supersedes the earlier request to keep that PR open.
-This documentation merge does not itself launch implementation or authorize merging future code PRs.
-The launch request below is a template Yan can send to activate the bounded implementation and merge scope in one message.
+**Launch update, 2026-09-19:** Yan has now authorized the bounded first-batch implementation and in-scope merges after checks and appropriate review.
+The coordinator owns review, merge order and integration;
+workers still deliver draft PRs for that coordinator.
+See the [plan's current position](maintainability-plan.md#start-here);
+existing issues hold live progress.
+
+Before that launch,
+Yan requested this handoff and merging documentation PR [#951](https://github.com/yan-h/harmonigraph/pull/951),
+superseding the earlier request to keep that PR open.
+That documentation merge did not itself launch implementation or authorize future code merges.
+The launch request below is retained as the template for activating the bounded scope in one message.
 If a different launch request authorizes implementation only,
 deliver draft PRs and use its actual merge authority;
 do not infer broader permission from the template's presence in the repository.

@@ -10,18 +10,29 @@ Nothing here blocks anything today.
 **State.** Project-wide adaptive retuning is built.
 [`adaptive-tuning.md`](adaptive-tuning.md) is the design and the account of what shipped:
 one lightweight tuner per independent note path, automatic aggregation into one full Harmonigraph, and central sequencing at a chosen fixed delay with sequential assignment.
-Each new assignment sees its predecessors across tracks, and its correction remains frozen through release.
-A missed assignment deadline delays that one attack and reports it;
-unrelated ready notes on the same track keep their schedule.
-Stop/Reset cancellation and a latched terminal fault at required-storage exhaustion are the accepted exceptions to retaining pending attacks.
+The Hub sequences the records received within each callback by sample;
+later arrivals are assigned when received rather than waiting for complete global chronological context.
+A chosen correction remains frozen through release.
+At the deadline, [`Tune::schedule`](../crates/harmonigraph-plugin/src/tuning/tune.rs) attempts output with the correction available or raw pitch if none has arrived.
+Host refusal or the callback output budget can defer physical emission;
+local acceptance bookkeeping still prevents duplicate output and incorrect held state.
+Display and take follow the Hub's scheduled output rather than exact instrument acceptance.
+The [2026-09-09 decisions in #786](https://github.com/yan-h/harmonigraph/issues/786),
+implemented by [#788](https://github.com/yan-h/harmonigraph/pull/788) and [#813](https://github.com/yan-h/harmonigraph/pull/813),
+supersede the former deadline-wait, terminal-fault gate and complete-chronology promises.
+Fault status does not itself gate emission;
+local retention bounds and valid host steady time still constrain which input can be scheduled.
+Explicit lifecycle cuts remain separate from faults.
 What follows is the set of alternatives that were considered and parked, which is why this entry survives its own implementation.
 
 **Immediate and jointly optimized alternatives.** Independent immediate assignment from prior snapshots permits simultaneous cross-track notes to miss each other's choices.
 That does not meet the chosen musical requirement.
 Immediate shared-state serialization instead needs a real-time contention and event-ordering contract across host callbacks.
-The central sequencer accepts a measured fixed normal delay to keep one policy owner and complete chronological context.
+The central sequencer uses a fixed normal delay and one policy owner for the context received so far.
 Joint chord optimization is unnecessary for that requirement:
-deterministic sequential assignment is sufficient to let each attack see its predecessors, without promising a unique absolute comma placement.
+deterministic sequential assignment lets each attack see the predecessors already sequenced, without promising a unique absolute comma placement or waiting for missing records.
+[`Hub`](../crates/harmonigraph-plugin/src/tuning/hub.rs) owns this ordering;
+`a_record_arriving_after_its_sample_was_sequenced_is_still_assigned` in the [tuning tests](../crates/harmonigraph-plugin/src/tuning/tests.rs) covers late arrival.
 None of these alternatives is an additional launch mode.
 
 **Reconciliation.** Adaptive movement of already-sounding voices is excluded absolutely by Yan's decision.

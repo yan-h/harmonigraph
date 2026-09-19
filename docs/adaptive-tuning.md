@@ -4,7 +4,10 @@ Harmonigraph retunes a performance as it is played.
 A lightweight **Harmonigraph Tune** note effect sits before each instrument, holds its track's MIDI for a fixed delay, and asks one full Harmonigraph —
 the **Hub**, normally on Master —
 what pitch each new note should have.
-The Hub sees every track's notes in one chronological order, so a chord spread across three tracks is tuned as one chord rather than three independent guesses.
+The Hub sequences the notes received from those tracks within each callback by sample,
+so their assignments share one musical context.
+Later arrivals are assigned when received;
+there is no wait for complete global chronological context.
 The chosen adaptive correction is composed into a CLAP per-note tuning expression and never moves again for the life of that note;
 the player's later per-note expression and MIDI channel bend remain live.
 
