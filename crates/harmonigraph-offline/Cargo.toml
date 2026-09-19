@@ -30,3 +30,4 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 harmonigraph-scene = { workspace = true }
 # The byte-exact frame gate the golden set is measured by.
 harmonigraph-golden = { workspace = true }
+harmonigraph-record = { workspace = true, features = ["test-support"] }

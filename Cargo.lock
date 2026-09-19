@@ -1428,6 +1428,7 @@ dependencies = [
  "egui-wgpu",
  "harmonigraph-core",
  "harmonigraph-golden",
+ "harmonigraph-record",
  "harmonigraph-render",
  "harmonigraph-scene",
  "harmonigraph-take",
