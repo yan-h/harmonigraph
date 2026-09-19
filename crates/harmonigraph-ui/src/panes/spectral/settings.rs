@@ -196,6 +196,9 @@ pub(crate) fn spectrum_settings_pane(
         )
         .unit(1.0, " pt")
         .decimals(1)
+        // The halves `sanitized` snaps to, so the bar never reads 2.3 over a
+        // cloud drawn at 2.5.
+        .step(0.5)
         .show(ui)
         .on_hover_text(
             "A PERFORMANCE control. Both textures walk their cells under every \

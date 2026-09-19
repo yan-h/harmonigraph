@@ -75,7 +75,8 @@ pub struct ValueBar<'a> {
     /// otherwise), so the fine end of a wide range is draggable.
     eased: bool,
     decimals: usize,
-    integer: bool,
+    /// The grid the value lands on, 0 for none (see [`ValueBar::step`]).
+    step: f32,
     /// A word saying what is DRIVING the value, drawn at full brightness
     /// ahead of the bar's name. Used by the bar of an axis a tempered-out
     /// comma derives (the major third under meantone, the harmonic seventh
@@ -105,7 +106,7 @@ impl<'a> ValueBar<'a> {
             label,
             eased: false,
             decimals: 2,
-            integer: false,
+            step: 0.0,
             badge: None,
             magnet: None,
             display: None,
@@ -160,9 +161,25 @@ impl<'a> ValueBar<'a> {
     }
 
     pub fn integer(mut self) -> Self {
-        self.integer = true;
         self.decimals = 0;
+        self.step(1.0)
+    }
+
+    /// Land the value on multiples of `step`, for a setting its owner snaps
+    /// on load: the bar then reads out only values the owner will keep, where
+    /// a free drag would show one number over a picture drawn from another.
+    pub fn step(mut self, step: f32) -> Self {
+        self.step = step;
         self
+    }
+
+    /// `v` on the bar's grid, or untouched when it has none.
+    fn quantized(&self, v: f32) -> f32 {
+        if self.step > 0.0 {
+            (v / self.step).round() * self.step
+        } else {
+            v
+        }
     }
 
     /// Read the value out as this rather than as plain decimals — for a
@@ -247,11 +264,7 @@ impl<'a> ValueBar<'a> {
         } else {
             min + t.powi(3) * (max - min)
         };
-        if self.integer {
-            v.round()
-        } else {
-            v
-        }
+        self.quantized(v)
     }
 
     /// Numeric entry carries its unit so a double-click never exposes the
@@ -312,7 +325,7 @@ impl<'a> ValueBar<'a> {
                 if !cancelled {
                     if let Some(v) = self.parse(&text) {
                         let v = self.snapped(v.clamp(self.min(), self.max()));
-                        *self.value = if self.integer { v.round() } else { v };
+                        *self.value = self.quantized(v);
                         response.mark_changed();
                     }
                 }
