@@ -836,6 +836,31 @@ impl NoteTracker {
         self.held.retain(|key, voice| {
             key.source != frame.source || voices.iter().any(|row| baseline_matches(row, voice))
         });
+        // The same identity question asked of the released tail, and the reason
+        // it has to be asked there too is that a departure can be WITHDRAWN. A
+        // publication gap releases what it could not see, because what it
+        // cannot see may have ended and a fade is the guess the picture
+        // recovers from; this frame is the source saying the note never
+        // stopped. Leaving the copy in place would draw the note twice and
+        // then, at the end of a fade it is not having, hand a still-sounding
+        // pitch to [`NoteHistory`] — a trail mark on a node the music has not
+        // left (#936). A row this baseline does NOT list is a genuine
+        // departure and keeps its fade.
+        //
+        // KNOWN GAP, accepted deliberately: this only reaches a copy that is
+        // still IN the tail. A `prune` landing between the outage and this
+        // frame has already recorded the mark and dropped the voice, and there
+        // is nothing left to withdraw — at a `Fade` near 0 that is every time,
+        // since the release is over on the very next frame. What that costs is
+        // a trail mark arriving early on a node whose note is still sounding;
+        // `NoteHistory::record` is idempotent per cent-key and only the trail
+        // reads it, so the note's real release overwrites it. Closing it needs
+        // a third note-lifecycle state — released, and released-but-unconfirmed
+        // — which is not worth carrying for a source that has lost contact with
+        // the thing telling it what is playing (Yan's call, 2026-09-19).
+        self.released.retain(|voice| {
+            voice.source != frame.source || !voices.iter().any(|row| baseline_matches(row, voice))
+        });
         for row in voices {
             let onset = self.roll.live_onset(row.key(frame.source)).unwrap();
             let voice = self.held.entry(row.key(frame.source)).or_insert_with(|| {
@@ -1006,7 +1031,14 @@ impl NoteTracker {
     /// lands in the history even if its source is hidden mid-fade. (A
     /// retrigger without an off replaces its voice outright — see
     /// `handle_event` — so that voice is never recorded; the retrigger's own
-    /// release covers the pitch.)
+    /// release covers the pitch. A resuming baseline withdraws a release the
+    /// same way, see [`replace_source`](Self::replace_source): a note a
+    /// publication gap let go of and the source then says is still sounding
+    /// never reaches here at all, so the trail cannot mark a node the music
+    /// has not left — as far as this gets, which is only while the voice is
+    /// still in the tail for the baseline to find. `replace_source` carries
+    /// what that leaves open.)
+    ///
     /// Asks the RELEASE rather than the full activation, because the question
     /// here is whether the fade is over and not whether anything is currently
     /// on screen. The two part company for the whole of a note's arrival,
@@ -1068,6 +1100,17 @@ impl NoteTracker {
     /// "drawn" and "remembered" one answer instead of two that can disagree
     /// (#905). The visible cost is that hiding a source does not cut its
     /// already-fading notes: they finish the fade they were drawing.
+    ///
+    /// One case looks like an exception to that and is really the two halves
+    /// changing hands. A baseline that arrives NOT participating and still
+    /// lists a note a publication gap had released withdraws that release
+    /// ([`replace_source`](Self::replace_source)) — so the voice is no longer
+    /// a fading one whose fade is protected, it is a HELD one, and the held
+    /// rule cuts it in that instant along with everything else the source is
+    /// holding. It leaves no trail mark either, which is the same answer read
+    /// through [`prune`](Self::prune): the source says the note never stopped,
+    /// and a note that never stopped is neither drawn as departing nor
+    /// remembered as departed.
     pub fn voices(&self) -> impl Iterator<Item = &Voice> {
         self.held
             .values()
@@ -1762,6 +1805,34 @@ mod tests {
         assert_eq!(tracker.voices().next().unwrap().on_time, 1.0);
     }
 
+    /// One voice as a canonical source PUBLISHES it, which is the only shape
+    /// that carries a lifetime and so the only one a baseline can resume.
+    ///
+    /// `AcceptedOutput` is the load-bearing field and the reason this helper
+    /// exists: `VoiceBaseline::default()` is `ObservedDirect`, which
+    /// `SourceBaseline::validate` rejects on every source but
+    /// [`SourceId::DIRECT`] — so the obvious fixture is refused, and refused
+    /// for a reason that has nothing to do with the note. Saying
+    /// `AcceptedOutput` then requires a nonzero lifetime and a real `onset`.
+    fn published_voice(note: u8, lifetime: u64) -> VoiceBaseline {
+        VoiceBaseline {
+            note,
+            lifetime,
+            actual_onset: 1.0,
+            onset: Some(crate::canonical::EventTiming {
+                clock: crate::canonical::ClockId::default(),
+                input: 0,
+                planned: None,
+                sample: 48_000,
+                sample_rate: 48_000.0,
+            }),
+            pitch_microcents: i64::from(note) * 100_000_000,
+            velocity: 0.8,
+            provenance: crate::confirmed::PitchProvenance::AcceptedOutput,
+            ..Default::default()
+        }
+    }
+
     /// Publication lost over one source, or over the whole canonical stream.
     fn gap(time: Time, source: Option<SourceId>) -> CanonicalEvent<'static> {
         CanonicalEvent::Gap(PublicationGap {
@@ -1809,6 +1880,102 @@ mod tests {
         assert_eq!(tracker.voices().count(), 0);
         let visited: Vec<_> = tracker.history().visits().map(|visit| visit.pitch).collect();
         assert_eq!(visited, vec![55.0, 60.0]);
+    }
+
+    /// The other half of the outage above: publication comes BACK, and the
+    /// repair baseline says the note never stopped (#936).
+    ///
+    /// The gap has to guess — what it cannot see may have ended — and it
+    /// guesses the way the picture can recover from, releasing the voice into
+    /// a fade. The baseline that follows is the source stating what it is
+    /// sounding NOW, same lifetime, same onset, and that overrules the guess:
+    /// the note is held again, resumed out of the roll's past rather than
+    /// re-attacked. What must not survive that is the released COPY of it,
+    /// which would otherwise draw the note a second time and then, at the end
+    /// of a fade it is not having, hand a still-sounding pitch to the trail —
+    /// [`NoteHistory`] marking a node the music has not left yet.
+    ///
+    /// The lifetime is what makes this fixture reach the resume at all: a
+    /// voice from a bare note-on carries none, so a baseline would attach a
+    /// fresh voice beside it instead of resuming this one, and every
+    /// assertion below would pass on the wrong shape.
+    ///
+    /// The repair arrives with the copy still FADING, which is the case
+    /// production actually takes — `tuning::Hub::flush` republishes within a
+    /// callback or two of the outage. A prune landing in between instead is
+    /// the known gap `replace_source` documents, deliberately not covered.
+    #[test]
+    fn a_resuming_baseline_takes_back_the_release_the_gap_handed_out() {
+        let env = Envelope::default();
+        let source = SourceId(1);
+        let row = published_voice(60, 61);
+        let mut tracker = NoteTracker::new();
+        assert_eq!(
+            tracker.replace_source(&SourceBaseline::new(source, 1, 2.0, 0, true, &[row]).unwrap()),
+            Ok(true)
+        );
+        assert_eq!(
+            tracker.held.values().next().map(|voice| voice.lifetime),
+            Some(Some(61)),
+            "a published voice carries the lifetime the resume matches on"
+        );
+
+        assert_eq!(tracker.handle_canonical(gap(3.0, None)), Ok(true));
+        assert_eq!(tracker.released.len(), 1, "the outage released it rather than dropping it");
+        assert!(tracker.released[0].visible_at_release, "on screen when it went, so recordable");
+
+        // The repair: `tuning::Hub` republishes every live row's baseline once
+        // an outage sets its `repair` flag, and those rows keep the lifetime
+        // and onset they attacked with.
+        assert_eq!(
+            tracker.replace_source(&SourceBaseline::new(source, 2, 3.2, 0, true, &[row]).unwrap()),
+            Ok(true)
+        );
+        assert_eq!(tracker.held_count(), 1, "the note is sounding again");
+        assert_eq!(tracker.voices().count(), 1, "one note, drawn once");
+        assert_eq!(tracker.roll().notes().count(), 1, "and one note in the roll to match");
+
+        tracker.prune(4.5, &env);
+        assert_eq!(tracker.held_count(), 1, "still down a fade-length later");
+        assert!(tracker.history().is_empty(), "so the trail has nowhere to mark yet");
+
+        // And it still arrives in the trail on the release it really has.
+        tracker.source_notes_off(source, 5.0);
+        tracker.prune(6.5, &env);
+        let visits: Vec<_> = tracker.history().visits().map(|v| (v.pitch, v.last_off)).collect();
+        assert_eq!(visits, [(60.0, 5.0)], "picked up where its own fade let go");
+    }
+
+    /// The one case where withdrawing a release also takes a note off the
+    /// screen, written down because it reads like a contradiction of the
+    /// `voices` contract and is not one.
+    ///
+    /// A repair baseline can arrive NOT participating — the source recovered
+    /// and is hidden. It still lists the note, so the release is withdrawn and
+    /// the voice goes back to being HELD, and the held half of `voices` cuts a
+    /// hidden source's voices in the instant they hide. So a fade that was on
+    /// screen stops, which `voices` otherwise promises not to do. The promise
+    /// is about a note that is DEPARTING, and this one turned out not to be.
+    #[test]
+    fn a_hiding_repair_baseline_cuts_the_fade_it_withdraws() {
+        let instant = Envelope { attack_time: 0.0, fade_time: 0.0, shape: 0.0 };
+        let source = SourceId(1);
+        let row = published_voice(60, 61);
+        let mut tracker = NoteTracker::new();
+        tracker
+            .replace_source(&SourceBaseline::new(source, 1, 2.0, 0, true, &[row]).unwrap())
+            .unwrap();
+        tracker.handle_canonical(gap(3.0, None)).unwrap();
+        assert_eq!(tracker.voices().count(), 1, "fading on screen, and visible at its release");
+
+        tracker
+            .replace_source(&SourceBaseline::new(source, 2, 3.1, 0, false, &[row]).unwrap())
+            .unwrap();
+        assert_eq!(tracker.voices().count(), 0, "cut, because it is held again and hidden");
+        assert_eq!(tracker.held.len(), 1, "held is where it went — not dropped");
+        assert_eq!(tracker.held_count(), 0, "just not counted while its source is hidden");
+        tracker.prune(9.0, &instant);
+        assert!(tracker.history().is_empty(), "a note that never stopped leaves no trail mark");
     }
 
     /// Certainty is a DEFAULT and its exceptions, and the stream-wide gap is

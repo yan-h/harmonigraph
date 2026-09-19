@@ -679,10 +679,23 @@ impl AudioSpectrum {
     /// time axis (see
     /// [`window_center_offset`](harmonigraph_analysis::SpectrumAnalyzer::window_center_offset)).
     ///
-    /// The heatmap's near edge has to allow for this or it reads a perfectly
-    /// healthy stream as stale and stops the strip short of the now-line — by
-    /// 171 ms on the Precise window, which is a visible gap that widens and
-    /// narrows as the window is changed.
+    /// The heatmap deliberately does NOT allow for this, and stopping the strip
+    /// short of the now-line by exactly this much is the picture it wants — 171
+    /// ms of bed on the Precise window, narrowing with the window and with the
+    /// Span. Everything nearer than the newest column is unmeasured, and
+    /// covering it meant holding that column flat across the gap: the
+    /// analyzer's current spectrum drawn as though it were history, which is
+    /// what it looked like (#914). The argument lives on `strip_depths`, in the
+    /// Spectral pane's spectrogram — named rather than linked, because this is
+    /// a public item and that one is the pane's own.
+    ///
+    /// What still reads this is the analysis window ITSELF, observed from
+    /// outside: nothing else about the running FFT is visible on this type, so
+    /// half of it is the one readout that says which window the analyzer is
+    /// actually on rather than which one the config asked for. The
+    /// background-analysis tests (#324) assert a restored project's Window
+    /// reached the thread through it, and the offline renderer's column-grid
+    /// test pins its stamps against it.
     pub fn column_lag(&self) -> f64 {
         self.analyzer.window_center_offset()
     }
