@@ -21,6 +21,13 @@ pub(crate) const ENTRY_POINTS: &[&str] =
 /// Draw the dark backing for the spiral's `dots` through the spectral geometry
 /// style. The callback belongs immediately before the colored egui discs;
 /// `pass_nr` is the painter context's cumulative pass number.
+///
+/// Added on EVERY frame the pane draws, including the frames with no dots and
+/// the frames whose style casts nothing: the skipping is this callback's to do,
+/// and the [`PANE_TTL_PASSES`] sweep that retires a pane nobody draws any more
+/// runs on the clock of these calls. A caller that gates instead ages its own
+/// pane out over a quiet stretch and rebuilds it inside the frame that ends
+/// one, and saves nothing — a declining frame allocates nothing here.
 pub fn dot_shadow_paint_callback(
     rect: egui::Rect,
     dots: Vec<crate::GlowDot>,
@@ -234,6 +241,18 @@ impl CallbackTrait for DotShadowCallback {
         _encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
+        let style = self.shadow.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
+        let wants = style.casts() && !self.dots.is_empty();
+
+        // Nothing to shadow and nothing built: the pipelines are not built
+        // either. This is the whole of what a caller used to buy by skipping
+        // the callback — a reader whose spectral geometry casts nothing never
+        // pays for its two pipelines — and it belongs here, because a caller
+        // cannot skip the callback without also stopping the clock the sweep
+        // below runs on.
+        if !wants && callback_resources.get::<Resources>().is_none() {
+            return Vec::new();
+        }
         let shadow_layouts = crate::spectral_shadow::layouts(device, callback_resources);
         let stale = callback_resources
             .get::<Resources>()
@@ -242,12 +261,32 @@ impl CallbackTrait for DotShadowCallback {
             callback_resources.insert(Resources::new(device, self.target_format, &shadow_layouts));
         }
         let resources: &mut Resources = callback_resources.get_mut().expect("inserted above");
+        // Retire the panes that stopped drawing. There is no teardown to hang
+        // that on, so the copies still PREPARING are the only evidence of which
+        // ones are still on screen — which makes "still drawn" and "still
+        // preparing" one claim, and it is the CALLER that has to keep them so
+        // (see [`dot_shadow_paint_callback`]).
         resources
             .panes
             .retain(|_, pane| self.pass_nr.saturating_sub(pane.last_seen_pass) < PANE_TTL_PASSES);
-        let style = self.shadow.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
+
+        // Held through a quiet stretch rather than dropped, since a depth
+        // dialled to 0 and back is one drag: what a declining frame skips is
+        // the work, not the two buffers. Registering nothing is what makes
+        // `paint` decline — `spectral_shadow::finish_for_pass` clears the
+        // submissions and rebuilds the ranges every pass, so a producer that
+        // registered nothing this pass has no range to bind — and the count
+        // goes to 0 so `paint` returns before it even asks, rather than on the
+        // strength of last frame's dots still sitting in the buffer.
+        if !wants {
+            if let Some(pane) = resources.panes.get_mut(&self.pane_id) {
+                pane.count = 0;
+                pane.last_seen_pass = self.pass_nr;
+            }
+            return Vec::new();
+        }
         let ppp = screen.pixels_per_point.max(f32::EPSILON);
-        let sigma = if style.casts() { crate::shadow::spectral_sigma_points(style) } else { 0.0 };
+        let sigma = crate::shadow::spectral_sigma_points(style);
         let casters: Vec<_> = self
             .dots
             .iter()
@@ -290,9 +329,9 @@ impl CallbackTrait for DotShadowCallback {
             );
         }
         pane.count = self.dots.len() as u32;
-        if !self.dots.is_empty() {
-            queue.write_buffer(&pane.dots, 0, bytemuck::cast_slice(&self.dots));
-        }
+        // Unguarded, because `wants` above has already established there is at
+        // least one: an empty write is what the guard that stood here was for.
+        queue.write_buffer(&pane.dots, 0, bytemuck::cast_slice(&self.dots));
         queue.write_buffer(&pane.locals, 0, bytemuck::bytes_of(&locals));
         let submission = crate::spectral_shadow::Submission {
             key: crate::spectral_shadow::ProducerKey::Dot(self.pane_id),
@@ -370,6 +409,78 @@ mod tests {
             .expect("baked dot_shadow.wgsl must parse and validate");
     }
 
+    /// A style that casts nothing, and a frame with no dots in it, each skip
+    /// the whole thing: no pipelines are built, no pane is built, and nothing
+    /// is registered with the shadow surface.
+    ///
+    /// Asked of the RESOURCES rather than of the frame, because both draw the
+    /// same bytes however much work went into them — a `prepare` that built its
+    /// two pipelines and then registered casters at a sigma of 0 would leave
+    /// the picture untouched and cost the whole thing. The PIPELINES are the
+    /// half that reaches a reader whose spectral geometry casts nothing, and
+    /// their absence is what lets the spiral add this callback on every frame
+    /// it draws, silent ones included, so that the sweep's clock keeps running.
+    ///
+    /// Read off a FIRST prepare, since anything already built is deliberately
+    /// held through a quiet stretch.
+    #[test]
+    fn nothing_to_shadow_builds_no_pipelines() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        const PANE: u64 = 7;
+        let casting = harmonigraph_scene::ShadowStyle {
+            width: 0.5,
+            depth: 1.0,
+            kernel: harmonigraph_scene::ShadowKernel::Distance,
+            ..Default::default()
+        };
+        let dot = || crate::GlowDot { center: [32.0, 32.0], radius: 4.0, color: [255; 4] };
+        let prepared = |dots: Vec<crate::GlowDot>, shadow| {
+            let cb = DotShadowCallback {
+                dots,
+                shadow,
+                target_format: wgpu::TextureFormat::Rgba8Unorm,
+                pane_id: PANE,
+                shadow_surface_id: 0,
+                pass_nr: 0,
+            };
+            let screen = ScreenDescriptor { size_in_pixels: [64, 64], pixels_per_point: 1.0 };
+            let mut resources = CallbackResources::default();
+            let mut encoder = device.create_command_encoder(&Default::default());
+            cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+            resources
+        };
+        for (dots, shadow, what) in [
+            (
+                vec![dot()],
+                harmonigraph_scene::ShadowStyle { depth: 0.0, ..casting },
+                "a style that casts nothing",
+            ),
+            (Vec::new(), casting, "an empty frame"),
+        ] {
+            let resources = prepared(dots, shadow);
+            assert!(resources.get::<Resources>().is_none(), "{what} built the pipelines anyway");
+        }
+        // The control, and what makes the two above claims about the DECISION
+        // rather than about a fixture too small to reach the build: one dot
+        // under a style that casts does build the pipelines and a pane.
+        assert!(
+            prepared(vec![dot()], casting)
+                .get::<Resources>()
+                .is_some_and(|resources| resources.panes.contains_key(&PANE)),
+            "a dot under a casting style built no pane",
+        );
+    }
+
+    /// Neither endpoint of the spectral geometry style costs an atlas.
+    ///
+    /// Both endpoints now take the declining arm of `prepare` — `casts()` is
+    /// `width > 0 && depth > 0` — so what this reads is that a declined frame
+    /// registers nothing, which is what leaves `finish` with no producer to
+    /// size a target for. The atlas is the expensive half of the claim and the
+    /// one that outlives any particular reason for declining, which is why it
+    /// stays measured here rather than folded into the test above.
     #[test]
     fn either_spectral_geometry_endpoint_allocates_no_dot_shadow_atlas() {
         let Some((device, queue)) = headless_device() else {
