@@ -22,41 +22,6 @@ pub use clap_sys::version::CLAP_VERSION;
 use nice_plug_core::context::remote_controls::RemoteControlsContext;
 use nice_plug_core::plugin::Plugin;
 
-/// Opt-in observation of the enclosing CLAP call and its exact Rust sub-blocks.
-/// Borrowed host data is valid only for the duration of this notification.
-/// This instrumentation neither defines a shared epoch nor changes event timing.
-pub enum ProcessTrace<'a> {
-    Enter {
-        process: &'a clap_sys::process::clap_process,
-        at: std::time::Instant,
-        latency_queries: u64,
-        reported_latency: u32,
-    },
-    SubBlockEnter {
-        start: u32,
-        length: u32,
-    },
-    SubBlockExit {
-        start: u32,
-        length: u32,
-    },
-    /// What the WRAPPER put on the wire: legacy `send_event` output, parameter
-    /// values and configuration notifications. Output an opted-in performance
-    /// plugin pushes for itself is not observed here, and does not need to be —
-    /// `performance::Output::push` returns the host's answer to the caller that
-    /// chose the event. Observing it would mean re-entering the plugin lock the
-    /// caller is already holding.
-    Output {
-        event: &'a clap_sys::events::clap_event_header,
-        accepted: bool,
-    },
-    Exit {
-        status: clap_sys::process::clap_process_status,
-    },
-    Start,
-    Stop,
-}
-
 /// Provides auxiliary metadata needed for a CLAP plugin.
 #[allow(unused_variables)]
 pub trait ClapPlugin: Plugin {
@@ -187,13 +152,6 @@ pub trait ClapPlugin: Plugin {
         summary: performance::Summary,
     ) {
     }
-    /// Compile out the observation path for plugins which do not request it.
-    const CLAP_PROCESS_TRACE: bool = false;
-
-    /// Called under the same plugin lock as `Plugin::process()`. Implementations
-    /// must be bounded and must not allocate, perform I/O, or call the host.
-    fn clap_process_trace(&mut self, event: ProcessTrace<'_>) {}
-
     /// A unique ID that identifies this particular plugin. This is usually in reverse domain name
     /// notation, e.g. `com.manufacturer.plugin-name`.
     const CLAP_ID: &'static str;

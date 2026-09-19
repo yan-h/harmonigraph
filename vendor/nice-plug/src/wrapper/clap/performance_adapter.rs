@@ -1,5 +1,5 @@
 //! Serializes owned commands without holding any plugin, input, output or
-//! configuration borrow across a host callback (including the tracing adapter).
+//! configuration borrow across a host callback.
 use super::*;
 
 impl<P: ClapPlugin> Wrapper<P> {
@@ -19,14 +19,10 @@ impl<P: ClapPlugin> Wrapper<P> {
         self.plugin.lock().clap_performance_begin(callback, &mut output);
     }
 
-    /// `output` is the wrapper's own route, which the process trace observes.
-    /// `plugin_output` is the host's original list, which the plugin writes to
-    /// directly — the trace hook takes the plugin lock, and the plugin holds it.
     pub(super) unsafe fn finish_performance(
         &self,
         callback: performance::Callback,
         output: *const clap_output_events,
-        plugin_output: *const clap_output_events,
         status: clap_process_status,
     ) {
         // A callback the host has already lost does not get the plugin's final
@@ -37,7 +33,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             && callback.input_status == performance::InputStatus::Complete;
         {
             let mut writer = unsafe {
-                performance::Output::new(plugin_output, &self.output_high_water, writable)
+                performance::Output::new(output, &self.output_high_water, writable)
             };
             self.plugin.lock().clap_performance_finalize(callback, status, &mut writer);
         }
