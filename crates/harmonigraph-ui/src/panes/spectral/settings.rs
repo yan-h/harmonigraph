@@ -3,6 +3,12 @@
 //! colors are the one thing dialled elsewhere — they are a color table, and
 //! both of those are on the Colors page ([`super::super::color`]).
 
+use harmonigraph_scene::{
+    CLOUD_SPEED_MAX, CLOUD_SPEED_MIN, CONTOURS_MAX, CONTOURS_MIN, CONTOUR_SOFTNESS_MAX,
+    CONTOUR_SOFTNESS_MIN, PITCH_SOFTNESS_MAX, PITCH_SOFTNESS_MIN, SCALE_REFRACT_MAX,
+    SCALE_REFRACT_MIN, TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
+};
+
 use crate::config::BALLISTICS_MAX;
 use crate::panes::{edge_bar, section};
 use crate::params::{AnalysisInput, ParamBackend};
@@ -121,12 +127,20 @@ pub(crate) fn spectrum_settings_pane(
     // for an effect that is not drawn. A row whose effect is off is greyed
     // rather than hidden, like every other section of this page, so the page's
     // inventory does not move under a drag.
-    ValueBar::new(&mut atmosphere.pitch_softness, 0.0..=300.0, "Pitch softness")
-        .unit(1.0, " ct")
-        .show(ui);
-    ValueBar::new(&mut atmosphere.time_softness, 0.0..=2000.0, "Time softness")
-        .unit(1.0, " ms")
-        .show(ui);
+    ValueBar::new(
+        &mut atmosphere.pitch_softness,
+        PITCH_SOFTNESS_MIN..=PITCH_SOFTNESS_MAX,
+        "Pitch softness",
+    )
+    .unit(1.0, " ct")
+    .show(ui);
+    ValueBar::new(
+        &mut atmosphere.time_softness,
+        TIME_SOFTNESS_MIN..=TIME_SOFTNESS_MAX,
+        "Time softness",
+    )
+    .unit(1.0, " ms")
+    .show(ui);
     let soft = atmosphere.pitch_softness > 0.0 || atmosphere.time_softness > 0.0;
     ui.add_enabled_ui(soft, |ui| {
         ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Spread").percent().show(ui);
@@ -139,10 +153,16 @@ pub(crate) fn spectrum_settings_pane(
              levels alone and costs nothing.",
         );
     ui.add_enabled_ui(atmosphere.contour_strength > 0.0, |ui| {
-        ValueBar::new(&mut atmosphere.contours, 2.0..=64.0, "Contours").integer().show(ui);
-        ValueBar::new(&mut atmosphere.contour_softness, 0.01..=0.5, "Edge softness")
-            .percent()
+        ValueBar::new(&mut atmosphere.contours, CONTOURS_MIN..=CONTOURS_MAX, "Contours")
+            .integer()
             .show(ui);
+        ValueBar::new(
+            &mut atmosphere.contour_softness,
+            CONTOUR_SOFTNESS_MIN..=CONTOUR_SOFTNESS_MAX,
+            "Edge softness",
+        )
+        .percent()
+        .show(ui);
     });
     ui.label(egui::RichText::new("Cloud texture").strong());
     ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Cloud depth")
@@ -182,13 +202,17 @@ pub(crate) fn spectrum_settings_pane(
                 ),
             ],
         );
-        ValueBar::new(&mut atmosphere.cloud_speed, 0.0..=20.0, "Cloud speed")
-            .unit(1.0, "\u{d7}")
-            .show(ui)
-            .on_hover_text(
-                "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds \
+        ValueBar::new(
+            &mut atmosphere.cloud_speed,
+            CLOUD_SPEED_MIN..=CLOUD_SPEED_MAX,
+            "Cloud speed",
+        )
+        .unit(1.0, "\u{d7}")
+        .show(ui)
+        .on_hover_text(
+            "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds \
                  it still, and holds Rock with it.",
-            );
+        );
         // Two constructions, so two sets of dials: nothing a wash carries means
         // anything to a lit scale, and a page listing both would be mostly
         // controls that do nothing wherever it stands.
@@ -216,18 +240,22 @@ pub(crate) fn spectrum_settings_pane(
                  smallest at 100%. It never opens a hole \u{2014} a scale that loses its \
                  cell loses it to a neighbour already covering it.",
                 );
-            ValueBar::new(&mut atmosphere.scale_refract, -1.0..=1.0, "Refraction")
-                .unit(100.0, "%")
-                .show(ui)
-                .on_hover_text(
-                    "How far a scale carries the light behind it, and which way. This is the \
+            ValueBar::new(
+                &mut atmosphere.scale_refract,
+                SCALE_REFRACT_MIN..=SCALE_REFRACT_MAX,
+                "Refraction",
+            )
+            .unit(100.0, "%")
+            .show(ui)
+            .on_hover_text(
+                "How far a scale carries the light behind it, and which way. This is the \
                  dial that makes the layer a LENS. Above 0 the spectrogram is read where \
                  each scale's face points, as a share of its own width, so the bands break \
                  and bend through the cloud. Below 0 it is pulled toward the scale's own \
                  centre instead \u{2014} at -100% one value for the whole scale, so the \
                  cloud comes apart into flat quantized patches. 0 leaves the light where \
                  it is and the cloud is just a lit body.",
-                );
+            );
             ValueBar::new(&mut atmosphere.scale_relief, 0.0..=1.0, "Scale relief")
                 .percent()
                 .show(ui)

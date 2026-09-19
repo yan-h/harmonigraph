@@ -7,6 +7,7 @@
 //! `harmonigraph-take`, because a take carries the frame it was composed at.
 
 use harmonigraph_scene::Gradient;
+pub use harmonigraph_scene::SCALE_BAR_RANGE;
 
 /// The Spectral pane's analysis window length, picked in the Analyzer
 /// settings section: longer windows resolve bass pitch more sharply but
@@ -766,12 +767,6 @@ pub(crate) fn sane_scale(scale: f32) -> f32 {
         1.0
     }
 }
-
-/// What every text-size bar offers, and so what a persisted scale is fit to.
-/// One range for the three of them: they are the same control over three kinds
-/// of text, and a reader comparing two of them should not have to check
-/// whether they mean the same thing by 2.
-pub const SCALE_BAR_RANGE: std::ops::RangeInclusive<f32> = 0.3..=3.0;
 
 /// Closest the two ends of the Colors page's Color range may come — the span the
 /// color gradient covers, which is a different bar from the analyzer's window
