@@ -1891,7 +1891,7 @@ fn replace_pair(blob: &str, key: &str, was: &str, value: &str) -> String {
 
 /// A hand-edited camera comes back one `view_proj` can draw, on the same
 /// footing as the pitch range and the soft-edge pair above:
-/// `screen_scale` already guards `distance`/`fov_y` locally for the
+/// `screen_scale` already guards `distance` locally for the
 /// font-size math it does, but nothing stood between a hand-edited blob and
 /// `ortho`'s `tan`, or `eye`'s trig, which read the fields directly on every
 /// frame the camera is drawn. A non-finite value and a finite one past what
@@ -1904,7 +1904,7 @@ type CameraCase = (&'static str, &'static str, &'static str, Option<(f32, f32)>)
 
 #[test]
 fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
-    let cases: [CameraCase; 11] = [
+    let cases: [CameraCase; 9] = [
         ("yaw", "NaN", "a NaN yaw", None),
         ("pitch", "NaN", "a NaN pitch", Some((-Camera::PITCH_LIMIT, Camera::PITCH_LIMIT))),
         (
@@ -1920,8 +1920,6 @@ fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
             "a distance past the zoom range",
             Some((Camera::MIN_DISTANCE, Camera::MAX_DISTANCE)),
         ),
-        ("fov_y", "NaN", "a NaN field of view", Some((0.2, 2.0))),
-        ("fov_y", "100.0", "a field of view `ortho`'s `tan` cannot take", Some((0.2, 2.0))),
         ("cabinet_angle", "NaN", "a NaN cabinet angle", Some((0.0, std::f32::consts::FRAC_PI_2))),
         (
             "cabinet_angle",
@@ -1940,7 +1938,6 @@ fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
             "yaw" => state.picture.appearance.camera.yaw,
             "pitch" => state.picture.appearance.camera.pitch,
             "distance" => state.picture.appearance.camera.distance,
-            "fov_y" => state.picture.appearance.camera.fov_y,
             "cabinet_angle" => state.picture.appearance.camera.cabinet_angle,
             _ => state.picture.appearance.camera.cabinet_scale,
         };
@@ -1953,7 +1950,6 @@ fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
             "yaw" => restored.picture.appearance.camera.yaw,
             "pitch" => restored.picture.appearance.camera.pitch,
             "distance" => restored.picture.appearance.camera.distance,
-            "fov_y" => restored.picture.appearance.camera.fov_y,
             "cabinet_angle" => restored.picture.appearance.camera.cabinet_angle,
             _ => restored.picture.appearance.camera.cabinet_scale,
         };

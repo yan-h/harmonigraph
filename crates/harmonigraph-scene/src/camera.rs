@@ -51,7 +51,6 @@ pub struct Camera {
     pub yaw: f32,
     pub pitch: f32,
     pub distance: f32,
-    pub fov_y: f32,
     pub projection: Projection,
     /// Cabinet only: on-screen direction of the sevens axis, radians
     /// counterclockwise from screen-right (drafting convention picks 30°,
@@ -93,7 +92,6 @@ impl Default for Camera {
             yaw: 0.4,
             pitch: 0.3,
             distance: Camera::DEFAULT_DISTANCE,
-            fov_y: Camera::DEFAULT_FOV_Y,
             projection: Projection::Cabinet,
             cabinet_angle: default_cabinet_angle(),
             cabinet_scale: default_cabinet_scale(),
@@ -129,9 +127,11 @@ impl Camera {
     /// The framing a fresh view opens at, and the zoom
     /// [`screen_scale`](Self::screen_scale) measures against.
     pub const DEFAULT_DISTANCE: f32 = 12.0;
-    /// Fixed: nothing sets the field of view, so the whole of the zoom is the
-    /// distance. Named anyway, since [`screen_scale`](Self::screen_scale)'s
-    /// arithmetic is only right while the two are read together.
+    /// The only field of view there is: nothing sets one, so the whole of the
+    /// zoom is the distance. It was a persisted field until #964 measured
+    /// every saved value at exactly this one; named rather than inlined
+    /// because [`screen_scale`](Self::screen_scale)'s arithmetic is only right
+    /// while it and `DEFAULT_DISTANCE` are read together.
     pub const DEFAULT_FOV_Y: f32 = std::f32::consts::FRAC_PI_4; // 45 degrees
 
     /// How large a world-space length draws compared to the default framing:
@@ -171,30 +171,21 @@ impl Camera {
         height.max(0.0) / (2.0 * self.focus_half_height())
     }
 
-    /// The world-space half-height of the window at the focus plane, out of
-    /// terms read through the range they are navigable in rather than trusted.
+    /// The world-space half-height of the window at the focus plane, with
+    /// `distance` read through the range it is navigable in rather than
+    /// trusted.
     ///
-    /// Nothing the UI does can put either outside it; a hand-edited persisted
-    /// blob can, and this scales a FONT SIZE — where a zero distance divides to
-    /// infinity, and a field of view anywhere near `PI` sends `tan` through it
-    /// and comes back NEGATIVE. What egui does with a size like that is quietly
+    /// Nothing the UI does can put it outside that range; a hand-edited
+    /// persisted blob can, and this scales a FONT SIZE — where a zero distance
+    /// divides to infinity. What egui does with a size like that is quietly
     /// draw nothing: the glyph is rasterized at a width that saturates to zero
     /// and every label vanishes, which reads as a broken plugin rather than as
-    /// a bad number.
+    /// a bad number. The field of view was the other half of this guard until
+    /// #964 made it a constant, which is a value no blob can reach.
     fn focus_half_height(&self) -> f32 {
-        let sane = |value: f32, range: std::ops::RangeInclusive<f32>, fallback: f32| {
-            if value.is_finite() {
-                value.clamp(*range.start(), *range.end())
-            } else {
-                fallback
-            }
-        };
-        let distance =
-            sane(self.distance, Self::MIN_DISTANCE..=Self::MAX_DISTANCE, Self::DEFAULT_DISTANCE);
-        // Well short of the half-turn where `tan` changes sign, and off zero,
-        // which would divide by it.
-        let fov_y = sane(self.fov_y, 0.2..=2.0, Self::DEFAULT_FOV_Y);
-        Self::half_height(distance, fov_y)
+        let distance = finite_or(self.distance, Self::DEFAULT_DISTANCE)
+            .clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE);
+        Self::half_height(distance, Self::DEFAULT_FOV_Y)
     }
 
     fn half_height(distance: f32, fov_y: f32) -> f32 {
@@ -257,7 +248,7 @@ impl Camera {
     /// cross-section at the target. Shared by the `Orthographic` and
     /// `Cabinet` projections (Cabinet post-multiplies a shear onto it).
     fn ortho(&self, aspect: f32) -> Mat4 {
-        let half_h = self.distance * (self.fov_y * 0.5).tan();
+        let half_h = Self::half_height(self.distance, Self::DEFAULT_FOV_Y);
         let half_w = half_h * aspect;
         directx::orthographic(-half_w, half_w, -half_h, half_h, CLIP_NEAR, CLIP_FAR)
     }
@@ -266,7 +257,7 @@ impl Camera {
         let aspect = aspect.max(0.01);
         let proj = match self.projection {
             Projection::Perspective => {
-                directx::perspective(self.fov_y, aspect, CLIP_NEAR, CLIP_FAR)
+                directx::perspective(Self::DEFAULT_FOV_Y, aspect, CLIP_NEAR, CLIP_FAR)
             }
             // The ortho window is the perspective frustum's cross-section
             // at the target, so toggling projections keeps the framing at
@@ -384,9 +375,9 @@ impl Camera {
     ///
     /// A bar cannot produce a nonsense value but a hand-edited blob can, and
     /// this feeds `view_proj` every frame the camera is drawn with —
-    /// `screen_scale` already guards `distance` and `fov_y` locally for the
-    /// font-size math it does, but that guard is local to it, and nothing
-    /// stands between a NaN in the blob and the `tan` in `ortho`. Same
+    /// `screen_scale` already guards `distance` locally for the font-size math
+    /// it does, but that guard is local to it, and nothing stands between a
+    /// NaN in the blob and `eye`'s trig or `ortho`'s `tan`. Same
     /// argument as [`ViewConfig::sanitize`], and the same split: finite-only
     /// where a field has no natural bound, clamped into the working range
     /// where it does.
@@ -416,14 +407,6 @@ impl Camera {
         // is the one door those two don't cover.
         self.distance =
             finite_or(self.distance, fresh.distance).clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE);
-
-        // Nothing in the UI sets this — see the field's own doc, "nothing
-        // sets the field of view" — so the only value a session ever chose
-        // is the default; a blob can still carry a stale or hand-edited one,
-        // and `ortho`'s `tan` is silent about a bad angle rather than
-        // panicking on it. Held to the range `screen_scale` already trusts,
-        // for the same reason it does.
-        self.fov_y = finite_or(self.fov_y, fresh.fov_y).clamp(0.2, 2.0);
 
         // The two cabinet knobs, ranged to what their own bars offer
         // ("Sevenths angle" 0..=90°, "Sevenths length" 0.1..=1.0).
@@ -531,26 +514,18 @@ mod tests {
     /// rasterizing nothing: the labels do not draw wrong, they disappear.
     #[test]
     fn a_hand_edited_camera_still_yields_a_usable_label_scale() {
-        let at = |distance: f32, fov_y: f32| {
-            Camera { distance, fov_y, ..Default::default() }.screen_scale()
-        };
+        let at = |distance: f32| Camera { distance, ..Default::default() }.screen_scale();
         // The framing a fresh view opens at is the identity, by construction.
-        assert_eq!(at(Camera::DEFAULT_DISTANCE, Camera::DEFAULT_FOV_Y), 1.0);
+        assert_eq!(at(Camera::DEFAULT_DISTANCE), 1.0);
         // Twice as close draws twice the size; the working range is bounded at
         // both ends, so the factor is too.
-        assert_eq!(at(Camera::DEFAULT_DISTANCE * 0.5, Camera::DEFAULT_FOV_Y), 2.0);
+        assert_eq!(at(Camera::DEFAULT_DISTANCE * 0.5), 2.0);
         // Finite and positive is the whole of what is owed here: what a label
         // may finally be SIZED at is bounded downstream, by `text::snap_scale`.
         let inside = |scale: f32| scale.is_finite() && scale > 0.0 && scale < 100.0;
         for distance in [0.0, -1.0, f32::NAN, f32::INFINITY, 1e30, -1e30] {
-            let scale = at(distance, Camera::DEFAULT_FOV_Y);
+            let scale = at(distance);
             assert!(inside(scale), "distance {distance} gave a scale of {scale}");
-        }
-        // A field of view near a half turn sends `tan` through infinity and
-        // back negative, which is the one of these that is not obviously bad.
-        for fov_y in [0.0, -1.0, f32::NAN, std::f32::consts::PI, 4.0, 1e-30, 1e30] {
-            let scale = at(Camera::DEFAULT_DISTANCE, fov_y);
-            assert!(inside(scale), "fov {fov_y} gave a scale of {scale}");
         }
     }
 }
