@@ -843,7 +843,11 @@ impl CallbackTrait for SpectrogramCallback {
                         pass.set_pipeline(&cloud.tone);
                         pass.set_bind_group(0, &target.source_group, &[]);
                         pass.set_bind_group(1, tone_group, &[]);
-                        pass.set_vertex_buffer(0, target.coverage_vertices.slice(..));
+                        // The whole pane, not the region: this target is sized
+                        // and addressed over the whole pane, so anything the
+                        // quad leaves cleared bleeds back in under the
+                        // composite's `Linear` tap. See `Targets::tone_vertices`.
+                        pass.set_vertex_buffer(0, target.tone_vertices.slice(..));
                         pass.draw(0..6, 0..1);
                     }
                 }
@@ -3550,6 +3554,97 @@ fn cs_wrap_probe() {
         assert!(
             means.iter().all(|&(_, mean, _)| mean < 3.0),
             "a reduced cloud is not the picture the walk draws: {means:?}"
+        );
+    }
+
+    /// A reduced cloud draws no seam along the edge the region starts at.
+    ///
+    /// Every other cloud fixture here sets `region: cb.rect`, so the region's
+    /// boundary does not exist in any of them and this is the geometry the
+    /// crate never rendered. Production is the other way round: `rect` is the
+    /// painter's whole clip and `region` starts at the analyzer divider
+    /// (`Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0))`), so at
+    /// the shipped `roll_fraction` the region is a strict sub-rect by DEFAULT
+    /// and the divider is an edge interior to the tone target.
+    ///
+    /// The trap is that the tone target is sized from the whole pane and the
+    /// composite reads it at `pt / cloud.size` over that same whole pane, while
+    /// the pass that fills it draws the REGION quad and clears the rest to
+    /// zero. `cloud_sampler` is `Linear`, so a fragment on the region's inside
+    /// edge took up to half its tone from a cleared texel, and after #934 a
+    /// tone of zero is `palette_color(0)` — the gradient's own floor. The band
+    /// is half a tone texel wide, so it widens with the dial: invisible at the
+    /// fresh 0.5 pt, which takes the native path and allocates no target at all.
+    ///
+    /// Measured on this fixture at 4 pt. Before the repair the two rows inside
+    /// the region's edge read 29.21 and 9.74 mean absolute channel difference
+    /// from the native walk, against an interior that stays under 5.2; after
+    /// it they read 3.71 and 1.26. The bound below is the interior's own band,
+    /// which is the claim: an edge row is no further from the walk than the
+    /// middle of the pane is.
+    ///
+    /// Only rows INSIDE the region are measured. Production draws the cloud
+    /// over the backdrop's region quad and the heatmap mesh, both of which stop
+    /// at the divider, so what this fixture's full-pane mesh puts above the
+    /// region is not a picture anyone sees.
+    #[test]
+    fn a_reduced_cloud_draws_no_seam_where_its_region_starts() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        use harmonigraph_scene::CloudStyle;
+        let mut cb = wash_fixture();
+        // The noisy grid for the same reason the sibling test takes it: over a
+        // flat picture both resolutions draw the same few levels and a seam has
+        // nothing to stand against.
+        cb.grid = grid_of(noisy_grid(BINS as usize, 12), BINS, 12, 0);
+        let split = 0.25;
+        {
+            let a = cb.atmosphere.as_mut().unwrap();
+            a.settings.cloud_style = CloudStyle::Mosaic;
+            a.settings.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
+            let r = cb.rect;
+            a.region =
+                egui::Rect::from_min_max(egui::pos2(r.min.x, r.min.y + r.height() * split), r.max);
+            assert!(
+                a.region.height() < r.height(),
+                "the region is not a strict sub-rect, so this fixture never reaches the edge"
+            );
+        }
+        let mut native_res = CallbackResources::default();
+        let native = frame_with(&device, &queue, &mut native_res, &cb);
+        // 4 pt against the fixture's 1 pixel per point, so a cleared texel
+        // reaches two pixels into the region.
+        cb.atmosphere.as_mut().unwrap().settings.cloud_pixel = 4.0;
+        let mut reduced_res = CallbackResources::default();
+        let reduced = frame_with(&device, &queue, &mut reduced_res, &cb);
+        let (w, h) = (SIZE[0] as usize, SIZE[1] as usize);
+        let row_mean = |y: usize| {
+            let mut sum = 0.0f64;
+            for x in 0..w {
+                let i = (y * w + x) * 4;
+                for c in 0..3 {
+                    sum += f64::from(native[i + c].abs_diff(reduced[i + c]));
+                }
+            }
+            sum / (w * 3) as f64
+        };
+        let first = (h as f32 * split) as usize;
+        let edge: Vec<f64> = (first..first + 2).map(row_mean).collect();
+        let interior: Vec<f64> = (first + 4..h).map(row_mean).collect();
+        let worst_edge = edge.iter().cloned().fold(0.0, f64::max);
+        let worst_interior = interior.iter().cloned().fold(0.0, f64::max);
+        // Both halves matter. A reduced cloud that had lost the picture
+        // everywhere would make the interior large and let the edge through.
+        assert!(
+            worst_interior < 8.0,
+            "the reduced cloud is not the walk anywhere, so the edge proves nothing: \
+             interior {worst_interior:.2}"
+        );
+        assert!(
+            worst_edge < 8.0,
+            "a reduced cloud seams where its region starts: edge {edge:?} against an \
+             interior worst of {worst_interior:.2}"
         );
     }
 

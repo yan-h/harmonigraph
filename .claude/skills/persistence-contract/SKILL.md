@@ -35,7 +35,9 @@ Don't add others to it.
 
 The offline renderer's `Layout` and `Placement` are runtime composition types, not serialized state.
 Custom layout RON input and its dump interface were retired under #974, so their former field-level exception is gone.
-`Pane` still serializes for the editor dock;
+`panes::Tab` is the editor dock's persisted enum — `UiPersist::dock` is a `DockState<panes::Tab>`, so `Tab`'s variants are the contract a saved dock depends on, and its own doc comment carries the reasoning and the #975 precedent for retiring one.
+`Pane` is the standalone view picker and is not the dock's;
+it still derives serde, but nothing in the tree serializes it.
 `RenderFrame` still carries the captured placement and proportion.
 
 ## The floor is no guard against a dropped variant

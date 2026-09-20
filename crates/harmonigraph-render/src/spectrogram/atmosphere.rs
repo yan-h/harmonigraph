@@ -520,6 +520,19 @@ pub(super) struct Targets {
     pub size: [u32; 2],
     pub source_view: wgpu::TextureView,
     pub coverage_vertices: wgpu::Buffer,
+    /// The tone pass's own quad: the WHOLE pane, where [`Self::coverage_vertices`]
+    /// is the atmosphere's region.
+    ///
+    /// The two differ on purpose. The light and the backdrop stop at the
+    /// analyzer divider because that is where the spectrogram's bed stops. The
+    /// tone target does not get to: it is sized from the whole pane and the
+    /// composite reads it at `pt / cloud.size` over that same whole pane, so a
+    /// texel the region quad never covers stays at the cleared zero and a
+    /// `Linear` tap on the region's inside edge blends up to half of it in —
+    /// drawing the gradient's floor as a dark seam along the divider. Writing
+    /// the tone everywhere its addressing can reach is what keeps the reduced
+    /// path a resampling of the walk rather than a different picture at its rim.
+    pub tone_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 3],
     /// The reduced tone target and its size, `None` where the cloud is drawn
     /// natively. Part of the allocation key beside [`Self::size`] — see
@@ -701,6 +714,11 @@ impl Targets {
                 "spectral_cloud_coverage",
                 6,
             ),
+            tone_vertices: create_vertex_buffer::<SpectrogramVertex>(
+                device,
+                "spectral_cloud_tone_quad",
+                6,
+            ),
             views,
             tone,
             tile,
@@ -792,6 +810,15 @@ impl Targets {
             SpectrogramVertex { pos: corners[i].into(), slab: fraction.x, t: fraction.y }
         });
         queue.write_buffer(&self.coverage_vertices, 0, bytemuck::cast_slice(&vertices));
+        // The same quad over the whole pane, for the tone pass alone — see
+        // `tone_vertices`. Built here rather than once at allocation because
+        // `rect` is what moves, and this is where it arrives.
+        let pane = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()];
+        let tone_quad = [0, 1, 2, 0, 2, 3].map(|i| {
+            let fraction = (pane[i] - rect.min) / rect.size();
+            SpectrogramVertex { pos: pane[i].into(), slab: fraction.x, t: fraction.y }
+        });
+        queue.write_buffer(&self.tone_vertices, 0, bytemuck::cast_slice(&tone_quad));
         read.origin_points = rect.min.into();
         read.viewport_points = rect.size().into();
         let pitch_vertical = atmosphere.pitch_vertical;

@@ -158,8 +158,9 @@ run cargo check -p harmonigraph-plugin --example editor-startup --features start
 # Cold on an 8-core M-series with sccache bypassed this is 1m54s, against 51s
 # for the same check narrowed to `-p harmonigraph-record --features
 # test-support` — and that feature is not optional in the narrow form, because
-# `mod audio_tests` is gated on it and only harmonigraph-plugin's
-# dev-dependency turns it on, so `cargo test --release -p harmonigraph-record`
+# `mod audio_tests` is gated on it and only another crate's dev-dependency
+# turns it on — harmonigraph-plugin's, and since #979 harmonigraph-offline's —
+# so `cargo test --release -p harmonigraph-record`
 # compiles and runs ZERO allocation tests and passes for the wrong reason.
 #
 # The fixed half of that cost is release-profile proc-macro and build-script

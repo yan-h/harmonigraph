@@ -6,8 +6,10 @@ description: How review, squashing, and agent definitions work in this repo. Use
 # Review happens at the merge boundary, not on the branch
 
 GitHub Actions runs `ci.sh` as the automatic full gate for pull requests and pushes to `main`, one job per gate group (`./ci.sh <group>`), reported as a single `Full CI` check.
-It checks formatting, markdown clause breaks, workspace clippy and tests, the plugin package check, harmonigraph-render's own tests, the three vendored crates, rustdoc links, the `harmonigraph-core` dependency guard, the security-audit trigger split, the CI group split, worktree-reclaim safety, and the registered-worktree bundle swap —
+It checks formatting, markdown clause breaks and local links, workspace clippy, workspace tests with harmonigraph-render excluded, the plugin package check, the release all-targets check, harmonigraph-render's own tests, the adaptive-tuning Node model, the committed Metal corpus under strict resolution, the three vendored crates, the optional CLAP probe fixture and the gated startup-probe example, rustdoc links, the `harmonigraph-core` dependency guard, the security-audit trigger split, the CI group split, worktree-reclaim safety, and the registered-worktree bundle swap —
 not judgement.
+The Metal corpus entry is the one worth knowing by name:
+since #965 a stale corpus fails `Full CI` itself, so the older habit of treating `Full CI` as silent on the shaders is now wrong in the direction that lets a stale corpus through.
 `ci.sh`'s own header is the list to copy when this one looks stale.
 The tracked pre-push hook checks formatting only, keeping compilation off the local push path.
 
@@ -57,7 +59,7 @@ and read the contact sheet the failure names before you do:
 a bless nobody looked at is the failure the gate exists to catch, not a step on the way past it.
 
 **Yan, and only Yan:
-run `/audit-merges` in Claude or `$audit-merges` in Codex after a batch of merges lands.** A session never starts one for itself — see CLAUDE.md's rule and the `PreToolUse` gate that holds it — it says the range looks worth auditing and leaves the call to him.
+run `/audit-merges` in Claude or `$audit-merges` in Codex after a batch of merges lands.** A session never starts one for itself — see CLAUDE.md's rule and the skill's own `disable-model-invocation: true`, which holds it in Claude by keeping the skill off the model's list, and which Codex ignores, so there the rule is prose the agent reads and honours — it says the range looks worth auditing and leaves the call to him.
 Parallel sessions produce branches that are each correct against the `main` they started from, so the interesting bugs are the ones that do not exist until two of them are combined —
 and a per-branch review is structurally blind to those.
 PR #85 is the worked example:
