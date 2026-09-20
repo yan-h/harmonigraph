@@ -111,6 +111,9 @@ pub(super) fn tone_size(
 const CLOUD_UNITS: f32 = 10.0;
 const SCALE_CELLS: f32 = 6.0 / 2.2;
 const WASH_CELLS: f32 = 5.25;
+/// The oblique tile's pitch displacement per time-axis repeat. Mirrored from
+/// the shader and held against it by the tile-resolution test below.
+const TILE_PITCH_SHIFT: f32 = 10.0;
 
 /// The tile's texel size: a whole number of these, and never fewer or more.
 ///
@@ -129,9 +132,11 @@ const TILE_MAX: u32 = 2048;
 /// Anything that feeds the baked channels and is missing here serves a stale
 /// picture; anything carried here that decides nothing rebakes a full cell walk
 /// at the rate of whatever it should not be watching. So the key is the STYLE,
-/// the period, the texel size, and the dials the WALK reads — `Variety` for the
-/// mosaic; `Lobe shape`, `Fuzz` and `Edge pooling` for the wash, which are the
-/// warp, the feather/bleed/tide widths and the tide's own strength.
+/// the period, the texel size, the pane orientation, and the dials the WALK
+/// reads — `Variety` for the mosaic; `Lobe shape`, `Fuzz` and `Edge pooling`
+/// for the wash, which are the warp, the feather/bleed/tide widths and the
+/// tide's own strength. Orientation decides which tile axis is time, so it
+/// decides which edge carries the pitch offset.
 ///
 /// Not the DRIFT and not the clock. The walk's output is a fixed field that the
 /// drift slides over — `drift` enters both styles only as a translation of the
@@ -152,6 +157,9 @@ pub(super) struct TileKey {
     period: u32,
     /// One side of the square tile, in texels.
     texels: u32,
+    /// Which pane axis is pitch. The oblique repeat follows TIME and shifts in
+    /// PITCH, so changing orientation changes the field baked into the tile.
+    pitch_vertical: bool,
     /// The walk's own dials as bits, so this compares by value. Sanitized, so
     /// there is no NaN here to compare unequal to itself. The mosaic reads one
     /// and leaves the rest at zero.
@@ -191,7 +199,13 @@ pub(super) fn tile_key(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> O
     // As fine as the pane itself draws a cell, so a tiled picture is the walk
     // resampled rather than a coarser one — and then rounded UP to a whole
     // [`TILE_STEP`], which is what keeps a resize off the bake.
-    let wanted = settings.cloud_tile * (pixels[1] as f32 / CLOUD_UNITS / cells);
+    // A square texture samples the shear through its two square axes. Its
+    // longest stretch is the largest singular value of [[1, 0], [k, 1]], not
+    // merely the slanted edge's length; spend enough texels for that direction
+    // so the stagger does not make the tile coarser than the pane draws a cell.
+    let shear = TILE_PITCH_SHIFT / settings.cloud_tile;
+    let stretch = ((2.0 + shear * shear + shear * (shear * shear + 4.0).sqrt()) * 0.5).sqrt();
+    let wanted = settings.cloud_tile * stretch * (pixels[1] as f32 / CLOUD_UNITS / cells);
     let texels = ((wanted / TILE_STEP as f32).ceil().max(1.0) as u32)
         .saturating_mul(TILE_STEP)
         .min(TILE_MAX);
@@ -199,6 +213,7 @@ pub(super) fn tile_key(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> O
         style,
         period: settings.cloud_tile as u32,
         texels,
+        pitch_vertical: atmosphere.pitch_vertical,
         dials: dials.map(f32::to_bits),
     })
 }
@@ -241,10 +256,9 @@ struct Uniforms {
     wash_layers: f32,
     /// The tile's period in cells, 0 for the live walk. See [`TileKey`].
     tile_cells: u32,
-    /// Tail padding to the whole 16-byte row the assertion below is about. The
-    /// members close four bytes short of one since `Ragged` was retired, and the
-    /// WGSL struct is rounded up whether this is here or not.
-    _tail: u32,
+    /// 1 when pitch is vertical, 0 when it is horizontal. This occupies the
+    /// uniform's former tail word, so the buffer shape does not change.
+    pitch_vertical: u32,
 }
 
 /// The `Cloud` struct's size in the uniform address space, which WGSL rounds up
@@ -255,10 +269,9 @@ struct Uniforms {
 /// compile-time check on a runtime failure that would otherwise arrive as a
 /// validation error on the first clouded frame.
 ///
-/// The members above need an explicit tail to close on a whole row, and that is
-/// exactly what dropping a field did: retiring `Ragged` left them four bytes
-/// short of 112. A field added or dropped moves that again, and this is what
-/// catches it.
+/// Retiring `Ragged` once left the members four bytes short of 112 and needed an
+/// explicit tail. `pitch_vertical` now occupies that word, but adding or
+/// dropping a field can move the edge again and this is what catches it.
 const _: () = assert!(
     std::mem::size_of::<Uniforms>().is_multiple_of(16),
     "the cloud uniform is not a whole number of 16-byte rows, so the shader's rounded-up \
@@ -830,7 +843,7 @@ impl Targets {
             // Zero where no tile was allocated, which is the live walk — so the
             // shader never reads a tile that is not there.
             tile_cells: tile.map_or(0, TileKey::period),
-            _tail: 0,
+            pitch_vertical: u32::from(pitch_vertical),
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }
@@ -884,11 +897,12 @@ fn source_group(
 mod tests {
     use super::{
         retained_size, tile_key, tone_size, SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS,
-        TILE_MAX, TILE_STEP, WASH_CELLS,
+        TILE_MAX, TILE_PITCH_SHIFT, TILE_STEP, WASH_CELLS,
     };
 
     /// The tile is as fine as the pane draws a cell, in whole [`TILE_STEP`]s —
-    /// and the cell it divides by is the SHADER's own.
+    /// across the oblique basis's longest edge — and the cell and stagger it
+    /// divides by are the SHADER's own.
     ///
     /// Both halves matter. Finer than the pane buys nothing and coarser is a
     /// blur the dial did not ask for, so the size follows the pane; but at one
@@ -911,6 +925,7 @@ mod tests {
         assert_eq!(CLOUD_UNITS, number("CLOUD_UNITS"));
         assert_eq!(SCALE_CELLS, number("SCALE_CELLS"));
         assert_eq!(WASH_CELLS, number("WASH_CELLS"));
+        assert_eq!(TILE_PITCH_SHIFT, number("CLOUD_TILE_PITCH_SHIFT"));
 
         let at = |cloud_tile, wash_size, height| {
             tile_key(
@@ -931,9 +946,10 @@ mod tests {
             )
             .map(|key| key.texels())
         };
-        // A 1080-pixel pane draws 20.6 pixels to a glob cell at the fresh size,
-        // so twenty of them want 411 texels and get the next whole step up.
-        assert_eq!(at(20.0, 1.0, 1080), Some(2 * TILE_STEP));
+        // A 1080-pixel pane draws 20.6 pixels to a glob cell at the fresh size.
+        // P20's half-period shear stretches the worst sampling direction 1.281x,
+        // so its 527 wanted texels get the next whole step up.
+        assert_eq!(at(20.0, 1.0, 1080), Some(3 * TILE_STEP));
         assert_eq!(at(40.0, 1.0, 1080), Some(4 * TILE_STEP));
         // A pane resized by a tenth stays on the same step.
         assert_eq!(at(20.0, 1.0, 1188), at(20.0, 1.0, 1080));

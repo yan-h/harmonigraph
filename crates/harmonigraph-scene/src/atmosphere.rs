@@ -202,16 +202,17 @@ pub struct SpectralAtmosphere {
     ///
     /// Neither walk reads the sound and neither reads the clock: the drift
     /// enters both as a plain translation of the cell coordinate, so what the
-    /// walk draws is a fixed field that slides. Wrap every cell hash every `P`
-    /// cells and that field becomes periodic, and one tile of `P` by `P` cells —
-    /// baked once, read through a repeating sampler — is the whole plane. What
-    /// is left per pixel is the light, the palette and the shading, which is
-    /// about a tenth of what the layer costs.
+    /// walk draws is a fixed field that slides. Wrap every cell hash on a
+    /// repeating lattice and one period — baked once, read through a repeating
+    /// sampler — is the whole plane. Its time-axis vector advances `P` cells
+    /// and shifts ten cells along pitch, so at `P = 40` the same cloud geometry
+    /// does not return to one pitch row for 160 cells. What is left per pixel is
+    /// the light, the palette and the shading, about a tenth of the layer's cost.
     ///
     /// What it spends is that the texture REPEATS: at 20 a 4K pane carries about
     /// two and a half periods of the wash across and four and a half down, each
-    /// repeat refracting different sound. Whether the eye finds that is why this
-    /// is a dial and not a decision, and why it runs over
+    /// repeat shifted in pitch and refracting different sound. Whether the eye
+    /// finds that is why this is a dial and not a decision, and why it runs over
     /// 0..=[`CLOUD_TILE_MAX`] in steps of [`CLOUD_TILE_STEP`] rather than over a
     /// continuum — the question is whether a repeat reads at all, not where
     /// between two periods it stops reading.

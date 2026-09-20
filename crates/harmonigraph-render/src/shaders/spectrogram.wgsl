@@ -290,10 +290,13 @@ struct Cloud {
     wash_pool: f32,
     wash_layers: f32,
     // The tile's period in cells, 0 for the live walk. Above zero the cell a
-    // hash is taken at is folded onto `[0, tile_cells)` so the walk's output is
-    // periodic, `fs_cloud_tile` bakes one period of it, and the two paths below
-    // read that texture instead of walking the ring per pixel.
+    // hash is taken at is folded onto the oblique period described beside
+    // `wrap_cell`, `fs_cloud_tile` bakes one period of it, and the two paths
+    // below read that texture instead of walking the ring per pixel.
     tile_cells: u32,
+    // 1 when pitch is the pane's Y axis, 0 when it is X. The repeat advances
+    // along time and shifts along pitch, so its basis follows this orientation.
+    pitch_vertical: u32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -505,6 +508,12 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 // `Refraction` carries the lookup from this round's continuous slope onto round
 // 1's flat per-glob patch, and `Variety` is how much the globs differ in size.
 const CLOUD_UNITS: f32 = 10.0;
+// Each repeat along time shifts the field this many cells along pitch. All
+// offered periods and every derived lattice make the corresponding scaled
+// shift a whole number; the Rust closure proof holds that contract against the
+// shader text. At P40 this is the selected B10 quarter-tile stagger: the field
+// does not return to the same pitch row until four time periods, or 160 cells.
+const CLOUD_TILE_PITCH_SHIFT: f32 = 10.0;
 // How many dome cells cross one cloud unit at `Scale size` 1x. Carries the
 // retired `Cloud size` default: the shipped picture was 6 cells per unit over a
 // frame half this one's, and `6 / 2.2` at the old `Scale size` default is what
@@ -513,23 +522,58 @@ const SCALE_CELLS: f32 = 6.0 / 2.2;
 
 // The cell a hash is taken at, folded onto the tile when one is being baked.
 //
-// This is the whole of what makes the walk periodic, and it is deliberately the
-// only thing that moves: a glob's or a dome's CENTRE is still built from the
-// unwrapped cell, so the field is the same field, read as if the hash had been
-// a periodic one all along. Inside `[0, period)` a wrapped cell IS the
-// unwrapped one, which is what makes "the tile matches the live walk" a
-// testable claim rather than a hope.
+// The two lattice vectors are one period along PITCH and one period along TIME
+// plus `CLOUD_TILE_PITCH_SHIFT` cells along pitch. That quarter-tile stagger at
+// P40 stops a repeated cloud edge landing on the same horizontal harmonic line
+// every time-axis period. It changes the repetition lattice, not the cells:
+// a glob's or dome's CENTRE is still built from the unwrapped cell, so none of
+// the local geometry is sheared.
 //
 // WGSL's `%` truncates toward zero, so `-1 % 20` is `-1` and the second fold is
-// what lands a negative cell in the range. A period of 0 is the live walk and
-// returns the cell whole, so the untiled arithmetic is untouched; the branch is
-// on a uniform, so no two lanes disagree about taking it.
-fn wrap_cell(cell: vec2<i32>, period: i32) -> vec2<i32> {
+// what lands a negative cell in the range. The quotient is then exact floor
+// division, including on that negative side. A period of 0 is the live walk
+// and returns the cell whole, so the untiled arithmetic is untouched; the
+// branch is on a uniform, so no two lanes disagree about taking it.
+fn wrap_cell_for_tile(
+    cell: vec2<i32>,
+    period: i32,
+    tile_cells: u32,
+    pitch_vertical: u32,
+) -> vec2<i32> {
     if period <= 0 {
         return cell;
     }
-    let p = vec2<i32>(period);
-    return ((cell % p) + p) % p;
+    let positive_mod = ((cell % vec2<i32>(period)) + vec2<i32>(period)) % vec2<i32>(period);
+    let shift = i32(round(f32(period) * CLOUD_TILE_PITCH_SHIFT / f32(tile_cells)));
+    if pitch_vertical == 1u {
+        let repeat = (cell.x - positive_mod.x) / period;
+        return vec2<i32>(
+            positive_mod.x,
+            ((cell.y - repeat * shift) % period + period) % period,
+        );
+    }
+    let repeat = (cell.y - positive_mod.y) / period;
+    return vec2<i32>(
+        ((cell.x - repeat * shift) % period + period) % period,
+        positive_mod.y,
+    );
+}
+
+fn wrap_cell(cell: vec2<i32>, period: i32) -> vec2<i32> {
+    return wrap_cell_for_tile(cell, period, cloud.tile_cells, cloud.pitch_vertical);
+}
+
+// Texture coordinates in the oblique basis. The texture itself stays square;
+// the bake below evaluates the walk over the corresponding parallelogram, so
+// this inverse mapping restores the original undistorted cell geometry.
+fn cloud_tile_uv(r: vec2<f32>) -> vec2<f32> {
+    let period = f32(cloud.tile_cells);
+    if cloud.pitch_vertical == 1u {
+        let time = r.x / period;
+        return vec2<f32>(time, (r.y - time * CLOUD_TILE_PITCH_SHIFT) / period);
+    }
+    let time = r.y / period;
+    return vec2<f32>(time, (r.x - time * CLOUD_TILE_PITCH_SHIFT) / period);
 }
 
 // One cell's dome, as four 10-bit fractions: where its centre sits inside the
@@ -815,7 +859,7 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
         let tile = textureSampleLevel(
             cloud_tile_a,
             tile_sampler,
-            r / f32(cloud.tile_cells),
+            cloud_tile_uv(r),
             0.0,
         );
         pile.face = tile.xy;
@@ -1465,7 +1509,7 @@ fn wash_field(r: vec2<f32>, period: i32, want_fine: bool) -> WashField {
 // period is the repeating texture coordinate, and that is the whole of what the
 // drift does here — it slides a fixed field rather than changing one.
 fn wash_tile_field(r: vec2<f32>) -> WashField {
-    let uv = r / f32(cloud.tile_cells);
+    let uv = cloud_tile_uv(r);
     let a = textureSampleLevel(cloud_tile_a, tile_sampler, uv, 0.0);
     var out: WashField;
     out.coarse = Wet(a.xy, a.z);
@@ -1541,10 +1585,10 @@ fn fs_cloud_tone(in: VertexOut) -> @location(0) vec4<f32> {
 // ====================== ONE PERIOD OF THE CELL WALK ========================
 //
 // The tile, baked when `Cloud tile` is on and read by both paths above. It has
-// no pane, no drift and no light in it: it is `tile_cells` by `tile_cells` CELLS
-// of whichever walk the style selects, which is why a resize, a drift or a note
-// never touches it and `Scale size` reaches it only through how many texels the
-// renderer spends on a cell.
+// no pane, no drift and no light in it: it is one parallelogram period of
+// whichever walk the style selects, stored in a square texture. That is why a
+// resize, a drift or a note never touches it and `Scale size` reaches it only
+// through how many texels the renderer spends on a cell.
 struct TileVertex {
     @builtin(position) position: vec4<f32>,
     // Where this texel sits in the tile, 0 at one corner and 1 at the other.
@@ -1569,9 +1613,13 @@ struct TileBake {
 @fragment
 fn fs_cloud_tile(in: TileVertex) -> TileBake {
     let period = i32(cloud.tile_cells);
-    // A texel centre lands exactly on `(i + 0.5) / texels * period`, which is
-    // the coordinate a repeating linear sampler reads back at `r / period`.
-    let cell = in.fraction * f32(cloud.tile_cells);
+    // A texel centre lands exactly where the inverse `cloud_tile_uv` mapping
+    // reads it back. `fraction.x` advances along TIME; `fraction.y` advances
+    // along PITCH. Their forward basis carries the ten-cell pitch stagger.
+    let period_f = f32(cloud.tile_cells);
+    let time = in.fraction.x * period_f;
+    let pitch = in.fraction.y * period_f + in.fraction.x * CLOUD_TILE_PITCH_SHIFT;
+    let cell = select(vec2<f32>(pitch, time), vec2<f32>(time, pitch), cloud.pitch_vertical == 1u);
     var out: TileBake;
     out.a = vec4<f32>(0.0);
     out.b = vec4<f32>(0.0);
