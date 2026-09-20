@@ -341,8 +341,8 @@ fn fs_density_source(in: VertexOut) -> @location(0) vec4<f32> {
     let last_center = f32(locals.run_slabs) - 0.5;
     // The field is affine BETWEEN those centers, so a segment's exact integral
     // is its width times the level at its midpoint: one `field_level` per
-    // segment, where the trapezoid rule below it read both ends and so read
-    // every interior kink twice over. The same number, off only in the last
+    // segment, where a trapezoid rule reads both ends and so reads every
+    // interior kink twice over. The same number, off only in the last
     // bit, for one read per segment fewer — and at full zoom-out a source
     // texel spans well under a slab, so a footprint is one or two segments and
     // that read is a third to a half of the whole integration.
