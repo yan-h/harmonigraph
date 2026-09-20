@@ -218,7 +218,7 @@ metal::int2 wrap_cell(
     return _e2;
 }
 
-metal::float2 cloud_tile_uv_for(
+metal::float2 watercolor_tile_uv_for(
     metal::float2 r,
     float period_2,
     uint pitch_vertical
@@ -227,17 +227,17 @@ metal::float2 cloud_tile_uv_for(
     return metal::float2((CLOUD_TILE_ROT_COS * semantic.x) + (CLOUD_TILE_ROT_SIN * semantic.y), (-0.6 * semantic.x) + (CLOUD_TILE_ROT_COS * semantic.y)) / metal::float2(period_2);
 }
 
-metal::float2 cloud_tile_uv(
+metal::float2 watercolor_tile_uv(
     metal::float2 r_1,
     constant Cloud& cloud
 ) {
     uint _e3 = cloud.tile_cells;
     uint _e7 = cloud.pitch_vertical;
-    metal::float2 _e8 = cloud_tile_uv_for(r_1, static_cast<float>(_e3), _e7);
+    metal::float2 _e8 = watercolor_tile_uv_for(r_1, static_cast<float>(_e3), _e7);
     return _e8;
 }
 
-metal::float2 rotate_tile_vector_for(
+metal::float2 rotate_watercolor_tile_vector_for(
     metal::float2 v,
     uint pitch_vertical_1
 ) {
@@ -246,12 +246,12 @@ metal::float2 rotate_tile_vector_for(
     return (pitch_vertical_1 == 1u) ? turned : metal::float2(turned.y, turned.x);
 }
 
-metal::float2 rotate_tile_vector(
+metal::float2 rotate_watercolor_tile_vector(
     metal::float2 v_1,
     constant Cloud& cloud
 ) {
     uint _e3 = cloud.pitch_vertical;
-    metal::float2 _e4 = rotate_tile_vector_for(v_1, _e3);
+    metal::float2 _e4 = rotate_watercolor_tile_vector_for(v_1, _e3);
     return _e4;
 }
 
@@ -439,37 +439,35 @@ float scale_tone(
     metal::float2 r_9 = q_1 * scale_units;
     uint _e35 = cloud.tile_cells;
     if (_e35 > 0u) {
-        metal::float2 _e40 = cloud_tile_uv(r_9, cloud);
-        metal::float4 tile = cloud_tile_a.sample(tile_sampler, _e40, metal::level(0.0));
-        metal::float2 _e45 = rotate_tile_vector(tile.xy, cloud);
-        pile.face = _e45;
-        metal::float2 _e48 = rotate_tile_vector(tile.zw, cloud);
-        pile.to_centre = _e48;
+        uint _e42 = cloud.tile_cells;
+        metal::float4 tile = cloud_tile_a.sample(tile_sampler, r_9 / metal::float2(static_cast<float>(_e42)), metal::level(0.0));
+        pile.face = tile.xy;
+        pile.to_centre = tile.zw;
     } else {
-        Pile _e50 = cloud_domes(r_9, 0, cloud);
-        pile = _e50;
+        Pile _e53 = cloud_domes(r_9, 0, cloud);
+        pile = _e53;
     }
     metal::float2 face_1 = pile.face;
-    float _e55 = cloud.scale_refract;
-    float bend = metal::max(_e55, 0.0) * scale_points;
-    float _e61 = cloud.scale_refract;
-    float gather = metal::max(-(_e61), 0.0) * scale_points;
-    metal::float2 _e69 = pile.to_centre;
-    metal::float2 lookup = (-(face_1) * bend) + (_e69 * gather);
-    float _e73 = cloud_light(pt_1 + lookup, close_light, wide_light, cloud_sampler, cloud);
+    float _e58 = cloud.scale_refract;
+    float bend = metal::max(_e58, 0.0) * scale_points;
+    float _e64 = cloud.scale_refract;
+    float gather = metal::max(-(_e64), 0.0) * scale_points;
+    metal::float2 _e72 = pile.to_centre;
+    metal::float2 lookup = (-(face_1) * bend) + (_e72 * gather);
+    float _e76 = cloud_light(pt_1 + lookup, close_light, wide_light, cloud_sampler, cloud);
     metal::float2 reach = metal::float2(scale_points * 0.75, 0.0);
-    float _e80 = cloud_light(pt_1 + reach.xy, close_light, wide_light, cloud_sampler, cloud);
-    float _e83 = cloud_light(pt_1 - reach.xy, close_light, wide_light, cloud_sampler, cloud);
-    float _e87 = cloud_light(pt_1 + reach.yx, close_light, wide_light, cloud_sampler, cloud);
-    float _e90 = cloud_light(pt_1 - reach.yx, close_light, wide_light, cloud_sampler, cloud);
-    metal::float2 grad = metal::float2(_e80 - _e83, _e87 - _e90);
+    float _e83 = cloud_light(pt_1 + reach.xy, close_light, wide_light, cloud_sampler, cloud);
+    float _e86 = cloud_light(pt_1 - reach.xy, close_light, wide_light, cloud_sampler, cloud);
+    float _e90 = cloud_light(pt_1 + reach.yx, close_light, wide_light, cloud_sampler, cloud);
+    float _e93 = cloud_light(pt_1 - reach.yx, close_light, wide_light, cloud_sampler, cloud);
+    metal::float2 grad = metal::float2(_e83 - _e86, _e90 - _e93);
     metal::float2 lean = grad * (SUN_LEAN / (SUN_KNEE + metal::length(grad)));
     float relief = cloud.scale_relief;
     metal::float3 normal = metal::normalize(metal::float3(-(face_1) * relief, 1.0));
     metal::float3 sun = metal::normalize(metal::float3(lean, 1.0));
     float lambert = metal::max(metal::dot(normal, sun), 0.0) / sun.z;
     float diffuse = metal::mix(metal::pow(1.0 - relief, RELIEF_FLOOR_FALL), 1.0, lambert);
-    float lit = (_e73 * diffuse) * CLOUD_SHADE;
+    float lit = (_e76 * diffuse) * CLOUD_SHADE;
     return metal::clamp(lit, 0.0, 1.0);
 }
 
@@ -798,16 +796,16 @@ WashField wash_tile_field(
     metal::sampler tile_sampler
 ) {
     WashField out_5 = {};
-    metal::float2 _e1 = cloud_tile_uv(r_8, cloud);
+    metal::float2 _e1 = watercolor_tile_uv(r_8, cloud);
     metal::float4 a_1 = cloud_tile_a.sample(tile_sampler, _e1, metal::level(0.0));
-    metal::float2 _e9 = rotate_tile_vector(a_1.xy, cloud);
+    metal::float2 _e9 = rotate_watercolor_tile_vector(a_1.xy, cloud);
     out_5.coarse = Wet {_e9, a_1.z};
     out_5.fine = Wet {metal::float2(0.0), 0.0};
     out_5.cover = 0.0;
     float _e21 = cloud.wash_layers;
     if (_e21 > 0.0) {
         metal::float4 b_2 = cloud_tile_b.sample(tile_sampler, _e1, metal::level(0.0));
-        metal::float2 _e30 = rotate_tile_vector(b_2.xy, cloud);
+        metal::float2 _e30 = rotate_watercolor_tile_vector(b_2.xy, cloud);
         out_5.fine = Wet {_e30, b_2.z};
         out_5.cover = b_2.w;
     }

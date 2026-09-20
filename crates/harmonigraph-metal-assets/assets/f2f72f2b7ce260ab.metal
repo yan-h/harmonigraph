@@ -588,19 +588,20 @@ fragment fs_cloud_tileOutput fs_cloud_tile(
     float time = in.fraction.x * period_f;
     float pitch = in.fraction.y * period_f;
     uint _e19 = cloud.pitch_vertical;
-    metal::float2 cell_6 = (_e19 == 1u) ? metal::float2(time, pitch) : metal::float2(pitch, time);
+    metal::float2 wash_cell = (_e19 == 1u) ? metal::float2(time, pitch) : metal::float2(pitch, time);
+    metal::float2 mosaic_cell = in.fraction * period_f;
     out.a = metal::float4(0.0);
     out.b = metal::float4(0.0);
-    uint _e32 = cloud.cloud_style;
-    if (_e32 == 1u) {
-        WashField _e36 = wash_field(cell_6, period_9, true, cloud);
-        out.a = metal::float4(_e36.coarse.offset, _e36.coarse.pigment, 0.0);
-        out.b = metal::float4(_e36.fine.offset, _e36.fine.pigment, _e36.cover);
+    uint _e34 = cloud.cloud_style;
+    if (_e34 == 1u) {
+        WashField _e38 = wash_field(wash_cell, period_9, true, cloud);
+        out.a = metal::float4(_e38.coarse.offset, _e38.coarse.pigment, 0.0);
+        out.b = metal::float4(_e38.fine.offset, _e38.fine.pigment, _e38.cover);
     } else {
-        Pile _e51 = cloud_domes(cell_6, period_9, cloud);
-        out.a = metal::float4(_e51.face, _e51.to_centre);
+        Pile _e53 = cloud_domes(mosaic_cell, period_9, cloud);
+        out.a = metal::float4(_e53.face, _e53.to_centre);
     }
-    TileBake _e56 = out;
-    const auto _tmp = _e56;
+    TileBake _e58 = out;
+    const auto _tmp = _e58;
     return fs_cloud_tileOutput { _tmp.a, _tmp.b };
 }
