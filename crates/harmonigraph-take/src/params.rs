@@ -93,11 +93,11 @@ impl ParamKey {
     /// spelled-out units, the narrow in-plugin UI gets symbols.
     pub fn host_name(self) -> &'static str {
         match self {
-            ParamKey::COffset => "C Offset (cents)",
+            ParamKey::COffset => "C Pitch Offset (cents)",
             ParamKey::Three => "Perfect Fifth (cents)",
             ParamKey::Five => "Major Third (cents)",
             ParamKey::Seven => "Harmonic Seventh (cents)",
-            ParamKey::Tolerance => "Tuning Tolerance (cents)",
+            ParamKey::Tolerance => "Note Match Tolerance (cents)",
             ParamKey::Fade => "Note Fade (sec)",
             ParamKey::DarkestPitch => "Low Color Pitch",
             ParamKey::BrightestPitch => "High Color Pitch",

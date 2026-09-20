@@ -253,7 +253,7 @@ impl Default for HarmonigraphParams {
             maps,
             map_editor: Default::default(),
             map_playback: Default::default(),
-            map: IntParam::new("Map", 0, IntRange::Linear { min: 0, max: 127 })
+            map: IntParam::new("Lattice Map", 0, IntRange::Linear { min: 0, max: 127 })
                 .with_value_to_string(Arc::new(move |id| {
                     let doc = names.read();
                     match doc.slots.get(id as usize).filter(|m| !m.deleted) {
@@ -261,16 +261,24 @@ impl Default for HarmonigraphParams {
                         None => format!("{} · unavailable", id + 1),
                     }
                 })),
-            map_fifths: IntParam::new("Map Fifths", 0, IntRange::Linear { min: -4096, max: 4096 }),
-            map_thirds: IntParam::new("Map Thirds", 0, IntRange::Linear { min: -4096, max: 4096 }),
-            map_sevenths: IntParam::new(
-                "Map Harmonic sevenths",
+            map_fifths: IntParam::new(
+                "Map Fifth Offset (steps)",
                 0,
                 IntRange::Linear { min: -4096, max: 4096 },
             ),
-            tuning_engine: IntParam::new("Tuning mode", 1, IntRange::Linear { min: 0, max: 2 })
+            map_thirds: IntParam::new(
+                "Map Third Offset (steps)",
+                0,
+                IntRange::Linear { min: -4096, max: 4096 },
+            ),
+            map_sevenths: IntParam::new(
+                "Map Seventh Offset (steps)",
+                0,
+                IntRange::Linear { min: -4096, max: 4096 },
+            ),
+            tuning_engine: IntParam::new("Note Retuning", 1, IntRange::Linear { min: 0, max: 2 })
                 .with_value_to_string(Arc::new(|value| {
-                    ["Off", "Adaptive", "Lattice Map"][value.clamp(0, 2) as usize].into()
+                    ["Pass through", "Adaptive", "Lattice Map"][value.clamp(0, 2) as usize].into()
                 }))
                 .non_automatable(),
             session: std::sync::OnceLock::new(),
@@ -280,7 +288,7 @@ impl Default for HarmonigraphParams {
                 editor::DEFAULT_SIZE.1,
             ),
             ui_state: Arc::new(parking_lot::RwLock::new(String::new())),
-            analysis_input: EnumParam::new("Analysis Input", AnalysisInputParam::Main)
+            analysis_input: EnumParam::new("Analyzer Audio Input", AnalysisInputParam::Main)
                 .non_automatable(),
             c_offset: param_for_key(ParamKey::COffset),
             three: param_for_key(ParamKey::Three),

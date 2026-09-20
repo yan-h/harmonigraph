@@ -10,7 +10,6 @@ use harmonigraph_scene::{
 };
 
 pub(super) fn lighting_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
-    super::lattice_atmosphere::settings(ui, &mut appearance.view.atmosphere);
     section(ui, "Bloom");
     ValueBar::new(&mut appearance.view.bloom_strength, 0.0..=1.5, "Bloom amount")
         .unit(1.0, "×")
@@ -21,6 +20,7 @@ pub(super) fn lighting_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocume
                  1× is the reference strength.",
         );
     glow_section(ui, &mut appearance.view);
+    super::lattice_atmosphere::settings(ui, &mut appearance.view);
     shadow_groups(ui, &mut appearance.view.shadow);
 }
 
@@ -50,7 +50,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .on_hover_text(
                 "Brightness of the lattice glow. 0 removes the light; 1× is the reference gain.",
             );
-        ValueBar::new(&mut view.glow_accumulation, 0.0..=1.0, "Glow accumulation")
+        ValueBar::new(&mut view.glow_accumulation, 0.0..=1.0, "Overlap buildup")
             .percent()
             .show(ui)
             .on_hover_text(
@@ -120,8 +120,8 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .unit(1000.0, " ms").decimals(0)
             .show(ui)
             .on_hover_text(
-                "Time for the glow to fade after the node goes silent. \
-                 It keeps its last color as it fades. \
+                "Response time for the glow to fade after the node goes silent. \
+                 About 37% remains after one interval; it keeps its last color as it fades. \
                  0 ms removes it immediately.",
             );
     });

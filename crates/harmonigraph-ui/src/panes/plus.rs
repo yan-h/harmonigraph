@@ -86,7 +86,7 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
     //
     // No off position, for the bar above's reason: Arm length at 0 is the
     // marker field's own switch, and every setting of this one draws.
-    ValueBar::new(&mut appearance.view.marker_ink, 0.0..=100.0, "Idle label brightness")
+    ValueBar::new(&mut appearance.view.marker_ink, 0.0..=100.0, "Idle label/cross brightness")
         .unit(1.0, "%")
         // Whole points on the same L* axis as Ground, and that IS the point of
         // the units: two bars a person is meant to read against each other

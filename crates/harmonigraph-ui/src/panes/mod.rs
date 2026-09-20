@@ -120,8 +120,7 @@ pub enum Tab {
     /// Where the lattice's nodes sit in pitch: the prime bars, and the commas
     /// it tempers out.
     Tuning,
-    /// How everything on screen is drawn: the Lattice, Analyzer, Colors,
-    /// Lighting and System pages behind the [`display`] picker.
+    /// Picture, shared analysis and workspace settings behind the [`display`] picker.
     Display,
     Console,
     /// The Spectral display: FFT curve, voices, and piano roll. Titled

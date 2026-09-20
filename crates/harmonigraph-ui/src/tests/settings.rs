@@ -12,7 +12,7 @@ fn opening_analyzer_settings_does_not_change_loaded_values() {
     assert!(state.load_persist(&state.save_persist()));
     assert_eq!(state.picture.appearance.spectrum.tilt, -1.5);
     let before = ron::to_string(&state.picture.appearance.spectrum).unwrap();
-    let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
+    let tab = SettingsPane::Page(DisplayPage::Analysis).install(&mut state);
     let path = state.workspace.dock.find_tab(&tab).unwrap();
     state.workspace.dock.set_active_tab(path).unwrap();
     let mut harness = DockHarness::at(egui::vec2(1000.0, 1600.0));
@@ -126,6 +126,8 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
         SettingsPane::Page(DisplayPage::Colors),
         SettingsPane::Page(DisplayPage::Lattice),
         SettingsPane::Page(DisplayPage::Analyzer),
+        SettingsPane::Page(DisplayPage::Spectrogram),
+        SettingsPane::Page(DisplayPage::Analysis),
         SettingsPane::Page(DisplayPage::Lighting),
         SettingsPane::Page(DisplayPage::System),
         SettingsPane::Tab(panes::Tab::Video),
@@ -351,7 +353,7 @@ fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
     // Shared by both shells: the section, the row, and the choice on it. The
     // standalone has no transport to record with and still renders, so this is
     // the one thing in Render it can act on.
-    for row in ["Render", "Spectrogram", "Whole video"] {
+    for row in ["Render", "Video history", "Whole video"] {
         for supported in [true, false] {
             let (shapes, _) = video_pane_shapes(supported);
             assert!(
@@ -362,7 +364,7 @@ fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
     }
     // Take-only, and gated on exactly the same flag: a shell that cannot record
     // has nothing for this to describe.
-    let row = "Render when";
+    let row = "Finish recording";
     let (with, _) = video_pane_shapes(true);
     assert!(text_y(&with, row).is_some(), "a recording shell drew no {row:?}");
     let (without, _) = video_pane_shapes(false);
@@ -521,16 +523,18 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
 /// say nothing about which body was reached. Each needle is a string only its
 /// own page draws: "Name size" would be the natural one for the Lattice page
 /// and is not, the Analyzer's piano-roll group having a bar of that name too,
-/// nor would a bare "Spectrum release", which the Glow section and the analyzer both
+/// nor would a bare "Live release", which the Glow section and the analyzer both
 /// draw. "Sector gap" is the Lattice page's own.
 #[test]
 fn the_picker_draws_the_page_it_holds_and_only_that_page() {
-    const CASES: [(DisplayPage, &str); 5] = [
+    const CASES: [(DisplayPage, &str); 7] = [
         (DisplayPage::Colors, "Pitch color range"),
         (DisplayPage::Lattice, "Sector gap"),
-        (DisplayPage::Analyzer, "Spectrum level range"),
+        (DisplayPage::Analyzer, "History duration"),
+        (DisplayPage::Analysis, "Spectrum level range"),
+        (DisplayPage::Spectrogram, "Texture mix"),
         (DisplayPage::Lighting, "Bloom amount"),
-        (DisplayPage::System, "Render resolution"),
+        (DisplayPage::System, "Lattice resolution"),
     ];
     for (page, needle) in CASES {
         let mut state = fresh();
@@ -998,12 +1002,12 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
 fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     let mut state = fresh();
     unfold_the_console_pane(&mut state);
-    // The Analyzer settings, on the Display tab's Analyzer page.
-    let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
+    // The Analyzer settings, on the Display tab's Analysis page.
+    let tab = SettingsPane::Page(DisplayPage::Analysis).install(&mut state);
     let path = state.workspace.dock.find_tab(&tab).expect("the Display tab");
     state.workspace.dock.set_active_tab(path).expect("selecting the tab");
     // Tall enough that Release is actually on screen below the picker,
-    // view, atmosphere and cloud controls; a clipped bar cannot start this drag.
+    // analysis and level-mapping controls; a clipped bar cannot start this drag.
     let screen_h = 1800.0;
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
     // The settings leaf, whose bars run the width of the column at x ~700..1000:
@@ -1034,7 +1038,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     // what an off-window drag to the right must arrive at.
     let out = frame(&mut state, vec![]);
     let name =
-        bar_named(&out, "Spectrum release").expect("the Release bar is drawn on the Analyzer page");
+        bar_named(&out, "Live release").expect("the Release bar is drawn on the Analysis page");
     let on_the_bar = name + egui::vec2(2.0, 4.0);
     let before = state.picture.appearance.spectrum.release;
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar)]);

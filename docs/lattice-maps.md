@@ -3,8 +3,8 @@
 Implements the passage workflow in [#889](https://github.com/yan-h/harmonigraph/issues/889).
 Use the existing Harmonigraph Tune instances before instruments and one Harmonigraph Hub.
 Retune and Show remain per-source controls.
-Tuning mode is shared by the Hub:
-Off preserves player pitch,
+Note retuning is shared by the Hub:
+Pass through preserves player pitch,
 Adaptive uses the existing policy,
 and Lattice Map assigns each incoming note from explicit geometry,
 choosing its slot by the 12-TET key the note actually sounds.
@@ -22,8 +22,8 @@ loading project state does.
 Audition and its bounded 64-edit undo history are transient and are not saved.
 
 Saved maps define shape only.
-Use the independent Map Fifths,
-Map Thirds and Map Harmonic sevenths automation lanes to move any shape in integer generator steps.
+Use the independent Map Fifth Offset (steps),
+Map Third Offset (steps) and Map Seventh Offset (steps) automation lanes to move any shape in integer generator steps.
 The same controls are always available in Lattice Map mode without entering audition or capturing a map.
 Positive values move along the corresponding generator;
 negative values move back.

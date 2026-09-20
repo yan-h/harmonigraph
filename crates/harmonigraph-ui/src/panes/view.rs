@@ -209,7 +209,7 @@ pub(super) fn view_pane(
 }
 
 /// The depth axis, whole: which sheets there are, which one is home, and how
-/// the ones off the home sheet draw. Size per layer and Outer layer labels are
+/// the ones off the home sheet draw. Layer size falloff and Off-home layer labels are
 /// inert while the strip holds one sheet (a flat lattice has only the home
 /// sheet), so they disable themselves rather than pretending otherwise; the
 /// strip is what turns depth on, and is live whatever it is set to.
@@ -259,7 +259,7 @@ fn sevens_section(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     );
     let has_depth = appearance.view.max_sevens != appearance.view.min_sevens;
     ui.add_enabled_ui(has_depth, |ui| {
-        ValueBar::new(&mut appearance.view.sevens_size, 0.15..=1.0, "Size per layer")
+        ValueBar::new(&mut appearance.view.sevens_size, 0.15..=1.0, "Layer size falloff")
         .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
@@ -267,7 +267,7 @@ fn sevens_section(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
             );
         choice_row(
             ui,
-            "Outer layer labels",
+            "Off-home layer labels",
             &mut appearance.view.sevens_label,
             &[
                 (

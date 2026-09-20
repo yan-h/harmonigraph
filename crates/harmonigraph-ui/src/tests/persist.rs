@@ -1807,8 +1807,7 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
 fn the_display_page_in_the_picker_survives_an_editor_reopen() {
     use super::harness::{press, DockHarness};
 
-    // A text only one page's body draws — the Lattice page's projection row,
-    // the Colors page's Bloom bar — scoped to the settings leaf.
+    // The Spectrogram page's visibility control, scoped to the settings leaf.
     let drawn = |out: &egui::FullOutput, leaf: egui::Rect, needle: &str| {
         out.shapes.iter().any(|cs| match &cs.shape {
             egui::Shape::Text(t) => t.galley.text() == needle && leaf.contains(t.pos),
@@ -1823,30 +1822,33 @@ fn the_display_page_in_the_picker_survives_an_editor_reopen() {
     window.settle(&mut state);
     let leaf = state.workspace.dock[path.surface][path.node].rect().expect("the leaf is laid out");
     let out = window.frame(&mut state, vec![]);
-    assert!(!drawn(&out, leaf, "Projection"), "the tab must open on the Colors page");
+    assert!(!drawn(&out, leaf, "Show spectrogram"), "the tab opens on Lattice, not Spectrogram");
 
-    // The Lattice name on the picker, found where it was painted and clicked
+    // The Spectrogram name on the picker, found where it was painted and clicked
     // for real.
     let target = out
         .shapes
         .iter()
         .find_map(|cs| match &cs.shape {
-            egui::Shape::Text(t) if t.galley.text() == "Lattice" && leaf.contains(t.pos) => {
+            egui::Shape::Text(t) if t.galley.text() == "Spectrogram" && leaf.contains(t.pos) => {
                 Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
             }
             _ => None,
         })
-        .expect("the Display pane drew no Lattice picker label");
+        .expect("the Display pane drew no Spectrogram picker label");
     window.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
     window.frame(&mut state, vec![egui::Event::PointerMoved(target), press(target, true)]);
     window.frame(&mut state, vec![press(target, false)]);
     let out = window.frame(&mut state, vec![]);
     assert_eq!(
         state.workspace.interaction.display_page,
-        panes::display::DisplayPage::Lattice,
+        panes::display::DisplayPage::Spectrogram,
         "the click did not reach the persisted field",
     );
-    assert!(drawn(&out, leaf, "Projection"), "the click did not switch to the Lattice page");
+    assert!(
+        drawn(&out, leaf, "Show spectrogram"),
+        "the click did not switch to the Spectrogram page"
+    );
     let saved = state.save_persist();
 
     // The window closes and reopens: a FRESH `Context`, and the state the
@@ -1861,14 +1863,14 @@ fn the_display_page_in_the_picker_survives_an_editor_reopen() {
     let leaf =
         reopened.workspace.dock[path.surface][path.node].rect().expect("the leaf is laid out");
     assert!(
-        drawn(&out, leaf, "Projection"),
+        drawn(&out, leaf, "Show spectrogram"),
         "the page reverted across the reopen — is its state in egui memory?",
     );
-    // And one page is ONE page: the Colors body it was switched away from is
+    // And one page is ONE page: the Lattice body it was switched away from is
     // gone rather than still stacked above.
     assert!(
-        !drawn(&out, leaf, "Pitch color range"),
-        "the Colors page is still drawn under the Lattice page",
+        !drawn(&out, leaf, "Projection"),
+        "the Lattice page is still drawn under the Spectrogram page",
     );
 }
 

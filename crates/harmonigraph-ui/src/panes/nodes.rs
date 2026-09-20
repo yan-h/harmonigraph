@@ -11,22 +11,23 @@ use harmonigraph_scene::{
     SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
-/// Sizes and timing first, then the audio and MIDI layers and their accents.
+/// Layer geometry, shared octave layout, the two readings, then note motion.
 pub(super) fn nodes_pane(
     ui: &mut egui::Ui,
     appearance: &mut AppearanceDocument,
     params: &dyn ParamBackend,
 ) {
-    note_section(ui, &mut appearance.view, params);
-    audio_section(ui, &mut appearance.view);
+    layers_section(ui, &mut appearance.view);
     octaves_section(ui, &mut appearance.view);
     melody_bass_section(ui, &mut appearance.view);
+    audio_section(ui, &mut appearance.view);
+    motion_section(ui, &mut appearance.view, params);
 }
 
 /// Octaves: which octaves of the pitch class are sounding, shown as arcs of a
-/// pitch axis that runs once round the node. Independent of the audio ring.
+/// pitch axis shared by the MIDI ring, audio ring and melody/bass marks.
 fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    section(ui, "MIDI octave ring");
+    section(ui, "Octave layout");
     // Octaves, Center and the fringe are the axis; how thick the ring they are
     // drawn on is, and where it sits, is the Layers bar up in Note — the
     // middle of its three handles, named MIDI there. The bar names layers by where each
@@ -54,7 +55,7 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     )
     .show(ui)
     .on_hover_text(
-        "Octaves shown around each node. \
+        "Octaves shared by the MIDI ring, audio ring and marks. \
                  Drag between the handles for full-size octaves, outside for smaller outer octaves. \
                  Notes beyond the range use the end slices.",
     );
@@ -260,7 +261,7 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .percent()
             .show(ui)
             .on_hover_text(
-                "Minimum audio level needed to show a ring, as a percentage of the Spectrum level range on Analyzer. \
+                "Minimum audio level needed to show a ring, as a percentage of the Spectrum level range on Analysis. \
                  MIDI notes always show their rings. \
                  0% also shows silent rings.",
             );
@@ -278,23 +279,22 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             "How far the threshold drops once a ring appears, in percentage points of the Spectrum level range. \
                  Increase to stop rings flickering near the threshold.",
         );
-        ValueBar::new(&mut view.spectral_ring_attack, 0.0..=SPECTRAL_BALLISTICS_MAX, "Level attack")
+        ValueBar::new(&mut view.spectral_ring_attack, 0.0..=SPECTRAL_BALLISTICS_MAX, "Ring attack")
             .unit(1000.0, " ms").decimals(0)
             .show(ui)
             .on_hover_text(
-                "Response time when audio in an octave slice gets louder. \
-                 Independent of the Analyzer curve. \
+                "Additional response time when audio-ring levels rise, after Live attack/release on Analysis. \
                  0 ms responds immediately.",
             );
         ValueBar::new(
             &mut view.spectral_ring_release,
             0.0..=SPECTRAL_BALLISTICS_MAX,
-            "Level release",
+            "Ring release",
         )
         .unit(1000.0, " ms").decimals(0)
         .show(ui)
         .on_hover_text(
-            "Response time when audio in an octave slice gets quieter. \
+            "Additional response time when audio-ring levels fall, after Live attack/release on Analysis. \
                  Increase to steady fluctuating harmonics. \
                  0 ms responds immediately.",
         );
@@ -341,130 +341,9 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
-/// Note: what the whole node does rather than any one layer of it — the time
-/// it takes to arrive and leave, the curve it runs on, and the shadow it clears
-/// around itself.
-///
-/// One section rather than a heading apiece, because they are one idea: none
-/// is about the audio ring, the octave glyphs or the melody/bass marks in
-/// particular, and all apply to whichever of those happen to be drawn.
-/// Fade especially — one time for the node rather than one per layer, so a
-/// release reads as a single gesture instead of pieces of the node going dark at
-/// different moments.
-fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
+/// Geometry first: every layer is sized on the same radius budget.
+fn layers_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Note layers");
-    // `choice_row`, which these two were the last enum settings in the panes
-    // not to be, and the HINTS are what the move buys: not one of the five
-    // orders was named anywhere in the UI, so what each does was findable only
-    // by picking it and watching. The cost is height — a `choice_row` wraps,
-    // so five order labels take about three lines where the popup took a label
-    // and one row — and it was taken deliberately. Animation is the other half
-    // of the trade, two rows becoming one.
-    //
-    // Both lists are built off `ALL` with an exhaustive match rather than
-    // written out, the way `SpectralOrientation`'s row is and for its reason: a
-    // sixth order cannot reach this pane without a name and a hint of its own.
-    let animations = NoteAnimation::ALL.map(|animation| {
-        let (label, hint) = match animation {
-            NoteAnimation::Fade => (
-                "Fade",
-                "Slices ease in to their resting size and position and stop there.",
-            ),
-            NoteAnimation::Pop => (
-                "Pop",
-                "Slices swell a little past full size partway in, then settle back. A Starting size or position away from rest is overshot before it settles.",
-            ),
-        };
-        (animation, label, hint)
-    });
-    choice_row(ui, "Animation", &mut view.note_animation.animation, &animations);
-    // Every hint here is about WHEN a slice starts and nothing else: the orders
-    // differ in the delay each slice waits, never in what it then does, which
-    // is the Animation row above.
-    let orders = AnimationOrder::ALL.map(|order| {
-        let (label, hint) = match order {
-            AnimationOrder::Simultaneous => (
-                "Simultaneous",
-                "Every octave slice of a node starts at the same moment. Stagger spread has no effect.",
-            ),
-            AnimationOrder::Circular => (
-                "Circular",
-                "Slices start one after another, sweeping once round the ring from the top slice — the one at the Center pitch — in the direction of rising pitch.",
-            ),
-            AnimationOrder::Bidirectional => (
-                "Bidirectional",
-                "Both halves of the ring sweep away from the top slice at once and meet at the bottom.",
-            ),
-            AnimationOrder::RandomStagger => (
-                "Random stagger",
-                "Each slice takes a delay of its own, in an order scrambled per node and per press. The note's release reuses the same order.",
-            ),
-            AnimationOrder::OddEvenStagger => (
-                "Odd/even stagger",
-                "Alternate slices start together and the ones between them follow as a second group, counting round from the top slice.",
-            ),
-        };
-        (order, label, hint)
-    });
-    choice_row(ui, "Order", &mut view.note_animation.order, &orders);
-    ui.add_enabled_ui(view.note_animation.order != AnimationOrder::Simultaneous, |ui| {
-        ValueBar::new(&mut view.note_animation.stagger_spread, 0.0..=0.9, "Stagger spread")
-            .unit(100.0, "%")
-            .show(ui)
-            .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Every slice still animates for the whole Note fade, so the arrival lasts that much longer -- and a note released before it finishes departs without order. Zero starts every slice together; Simultaneous ignores this setting.");
-    });
-    ValueBar::new(&mut view.note_animation.radial_start, -1.0..=1.0, "Starting position")
-        .unit(100.0, "%").show(ui)
-        .on_hover_text("Radial offset of each slice. -100% starts at the node centre; positive values start outward.");
-    ValueBar::new(&mut view.note_animation.start_size, 0.0..=2.0, "Starting size")
-        .unit(100.0, "%")
-        .show(ui);
-    if ui.button("Grow from centre").clicked() {
-        view.note_animation.radial_start = -1.0;
-        view.note_animation.start_size = 0.0;
-    }
-    // The note's timing and the curve it runs on, in that order. Fade is an
-    // automatable param and Fade curve a view setting, so the two are stored apart
-    // (`ViewConfig::envelope` is where they are put back together); the pane
-    // is where they have to LOOK like the one setting they are.
-    param_bar(ui, params, ParamKey::Fade).on_hover_text(
-        "Fade-in and fade-out time for the whole node, including audio-ring visibility. \
-                 Release immediately reverses the current pose and opacity. \
-                 0 ms switches immediately.",
-    );
-    // Linear like every bar around it, and for the same reason: the whole
-    // range is one unit, so every hundredth of it — the readout's own
-    // resolution — is already a couple of pixels of travel, and there is no
-    // fine end for an ease to rescue. The one bar in the group that is NOT a
-    // duration, hence no seconds on the readout — it is the shape the Fade
-    // above it is drawn with.
-    //
-    // The one bar in the pane carrying a picture of itself, and the reason is
-    // that its number says nothing: the Fade's seconds are a length anyone can
-    // feel, while a Fade curve is a position on a scale with no unit and no
-    // landmarks. The line is drawn RISING, as an arrival, because that is the
-    // function itself — a release is the same curve upside down, and picking
-    // the falling one would be picking a direction the setting does not have.
-    ValueBar::new(&mut view.fade_shape, 0.0..=1.0, "Fade curve")
-        .percent()
-        .curve(|shape, p| {
-            // The scene's own curve, not a second copy of the formula: the
-            // preview is only worth drawing if it cannot disagree with the
-            // notes, and nothing on screen would show the disagreement. A
-            // one-second arrival read `p` seconds in IS the shape at that
-            // fraction of any duration the Fade actually RUNS, the curve
-            // being in the fraction alone — at a Fade of 0 there is no
-            // transition for it to be a fraction of, and the line goes on
-            // describing a curve the notes are not taking.
-            harmonigraph_core::Envelope { attack_time: 1.0, shape, ..Default::default() }
-                .attack(p as f64, 0.0)
-        })
-        .show(ui)
-        .on_hover_text(
-            "Shape of the note fade. \
-                 0% is linear; higher values change quickly at first and settle slowly. \
-                 The line previews the fade-in.",
-        );
     // Every layer's size, in the one bar that can show where each of them
     // lands: one stack read outward from the node's center — where it begins,
     // and then a width apiece — and the picture on the bar is the node's own
@@ -517,4 +396,122 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
             "Space between octave slices in the audio ring, MIDI ring and marks, as a percentage of the node radius. \
                  0% joins the slices.",
         );
+}
+
+/// Shared visibility timing followed by the MIDI slices' motion and ordering.
+fn motion_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
+    section(ui, "Note animation");
+    // The note's timing and the curve it runs on, in that order. Fade is an
+    // automatable param and Fade curve a view setting, so the two are stored apart
+    // (`ViewConfig::envelope` is where they are put back together); the pane
+    // is where they have to LOOK like the one setting they are.
+    param_bar(ui, params, ParamKey::Fade).on_hover_text(
+        "Fade-in and fade-out duration for MIDI slices, marks and labels, and audio-ring visibility. \
+                 A release during arrival reverses immediately; completed arrivals depart in the selected Slice order. \
+                 0 ms switches immediately.",
+    );
+    // Linear like every bar around it, and for the same reason: the whole
+    // range is one unit, so every hundredth of it — the readout's own
+    // resolution — is already a couple of pixels of travel, and there is no
+    // fine end for an ease to rescue. The one bar in the group that is NOT a
+    // duration, hence no seconds on the readout — it is the shape the Fade
+    // above it is drawn with.
+    //
+    // The one bar in the pane carrying a picture of itself, and the reason is
+    // that its number says nothing: the Fade's seconds are a length anyone can
+    // feel, while a Fade curve is a position on a scale with no unit and no
+    // landmarks. The line is drawn RISING, as an arrival, because that is the
+    // function itself — a release is the same curve upside down, and picking
+    // the falling one would be picking a direction the setting does not have.
+    ValueBar::new(&mut view.fade_shape, 0.0..=1.0, "Fade curve")
+        .percent()
+        .curve(|shape, p| {
+            // The scene's own curve, not a second copy of the formula: the
+            // preview is only worth drawing if it cannot disagree with the
+            // notes, and nothing on screen would show the disagreement. A
+            // one-second arrival read `p` seconds in IS the shape at that
+            // fraction of any duration the Fade actually RUNS, the curve
+            // being in the fraction alone — at a Fade of 0 there is no
+            // transition for it to be a fraction of, and the line goes on
+            // describing a curve the notes are not taking.
+            harmonigraph_core::Envelope { attack_time: 1.0, shape, ..Default::default() }
+                .attack(p as f64, 0.0)
+        })
+        .show(ui)
+        .on_hover_text(
+            "Shape of the note fade. \
+                 0% is linear; higher values change quickly at first and settle slowly. \
+                 The line previews the fade-in.",
+        );
+    // `choice_row`, which these two were the last enum settings in the panes
+    // not to be, and the HINTS are what the move buys: not one of the five
+    // orders was named anywhere in the UI, so what each does was findable only
+    // by picking it and watching. The cost is height — a `choice_row` wraps,
+    // so five order labels take about three lines where the popup took a label
+    // and one row — and it was taken deliberately. Animation is the other half
+    // of the trade, two rows becoming one.
+    //
+    // Both lists are built off `ALL` with an exhaustive match rather than
+    // written out, the way `SpectralOrientation`'s row is and for its reason: a
+    // sixth order cannot reach this pane without a name and a hint of its own.
+    let animations = NoteAnimation::ALL.map(|animation| {
+        let (label, hint) = match animation {
+            NoteAnimation::Fade => (
+                "Smooth",
+                "Slices ease in to their resting size and position and stop there.",
+            ),
+            NoteAnimation::Pop => (
+                "Overshoot",
+                "Slices swell a little past full size partway in, then settle back. A Starting scale or offset away from rest is overshot before it settles.",
+            ),
+        };
+        (animation, label, hint)
+    });
+    choice_row(ui, "Motion easing", &mut view.note_animation.animation, &animations);
+    // Every hint here is about WHEN a slice starts and nothing else: the orders
+    // differ in the delay each slice waits, never in what it then does, which
+    // is the Animation row above.
+    let orders = AnimationOrder::ALL.map(|order| {
+        let (label, hint) = match order {
+            AnimationOrder::Simultaneous => (
+                "Simultaneous",
+                "Every octave slice of a node starts at the same moment. Stagger spread has no effect.",
+            ),
+            AnimationOrder::Circular => (
+                "Circular",
+                "Slices start one after another, sweeping once round the ring from the top slice — the one at the Center pitch — in the direction of rising pitch.",
+            ),
+            AnimationOrder::Bidirectional => (
+                "Bidirectional",
+                "Both halves of the ring sweep away from the top slice at once and meet at the bottom.",
+            ),
+            AnimationOrder::RandomStagger => (
+                "Random stagger",
+                "Each slice takes a delay of its own, in an order scrambled per node and per press. The note's release reuses the same order.",
+            ),
+            AnimationOrder::OddEvenStagger => (
+                "Odd/even stagger",
+                "Alternate slices start together and the ones between them follow as a second group, counting round from the top slice.",
+            ),
+        };
+        (order, label, hint)
+    });
+    choice_row(ui, "Slice order", &mut view.note_animation.order, &orders);
+    ui.add_enabled_ui(view.note_animation.order != AnimationOrder::Simultaneous, |ui| {
+        ValueBar::new(&mut view.note_animation.stagger_spread, 0.0..=0.9, "Stagger spread")
+            .unit(100.0, "%")
+            .show(ui)
+            .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Every slice still animates for the whole Note fade, so the arrival lasts that much longer -- and a note released before it finishes departs without order. Zero starts every slice together; Simultaneous ignores this setting.");
+    });
+    ValueBar::new(&mut view.note_animation.radial_start, -1.0..=1.0, "Starting offset")
+        .unit(100.0, "%").show(ui)
+        .on_hover_text("Starting offset of each MIDI slice and mark. -100% starts at the node center; 0% starts at its resting position; +100% starts twice as far from the center.");
+    ValueBar::new(&mut view.note_animation.start_size, 0.0..=2.0, "Starting scale")
+        .unit(100.0, "%")
+        .show(ui)
+        .on_hover_text("Starting scale of each MIDI slice and mark relative to its final size. 0% grows from a point; 100% starts at its final size; above 100% shrinks into place.");
+    if ui.button("Grow from center").on_hover_text("Set Starting offset to -100% and Starting scale to 0%. Keeps the selected timing and easing.").clicked() {
+        view.note_animation.radial_start = -1.0;
+        view.note_animation.start_size = 0.0;
+    }
 }

@@ -330,7 +330,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
     // `selectable_value` to compare against.
     button_row(ui, |ui| {
         ui.label("Aspect ratio")
-            .on_hover_text("Shape of the exported video. Short edge sets its size in pixels.");
+            .on_hover_text("Shape of the exported video. Output size sets its pixel dimensions.");
         let f = &mut state.appearance.render.frame;
         for (w, h) in [(16u32, 9u32), (9, 16), (1, 1), (4, 5), (21, 9)] {
             let on = f.aspect_w == w && f.aspect_h == h;
@@ -352,19 +352,19 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
         .iter()
         .map(|&short| {
             let [w, h] = frame.pixels(short);
-            (short, short.to_string(), format!("{w}x{h}"))
+            (short, format!("{w} × {h}"), format!("{w} × {h} pixels; {short} px on the short edge"))
         })
         .collect();
     let options: Vec<(u32, &str, &str)> =
         sizes.iter().map(|(v, label, hint)| (*v, label.as_str(), hint.as_str())).collect();
-    choice_row(ui, "Short edge (px)", &mut state.appearance.render.short_edge, &options);
+    choice_row(ui, "Output size (px)", &mut state.appearance.render.short_edge, &options);
 }
 
 /// Empty the four things that accumulate, in one press, next to the button
 /// that starts a take.
 ///
 /// Each pane that owns an accumulation already clears its own — Labels' "Clear
-/// note names", the Analyzer's "Clear roll and spectrogram" — and those stay, since
+/// label history", the Analyzer's "Clear analyzer history" — and those stay, since
 /// clearing what one pane draws is a real thing to want while dialing that pane
 /// in. This is for the other moment, when all four are wanted together and
 /// there is only one reason: a take about to be recorded should start on an
@@ -388,11 +388,11 @@ fn clear_everything(ui: &mut egui::Ui, state: &mut PictureState) {
     });
 }
 
-/// Turning a recorded take into a video: which spectrogram gets baked, when the
-/// render fires, how it opens, and how far a running one has got.
+/// Turning a recorded take into a video: its history window, re-render action
+/// and progress. The finish trigger belongs beside Record take.
 ///
 /// Its own section rather than rows under Record, which is about CAPTURE: only
-/// the record switch, its status and the clear are about getting a take, and
+/// the record switch, finish trigger, status and clear are about getting a take, and
 /// everything here happens after there is one. The Spectrogram row belongs here
 /// rather than under a heading of its own, which would be one row calling
 /// itself "Spectrogram" beside the Analyzer settings' heading of that name; what it
@@ -418,7 +418,7 @@ fn render_controls(
     );
     choice_row(
         ui,
-        "Spectrogram",
+        "Video history",
         &mut state.appearance.render.spectrogram,
         &[
             (
@@ -437,53 +437,6 @@ fn render_controls(
         return;
     }
 
-    // When a take finishes and turns into a video.
-    choice_row(
-        ui,
-        "Render when",
-        &mut state.appearance.render.trigger,
-        &[
-            (
-                crate::RenderTrigger::OnDisarm,
-                "Record off",
-                "Finish recording and start rendering when you turn Record take off.",
-            ),
-            (
-                crate::RenderTrigger::OnTransportStop,
-                "Transport stop",
-                "Finish recording and render when the host transport stops or jumps backward after recording has begun.",
-            ),
-            (
-                crate::RenderTrigger::AtLoopEnd,
-                "Loop end",
-                "Record one loop, then render when playback wraps to its start. Enable looping in the host; without a wrap, recording continues until you turn Record take off.",
-            ),
-            (
-                crate::RenderTrigger::AtBar,
-                "Bar",
-                "Finish recording and render when the transport plays through the bar below. The one that works during an audio export, which never loops and never reports itself playing.",
-            ),
-        ],
-    );
-    // Only under the trigger that reads it — a bar shown beside three triggers
-    // that ignore it is a dial that appears to do nothing three times out of
-    // four. The value is kept either way, so switching away and back does not
-    // lose it.
-    if state.appearance.render.trigger == crate::RenderTrigger::AtBar {
-        button_row(ui, |ui| {
-            ui.label("Stop at bar").on_hover_text(
-                "Counted as the host's arranger counts: bar 1 is the song's start. \
-                 Recording must reach this bar from before it — arming with the playhead \
-                 already past it records until you turn Record take off.",
-            );
-            ui.add(
-                egui::DragValue::new(&mut state.appearance.render.stop_bar)
-                    .range(crate::STOP_BAR_RANGE.0..=crate::STOP_BAR_RANGE.1)
-                    .speed(0.25),
-            );
-        });
-    }
-
     // Re-render the last take with the frame you've dialed in since recording.
     // The take carries only a record-time snapshot, so this is how a reframed
     // preview reaches the video without recording again.
@@ -492,7 +445,7 @@ fn render_controls(
         if ui
             .button("Re-render take")
             .on_hover_text(
-                "Render the last take using the current frame settings. Saves the video beside the take. If a render is running, it is replaced by this one.",
+                "Render the last take using the current appearance and video settings. Saves the video beside the take. If a render is running, it is replaced by this one.",
             )
             .clicked()
         {
@@ -604,11 +557,58 @@ fn record_controls(
     section(ui, "Record");
     let rolling = interaction.take.rolling;
     record_button(ui, &mut interaction.take.recording, rolling, "Record take").on_hover_text(
-        "Record notes, automation, the current look and the selected audio input for video export. Press again to finish, or choose an automatic ending under Render when.",
+        "Record notes, automation, the current look and the selected audio input for video export. Press again to finish, or choose an automatic ending below. Finishing starts the video render.",
     );
     if !interaction.take.status.is_empty() {
         ui.weak(&interaction.take.status);
     }
+    // When a take finishes and turns into a video.
+    choice_row(
+        ui,
+        "Finish recording",
+        &mut state.appearance.render.trigger,
+        &[
+            (
+                crate::RenderTrigger::OnDisarm,
+                "Manually",
+                "Finish recording and start rendering when you turn Record take off.",
+            ),
+            (
+                crate::RenderTrigger::OnTransportStop,
+                "Transport stop",
+                "Finish recording and render when the host transport stops or jumps backward after recording has begun.",
+            ),
+            (
+                crate::RenderTrigger::AtLoopEnd,
+                "Loop end",
+                "Record one loop, then render when playback wraps to its start. Enable looping in the host; without a wrap, recording continues until you turn Record take off.",
+            ),
+            (
+                crate::RenderTrigger::AtBar,
+                "At bar",
+                "Finish recording and render when the transport plays through the bar below. The one that works during an audio export, which never loops and never reports itself playing.",
+            ),
+        ],
+    );
+    // Only under the trigger that reads it — a bar shown beside three triggers
+    // that ignore it is a dial that appears to do nothing three times out of
+    // four. The value is kept either way, so switching away and back does not
+    // lose it.
+    if state.appearance.render.trigger == crate::RenderTrigger::AtBar {
+        button_row(ui, |ui| {
+            ui.label("Stop at bar").on_hover_text(
+                "Counted as the host's arranger counts: bar 1 is the song's start. \
+                 Recording must reach this bar from before it — arming with the playhead \
+                 already past it records until you turn Record take off.",
+            );
+            ui.add(
+                egui::DragValue::new(&mut state.appearance.render.stop_bar)
+                    .range(crate::STOP_BAR_RANGE.0..=crate::STOP_BAR_RANGE.1)
+                    .speed(0.25),
+            );
+        });
+    }
+
     clear_everything(ui, state);
 }
 

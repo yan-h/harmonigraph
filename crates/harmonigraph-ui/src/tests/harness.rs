@@ -264,11 +264,13 @@ impl SettingsPane {
 }
 
 /// Every settings pane, and the tabs that share the column with them.
-pub(super) const SETTINGS_PANES: [SettingsPane; 8] = [
+pub(super) const SETTINGS_PANES: [SettingsPane; 10] = [
     SettingsPane::Tab(panes::Tab::Tuning),
     SettingsPane::Page(DisplayPage::Colors),
     SettingsPane::Page(DisplayPage::Lattice),
     SettingsPane::Page(DisplayPage::Analyzer),
+    SettingsPane::Page(DisplayPage::Spectrogram),
+    SettingsPane::Page(DisplayPage::Analysis),
     SettingsPane::Page(DisplayPage::Lighting),
     SettingsPane::Page(DisplayPage::System),
     SettingsPane::Tab(panes::Tab::Video),
