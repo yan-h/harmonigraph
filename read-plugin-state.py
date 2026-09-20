@@ -185,7 +185,7 @@ def main() -> None:
     output.add_argument(
         "--rust",
         action="store_true",
-        help="print the view fields as an impl Default body to paste into view.rs",
+        help="print the view fields as an impl Default body to paste into view/mod.rs",
     )
     args = ap.parse_args()
 

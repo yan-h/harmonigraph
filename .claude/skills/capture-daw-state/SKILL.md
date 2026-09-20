@@ -44,7 +44,7 @@ An output showing only Tune instances means the scan stopped short, not that the
 ## Scope check before you edit any default
 
 - The fresh look is the `Default` of every group in `AppearanceDocument` (`crates/harmonigraph-ui/src/appearance.rs`):
-`ViewConfig` (`crates/harmonigraph-scene/src/view.rs`),
+`ViewConfig` (`crates/harmonigraph-scene/src/view/mod.rs`),
 `SpectrumConfig` (`crates/harmonigraph-ui/src/config.rs`),
 `SpiralView`,
 and the video block's `RenderConfig` and `RenderFrame` (`crates/harmonigraph-take/src/render.rs`).
