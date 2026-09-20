@@ -797,21 +797,25 @@ impl CallbackTrait for SpectrogramCallback {
                                     },
                                 })
                             };
-                            let mut pass =
-                                egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                    label: Some("spectral_cloud_tile"),
-                                    color_attachments: &[
-                                        attachment(&views[0]),
-                                        attachment(&views[1]),
-                                    ],
-                                    ..Default::default()
-                                });
-                            pass.set_pipeline(&cloud.tile);
-                            pass.set_bind_group(0, &target.source_group, &[]);
-                            pass.set_bind_group(1, group, &[]);
-                            pass.draw(0..3, 0..1);
+                            {
+                                let mut pass =
+                                    egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                        label: Some("spectral_cloud_tile"),
+                                        color_attachments: &[
+                                            attachment(&views[0]),
+                                            attachment(&views[1]),
+                                        ],
+                                        ..Default::default()
+                                    });
+                                pass.set_pipeline(&cloud.tile);
+                                pass.set_bind_group(0, &target.source_group, &[]);
+                                pass.set_bind_group(1, group, &[]);
+                                pass.draw(0..3, 0..1);
+                            }
+                            // Inside the pass's own branch, so a key can only be
+                            // recorded against a tile that was actually filled.
+                            target.tile_baked(key);
                         }
-                        target.tile_baked(key);
                     }
                     // The cloud's own tone, once per `Cloud pixel size` of pane
                     // rather than once per pixel of the composite. After the
