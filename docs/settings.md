@@ -42,6 +42,11 @@ in **Spectrum** mode, **Pitch span** sets the displayed range.
 - The glow falloff curve keeps its signed shape value and a preview:
   zero is linear, positive fades early, and negative fades late.
 
+**Shadow falloff** runs from −6 (early decay) through 0 (linear) to +6 (late decay).
+Its preview shows the Contour shadow profile,
+which reaches zero at one Shadow width and never bends into an S curve.
+Blur shadows keep their Gaussian profile.
+
 Drag a numeric bar to change its value, or double-click to type.
 Entry uses the displayed units:
 `25%` or `25` means 25 percent on a percentage bar, and `250 ms` or `250` means 250 milliseconds on a timing bar.

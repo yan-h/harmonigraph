@@ -1615,13 +1615,12 @@ fn a_shadow_endpoint_missing_any_one_group_keeps_the_other_three() {
 /// field-level one is deliberate rather than residual.
 #[test]
 fn a_shadow_group_missing_one_field_fills_it_from_the_bare_style() {
-    use harmonigraph_scene::{ShadowKernel, ShadowSettings, ShadowStyle};
+    use harmonigraph_scene::{ShadowKernel, ShadowStyle};
 
     let bare = ShadowStyle::default();
-    let group = ShadowSettings::default().lattice_geometry;
-    // Every field off BOTH defaults, so each of the three places a loaded field
-    // could have come from — the blob, the bare style, this group's fresh value
-    // — is a distinct number, and one filled from the wrong one cannot pass.
+    // Every held field differs from the bare fallback. Width and depth also
+    // differ from the group defaults, distinguishing the two fallback sources;
+    // falloff deliberately shares the same early decay in both defaults.
     let held =
         ShadowStyle { kernel: ShadowKernel::Gaussian, width: 0.55, depth: 0.66, falloff: 1.2 };
 
@@ -1637,24 +1636,14 @@ fn a_shadow_group_missing_one_field_fills_it_from_the_bare_style() {
     assert_eq!(pairs.len(), 4, "the probe must see the whole style, got {pairs:?}");
 
     for (key, _) in &pairs {
-        // (what the group must come back as, the two fallbacks the drop is
-        // meant to tell apart).
-        let (want, fallbacks) = match key.as_str() {
-            "width" => (ShadowStyle { width: bare.width, ..held }, (bare.width, group.width)),
-            "depth" => (ShadowStyle { depth: bare.depth, ..held }, (bare.depth, group.depth)),
-            "falloff" => {
-                (ShadowStyle { falloff: bare.falloff, ..held }, (bare.falloff, group.falloff))
-            }
-            // Both defaults are Distance, so a dropped kernel comes back the
-            // same whichever fallback ran: the fixture cannot reach the claim,
-            // so it is skipped rather than asserted for the wrong reason.
-            "kernel" => continue,
+        let want = match key.as_str() {
+            "width" => ShadowStyle { width: bare.width, ..held },
+            "depth" => ShadowStyle { depth: bare.depth, ..held },
+            "falloff" => ShadowStyle { falloff: bare.falloff, ..held },
+            "kernel" => ShadowStyle { kernel: bare.kernel, ..held },
             other => panic!("a shadow style grew a {other:?} field this sweep does not name"),
         };
-        assert_ne!(
-            fallbacks.0, fallbacks.1,
-            "the two fallbacks agree on {key:?}, so dropping it cannot tell them apart",
-        );
+        assert_ne!(want, held, "dropping {key:?} must exercise a fallback");
 
         let kept: Vec<&str> =
             pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();

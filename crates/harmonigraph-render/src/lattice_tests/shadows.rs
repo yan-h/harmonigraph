@@ -1210,8 +1210,7 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         far(crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 0.0)),
     );
     // And a node on the DISTANCE row, whose quad is grown to a reach of its
-    // own: the window that ends the standoff's decay shuts at `SHADOW_STOP`
-    // widths where a Gaussian's pedestal lands at `REACH_SIGMAS` σ, so a quad
+    // own: the distance profile ends at `SHADOW_STOP` widths where a Gaussian's pedestal lands at `REACH_SIGMAS` σ, so a quad
     // sized off the wrong one of the two cuts a whole family's tail off in a
     // straight line at the box.
     let distant = |mut scene: Scene| -> Scene {
@@ -1266,7 +1265,11 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         // what this fixture stands on; a bound that ruled it out would be
         // asking the cross to be a node.
         assert!(
-            profile[0] > 0.1 && reach > 2.0 * sigma(&deep_scene),
+            profile[0] > 0.1
+                && reach
+                    > 0.75
+                        * deep_scene.shadow.lattice_geometry.kernel.reach_sigmas()
+                        * sigma(&deep_scene),
             "{what} cast {:.3} at its ink and out to {reach} px, against a σ of {}",
             profile[0],
             sigma(&deep_scene),
@@ -1408,12 +1411,9 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
                 casting.len(),
             );
             // The widest a box can be after the clip, in points: the pane with
-            // this kernel's reach added at both edges. Off the casters' own
-            // falloffs rather than a fixed number of σ, because a distance
-            // group dialled under 0.64 asks for a longer tail and gets a
-            // bigger cell for it (`ShadowKernel::reach_sigmas`).
-            let reach = sigma
-                * casters.iter().map(|c| kernel.reach_sigmas(c.falloff)).fold(0.0f32, f32::max);
+            // this kernel's reach added at both edges. Distance profiles all
+            // stop at one width.
+            let reach = sigma * kernel.reach_sigmas();
             let box_points = pane + 2.0 * reach;
             // The allocator rounds both atlas dimensions to powers of two.
             // Apply the same rounding to this continuous size bound.
@@ -1818,7 +1818,7 @@ fn a_marker_inherits_the_text_groups_whole_shadow() {
             callback.uniforms.marker_shadow.reach_sigmas,
             callback.uniforms.marker_shadow.depth,
         ),
-        (text.width, text.kernel.reach_sigmas(text.falloff), text.depth),
+        (text.width, text.kernel.reach_sigmas(), text.depth),
         "the marker shader did not inherit the text group's whole style",
     );
 
@@ -1902,6 +1902,8 @@ fn a_frame_whose_groups_disagree_draws_both_renderers() {
     // group's shadow lands.
     let no_geometry = shot(Distance, Distance, [0.0, WIDTH]);
     let no_text = shot(Gaussian, Gaussian, [WIDTH, 0.0]);
+    let no_gaussian_geometry = shot(Gaussian, Gaussian, [0.0, WIDTH]);
+    let no_distance_text = shot(Distance, Distance, [WIDTH, 0.0]);
     for (what, uniform) in [("all-Distance", &all_distance), ("all-Gaussian", &all_gaussian)] {
         let moved = differing_pixels(&mixed, uniform);
         assert!(
@@ -1917,8 +1919,18 @@ fn a_frame_whose_groups_disagree_draws_both_renderers() {
     let alone = |m: &[bool], other: &[bool]| -> Vec<bool> {
         m.iter().zip(other).map(|(&a, &b)| a && !b).collect()
     };
-    let geometry_ground = darkened(&all_distance, &no_geometry);
-    let text_ground = darkened(&all_gaussian, &no_text);
+    // Exclude the other group's support under BOTH kernels. The Gaussian
+    // reaches further than the distance profile, so a distance-only mask
+    // would mislabel some Gaussian geometry shadow as text-only ground.
+    let union = |a: Vec<bool>, b: Vec<bool>| -> Vec<bool> {
+        a.into_iter().zip(b).map(|(a, b)| a || b).collect()
+    };
+    let geometry_ground = union(
+        darkened(&all_distance, &no_geometry),
+        darkened(&all_gaussian, &no_gaussian_geometry),
+    );
+    let text_ground =
+        union(darkened(&all_gaussian, &no_text), darkened(&all_distance, &no_distance_text));
     let geometry_only = alone(&geometry_ground, &text_ground);
     let text_only = alone(&text_ground, &geometry_ground);
     // The two readings are not fully independent: the bloom is ONE attachment
@@ -2018,17 +2030,8 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
     );
 }
 
-/// The Shadow falloff moves the darkness INSIDE the width, and leaves the
-/// width's own edge where it was.
-///
-/// Read on the ground beside one node, at two distances along the same row: a
-/// half width out, where the bar has all its travel, and a whole width out,
-/// where `pow(u, f)` fixes the level because `1^f` is 1. The pair is the claim
-/// — a bar that only rescaled the profile, which is what an exponent on the
-/// finished coverage comes to, would move both.
-///
-/// At full amplitude, so the roughly two-percent coverage one width out is
-/// still several output codes and the equality cannot pass on empty ground.
+/// The GPU spends different darkness within the width but reaches bare
+/// ground at its edge for both ends of the falloff bar.
 #[test]
 fn the_falloff_moves_the_darkness_inside_the_width_and_not_its_edge() {
     use harmonigraph_scene::{SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN};
@@ -2062,26 +2065,12 @@ fn the_falloff_moves_the_darkness_inside_the_width_and_not_its_edge() {
     let ground = bright_at(&shot(SHADOW_FALLOFF_MIN), at(1.9), row);
     assert!(ground > 40, "the fixture's ground reads {ground}, too dark to take a share of");
 
-    // A whole width out: the same level at both ends of the bar, so the width
-    // still means what it meant. The discriminating claim, so it is read first
-    // — an exponent on the finished coverage passes everything below this and
-    // fails here. Loose enough for the atlas's own bilinear tap, and tight
-    // against a reading that has moved with the bar.
-    let (sharp_whole, plateau_whole) =
-        (bright_at(&sharp, whole, row), bright_at(&plateau, whole, row));
-    let drift = (sharp_whole - plateau_whole).abs();
-    assert!(
-        drift * 12 < ground,
-        "one width out the bar moved the ground by {drift} of {ground}, so the Shadow width bar \
-         means something different at each end of the falloff",
-    );
-    // And that reading is a shadow rather than bare ground, or the invariant
-    // above would hold for a picture with nothing drawn in it.
-    assert!(
-        sharp_whole < ground - 3,
-        "one width out reads {sharp_whole} against a ground of {ground}, so there is no shadow \
-         at the width the bar names and the invariant above is vacuous",
-    );
+    // Sample just beyond the edge to avoid pixel rounding straddling it.
+    let whole = whole + 2;
+    for pixels in [&sharp, &plateau] {
+        let level = bright_at(pixels, whole, row);
+        assert!((level - ground).abs() <= 2, "shadow persists past width: {level} vs {ground}");
+    }
 
     // Half a width out: the whole travel of the bar. The plateau end holds the
     // darkness out to here; the sharp end has spent it against the ink.

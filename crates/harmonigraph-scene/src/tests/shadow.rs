@@ -13,7 +13,7 @@ use harmonigraph_core::{NoteTracker, Tuning};
 #[test]
 fn the_shadow_controls_keep_one_range_at_both_doors() {
     for (asked_width, widths, asked_depth, depth, asked_falloff, falloff) in [
-        (-1.0, [0.0; 4], -0.5, 0.0, 0.0, SHADOW_FALLOFF_MIN),
+        (-1.0, [0.0; 4], -0.5, 0.0, -9.0, SHADOW_FALLOFF_MIN),
         (2.0, [1.0, 1.0, 2.0, 2.0], 0.8, 0.8, 1.0, 1.0),
         (3.0, [1.0, 1.0, 3.0, 3.0], 1.0, 1.0, 1.0, 1.0),
         (9.0, [1.0, 1.0, 3.0, 3.0], 3.0, 1.0, 9.0, SHADOW_FALLOFF_MAX),
@@ -76,97 +76,41 @@ fn a_group_with_either_bar_at_its_bottom_casts_nothing() {
     assert!(!ShadowStyle { depth: 0.0, ..fresh }.casts(), "a group at no depth still casts");
 }
 
-/// One Shadow width out, a distance shadow stands at the same level whatever
-/// the falloff is dialled to — so the Shadow width bar keeps its meaning across
-/// the whole of the falloff bar, and the two are free of each other.
-///
-/// The property the whole design rests on, and what makes this exponent worth
-/// having where the `glow_shadow_shape` that #563 removed was not: `pow(u, f)`
-/// fixes `u = 1` because `1^f` is 1, where an exponent on the finished COVERAGE
-/// gives `exp(-TAIL · f)` there and so is the width bar wearing another name. A
-/// falloff that moved this number would be one the Shadow bar had to be
-/// re-dialled after.
+/// The full slider range has fixed endpoints, decreases monotonically, and
+/// keeps one curvature sign. Include both sides of the near-linear series.
 #[test]
-fn one_shadow_width_holds_the_same_level_at_every_falloff() {
-    let whole = (-SHADOW_TAIL).exp();
-    for step in 0..=8 {
-        let falloff =
-            SHADOW_FALLOFF_MIN + (SHADOW_FALLOFF_MAX - SHADOW_FALLOFF_MIN) * step as f32 / 8.0;
-        let level = standoff_level(falloff, 1.0);
-        assert!(
-            (level - whole).abs() < 1.0e-6,
-            "at falloff {falloff} one width out reads {level} against the {whole} every other \
-             falloff reads, so the width bar means something different here",
-        );
+fn falloff_runs_from_early_through_linear_to_late_without_inflections() {
+    for falloff in
+        (-60..=60).map(|i| i as f32 / 10.0).chain([-0.051, -0.049, -0.001, 0.001, 0.049, 0.051])
+    {
+        assert_eq!(standoff_level(falloff, 0.0), 1.0);
+        assert_eq!(standoff_level(falloff, 1.0), 0.0);
+        assert_eq!(standoff_level(falloff, 2.0), 0.0);
+        let samples: Vec<_> = (0..=64).map(|i| standoff_level(falloff, i as f32 / 64.0)).collect();
+        for pair in samples.windows(2) {
+            assert!(pair[0] >= pair[1], "falloff {falloff} rises: {pair:?}");
+        }
+        for triple in samples.windows(3) {
+            let curvature = triple[0] - 2.0 * triple[1] + triple[2];
+            assert!(
+                curvature * falloff.signum() <= 4.0e-7,
+                "falloff {falloff} inflects: {triple:?}"
+            );
+        }
+        for (i, &level) in samples.iter().enumerate() {
+            let u = i as f32 / 64.0;
+            let k = -f64::from(falloff);
+            let exact = if k == 0.0 {
+                1.0 - f64::from(u)
+            } else {
+                (k * (1.0 - f64::from(u))).exp_m1() / k.exp_m1()
+            };
+            assert!((f64::from(level) - exact).abs() < 2.0e-6);
+            if falloff == 0.0 {
+                assert_eq!(level, 1.0 - u);
+            }
+        }
     }
-    // And the bar has its whole travel somewhere: half a width in, which is the
-    // part of the profile it bends.
-    let (sharp, plateau) =
-        (standoff_level(SHADOW_FALLOFF_MIN, 0.5), standoff_level(SHADOW_FALLOFF_MAX, 0.5));
-    assert!(
-        plateau > 4.0 * sharp,
-        "across the whole bar half a width out moves {sharp} to {plateau}, less than the factor \
-         of four that would make it a bar with something on it",
-    );
-}
-
-/// Every falloff on the bar shuts its window on a shadow the eye cannot see,
-/// because the CELL follows the exponent rather than the exponent being held to
-/// the cell.
-///
-/// The claim that lets the bar reach 0.35 at all. A falloff under 1 carries the
-/// decay further out; the predecessor bar left the pad fixed and cut a tail
-/// still standing at 0.9%, drawing the closed contour at a fixed radius that
-/// the whole family exists to avoid. Here [`shadow_stop`] solves for the radius
-/// instead, so what a low falloff costs is atlas rather than a ring.
-#[test]
-fn every_falloff_shuts_its_window_on_nothing() {
-    for step in 0..=12 {
-        let falloff =
-            SHADOW_FALLOFF_MIN + (SHADOW_FALLOFF_MAX - SHADOW_FALLOFF_MIN) * step as f32 / 12.0;
-        let stop = shadow_stop(falloff);
-        // The raw decay where this falloff's cell stops, against the threshold
-        // the stop was solved for.
-        let raw = (-SHADOW_TAIL * stop.powf(falloff)).exp();
-        assert!(
-            raw <= SHADOW_INVISIBLE * 1.01,
-            "at falloff {falloff} the decay is still {raw} at its own stop of {stop}, against \
-             the {SHADOW_INVISIBLE} that is invisible",
-        );
-        // And the window really does end there, exactly.
-        assert_eq!(
-            standoff_level(falloff, stop),
-            0.0,
-            "at falloff {falloff} the shadow is still standing where its cell stops",
-        );
-    }
-    // The crossover is where the solve meets the floor, and it is a rounded
-    // literal because `ln` is not a `const fn` — so it is held to its own
-    // algebra here rather than trusted. Both spellings of `shadow_stop` BRANCH
-    // on it, so a drift would put a step in the stop exactly where the two
-    // expressions are supposed to agree.
-    let solved = ((1.0f32 / SHADOW_INVISIBLE).ln() / SHADOW_TAIL).powf(1.0 / SHADOW_FALLOFF_FREE);
-    assert!(
-        (solved - SHADOW_STOP).abs() < 1.0e-4,
-        "at the crossover {SHADOW_FALLOFF_FREE} the solve reaches {solved}, not the \
-         {SHADOW_STOP} it is supposed to meet",
-    );
-    // The fixed stop is a FLOOR and holds wherever it is already generous, so
-    // a fresh picture is padded and windowed exactly as it was before the bar
-    // existed. Everything from the crossover up pays nothing.
-    for falloff in [SHADOW_FALLOFF_FREE, 0.65, 0.8, 1.0, 2.0, SHADOW_FALLOFF_MAX] {
-        assert_eq!(
-            shadow_stop(falloff),
-            SHADOW_STOP,
-            "falloff {falloff} moved the stop off its floor, so it pads cells for nothing",
-        );
-    }
-    // And below the crossover it grows, or the bottom of the bar is the old
-    // cut-off tail wearing a new number.
-    assert!(
-        shadow_stop(SHADOW_FALLOFF_MIN) > 1.7 * SHADOW_STOP,
-        "the bottom of the bar pads to {} against the fixed {SHADOW_STOP}, which is not a cell \
-         following its exponent",
-        shadow_stop(SHADOW_FALLOFF_MIN),
-    );
+    assert!(standoff_level(SHADOW_FALLOFF_MIN, 0.5) < 0.05);
+    assert!(standoff_level(SHADOW_FALLOFF_MAX, 0.5) > 0.95);
 }
