@@ -38,7 +38,7 @@ Closed-only persisted-document adoption still happens before draining,
 so a restored analysis window affects the first consumed audio.
 An open window's unsaved controls are never replaced by its last saved blob.
 
-Full recording control synchronization remains once per GUI callback in [`EditorShared::sync_take`](../crates/harmonigraph-plugin/src/editor.rs).
+Full recording control synchronization remains once per GUI callback in [`EditorShared::sync_take`](../crates/harmonigraph-plugin/src/editor/shared.rs).
 Closed-window [`background::tick`](../crates/harmonigraph-plugin/src/background.rs) separately calls `EditorShared::poll_take_end`,
 so a completed take can finish and render without reopening the editor.
 Both paths advance the shared twenty-poll stopped-transport debounce;

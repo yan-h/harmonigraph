@@ -35,7 +35,7 @@
 //! `live_slab` ladder on their shared `FFT_INTERVAL` grid.
 //!
 //! Nothing here analyzes anything itself. It calls
-//! [`LiveInput::drain`](crate::editor::LiveInput::drain) and
+//! [`LiveInput::drain`](crate::editor::input::LiveInput::drain) and
 //! [`VisualRuntime::advance_time`](harmonigraph_ui::VisualRuntime::advance_time),
 //! which is the frame's own drain plus the ageing a frame instead gets from
 //! `begin_frame`; see there for why sharing that one path is the point.

@@ -16,7 +16,7 @@ The exact values are recoverable:
 ./read-plugin-state.py --appearance project.bwproject > appearance.ron
 ```
 
-**The trap, which costs a round trip with Yan every time it's missed:** the UI state (dock, camera, ViewConfig) is written into the plugin state ONLY when the editor WINDOW is closed (`impl Drop for LatticeEditorHandle`, `crates/harmonigraph-plugin/src/editor.rs`).
+**The trap, which costs a round trip with Yan every time it's missed:** the UI state (dock, camera, ViewConfig) is written into the plugin state ONLY when the editor WINDOW is closed (`impl Drop for LatticeEditorHandle`, `crates/harmonigraph-plugin/src/editor/window.rs`).
 Saving a project with the plugin window open silently keeps the previous values, with no warning.
 So ask Yan for, in order:
 
