@@ -462,8 +462,8 @@ build_submodule_fixture() {
 # The removal that silently did not happen. git refuses a worktree containing a
 # submodule, the script discarded that stderr and returned 1, so a dry run
 # promising three removals was followed by a real run that took none of them and
-# said nothing (#898). Every Claude worktree now populates `.shared-skills`, so
-# without the `--force` retry tier 2 removes nothing at all, ever.
+# said nothing (#898). Older worktrees still hold `.shared-skills`, so keep
+# the `--force` retry covered after removing the pin from new checkouts.
 check_submodule_removal() {
   desc="a worktree with a populated submodule is removed"
   work="$TMP/submodule"

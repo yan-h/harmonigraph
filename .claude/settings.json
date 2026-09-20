@@ -1,39 +1,6 @@
 {
   "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "EnterWorktree",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR/.claude/worktree-start.sh\"",
-            "timeout": 60
-          }
-        ]
-      }
-    ],
-    "SubagentStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR/.claude/worktree-start.sh\"",
-            "timeout": 60
-          }
-        ]
-      }
-    ],
     "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR/.claude/session-start.sh\"",
-            "timeout": 60,
-            "statusMessage": "Preparing pinned shared skills"
-          }
-        ]
-      },
       {
         "hooks": [
           {
