@@ -19,7 +19,7 @@ struct Cloud {
     float contours;
     float contour_softness;
     float contour_strength;
-    uint _pad;
+    uint tone_baked;
     metal::float2 drift;
     float time;
     float cloud_depth;

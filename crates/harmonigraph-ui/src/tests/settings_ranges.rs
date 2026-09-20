@@ -74,7 +74,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // the blob keeps; this is what holds the bar and the clamp to one pair of
     // numbers.
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, contour_strength, contours, contour_softness, analyzer_softness, note_glow,
-        cloud_depth, cloud_speed, scale_size, scale_variety, scale_refract, scale_relief, scale_rock,
+        cloud_depth, cloud_speed, cloud_pixel, scale_size, scale_variety, scale_refract, scale_relief, scale_rock,
         wash_size, wash_fuzz, wash_ragged, wash_lobe, wash_refract, wash_pool, wash_grain, wash_layers);
     saved.workspace.interaction.ui_scale = v;
     // These owners have NO ValueBar/RangeBar today. Still pass through their
@@ -207,7 +207,7 @@ fn scenarios() -> Vec<Scenario> {
             SettingsPane::Tab(panes::Tab::Tuning) => 7,
             SettingsPane::Page(DisplayPage::Colors) => 2,
             SettingsPane::Page(DisplayPage::Lattice) => 26,
-            SettingsPane::Page(DisplayPage::Analyzer) => 27,
+            SettingsPane::Page(DisplayPage::Analyzer) => 28,
             SettingsPane::Page(DisplayPage::Lighting) => 26,
             SettingsPane::Page(DisplayPage::System) => 2,
             SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console | panes::Tab::Notes) => 0,
@@ -226,7 +226,7 @@ fn scenarios() -> Vec<Scenario> {
     cases.push(Scenario {
         pane: SettingsPane::Page(DisplayPage::Analyzer),
         wash: true,
-        visits: 30,
+        visits: 31,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
