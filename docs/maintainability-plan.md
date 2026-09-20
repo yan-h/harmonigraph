@@ -493,6 +493,13 @@ Hidden knobs remain secondary.
 Product choices should still arrive as a small batch with concrete losses;
 implementation remains deferred.
 
+**Subsequent #968 checkpoint (2026-09-19):** the [published-cohort feasibility report](gui-cohort-feasibility.md) completes that bounded investigation.
+It recommends retaining the current stack after the patch inventory and native prototypes;
+the publication trigger is satisfied,
+not an outstanding reason to wait.
+Most obligations still need porting,
+and the texture probe's lack of a successful presentation remains an explicit limit.
+
 Do not create a parallel backlog or a second copy of the architectural documentation.
 
 For a consequential product decision,
