@@ -1,0 +1,35 @@
+   Compiling egui-baseview v0.7.2 (/tmp/gui-feasibility-968/egui-baseview-0.7.2)
+   Compiling gui-feasibility-probe v0.1.0 (/tmp/gui-feasibility-968/probe)
+    Finished `dev` profile [unoptimized] target(s) in 4.28s
+     Running `/tmp/gui-feasibility-968/probe/target/debug/gui-feasibility-probe`
+BUILD native=WindowSize { physical: PhysicalSize { width: 900, height: 480 }, logical: LogicalSize { width: 450.0, height: 240.0 }, scale_factor: 2.0 }
+UI 1 t=0.345 native=WindowSize { physical: PhysicalSize { width: 900, height: 480 }, logical: LogicalSize { width: 450.0, height: 240.0 }, scale_factor: 2.0 } screen=[[0.0 0.0] - [6666.7 6666.7]] ppp=3
+RESIZE request 320x180 egui points zoom=1.5
+RESIZED reported=WindowSize { physical: PhysicalSize { width: 960, height: 540 }, logical: LogicalSize { width: 320.0, height: 180.0 }, scale_factor: 3.0 }
+GPU_UPLOAD Managed(0) size=[8192, 32] partial=None
+ACQUIRE_OCCLUDED
+UI 2 t=0.419 native=WindowSize { physical: PhysicalSize { width: 960, height: 540 }, logical: LogicalSize { width: 480.0, height: 270.0 }, scale_factor: 2.0 } screen=[[0.0 0.0] - [320.0 180.0]] ppp=3
+ACQUIRE_OCCLUDED
+UI 3 t=0.420 native=WindowSize { physical: PhysicalSize { width: 960, height: 540 }, logical: LogicalSize { width: 480.0, height: 270.0 }, scale_factor: 2.0 } screen=[[0.0 0.0] - [320.0 180.0]] ppp=3
+ACQUIRE_OCCLUDED
+MUTATED idle font/image before_frames=3
+UNWOKEN after_frames=3
+EXPLICIT_WAKE
+UI 4 t=5.076 native=WindowSize { physical: PhysicalSize { width: 960, height: 540 }, logical: LogicalSize { width: 480.0, height: 270.0 }, scale_factor: 2.0 } screen=[[0.0 0.0] - [320.0 180.0]] ppp=3
+GPU_UPLOAD Managed(1) size=[16, 16] partial=None
+GPU_UPLOAD Managed(0) size=[8192, 64] partial=None
+ACQUIRE_OCCLUDED
+UI 5 t=5.101 native=WindowSize { physical: PhysicalSize { width: 960, height: 540 }, logical: LogicalSize { width: 480.0, height: 270.0 }, scale_factor: 2.0 } screen=[[0.0 0.0] - [320.0 180.0]] ppp=3
+ACQUIRE_OCCLUDED
+WOKEN after_frames=5
+DELAYED_WAKE 500ms
+UI 6 t=7.561 native=WindowSize { physical: PhysicalSize { width: 960, height: 540 }, logical: LogicalSize { width: 480.0, height: 270.0 }, scale_factor: 2.0 } screen=[[0.0 0.0] - [320.0 180.0]] ppp=3
+GPU_UPLOAD Managed(1) size=[16, 16] partial=None
+ACQUIRE_OCCLUDED
+HOST_RESIZE physical=1080x600
+RESIZED reported=WindowSize { physical: PhysicalSize { width: 1080, height: 600 }, logical: LogicalSize { width: 360.0, height: 200.0 }, scale_factor: 3.0 }
+UI 7 t=9.076 native=WindowSize { physical: PhysicalSize { width: 1080, height: 600 }, logical: LogicalSize { width: 540.0, height: 300.0 }, scale_factor: 2.0 } screen=[[0.0 0.0] - [360.0 200.0]] ppp=3
+ACQUIRE_OCCLUDED
+UI 8 t=9.091 native=WindowSize { physical: PhysicalSize { width: 1080, height: 600 }, logical: LogicalSize { width: 540.0, height: 300.0 }, scale_factor: 2.0 } screen=[[0.0 0.0] - [360.0 200.0]] ppp=3
+ACQUIRE_OCCLUDED
+PROBE_WATCHDOG_END

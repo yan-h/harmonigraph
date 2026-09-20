@@ -279,10 +279,15 @@ Measured on Metal:
 constructing the lattice resources took 2.58 s cold and 49 ms warm;
 reusing their compiled handles took 1.4 µs in the headless reopen test.
 The first open of a newly loaded instance still compiles, and hot-reload builds retain their existing rebuild behavior.
-- **Upgrade**: download the new crates.io tarball into
-`vendor/egui-baseview`, re-apply the two conversions, the texture-delta forced render, the occlusion/skipped-present patch, the staged-upload flush, the repaint-deadline fix, the frame-timer plumbing, the `WgpuSetup` re-export, the tessellation/egui-GPU timers, the upload split with its per-frame-reconfigure fix, the `layer_present` module with its hooks and objc2 deps —
-both the resize half and the occlusion hide/unhide —
-the kept pointer position, and the font-texture publication into `CallbackResources`, then the font-atlas limit and shared GPU context.
+- **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package.
+The egui 0.36 publication trigger is met and investigated;
+the current recommendation is to retain the product stack.
+Published egui-baseview 0.7.2 replaces the Queue API and some old patch topologies,
+so do not mechanically reapply every numbered patch.
+The map records retained obligations,
+including pre-input host-size adoption and surface-refusal backoff beyond this numbered inventory,
+and the toolchain,
+wgpu-hal and Metal-corpus costs of a future migration.
 - **Upstreaming**: Patch 1 is a clear-cut bug fix affecting their own `ResizableWindow` helper on any HiDPI display.
 The remaining patches each need separate review.
 Review any upstream work in the RustAudio repo.
