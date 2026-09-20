@@ -1377,6 +1377,10 @@ mod tests {
             pitch_vertical: true,
             points_per_cent: 0.03,
             points_per_ms: 0.01,
+            // The twelve slabs `full_quad` lays across the pane's width. A
+            // fixture that re-lays the quad owes this number too, and only
+            // `Blur time step` above zero reads it.
+            points_per_slab: SIZE[0] as f32 / 12.0,
             now: 0.0,
         });
         cb
@@ -1647,6 +1651,79 @@ mod tests {
         // nothing at all reaches six.
         assert!(blue(69) > 0, "the kernel stopped short of its own three sigma");
         assert_eq!(blue(70), 0, "the kernel reached past three sigma");
+    }
+
+    /// At one source texel a slab, the light field is the same picture the
+    /// full-resolution one draws — on a fixture smooth in time, which is the
+    /// only thing the dial claims.
+    ///
+    /// **The bound is derived rather than dialled to green.** The field is
+    /// affine between slab centres and the source integrates each texel's whole
+    /// footprint, so capping the axis at a texel per slab replaces a linear
+    /// interpolant stepped every quarter slab with one stepped every slab. The
+    /// difference of the two is what a linear interpolant misses on a curve:
+    /// `|g''| h^2 / 8` over a span `h`, plus `|g''| h^2 / 24` between a
+    /// footprint's mean and its midpoint — so `(1 - 1/16) * (1/8 + 1/24)`, about
+    /// `0.156 |g''|`, where `g` is the DISPLAYED intensity against slabs.
+    ///
+    /// The fixture runs two cosine periods over the 32 slabs, so `f''` peaks at
+    /// `0.45 (2 pi / 16)^2` = 0.069 of the encoded range per slab squared, at
+    /// the two ends of the cosine where `f'` is zero. The decode's own slope is
+    /// steepest down at the dark end (2.3 at a tenth of the range, against 0.74
+    /// at the middle), so `|g''|` is about 0.16 of display intensity there,
+    /// 0.156 of that is 0.025, and a palette channel moving over the whole
+    /// 0..255 turns it into about 6 levels. That is the MAX; the mean runs a
+    /// fraction of it, since most of the picture is where the cosine is
+    /// straight. Measured: mean 0.82, max 3.
+    #[test]
+    fn a_time_stepped_light_field_draws_the_smooth_picture_from_one_texel_a_slab() {
+        let Some((device, queue)) = headless_device() else { return };
+        const SLABS: u32 = 32;
+        let mut cb = cloud_fixture();
+        // Four pane points to a slab, which is the zoomed-out pane's own
+        // geometry at this fixture's size.
+        cb.vertices = full_quad(SLABS);
+        // Smooth along TIME and flat along pitch, so what the two frames differ
+        // by is the resample and nothing else. Two periods of a cosine over the
+        // run — sixteen slabs each, well sampled, and the curvature the bound
+        // below is derived from.
+        let bytes = (0..SLABS as usize)
+            .flat_map(|slab| {
+                let phase = slab as f32 / 16.0 * std::f32::consts::TAU;
+                let level = (0.5 + 0.45 * phase.cos()) * 255.0;
+                vec![level.round() as u8; BINS as usize]
+            })
+            .collect();
+        cb.grid = grid_of(Arc::new(bytes), BINS, SLABS, 0);
+        let a = cb.atmosphere.as_mut().unwrap();
+        a.points_per_slab = SIZE[0] as f32 / SLABS as f32;
+        (a.settings.pitch_softness, a.settings.time_softness) = (0.0, 20.0);
+        // The fixture's own precondition: at this softness the time sigma is a
+        // fifth of a pixel, so the musical reduction leaves that axis at full
+        // resolution and the dial is the only thing that can take it down.
+        let pane = pane_of(&cb);
+        let full = atmosphere::source_size(pane, 1.0, cb.atmosphere.unwrap());
+        assert_eq!(full[0], pane[0], "the time axis was reduced without the dial");
+        let native = fresh_frame(&device, &queue, &cb);
+
+        cb.atmosphere.as_mut().unwrap().settings.blur_time_step = 1.0;
+        let stepped_size = atmosphere::source_size(pane, 1.0, cb.atmosphere.unwrap());
+        assert_eq!(stepped_size, [SLABS, full[1]], "the capped path was never taken");
+        let stepped = fresh_frame(&device, &queue, &cb);
+        assert_ne!(native, stepped, "one texel a slab drew the full-resolution frame");
+
+        let (max, _) = compare(&native, &stepped);
+        let channels = native.len() / 4 * 3;
+        let mean = native
+            .chunks_exact(4)
+            .zip(stepped.chunks_exact(4))
+            .flat_map(|(a, b)| (0..3).map(move |c| f64::from(a[c].abs_diff(b[c]))))
+            .sum::<f64>()
+            / channels as f64;
+        assert!(
+            mean < 2.0 && max <= 7,
+            "the resample moved the picture: mean {mean:.3}, max {max}"
+        );
     }
 
     #[test]
@@ -4218,6 +4295,7 @@ fn cs_rotation_probe() {
                         pitch_vertical,
                         points_per_cent: 0.03,
                         points_per_ms: 0.01,
+                        points_per_slab: 0.0,
                         now,
                     },
                 )

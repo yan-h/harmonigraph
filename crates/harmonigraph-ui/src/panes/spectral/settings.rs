@@ -4,10 +4,10 @@
 //! both of those are on the Colors page ([`super::super::color`]).
 
 use harmonigraph_scene::{
-    CLOUD_PIXEL_MAX, CLOUD_PIXEL_MIN, CLOUD_SPEED_MAX, CLOUD_SPEED_MIN, CLOUD_TILE_MAX,
-    CLOUD_TILE_STEP, CONTOURS_MAX, CONTOURS_MIN, CONTOUR_SOFTNESS_MAX, CONTOUR_SOFTNESS_MIN,
-    PITCH_SOFTNESS_MAX, PITCH_SOFTNESS_MIN, SCALE_REFRACT_MAX, SCALE_REFRACT_MIN,
-    TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
+    BLUR_TIME_STEP_MAX, CLOUD_PIXEL_MAX, CLOUD_PIXEL_MIN, CLOUD_SPEED_MAX, CLOUD_SPEED_MIN,
+    CLOUD_TILE_MAX, CLOUD_TILE_STEP, CONTOURS_MAX, CONTOURS_MIN, CONTOUR_SOFTNESS_MAX,
+    CONTOUR_SOFTNESS_MIN, PITCH_SOFTNESS_MAX, PITCH_SOFTNESS_MIN, SCALE_REFRACT_MAX,
+    SCALE_REFRACT_MIN, TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
 };
 
 use crate::config::BALLISTICS_MAX;
@@ -145,6 +145,30 @@ pub(crate) fn spectrum_settings_pane(
     let soft = atmosphere.pitch_softness > 0.0 || atmosphere.time_softness > 0.0;
     ui.add_enabled_ui(soft, |ui| {
         ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Spread").percent().show(ui);
+    });
+    // Greyed on the light FIELD rather than on the softness above, because a
+    // cloud reads that field too and pays for its resolution at zero softness.
+    let light = atmosphere.effects().light();
+    ui.add_enabled_ui(light, |ui| {
+        ValueBar::new(&mut atmosphere.blur_time_step, 0.0..=BLUR_TIME_STEP_MAX, "Blur time step")
+            .unit(1.0, " slabs")
+            .decimals(1)
+            // The halves `sanitized` snaps to, so the bar never reads 0.7 over
+            // a field drawn at 0.5.
+            .step(0.5)
+            .show(ui)
+            .on_hover_text(
+                "EXPERIMENTAL, and a PERFORMANCE control. The softened picture is \
+                 drawn into its own image first, and zoomed out that image is as \
+                 fine as the PANE while the sound under it is a few hundred \
+                 slabs, two or three pixels each. This is how many of those slabs \
+                 one sample of the image may cover, and its cost falls with it: \
+                 on a 1400-pixel pane at a 600 s span, 1 slab draws the picture \
+                 from 587 samples where 0 draws it from 1416, and the blur runs \
+                 half as long. What it costs is a smear along TIME of about one \
+                 of these steps \u{2014} pitch is untouched, and so is everything \
+                 drawn over the softened picture. 0 is off.",
+            );
     });
     ValueBar::new(&mut atmosphere.contour_strength, 0.0..=1.0, "Contour strength")
         .percent()

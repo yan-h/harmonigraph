@@ -99,6 +99,21 @@ pub const CLOUD_TILE_MAX: f32 = 40.0;
 /// See [`CLOUD_TILE_MAX`].
 pub const CLOUD_TILE_STEP: f32 = 20.0;
 
+/// The top of [`SpectralAtmosphere::blur_time_step`], in slabs per texel.
+///
+/// One texel per two slabs is where the resample has already halved the data
+/// the picture was drawn from, and the saving it is bought with has flattened:
+/// on the 600 s pane this was measured for, the light field's time axis falls
+/// from 1416 texels to 587 at a step of one and to 294 at two, so the second
+/// half of the bar removes a fifth of the texels where the first removed three
+/// fifths. Past it the dial would be spending picture for very little.
+///
+/// Snapped to halves the way [`SpectralAtmosphere::cloud_pixel`] is, so the bar
+/// offers OFF and four resolutions to compare rather than a continuum — what is
+/// being judged is whether a resample along time reads at all, not where
+/// between two of them it starts to.
+pub const BLUR_TIME_STEP_MAX: f32 = 2.0;
+
 /// Bounds shared by the [`SpectralAtmosphere::pitch_softness`] control and sanitizer.
 pub const PITCH_SOFTNESS_MIN: f32 = 0.0;
 /// See [`PITCH_SOFTNESS_MIN`].
@@ -157,6 +172,29 @@ pub struct SpectralAtmosphere {
     pub pitch_softness: f32,
     pub time_softness: f32,
     pub spread: f32,
+    /// How coarse the blurred light field's TIME axis may be, in slabs per
+    /// source texel, 0 for off. A PERFORMANCE dial, and the one that spends
+    /// time resolution.
+    ///
+    /// At a long Span the blur's time radius is a fraction of a pixel, so the
+    /// renderer leaves that axis at the pane's FULL resolution — while the data
+    /// under it is a few hundred slabs two or three pixels wide, and the field
+    /// between slab centres is a straight line the shader redraws pixel by
+    /// pixel. The field's whole cost is linear in its texels, so bounding that
+    /// axis at one texel per this many slabs draws the same line out of fewer
+    /// of them.
+    ///
+    /// **SLABS and not points or pixels.** The editor and an offline export lay
+    /// out their own slabs, so "never finer than one slab" means the same thing
+    /// to both, where a number of points would mean a different resolution on
+    /// each.
+    ///
+    /// What it spends is a resample along time, about one slab of extra
+    /// softening at a step of one. The pitch axis is never touched: at full
+    /// zoom-out it already carries a couple of buckets to the pixel and is
+    /// data-limited rather than pane-limited. Runs over
+    /// 0..=[`BLUR_TIME_STEP_MAX`], snapped to halves.
+    pub blur_time_step: f32,
     /// How far the levels are gathered into terraces, 0 for none. What the
     /// `Lava` style used to switch on whole.
     pub contour_strength: f32,
@@ -308,6 +346,9 @@ impl Default for SpectralAtmosphere {
             pitch_softness: 35.0,
             time_softness: 120.0,
             spread: 0.25,
+            // Off, so the light field is the full-resolution one it has always
+            // been until Yan judges what the resample costs the picture.
+            blur_time_step: 0.0,
             // Full strength is what the `Lava` style drew, and that style was
             // the fresh one.
             contour_strength: 1.0,
@@ -363,6 +404,12 @@ impl SpectralAtmosphere {
         self.time_softness =
             clamp(self.time_softness, fresh.time_softness, TIME_SOFTNESS_MIN, TIME_SOFTNESS_MAX);
         self.spread = clamp(self.spread, fresh.spread, 0.0, 1.0);
+        // Snapped to halves for the reason [`BLUR_TIME_STEP_MAX`] gives: five
+        // resolutions to compare, not a continuum to hunt through.
+        self.blur_time_step =
+            (clamp(self.blur_time_step, fresh.blur_time_step, 0.0, BLUR_TIME_STEP_MAX) * 2.0)
+                .round()
+                / 2.0;
         self.contour_strength = clamp(self.contour_strength, fresh.contour_strength, 0.0, 1.0);
         self.contours = clamp(self.contours, fresh.contours, CONTOURS_MIN, CONTOURS_MAX).round();
         self.contour_softness = clamp(

@@ -28,13 +28,21 @@
 //! override a case's `turn`, so a control that works by turning a softness to
 //! zero is not one under them; `plain` still is.
 //!
-//! `PROBE_CLOUD_PIXEL` (points per cloud sample) and `PROBE_CLOUD_TILE` (the
-//! walk's period in cells, 0 for the live walk), each defaulting to whatever
-//! `SpectralAtmosphere::default` says, apply to EVERY case after its own `turn`,
-//! so one run reads the whole table at one setting and two runs are what that
-//! setting is worth. They are dials rather than cases because the question is
-//! how much each of the rows above falls, not how one of them does — and they
-//! stack, which is the other thing two runs cannot show.
+//! `PROBE_CLOUD_PIXEL` (points per cloud sample), `PROBE_CLOUD_TILE` (the
+//! walk's period in cells, 0 for the live walk) and `PROBE_BLUR_TIME_STEP`
+//! (slabs per source texel on the light field's time axis, 0 for off), each
+//! defaulting to whatever `SpectralAtmosphere::default` says, apply to EVERY
+//! case after its own `turn`, so one run reads the whole table at one setting
+//! and two runs are what that setting is worth. They are dials rather than
+//! cases because the question is how much each of the rows above falls, not how
+//! one of them does — and they stack, which is the other thing two runs cannot
+//! show.
+//!
+//! `PROBE_BLUR_TIME_STEP` is measured against the slab width `quad` actually
+//! lays out, `points.x * fill / PROBE_SLABS`, rather than against the whole
+//! pane's: the fixture puts every slab inside the filled fraction, so at a fill
+//! below one the data really is finer per point than the pane and the dial is
+//! right to bound nothing. At `PROBE_FILLS=1` the two are the same number.
 
 use super::*;
 use harmonigraph_scene::{CloudStyle, SpectralAtmosphere};
@@ -119,6 +127,7 @@ fn cloud_costs_by_style_and_dial() {
         |name: &str| -> Option<f32> { std::env::var(name).ok().and_then(|v| v.parse().ok()) };
     let cloud_pixel = dial("PROBE_CLOUD_PIXEL");
     let cloud_tile = dial("PROBE_CLOUD_TILE");
+    let blur_time_step = dial("PROBE_BLUR_TIME_STEP");
     let pitch_softness = dial("PROBE_PITCH_SOFTNESS");
     let time_softness = dial("PROBE_TIME_SOFTNESS");
     let spread = dial("PROBE_SPREAD");
@@ -268,7 +277,15 @@ fn cloud_costs_by_style_and_dial() {
     for frame in 0..frames + 10 {
         for case in &mut cases {
             let Case {
-                turn, cb, resources, samples, gpu_total, cpu_prepare, history_seconds, ..
+                turn,
+                cb,
+                resources,
+                samples,
+                gpu_total,
+                cpu_prepare,
+                history_seconds,
+                fill,
+                ..
             } = case;
             cb.pass_nr = frame as u64;
             cb.atmosphere = turn.map(|turn| {
@@ -281,6 +298,9 @@ fn cloud_costs_by_style_and_dial() {
                 }
                 if let Some(cloud_tile) = cloud_tile {
                     settings.cloud_tile = cloud_tile;
+                }
+                if let Some(blur_time_step) = blur_time_step {
+                    settings.blur_time_step = blur_time_step;
                 }
                 // The light field's own dials, for replaying a saved pane's
                 // settings rather than the fresh ones. A case that turns a
@@ -301,6 +321,10 @@ fn cloud_costs_by_style_and_dial() {
                     pitch_vertical: true,
                     points_per_cent: points.y / (span * 100.0),
                     points_per_ms: points.x / (*history_seconds * 1000.0),
+                    // What `quad` lays out: every slab inside the filled
+                    // fraction, so this is `w / n` and not the pane's width
+                    // over the slab count.
+                    points_per_slab: points.x * *fill / slabs as f32,
                     now: 1.0 + frame as f64 / 144.0,
                 }
             });

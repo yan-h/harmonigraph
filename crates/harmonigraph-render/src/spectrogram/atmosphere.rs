@@ -26,14 +26,40 @@ pub struct SpectrogramAtmosphere {
     /// Physical display points per cent and per millisecond, before clipping.
     pub points_per_cent: f32,
     pub points_per_ms: f32,
+    /// Display points one SLAB of the run being drawn spans along the time
+    /// axis — the resolution the DATA has there, which is what
+    /// `blur_time_step` bounds the light field against.
+    ///
+    /// The slab width of the run actually on screen, held rung and all, rather
+    /// than one re-derived from the window: a held rung draws wider slabs than
+    /// the window alone would ask for, and bounding the field against the
+    /// narrower number would leave it finer than the picture it is drawn from.
+    ///
+    /// 0 where the caller has no run to say it from, which reads as no bound —
+    /// the same answer the dial's own zero gives, since the two are multiplied.
+    pub points_per_slab: f32,
     /// The pane's clock, which drives the cloud drift. Offline it is the
     /// frame's time, so a render is deterministic.
     pub now: f64,
 }
 
-/// Bound filter work by reducing each axis only as its musical radius grows.
-/// The scalar source averages its whole footprint before these Gaussian passes.
-/// The allocation key is this size alone; no measurement cache is invalidated.
+/// Bound filter work by reducing each axis only as its musical radius grows,
+/// and — where `Blur time step` asks — the time axis by the DATA's own
+/// resolution as well. The scalar source averages its whole footprint before
+/// these Gaussian passes. The allocation key is this size alone; no measurement
+/// cache is invalidated.
+///
+/// **What decides this size, both directions.** The pane's pixels and `ppp`,
+/// the two softnesses through `points_per_cent`/`points_per_ms`, whether the
+/// field is drawn at all, and now [`SpectralAtmosphere::blur_time_step`] with
+/// [`SpectrogramAtmosphere::points_per_slab`]. Nothing else reaches the
+/// picture's needed resolution, so nothing else may serve a stale one. The
+/// input that CHURNS is the slab width: `points_per_slab` moves continuously
+/// through a Span drag, since the window moves while the rung holds. That does
+/// not reallocate per frame, because a capped axis is a REDUCED axis and
+/// [`retained_size`] gives those a 10% band — a drag refreshes pixels until it
+/// has moved the requested size a tenth, and a rung crossing (the slab width
+/// doubling) costs exactly one reallocation.
 pub(super) fn source_size(
     pixels: [u32; 2],
     ppp: f32,
@@ -51,9 +77,21 @@ pub(super) fn source_size(
     let pitch = settings.pitch_softness * atmosphere.points_per_cent * ppp;
     let time = settings.time_softness * atmosphere.points_per_ms * ppp;
     let sigma = if atmosphere.pitch_vertical { [time, pitch] } else { [pitch, time] };
+    // The same axis order `sigma` is built in: time leads when pitch is the
+    // pane's Y. The dial reaches this axis and no other.
+    let time_axis = usize::from(!atmosphere.pitch_vertical);
+    // Device pixels the dial allows per source texel on it. Not finite or not
+    // positive is no bound at all, which covers the dial's own zero, a caller
+    // with no run to measure, and any nonsense either could carry.
+    let per_texel = settings.blur_time_step * atmosphere.points_per_slab * ppp;
+    let bounded = per_texel.is_finite() && per_texel > 0.0;
     std::array::from_fn(|axis| {
         let base = pixels[axis];
-        ((pixels[axis] as f32 / (sigma[axis] * 0.5).max(1.0)).ceil() as u32).max(8).min(base)
+        let mut texels = pixels[axis] as f32 / (sigma[axis] * 0.5).max(1.0);
+        if axis == time_axis && bounded {
+            texels = texels.min(pixels[axis] as f32 / per_texel);
+        }
+        (texels.ceil() as u32).max(8).min(base)
     })
 }
 
@@ -927,8 +965,8 @@ fn source_group(
 #[cfg(test)]
 mod tests {
     use super::{
-        retained_size, tile_key, tone_size, SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS,
-        TILE_MAX, TILE_STEP, WASH_CELLS,
+        retained_size, source_size, tile_key, tone_size, SpectrogramAtmosphere, CLOUD_UNITS,
+        SCALE_CELLS, TILE_MAX, TILE_STEP, WASH_CELLS,
     };
 
     /// The tile is as fine as the pane draws a cell, in whole [`TILE_STEP`]s —
@@ -970,6 +1008,7 @@ mod tests {
                     pitch_vertical: true,
                     points_per_cent: 0.03,
                     points_per_ms: 0.01,
+                    points_per_slab: 0.0,
                     now: 0.0,
                 },
             )
@@ -1009,6 +1048,7 @@ mod tests {
                     pitch_vertical: true,
                     points_per_cent: 0.03,
                     points_per_ms: 0.01,
+                    points_per_slab: 0.0,
                     now: 0.0,
                 },
             )
@@ -1029,6 +1069,58 @@ mod tests {
         // Past the bar's top the clamp holds, so the dial cannot ask for a
         // target of no texels at all.
         assert_eq!(at(1.0e6, 1.0, 2.0), at(4.0, 1.0, 2.0));
+    }
+
+    /// `Blur time step` bounds the light field's TIME axis by the run's slab
+    /// count, and reaches nothing else.
+    ///
+    /// The fixture is the zoomed-out pane the dial exists for, and its
+    /// precondition is asserted rather than assumed: at this span the time
+    /// sigma is a tenth of a pixel, so the musical reduction alone leaves that
+    /// axis at FULL resolution and every texel the dial removes is one only it
+    /// could remove. The pitch axis is reduced by its own sigma in the same
+    /// fixture, which is what makes "the dial left it alone" a claim about the
+    /// dial rather than about an axis nothing was touching.
+    ///
+    /// Powers of two throughout so the bound divides exactly and the assertion
+    /// is the rule rather than a rounding.
+    #[test]
+    fn the_time_step_bounds_the_light_field_by_the_runs_slabs_alone() {
+        // A 1024 x 1024 pane at 2 px/pt showing 600 s of a 119.59-semitone
+        // spectrum in 256 slabs: four points to a slab.
+        let pixels = [1024, 1024];
+        let points = [512.0, 512.0];
+        let sized = |blur_time_step, points_per_slab| {
+            source_size(
+                pixels,
+                2.0,
+                SpectrogramAtmosphere {
+                    settings: harmonigraph_scene::SpectralAtmosphere {
+                        blur_time_step,
+                        pitch_softness: 35.0,
+                        time_softness: 57.23,
+                        ..Default::default()
+                    },
+                    region: egui::Rect::ZERO,
+                    pitch_vertical: true,
+                    points_per_cent: points[1] / (119.59 * 100.0),
+                    points_per_ms: points[0] / (600.0 * 1000.0),
+                    points_per_slab,
+                    now: 0.0,
+                },
+            )
+        };
+        let slab = points[0] / 256.0;
+        let at = |blur_time_step| sized(blur_time_step, slab);
+        let off = at(0.0);
+        assert_eq!(off[0], pixels[0], "the fixture's time axis was reduced without the dial");
+        assert!(off[1] < pixels[1], "the fixture's pitch axis was not reduced by its own sigma");
+        // One texel per slab, per two slabs, and per half a slab.
+        assert_eq!(at(1.0), [256, off[1]]);
+        assert_eq!(at(2.0), [128, off[1]]);
+        assert_eq!(at(0.5), [512, off[1]]);
+        // A caller with no run to measure is the dial's own zero: no bound.
+        assert_eq!(sized(1.0, 0.0), off);
     }
 
     #[test]
