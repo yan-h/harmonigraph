@@ -113,22 +113,26 @@ impl GlowDot {
 /// chain on the first frame after a quiet stretch and saves nothing, because
 /// the declined frame allocates nothing here.
 ///
-/// `pane_id` must be unique per halo grown in the same frame, and the same
-/// across frames for one live copy of a pane: each id keeps a chain of its own,
-/// so an id minted per frame would build a chain per frame and hold every one
-/// of them until the sweep aged it out.
-/// `pass_nr` is the painter context's cumulative pass number.
+/// See [`crate::PaneIds`]: each pane id keeps a chain of its own, so an id
+/// minted per frame would build a chain per frame and hold every one of them
+/// until the sweep aged it out.
 pub fn glow_paint_callback(
     rect: egui::Rect,
     dots: Vec<GlowDot>,
     strength: f32,
     target_format: wgpu::TextureFormat,
-    pane_id: u64,
-    pass_nr: u64,
+    ids: crate::PaneIds,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        GlowCallback { rect, dots, strength, target_format, pane_id, pass_nr },
+        GlowCallback {
+            rect,
+            dots,
+            strength,
+            target_format,
+            pane_id: ids.pane,
+            pass_nr: ids.pass_nr,
+        },
     )
 }
 

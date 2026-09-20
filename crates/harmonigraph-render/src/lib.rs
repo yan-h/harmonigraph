@@ -79,8 +79,8 @@ use lattice_node_glow::create_glow_pipelines;
 /// stamp.
 mod text;
 pub use text::{
-    text_paint_callback, FontAtlas, GlyphInstance, GlyphSdfAtlas, SlideAxis, GLYPH_SDF_COARSE_PAD,
-    GLYPH_SDF_NEAR_BLEND, GLYPH_SDF_NEAR_PAD,
+    text_paint_callback, FontAtlas, GlyphInstance, GlyphSdfAtlas, PaneIds, SheetUploads, SlideAxis,
+    GLYPH_SDF_COARSE_PAD, GLYPH_SDF_NEAR_BLEND, GLYPH_SDF_NEAR_PAD,
 };
 
 /// Generic shadow packing and kernels, shared by every group.
@@ -791,8 +791,7 @@ struct LatticeCallback {
     /// The scene pass's whole order, back to front — see [`Draw`].
     draws: Vec<Draw>,
     /// The fallback font sheet and drawn-mark sheet, on their publication frames.
-    atlas: Option<FontAtlas>,
-    marks: Option<FontAtlas>,
+    sheets: text::SheetUploads,
     sdf: Option<GlyphSdfAtlas>,
     /// Which way these names travel, for the glyph shader's filter.
     slide: SlideAxis,
@@ -988,8 +987,6 @@ struct CompiledLatticeResources {
     /// [`shadow::caster_layout`].
     caster_layout: wgpu::BindGroupLayout,
     glyph_sampler: wgpu::Sampler,
-    blank: wgpu::Texture,
-    blank_sdf: wgpu::Texture,
     target_format: wgpu::TextureFormat,
 }
 
@@ -997,14 +994,11 @@ struct CompiledLatticeResources {
 /// context starts empty even when its pane IDs match a previous window.
 struct LatticeResources {
     compiled: CompiledLatticeResources,
-    /// This renderer's bindings for the two sheets a glyph can be cut from —
-    /// egui's shared font texture and the drawn marks' private texture.
-    atlas: text::AtlasTexture,
-    marks: text::AtlasTexture,
-    /// Identity of the shared SDF texture its glyph bind groups name. The
-    /// allocation itself is stored once in `CallbackResources` and is also
-    /// used by the standalone text renderer.
-    sdf_key: u64,
+    /// This renderer's bindings for the sheets a glyph can be cut from — egui's
+    /// shared font texture, the drawn marks' private texture, and the identity
+    /// of the shared distance sheet, whose allocation is stored once in
+    /// `CallbackResources` and is also used by the standalone text renderer.
+    sheets: text::Sheets,
     panes: HashMap<u64, PaneBuffers>,
     /// GPU-side timing of the lattice passes. `None` when the device didn't
     /// grant timestamp queries — plenty of GPUs (and the offline renderer,
@@ -1050,7 +1044,7 @@ impl LatticePipelineCache {
             if cached.as_ref().is_none_or(|(owner_instance, owner, r)| {
                 owner_instance != instance || owner != device || r.target_format != format
             }) {
-                let compiled = CompiledLatticeResources::new(device, queue, format);
+                let compiled = CompiledLatticeResources::new(device, format);
                 *cached = Some((instance.clone(), device.clone(), compiled));
             }
             LatticeResources::from_compiled(
@@ -2467,13 +2461,12 @@ fn create_post_pipeline(
 }
 
 impl CompiledLatticeResources {
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
-        Self::new_with_progress(device, queue, target_format, |_| {})
+    fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        Self::new_with_progress(device, target_format, |_| {})
     }
 
     fn new_with_progress(
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         target_format: wgpu::TextureFormat,
         progress: impl Fn(startup::Stage),
     ) -> Self {
@@ -2739,8 +2732,6 @@ impl CompiledLatticeResources {
             caster_layout,
             glyph_layout,
             glyph_sampler: text::glyph_sampler(device),
-            blank: text::blank_atlas(device, queue),
-            blank_sdf: text::blank_sdf_atlas(device, queue),
             target_format,
         }
     }
@@ -2748,11 +2739,7 @@ impl CompiledLatticeResources {
 
 impl LatticeResources {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
-        Self::from_compiled(
-            CompiledLatticeResources::new(device, queue, target_format),
-            device,
-            queue,
-        )
+        Self::from_compiled(CompiledLatticeResources::new(device, target_format), device, queue)
     }
 
     fn from_compiled(
@@ -2762,63 +2749,12 @@ impl LatticeResources {
     ) -> Self {
         Self {
             compiled,
-            atlas: text::AtlasTexture::default(),
-            marks: text::AtlasTexture::default(),
-            sdf_key: 0,
+            sheets: text::Sheets::new(device, queue),
             panes: HashMap::new(),
             timer: GpuTimer::new(device, queue),
             #[cfg(feature = "hot-reload")]
             watcher: ShaderWatcher::new(),
         }
-    }
-
-    /// Bind egui's current font texture and upload whichever fallback sheet moved.
-    ///
-    /// The text callback answers the same question with a great deal more
-    /// (`text::TextResources::bind_sheets`, which carries every pane already
-    /// prepared this frame onto the new texture), and the difference is not an
-    /// omission — it is where the two record their draws. That callback draws
-    /// in `paint`, after every `prepare` in the frame, so a pane's bind group
-    /// and uniforms have to still be right once some LATER pane has grown a
-    /// sheet under it. A lattice pane draws in its OWN `prepare`, into its own
-    /// offscreen: by the time a later pane uploads anything, this one's pass is
-    /// encoded, holding the bind group it was recorded with.
-    ///
-    /// Which makes the carry-over not merely unnecessary here but wrong. The
-    /// pass is encoded, not submitted — egui-wgpu runs the shared encoder after
-    /// every prepare — and a `write_buffer` is ordered ahead of that encoder,
-    /// so rewriting a prepared pane's atlas size would reach a pass that is
-    /// still going to sample the texture it was recorded against. Old texture,
-    /// new size, which is exactly the mismatch the text callback's version
-    /// exists to prevent, arriving by the other road.
-    fn bind_sheets(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        shared_atlas: Option<&wgpu::Texture>,
-        fallback_atlas: Option<&FontAtlas>,
-        marks: Option<&FontAtlas>,
-        sdf_key: u64,
-    ) {
-        if let Some(atlas) = fallback_atlas.filter(|a| !self.atlas.holds(a)) {
-            self.atlas.upload(device, queue, atlas);
-        } else if let Some(atlas) = shared_atlas {
-            self.atlas.share(atlas);
-        }
-        if let Some(marks) = marks.filter(|a| !self.marks.holds(a)) {
-            self.marks.upload(device, queue, marks);
-        }
-        self.sdf_key = sdf_key;
-    }
-
-    /// The two sheets' sizes, as the glyph uniforms carry them.
-    ///
-    /// A sheet that has never been uploaded reports the 1x1 blank standing in
-    /// for it rather than its own zero, because the shader DIVIDES by this.
-    /// See `text::TextResources::atlas_sizes`, which says what a zero costs.
-    fn sheet_sizes(&self) -> [f32; 4] {
-        let (a, m) = (self.atlas.size(), self.marks.size());
-        [a[0], a[1], m[0], m[1]].map(|n| n.max(1) as f32)
     }
 
     /// Fetch (or create) a pane's GPU objects, and when `offscreen_size` is
@@ -2844,10 +2780,24 @@ impl LatticeResources {
         // before it gets here.
         let (glyph_layout, glyph_sampler) =
             (&self.compiled.glyph_layout, &self.compiled.glyph_sampler);
-        let atlas_view = self.atlas.view();
-        let mark_view = self.marks.view_or(&self.compiled.blank);
-        let sdf_view = sdf.unwrap_or(&self.compiled.blank_sdf).create_view(&Default::default());
-        let sheet_keys = (self.atlas.key(), self.marks.key(), self.sdf_key);
+        let sheet_keys = self.sheets.keys();
+        // Each of these mints a `wgpu::TextureView`, and the only thing that
+        // reads them is the bind-group rebuild below — which the ordinary
+        // frame skips, because the sheets it names have not moved. So they are
+        // built off that rebuild's own predicate rather than beside the rest
+        // of the frame's setup, and holding one IS the decision to rebuild.
+        // #907 did this for the text callback and left this copy, which is the
+        // same three views in the same shape.
+        //
+        // The font atlas decides on its own account: the first frames of a
+        // session arrive before one exists, and a pane cannot be bound against
+        // a sheet that has not come.
+        let wants_views = !self.sheets.atlas.is_empty()
+            && self
+                .panes
+                .get(&pane_id)
+                .is_none_or(|p| p.glyph_bind_group.is_none() || p.glyph_sheet_keys != sheet_keys);
+        let views = wants_views.then(|| self.sheets.views(sdf));
         let shared = OffscreenShared {
             format: LATTICE_COLOR_FORMAT,
             composite_layout: &self.compiled.composite_layout,
@@ -2943,19 +2893,21 @@ impl LatticeResources {
         // than on the sizes, which is the cheap way to be right about the
         // same-size re-upload too: nothing is stale there, and one bind group
         // per publication is nothing.
-        if let Some(view) = &atlas_view {
-            if pane.glyph_bind_group.is_none() || pane.glyph_sheet_keys != sheet_keys {
-                pane.glyph_bind_group = Some(text::bind_group(
-                    device,
-                    glyph_layout,
-                    glyph_sampler,
-                    view,
-                    &mark_view,
-                    &sdf_view,
-                    &pane.glyph_uniform_buffer,
-                ));
-                pane.glyph_sheet_keys = sheet_keys;
-            }
+        //
+        // Holding views is exactly that condition, taken before the entry
+        // above: a pane that entry has just created was absent when the
+        // question was asked, and an absent pane reads as unbound.
+        if let Some((atlas_view, mark_view, sdf_view)) = views {
+            pane.glyph_bind_group = Some(text::bind_group(
+                device,
+                glyph_layout,
+                glyph_sampler,
+                &atlas_view,
+                &mark_view,
+                &sdf_view,
+                &pane.glyph_uniform_buffer,
+            ));
+            pane.glyph_sheet_keys = sheet_keys;
         }
         if let Some(size) = offscreen_size {
             if pane

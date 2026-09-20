@@ -308,8 +308,10 @@ pub(crate) fn draw_spectrogram(
         read_of(&view, plan.rows),
         shades,
         target_format,
-        crate::panes::lattice::pane_id(surface),
-        painter.ctx().cumulative_pass_nr(),
+        harmonigraph_render::PaneIds {
+            pane: crate::panes::lattice::pane_id(surface),
+            pass_nr: painter.ctx().cumulative_pass_nr(),
+        },
         Some(harmonigraph_render::SpectrogramAtmosphere {
             settings: cfg.atmosphere,
             region: egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0)),

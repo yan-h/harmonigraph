@@ -98,7 +98,7 @@ impl CallbackTrait for LoadingCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         #[cfg(not(feature = "hot-reload"))]
         let status = if let Some(instance) = resources.get::<wgpu::Instance>().cloned() {
-            let status = self.cache.poll_startup(&instance, device, queue, self.format);
+            let status = self.cache.poll_startup(&instance, device, self.format);
             if matches!(status, Status::Ready { .. }) {
                 resources.insert(self.cache.resources(&instance, device, queue, self.format));
             }
@@ -154,17 +154,17 @@ mod tests {
         let Some((instance, adapter)) = crate::test_gpu_adapter() else {
             return;
         };
-        let (device, queue) =
+        // The queue is unused now that the compiled resources upload nothing,
+        // but it owns half the device handle and must outlive the worker.
+        let (device, _queue) =
             pollster::block_on(adapter.request_device(&Default::default())).unwrap();
         let cache = Arc::new(LatticePipelineCache::default());
         let (release, blocked) = std::sync::mpsc::channel();
         let worker_device = device.clone();
-        let worker_queue = queue.clone();
         let worker = std::thread::spawn(move || {
             blocked.recv().unwrap();
             super::super::CompiledLatticeResources::new(
                 &worker_device,
-                &worker_queue,
                 wgpu::TextureFormat::Bgra8Unorm,
             )
         });
@@ -193,7 +193,7 @@ mod tests {
         completion.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
         shutdown.join().unwrap();
         assert_eq!(
-            cache.poll_startup(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm),
+            cache.poll_startup(&instance, &device, wgpu::TextureFormat::Bgra8Unorm),
             Status::Failed,
             "a late window callback must not restart initialization during unload"
         );
@@ -228,7 +228,6 @@ impl LatticePipelineCache {
         &self,
         instance: &wgpu::Instance,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
     ) -> Status {
         let mut startup = self.startup.lock().expect("startup job poisoned");
@@ -275,12 +274,10 @@ impl LatticePipelineCache {
         let progress = Arc::new(Mutex::new(Stage::Graphics));
         let worker_progress = progress.clone();
         let worker_device = device.clone();
-        let worker_queue = queue.clone();
         let worker =
             std::thread::Builder::new().name("harmonigraph-graphics".into()).spawn(move || {
                 super::CompiledLatticeResources::new_with_progress(
                     &worker_device,
-                    &worker_queue,
                     format,
                     |stage| {
                         *worker_progress.lock().expect("startup stage poisoned") = stage;

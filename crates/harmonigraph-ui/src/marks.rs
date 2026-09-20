@@ -774,8 +774,7 @@ fn paint_mark(
     ppp: f32,
     key: MarkKey,
     center: egui::Pos2,
-    color: egui::Color32,
-    outline: egui::Color32,
+    ink: NameInk,
 ) -> f32 {
     // The bitmap is rasterized on the same grid the type is (see `mark_key`),
     // and DRAWN at whatever size the label is actually at -- the two are the
@@ -783,7 +782,7 @@ fn paint_mark(
     // name would glide while the `+` beside it stepped. Both halves are the
     // batch's now, which is what makes them the same split rather than two
     // that have to agree.
-    let [_, h] = batch.mark(ctx, key, center, ppp, color, outline);
+    let [_, h] = batch.mark(ctx, key, center, ppp, ink.fill, ink.outline);
     // UNmagnified, because the caller is still laying out at the rasterized
     // size and this is one of its measurements — the magnification is applied
     // once, to the finished label, and a measurement that had it applied
@@ -865,33 +864,63 @@ pub(crate) fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> Mark
 /// Monospace for in-lattice text: labels align across nodes and match the
 /// technical feel of the readouts.
 ///
-/// `scale` is the size the label is LAID OUT and rasterized at; `magnify` is
-/// how much bigger it is finally drawn, which is what lets the size follow a
-/// zoom continuously while the atlas still sees one size per rung. See
-/// [`crate::text::ladder`], which hands the pair out together, and
-/// [`crate::text::TextBatch::magnified`]; 1.0 is a label drawn at exactly the
-/// size it was rasterized at.
+/// `size` is what the label is laid out, rasterized and finally drawn at --
+/// see [`NameSize`].
 ///
 /// `lead` decides what `anchor` MEANS -- see [`NameLead`]. The magnification
 /// turns about that same point either way, so a name led by its letter keeps
 /// the gap it was placed with at every rung of the ladder: the letter's ink is
 /// at distance zero from the point everything is scaled about, and zero times
 /// anything is zero.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_stacked_name(
     batch: &mut crate::text::TextBatch,
     painter: &egui::Painter,
     anchor: egui::Pos2,
     name: harmonigraph_core::NoteName,
-    color: egui::Color32,
-    outline: egui::Color32,
-    scale: f32,
-    magnify: f32,
+    ink: NameInk,
+    size: NameSize,
     lead: NameLead,
 ) -> f32 {
-    batch.magnified(anchor, magnify, |batch| {
-        stacked_name(batch, painter, anchor, name, color, outline, scale, lead)
+    batch.magnified(anchor, size.magnify, |batch| {
+        stacked_name(batch, painter, anchor, name, ink, size.scale, lead)
     })
+}
+
+/// The two colours a piece of label text is drawn in.
+///
+/// One struct rather than two arguments, for the reason `NameScale`
+/// (`panes/spectral/names.rs`) gives: both are `Color32`, nothing but their
+/// order told them apart, and both are passed down through the whole layout --
+/// every glyph and every mark in the column -- so a call that swapped them
+/// paints the type in the ground's colour and the halo meant to lift it off
+/// that ground in the type's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NameInk {
+    /// The type itself, and the drawn marks beside it.
+    pub(crate) fill: egui::Color32,
+    /// What is laid UNDER that, the ground's own colour where a caller wants
+    /// the name lifted off whatever it crosses.
+    pub(crate) outline: egui::Color32,
+}
+
+/// The scale a label is LAID OUT and rasterized at, and how much bigger than
+/// that it is finally drawn -- which is what lets the size follow a zoom
+/// continuously while the atlas still sees one size per rung.
+///
+/// One struct rather than two arguments, for the same reason `NameScale`
+/// (`panes/spectral/names.rs`) gives: both are `f32` and they are EQUAL
+/// wherever the picture is not zooming, so a call that swapped them draws
+/// correctly at the dialled view and wrongly everywhere else. See
+/// [`crate::text::ladder`], which hands the pair out together and exists for
+/// the same reason, and [`crate::text::TextBatch::magnified`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NameSize {
+    /// The size the type is set and the marks are rasterized at, as a multiple
+    /// of [`NAME_SIZE`].
+    pub(crate) scale: f32,
+    /// How much bigger the finished label is drawn; 1.0 is a label drawn at
+    /// exactly the size it was rasterized at.
+    pub(crate) magnify: f32,
 }
 
 /// What the point handed to [`draw_stacked_name`] is a point OF.
@@ -950,8 +979,7 @@ fn stacked_name(
     painter: &egui::Painter,
     anchor: egui::Pos2,
     name: harmonigraph_core::NoteName,
-    color: egui::Color32,
-    outline: egui::Color32,
+    ink: NameInk,
     scale: f32,
     lead: NameLead,
 ) -> f32 {
@@ -1060,8 +1088,8 @@ fn stacked_name(
         egui::Align2::LEFT_CENTER,
         letter_text.clone(),
         name_font.clone(),
-        color,
-        outline,
+        ink.fill,
+        ink.outline,
     );
     let mut bottom = ink_below(&letter_text, &name_font, letter);
 
@@ -1070,7 +1098,7 @@ fn stacked_name(
     let mut draw_signed = |x: f32, direction: f32, count: &str, kind: MarkKind| -> f32 {
         let key = mark_key(kind, mark_size, MARK_WEIGHT, ppp);
         let center = egui::pos2(x + cell / 2.0, anchor.y + direction * rise);
-        let half_height = paint_mark(batch, painter.ctx(), ppp, key, center, color, outline);
+        let half_height = paint_mark(batch, painter.ctx(), ppp, key, center, ink);
         if !count.is_empty() {
             batch.text(
                 painter,
@@ -1078,8 +1106,8 @@ fn stacked_name(
                 egui::Align2::LEFT_CENTER,
                 count.to_owned(),
                 mark_font.clone(),
-                color,
-                outline,
+                ink.fill,
+                ink.outline,
             );
         }
         // Whichever reaches lower: the mark's own bitmap from its center, or
@@ -1124,32 +1152,29 @@ fn stacked_name(
 /// below `anchor.y`. Used for the label lines that are numbers rather than
 /// note names — an off-sheet node's cents, and its comma (see
 /// [SevensLabel](harmonigraph_scene::SevensLabel)).
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_plain_name(
     batch: &mut crate::text::TextBatch,
     painter: &egui::Painter,
     anchor: egui::Pos2,
     text: &str,
-    color: egui::Color32,
-    outline: egui::Color32,
-    scale: f32,
-    magnify: f32,
+    ink: NameInk,
+    size: NameSize,
 ) -> f32 {
-    let font = egui::FontId::monospace(NAME_SIZE * scale);
-    let size =
+    let font = egui::FontId::monospace(NAME_SIZE * size.scale);
+    let galley =
         painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size();
-    batch.magnified(anchor, magnify, |batch| {
+    batch.magnified(anchor, size.magnify, |batch| {
         batch.text(
             painter,
             anchor,
             egui::Align2::CENTER_CENTER,
             text.to_owned(),
             font.clone(),
-            color,
-            outline,
+            ink.fill,
+            ink.outline,
         );
     });
-    painter_ink(painter, text, &font).max.y - size.y / 2.0
+    painter_ink(painter, text, &font).max.y - galley.y / 2.0
 }
 
 /// The box the glyphs of `text` actually cover, relative to the galley's own
@@ -1893,10 +1918,11 @@ mod tests {
                                 ui.painter(),
                                 anchor,
                                 name,
-                                egui::Color32::WHITE,
-                                egui::Color32::TRANSPARENT,
-                                scale,
-                                magnify,
+                                NameInk {
+                                    fill: egui::Color32::WHITE,
+                                    outline: egui::Color32::TRANSPARENT,
+                                },
+                                NameSize { scale, magnify },
                                 // The reading is about how the ink MOVES, so
                                 // the anchor is a place to move it from.
                                 NameLead::Centred,

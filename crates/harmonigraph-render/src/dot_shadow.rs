@@ -31,13 +31,19 @@ pub fn dot_shadow_paint_callback(
     dots: Vec<crate::GlowDot>,
     shadow: harmonigraph_scene::ShadowStyle,
     target_format: wgpu::TextureFormat,
-    pane_id: u64,
+    ids: crate::PaneIds,
     shadow_surface_id: u64,
-    pass_nr: u64,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        DotShadowCallback { dots, shadow, target_format, pane_id, shadow_surface_id, pass_nr },
+        DotShadowCallback {
+            dots,
+            shadow,
+            target_format,
+            pane_id: ids.pane,
+            shadow_surface_id,
+            pass_nr: ids.pass_nr,
+        },
     )
 }
 

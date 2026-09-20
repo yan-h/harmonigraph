@@ -610,6 +610,66 @@ fn one_name(scene: &Scene, size: [u32; 2]) -> LatticeLabels {
     name_at(scene, size, NAME_AT)
 }
 
+/// A pane keeps the glyph bind group it has until a sheet moves under it, and
+/// is handed a new one when that happens.
+///
+/// Both answers used to be read AFTER three `wgpu::TextureView`s had been
+/// minted for them; `pane_buffers` now builds those off this same question.
+/// What that puts at risk is only one direction of it — a frame that decides
+/// it needs no views has no views to bind WITH — and that is the direction
+/// this reads: `glyph_sheet_keys` is assigned inside the rebuild, so a
+/// publication that failed to reach it leaves the old keys standing. Views
+/// built and dropped unused cost an allocation and are invisible from here.
+#[test]
+fn a_pane_rebinds_its_sheets_only_when_one_moves() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let scene = lit_node_and_a_name(0.0, FRESH_SHADOW, 0.0);
+    // `shot_with` opens a fresh pane per call and this reading is about one
+    // pane across frames, so the shots below go through `draw`.
+    let keys = |shooter: &Shooter| {
+        let pane = shooter
+            .resources
+            .get::<LatticeResources>()
+            .expect("the shot prepares lattice resources")
+            .panes
+            .values()
+            .next()
+            .expect("the shot drew a pane");
+        assert!(
+            pane.glyph_bind_group.is_some(),
+            "the fixture bound no sheets, so the keys below are the empty sentinel \
+             and every comparison passes for nothing",
+        );
+        pane.glyph_sheet_keys
+    };
+
+    shooter.draw(&scene, one_name(&scene, SIZE));
+    let first = keys(&shooter);
+
+    // The same two publications again. `AtlasTexture::holds` recognizes both,
+    // nothing is recreated, and the pane keeps what it has.
+    shooter.draw(&scene, one_name(&scene, SIZE));
+    assert_eq!(keys(&shooter), first, "an unchanged publication rebound the pane");
+
+    // A mark sheet of another size, which cannot be written into the texture
+    // in hand and so makes every bind group naming it stale.
+    let mut moved = one_name(&scene, SIZE);
+    moved.marks = Some(FontAtlas {
+        image: std::sync::Arc::new(egui::ColorImage::filled([128, 32], egui::Color32::WHITE)),
+        key: 7,
+    });
+    shooter.draw(&scene, moved);
+    let after = keys(&shooter);
+    assert_ne!(after.1, first.1, "a grown mark sheet left the pane on the old texture");
+    assert_eq!(
+        after.0, first.0,
+        "the font atlas moved as well, so this says nothing about the mark sheet",
+    );
+}
+
 /// A name wears the light it stands in, exactly as a resting cross does.
 ///
 /// The pair is one field: a position shows a name or a marker and never both
