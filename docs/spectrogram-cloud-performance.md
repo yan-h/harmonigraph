@@ -181,10 +181,11 @@ Mosaic: `face` and `to_centre`, one `Rgba16Float`.
 Watercolor: per octave the finished look offset (`look - r`, after feather and bleed) and the pigment, plus the fine octave's `cover` — seven channels, two `Rgba16Float`.
 The per-frame shader keeps the light taps, the lean, the shading and the palette, which is the measured 1.35 ms (Mosaic) and 3.15 ms (Watercolor) residue from the throwaway-edit table above, plus one or two coherent texture reads.
 - **Why `P` is a multiple of 10.**
-Both styles run a second octave at a lacunarity of 2.1, so the fine octave tiles when `2.1 * P` is an integer; the wash's warp and ragged noise lattices sit at 0.9 and 2.8 of a cell, which want `0.9 * P` and `2.8 * P` whole as well.
-`P = 20` gives 42, 18 and 56.
+Both styles run a second octave at a lacunarity of 2.1, so the fine octave tiles when `2.1 * P` is an integer; the wash's warp noise lattice sits at 0.9 of a cell, which wants `0.9 * P` whole as well.
+`P = 20` gives 42 and 18.
+A ragged noise at 2.8 was the third constraint until `Ragged` was retired (below).
 The noise's own second octave is at 2.07, which no `P` makes whole, so the tiled path runs it at 2.0 — the one constant the tile changes, and only when the tile is on.
-- **The key** is the style, `P`, the tile's texel size and the dials the walk reads: `Variety` for Mosaic; `Lobe shape`, `Ragged`, `Fuzz` and `Pool` for Watercolor.
+- **The key** is the style, `P`, the tile's texel size and the dials the walk reads: `Variety` for Mosaic; `Lobe shape`, `Fuzz` and `Pool` for Watercolor.
 NOT the drift, the clock, the light, the palette, the softness, `Refraction`, `Relief`, `Cloud depth` or `Layers` — none of them reaches the baked channels, and the bake always walks the fine octave so `Layers` is a mix over channels already held.
 The size dials and the pane reach it only through the texel size, which is as fine as the pane draws a cell, rounded up to a multiple of 256 and capped at 2048, so a resize drag does not rebake on every frame.
 The tile is also carried across a rebuild of the light field's targets, which a zoom or a Span drag forces.
@@ -214,8 +215,8 @@ Recorded so they are not re-derived.
 Neither is built or measured beyond the arithmetic here, and the bake removes the walk they would only shorten.
 
 - **Watercolor, a half-cell-centred 4x4 ring** (`base = floor(r - 0.5)`, visit `0..3`): 16 visits for 25, about 37 ms to about 25.
-The nearest unvisited centre is then `2.0 - (JITTER / 2) * sqrt(2) = 1.717` away, and the reach bound carries `RADIUS_MAX * (1 + RAGGED)`, so `RADIUS_MAX` falls from 1.66 to 1.32 at the shipped `RAGGED` and the radius band from 1.63:1 to about 1.3:1.
-That band is the "different sized globs" the wash was asked to be, so this is a look regression for a third of the walk.
+The nearest unvisited centre is then `2.0 - (JITTER / 2) * sqrt(2) = 1.717` away, which is the whole of what `RADIUS_MAX` may be now that `Ragged` is retired and the reach bound no longer carries `(1 + RAGGED)` — so `RADIUS_MAX` falls from 1.91 to under 1.717 and the radius band from 1.63:1 to about 1.47:1.
+(Derived at the shipped `RAGGED` it was worse still: 1.66 to 1.32, a band of about 1.3:1.) That band is the "different sized globs" the wash was asked to be, so this is a look regression for a third of the walk.
 A plain `WASH_RING = 1` measured 19.7 ms, but it breaks the reach proof and draws steps on the cell grid — not a similar picture, a broken one.
 - **Mosaic, the fine octave replaced by a cheap noise gradient.**
 The fine octave is half the walk, about 5.5 ms, and contributes only slope at a gain of 0.22.
@@ -229,7 +230,7 @@ The tone reads the sound, so a stale tone lags the music; the walk is the only p
 2. Does the drift-phase softening shimmer at `Fuzz` 0 and on Mosaic's creases? If it does, bake at 1.5x texel density before reaching for anything cleverer.
 3. Which `Cloud tile` becomes the default, and whether it stays a dial at all once a period is picked — a default change moves the goldens and owes a regenerated Metal corpus.
 4. If the tile becomes the default: retire `Cloud pixel size`, and retire the live walk with it? The live walk is then only the reference the first-period test compares against.
-5. `Ragged` is retired in a PR stacked on #991 (it ships at 1.0, so it moves the default wash). The reach bound then stops carrying `(1 + RAGGED)`, which leaves room for a wider radius band than 1.63:1 — a look change for Yan's eye.
+5. ~~`Ragged`~~ RETIRED in the PR stacked on #991. It shipped at 1.0 and its wobble was one-sided, so the radius band was scaled by 1.15 (`WASH_RADIUS_MIN` 1.02 → 1.17, `WASH_RADIUS_MAX` 1.66 → 1.91) to keep the default globs their size. The reach bound stopped carrying `(1 + RAGGED)` and `RADIUS_MAX` now sits 1.91 against a bound of 2.217, so a band WIDER than 1.63:1 is available and deliberately untaken — a look change for Yan's eye (#992).
 6. The scrolling window above, only if 1 fails.
 
 ## Source map at `8b4edf4e`

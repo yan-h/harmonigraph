@@ -256,8 +256,6 @@ pub struct SpectralAtmosphere {
     /// into what lies beneath, how far it bleeds into what is about to cover it,
     /// and — falling as those rise — how much of the tide line is left.
     pub wash_fuzz: f32,
-    /// How far the shared fine-scale wobble carries a glob's rim off its circle.
-    pub wash_ragged: f32,
     /// How far the shared domain warp carries glob space off the grid: 0 is
     /// bubbles, the top of the dial is shearing lobes.
     pub wash_lobe: f32,
@@ -328,11 +326,11 @@ impl Default for SpectralAtmosphere {
             scale_relief: 0.35,
             cloud_style: CloudStyle::Mosaic,
             // J2 "dissolved" from the prototype's sheet J, translated: globs
-            // about two harmonic lines across, the rim fully dissolved, the
-            // wobble at the top of what the coverage proof allows.
+            // about two harmonic lines across and the rim fully dissolved. Its
+            // third term was a `Ragged` rim wobble, retired once `Fuzz` 1 was
+            // found to mask it; the radius band carries the size it added.
             wash_size: 1.0,
             wash_fuzz: 1.0,
-            wash_ragged: 1.0,
             wash_lobe: 0.55,
             wash_refract: 0.85,
             wash_pool: 0.5,
@@ -396,7 +394,6 @@ impl SpectralAtmosphere {
         self.scale_relief = clamp(self.scale_relief, fresh.scale_relief, 0.0, 1.0);
         self.wash_size = clamp(self.wash_size, fresh.wash_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.wash_fuzz = clamp(self.wash_fuzz, fresh.wash_fuzz, 0.0, 1.0);
-        self.wash_ragged = clamp(self.wash_ragged, fresh.wash_ragged, 0.0, 1.0);
         self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);
         self.wash_refract = clamp(self.wash_refract, fresh.wash_refract, 0.0, 1.0);
         self.wash_pool = clamp(self.wash_pool, fresh.wash_pool, 0.0, 1.0);

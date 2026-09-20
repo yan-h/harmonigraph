@@ -285,7 +285,6 @@ struct Cloud {
     cloud_style: u32,
     wash_size: f32,
     wash_fuzz: f32,
-    wash_ragged: f32,
     wash_lobe: f32,
     wash_refract: f32,
     wash_pool: f32,
@@ -989,12 +988,15 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
 // `RING + 0.5 - (JITTER / 2) * sqrt(2)` or a glob the ring never visits can cover
 // the pixel — which is a step on the cell grid every time `floor(r)` moves.
 //
-// The largest RIM is not the largest radius: `Ragged` only ever pushes a rim
-// OUTWARD (see `wash_glob`), by up to `RAGGED` of its own radius, so the reach
-// bound carries `RADIUS_MAX * (1 + RAGGED)` while the coverage bound carries
-// `RADIUS_MIN` untouched. One-sided is what makes that asymmetry available: a
-// zero-mean wobble of the same visible amplitude costs BOTH bounds, and buys a
-// narrower radius band for the same picture.
+// The largest RIM is the largest radius, and it was not always. A retired
+// `Ragged` dial pushed a rim OUTWARD by up to 30% of its own radius and never
+// inward, so the reach bound carried `RADIUS_MAX * (1 + RAGGED)` while coverage
+// read `RADIUS_MIN` untouched. One-sided also meant every rim sat about 15%
+// OUTSIDE its radius on average at the setting that shipped, so the band was
+// scaled by 1.15 when the wobble went, and a default glob is the size it always
+// drew. What the reach bound stops carrying is slack: 1.91 against a bound of
+// 2.217, where the wobble left 2.7% of a radius. Spending it on a wider band
+// than 1.63:1 is a LOOK change and is deliberately not taken here.
 //
 // Both bounds are about globs that COVER the pixel, which is what the visible
 // glob, the one beneath it and `cover` are all read off. The tide line is
@@ -1011,16 +1013,12 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
 // jitter of 0.20 — a nearly regular grid of nearly equal globs, which is the one
 // thing this look cannot be, since a field of DIFFERENT SIZED globs is what was
 // asked for. The wider ring costs a second pass over 25 cells instead of 9 and
-// buys jitter 0.40, a 1.63:1 radius band, and a rim wobble of half of `RAGGED`
-// either way about an inflated radius. That last one is where the proof and the
-// prototype part: ±0.15 reaches J1's and J5's wobble of ±0.10 with room over,
-// and stops short of J2's ±0.34, which the prototype could afford only by
-// widening its ring per render and tolerating pinholes.
+// buys jitter 0.40 and a 1.63:1 radius band, with 15.4% of a radius spare on
+// coverage and 16.1% on reach — the room the retired wobble used to spend.
 const WASH_RING: i32 = 2;
 const WASH_JITTER: f32 = 0.40;
-const WASH_RAGGED: f32 = 0.30;
-const WASH_RADIUS_MIN: f32 = 1.02;
-const WASH_RADIUS_MAX: f32 = 1.66;
+const WASH_RADIUS_MIN: f32 = 1.17;
+const WASH_RADIUS_MAX: f32 = 1.91;
 
 // How many cells cross one cloud unit at `Glob size` 1x — see `wash_cloud_tone`,
 // where it is chosen so a glob comes out the width the prototype's J2 drew
@@ -1035,17 +1033,16 @@ const WASH_CELLS: f32 = 5.25;
 const WASH_LACUNARITY: f32 = 2.1;
 const WASH_FINE_OCCUPANCY: f32 = 0.20;
 
-// The tops of the three dials whose shader value is not a plain 0..1: the domain
-// warp in cells, the tide line, and the rim wobble above. The warp draws bubbles
-// at 0, lobes around 0.25 and flames past 0.55, so the dial stops short of where
-// it stops being paint.
+// The tops of the two dials whose shader value is not a plain 0..1: the domain
+// warp in cells and the tide line. The warp draws bubbles at 0, lobes around
+// 0.25 and flames past 0.55, so the dial stops short of where it stops being
+// paint.
 //
-// The two SCALES beside them are the lattices the shared noises are read on, in
-// cells, and they are also two of the six numbers a tile period has to make a
+// The SCALE between them is the lattice the shared warp noise is read on, in
+// cells, and it is also one of the four numbers a tile period has to make a
 // whole number of — see `wrap_cell` and `wash_fbm`.
 const WASH_WARP: f32 = 0.45;
 const WASH_WARP_SCALE: f32 = 0.9;
-const WASH_RAGGED_SCALE: f32 = 2.8;
 const WASH_POOL: f32 = 0.44;
 
 // How wide the tide line lies outside the covering glob's boundary, and how
@@ -1121,10 +1118,10 @@ fn wash_hash(cell: vec2<i32>, salt: u32) -> vec3<f32> {
     );
 }
 
-// Smooth value noise, two octaves. Used for the two SHARED fields only — the
-// domain warp and the rim wobble — each evaluated once per pixel and then read
-// by every glob of every octave, which is what keeps neighbouring globs wobbling
-// together along a shared boundary instead of each wandering off on its own.
+// Smooth value noise, two octaves. Used for the SHARED domain warp only —
+// evaluated once per pixel and then read by every glob of every octave, which is
+// what keeps neighbouring globs leaning together along a shared boundary instead
+// of each wandering off on its own.
 fn wash_noise(p: vec2<f32>, salt: u32, period: i32) -> f32 {
     let b = floor(p);
     let f = p - b;
@@ -1154,9 +1151,9 @@ fn wash_fbm(p: vec2<f32>, salt: u32, period: i32) -> f32 {
 
 struct Glob {
     centre: vec2<f32>,
-    // Where the pixel sits on this glob's rim: under 1 is inside it. The shared
-    // wobble is already in here, which is why it is the RIM coordinate and not a
-    // distance.
+    // Where the pixel sits on this glob's rim: under 1 is inside it. A rim
+    // coordinate rather than a distance, so every glob's feather and tide line
+    // are worked out in fractions of its own radius.
     edge: f32,
     order: f32,
 }
@@ -1164,7 +1161,7 @@ struct Glob {
 // One cell's glob, at the pixel `r` — both in this octave's cell units. `period`
 // folds the cell the two hashes are taken at and nothing else, so the centre
 // below is still this cell's own (see `wrap_cell`).
-fn wash_glob(cell: vec2<i32>, salt: u32, r: vec2<f32>, wob: f32, occupancy: f32, period: i32) -> Glob {
+fn wash_glob(cell: vec2<i32>, salt: u32, r: vec2<f32>, occupancy: f32, period: i32) -> Glob {
     let hashed = wrap_cell(cell, period);
     let g = wash_hash(hashed, salt + 77u);
     var out: Glob;
@@ -1205,7 +1202,7 @@ fn wash_glob(cell: vec2<i32>, salt: u32, r: vec2<f32>, wob: f32, occupancy: f32,
     // two of movement under a whole field already drifting faster than that.
     let radius = mix(WASH_RADIUS_MIN, WASH_RADIUS_MAX, h.z);
     out.centre = centre;
-    out.edge = length(r - centre) / radius + wob;
+    out.edge = length(r - centre) / radius;
     return out;
 }
 
@@ -1254,7 +1251,7 @@ struct Wash {
 // where dropping the weakest crescents leaves the same texture with a softer
 // edge. That it also costs 2.8 ms a frame against a second walk's 6.5 is the
 // smaller half of the reason.
-fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, wob: f32, period: i32) -> Wash {
+fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, period: i32) -> Wash {
     var out: Wash;
     // What an uncovered pixel would draw: its own light, unmoved, and no
     // pigment. Unreachable for the base octave while the constants hold — see
@@ -1279,7 +1276,7 @@ fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, wob: f32, period: i32) -> 
     let base = vec2<i32>(floor(r));
     for (var j = -WASH_RING; j <= WASH_RING; j += 1) {
         for (var i = -WASH_RING; i <= WASH_RING; i += 1) {
-            let glob = wash_glob(base + vec2<i32>(i, j), salt, r, wob, occupancy, period);
+            let glob = wash_glob(base + vec2<i32>(i, j), salt, r, occupancy, period);
             let prox = 1.0 - glob.edge;
             out.cover = max(out.cover, clamp(prox / 0.05, 0.0, 1.0));
             if glob.edge < 1.0 {
@@ -1432,13 +1429,11 @@ struct WashField {
 };
 
 fn wash_field(r: vec2<f32>, period: i32, want_fine: bool) -> WashField {
-    // Two shared fields, one evaluation each per pixel and then read by every
-    // glob of every octave: a domain warp of glob space, which is what stops a
-    // glob being a circle, and a finer ragged offset on every rim. Both are read
-    // at the UNWARPED point, and both stay small — a heavy warp draws flames.
-    //
-    // Each sits on its own lattice, so each tiles at its own period: the warp's
-    // is `WASH_WARP_SCALE` cells across and the wobble's `WASH_RAGGED_SCALE`.
+    // One shared field, evaluated once per pixel and then read by every glob of
+    // every octave: a domain warp of glob space, which is what stops a glob
+    // being a circle. It is read at the UNWARPED point and stays small — a heavy
+    // warp draws flames — and it sits on a lattice `WASH_WARP_SCALE` cells
+    // across, which is the period it tiles at.
     var warped = r;
     if cloud.wash_lobe > 0.0 {
         let amp = WASH_WARP * cloud.wash_lobe;
@@ -1448,21 +1443,8 @@ fn wash_field(r: vec2<f32>, period: i32, want_fine: bool) -> WashField {
             wash_fbm(r * WASH_WARP_SCALE + vec2<f32>(37.0, -19.0), 73u, warp_period) - 0.5,
         );
     }
-    // One-sided, and that is what buys the amplitude: a rim is only ever pushed
-    // OUTWARD, by up to `RAGGED` of its own radius, so the coverage half of the
-    // proof above is untouched and only the reach half pays. Against a
-    // zero-mean wobble it is the same picture — a rim of mean radius
-    // `R * (1 + RAGGED / 2)` wobbling by half of `RAGGED` either way.
-    var wob = 0.0;
-    if cloud.wash_ragged > 0.0 {
-        let ragged_period = i32(round(WASH_RAGGED_SCALE * f32(period)));
-        wob = WASH_RAGGED
-            * cloud.wash_ragged
-            * (wash_fbm(r * WASH_RAGGED_SCALE, 41u, ragged_period) - 1.0);
-    }
-
     var out: WashField;
-    out.coarse = wash_wet(wash_scan(warped, 1u, 1.0, wob, period), warped);
+    out.coarse = wash_wet(wash_scan(warped, 1u, 1.0, period), warped);
     out.fine = Wet(vec2<f32>(0.0), 0.0);
     out.cover = 0.0;
     // Coarse to fine, the finer octave a translucent wash over the one below and
@@ -1471,13 +1453,8 @@ fn wash_field(r: vec2<f32>, period: i32, want_fine: bool) -> WashField {
     // cheapest this path gets.
     if want_fine {
         let fine_r = warped * WASH_LACUNARITY + vec2<f32>(17.3, 5.9);
-        let fine = wash_scan(
-            fine_r,
-            2u,
-            WASH_FINE_OCCUPANCY,
-            wob,
-            i32(round(WASH_LACUNARITY * f32(period))),
-        );
+        let fine =
+            wash_scan(fine_r, 2u, WASH_FINE_OCCUPANCY, i32(round(WASH_LACUNARITY * f32(period))));
         out.fine = wash_wet(fine, fine_r);
         out.cover = fine.cover;
     }

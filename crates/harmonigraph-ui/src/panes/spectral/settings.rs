@@ -561,14 +561,6 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
              together because a crisp dark crescent on an edge that is no longer there reads \
              as a line floating in fog. 0 is hard-edged pebbles, 100% is dissolved paint.",
     );
-    ValueBar::new(&mut atmosphere.wash_ragged, 0.0..=1.0, "Ragged")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How far a fine shared wobble carries each glob's rim off its circle. A shape \
-             control, not a softness one: the edge stays exactly as sharp, it just stops \
-             being an arc. Its top is where the layer's own coverage proof stops it.",
-        );
     ValueBar::new(&mut atmosphere.wash_lobe, 0.0..=1.0, "Lobe shape")
         .percent()
         .show(ui)
