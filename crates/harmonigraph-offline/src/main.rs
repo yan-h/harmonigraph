@@ -7,7 +7,7 @@
 //!
 //! The visualization is a pure function of its inputs, so a take
 //! (recorded once, in the DAW or the standalone harness) can be re-rendered
-//! as often as you like, at any frame rate and resolution, with any layout
+//! as often as you like, at any frame rate and resolution
 //! — long after the music stopped and as slowly as the GPU needs.
 //!
 //! See `docs/offline-rendering.md` for the whole workflow.
@@ -45,9 +45,9 @@ OPTIONS:
     -o, --out <PATH>       Output. .mp4/.mov/.mkv go through ffmpeg;
                            .png writes a numbered sequence; .rgba writes
                            a raw stream.  [default: <take>.mp4]
-    -l, --layout <SPEC>    Preset name or path to a .ron layout.
+    -l, --layout <NAME>    Combined Lattice/Analyzer arrangement.
                            Presets: PRESET_LIST
-                           [default: side-by-side]
+                           [default: the take's captured placement and proportion]
     -s, --size <WxH>       Output pixels. At an aspect other than the one the
                            take was framed at, the picture is recomposed to
                            fit rather than letterboxed, and it says so.
@@ -78,8 +78,6 @@ OPTIONS:
                            seconds of take time. off is the default spelled
                            out: the take\'s recording starts where its
                            header says (or at zero if unstamped).
-        --dump-layout      Print the resolved layout as .ron and exit —
-                           the starting point for a custom one.
     -h, --help             Show this.
 
 ENVIRONMENT:
@@ -102,7 +100,7 @@ struct Args {
     take: Option<String>,
     out: Option<String>,
     /// `None` means "use the frame the take was composed for" (its RenderFrame),
-    /// falling back to a preset.
+    /// falling back to the default RenderFrame.
     layout: Option<String>,
     /// `None` means "size to the take's frame aspect".
     size: Option<[u32; 2]>,
@@ -125,7 +123,6 @@ struct Args {
     /// A hand-set start for the soundtrack, in seconds of take time. `None`
     /// places it where it starts by construction — see `start_of_audio`.
     align: Option<f64>,
-    dump_layout: bool,
 }
 
 impl Default for Args {
@@ -151,7 +148,6 @@ impl Default for Args {
             appearance: None,
             ffmpeg: None,
             align: None,
-            dump_layout: false,
         }
     }
 }
@@ -177,16 +173,7 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
         };
         match arg.as_str() {
             "-h" | "--help" => {
-                // The preset names are `harmonigraph_ui::PRESETS`'s to state,
-                // spliced in here rather than written out above. A second copy
-                // drifts the moment a preset is added, and it drifts against
-                // the one message that would correct it: `Layout::load` prints
-                // the real list when a name is not a preset, so the help and
-                // the error would disagree exactly when someone is trying to
-                // learn the names.
-                //
-                // A token and a `replace` rather than a `format!`, so the help
-                // text stays a plain string with no braces to escape.
+                // Help and layout errors share the retained preset list.
                 print!("{}", USAGE.replace(PRESET_TOKEN, &PRESETS.join(", ")));
                 return Ok(None);
             }
@@ -203,7 +190,6 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
             "--appearance" => args.appearance = Some(value("--appearance")?),
             "--ffmpeg" => args.ffmpeg = Some(value("--ffmpeg")?),
             "--align" => args.align = parse_align(&value("--align")?)?,
-            "--dump-layout" => args.dump_layout = true,
             other if other.starts_with('-') => {
                 return Err(format!("unknown option {other:?} (--help for the list)"))
             }
@@ -371,15 +357,6 @@ fn export(args: Args) -> Result<(), String> {
     // the audio and the encoder's backlog as well as
     // the loop — everything between typing the command and having the file.
     let began = std::time::Instant::now();
-    if args.dump_layout {
-        // Without a take there's no frame to compose, so dump the named preset
-        // (or the default) as a starting point for a custom .ron.
-        let layout = Layout::load(args.layout.as_deref().unwrap_or("side-by-side"))?;
-        let pretty = ron::ser::PrettyConfig::new().depth_limit(4);
-        println!("{}", ron::ser::to_string_pretty(&layout, pretty).map_err(|e| e.to_string())?);
-        return Ok(());
-    }
-
     let take_path = args.take.ok_or("no take file given (--help for usage)")?;
     let take = harmonigraph_take::Take::read(&take_path).map_err(|e| e.to_string())?;
     let replacement = args
@@ -401,7 +378,8 @@ fn export(args: Args) -> Result<(), String> {
     let render_config = &appearance.render;
     let frame = render_config.frame;
     let layout = match &args.layout {
-        Some(spec) => Layout::load(spec)?,
+        Some(spec) => Layout::preset(spec)
+            .ok_or_else(|| format!("unknown layout {spec:?}; choose {}", PRESETS.join(" or ")))?,
         None => Layout::split(frame.lattice, frame.split),
     };
     let size = output_size(args.size, render_config);
@@ -658,7 +636,7 @@ mod tests {
         assert_eq!(overridden, draw("rerecorded", &[]).unwrap());
         let explicit = draw(
             "explicit",
-            &["--appearance", replacement_path, "--size", "160x120", "--layout", "lattice"],
+            &["--appearance", replacement_path, "--size", "160x120", "--layout", "stacked"],
         )
         .unwrap();
         assert_eq!(explicit.dimensions(), (160, 120));

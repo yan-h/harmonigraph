@@ -17,7 +17,7 @@ I have tested it only on macOS with Bitwig Studio.
 - **Lattice.** Incoming MIDI notes are organized by pitch class and register on a tunable [Tonnetz](https://en.wikipedia.org/wiki/Tonnetz), making interval shapes and harmonic distance visible while I compose.
 - **Spectrogram.** A live spectrum analyzer and scrolling spectrogram with overlaid piano roll.
 - **Configuration.** Camera, lattice detail, frequency range, colors, lighting, pane visibility and layout.
-- **Video.** Records performance data and audio for [offline rendering](docs/offline-rendering.md) at any resolution, frame rate or layout.
+- **Video.** Records performance data and audio for [offline rendering](docs/offline-rendering.md) at any resolution and frame rate, with the captured Lattice/Analyzer framing.
 - **Adaptive tuning (experimental, CLAP only).** A separate [Tune note effect](docs/adaptive-tuning.md) adjusts new notes from harmonic context shared by a Harmonigraph Hub.
 
 See the [settings guide](docs/settings.md) for controls and units.

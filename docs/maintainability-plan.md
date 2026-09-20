@@ -1,7 +1,7 @@
 # Long-term maintainability
 
 Last updated: 2026-09-19.
-Status: bounded first-batch implementation launched; six product removals accepted; coordinator authorized to merge in-scope PRs after checks and review.
+Status: the named first-batch implementation is in place; final integration verification and build handoff are recorded in #954.
 
 ## Start here
 
@@ -31,11 +31,15 @@ nested settings coverage ([B1, #980](https://github.com/yan-h/harmonigraph/pull/
 recording parity ([B2, #979](https://github.com/yan-h/harmonigraph/pull/979)) and tracing cleanup ([D2, #981](https://github.com/yan-h/harmonigraph/pull/981)) have landed.
 Spacing retirement ([C5, #982](https://github.com/yan-h/harmonigraph/pull/982)) and separate-WAV/dormant export-field retirement ([C1, #983](https://github.com/yan-h/harmonigraph/pull/983)) have also landed.
 Next-note outline retirement ([C4, #984](https://github.com/yan-h/harmonigraph/pull/984)) has landed.
-Shared setting rules (D1) are in progress;
-Playhead retirement (C2),
-extra export-layout retirement (C3),
-combined retained-workflow verification and the final built pair remain.
-Yan will run the merge audit manually later.
+Shared setting rules ([D1, #986](https://github.com/yan-h/harmonigraph/pull/986)) and Playhead retirement ([C2, #988](https://github.com/yan-h/harmonigraph/pull/988)) have landed.
+Extra public export-layout retirement ([C3, #974](https://github.com/yan-h/harmonigraph/issues/974)) completes the named implementation batch.
+Package PRs,
+combined retained-workflow verification,
+and the final combined plugin/offline build record belong in the existing [#954 index](https://github.com/yan-h/harmonigraph/issues/954).
+This checkpoint records the implementation and its evidence destination;
+it does not claim that final combined verification has already completed.
+Yan explicitly deferred the merge audit for a later manual run;
+ordinary PR review and final combined workflow checks still apply.
 The coordinator owns review and merge order;
 workers deliver draft PRs.
 Live package status and PR links stay in the existing issues.

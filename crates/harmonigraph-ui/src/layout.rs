@@ -8,28 +8,6 @@
 //! panes it places, is what lets the preview and the render be the same
 //! picture.
 //!
-//! A layout is a list of panes with fractional rectangles, so the same layout
-//! means the same picture at any output size:
-//!
-//! ```ron
-//! (
-//!     background: (0, 0, 0),
-//!     margin: 0.0,
-//!     gap: 0.0,
-//!     panes: [
-//!         (pane: Lattice,  rect: (0.0, 0.0, 0.68, 1.0)),
-//!         (pane: Spectral, rect: (0.68, 0.0, 1.0, 1.0)),
-//!     ],
-//! )
-//! ```
-//!
-//! `rect` is `(x0, y0, x1, y1)` as fractions of the frame, origin top-left.
-//! Panes are drawn in order, so a later one overlaps an earlier one — which is
-//! how you'd inset a small roll over a full-bleed lattice, if that's the look
-//! you want.
-
-use serde::{Deserialize, Serialize};
-
 use crate::{LatticeSide, Pane, RenderFrame};
 
 /// Default export density: roughly 1280 logical points across the frame.
@@ -47,34 +25,30 @@ pub fn export_pixels_per_point(size: [u32; 2]) -> f32 {
 }
 
 /// One pane and the slice of the frame it fills.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug)]
 pub struct Placement {
     pub pane: Pane,
     /// `(x0, y0, x1, y1)` in `0..1` of the frame, origin top-left.
     pub rect: (f32, f32, f32, f32),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Layout {
     /// Frame background, RGB. Shows through the margin and the gaps.
-    #[serde(default = "default_background")]
     pub background: (u8, u8, u8),
     /// Inset of the whole picture from the frame edge, in points.
-    #[serde(default)]
     pub margin: f32,
     /// Space between panes, in points. Applied as a half-gap inset on
     /// every pane edge that isn't already on the picture's boundary —
     /// which is close enough, and means adjacent panes get one gap
     /// between them rather than two.
     ///
-    /// Zero in every layout the plugin composes, and a hand-written `.ron`
-    /// wanting a gutter has to say so: a gap fills with `background`, and
+    /// Zero in every layout the plugin composes. A gap fills with `background`, and
     /// `background` matches a pane's bed only while that pane is UNLIT. The
     /// lattice's bed carries the glow's wash, so beside a lit lattice any
     /// gap at all reads as a dark bar down the seam — several shades under
     /// the pane it borders, at the one place in the frame the eye is already
     /// looking. No fixed colour fixes that; the wash is a dial.
-    #[serde(default)]
     pub gap: f32,
     pub panes: Vec<Placement>,
 }
@@ -86,14 +60,12 @@ fn default_background() -> (u8, u8, u8) {
     (r, g, b)
 }
 
-/// The layouts you get by name. Deliberately few: these are the two
-/// arrangements the panes were designed around, plus each pane alone.
-pub const PRESETS: [&str; 5] = ["side-by-side", "stacked", "lattice", "spectral", "spiral"];
+/// Public combined export arrangements.
+pub const PRESETS: [&str; 2] = ["side-by-side", "stacked"];
 
 impl Layout {
     /// A preset by name, or `None` if it isn't one.
     pub fn preset(name: &str) -> Option<Layout> {
-        let full = |pane| Placement { pane, rect: (0.0, 0.0, 1.0, 1.0) };
         let panes = match name {
             // The lattice leads and the Spectral pane takes a tall column
             // beside it. The pane draws at whatever orientation is SET, and
@@ -112,29 +84,9 @@ impl Layout {
                 Placement { pane: Pane::Lattice, rect: (0.0, 0.0, 1.0, 0.74) },
                 Placement { pane: Pane::Spectral, rect: (0.0, 0.74, 1.0, 1.0) },
             ],
-            "lattice" => vec![full(Pane::Lattice)],
-            "spectral" => vec![full(Pane::Spectral)],
-            // The spiral is a DISC, so it takes what it is given and centres
-            // itself in it; a composition wanting it beside something else is a
-            // hand-written `.ron`, which is what the `.ron` is for.
-            "spiral" => vec![full(Pane::Spiral)],
             _ => return None,
         };
         Some(Layout { background: default_background(), margin: 0.0, gap: 0.0, panes })
-    }
-
-    /// A preset name or a path to a `.ron` file.
-    pub fn load(spec: &str) -> Result<Layout, String> {
-        if let Some(preset) = Layout::preset(spec) {
-            return Ok(preset);
-        }
-        let text = std::fs::read_to_string(spec).map_err(|e| {
-            format!(
-                "layout {spec:?} is not a preset ({}) and could not be read: {e}",
-                PRESETS.join(", ")
-            )
-        })?;
-        ron::from_str(&text).map_err(|e| format!("layout {spec:?}: {e}"))
     }
 
     /// A two-pane composition of the lattice and the spectral pane, with the
@@ -351,15 +303,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_layout_round_trips_through_ron() {
-        let layout = Layout::preset("stacked").unwrap();
-        let text = ron::to_string(&layout).unwrap();
-        let back: Layout = ron::from_str(&text).unwrap();
-        assert_eq!(back.resolve(FRAME).len(), layout.resolve(FRAME).len());
-        assert_eq!(back.panes[0].rect, layout.panes[0].rect);
-    }
-
     /// The line goes down the middle of the gap and spans the shared edge —
     /// whichever way the two panes are arranged.
     #[test]
@@ -414,9 +357,12 @@ mod tests {
     /// face each other across a gap aren't neighbours either.
     #[test]
     fn only_neighbours_get_a_divider() {
-        for name in ["lattice", "spectral"] {
-            let layout = Layout::preset(name).unwrap();
-            assert!(layout.dividers(&layout.resolve(FRAME)).is_empty(), "{name}");
+        for pane in [Pane::Lattice, Pane::Spectral] {
+            let layout = Layout {
+                panes: vec![Placement { pane, rect: (0.0, 0.0, 1.0, 1.0) }],
+                ..Layout::split(LatticeSide::Left, 0.6)
+            };
+            assert!(layout.dividers(&layout.resolve(FRAME)).is_empty(), "{pane:?}");
         }
         // Two panes with a quarter of the frame between them: a gap that wide
         // is a composition choice, not a seam.

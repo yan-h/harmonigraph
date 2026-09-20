@@ -250,7 +250,7 @@ The flags worth knowing (`--help` lists them all):
 |---|---|
 | `--out` | `.mp4`/`.mov`/`.mkv` → ffmpeg; `.png` → numbered stills; `.rgba` → raw |
 | `--align` | where the soundtrack's first sample falls, in seconds of take time; `off` (the default) leaves it where its own clock says |
-| `--layout` | preset name or a `.ron` file (see below) |
+| `--layout` | `side-by-side` or `stacked`; omitted uses the captured placement and proportion |
 | `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect and Resolution, whose fresh short edge is 1440 |
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
 | `--fps` | default 60 |
@@ -334,40 +334,20 @@ Offline rendering does **not** reproduce the plugin's dock.
 It composes its own picture —
 no tab bars, no settings columns, and whatever proportions suit the piece.
 
-Five presets:
-`side-by-side` (lattice left, Spectral pane right —
-the arrangement the plugin's own default dock uses), `stacked`, `lattice`, `spectral`, `spiral` —
-the two arrangements the panes were designed around, plus each pane alone.
-The spiral is a disc, so it centres itself in the frame it is given, and a composition wanting it beside something else is a hand-written `.ron`.
+Without `--layout`, export uses the captured or overridden appearance's **Lattice placement** and **Proportion**, through the same `Layout::split` as the Video preview.
+Left, Right, Top and Bottom remain available, alongside aspect, resolution and every Analyzer orientation.
 
-A preset places the panes and nothing else:
-the Spectral pane renders at whichever orientation the take's own UI state carries, so a `side-by-side` render wants Top or Bottom picked in the pane before the take is recorded —
-its column is tall and narrow, and Left scrolls the spectrogram across the short side.
-Nothing infers it from the aspect, deliberately:
-a picture that changes with the size it is rendered at is not one you can dial in.
+Two combined CLI choices remain:
+`side-by-side` places the Lattice on the left at 68% width;
+`stacked` places it above the Analyzer at 74% height.
+These explicit presets replace placement and proportion for that export.
+They leave the captured Analyzer orientation and appearance unchanged.
+Nothing infers Analyzer orientation from the output aspect.
 
-For anything else, start from a preset and edit:
-
-```sh
-harmonigraph-offline --layout side-by-side --dump-layout > mine.ron
-harmonigraph-offline piece.take --layout mine.ron
-```
-
-```ron
-(
-    background: (14, 14, 18),
-    margin: 0.0,
-    gap: 0.0,
-    panes: [
-        (pane: Lattice,  rect: (0.0, 0.0, 0.68, 1.0)),
-        (pane: Spectral, rect: (0.68, 0.0, 1.0, 1.0)),
-    ],
-)
-```
-
-`rect` is `(x0, y0, x1, y1)` as **fractions of the frame**, origin top-left —
-so one layout means the same picture at 1080p and at 4K.
-Panes draw in order, so a later one overlaps an earlier one if you want a roll inset over a full-bleed lattice.
+The public `lattice`, `spectral` and `spiral` single-pane presets, custom RON layout files and `--dump-layout` are retired.
+Old invocations fail visibly and name the retained choices;
+editor panes, saved dock layouts and the captured Video frame are unaffected.
+Internal pixel fixtures and scratch look prototypes still compose a single pane through the offline test harness.
 
 ## What is and isn't captured
 
