@@ -12,6 +12,7 @@ on:
       - Cargo.lock
       - crates/harmonigraph-render/**
       - crates/harmonigraph-plugin/src/editor.rs
+      - crates/harmonigraph-plugin/src/editor/**
       - crates/harmonigraph-offline/**
       - crates/harmonigraph-standalone/src/main.rs
   workflow_dispatch:
