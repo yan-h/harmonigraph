@@ -19,6 +19,17 @@ use harmonigraph_render::wgpu;
 /// without a swizzle; the two render identically.
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+/// Full-frame composition for pixel fixtures and scratch look prototypes.
+/// This is test-only; the public export interface composes both panes.
+#[cfg(test)]
+pub(crate) fn single_pane(pane: harmonigraph_ui::Pane) -> harmonigraph_ui::Layout {
+    use harmonigraph_ui::{LatticeSide, Layout, Placement};
+    Layout {
+        panes: vec![Placement { pane, rect: (0.0, 0.0, 1.0, 1.0) }],
+        ..Layout::split(LatticeSide::Left, 0.5)
+    }
+}
+
 /// Everything needed to render frames, set up once.
 pub struct Renderer {
     device: wgpu::Device,
@@ -338,7 +349,7 @@ mod tests {
     /// is a claim about what light does BETWEEN nodes; the note Fade and the
     /// light's own clock are off, so one frame is the whole picture rather than
     /// a shot of an envelope part way through; and the ground is the skin's
-    /// panel rather than the preset's near-black, which is what a wash is
+    /// panel rather than the fixture's near-black, which is what a wash is
     /// actually laid over in the DAW.
     ///
     /// The Strength comes down as the Reach goes up, deliberately: the light is
@@ -352,7 +363,7 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_node_glow_draws_a_picture() {
-        use harmonigraph_ui::{draw_pane, Layout, PictureState};
+        use harmonigraph_ui::{draw_pane, PictureState};
 
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
@@ -366,9 +377,9 @@ mod tests {
         harmonigraph_ui::theme::apply_theme(&context);
         context.set_pixels_per_point(PPP);
 
-        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
         let mut state = PictureState::new(FORMAT);
-        // The DAW's own lattice ground rather than the preset's near-black, so
+        // The DAW's own lattice ground rather than the fixture's near-black, so
         // what the light lands on here is what it lands on there.
         state.set_background((24, 25, 29));
         state.runtime.frame_params.fade_time = 0.0;
@@ -452,7 +463,7 @@ mod tests {
     /// and a wide halo on every node of a chord saturates to white at a strength
     /// that was right for an accent; the light's own clock off, so one frame is
     /// the whole picture rather than a shot of the ballistics; the DAW's ground
-    /// rather than the preset's near-black; and a zoom that puts one node's
+    /// rather than the fixture's near-black; and a zoom that puts one node's
     /// slices across a good part of the frame.
     ///
     /// `PROBE_TAG` names the shots, which is what makes a BEFORE and an AFTER of
@@ -465,7 +476,7 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_shadow_against_the_octave_gap() {
-        use harmonigraph_ui::{draw_pane, Layout, PictureState};
+        use harmonigraph_ui::{draw_pane, PictureState};
 
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
@@ -479,7 +490,7 @@ mod tests {
         harmonigraph_ui::theme::apply_theme(&context);
         context.set_pixels_per_point(PPP);
 
-        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
         let mut state = PictureState::new(FORMAT);
         state.set_background((24, 25, 29));
         state.runtime.frame_params.fade_time = 0.0;
@@ -548,7 +559,7 @@ mod tests {
     /// unplayed lattice draws and a chord over it is exactly the thing that
     /// hides it; the camera pulled back so several rows are on screen, a field
     /// being a claim about regularity rather than about one marker; and the
-    /// skin's panel as the ground rather than the preset's near-black, because
+    /// skin's panel as the ground rather than the fixture's near-black, because
     /// the markers are the ground's own grey a step above it and the whole
     /// judgement is how far above.
     ///
@@ -569,7 +580,7 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_resting_markers_draw_a_picture() {
-        use harmonigraph_ui::{draw_pane, Layout, PictureState};
+        use harmonigraph_ui::{draw_pane, PictureState};
 
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
@@ -583,7 +594,7 @@ mod tests {
         harmonigraph_ui::theme::apply_theme(&context);
         context.set_pixels_per_point(PPP);
 
-        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
         let placements = layout.resolve(points);
@@ -622,7 +633,7 @@ mod tests {
             let mut state = PictureState::new(FORMAT);
             state.appearance.view.show_labels = true;
             state.appearance.view.note_names = names;
-            // The DAW's own lattice ground rather than the preset's near-black:
+            // The DAW's own lattice ground rather than the fixture's near-black:
             // the markers are a step above the panel and nothing else here says
             // how big a step that reads as.
             state.set_background((24, 25, 29));
@@ -702,7 +713,7 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_lattice_shadows_draw_a_picture() {
-        use harmonigraph_ui::{draw_pane, Layout, PictureState};
+        use harmonigraph_ui::{draw_pane, PictureState};
 
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
@@ -716,7 +727,7 @@ mod tests {
         harmonigraph_ui::theme::apply_theme(&context);
         context.set_pixels_per_point(PPP);
 
-        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
         let placements = layout.resolve(points);
@@ -794,7 +805,7 @@ mod tests {
     /// fixture sets its own rather than taking the layout's.
     #[test]
     fn a_node_with_a_sheet_behind_it_is_still_a_lamp() {
-        use harmonigraph_ui::{draw_pane, Layout, PictureState};
+        use harmonigraph_ui::{draw_pane, PictureState};
 
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
@@ -808,7 +819,7 @@ mod tests {
         harmonigraph_ui::theme::apply_theme(&context);
         context.set_pixels_per_point(PPP);
 
-        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
         let placements = layout.resolve(points);
@@ -923,7 +934,7 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_audio_ring_draws_a_picture() {
-        use harmonigraph_ui::{draw_pane, Layout, PictureState};
+        use harmonigraph_ui::{draw_pane, PictureState};
 
         const SIZE: [u32; 2] = [1200, 1000];
         // Retina-ish, so the wedges and the note names are resolved rather
@@ -943,7 +954,7 @@ mod tests {
         harmonigraph_ui::theme::apply_theme(&context);
         context.set_pixels_per_point(PPP);
 
-        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
         let mut state = PictureState::new(FORMAT);
         state.set_background(layout.background);
         // Just intonation, which is what the panel is aimed at: a partial of a
@@ -1129,7 +1140,7 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn a_released_note_lets_go_of_its_light() {
-        use harmonigraph_ui::{draw_pane, Layout, PictureState};
+        use harmonigraph_ui::{draw_pane, PictureState};
 
         const SIZE: [u32; 2] = [900, 900];
         const PPP: f32 = 2.0;
@@ -1147,7 +1158,7 @@ mod tests {
         harmonigraph_ui::theme::apply_theme(&context);
         context.set_pixels_per_point(PPP);
 
-        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
         let placements = layout.resolve(points);
@@ -1245,7 +1256,7 @@ mod tests {
     /// The names are OFF, a marker being what a name replaces
     /// (`derive_pluses`): with them on, every position this is about is named
     /// and ships no cross at all. The ground is the skin's panel rather than
-    /// the preset's near-black, which is what the field is actually read
+    /// the fixture's near-black, which is what the field is actually read
     /// against.
     ///
     /// ```text
@@ -1254,7 +1265,7 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_marker_depth_order_draws_a_picture() {
-        use harmonigraph_ui::{draw_pane, Layout, PictureState};
+        use harmonigraph_ui::{draw_pane, PictureState};
 
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
@@ -1268,7 +1279,7 @@ mod tests {
         harmonigraph_ui::theme::apply_theme(&context);
         context.set_pixels_per_point(PPP);
 
-        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
         let placements = layout.resolve(points);

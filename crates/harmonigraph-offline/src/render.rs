@@ -581,7 +581,7 @@ mod tests {
         state.appearance.spectrum.show_roll = false;
         take.header.appearance = Some(state.appearance.serialize());
         let settings = Settings {
-            layout: Layout::preset("spectral").unwrap(),
+            layout: crate::frames::single_pane(harmonigraph_ui::Pane::Spectral),
             fps: 30_000.0 / 1001.0,
             start: 7.125 + 0.41731,
             end: 7.125 + 1.4,
@@ -622,7 +622,7 @@ mod tests {
     fn a_whole_video_spectrogram_draws_the_render_window_as_its_span() {
         let mut audio = transient_audio();
         let settings = Settings {
-            layout: Layout::preset("spectral").unwrap(),
+            layout: crate::frames::single_pane(harmonigraph_ui::Pane::Spectral),
             start: 7.125,
             end: 7.125 + 1.4,
             audio_start: 7.125,
@@ -885,7 +885,7 @@ mod tests {
             // The full-pane preset, because the cloud layer is drawn over the
             // spectrogram and nothing else — a layout that gives it a third of
             // a 320-point frame measures the other two thirds.
-            layout: Layout::preset("spectral").unwrap(),
+            layout: crate::frames::single_pane(harmonigraph_ui::Pane::Spectral),
             ..settings()
         };
         let run = |take: &Take| {
@@ -936,7 +936,7 @@ mod tests {
     #[test]
     fn lattice_atmosphere_requires_note_light_in_export() {
         let settings = Settings {
-            layout: Layout::preset("lattice").unwrap(),
+            layout: crate::frames::single_pane(harmonigraph_ui::Pane::Lattice),
             fps: 2.0,
             end: 3.0,
             ..settings()
@@ -972,7 +972,7 @@ mod tests {
     fn spectral_shadows_agree_with_the_shared_editor_path_at_every_export_scale() {
         for ppp in [1.0f32, 1.5, 2.0, 4.0] {
             let settings = Settings {
-                layout: Layout::preset("spectral").expect("the spectral preset exists"),
+                layout: crate::frames::single_pane(harmonigraph_ui::Pane::Spectral),
                 size: [(320.0 * ppp).round() as u32, (200.0 * ppp).round() as u32],
                 pixels_per_point: ppp,
                 fps: 2.0,

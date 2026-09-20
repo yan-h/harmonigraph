@@ -114,9 +114,7 @@ pub(crate) fn render_pane(
             // Unreachable, and here for the match rather than for the picture:
             // this preview composes `Layout::split`, which places the lattice
             // and the Analyzer and nothing else, so the Video panel cannot
-            // preview a spiral at all. The `spiral` layout preset is
-            // render-only, and a frame that wants one beside something else is
-            // a hand-written `.ron`.
+            // preview a spiral at all. Spiral remains an editor pane.
             //
             // Drawn rather than left as a `todo!()` so that whatever reaches
             // here if `Layout::split` ever grows a spiral gets the pane instead

@@ -74,10 +74,8 @@ pub struct AudioSpectrum {
 /// preview, and offline the placement's index in the layout (see
 /// [`draw_pane`](crate::draw_pane)).
 ///
-/// Grown on first sight of an id rather than fixed at the two the editor draws,
-/// because a hand-written offline layout names as many Spectral placements as
-/// it likes and each one folds a grid of its own: the slab width a fold settles
-/// on comes off the pane's own depth in points, so two placements at different
+/// Each surface folds a grid of its own: the slab width comes off the pane's
+/// own depth in points, so two placements at different
 /// sizes sharing one surface would each invalidate the other's grid every
 /// frame.
 ///

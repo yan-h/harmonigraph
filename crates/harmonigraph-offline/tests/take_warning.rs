@@ -76,3 +76,40 @@ fn a_take_with_a_hole_warns_before_the_command_line_is_judged() {
     assert!(complaint > 0, "the command line is judged after the take is read: {stderr}");
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+/// Retired names and a readable formerly valid file all fail at the public
+/// boundary; none can silently become a combined export or a file read.
+#[test]
+fn retired_layout_interfaces_fail_visibly() {
+    let directory = std::env::temp_dir()
+        .join(format!("harmonigraph-offline-retired-layouts-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let take = directory.join("take.take");
+    take_with_a_gap(&take);
+    let custom = directory.join("custom.ron");
+    std::fs::write(
+        &custom,
+        "(background:(0,0,0),margin:0.0,gap:0.0,panes:[(pane:Lattice,rect:(0.0,0.0,1.0,1.0))])",
+    )
+    .unwrap();
+    for name in ["lattice", "spectral", "spiral", custom.to_str().unwrap()] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_harmonigraph-offline"))
+            .arg(&take)
+            .args(["--layout", name])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{name} was accepted");
+        assert!(stderr.contains("unknown layout") && stderr.contains(name), "{stderr}");
+        assert!(stderr.contains("side-by-side or stacked"), "{stderr}");
+    }
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_harmonigraph-offline"))
+        .arg("--dump-layout")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown option") && stderr.contains("--dump-layout"), "{stderr}");
+    assert!(output.stdout.is_empty(), "the removed dump interface still emitted a layout");
+    std::fs::remove_dir_all(directory).unwrap();
+}

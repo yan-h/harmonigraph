@@ -89,7 +89,7 @@ three picked looks that are one construction at different settings is a build pl
 - One builder at a time in a shader file.
   The coordinator stays out of the code, reviews evidence, and commits;
   enter the worktree before spawning the builder.
-- The builder proves the port **by picture**: the plugin's render of each picked cell beside the prototype's, through the offline frame harness (a scratch `#[cfg(test)]` on `crate::frames::Renderer` with `Layout::preset("spectral")` and real audio, saved with `image::save_buffer`; delete it before committing).
+- The builder proves the port **by picture**: the plugin's render of each picked cell beside the prototype's, through the offline frame harness (a scratch `#[cfg(test)]` on `crate::frames::Renderer` with `crate::frames::single_pane(harmonigraph_ui::Pane::Spectral)` and real audio, saved with `image::save_buffer`; delete it before committing).
   Compare structure, not colour — the kit's palette is not the plugin's.
 - What the existing look's golden frames prove is that the new style did not disturb it: they pass UNBLESSED or something is wrong.
 - Measure cost against the look it sits beside, back to back, and report it rather than quietly trading the look for speed.

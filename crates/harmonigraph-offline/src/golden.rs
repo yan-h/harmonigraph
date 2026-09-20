@@ -56,7 +56,7 @@
 use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS};
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_take::{Header, NoteKind, NoteRecord, Take};
-use harmonigraph_ui::{Layout, PictureState, SpectrogramRender};
+use harmonigraph_ui::{PictureState, SpectrogramRender};
 
 use crate::render::{render, Settings};
 use crate::replay::Replay;
@@ -165,7 +165,7 @@ fn probe_audio() -> Audio {
 
 /// One golden frame: the pane's size and what it is dialled to.
 struct Shot {
-    /// Output pixels. The `spectral` preset is full-bleed, so the height IS the
+    /// Output pixels. The spectral fixture is full-bleed, so the height IS the
     /// pitch axis and decides the image's rows.
     size: [u32; 2],
     /// The displayed pitch range, in MIDI. Which arm of the row read runs is
@@ -283,7 +283,7 @@ impl Shot {
 
     fn settings(&self) -> Settings {
         Settings {
-            layout: Layout::preset("spectral").expect("the spectral preset exists"),
+            layout: crate::frames::single_pane(harmonigraph_ui::Pane::Spectral),
             size: self.size,
             pixels_per_point: 1.0,
             fps: FPS,
@@ -484,7 +484,7 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
         truncated: false,
         incomplete: None,
     };
-    let mut layout = Layout::preset("spectral").expect("the spectral preset exists");
+    let mut layout = crate::frames::single_pane(harmonigraph_ui::Pane::Spectral);
     if drawn == Drawn::Sliver {
         // A placement's rect is `(x0, y0, x1, y1)`, so the sliver is taken from
         // the pane's OWN top edge rather than the frame's. Floored at two
@@ -589,7 +589,7 @@ fn spectral_shadow_frame_ms(
         incomplete: None,
     };
     let settings = Settings {
-        layout: Layout::preset("spectral").expect("the spectral preset exists"),
+        layout: crate::frames::single_pane(harmonigraph_ui::Pane::Spectral),
         size: [640, 400],
         pixels_per_point: 2.0,
         fps: TIMING_FPS,
