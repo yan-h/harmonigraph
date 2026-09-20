@@ -174,7 +174,13 @@ Measured with `PROBE_CLOUD_TILE` at 3840x2160 and 2 px/pt, light plus paint, med
 The repeated row is 4% under the first, which is the run's noise; the ratios are 4x and 14x.
 The period costs nothing per frame, since the walk is paid once either way.
 Tiled, Watercolor is CHEAPER than Mosaic: what is left per pixel is two light taps for the wash and ten for the mosaic's sun.
-Both hold 144 Hz on a full 4K pane at NATIVE resolution, which `Cloud pixel size` could only buy with softness — so that dial, its target, its pass and its branch are the next retirement candidate once the tile has been judged.
+Both held 144 Hz in that original run on a full 4K pane at NATIVE resolution, which `Cloud pixel size` could only buy with softness — so that dial, its target, its pass and its branch are the next retirement candidate once the tile has been judged.
+
+The exact rotation was measured again on 2026-09-20 in the same 3840x2160 probe, with `P = 40` and forty frames per case.
+Against the same run's live walk, Mosaic paint fell from 14.23 to 2.66 ms and Watercolor from 37.54 to 3.65 ms: 5.3x and 10.3x.
+Yan then kept the rotation only on Watercolor because turning the Mosaic scale pile changed its look.
+Mosaic returns to the original square lookup measured at 2.67 ms above; Watercolor's extra inverse rotation and two vector rotations preserve its order-of-magnitude benefit.
+The pure rotation also returns P20's 1080-high wash bake from the stagger's 768² target to 512².
 
 - **What is baked** is the walk's output and never the tone, because the tone carries the sound.
 Mosaic: `face` and `to_centre`, one `Rgba16Float`.
@@ -185,7 +191,7 @@ Both styles run a second octave at a lacunarity of 2.1, so the fine octave tiles
 `P = 20` gives 42 and 18.
 A ragged noise at 2.8 was the third constraint until `Ragged` was retired (below).
 The noise's own second octave is at 2.07, which no `P` makes whole, so the tiled path runs it at 2.0 — the one constant the tile changes, and only when the tile is on.
-- **The key** is the style, `P`, the tile's texel size and the dials the walk reads: `Variety` for Mosaic; `Lobe shape`, `Fuzz` and `Pool` for Watercolor.
+- **The key** is the style, `P`, the tile's texel size, the Watercolor pane orientation and the dials the walk reads: `Variety` for Mosaic; `Lobe shape`, `Fuzz` and `Pool` for Watercolor.
 NOT the drift, the clock, the light, the palette, the softness, `Refraction`, `Relief`, `Cloud depth` or `Layers` — none of them reaches the baked channels, and the bake always walks the fine octave so `Layers` is a mix over channels already held.
 The size dials and the pane reach it only through the texel size, which is as fine as the pane draws a cell, rounded up to a multiple of 256 and capped at 2048, so a resize drag does not rebake on every frame.
 The tile is also carried across a rebuild of the light field's targets, which a zoom or a Span drag forces.
@@ -199,6 +205,14 @@ That is what makes "tiled matches walked" testable, up to bilinear resampling, h
 
 What it spends of "similar": up to half a texel of bilinear softening that varies with the drift's phase; half-float offsets, under a tenth of a pixel of lookup error; and visible REPETITION, which is the open question.
 At the fresh sizes a 4K pane is about 52 by 93 wash cells and 27 by 48 mosaic cells, so `P = 20` repeats the glob outlines 2.6 by 4.6 times (wash) and 1.4 by 2.4 times (mosaic), each repeat refracting different sound.
+
+The original square repetition lined those copies up on the same pitch rows, which made them easiest to find against long horizontal harmonics.
+Issue #992 first tried B10's ten-cell stagger, then replaced it with an exact 3-4-5 rotation of Watercolor's complete baked field.
+Mosaic keeps the original square recurrence because rotating its scale pile did not preserve the look.
+Watercolor's stored texture and every hash lattice inside it remain square and seamless; the read applies the inverse 36.87-degree rotation to its coordinates and turns the stored direction vectors forward with the picture.
+Its two repeat vectors are `(4P/5, 3P/5)` and `(-3P/5, 4P/5)` in `(time, pitch)`, so neither recurrence axis follows a pane axis.
+At `P = 20` the same geometry returns to a pitch row after 100 time cells; at `P = 40` it takes 200.
+The Watercolor rotation follows the pane's time and pitch axes when its orientation changes, and as an isometry it needs none of the extra tile resolution the stagger's shear did.
 Whether the eye finds that is Yan's call, and the dial exists so he can compare `P` against the live walk in the DAW.
 
 ### The alternative if repetition shows: a scrolling window
