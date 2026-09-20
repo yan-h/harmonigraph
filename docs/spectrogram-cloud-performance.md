@@ -146,6 +146,92 @@ That is where the design gets its edges:
 
 It stacks with lever 1, and lever 1 is the smaller change with the measured number, so it goes first.
 
+## Similar, not identical (2026-09-19)
+
+Everything above holds the picture EXACT: lever 1 defaults to native so the goldens stay byte-identical, lever 2 snaps the drift so a bake reproduces the live walk, and ring culling was refuted as an exact cull.
+Yan then asked the other question — what opens up if the texture only has to look SIMILAR — and the answer is that lever 2's three edges were all exactness, not the bake.
+
+**The walk's output is a fixed field that slides.** `cloud.drift` enters both styles only as `q = ... + cloud.drift`, a translation, and `cloud.time` appeared only inside `Rock`, which shipped at 0 and is now retired (below).
+So the drift does not belong in a cache key at all: it is a UV offset into a field that never changes.
+Snapping it, rebaking per step, spreading a 35 ms rebake over frames and losing the lever at `Cloud speed` 20x were the price of reproducing the live walk texel for texel.
+Sampled bilinearly at the fractional offset instead, the motion stays smooth and nothing is ever rebaked because of time.
+
+### The periodic tile (built: the `Cloud tile` dial, PR #991)
+
+Wrap the cell hash every `P` cells and the field is periodic, so ONE tile of `P` by `P` cells, baked once and read through a repeat sampler, is the whole plane.
+`Cloud tile` is `P` in cells: 0 is off — the live walk, and the fresh value, so the goldens do not move — and 20 and 40 are the two periods on offer.
+
+Measured with `PROBE_CLOUD_TILE` at 3840x2160 and 2 px/pt, light plus paint, median ms per frame, Bitwig on the same GPU:
+
+| Case | Mosaic | Watercolor |
+| --- | --- | --- |
+| tile off, native `Cloud pixel size` | 11.65 | 33.14 |
+| `Cloud tile` 20 | 2.72 | 2.35 |
+| `Cloud tile` 40 | 2.67 | 2.39 |
+| `Cloud tile` 20 with `Cloud pixel size` 1.5 pt | 1.88 | 2.00 |
+| tile off, repeated at the end of the run | 11.20 | 31.84 |
+
+The repeated row is 4% under the first, which is the run's noise; the ratios are 4x and 14x.
+The period costs nothing per frame, since the walk is paid once either way.
+Tiled, Watercolor is CHEAPER than Mosaic: what is left per pixel is two light taps for the wash and ten for the mosaic's sun.
+Both hold 144 Hz on a full 4K pane at NATIVE resolution, which `Cloud pixel size` could only buy with softness — so that dial, its target, its pass and its branch are the next retirement candidate once the tile has been judged.
+
+- **What is baked** is the walk's output and never the tone, because the tone carries the sound.
+Mosaic: `face` and `to_centre`, one `Rgba16Float`.
+Watercolor: per octave the finished look offset (`look - r`, after feather and bleed) and the pigment, plus the fine octave's `cover` — seven channels, two `Rgba16Float`.
+The per-frame shader keeps the light taps, the lean, the shading and the palette, which is the measured 1.35 ms (Mosaic) and 3.15 ms (Watercolor) residue from the throwaway-edit table above, plus one or two coherent texture reads.
+- **Why `P` is a multiple of 10.**
+Both styles run a second octave at a lacunarity of 2.1, so the fine octave tiles when `2.1 * P` is an integer; the wash's warp and ragged noise lattices sit at 0.9 and 2.8 of a cell, which want `0.9 * P` and `2.8 * P` whole as well.
+`P = 20` gives 42, 18 and 56.
+The noise's own second octave is at 2.07, which no `P` makes whole, so the tiled path runs it at 2.0 — the one constant the tile changes, and only when the tile is on.
+- **The key** is the style, `P`, the tile's texel size and the dials the walk reads: `Variety` for Mosaic; `Lobe shape`, `Ragged`, `Fuzz` and `Pool` for Watercolor.
+NOT the drift, the clock, the light, the palette, the softness, `Refraction`, `Relief`, `Cloud depth` or `Layers` — none of them reaches the baked channels, and the bake always walks the fine octave so `Layers` is a mix over channels already held.
+The size dials and the pane reach it only through the texel size, which is as fine as the pane draws a cell, rounded up to a multiple of 256 and capped at 2048, so a resize drag does not rebake on every frame.
+The tile is also carried across a rebuild of the light field's targets, which a zoom or a Span drag forces.
+- **`Rock` and `Grain` were retired with it, on Yan's call.**
+`Rock` was the only reader of the clock in either walk and could not be baked — each dome turns at its own hashed rate, and interpolating a RATE across a bisector spins the phase without bound — so keeping it meant keeping a live-walk fallback for a sway worth at most 5% of tone over a 12 to 31 s cycle, and about 1% wherever the sound's light is flat.
+`Grain` shipped at 0 and still ran a smoothstep per visited cell to count the pile.
+Removing `Rock`'s accumulator moved `spectrogram-zoomed-in` by 1/255 on three pixels: the Metal compiler scheduling the dome ring differently, isolated by putting a dead accumulator back, which restores the frame.
+- **Inside the first period the tile IS the live field**, since a wrapped hash equals the unwrapped one for cells in `[0, P)`.
+That is what makes "tiled matches walked" testable, up to bilinear resampling, half-float storage and the 2.07 to 2.0 change.
+`a_tiled_cloud_draws_the_live_walk_inside_its_first_period` holds it: mean difference 0.02/255 for the mosaic and 0.37/255 for the wash, worst channel 1 and 21 — the 21 is where the wash's stored offset steps because the glob UNDER the visible one changes, a discontinuity the live walk has too and one texel of bilinear smooths.
+
+What it spends of "similar": up to half a texel of bilinear softening that varies with the drift's phase; half-float offsets, under a tenth of a pixel of lookup error; and visible REPETITION, which is the open question.
+At the fresh sizes a 4K pane is about 52 by 93 wash cells and 27 by 48 mosaic cells, so `P = 20` repeats the glob outlines 2.6 by 4.6 times (wash) and 1.4 by 2.4 times (mosaic), each repeat refracting different sound.
+Whether the eye finds that is Yan's call, and the dial exists so he can compare `P` against the live walk in the DAW.
+
+### The alternative if repetition shows: a scrolling window
+
+A pane-sized bake with toroidal addressing, walking only the strip the drift newly exposes each frame — a column every ten frames or so at `Cloud speed` 1x, two columns a frame at 20x.
+It never repeats.
+What it costs over the tile: about 130 MB of `Rgba16Float` at native 4K for Watercolor (it stacks with a coarser bake, as `Cloud pixel size` does); a full 35 ms walk on every frame of a dial drag or a pane resize, which is no worse than today; and incremental validity state — which strips are current — that is exactly the carry-forward cache this repo's `CLAUDE.md` warns about.
+Unbuilt and unmeasured.
+Try it only if the tile's repetition is rejected at every `P` that fits in memory.
+
+### Thinning the walk itself: dominated, and why
+
+Recorded so they are not re-derived.
+Neither is built or measured beyond the arithmetic here, and the bake removes the walk they would only shorten.
+
+- **Watercolor, a half-cell-centred 4x4 ring** (`base = floor(r - 0.5)`, visit `0..3`): 16 visits for 25, about 37 ms to about 25.
+The nearest unvisited centre is then `2.0 - (JITTER / 2) * sqrt(2) = 1.717` away, and the reach bound carries `RADIUS_MAX * (1 + RAGGED)`, so `RADIUS_MAX` falls from 1.66 to 1.32 at the shipped `RAGGED` and the radius band from 1.63:1 to about 1.3:1.
+That band is the "different sized globs" the wash was asked to be, so this is a look regression for a third of the walk.
+A plain `WASH_RING = 1` measured 19.7 ms, but it breaks the reach proof and draws steps on the cell grid — not a similar picture, a broken one.
+- **Mosaic, the fine octave replaced by a cheap noise gradient.**
+The fine octave is half the walk, about 5.5 ms, and contributes only slope at a gain of 0.22.
+Four hashes for nine hash-sqrt-exp visits would save perhaps 4 of 13 ms.
+- **Updating the tone at a lower rate, checkerboarding, temporal reprojection.**
+The tone reads the sound, so a stale tone lags the music; the walk is the only part safe to hold, and holding it is the bake.
+
+### Open questions for whoever continues
+
+1. Does repetition read at `P = 20` and `P = 40`, on both styles, over real music and at `Cloud speed` 1x and 20x? (Yan's eye; the `Cloud tile` dial.)
+2. Does the drift-phase softening shimmer at `Fuzz` 0 and on Mosaic's creases? If it does, bake at 1.5x texel density before reaching for anything cleverer.
+3. Which `Cloud tile` becomes the default, and whether it stays a dial at all once a period is picked — a default change moves the goldens and owes a regenerated Metal corpus.
+4. If the tile becomes the default: retire `Cloud pixel size`, and retire the live walk with it? The live walk is then only the reference the first-period test compares against.
+5. `Ragged` is retired in a PR stacked on #991 (it ships at 1.0, so it moves the default wash). The reach bound then stops carrying `(1 + RAGGED)`, which leaves room for a wider radius band than 1.63:1 — a look change for Yan's eye.
+6. The scrolling window above, only if 1 fails.
+
 ## Source map at `8b4edf4e`
 
 - The two walks: `crates/harmonigraph-render/src/shaders/spectrogram.wgsl`, `dome_octave` / `cloud_domes` and `wash_glob` / `wash_scan`.

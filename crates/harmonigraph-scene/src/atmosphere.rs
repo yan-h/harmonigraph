@@ -84,6 +84,21 @@ pub const CLOUD_PIXEL_MIN: f32 = 0.5;
 /// See [`CLOUD_PIXEL_MIN`].
 pub const CLOUD_PIXEL_MAX: f32 = 4.0;
 
+/// The top of [`SpectralAtmosphere::cloud_tile`] and the step it lands on, so
+/// the bar offers OFF and two periods and nothing between them.
+///
+/// **A period is not a free number.** Both textures hash on more than one
+/// lattice — a second octave at a lacunarity of 2.1, and for the wash two shared
+/// noises at 0.9 and 2.8 cells — and a tile only closes when every one of those
+/// products is a whole number of ITS own cells. That makes the multiples of ten
+/// the candidates, which `the_tile_period_tiles_every_lattice` holds against the
+/// shipped shader text. Twenty and forty are the two worth comparing: below
+/// twenty a 4K pane repeats the same globs five times across, and above forty
+/// the tile stops fitting in the texels the renderer will spend on it.
+pub const CLOUD_TILE_MAX: f32 = 40.0;
+/// See [`CLOUD_TILE_MAX`].
+pub const CLOUD_TILE_STEP: f32 = 20.0;
+
 /// Bounds shared by the [`SpectralAtmosphere::pitch_softness`] control and sanitizer.
 pub const PITCH_SOFTNESS_MIN: f32 = 0.0;
 /// See [`PITCH_SOFTNESS_MIN`].
@@ -181,6 +196,26 @@ pub struct SpectralAtmosphere {
     /// [`CLOUD_PIXEL_MIN`]..=[`CLOUD_PIXEL_MAX`], snapped to halves the way
     /// [`Self::contours`] is snapped to whole numbers.
     pub cloud_pixel: f32,
+    /// How many cells the cloud's walk repeats over, 0 for the live walk. The
+    /// second dial here that is about cost rather than about the look, and the
+    /// one that spends REPETITION for it.
+    ///
+    /// Neither walk reads the sound and neither reads the clock: the drift
+    /// enters both as a plain translation of the cell coordinate, so what the
+    /// walk draws is a fixed field that slides. Wrap every cell hash every `P`
+    /// cells and that field becomes periodic, and one tile of `P` by `P` cells —
+    /// baked once, read through a repeating sampler — is the whole plane. What
+    /// is left per pixel is the light, the palette and the shading, which is
+    /// about a tenth of what the layer costs.
+    ///
+    /// What it spends is that the texture REPEATS: at 20 a 4K pane carries about
+    /// two and a half periods of the wash across and four and a half down, each
+    /// repeat refracting different sound. Whether the eye finds that is why this
+    /// is a dial and not a decision, and why it runs over
+    /// 0..=[`CLOUD_TILE_MAX`] in steps of [`CLOUD_TILE_STEP`] rather than over a
+    /// continuum — the question is whether a repeat reads at all, not where
+    /// between two periods it stops reading.
+    pub cloud_tile: f32,
     /// Size of one scale, as a multiplier on that size: how many of them cross
     /// a cloud moves the other way, because the count is divided by this.
     /// Runs over [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`].
@@ -208,10 +243,6 @@ pub struct SpectralAtmosphere {
     /// own `shade_floor` dial: the floor falls as the relief rises, since a
     /// floor decides nothing where there is no tilt to shade.
     pub scale_relief: f32,
-    /// How far each scale rocks on its own slow clock, so the shading on its
-    /// face sways even under a picture that is holding still. 0 leaves every
-    /// face where the sound puts it.
-    pub scale_rock: f32,
     /// Which texture the layer draws. `Mosaic` is the refracting scale clouds
     /// above; `Watercolor` is the glob field below, and every `wash_` setting
     /// belongs to it alone.
@@ -235,8 +266,6 @@ pub struct SpectralAtmosphere {
     pub wash_refract: f32,
     /// How dark the pigment pools along the edge a later glob lays over this one.
     pub wash_pool: f32,
-    /// How much extra pigment settles where globs are piled deepest.
-    pub wash_grain: f32,
     /// How opaque the finer octave's wash is over the coarse one. 0 draws the
     /// coarse octave alone and skips the finer one's work.
     pub wash_layers: f32,
@@ -288,13 +317,15 @@ impl Default for SpectralAtmosphere {
             // Native on a Retina display and on a plain one, so the fresh
             // picture is the full-resolution one it always was.
             cloud_pixel: 0.5,
+            // The live walk, so the fresh picture is the one the cells draw
+            // under every pixel and nothing repeats.
+            cloud_tile: 0.0,
             // 1.0x now draws what `cloud_scale` 0.5 against `scale_size` 2.2
             // drew, because `SCALE_CELLS` carries the retired dial's default.
             scale_size: 1.0,
             scale_variety: 0.5,
             scale_refract: 0.30,
             scale_relief: 0.35,
-            scale_rock: 0.0,
             cloud_style: CloudStyle::Mosaic,
             // J2 "dissolved" from the prototype's sheet J, translated: globs
             // about two harmonic lines across, the rim fully dissolved, the
@@ -305,7 +336,6 @@ impl Default for SpectralAtmosphere {
             wash_lobe: 0.55,
             wash_refract: 0.85,
             wash_pool: 0.5,
-            wash_grain: 0.0,
             wash_layers: 0.5,
         }
     }
@@ -351,19 +381,25 @@ impl SpectralAtmosphere {
             (clamp(self.cloud_pixel, fresh.cloud_pixel, CLOUD_PIXEL_MIN, CLOUD_PIXEL_MAX) * 2.0)
                 .round()
                 / 2.0;
+        // Three settings and nothing between them, for the reason
+        // [`CLOUD_TILE_MAX`] gives: a period between two of these does not tile
+        // at all, so a free drag would draw a seam on the cell grid rather than
+        // a coarser repeat.
+        self.cloud_tile = (clamp(self.cloud_tile, fresh.cloud_tile, 0.0, CLOUD_TILE_MAX)
+            / CLOUD_TILE_STEP)
+            .round()
+            * CLOUD_TILE_STEP;
         self.scale_size = clamp(self.scale_size, fresh.scale_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
         self.scale_refract =
             clamp(self.scale_refract, fresh.scale_refract, SCALE_REFRACT_MIN, SCALE_REFRACT_MAX);
         self.scale_relief = clamp(self.scale_relief, fresh.scale_relief, 0.0, 1.0);
-        self.scale_rock = clamp(self.scale_rock, fresh.scale_rock, 0.0, 1.0);
         self.wash_size = clamp(self.wash_size, fresh.wash_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.wash_fuzz = clamp(self.wash_fuzz, fresh.wash_fuzz, 0.0, 1.0);
         self.wash_ragged = clamp(self.wash_ragged, fresh.wash_ragged, 0.0, 1.0);
         self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);
         self.wash_refract = clamp(self.wash_refract, fresh.wash_refract, 0.0, 1.0);
         self.wash_pool = clamp(self.wash_pool, fresh.wash_pool, 0.0, 1.0);
-        self.wash_grain = clamp(self.wash_grain, fresh.wash_grain, 0.0, 1.0);
         self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
         self
     }

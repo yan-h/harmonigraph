@@ -44,7 +44,6 @@ constant float DOME_RADIUS_MAX = 1.32;
 constant float DOME_UNION = 9.0;
 constant float DOME_VARIETY_GAIN = 5.0;
 constant float DOME_FACE = 1.5122874;
-constant float ROCK_TILT = 0.3;
 constant float SUN_LEAN = 1.0;
 constant float SUN_KNEE = 0.03;
 constant float RELIEF_FLOOR_FALL = 3.22;
@@ -63,7 +62,6 @@ constant float WASH_WARP = 0.45;
 constant float WASH_WARP_SCALE = 0.9;
 constant float WASH_RAGGED_SCALE = 2.8;
 constant float WASH_POOL = 0.44;
-constant float WASH_GRAIN = 0.1;
 constant float WASH_POOL_WIDTH = 0.55;
 constant float WASH_SURF = 0.07;
 constant float WASH_PIG_DEPTH = 0.35;
@@ -72,6 +70,8 @@ constant float WASH_PIVOT = 0.45;
 constant float WASH_LIFT_A = 1.15;
 constant float WASH_LIFT_B = 0.16;
 constant float WASH_BLACK_KNEE = 0.175;
+constant float WASH_FBM_FINE = 2.07;
+constant float WASH_FBM_FINE_TILED = 2.0;
 
 uint stored(
     uint slot,

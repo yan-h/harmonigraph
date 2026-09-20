@@ -74,8 +74,8 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // the blob keeps; this is what holds the bar and the clamp to one pair of
     // numbers.
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, contour_strength, contours, contour_softness, analyzer_softness, note_glow,
-        cloud_depth, cloud_speed, cloud_pixel, scale_size, scale_variety, scale_refract, scale_relief, scale_rock,
-        wash_size, wash_fuzz, wash_ragged, wash_lobe, wash_refract, wash_pool, wash_grain, wash_layers);
+        cloud_depth, cloud_speed, cloud_pixel, cloud_tile, scale_size, scale_variety, scale_refract, scale_relief,
+        wash_size, wash_fuzz, wash_ragged, wash_lobe, wash_refract, wash_pool, wash_layers);
     saved.workspace.interaction.ui_scale = v;
     // These owners have NO ValueBar/RangeBar today. Still pass through their
     // real shared load boundary; zero Video visits below explicitly records
@@ -218,8 +218,8 @@ fn scenarios() -> Vec<Scenario> {
         // marks, audio reading, sevens, roll/note names, glow and shadow falloff.
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
-    // The wash's own inventory: it takes the five scale bars off the Analyzer
-    // page and puts eight of its own there, and nothing else on the page moves.
+    // The wash's own inventory: it takes the four scale bars off the Analyzer
+    // page and puts seven of its own there, and nothing else on the page moves.
     // Its own scenario rather than a flag on the loop above because the fresh
     // state selects the scales, so without this the eight are drawn by no case
     // here at all.

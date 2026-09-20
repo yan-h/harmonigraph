@@ -270,18 +270,15 @@ struct Cloud {
     // instead of walking the cells per pixel. 0 is the native path, which is
     // what every `cloud_pixel` at or under one device pixel takes.
     tone_baked: u32,
-    // Watercolour clouds. `drift` is the wash's offset in cloud units and
-    // `time` a bounded clock; the rest are the sanitized settings. The filter
-    // shader declares only the head of this struct, which is why these are
-    // appended rather than interleaved.
+    // Watercolour clouds. `drift` is the wash's offset in cloud units; the rest
+    // are the sanitized settings. The filter shader declares only the head of
+    // this struct, which is why these are appended rather than interleaved.
     drift: vec2<f32>,
-    time: f32,
     cloud_depth: f32,
     scale_size: f32,
     scale_variety: f32,
     scale_refract: f32,
     scale_relief: f32,
-    scale_rock: f32,
     // Which texture the layer draws: 0 the refracting scales above, 1 the
     // watercolour wash below. Nothing is shared between the two but the blurred
     // light, the palette, the clock and `cloud_depth`.
@@ -292,8 +289,12 @@ struct Cloud {
     wash_lobe: f32,
     wash_refract: f32,
     wash_pool: f32,
-    wash_grain: f32,
     wash_layers: f32,
+    // The tile's period in cells, 0 for the live walk. Above zero the cell a
+    // hash is taken at is folded onto `[0, tile_cells)` so the walk's output is
+    // periodic, `fs_cloud_tile` bakes one period of it, and the two paths below
+    // read that texture instead of walking the ring per pixel.
+    tile_cells: u32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -304,6 +305,18 @@ struct Cloud {
 /// binds a stand-in here, since wgpu validates every resource in a bound group
 /// against the attachments whether the shader reads it or not.
 @group(1) @binding(4) var cloud_tone: texture_2d<f32>;
+/// One period of the cell walk's OUTPUT, as `fs_cloud_tile` baked it, and bound
+/// on the same terms as `cloud_tone` above — the pass that renders into these
+/// two binds a stand-in here. The mosaic uses only the first (its `face` and
+/// `to_centre`); the wash fills both (see `WashField`).
+@group(1) @binding(5) var cloud_tile_a: texture_2d<f32>;
+@group(1) @binding(6) var cloud_tile_b: texture_2d<f32>;
+/// The tile's own sampler, and the only REPEATING one here: the whole point of
+/// the tile is that a cell coordinate divided by the period is a texture
+/// coordinate that wraps. `cloud_sampler` clamps, which every other read wants —
+/// a refracted lookup that ran off the pane must hold its edge rather than
+/// return the light from the far side of the picture.
+@group(1) @binding(7) var tile_sampler: sampler;
 
 // Scalar display intensity has no gamma transfer function. In particular,
 // the float source target must not take fs_heatmap_linear's RGB conversion.
@@ -491,14 +504,34 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 // Three qualities are on DIALS rather than decided here, because describing
 // which of them Yan wants has failed in words repeatedly: the NEGATIVE half of
 // `Refraction` carries the lookup from this round's continuous slope onto round
-// 1's flat per-glob patch, `Rock` is round 1's per-dome clock, and `Variety` is
-// how much the globs differ in size.
+// 1's flat per-glob patch, and `Variety` is how much the globs differ in size.
 const CLOUD_UNITS: f32 = 10.0;
 // How many dome cells cross one cloud unit at `Scale size` 1x. Carries the
 // retired `Cloud size` default: the shipped picture was 6 cells per unit over a
 // frame half this one's, and `6 / 2.2` at the old `Scale size` default is what
 // puts the same scales on the pane with the dial reading a plain 1x.
 const SCALE_CELLS: f32 = 6.0 / 2.2;
+
+// The cell a hash is taken at, folded onto the tile when one is being baked.
+//
+// This is the whole of what makes the walk periodic, and it is deliberately the
+// only thing that moves: a glob's or a dome's CENTRE is still built from the
+// unwrapped cell, so the field is the same field, read as if the hash had been
+// a periodic one all along. Inside `[0, period)` a wrapped cell IS the
+// unwrapped one, which is what makes "the tile matches the live walk" a
+// testable claim rather than a hope.
+//
+// WGSL's `%` truncates toward zero, so `-1 % 20` is `-1` and the second fold is
+// what lands a negative cell in the range. A period of 0 is the live walk and
+// returns the cell whole, so the untiled arithmetic is untouched; the branch is
+// on a uniform, so no two lanes disagree about taking it.
+fn wrap_cell(cell: vec2<i32>, period: i32) -> vec2<i32> {
+    if period <= 0 {
+        return cell;
+    }
+    let p = vec2<i32>(period);
+    return ((cell % p) + p) % p;
+}
 
 // One cell's dome, as four 10-bit fractions: where its centre sits inside the
 // cell, how wide it is, and how loudly it argues for its own territory.
@@ -586,11 +619,6 @@ const DOME_VARIETY_GAIN: f32 = 5.0;
 // as far as it is wide, and a dome at the base radius bends exactly what it did
 // before `Variety` existed.
 const DOME_FACE: f32 = 2.0 / (DOME_RADIUS * DOME_RADIUS);
-// How far off its own face a scale's normal may be rocked, at the top of the
-// dial. Round 1 rocked by 0.12 against a tilt vector that reached about 0.5, so
-// round 1's whole wobble sits around 40% of the way up this one and the rest of
-// the dial is past anything that has been seen.
-const ROCK_TILT: f32 = 0.30;
 // How far the sun may lean off vertical, and the gradient at which it has leant
 // half that far. `SUN_LEAN` of 1 against a height of 1 is 45 degrees, which is
 // where the sun stood before it was allowed to stand up.
@@ -612,9 +640,6 @@ struct Pile {
     // mean, so the reading turns over continuously where round 1's nearest-cell
     // pick stepped. That is the whole difference between the two.
     to_centre: vec2<f32>,
-    // Each dome's own slow wobble at unit amplitude, blended by the same
-    // weights, so the scales rock past each other rather than together.
-    rock: vec2<f32>,
 };
 
 // One octave of domes: a soft union over the 3x3 ring, with the union's own
@@ -630,16 +655,19 @@ struct Pile {
 // suppressed dome still covers its own cell and still has a face, it has just
 // lost the argument about whose face this pixel reads. The union is continuous
 // across the whole plane either way.
-fn dome_octave(r: vec2<f32>) -> Pile {
+//
+// `period` is the tile's own, in THIS octave's cells, and 0 for the live walk.
+// Only the hash's cell is folded by it; the centre below is built from the
+// unwrapped cell, so a dome at the tile's far edge still sits where it sits.
+fn dome_octave(r: vec2<f32>, period: i32) -> Pile {
     let base = floor(r);
     var weight = 0.0;
     var face = vec2<f32>(0.0);
     var to_centre = vec2<f32>(0.0);
-    var rock = vec2<f32>(0.0);
     for (var j = -1; j <= 1; j += 1) {
         for (var i = -1; i <= 1; i += 1) {
             let cell = vec2<i32>(base) + vec2<i32>(i, j);
-            let h4 = cloud_hash4(cell);
+            let h4 = cloud_hash4(wrap_cell(cell, period));
             let centre = base + vec2<f32>(f32(i), f32(j)) + 0.5
                 + (h4.xy - 0.5) * DOME_JITTER;
             // Each dome's own width. `Variety` opens the band from the single
@@ -659,9 +687,10 @@ fn dome_octave(r: vec2<f32>) -> Pile {
             let h = q * root;
             // Each dome's own say in the union, log-symmetric about the shared
             // weight so `Variety` gives one dome a neighbour's cell exactly as
-            // often as it takes its own away. Behind the knob for the same
-            // reason the rock is: an `exp2` per dome per pixel is real work for
-            // a gain that is exactly 1, and the branch is on a uniform.
+            // often as it takes its own away. Behind a knob because an `exp2`
+            // per dome per pixel is real work for a gain that is exactly 1, and
+            // the branch is on a uniform, so no two lanes ever disagree about
+            // taking it.
             var gain = 1.0;
             if cloud.scale_variety > 0.0 {
                 gain = exp2(DOME_VARIETY_GAIN * cloud.scale_variety * (2.0 * h4.w - 1.0));
@@ -678,17 +707,6 @@ fn dome_octave(r: vec2<f32>) -> Pile {
             weight += w;
             face += w * (-(DOME_FACE * root * radius)) * d;
             to_centre += w * (centre - r);
-            // Round 1's clock, rates and phases unchanged: each dome turns at
-            // its own rate from its own offset, so no two scales beat together.
-            // Behind the knob because a sine and a cosine per dome per pixel is
-            // real work to do for an amplitude of zero, and the branch is on a
-            // uniform, so no two lanes ever disagree about taking it.
-            if cloud.scale_rock > 0.0 {
-                rock += w * vec2<f32>(
-                    sin(cloud.time * (0.2 + 0.3 * h4.x) + h4.y * 6.2831853),
-                    cos(cloud.time * (0.25 + 0.2 * h4.y) + h4.x * 6.2831853),
-                );
-            }
         }
     }
     var out: Pile;
@@ -699,12 +717,10 @@ fn dome_octave(r: vec2<f32>) -> Pile {
     if weight <= 0.0 {
         out.face = vec2<f32>(0.0);
         out.to_centre = vec2<f32>(0.0);
-        out.rock = vec2<f32>(0.0);
         return out;
     }
     out.face = face / weight;
     out.to_centre = to_centre / weight;
-    out.rock = rock / weight;
     return out;
 }
 
@@ -721,9 +737,16 @@ fn dome_octave(r: vec2<f32>) -> Pile {
 const DOME_LACUNARITY: f32 = 2.1;
 const DOME_FINE_GAIN: f32 = 0.22;
 
-fn cloud_domes(r: vec2<f32>) -> Pile {
-    let coarse = dome_octave(r);
-    let fine = dome_octave(r * DOME_LACUNARITY + vec2<f32>(17.3, 5.9));
+fn cloud_domes(r: vec2<f32>, period: i32) -> Pile {
+    let coarse = dome_octave(r, period);
+    // The finer octave counts in its OWN cells, `DOME_LACUNARITY` of them to
+    // one coarse cell, so the tile closes on `DOME_LACUNARITY * period` of
+    // them. Rounded because 2.1 is not exact in binary and this has to be the
+    // whole number `the_tile_period_tiles_every_lattice` proves it is.
+    let fine = dome_octave(
+        r * DOME_LACUNARITY + vec2<f32>(17.3, 5.9),
+        i32(round(DOME_LACUNARITY * f32(period))),
+    );
     var out: Pile;
     let norm = 1.0 + DOME_FINE_GAIN;
     // the finer octave's face arrives in ITS cell units, so it carries the
@@ -739,9 +762,6 @@ fn cloud_domes(r: vec2<f32>) -> Pile {
     // the picture through the SLOPE above, which is where it belongs: it is
     // surface, not a scale.
     out.to_centre = coarse.to_centre;
-    // An amplitude rather than a derivative, so this takes the height's
-    // combination and not the slope's — no lacunarity.
-    out.rock = (coarse.rock + DOME_FINE_GAIN * fine.rock) / norm;
     return out;
 }
 
@@ -786,7 +806,24 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
     // so the knob reads as a size rather than as a frequency.
     let scale_units = SCALE_CELLS / cloud.scale_size;
     let scale_points = cloud.size.y / CLOUD_UNITS / scale_units;
-    let pile = cloud_domes(q * scale_units);
+    let r = q * scale_units;
+    // Either the ring walked under this pixel, or one tap into the period of it
+    // `fs_cloud_tile` already walked. The whole of the walk's output is the two
+    // vectors below, so the tile is one `Rgba16Float` read and the rest of this
+    // function — the refraction, the sun, the shading — is unchanged.
+    var pile: Pile;
+    if cloud.tile_cells > 0u {
+        let tile = textureSampleLevel(
+            cloud_tile_a,
+            tile_sampler,
+            r / f32(cloud.tile_cells),
+            0.0,
+        );
+        pile.face = tile.xy;
+        pile.to_centre = tile.zw;
+    } else {
+        pile = cloud_domes(r, 0);
+    }
 
     // THE REFRACTION. `DOME_FACE` has already put the offset in scale widths
     // whatever the scale size is, and in each glob's OWN width whatever
@@ -848,15 +885,7 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
     // The scales' normal, from the same face that bent the light, flattened by
     // `scale_relief` so 0 is a smooth body with no faces at all.
     let relief = cloud.scale_relief;
-    // Rocked off that face by `scale_rock`, on each dome's own clock, so the
-    // shading on a face sways over a picture that is holding still. The LOOKUP
-    // is left alone: a scale that rocked the light it refracts would swim, and
-    // what round 1 had was the shading travelling over a lens that stayed put.
-    var tilt = face;
-    if cloud.scale_rock > 0.0 {
-        tilt += pile.rock * (cloud.scale_rock * ROCK_TILT);
-    }
-    let normal = normalize(vec3<f32>(-tilt * relief, 1.0));
+    let normal = normalize(vec3<f32>(-face * relief, 1.0));
     // Diffuse is 1 on a flat face, so a relief of 0 leaves the light alone.
     //
     // The floor — how much a face turned right away still keeps — is DERIVED
@@ -968,7 +997,7 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
 // narrower radius band for the same picture.
 //
 // Both bounds are about globs that COVER the pixel, which is what the visible
-// glob, the one beneath it, `cover` and `tau` are all read off. The tide line is
+// glob, the one beneath it and `cover` are all read off. The tide line is
 // the one term that reads a glob it is OUTSIDE, and its window runs `POOL_WIDTH`
 // of a radius past the rim — further than this ring reaches. What holds that is
 // not the ring but the top-two rule in `wash_scan`: the front is chosen from the
@@ -1006,15 +1035,18 @@ const WASH_CELLS: f32 = 5.25;
 const WASH_LACUNARITY: f32 = 2.1;
 const WASH_FINE_OCCUPANCY: f32 = 0.20;
 
-// The tops of the four dials whose shader value is not a plain 0..1: the domain
-// warp in cells, the tide line, the grain, and the rim wobble above. The warp
-// draws bubbles at 0, lobes around 0.25 and flames past 0.55, so the dial stops
-// short of where it stops being paint.
+// The tops of the three dials whose shader value is not a plain 0..1: the domain
+// warp in cells, the tide line, and the rim wobble above. The warp draws bubbles
+// at 0, lobes around 0.25 and flames past 0.55, so the dial stops short of where
+// it stops being paint.
+//
+// The two SCALES beside them are the lattices the shared noises are read on, in
+// cells, and they are also two of the six numbers a tile period has to make a
+// whole number of — see `wrap_cell` and `wash_fbm`.
 const WASH_WARP: f32 = 0.45;
 const WASH_WARP_SCALE: f32 = 0.9;
 const WASH_RAGGED_SCALE: f32 = 2.8;
 const WASH_POOL: f32 = 0.44;
-const WASH_GRAIN: f32 = 0.10;
 
 // How wide the tide line lies outside the covering glob's boundary, and how
 // hard it comes on. A crescent on the OVERLAPPED glob hugging the outside of the
@@ -1093,20 +1125,30 @@ fn wash_hash(cell: vec2<i32>, salt: u32) -> vec3<f32> {
 // domain warp and the rim wobble — each evaluated once per pixel and then read
 // by every glob of every octave, which is what keeps neighbouring globs wobbling
 // together along a shared boundary instead of each wandering off on its own.
-fn wash_noise(p: vec2<f32>, salt: u32) -> f32 {
+fn wash_noise(p: vec2<f32>, salt: u32, period: i32) -> f32 {
     let b = floor(p);
     let f = p - b;
     let t = f * f * (3.0 - 2.0 * f);
     let i = vec2<i32>(b);
-    let n00 = wash_hash(i, salt).x;
-    let n10 = wash_hash(i + vec2<i32>(1, 0), salt).x;
-    let n01 = wash_hash(i + vec2<i32>(0, 1), salt).x;
-    let n11 = wash_hash(i + vec2<i32>(1, 1), salt).x;
+    let n00 = wash_hash(wrap_cell(i, period), salt).x;
+    let n10 = wash_hash(wrap_cell(i + vec2<i32>(1, 0), period), salt).x;
+    let n01 = wash_hash(wrap_cell(i + vec2<i32>(0, 1), period), salt).x;
+    let n11 = wash_hash(wrap_cell(i + vec2<i32>(1, 1), period), salt).x;
     return mix(mix(n00, n10, t.x), mix(n01, n11, t.x), t.y);
 }
-fn wash_fbm(p: vec2<f32>, salt: u32) -> f32 {
-    let coarse = wash_noise(p, salt);
-    let fine = wash_noise(p * 2.07 + vec2<f32>(13.1, -7.3), salt + 31u);
+// Where this noise's second octave sits, and the one constant the TILE changes.
+//
+// `WASH_FBM_FINE` is an irrational-looking 2.07 exactly so the two octaves never
+// line up, and no tile period makes `2.07 * P` a whole number of the finer
+// lattice's cells — so a tiled walk runs it at exactly 2 instead, which doubles
+// the period with it and tiles for every `P` the coarse lattice already does.
+// The live walk keeps 2.07 bit for bit; the branch is on a uniform.
+const WASH_FBM_FINE: f32 = 2.07;
+const WASH_FBM_FINE_TILED: f32 = 2.0;
+fn wash_fbm(p: vec2<f32>, salt: u32, period: i32) -> f32 {
+    let lacunarity = select(WASH_FBM_FINE, WASH_FBM_FINE_TILED, period > 0);
+    let coarse = wash_noise(p, salt, period);
+    let fine = wash_noise(p * lacunarity + vec2<f32>(13.1, -7.3), salt + 31u, period * 2);
     return (coarse + 0.5 * fine) / 1.5;
 }
 
@@ -1119,9 +1161,12 @@ struct Glob {
     order: f32,
 }
 
-// One cell's glob, at the pixel `r` — both in this octave's cell units.
-fn wash_glob(cell: vec2<i32>, salt: u32, r: vec2<f32>, wob: f32, occupancy: f32) -> Glob {
-    let g = wash_hash(cell, salt + 77u);
+// One cell's glob, at the pixel `r` — both in this octave's cell units. `period`
+// folds the cell the two hashes are taken at and nothing else, so the centre
+// below is still this cell's own (see `wrap_cell`).
+fn wash_glob(cell: vec2<i32>, salt: u32, r: vec2<f32>, wob: f32, occupancy: f32, period: i32) -> Glob {
+    let hashed = wrap_cell(cell, period);
+    let g = wash_hash(hashed, salt + 77u);
     var out: Glob;
     out.order = g.x;
     // A cell the occupancy draw missed carries no glob, and that is four cells
@@ -1130,8 +1175,8 @@ fn wash_glob(cell: vec2<i32>, salt: u32, r: vec2<f32>, wob: f32, occupancy: f32)
     // costs. Its rim is put out of reach, where `wash_scan` does exactly
     // nothing with it — `1 - 1e9` rounds to `-1e9` in an f32, which is the
     // value every running nearest starts at and no `>` passes, and it adds a
-    // clamped zero to the cover and the pile. So the early return draws the
-    // picture the uniform loop drew, bit for bit.
+    // clamped zero to the cover. So the early return draws the picture the
+    // uniform loop drew, bit for bit.
     //
     // The compare takes the boundary because `wash_hash` returns
     // `(n & 0x3ff) / 1023`, which is a CLOSED range: a channel can be exactly
@@ -1146,7 +1191,7 @@ fn wash_glob(cell: vec2<i32>, salt: u32, r: vec2<f32>, wob: f32, occupancy: f32)
         out.edge = 1.0e9;
         return out;
     }
-    let h = wash_hash(cell, salt);
+    let h = wash_hash(hashed, salt);
     let centre = vec2<f32>(cell) + 0.5 + (h.xy - 0.5) * WASH_JITTER;
     // Each glob draws its own radius from the whole band the proof above
     // allows. That was the top of a `Variety` dial, which is where it shipped
@@ -1177,16 +1222,13 @@ struct Wash {
     // covers it at all — the latter is what a finer wash is composited by.
     edge: f32,
     cover: f32,
-    // How many globs are piled over this pixel, smoothly counted. `Grain` reads
-    // the excess of this over its own average.
-    tau: f32,
 }
 
 // One octave, in ONE walk of the ring.
 //
-// Three things come out of it. The two highest-ordered globs COVERING the pixel
+// Two things come out of it. The two highest-ordered globs COVERING the pixel
 // are the one it shows and the one its rim dissolves into, and both are a plain
-// running top-two. The pile count is a sum. The FRONT — the glob painted after
+// running top-two. The FRONT — the glob painted after
 // the visible one whose arc is about to take this pixel — is the awkward one: it
 // is defined against an answer the same walk is still computing, since the
 // visible glob's order is not known until the last cell.
@@ -1212,7 +1254,7 @@ struct Wash {
 // where dropping the weakest crescents leaves the same texture with a softer
 // edge. That it also costs 2.8 ms a frame against a second walk's 6.5 is the
 // smaller half of the reason.
-fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, wob: f32) -> Wash {
+fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, wob: f32, period: i32) -> Wash {
     var out: Wash;
     // What an uncovered pixel would draw: its own light, unmoved, and no
     // pigment. Unreachable for the base octave while the constants hold — see
@@ -1224,7 +1266,6 @@ fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, wob: f32) -> Wash {
     out.near = -1.0e9;
     out.edge = 1.0;
     out.cover = 0.0;
-    out.tau = 0.0;
     var best = -1.0e9;
     var second = -1.0e9;
     // The two nearest globs the pixel is OUTSIDE, with the order each was
@@ -1238,11 +1279,9 @@ fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, wob: f32) -> Wash {
     let base = vec2<i32>(floor(r));
     for (var j = -WASH_RING; j <= WASH_RING; j += 1) {
         for (var i = -WASH_RING; i <= WASH_RING; i += 1) {
-            let glob = wash_glob(base + vec2<i32>(i, j), salt, r, wob, occupancy);
+            let glob = wash_glob(base + vec2<i32>(i, j), salt, r, wob, occupancy, period);
             let prox = 1.0 - glob.edge;
             out.cover = max(out.cover, clamp(prox / 0.05, 0.0, 1.0));
-            let body = clamp(prox / 0.10, 0.0, 1.0);
-            out.tau += body * body * (3.0 - 2.0 * body);
             if glob.edge < 1.0 {
                 if glob.order > best {
                     second = best;
@@ -1306,11 +1345,21 @@ struct Painted {
     hold: f32,
 };
 
-// One wash's tone: paper minus pigment, and nothing that adds light.
-//
-// `pane_per_cell` converts this octave's cell units to pane points, so a lookup
-// offset measured in cells lands where the glob's centre really is.
-fn wash_tone(f: Wash, r: vec2<f32>, pane_per_cell: f32, pt: vec2<f32>, average_pile: f32) -> Painted {
+// The half of one wash's tone that reads no light — which is the half a tile
+// can hold, since it is a function of the glob field and the dials alone.
+struct Wet {
+    // Where this wash reads the picture, as an offset from the pixel in THIS
+    // octave's cell units. The finished one: the feather and the bleed are
+    // already in it.
+    offset: vec2<f32>,
+    // The tide line, the rim and nothing that adds light, already floored.
+    pigment: f32,
+};
+
+// The geometry half of one wash's tone: where it looks, and how much pigment
+// lies there. Split out of [`wash_paint`] below because THIS is what the cell
+// walk costs and what `fs_cloud_tile` bakes; the light half is a texture tap.
+fn wash_wet(f: Wash, r: vec2<f32>) -> Wet {
     // ONE dial over the rim. The tide line has to fade as the edge dissolves: a
     // crisp dark crescent drawn on a boundary that is no longer there reads as a
     // line floating in fog, and at small glob sizes it is what turns a field into
@@ -1338,46 +1387,123 @@ fn wash_tone(f: Wash, r: vec2<f32>, pane_per_cell: f32, pt: vec2<f32>, average_p
     bl = bl * bl * (3.0 - 2.0 * bl) * 0.5;
     look = mix(look, f.front, bl);
 
-    // THE REFRACTION, and the only term that carries the sound. The offset is
-    // measured from the WARPED pixel — which is where the glob geometry lives —
-    // and applied from the real one, so at 0 the light is read exactly under the
-    // pixel and the layer displaces nothing at all.
-    let light = wash_light(pt + (look - r) * pane_per_cell * cloud.wash_refract);
-    let paper = clamp(WASH_PIVOT + WASH_LIFT_A * (light - WASH_PIVOT) + WASH_LIFT_B, 0.0, 1.0);
-
     let rim = clamp(f.edge, 0.0, 1.0);
     var pigment = surf * rim * rim;
     // The tide line: a broad soft crescent lying on the OVERLAPPED glob, hugging
     // the outside of the front glob's arc. Squared, so it comes on gently.
     let crescent = clamp((f.near + WASH_POOL_WIDTH) / WASH_POOL_WIDTH, 0.0, 1.0);
     pigment += tide * crescent * crescent;
-    // Granulation: pigment settling where the washes are piled deepest, read as
-    // the excess over how deep they are on average.
-    pigment += WASH_GRAIN * cloud.wash_grain * max(f.tau - average_pile, 0.0);
+    return Wet(look - r, max(pigment, 0.0));
+}
 
+// The light half: one tap, the paper it lifts to, and the pigment biting it.
+//
+// `pane_per_cell` converts this octave's cell units to pane points, so a lookup
+// offset measured in cells lands where the glob's centre really is.
+fn wash_paint(wet: Wet, pane_per_cell: f32, pt: vec2<f32>) -> Painted {
+    // THE REFRACTION, and the only term that carries the sound. The offset is
+    // measured from the WARPED pixel — which is where the glob geometry lives —
+    // and applied from the real one, so at 0 the light is read exactly under the
+    // pixel and the layer displaces nothing at all.
+    let light = wash_light(pt + wet.offset * pane_per_cell * cloud.wash_refract);
+    let paper = clamp(WASH_PIVOT + WASH_LIFT_A * (light - WASH_PIVOT) + WASH_LIFT_B, 0.0, 1.0);
     // Subtractive, and biting in proportion to the paper under it: a pigment
     // that took the same bite out of a dark tone as out of a light one turns
     // every crevice black, which is mortar between stones rather than paint.
-    let pig = max(pigment, 0.0);
-    let tone = paper - pig * (WASH_PIG_DEPTH + (1.0 - WASH_PIG_DEPTH) * paper);
-
+    let tone = paper - wet.pigment * (WASH_PIG_DEPTH + (1.0 - WASH_PIG_DEPTH) * paper);
     // The hold that returns silence to the palette's own floor, undoing the
     // lift where the glob found no light and leaving every brighter tone alone.
     return Painted(tone, smoothstep(0.0, WASH_BLACK_KNEE, light));
 }
 
-// How deep the washes are piled on average, which is what `Grain` measures the
-// excess over. One glob per cell of area `pi * R^2`, and the radius is drawn
-// uniformly from a band, so this is the band's mean square.
-fn wash_average_pile(occupancy: f32) -> f32 {
-    let lo = WASH_RADIUS_MIN;
-    let hi = WASH_RADIUS_MAX;
-    return occupancy * 3.14159265 * (lo * lo + lo * hi + hi * hi) / 3.0;
+// The whole of the wash's geometry at a point, in cells: what each octave
+// carries and how much of the pixel the finer one covers.
+//
+// Seven numbers, not one of which reads the light, the sound or the clock —
+// which is exactly why `fs_cloud_tile` can bake them into two `Rgba16Float`
+// targets and the per-frame shader can read them back. `want_fine` is the live
+// path's `Layers` 0 saving, which drops the second ring walk outright; the BAKE
+// always takes both, because `Layers` is a mix over channels the tile already
+// holds and so is deliberately not in the tile's key.
+struct WashField {
+    coarse: Wet,
+    fine: Wet,
+    cover: f32,
+};
+
+fn wash_field(r: vec2<f32>, period: i32, want_fine: bool) -> WashField {
+    // Two shared fields, one evaluation each per pixel and then read by every
+    // glob of every octave: a domain warp of glob space, which is what stops a
+    // glob being a circle, and a finer ragged offset on every rim. Both are read
+    // at the UNWARPED point, and both stay small — a heavy warp draws flames.
+    //
+    // Each sits on its own lattice, so each tiles at its own period: the warp's
+    // is `WASH_WARP_SCALE` cells across and the wobble's `WASH_RAGGED_SCALE`.
+    var warped = r;
+    if cloud.wash_lobe > 0.0 {
+        let amp = WASH_WARP * cloud.wash_lobe;
+        let warp_period = i32(round(WASH_WARP_SCALE * f32(period)));
+        warped += amp * 2.0 * vec2<f32>(
+            wash_fbm(r * WASH_WARP_SCALE, 71u, warp_period) - 0.5,
+            wash_fbm(r * WASH_WARP_SCALE + vec2<f32>(37.0, -19.0), 73u, warp_period) - 0.5,
+        );
+    }
+    // One-sided, and that is what buys the amplitude: a rim is only ever pushed
+    // OUTWARD, by up to `RAGGED` of its own radius, so the coverage half of the
+    // proof above is untouched and only the reach half pays. Against a
+    // zero-mean wobble it is the same picture — a rim of mean radius
+    // `R * (1 + RAGGED / 2)` wobbling by half of `RAGGED` either way.
+    var wob = 0.0;
+    if cloud.wash_ragged > 0.0 {
+        let ragged_period = i32(round(WASH_RAGGED_SCALE * f32(period)));
+        wob = WASH_RAGGED
+            * cloud.wash_ragged
+            * (wash_fbm(r * WASH_RAGGED_SCALE, 41u, ragged_period) - 1.0);
+    }
+
+    var out: WashField;
+    out.coarse = wash_wet(wash_scan(warped, 1u, 1.0, wob, period), warped);
+    out.fine = Wet(vec2<f32>(0.0), 0.0);
+    out.cover = 0.0;
+    // Coarse to fine, the finer octave a translucent wash over the one below and
+    // sparse, so a big wash sometimes carries a small one and sometimes sits
+    // beside it. At `Layers` 0 it is not walked at all, which is also the
+    // cheapest this path gets.
+    if want_fine {
+        let fine_r = warped * WASH_LACUNARITY + vec2<f32>(17.3, 5.9);
+        let fine = wash_scan(
+            fine_r,
+            2u,
+            WASH_FINE_OCCUPANCY,
+            wob,
+            i32(round(WASH_LACUNARITY * f32(period))),
+        );
+        out.fine = wash_wet(fine, fine_r);
+        out.cover = fine.cover;
+    }
+    return out;
+}
+
+// The same field out of the baked tile: the cell coordinate divided by the
+// period is the repeating texture coordinate, and that is the whole of what the
+// drift does here — it slides a fixed field rather than changing one.
+fn wash_tile_field(r: vec2<f32>) -> WashField {
+    let uv = r / f32(cloud.tile_cells);
+    let a = textureSampleLevel(cloud_tile_a, tile_sampler, uv, 0.0);
+    var out: WashField;
+    out.coarse = Wet(a.xy, a.z);
+    out.fine = Wet(vec2<f32>(0.0), 0.0);
+    out.cover = 0.0;
+    if cloud.wash_layers > 0.0 {
+        let b = textureSampleLevel(cloud_tile_b, tile_sampler, uv, 0.0);
+        out.fine = Wet(b.xy, b.z);
+        out.cover = b.w;
+    }
+    return out;
 }
 
 // The wash's scalar tone at a pane-relative point — `scale_tone`'s counterpart,
-// split out for the same reason and named `wash_cloud_tone` because `wash_tone`
-// above is one octave's own paper-minus-pigment.
+// split out for the same reason.
 fn wash_cloud_tone(pt: vec2<f32>) -> f32 {
     let q = (pt - cloud.size * 0.5) / cloud.size.y * CLOUD_UNITS + cloud.drift;
 
@@ -1394,45 +1520,18 @@ fn wash_cloud_tone(pt: vec2<f32>) -> f32 {
     let pane_per_cell = cloud.size.y / CLOUD_UNITS / cells;
     let r = q * cells;
 
-    // Two shared fields, one evaluation each per pixel and then read by every
-    // glob of every octave: a domain warp of glob space, which is what stops a
-    // glob being a circle, and a finer ragged offset on every rim. Both are read
-    // at the UNWARPED point, and both stay small — a heavy warp draws flames.
-    var warped = r;
-    if cloud.wash_lobe > 0.0 {
-        let amp = WASH_WARP * cloud.wash_lobe;
-        warped += amp * 2.0 * vec2<f32>(
-            wash_fbm(r * WASH_WARP_SCALE, 71u) - 0.5,
-            wash_fbm(r * WASH_WARP_SCALE + vec2<f32>(37.0, -19.0), 73u) - 0.5,
-        );
+    // Either the two ring walks under this pixel, or one or two taps into the
+    // period of them `fs_cloud_tile` already walked.
+    var field: WashField;
+    if cloud.tile_cells > 0u {
+        field = wash_tile_field(r);
+    } else {
+        field = wash_field(r, 0, cloud.wash_layers > 0.0);
     }
-    // One-sided, and that is what buys the amplitude: a rim is only ever pushed
-    // OUTWARD, by up to `RAGGED` of its own radius, so the coverage half of the
-    // proof above is untouched and only the reach half pays. Against a
-    // zero-mean wobble it is the same picture — a rim of mean radius
-    // `R * (1 + RAGGED / 2)` wobbling by half of `RAGGED` either way.
-    var wob = 0.0;
-    if cloud.wash_ragged > 0.0 {
-        wob = WASH_RAGGED * cloud.wash_ragged * (wash_fbm(r * WASH_RAGGED_SCALE, 41u) - 1.0);
-    }
-
-    let coarse = wash_scan(warped, 1u, 1.0, wob);
-    var paint = wash_tone(coarse, warped, pane_per_cell, pt, wash_average_pile(1.0));
-    // Coarse to fine, the finer octave a translucent wash over the one below and
-    // sparse, so a big wash sometimes carries a small one and sometimes sits
-    // beside it. At `Layers` 0 it is not drawn at all, which is also the cheapest
-    // this path gets.
+    var paint = wash_paint(field.coarse, pane_per_cell, pt);
     if cloud.wash_layers > 0.0 {
-        let fine_r = warped * WASH_LACUNARITY + vec2<f32>(17.3, 5.9);
-        let fine = wash_scan(fine_r, 2u, WASH_FINE_OCCUPANCY, wob);
-        let fine_paint = wash_tone(
-            fine,
-            fine_r,
-            pane_per_cell / WASH_LACUNARITY,
-            pt,
-            wash_average_pile(WASH_FINE_OCCUPANCY),
-        );
-        let over = cloud.wash_layers * fine.cover;
+        let fine_paint = wash_paint(field.fine, pane_per_cell / WASH_LACUNARITY, pt);
+        let over = cloud.wash_layers * field.cover;
         paint.tone = mix(paint.tone, fine_paint.tone, over);
         paint.hold = mix(paint.hold, fine_paint.hold, over);
     }
@@ -1460,6 +1559,59 @@ fn cloud_tone_at(pt: vec2<f32>) -> f32 {
 @fragment
 fn fs_cloud_tone(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(cloud_tone_at(vec2<f32>(in.slab, in.t) * cloud.size), 0.0, 0.0, 1.0);
+}
+
+// ====================== ONE PERIOD OF THE CELL WALK ========================
+//
+// The tile, baked when `Cloud tile` is on and read by both paths above. It has
+// no pane, no drift and no light in it: it is `tile_cells` by `tile_cells` CELLS
+// of whichever walk the style selects, which is why a resize, a drift or a note
+// never touches it and `Scale size` reaches it only through how many texels the
+// renderer spends on a cell.
+struct TileVertex {
+    @builtin(position) position: vec4<f32>,
+    // Where this texel sits in the tile, 0 at one corner and 1 at the other.
+    // The PERIOD is applied in the fragment stage rather than here, because the
+    // cloud uniform is bound to the fragment stage alone and a vertex read of
+    // it would widen every cloud pipeline's layout for this one entry point.
+    @location(0) fraction: vec2<f32>,
+};
+@vertex
+fn vs_cloud_tile(@builtin(vertex_index) vertex: u32) -> TileVertex {
+    let uv = vec2<f32>(f32((vertex << 1u) & 2u), f32(vertex & 2u));
+    var out: TileVertex;
+    out.position = vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0);
+    out.fraction = uv;
+    return out;
+}
+
+struct TileBake {
+    @location(0) a: vec4<f32>,
+    @location(1) b: vec4<f32>,
+};
+@fragment
+fn fs_cloud_tile(in: TileVertex) -> TileBake {
+    let period = i32(cloud.tile_cells);
+    // A texel centre lands exactly on `(i + 0.5) / texels * period`, which is
+    // the coordinate a repeating linear sampler reads back at `r / period`.
+    let cell = in.fraction * f32(cloud.tile_cells);
+    var out: TileBake;
+    out.a = vec4<f32>(0.0);
+    out.b = vec4<f32>(0.0);
+    if cloud.cloud_style == 1u {
+        // Seven channels of glob geometry. `want_fine` is true whatever `Layers`
+        // says, so turning that dial up is a mix and never a rebake.
+        let field = wash_field(cell, period, true);
+        out.a = vec4<f32>(field.coarse.offset, field.coarse.pigment, 0.0);
+        out.b = vec4<f32>(field.fine.offset, field.fine.pigment, field.cover);
+    } else {
+        // The mosaic's whole walk is these two vectors, so its second target is
+        // never read. It is still allocated and still written, which is what
+        // keeps a change of style a rebake rather than a reallocation.
+        let pile = cloud_domes(cell, period);
+        out.a = vec4<f32>(pile.face, pile.to_centre);
+    }
+    return out;
 }
 
 fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {

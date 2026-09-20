@@ -45,6 +45,8 @@ pub(crate) const SPECTROGRAM_ENTRY_POINTS: &[&str] = &[
     "fs_cloud_linear",
     "fs_cloud_backdrop_gamma",
     "fs_cloud_backdrop_linear",
+    "vs_cloud_tile",
+    "fs_cloud_tile",
 ];
 
 /// The stored-dB grid the shader reads: `capacity` slots of `bins` bytes, slab
@@ -686,25 +688,38 @@ impl CallbackTrait for SpectrogramCallback {
                 let grid = &pane.grid.as_ref().expect("drawable grid").buffer;
                 let lut = &pane.lut.as_ref().expect("drawable gradient").view;
                 let tone_size = atmosphere::tone_size(pixels, ppp, settings);
-                // Either size rebuilds the whole set, and that is deliberate:
-                // nothing here is retained across frames — every target is
-                // refilled every frame — so a rebuild costs an allocation and
-                // no picture. The tone size moves on a pane resize or a drag of
-                // `Cloud pixel size` and on nothing else, where the LIGHT size
-                // follows the musical radius and would otherwise be reallocated
-                // through every zoom and Span drag, which is what
-                // `retained_size` is here to stop.
-                let resize = pane
-                    .cloud
-                    .as_ref()
-                    .is_none_or(|c| c.size != size || c.tone_size() != tone_size);
+                let tile = atmosphere::tile_key(pixels, settings);
+                // Any of the three sizes rebuilds the whole set, and that is
+                // deliberate: nothing here is retained across frames — every
+                // target is refilled every frame — so a rebuild costs an
+                // allocation and no picture. The tone size moves on a pane
+                // resize or a drag of `Cloud pixel size` and on nothing else,
+                // where the LIGHT size follows the musical radius and would
+                // otherwise be reallocated through every zoom and Span drag,
+                // which is what `retained_size` is here to stop.
+                //
+                // The TILE is the exception to "refilled every frame": filling
+                // it is a whole cell walk, tens of milliseconds. So it is
+                // carried across a rebuild whenever its texels are unchanged —
+                // a zoom reallocates the light around a tile that keeps its
+                // bake — and `tile_owes` decides separately whether the walk in
+                // it is still the one this frame wants.
+                let texels = tile.map(atmosphere::TileKey::texels);
+                let resize = pane.cloud.as_ref().is_none_or(|c| {
+                    c.size != size || c.tone_size() != tone_size || c.tile_texels() != texels
+                });
                 if resize {
-                    pane.cloud = Some(atmosphere::Targets::new(
-                        device, cloud, size, tone_size, layout, grid, lut,
-                    ));
+                    let carried = pane
+                        .cloud
+                        .take()
+                        .filter(|held| held.tile_texels() == texels)
+                        .and_then(atmosphere::Targets::into_tile);
+                    let wanted = atmosphere::Allocation { size, tone: tone_size, tile, carried };
+                    pane.cloud =
+                        Some(atmosphere::Targets::new(device, cloud, wanted, layout, grid, lut));
                 }
                 let target = pane.cloud.as_mut().expect("allocated above");
-                target.update(queue, uniforms, rect, ppp, settings);
+                target.update(queue, uniforms, rect, ppp, settings, tile);
                 // Terraces alone still need their transfer/composite, but the
                 // one-pixel source would integrate the whole history only for
                 // the composite to discard that expensive result. A cloud is
@@ -761,6 +776,46 @@ impl CallbackTrait for SpectrogramCallback {
                         pass.set_bind_group(1, &target.bake_group, &[]);
                         pass.set_vertex_buffer(0, target.coverage_vertices.slice(..));
                         pass.draw(0..6, 0..1);
+                    }
+                    // One period of the cell walk, when `Cloud tile` asks for
+                    // one and what is in the tile is not already it. Before the
+                    // tone pass and the composite because both read it; it
+                    // reads neither the light nor the pane, so where it sits
+                    // among the light passes decides nothing.
+                    if let Some(key) = tile.filter(|&key| target.tile_owes(key)) {
+                        if let Some((views, group)) = target.tile_pass() {
+                            #[cfg(test)]
+                            target.encoded_passes.fetch_add(1, Ordering::Relaxed);
+                            let attachment = |view| {
+                                Some(wgpu::RenderPassColorAttachment {
+                                    view,
+                                    depth_slice: None,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })
+                            };
+                            {
+                                let mut pass =
+                                    egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                        label: Some("spectral_cloud_tile"),
+                                        color_attachments: &[
+                                            attachment(&views[0]),
+                                            attachment(&views[1]),
+                                        ],
+                                        ..Default::default()
+                                    });
+                                pass.set_pipeline(&cloud.tile);
+                                pass.set_bind_group(0, &target.source_group, &[]);
+                                pass.set_bind_group(1, group, &[]);
+                                pass.draw(0..3, 0..1);
+                            }
+                            // Inside the pass's own branch, so a key can only be
+                            // recorded against a tile that was actually filled.
+                            target.tile_baked(key);
+                        }
                     }
                     // The cloud's own tone, once per `Cloud pixel size` of pane
                     // rather than once per pixel of the composite. After the
@@ -2573,56 +2628,45 @@ mod tests {
         );
     }
 
-    /// The dials that do not move the LOOKUP reach the shader, each on its own.
+    /// `Variety`, which does not move the LOOKUP, reaches the shader.
     ///
-    /// None of them changes where the light is read, so none shows up in the
-    /// measurement above — and all ride in the same uniform, which is read by
+    /// It does not change where the light is read, so it does not show up in the
+    /// measurement above — and it rides in the same uniform, which is read by
     /// OFFSET rather than by name. A field added in the wrong place there swaps
     /// two values silently and nothing in either type system notices, so what
-    /// this holds is that each of them separately moves the picture it is
-    /// supposed to move.
+    /// this holds is that this one separately moves the picture it is supposed
+    /// to move.
     ///
     /// At the fixture's fresh relief the scales are barely domed and at its
     /// fresh refraction the lookup hardly moves, which is a fixture too small
-    /// to reach either knob; both are turned up here. Measured at 4.0% of the
-    /// pane for the rock and 6.7% for the variety. Both are smaller than they
-    /// were before the glint went: the glint was an ADDITIVE term that carried
-    /// a lot of whatever moved the normal, and with it gone everything these
-    /// two do has to arrive through `diffuse` and the lookup alone. At rock 0
-    /// the difference is EXACTLY zero, which is what says the knob costs the
-    /// picture it starts from nothing.
+    /// to reach the knob; both are turned up here. Measured at 6.7% of the
+    /// pane. That is smaller than it was before the glint went: the glint was
+    /// an ADDITIVE term that carried a lot of whatever moved the normal, and
+    /// with it gone everything the dial does has to arrive through `diffuse`
+    /// and the lookup alone.
     ///
-    /// Variety is in here rather than in its own test because what it changes
-    /// is the same KIND of thing: it redraws each dome's radius AND how loudly
-    /// each argues for its own ground, which moves every face and so the whole
-    /// shading. The property that makes it safe — that its smallest radius
-    /// still covers the plane, and that a weight is a share of a mean rather
-    /// than a licence to leave — is geometry rather than pixels and is held by
+    /// What it changes is each dome's radius AND how loudly each argues for its
+    /// own ground, which moves every face and so the whole shading. The
+    /// property that makes it safe — that its smallest radius still covers the
+    /// plane, and that a weight is a share of a mean rather than a licence to
+    /// leave — is geometry rather than pixels and is held by
     /// [`the_dome_grid_covers_the_plane_and_the_ring_holds_it`].
     ///
-    /// **Variety's floor is 5% rather than the rock's 2% on purpose.** It used
-    /// to move 2.6% here, and that was the complaint: a dial that passed this
-    /// test and still read as doing nothing, because the radius band it opened
-    /// was pinned by the coverage proof to about a sixth either way while the
-    /// cell grid that sets the apparent size never moved at all. A floor set
-    /// just under the old reading is a floor that cannot tell the two apart, so
-    /// it is set above it instead — this fails if the dial ever goes back to
-    /// being a radius band alone.
-    ///
-    /// What this does NOT say is that the rock is on a CLOCK, and no cheap test
-    /// can: the rock's phase advances on `cloud_time`, the same clock that
-    /// drives the drift, so there is no setting that runs one and holds the
-    /// other — at `cloud_speed` 0 both stop. Over half a second the drift alone
-    /// moves 8.1% of this pane and the rock changes that to 8.0%, which is
-    /// noise. The wander is visible in a render and not in a pair of frames.
+    /// **The floor is 5% on purpose.** It used to move 2.6% here, and that was
+    /// the complaint: a dial that passed this test and still read as doing
+    /// nothing, because the radius band it opened was pinned by the coverage
+    /// proof to about a sixth either way while the cell grid that sets the
+    /// apparent size never moved at all. A floor set just under the old reading
+    /// is a floor that cannot tell the two apart, so it is set above it instead
+    /// — this fails if the dial ever goes back to being a radius band alone.
     #[test]
-    fn the_rock_and_the_variety_each_reach_the_scales() {
+    fn the_variety_reaches_the_scales() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // The fixture's own relief is too small to reach either: a scale barely
+        // The fixture's own relief is too small to reach it: a scale barely
         // domed has hardly any face for the shading to find.
-        let lit = |turn: fn(&mut harmonigraph_scene::SpectralAtmosphere)| {
+        let lit = |variety| {
             let mut cb = cloud_fixture();
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
             s.cloud_depth = 1.0;
@@ -2631,31 +2675,18 @@ mod tests {
             // which reaches the picture through the lookup as much as through
             // the shading, and at the fresh 30% the lookup barely moves.
             s.scale_refract = 1.0;
-            turn(s);
+            s.scale_variety = variety;
             fresh_frame(&device, &queue, &cb)
         };
-        let plain = lit(|s| s.scale_variety = 0.0);
-        for (name, floor, turn) in [
-            (
-                "Rock",
-                0.02,
-                (|s: &mut harmonigraph_scene::SpectralAtmosphere| {
-                    s.scale_variety = 0.0;
-                    s.scale_rock = 1.0;
-                }) as fn(&mut harmonigraph_scene::SpectralAtmosphere),
-            ),
-            ("Variety", 0.05, |s| s.scale_variety = 1.0),
-        ] {
-            let frame = lit(turn);
-            let n = plain.len() / 4;
-            let moved = plain
-                .chunks_exact(4)
-                .zip(frame.chunks_exact(4))
-                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
-                .count() as f32
-                / n as f32;
-            assert!(moved > floor, "{name} moved almost none of the pane: {moved}");
-        }
+        let plain = lit(0.0);
+        let frame = lit(1.0);
+        let moved = plain
+            .chunks_exact(4)
+            .zip(frame.chunks_exact(4))
+            .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+            .count() as f32
+            / (plain.len() / 4) as f32;
+        assert!(moved > 0.05, "Variety moved almost none of the pane: {moved}");
     }
 
     /// The layer saturates no channel the picture had not saturated already.
@@ -2980,6 +3011,57 @@ mod tests {
         );
     }
 
+    /// Every period the `Cloud tile` bar offers makes a whole number of cells
+    /// out of EVERY lattice the two walks hash on.
+    ///
+    /// A tile is one period of the walk read through a REPEATING sampler, so the
+    /// walk has to be periodic or its far edge hashes cells that do not meet its
+    /// near edge — a straight seam down the pane every period, which is the same
+    /// failure the two ring proofs above exist to keep off the cell grid.
+    ///
+    /// Neither walk runs on one lattice. Each has a second octave at its own
+    /// lacunarity, and the wash reads two shared noises whose cells are
+    /// `WASH_WARP_SCALE` and `WASH_RAGGED_SCALE` across, each with a second
+    /// octave of its own. `WASH_FBM_FINE`'s 2.07 is the one no period can make
+    /// whole, which is why the tiled path runs that octave at
+    /// `WASH_FBM_FINE_TILED` — so that constant is read here too, and moving it
+    /// off a whole number fails this.
+    ///
+    /// Read off the shipped shader text rather than a transcription of it, for
+    /// the reason the two proofs above give.
+    #[test]
+    fn the_tile_period_tiles_every_lattice() {
+        let number = |name: &str| -> f32 {
+            crate::shadow::tests::shader_const(SPECTROGRAM_SRC, name).parse().expect("a number")
+        };
+        let fine = number("WASH_FBM_FINE_TILED");
+        let warp = number("WASH_WARP_SCALE");
+        let ragged = number("WASH_RAGGED_SCALE");
+        let lattices = [
+            ("the mosaic's fine octave", number("DOME_LACUNARITY")),
+            ("the wash's fine octave", number("WASH_LACUNARITY")),
+            ("the warp noise", warp),
+            ("the warp noise's own second octave", warp * fine),
+            ("the ragged noise", ragged),
+            ("the ragged noise's own second octave", ragged * fine),
+        ];
+        let step = harmonigraph_scene::CLOUD_TILE_STEP;
+        let steps = (harmonigraph_scene::CLOUD_TILE_MAX / step) as u32;
+        assert!(steps > 0, "the bar offers no period at all, so the dial cannot be turned on");
+        for offered in 1..=steps {
+            let period = offered as f32 * step;
+            for (name, lattice) in lattices {
+                let cells = lattice * period;
+                assert!(
+                    (cells - cells.round()).abs() < 1.0e-3,
+                    "a period of {period} leaves {name} {cells} cells across, which is not a \
+                     whole number of them, so the walk does not close on itself and the tile \
+                     draws a seam every period"
+                );
+            }
+        }
+    }
+
     /// The fixture the wash is measured over: the ridge pane above, with the
     /// watercolour texture selected and its globs made big enough to BE a
     /// texture on a 128-point pane.
@@ -3015,9 +3097,9 @@ mod tests {
     /// it lands. A wash that drew its globs from the paint rather than from the
     /// light would move both.
     ///
-    /// Exactly zero and not merely small: the pigment cues (tide line, rim,
-    /// grain) are still drawn over the flat fixture and are still there in both
-    /// frames, so anything this measures is the lookup alone.
+    /// Exactly zero and not merely small: the pigment cues (tide line, rim) are
+    /// still drawn over the flat fixture and are still there in both frames, so
+    /// anything this measures is the lookup alone.
     #[test]
     fn the_wash_reads_the_light_at_each_globs_centre_and_invents_none() {
         let Some((device, queue)) = headless_device() else {
@@ -3219,10 +3301,10 @@ mod tests {
 
     /// Every wash dial separately reaches the shader.
     ///
-    /// Nine `f32`s ride in one uniform read by OFFSET rather than by name,
+    /// Eight `f32`s ride in one uniform read by OFFSET rather than by name,
     /// so a field added in the wrong place swaps two values silently and nothing
     /// in either type system notices. Folded into one test the way
-    /// [`the_rock_and_the_variety_each_reach_the_scales`] is, because what each
+    /// [`the_variety_reaches_the_scales`] is, because what each
     /// of them holds is the same thing about the same buffer.
     ///
     /// The base setting is not the fresh one. Several of these dials only have
@@ -3251,7 +3333,6 @@ mod tests {
             s.wash_ragged = 0.5;
             s.wash_lobe = 0.5;
             s.wash_pool = 0.5;
-            s.wash_grain = 0.3;
             s.wash_layers = 0.5;
             turn(s);
             fresh_frame(&device, &queue, &cb)
@@ -3267,7 +3348,6 @@ mod tests {
             ("Ragged", |s| s.wash_ragged = 0.0),
             ("Lobe shape", |s| s.wash_lobe = 0.0),
             ("Edge pooling", |s| s.wash_pool = 1.0),
-            ("Grain", |s| s.wash_grain = 1.0),
             ("Layers", |s| s.wash_layers = 0.0),
         ] {
             let frame = painted(turn);
@@ -3370,6 +3450,251 @@ mod tests {
         assert!(
             means.iter().all(|&(_, mean, _)| mean < 3.0),
             "a reduced cloud is not the picture the walk draws: {means:?}"
+        );
+    }
+
+    /// The pane the tile is measured over: square, and twice [`SIZE`] on a side.
+    ///
+    /// The size is the fixture-reach half of
+    /// [`a_tiled_cloud_draws_the_live_walk_inside_its_first_period`] and not
+    /// dressing. The two pictures may only be compared where every cell the
+    /// walk VISITS lies inside the first period, and the pane's cell
+    /// coordinates run either side of zero — so at most the quarter of the pane
+    /// whose cells are positive is ever comparable, and a small pane would
+    /// leave that quarter a few hundred pixels.
+    const TILE_SIZE: [u32; 2] = [SIZE[0] * 2, SIZE[1] * 2];
+
+    /// A tiled cloud draws EXACTLY the live walk inside its first period.
+    ///
+    /// The tile wraps every cell a hash is taken at onto `[0, P)`, and inside
+    /// that range a wrapped cell IS the unwrapped one — so where the whole ring
+    /// a pixel visits lies in the first period, the tiled picture is the live
+    /// walk resampled through one bilinear tap of a half-float texture, and
+    /// nothing else. That is the claim that makes the tile a repeat of the real
+    /// texture rather than a second look, and it is the one thing a wrong
+    /// lookup — a scale, an offset, a `q` that forgot the drift, a missing
+    /// second octave — cannot pass.
+    ///
+    /// Measured with both noises OFF (`Lobe shape` and `Ragged` at 0) because
+    /// they are the one place the tiled path deliberately differs: their second
+    /// octave runs at `WASH_FBM_FINE_TILED` rather than 2.07, which is not the
+    /// same field anywhere. Everything else is expected to agree.
+    ///
+    /// The window is worked out per pixel from the shader's own geometry, and
+    /// the count of pixels in it is asserted — a mask that had drifted off the
+    /// pane would otherwise compare nothing and pass. Measured over 9,540 pixels
+    /// for the mosaic and 8,208 for the wash, out of a 65,536-pixel pane: a mean
+    /// absolute channel difference of 0.02/255 and 0.37/255, NO mosaic pixel
+    /// moving past 4 at all and 2.4% of the wash's, worst channel 1 and 21.
+    ///
+    /// The wash's worst is where its stored offset STEPS — the glob under the
+    /// visible one changing, which the feather only smooths on the visible
+    /// one's own rim — and one bilinear texel there is about three quarters of
+    /// a pixel at this fixture's density. That is the resampling this dial is
+    /// spending, and it is why the bound is a mean rather than a per-pixel one.
+    #[test]
+    fn a_tiled_cloud_draws_the_live_walk_inside_its_first_period() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // `SCALE_CELLS` is spelled as a quotient in the shader, so this reads
+        // one as well as a plain number.
+        let number = |name: &str| -> f32 {
+            crate::shadow::tests::shader_const(SPECTROGRAM_SRC, name)
+                .split('/')
+                .map(|part| part.trim().parse::<f32>().expect("a number"))
+                .reduce(|a, b| a / b)
+                .expect("a constant has a value")
+        };
+        // The one number below that is not read out of the shader, because it
+        // is not a constant there: both octaves are offset by this literal, in
+        // `cloud_domes` and in `wash_field`. The window is only right while
+        // that is what they say.
+        let fine_offset = [17.3_f32, 5.9];
+        assert!(
+            SPECTROGRAM_SRC.matches("vec2<f32>(17.3, 5.9)").count() == 2,
+            "the two fine octaves no longer sit at the offset this window assumes"
+        );
+        let units = number("CLOUD_UNITS");
+        let period = 20.0_f32;
+        use harmonigraph_scene::CloudStyle;
+        let mut read = Vec::new();
+        for (style, cells, ring) in [
+            (CloudStyle::Mosaic, number("SCALE_CELLS") / 2.0, 1.0),
+            (CloudStyle::Watercolor, number("WASH_CELLS") / 2.0, number("WASH_RING")),
+        ] {
+            let mut cb = cloud_fixture();
+            cb.rect = egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(TILE_SIZE[0] as f32, TILE_SIZE[1] as f32),
+            );
+            cb.vertices = full_quad_in(12, TILE_SIZE);
+            cb.read.rows = TILE_SIZE[1];
+            cb.grid = grid_of(noisy_grid(BINS as usize, 12), BINS, 12, 0);
+            cb.atmosphere.as_mut().unwrap().region = cb.rect;
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.cloud_style = style;
+            s.cloud_depth = 1.0;
+            // The biggest cells the bars offer, so one period covers a real
+            // fraction of the pane rather than repeating off the edge of it.
+            s.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
+            s.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX;
+            s.wash_lobe = 0.0;
+            s.wash_ragged = 0.0;
+            // A still texture: `cloud_time` is zero, so the drift is the
+            // constant `[0, 0.6]` its cosine starts at and both frames read the
+            // field in the same place.
+            s.cloud_speed = 0.0;
+            let live = fresh_frame(&device, &queue, &cb);
+            cb.atmosphere.as_mut().unwrap().settings.cloud_tile = period;
+            let tiled = fresh_frame(&device, &queue, &cb);
+            assert_ne!(live, tiled, "{style:?} drew the same frame tiled, so the tile never ran");
+
+            // Which pixels the two are entitled to agree on: those whose whole
+            // ring, in both octaves, lies inside the first period. The fine
+            // octave counts in its own cells, `LACUNARITY` of them to one, so
+            // its window is the tighter of the two and is what decides the
+            // shape below.
+            let lacunarity = number("DOME_LACUNARITY");
+            let drift = [0.0_f32, 0.6];
+            let inside = |axis: usize, pt: f32| {
+                let half = TILE_SIZE[axis] as f32 / 2.0;
+                let r = ((pt - half) / TILE_SIZE[1] as f32 * units + drift[axis]) * cells;
+                let fine = lacunarity * r + fine_offset[axis];
+                let held = |v: f32, last: f32| v >= ring + 1.0 && v <= last - ring - 1.0;
+                held(r, period) && held(fine, (lacunarity * period).round())
+            };
+            let (mut compared, mut moved, mut worst, mut total) = (0u32, 0u32, 0u32, 0u64);
+            for y in 0..TILE_SIZE[1] {
+                for x in 0..TILE_SIZE[0] {
+                    if !inside(0, x as f32 + 0.5) || !inside(1, y as f32 + 0.5) {
+                        continue;
+                    }
+                    compared += 1;
+                    let at = (y * TILE_SIZE[0] + x) as usize * 4;
+                    let diff = |c: usize| u32::from(live[at + c].abs_diff(tiled[at + c]));
+                    moved += u32::from((0..3).any(|c| diff(c) > 4));
+                    for c in 0..3 {
+                        worst = worst.max(diff(c));
+                        total += u64::from(diff(c));
+                    }
+                }
+            }
+            let pane = TILE_SIZE[0] * TILE_SIZE[1];
+            assert!(
+                compared * 20 > pane,
+                "{style:?} compared {compared} of {pane} pixels, which is too little of the \
+                 pane to say the tile draws the walk"
+            );
+            let mean = total as f64 / f64::from(compared * 3);
+            read.push((style, compared, mean, f64::from(moved) / f64::from(compared), worst));
+            assert!(
+                mean < 0.5 && worst < 32,
+                "{style:?} tiled is not the walk inside its own first period: {read:?}"
+            );
+        }
+    }
+
+    /// The tile is rebaked when the WALK moves and never when the picture does.
+    ///
+    /// This is the cache-key half of the dial, and a key is wrong in two
+    /// directions: a dial the walk reads and the key does not serves a stale
+    /// texture, while one the key carries and the walk does not pays a whole
+    /// cell walk — tens of milliseconds — on every frame of a drag of it. So
+    /// both lists are here, and the clock is at the head of the second: the
+    /// drift slides a fixed field rather than changing one, which is the whole
+    /// reason this cache can exist.
+    ///
+    /// The key comparison is what decides, so it is what is checked; the pass
+    /// count at the end is the seam that says `prepare` actually asks it,
+    /// rather than rebaking around it on a resize of something else.
+    #[test]
+    fn the_tile_is_rebaked_only_when_the_walk_moves() {
+        let key = |turn: fn(&mut harmonigraph_scene::SpectralAtmosphere), now| {
+            let mut settings = harmonigraph_scene::SpectralAtmosphere {
+                cloud_tile: 20.0,
+                cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
+                ..Default::default()
+            };
+            turn(&mut settings);
+            atmosphere::tile_key(
+                [1920, 1080],
+                SpectrogramAtmosphere {
+                    settings,
+                    region: egui::Rect::ZERO,
+                    pitch_vertical: true,
+                    points_per_cent: 0.03,
+                    points_per_ms: 0.01,
+                    now,
+                },
+            )
+        };
+        let fresh = key(|_| {}, 0.0);
+        assert!(fresh.is_some(), "the fixture turned the tile on and got no tile");
+        for now in [0.5, 7.0, 600.0] {
+            assert_eq!(key(|_| {}, now), fresh, "a clock of {now} rebaked a field that only slid");
+        }
+        type Turn = fn(&mut harmonigraph_scene::SpectralAtmosphere);
+        for (name, turn) in [
+            ("Cloud speed", (|s| s.cloud_speed = 20.0) as Turn),
+            ("Cloud depth", |s| s.cloud_depth = 0.5),
+            ("Cloud pixel size", |s| s.cloud_pixel = 4.0),
+            ("Refraction", |s| s.wash_refract = 0.0),
+            ("Layers", |s| s.wash_layers = 0.0),
+            ("Pitch softness", |s| s.pitch_softness = 300.0),
+            ("Spread", |s| s.spread = 1.0),
+            ("Contour strength", |s| s.contour_strength = 0.0),
+            // The mosaic's own dial, which the wash's walk cannot read.
+            ("Variety", |s| s.scale_variety = 1.0),
+        ] {
+            assert_eq!(key(turn, 0.0), fresh, "{name} rebaked a tile it cannot reach");
+        }
+        for (name, turn) in [
+            ("Lobe shape", (|s| s.wash_lobe = 0.0) as Turn),
+            ("Ragged", |s| s.wash_ragged = 0.0),
+            ("Fuzz", |s| s.wash_fuzz = 0.0),
+            ("Edge pooling", |s| s.wash_pool = 1.0),
+            ("Cloud tile", |s| s.cloud_tile = 40.0),
+            ("Texture", |s| s.cloud_style = harmonigraph_scene::CloudStyle::Mosaic),
+            // Through the tile's texel size alone — how many cells cross the
+            // pane, not what a cell draws.
+            ("Glob size", |s| s.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX),
+        ] {
+            assert_ne!(key(turn, 0.0), fresh, "{name} reaches the walk and did not rebake");
+        }
+        assert_eq!(key(|s| s.cloud_tile = 0.0, 0.0), None, "the dial at 0 still allocated a tile");
+
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let passes = |resources: &CallbackResources| {
+            resources
+                .get::<SpectrogramResources>()
+                .unwrap()
+                .panes
+                .get(0)
+                .expect("the spectrogram prepared a pane")
+                .cloud
+                .as_ref()
+                .expect("a clouded pane holds its targets")
+                .encoded_passes
+                .load(Ordering::Relaxed)
+        };
+        let mut cb = wash_fixture();
+        cb.atmosphere.as_mut().unwrap().settings.cloud_tile = 20.0;
+        let mut resources = CallbackResources::default();
+        frame_with(&device, &queue, &mut resources, &cb);
+        let first = passes(&resources);
+        cb.atmosphere.as_mut().unwrap().now = 9.0;
+        frame_with(&device, &queue, &mut resources, &cb);
+        let steady = passes(&resources) - first;
+        assert_eq!(first, steady + 1, "the first frame encoded no bake, so nothing is cached");
+        cb.atmosphere.as_mut().unwrap().settings.wash_pool = 0.9;
+        frame_with(&device, &queue, &mut resources, &cb);
+        assert_eq!(
+            passes(&resources) - first - steady,
+            steady + 1,
+            "a dial the walk reads left the tile standing"
         );
     }
 

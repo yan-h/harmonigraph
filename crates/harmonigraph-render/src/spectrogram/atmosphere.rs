@@ -1,12 +1,20 @@
 //! A small scalar image diffuses the heatmap before its single palette lookup.
-//! Targets belong to one pane and are keyed only on their two sizes — the light field's and the cloud tone's; source pixels and uniforms are refreshed every
-//! draw, including paused zooms and palette edits.
+//! Targets belong to one pane and are keyed only on their sizes — the light
+//! field's, the cloud tone's and the walk tile's ([`Allocation`]); source pixels
+//! and uniforms are refreshed every draw, including paused zooms and palette
+//! edits. The TILE is the one thing here not refilled every draw, and
+//! [`TileKey`] is what decides when it is.
 
 use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex};
 use crate::{create_vertex_buffer, wgpu};
 
 pub(super) const SOURCE: &str = include_str!("../shaders/spectral_atmosphere.wgsl");
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+/// The tile's own format. Four channels because the mosaic's walk produces two
+/// vectors and the wash's produces seven numbers over two targets; half floats
+/// because what is stored is a cell offset of order one, where the eleven-bit
+/// mantissa is a thousandth of a cell.
+const TILE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 #[derive(Clone, Copy, Debug)]
 pub struct SpectrogramAtmosphere {
@@ -93,6 +101,109 @@ pub(super) fn tone_size(
     Some(std::array::from_fn(|axis| ((pixels[axis] as f32 / pixel).ceil() as u32).max(1)))
 }
 
+/// The shader's own `CLOUD_UNITS`, `SCALE_CELLS` and `WASH_CELLS`: how many
+/// cloud units cross the pane's height and how many cells of each texture cross
+/// one unit at a size of 1x. Nothing else here needs to know what a cell is —
+/// the tile does, because how fine it has to be is how fine the pane draws one.
+///
+/// Held against the shipped shader text by
+/// `the_tile_is_as_fine_as_the_pane_draws_a_cell`.
+const CLOUD_UNITS: f32 = 10.0;
+const SCALE_CELLS: f32 = 6.0 / 2.2;
+const WASH_CELLS: f32 = 5.25;
+
+/// The tile's texel size: a whole number of these, and never fewer or more.
+///
+/// Quantised because the pane's own pixels feed it: at one texel per pixel a
+/// resize drag would rebake a 20 to 40 ms walk on EVERY frame of the drag, where
+/// a 256-texel grain crosses a boundary a handful of times across a whole
+/// window. The ceiling is memory — two `Rgba16Float` targets, so 2048 is 67 MB —
+/// and past it the tile is simply coarser than the pane, which is the same
+/// trade `Cloud pixel size` makes on purpose.
+const TILE_STEP: u32 = 256;
+const TILE_MAX: u32 = 2048;
+
+/// What a baked tile holds, and therefore exactly what a rebake has to watch.
+///
+/// **A key is wrong in two directions and this one is worth writing out.**
+/// Anything that feeds the baked channels and is missing here serves a stale
+/// picture; anything carried here that decides nothing rebakes a full cell walk
+/// at the rate of whatever it should not be watching. So the key is the STYLE,
+/// the period, the texel size, and the dials the WALK reads — `Variety` for the
+/// mosaic; `Lobe shape`, `Ragged`, `Fuzz` and `Edge pooling` for the wash, which
+/// are the warp, the rim wobble, the feather/bleed/tide widths and the tide's
+/// own strength.
+///
+/// Not the DRIFT and not the clock. The walk's output is a fixed field that the
+/// drift slides over — `drift` enters both styles only as a translation of the
+/// cell coordinate — so it is a texture coordinate here rather than an input,
+/// and a tile is never rebaked because time passed.
+///
+/// Not the light, the palette, the softness or `Cloud depth`: none of them
+/// reaches the walk at all. Not `Refraction`, `Relief` or `Layers`, which are
+/// read AFTER the tile, out of channels it already holds. Not `Scale size` or
+/// `Glob size`, which decide how many cells cross the pane rather than what a
+/// cell draws, and not the pane's pixels: both reach this only through
+/// [`Self::texels`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct TileKey {
+    /// 0 for the mosaic, 1 for the wash — the same word the uniform carries.
+    style: u32,
+    /// The period in cells, which is `Cloud tile` itself.
+    period: u32,
+    /// One side of the square tile, in texels.
+    texels: u32,
+    /// The walk's own dials as bits, so this compares by value. Sanitized, so
+    /// there is no NaN here to compare unequal to itself. The mosaic reads one
+    /// and leaves the rest at zero.
+    dials: [u32; 4],
+}
+
+impl TileKey {
+    /// The period, for the uniform the shader divides a cell coordinate by.
+    pub fn period(self) -> u32 {
+        self.period
+    }
+
+    /// One side of the square tile, for the pass that fills it.
+    pub fn texels(self) -> u32 {
+        self.texels
+    }
+}
+
+/// The tile this frame wants, or `None` where the cells are walked live.
+///
+/// See [`TileKey`] for what is in it and what deliberately is not.
+pub(super) fn tile_key(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> Option<TileKey> {
+    let settings = atmosphere.settings.sanitized();
+    if !settings.effects().cloud || settings.cloud_tile <= 0.0 {
+        return None;
+    }
+    let (style, cells, dials) = match settings.cloud_style {
+        harmonigraph_scene::CloudStyle::Mosaic => {
+            (0, SCALE_CELLS / settings.scale_size, [settings.scale_variety, 0.0, 0.0, 0.0])
+        }
+        harmonigraph_scene::CloudStyle::Watercolor => (
+            1,
+            WASH_CELLS / settings.wash_size,
+            [settings.wash_lobe, settings.wash_ragged, settings.wash_fuzz, settings.wash_pool],
+        ),
+    };
+    // As fine as the pane itself draws a cell, so a tiled picture is the walk
+    // resampled rather than a coarser one — and then rounded UP to a whole
+    // [`TILE_STEP`], which is what keeps a resize off the bake.
+    let wanted = settings.cloud_tile * (pixels[1] as f32 / CLOUD_UNITS / cells);
+    let texels = ((wanted / TILE_STEP as f32).ceil().max(1.0) as u32)
+        .saturating_mul(TILE_STEP)
+        .min(TILE_MAX);
+    Some(TileKey {
+        style,
+        period: settings.cloud_tile as u32,
+        texels,
+        dials: dials.map(f32::to_bits),
+    })
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -107,21 +218,18 @@ struct Uniforms {
     /// 1 when the tone target exists and holds this frame's cloud, so the
     /// composite reads it instead of walking the cells under every pixel.
     tone_baked: u32,
-    /// Cloud-space offset of the scale clouds and a bounded clock. Both are
-    /// reduced from f64 on the CPU.
+    /// Cloud-space offset of the cloud texture, reduced from f64 on the CPU.
     ///
     /// The order below is the WGSL `Cloud` struct's order and has to stay that
     /// way: these are read by OFFSET, not by name, so transposing two `f32`
     /// fields swaps their values silently and nothing in the type system
     /// notices.
     drift: [f32; 2],
-    time: f32,
     cloud_depth: f32,
     scale_size: f32,
     scale_variety: f32,
     scale_refract: f32,
     scale_relief: f32,
-    scale_rock: f32,
     /// 0 for the refracting scales, 1 for the watercolour wash. The wash reads
     /// none of the `scale_` settings and the scales read none of the `wash_`
     /// ones; both share what sits above them.
@@ -132,13 +240,9 @@ struct Uniforms {
     wash_lobe: f32,
     wash_refract: f32,
     wash_pool: f32,
-    wash_grain: f32,
     wash_layers: f32,
-    /// The tail the assert below needs, since the members above stop 8 bytes
-    /// short of a whole 16-byte row. WGSL rounds its own copy of the struct up
-    /// to the same length, so this is space the shader is entitled to read and
-    /// Rust has to own.
-    _tail: [u32; 2],
+    /// The tile's period in cells, 0 for the live walk. See [`TileKey`].
+    tile_cells: u32,
 }
 
 /// The `Cloud` struct's size in the uniform address space, which WGSL rounds up
@@ -148,6 +252,10 @@ struct Uniforms {
 /// past, and wgpu refuses the bind group rather than the draw — so this is a
 /// compile-time check on a runtime failure that would otherwise arrive as a
 /// validation error on the first clouded frame.
+///
+/// The members above happen to close on a whole row, so there is no explicit
+/// tail here. A field added or dropped may well need one back, and that is what
+/// this catches.
 const _: () = assert!(
     std::mem::size_of::<Uniforms>().is_multiple_of(16),
     "the cloud uniform is not a whole number of 16-byte rows, so the shader's rounded-up \
@@ -160,12 +268,18 @@ pub(super) struct Pipelines {
     /// The cloud's scalar tone into its own reduced target, for the composite to
     /// read instead of walking the cells per pixel.
     pub tone: wgpu::RenderPipeline,
+    /// One period of the cell walk into the two tile targets, for both of the
+    /// above to read instead of walking the ring at all.
+    pub tile: wgpu::RenderPipeline,
     pub composite: wgpu::RenderPipeline,
     pub backdrop: wgpu::RenderPipeline,
     filter_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
     filters: [wgpu::RenderPipeline; 4],
     sampler: wgpu::Sampler,
+    /// The tile's repeating sampler — see the shader's `tile_sampler`, where
+    /// the reason the other reads must keep clamping is spelled out.
+    tile_sampler: wgpu::Sampler,
 }
 
 impl Pipelines {
@@ -206,7 +320,16 @@ impl Pipelines {
         });
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("spectral_cloud_composite_layout"),
-            entries: &[texture(0), texture(1), sampler_entry(2), uniform(3), texture(4)],
+            entries: &[
+                texture(0),
+                texture(1),
+                sampler_entry(2),
+                uniform(3),
+                texture(4),
+                texture(5),
+                texture(6),
+                sampler_entry(7),
+            ],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("spectral_cloud_filter"),
@@ -266,6 +389,7 @@ impl Pipelines {
                 Some(&composite_layout),
                 "fs_cloud_tone",
             ),
+            tile: tile_pipeline(device, source_layout, &composite_layout),
             composite: create_spectrogram_pipeline(
                 device,
                 format,
@@ -297,8 +421,77 @@ impl Pipelines {
                 mag_filter: wgpu::FilterMode::Linear,
                 ..Default::default()
             }),
+            tile_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("spectral_cloud_tile_sampler"),
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::Repeat,
+                min_filter: wgpu::FilterMode::Linear,
+                mag_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
         }
     }
+}
+
+/// The tile bake: a full-screen triangle over the tile's own target, with two
+/// colour attachments and no vertex buffer.
+///
+/// It declares the source layout at group 0 that it never reads, so the pass can
+/// bind the same group every other cloud pass does; what it does read is the
+/// cloud uniform at group 1, for the period and the style.
+fn tile_pipeline(
+    device: &wgpu::Device,
+    source_layout: &wgpu::BindGroupLayout,
+    composite_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("spectrogram_shader"),
+        source: wgpu::ShaderSource::Wgsl(super::SPECTROGRAM_SRC.into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("spectral_cloud_tile_pipeline_layout"),
+        bind_group_layouts: &[Some(source_layout), Some(composite_layout)],
+        ..Default::default()
+    });
+    let target = Some(wgpu::ColorTargetState {
+        format: TILE_FORMAT,
+        blend: None,
+        write_mask: wgpu::ColorWrites::ALL,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("spectral_cloud_tile"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_cloud_tile"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_cloud_tile"),
+            compilation_options: Default::default(),
+            targets: &[target.clone(), target],
+        }),
+        primitive: Default::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// One period of the cell walk, and what it was filled for.
+///
+/// The one thing here that does NOT follow the pane: every other target is
+/// rewritten from scratch each frame, where refilling these two is a whole cell
+/// walk. So they are carried across a rebuild the light's size forces (see
+/// `SpectrogramCallback::prepare`), and [`Self::baked`] is what says a bake is
+/// owed rather than a reallocation.
+pub(super) struct Tile {
+    views: [wgpu::TextureView; 2],
+    texels: u32,
+    baked: Option<TileKey>,
 }
 
 pub(super) struct Targets {
@@ -312,6 +505,7 @@ pub(super) struct Targets {
     /// natively. Part of the allocation key beside [`Self::size`] — see
     /// `SpectrogramCallback::prepare`.
     pub tone: Option<(wgpu::TextureView, [u32; 2])>,
+    tile: Option<Tile>,
     source_uniform: wgpu::Buffer,
     pub source_group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
@@ -320,20 +514,38 @@ pub(super) struct Targets {
     /// Reads the baked material and writes the tone target, so the tone target
     /// is the one view this group must NOT carry.
     pub tone_group: Option<wgpu::BindGroup>,
+    /// Writes both tile targets, so those are the two views it stands scratch
+    /// in for.
+    tile_group: Option<wgpu::BindGroup>,
     pub composite_group: wgpu::BindGroup,
+}
+
+/// What one set of targets is allocated FOR: the light field's size, the reduced
+/// tone's where there is one, and the tile this frame wants beside whatever tile
+/// the previous set held.
+///
+/// The three move independently — the light's size follows the musical radius,
+/// the tone's `Cloud pixel size`, the tile's `Cloud tile` and how many cells
+/// cross the pane — which is why `SpectrogramCallback::prepare` compares all
+/// three before rebuilding, and why the tile alone is handed back in.
+pub(super) struct Allocation {
+    pub size: [u32; 2],
+    pub tone: Option<[u32; 2]>,
+    pub tile: Option<TileKey>,
+    pub carried: Option<Tile>,
 }
 
 impl Targets {
     pub fn new(
         device: &wgpu::Device,
         pipelines: &Pipelines,
-        size: [u32; 2],
-        tone_size: Option<[u32; 2]>,
+        wanted: Allocation,
         source_layout: &wgpu::BindGroupLayout,
         grid: &wgpu::Buffer,
         lut: &wgpu::TextureView,
     ) -> Self {
-        let sized = |label, size: [u32; 2]| {
+        let Allocation { size, tone: tone_size, tile: tile_key, carried } = wanted;
+        let formatted = |label, size: [u32; 2], format| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
@@ -345,13 +557,14 @@ impl Targets {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: FORMAT,
+                    format,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                         | wgpu::TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
                 })
                 .create_view(&Default::default())
         };
+        let sized = |label, size: [u32; 2]| formatted(label, size, FORMAT);
         let view = |label| sized(label, size);
         let source_view = view("spectral_cloud_source");
         let views = [
@@ -360,6 +573,17 @@ impl Targets {
             view("spectral_cloud_wide"),
         ];
         let tone = tone_size.map(|size| (sized("spectral_cloud_tone", size), size));
+        // Reused whenever it is already the right shape, key and all, so a
+        // rebuild the LIGHT's size forced costs no walk at all.
+        let tile = tile_key.map(|key| match carried {
+            Some(tile) if tile.texels == key.texels => tile,
+            _ => Tile {
+                views: ["spectral_cloud_tile_a", "spectral_cloud_tile_b"]
+                    .map(|label| formatted(label, [key.texels; 2], TILE_FORMAT)),
+                texels: key.texels,
+                baked: None,
+            },
+        });
         let buffer = |label, size| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -391,12 +615,12 @@ impl Targets {
             })
         });
         // wgpu validates every resource a bound group carries against the pass's
-        // attachments whether the shader reads it or not, so the binding-4 view
-        // is a PARAMETER: a pass that renders into the tone target has to bind
-        // something else there, and the scratch target is the harmless choice —
-        // `fs_cloud_tone`, the one entry point drawn into that target, never
-        // reads binding 4 at all.
-        let cloud_group = |front, tone| {
+        // attachments whether the shader reads it or not, so the views a pass
+        // WRITES are PARAMETERS here: the tone pass binds a scratch where the
+        // tone target would be, and the tile pass binds one at each tile. The
+        // scratch is the harmless choice — neither `fs_cloud_tone` nor
+        // `fs_cloud_tile` reads any of those three bindings.
+        let cloud_group = |front, tone, tile: [&wgpu::TextureView; 2]| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("spectral_cloud_composite_group"),
                 layout: &pipelines.composite_layout,
@@ -418,15 +642,34 @@ impl Targets {
                         binding: 4,
                         resource: wgpu::BindingResource::TextureView(tone),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(tile[0]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::TextureView(tile[1]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::Sampler(&pipelines.tile_sampler),
+                    },
                 ],
             })
         };
-        let bake_group = cloud_group(&views[1], &views[0]);
+        let scratch_tile = [&views[0], &views[0]];
+        let tile_views =
+            tile.as_ref().map_or(scratch_tile, |tile| [&tile.views[0], &tile.views[1]]);
+        let bake_group = cloud_group(&views[1], &views[0], tile_views);
         // Reads the baked material the light passes just wrote, and writes the
         // tone target — so that is the one view it stands a scratch in for.
-        let tone_group = tone.as_ref().map(|_| cloud_group(&source_view, &views[0]));
-        let composite_group =
-            cloud_group(&source_view, tone.as_ref().map_or(&views[0], |(view, _)| view));
+        let tone_group = tone.as_ref().map(|_| cloud_group(&source_view, &views[0], tile_views));
+        let tile_group = tile.as_ref().map(|_| cloud_group(&source_view, &views[0], scratch_tile));
+        let composite_group = cloud_group(
+            &source_view,
+            tone.as_ref().map_or(&views[0], |(view, _)| view),
+            tile_views,
+        );
         let source_group = source_group(device, source_layout, &source_uniform, grid, lut);
         Self {
             #[cfg(test)]
@@ -440,12 +683,14 @@ impl Targets {
             ),
             views,
             tone,
+            tile,
             source_uniform,
             source_group,
             uniform,
             filter_groups,
             bake_group,
             tone_group,
+            tile_group,
             composite_group,
         }
     }
@@ -454,6 +699,36 @@ impl Targets {
     /// against what this frame's settings ask for.
     pub fn tone_size(&self) -> Option<[u32; 2]> {
         self.tone.as_ref().map(|&(_, size)| size)
+    }
+
+    /// The held tile's texel size, which is the whole of what it was ALLOCATED
+    /// for — both targets exist whatever the style, so a style change is a
+    /// rebake and never a reallocation.
+    pub fn tile_texels(&self) -> Option<u32> {
+        self.tile.as_ref().map(|tile| tile.texels)
+    }
+
+    /// Whether the tile holds something other than `key` and so owes a walk.
+    /// The WHOLE of the rebake decision — see [`TileKey`] for what is in one.
+    pub fn tile_owes(&self, key: TileKey) -> bool {
+        self.tile.as_ref().is_some_and(|tile| tile.baked != Some(key))
+    }
+
+    /// The tile's two targets and the group the pass that writes them binds.
+    pub fn tile_pass(&self) -> Option<(&[wgpu::TextureView; 2], &wgpu::BindGroup)> {
+        Some((&self.tile.as_ref()?.views, self.tile_group.as_ref()?))
+    }
+
+    /// Records the key the tile now holds. Called once the bake is encoded.
+    pub fn tile_baked(&mut self, key: TileKey) {
+        if let Some(tile) = self.tile.as_mut() {
+            tile.baked = Some(key);
+        }
+    }
+
+    /// The baked tile, for a rebuilt set of targets to carry across.
+    pub fn into_tile(self) -> Option<Tile> {
+        self.tile
     }
 
     pub fn rebind(
@@ -473,6 +748,7 @@ impl Targets {
         rect: egui::Rect,
         ppp: f32,
         atmosphere: SpectrogramAtmosphere,
+        tile: Option<TileKey>,
     ) {
         // The source mesh records only measured history. Its already-blurred
         // light can occupy the whole spectrogram region, without crossing the
@@ -533,13 +809,11 @@ impl Targets {
             contour_strength: settings.contour_strength,
             tone_baked: u32::from(self.tone.is_some()),
             drift,
-            time: (cloud_time % 1000.0) as f32,
             cloud_depth: settings.cloud_depth,
             scale_size: settings.scale_size,
             scale_variety: settings.scale_variety,
             scale_refract: settings.scale_refract,
             scale_relief: settings.scale_relief,
-            scale_rock: settings.scale_rock,
             cloud_style: match settings.cloud_style {
                 harmonigraph_scene::CloudStyle::Mosaic => 0,
                 harmonigraph_scene::CloudStyle::Watercolor => 1,
@@ -550,9 +824,10 @@ impl Targets {
             wash_lobe: settings.wash_lobe,
             wash_refract: settings.wash_refract,
             wash_pool: settings.wash_pool,
-            wash_grain: settings.wash_grain,
             wash_layers: settings.wash_layers,
-            _tail: [0; 2],
+            // Zero where no tile was allocated, which is the live walk — so the
+            // shader never reads a tile that is not there.
+            tile_cells: tile.map_or(0, TileKey::period),
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }
@@ -604,7 +879,70 @@ fn source_group(
 
 #[cfg(test)]
 mod tests {
-    use super::{retained_size, tone_size, SpectrogramAtmosphere};
+    use super::{
+        retained_size, tile_key, tone_size, SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS,
+        TILE_MAX, TILE_STEP, WASH_CELLS,
+    };
+
+    /// The tile is as fine as the pane draws a cell, in whole [`TILE_STEP`]s —
+    /// and the cell it divides by is the SHADER's own.
+    ///
+    /// Both halves matter. Finer than the pane buys nothing and coarser is a
+    /// blur the dial did not ask for, so the size follows the pane; but at one
+    /// texel per pixel a resize drag would rebake a whole cell walk on every
+    /// frame of the drag, which is the too-wide key this repo ships. The step
+    /// is what makes a drag cross a boundary a handful of times.
+    ///
+    /// The three constants are a mirror of the shader's, since only this side
+    /// needs to know what a cell is. Read off the shipped text, because a
+    /// mirror that drifted would size every tile wrong with nothing saying so.
+    #[test]
+    fn the_tile_is_as_fine_as_the_pane_draws_a_cell() {
+        let number = |name: &str| -> f32 {
+            crate::shadow::tests::shader_const(crate::spectrogram::SPECTROGRAM_SRC, name)
+                .split('/')
+                .map(|part| part.trim().parse::<f32>().expect("a number"))
+                .reduce(|a, b| a / b)
+                .expect("a constant has a value")
+        };
+        assert_eq!(CLOUD_UNITS, number("CLOUD_UNITS"));
+        assert_eq!(SCALE_CELLS, number("SCALE_CELLS"));
+        assert_eq!(WASH_CELLS, number("WASH_CELLS"));
+
+        let at = |cloud_tile, wash_size, height| {
+            tile_key(
+                [1920, height],
+                SpectrogramAtmosphere {
+                    settings: harmonigraph_scene::SpectralAtmosphere {
+                        cloud_tile,
+                        wash_size,
+                        cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
+                        ..Default::default()
+                    },
+                    region: egui::Rect::ZERO,
+                    pitch_vertical: true,
+                    points_per_cent: 0.03,
+                    points_per_ms: 0.01,
+                    now: 0.0,
+                },
+            )
+            .map(|key| key.texels())
+        };
+        // A 1080-pixel pane draws 20.6 pixels to a glob cell at the fresh size,
+        // so twenty of them want 411 texels and get the next whole step up.
+        assert_eq!(at(20.0, 1.0, 1080), Some(2 * TILE_STEP));
+        assert_eq!(at(40.0, 1.0, 1080), Some(4 * TILE_STEP));
+        // A pane resized by a tenth stays on the same step.
+        assert_eq!(at(20.0, 1.0, 1188), at(20.0, 1.0, 1080));
+        // Fine cells want few texels, and the floor is one step.
+        assert_eq!(at(20.0, harmonigraph_scene::CLOUD_SIZE_MIN, 1080), Some(TILE_STEP));
+        // Coarse cells on a tall pane run past the ceiling, where the tile is
+        // simply coarser than the pane — the same trade `Cloud pixel size`
+        // makes on purpose.
+        assert_eq!(at(40.0, harmonigraph_scene::CLOUD_SIZE_MAX, 4320), Some(TILE_MAX));
+        // The dial's own zero is the live walk: nothing allocated at all.
+        assert_eq!(at(0.0, 1.0, 1080), None);
+    }
 
     /// A reduced tone target exists only where it would be SMALLER than the
     /// pane, and it is the pane's pixels divided by device pixels per sample.
