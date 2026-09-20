@@ -245,13 +245,12 @@ fn scene_floats(scene: &Scene) -> Floats {
         f.one(format!("nodes[{i}].trail"), *trail);
     }
 
-    let Camera { target, yaw, pitch, distance, fov_y, projection: _, cabinet_angle, cabinet_scale } =
+    let Camera { target, yaw, pitch, distance, projection: _, cabinet_angle, cabinet_scale } =
         camera;
     f.vec3("camera.target", *target);
     f.one("camera.yaw", *yaw);
     f.one("camera.pitch", *pitch);
     f.one("camera.distance", *distance);
-    f.one("camera.fov_y", *fov_y);
     f.one("camera.cabinet_angle", *cabinet_angle);
     f.one("camera.cabinet_scale", *cabinet_scale);
 

@@ -467,7 +467,7 @@ These individual issues make the leads independently returnable without converti
 | Repeated ranges | [#961](https://github.com/yan-h/harmonigraph/issues/961) | Bounded sanitizer/range reuse; coordinate with #957. |
 | Recorder/display/replay parity | [#962](https://github.com/yan-h/harmonigraph/issues/962) | Promote focused coverage when implementation is requested. |
 | Hidden naming reach | [#963](https://github.com/yan-h/harmonigraph/issues/963) | Investigate actual naming loss before a decision. |
-| Custom camera FOV | [#964](https://github.com/yan-h/harmonigraph/issues/964) | Investigate visual value; spacing equivalence does not establish FOV equivalence. |
+| Custom camera FOV | [#964](https://github.com/yan-h/harmonigraph/issues/964) | Investigated and removed: every saved value measured at the default, so `fov_y` is now a constant rather than a persisted field. |
 | Current architecture guide | [#966](https://github.com/yan-h/harmonigraph/issues/966) | Correct verified Fold-cache and closed-window completion descriptions. |
 | Old dispatch plans | [#967](https://github.com/yan-h/harmonigraph/issues/967) | Reconcile dated mechanics with current worktree ownership. |
 | GUI dependency cohort | [#968](https://github.com/yan-h/harmonigraph/issues/968) | Investigate the newly eligible published version before deciding on a rebase. |
