@@ -51,7 +51,8 @@ pub struct SpectrogramAtmosphere {
 ///
 /// **What decides this size, both directions.** The pane's pixels and `ppp`,
 /// the two softnesses through `points_per_cent`/`points_per_ms`, whether the
-/// field is drawn at all, and now [`SpectralAtmosphere::blur_time_step`] with
+/// field is drawn at all, and now
+/// [`harmonigraph_scene::SpectralAtmosphere::blur_time_step`] with
 /// [`SpectrogramAtmosphere::points_per_slab`]. Nothing else reaches the
 /// picture's needed resolution, so nothing else may serve a stale one. The
 /// input that CHURNS is the slab width: `points_per_slab` moves continuously
