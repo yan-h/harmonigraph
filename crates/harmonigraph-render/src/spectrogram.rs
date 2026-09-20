@@ -3012,8 +3012,7 @@ mod tests {
     }
 
     /// Every period the `Cloud tile` bar offers makes a whole number of cells
-    /// out of EVERY lattice the two walks hash on, both across the period and
-    /// along the oblique lattice's pitch shift.
+    /// out of EVERY lattice the two walks hash on.
     ///
     /// A tile is one period of the walk read through a REPEATING sampler, so the
     /// walk has to be periodic or its far edge hashes cells that do not meet its
@@ -3036,7 +3035,6 @@ mod tests {
         };
         let fine = number("WASH_FBM_FINE_TILED");
         let warp = number("WASH_WARP_SCALE");
-        let shift = number("CLOUD_TILE_PITCH_SHIFT");
         let lattices = [
             ("the mosaic's fine octave", number("DOME_LACUNARITY")),
             ("the wash's fine octave", number("WASH_LACUNARITY")),
@@ -3056,63 +3054,52 @@ mod tests {
                      whole number of them, so the walk does not close on itself and the tile \
                      draws a seam every period"
                 );
-                let shifted = lattice * shift;
-                assert!(
-                    (shifted - shifted.round()).abs() < 1.0e-3,
-                    "the {shift}-cell pitch stagger leaves {name} shifted by {shifted} cells, \
-                     which is not a whole number of them, so the oblique tile does not close"
-                );
             }
         }
     }
 
-    /// The production shader's hash fold closes on both vectors of the
-    /// oblique lattice, including on the negative-time side of every derived
-    /// lattice, while one pure-time period deliberately lands elsewhere.
+    /// The production shader's hash fold closes on both axes of every derived
+    /// lattice, including on their negative sides.
     ///
     /// This probes `wrap_cell_for_tile` itself through a compute entry point.
     /// Sampling a baked texture cannot prove this: a repeating sampler repeats
     /// even a texture whose own two edges do not meet, hiding the seam this
     /// contract exists to prevent.
     #[test]
-    fn the_tile_hash_fold_closes_every_oblique_lattice() {
+    fn the_tile_hash_fold_closes_every_lattice() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        const COUNT: u64 = 20;
+        const COUNT: u64 = 18;
         let source = format!(
             "{}\n{}",
             SPECTROGRAM_SRC,
             r#"
-struct WrapProbe { cells: array<vec2<i32>, 20> }
+struct WrapProbe { cells: array<vec2<i32>, 18> }
 @group(0) @binding(3) var<storage, read_write> wrap_probe: WrapProbe;
 
 @compute @workgroup_size(1)
 fn cs_wrap_probe() {
-    // P40 coarse, pitch vertical: base, oblique, pitch, pure time.
-    wrap_probe.cells[0] = wrap_cell_for_tile(vec2<i32>(-41, 7), 40, 40u, 1u);
-    wrap_probe.cells[1] = wrap_cell_for_tile(vec2<i32>(-1, 17), 40, 40u, 1u);
-    wrap_probe.cells[2] = wrap_cell_for_tile(vec2<i32>(-41, 47), 40, 40u, 1u);
-    wrap_probe.cells[3] = wrap_cell_for_tile(vec2<i32>(-1, 7), 40, 40u, 1u);
-    // The same semantic coordinates with pitch horizontal.
-    wrap_probe.cells[4] = wrap_cell_for_tile(vec2<i32>(7, -41), 40, 40u, 0u);
-    wrap_probe.cells[5] = wrap_cell_for_tile(vec2<i32>(17, -1), 40, 40u, 0u);
-    wrap_probe.cells[6] = wrap_cell_for_tile(vec2<i32>(47, -41), 40, 40u, 0u);
-    wrap_probe.cells[7] = wrap_cell_for_tile(vec2<i32>(7, -1), 40, 40u, 0u);
-    // P40's 2.1, 0.9 and 1.8 lattices: shifts 21, 9 and 18.
-    wrap_probe.cells[8] = wrap_cell_for_tile(vec2<i32>(-85, 7), 84, 40u, 1u);
-    wrap_probe.cells[9] = wrap_cell_for_tile(vec2<i32>(-1, 28), 84, 40u, 1u);
-    wrap_probe.cells[10] = wrap_cell_for_tile(vec2<i32>(-85, 91), 84, 40u, 1u);
-    wrap_probe.cells[11] = wrap_cell_for_tile(vec2<i32>(-37, 7), 36, 40u, 1u);
-    wrap_probe.cells[12] = wrap_cell_for_tile(vec2<i32>(-1, 16), 36, 40u, 1u);
-    wrap_probe.cells[13] = wrap_cell_for_tile(vec2<i32>(-37, 43), 36, 40u, 1u);
-    wrap_probe.cells[14] = wrap_cell_for_tile(vec2<i32>(-73, 7), 72, 40u, 1u);
-    wrap_probe.cells[15] = wrap_cell_for_tile(vec2<i32>(-1, 25), 72, 40u, 1u);
-    wrap_probe.cells[16] = wrap_cell_for_tile(vec2<i32>(-73, 79), 72, 40u, 1u);
-    // P20's 2.1 lattice uses the same 21-cell derived shift.
-    wrap_probe.cells[17] = wrap_cell_for_tile(vec2<i32>(-43, 7), 42, 20u, 1u);
-    wrap_probe.cells[18] = wrap_cell_for_tile(vec2<i32>(-1, 28), 42, 20u, 1u);
-    wrap_probe.cells[19] = wrap_cell_for_tile(vec2<i32>(-43, 49), 42, 20u, 1u);
+    // Base, +x period, +y period for P40 and every derived P40 lattice.
+    wrap_probe.cells[0] = wrap_cell_for_tile(vec2<i32>(-41, 7), 40);
+    wrap_probe.cells[1] = wrap_cell_for_tile(vec2<i32>(-1, 7), 40);
+    wrap_probe.cells[2] = wrap_cell_for_tile(vec2<i32>(-41, 47), 40);
+    wrap_probe.cells[3] = wrap_cell_for_tile(vec2<i32>(-85, 7), 84);
+    wrap_probe.cells[4] = wrap_cell_for_tile(vec2<i32>(-1, 7), 84);
+    wrap_probe.cells[5] = wrap_cell_for_tile(vec2<i32>(-85, 91), 84);
+    wrap_probe.cells[6] = wrap_cell_for_tile(vec2<i32>(-37, 7), 36);
+    wrap_probe.cells[7] = wrap_cell_for_tile(vec2<i32>(-1, 7), 36);
+    wrap_probe.cells[8] = wrap_cell_for_tile(vec2<i32>(-37, 43), 36);
+    wrap_probe.cells[9] = wrap_cell_for_tile(vec2<i32>(-73, 7), 72);
+    wrap_probe.cells[10] = wrap_cell_for_tile(vec2<i32>(-1, 7), 72);
+    wrap_probe.cells[11] = wrap_cell_for_tile(vec2<i32>(-73, 79), 72);
+    // P20 coarse and its 2.1 lattice.
+    wrap_probe.cells[12] = wrap_cell_for_tile(vec2<i32>(-21, 7), 20);
+    wrap_probe.cells[13] = wrap_cell_for_tile(vec2<i32>(-1, 7), 20);
+    wrap_probe.cells[14] = wrap_cell_for_tile(vec2<i32>(-21, 27), 20);
+    wrap_probe.cells[15] = wrap_cell_for_tile(vec2<i32>(-43, 7), 42);
+    wrap_probe.cells[16] = wrap_cell_for_tile(vec2<i32>(-1, 7), 42);
+    wrap_probe.cells[17] = wrap_cell_for_tile(vec2<i32>(-43, 49), 42);
 }
 "#,
         );
@@ -3162,26 +3149,19 @@ fn cs_wrap_probe() {
         let cells: &[[i32; 2]] = bytemuck::cast_slice(&mapped);
         assert_eq!(
             cells[0],
-            [39, 27],
-            "negative vertical time did not use floor division: {cells:?}"
+            [39, 7],
+            "negative coordinates did not use positive modulo: {cells:?}"
         );
-        assert_eq!(
-            cells[4],
-            [27, 39],
-            "negative horizontal time did not use floor division: {cells:?}"
-        );
-        for group in [[0, 1, 2], [4, 5, 6], [8, 9, 10], [11, 12, 13], [14, 15, 16], [17, 18, 19]] {
+        for group in [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11], [12, 13, 14], [15, 16, 17]] {
             assert_eq!(
                 cells[group[0]], cells[group[1]],
-                "an oblique translation changed the wrapped hash cell: {cells:?}"
+                "an x-period translation changed the wrapped hash cell: {cells:?}"
             );
             assert_eq!(
                 cells[group[0]], cells[group[2]],
-                "a pitch-period translation changed the wrapped hash cell: {cells:?}"
+                "a y-period translation changed the wrapped hash cell: {cells:?}"
             );
         }
-        assert_ne!(cells[0], cells[3], "P40 still repeated on the pure time axis: {cells:?}");
-        assert_ne!(cells[4], cells[7], "horizontal P40 still repeated on time: {cells:?}");
     }
 
     /// The fixture the wash is measured over: the ridge pane above, with the
@@ -3573,177 +3553,117 @@ fn cs_wrap_probe() {
         );
     }
 
-    /// The pane the tile is measured over: square, and twice [`SIZE`] on a side.
+    /// The production lookup is the exact 3-4-5 rotation in semantic
+    /// `(time, pitch)` coordinates, whichever pane axis carries pitch.
     ///
-    /// The size is the fixture-reach half of
-    /// [`a_tiled_cloud_draws_the_live_walk_inside_its_first_period`] and not
-    /// dressing. The two pictures may only be compared where every cell the
-    /// walk VISITS lies inside the first period, and the pane's cell
-    /// coordinates run either side of zero — so at most the quarter of the pane
-    /// whose cells are positive is ever comparable, and a small pane would
-    /// leave that quarter a few hundred pixels.
-    const TILE_SIZE: [u32; 2] = [SIZE[0] * 2, SIZE[1] * 2];
-
-    /// A tiled cloud draws EXACTLY the live walk inside its first period.
-    ///
-    /// The tile wraps every cell a hash is taken at onto `[0, P)`, and inside
-    /// that range a wrapped cell IS the unwrapped one — so where the whole ring
-    /// a pixel visits lies in the first period, the tiled picture is the live
-    /// walk resampled through one bilinear tap of a half-float texture, and
-    /// nothing else. That is the claim that makes the tile a repeat of the real
-    /// texture rather than a second look, and it is the one thing a wrong
-    /// lookup — a scale, an offset, a `q` that forgot the drift, a missing
-    /// second octave — cannot pass.
-    ///
-    /// Measured with the warp noise OFF (`Lobe shape` at 0) because it is the
-    /// one place the tiled path deliberately differs: its second octave runs at
-    /// `WASH_FBM_FINE_TILED` rather than 2.07, which is not the same field
-    /// anywhere. Everything else is expected to agree.
-    ///
-    /// The window is worked out per pixel from the shader's own geometry, and
-    /// the count of pixels in it is asserted — a mask that had drifted off the
-    /// pane would otherwise compare nothing and pass. Measured over 9,540 pixels
-    /// for the mosaic and 8,208 for the wash, out of a 65,536-pixel pane: a mean
-    /// absolute channel difference of 0.02/255 and 0.36/255, NO mosaic pixel
-    /// moving past 4 at all and 2.2% of the wash's, worst channel 1 and 21.
-    ///
-    /// The wash's worst is where its stored offset STEPS — the glob under the
-    /// visible one changing, which the feather only smooths on the visible
-    /// one's own rim — and one bilinear texel there is about three quarters of
-    /// a pixel at this fixture's density. That is the resampling this dial is
-    /// spending, and it is why the bound is a mean rather than a per-pixel one.
+    /// This probes the helpers themselves through a compute entry point. A
+    /// rendered repeat alone cannot tell a 36.87-degree turn from an arbitrary
+    /// affine transform whose two sampled patches happen to agree. It also
+    /// checks the directional channels: rotating the lookup without rotating
+    /// those vectors would leave refraction and lighting on the old axes.
     #[test]
-    fn a_tiled_cloud_draws_the_live_walk_inside_its_first_period() {
+    fn the_tile_uses_the_exact_rotation_in_both_pane_orientations() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // `SCALE_CELLS` is spelled as a quotient in the shader, so this reads
-        // one as well as a plain number.
-        let number = |name: &str| -> f32 {
-            crate::shadow::tests::shader_const(SPECTROGRAM_SRC, name)
-                .split('/')
-                .map(|part| part.trim().parse::<f32>().expect("a number"))
-                .reduce(|a, b| a / b)
-                .expect("a constant has a value")
-        };
-        // The one number below that is not read out of the shader, because it
-        // is not a constant there: both octaves are offset by this literal, in
-        // `cloud_domes` and in `wash_field`. The window is only right while
-        // that is what they say.
-        let fine_offset = [17.3_f32, 5.9];
-        assert!(
-            SPECTROGRAM_SRC.matches("vec2<f32>(17.3, 5.9)").count() == 2,
-            "the two fine octaves no longer sit at the offset this window assumes"
+        const COUNT: u64 = 8;
+        let source = format!(
+            "{}\n{}",
+            SPECTROGRAM_SRC,
+            r#"
+struct RotationProbe { values: array<vec2<f32>, 8> }
+@group(0) @binding(3) var<storage, read_write> rotation_probe: RotationProbe;
+
+@compute @workgroup_size(1)
+fn cs_rotation_probe() {
+    // Pitch vertical: the two P40 repeat vectors, pure time, and local time.
+    rotation_probe.values[0] = cloud_tile_uv_for(vec2<f32>(32.0, 24.0), 40.0, 1u);
+    rotation_probe.values[1] = cloud_tile_uv_for(vec2<f32>(-24.0, 32.0), 40.0, 1u);
+    rotation_probe.values[2] = cloud_tile_uv_for(vec2<f32>(40.0, 0.0), 40.0, 1u);
+    rotation_probe.values[3] = rotate_tile_vector_for(vec2<f32>(1.0, 0.0), 1u);
+    // The same semantic vectors when physical x is pitch and y is time.
+    rotation_probe.values[4] = cloud_tile_uv_for(vec2<f32>(24.0, 32.0), 40.0, 0u);
+    rotation_probe.values[5] = cloud_tile_uv_for(vec2<f32>(32.0, -24.0), 40.0, 0u);
+    rotation_probe.values[6] = cloud_tile_uv_for(vec2<f32>(0.0, 40.0), 40.0, 0u);
+    rotation_probe.values[7] = rotate_tile_vector_for(vec2<f32>(0.0, 1.0), 0u);
+}
+"#,
         );
-        let units = number("CLOUD_UNITS");
-        let period = 20.0_f32;
-        use harmonigraph_scene::CloudStyle;
-        let mut read = Vec::new();
-        for (style, cells, ring, pitch_vertical) in [
-            (CloudStyle::Mosaic, number("SCALE_CELLS") / 2.0, 1.0, true),
-            (CloudStyle::Mosaic, number("SCALE_CELLS") / 2.0, 1.0, false),
-            (CloudStyle::Watercolor, number("WASH_CELLS") / 2.0, number("WASH_RING"), true),
-            (CloudStyle::Watercolor, number("WASH_CELLS") / 2.0, number("WASH_RING"), false),
-        ] {
-            let mut cb = cloud_fixture();
-            cb.rect = egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(TILE_SIZE[0] as f32, TILE_SIZE[1] as f32),
-            );
-            cb.vertices = full_quad_in(12, TILE_SIZE);
-            cb.read.rows = TILE_SIZE[1];
-            cb.grid = grid_of(noisy_grid(BINS as usize, 12), BINS, 12, 0);
-            let atmosphere = cb.atmosphere.as_mut().unwrap();
-            atmosphere.region = cb.rect;
-            atmosphere.pitch_vertical = pitch_vertical;
-            let s = &mut atmosphere.settings;
-            s.cloud_style = style;
-            s.cloud_depth = 1.0;
-            // The biggest cells the bars offer, so one period covers a real
-            // fraction of the pane rather than repeating off the edge of it.
-            s.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
-            s.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX;
-            s.wash_lobe = 0.0;
-            // A still texture: `cloud_time` is zero, so the drift is the
-            // constant `[0, 0.6]` its cosine starts at and both frames read the
-            // field in the same place.
-            s.cloud_speed = 0.0;
-            let live = fresh_frame(&device, &queue, &cb);
-            cb.atmosphere.as_mut().unwrap().settings.cloud_tile = period;
-            let tiled = fresh_frame(&device, &queue, &cb);
-            assert_ne!(
-                live, tiled,
-                "{style:?} pitch_vertical={pitch_vertical} drew the same frame tiled, so the \
-                 tile never ran"
-            );
-
-            // Which pixels the two are entitled to agree on: those whose whole
-            // ring, in both octaves, lies inside the first period. The fine
-            // octave counts in its own cells, `LACUNARITY` of them to one, so
-            // its window is the tighter of the two and is what decides the
-            // shape below.
-            let lacunarity = number("DOME_LACUNARITY");
-            let drift = [0.0_f32, 0.6];
-            let inside = |axis: usize, pt: f32| {
-                let half = TILE_SIZE[axis] as f32 / 2.0;
-                let r = ((pt - half) / TILE_SIZE[1] as f32 * units + drift[axis]) * cells;
-                let fine = lacunarity * r + fine_offset[axis];
-                let held = |v: f32, last: f32| v >= ring + 1.0 && v <= last - ring - 1.0;
-                held(r, period) && held(fine, (lacunarity * period).round())
-            };
-            let (mut compared, mut moved, mut worst, mut total) = (0u32, 0u32, 0u32, 0u64);
-            for y in 0..TILE_SIZE[1] {
-                for x in 0..TILE_SIZE[0] {
-                    if !inside(0, x as f32 + 0.5) || !inside(1, y as f32 + 0.5) {
-                        continue;
-                    }
-                    compared += 1;
-                    let at = (y * TILE_SIZE[0] + x) as usize * 4;
-                    let diff = |c: usize| u32::from(live[at + c].abs_diff(tiled[at + c]));
-                    moved += u32::from((0..3).any(|c| diff(c) > 4));
-                    for c in 0..3 {
-                        worst = worst.max(diff(c));
-                        total += u64::from(diff(c));
-                    }
-                }
-            }
-            let pane = TILE_SIZE[0] * TILE_SIZE[1];
-            assert!(
-                compared * 20 > pane,
-                "{style:?} pitch_vertical={pitch_vertical} compared {compared} of {pane} pixels, \
-                 which is too little of the pane to say the tile draws the walk"
-            );
-            let mean = total as f64 / f64::from(compared * 3);
-            read.push((
-                style,
-                pitch_vertical,
-                compared,
-                mean,
-                f64::from(moved) / f64::from(compared),
-                worst,
-            ));
-            assert!(
-                mean < 0.5 && worst < 32,
-                "{style:?} pitch_vertical={pitch_vertical} tiled is not the walk inside its own \
-                 first period: {read:?}"
-            );
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("spectral_cloud_rotation_probe"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("spectral_cloud_rotation_probe"),
+            layout: None,
+            module: &shader,
+            entry_point: Some("cs_rotation_probe"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let bytes = COUNT * 8;
+        let output = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("spectral_cloud_rotation_probe_output"),
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("spectral_cloud_rotation_probe"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry { binding: 3, resource: output.as_entire_binding() }],
+        });
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("spectral_cloud_rotation_probe_readback"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
         }
+        encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, bytes);
+        queue.submit([encoder.finish()]);
+        let slice = readback.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |result| result.expect("map rotation probe"));
+        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll rotation probe");
+        let mapped = slice.get_mapped_range();
+        let values: &[[f32; 2]] = bytemuck::cast_slice(&mapped);
+        let close = |actual: [f32; 2], expected: [f32; 2]| {
+            assert!(
+                actual.into_iter().zip(expected).all(|(a, b)| (a - b).abs() < 1.0e-6),
+                "{actual:?} is not {expected:?}: {values:?}"
+            );
+        };
+        for index in [0, 4] {
+            close(values[index], [1.0, 0.0]);
+        }
+        for index in [1, 5] {
+            close(values[index], [0.0, 1.0]);
+        }
+        for index in [2, 6] {
+            close(values[index], [0.8, -0.6]);
+        }
+        close(values[3], [0.8, 0.6]);
+        close(values[7], [0.6, 0.8]);
     }
-
-    /// The selected B10 lattice repeats along `(time = P, pitch = 10)` and
-    /// along one pure-pitch period, but NOT along one pure-time period.
+    /// The exact 3-4-5 rotation repeats along `(time = 4P/5, pitch = 3P/5)`
+    /// and `(-3P/5, 4P/5)`, but NOT along either unrotated axis.
     ///
     /// The fixture is 525 pixels tall at the fresh wash size, exactly ten
     /// pixels per cell. That makes every translation below land on a pixel
     /// centre rather than measuring interpolation phase. Its 920 by 525 extent
-    /// is large enough to hold all three translated 64-pixel patches even at
-    /// P40; a normal 128-pixel fixture cannot reach one repeat and would pass
-    /// for the wrong reason. Constant light removes the sound from the
-    /// comparison. The direct shader probe above owns hash closure; this one
-    /// owns the forward bake and inverse sampling basis that turn it into an
-    /// undistorted repeating picture.
+    /// is large enough to hold both translated 64-pixel patches even at P40;
+    /// a normal 128-pixel fixture cannot reach one repeat and would pass for
+    /// the wrong reason. Constant light removes the sound from the comparison.
+    /// The direct shader probes above own hash closure and exact coefficients;
+    /// this one owns the bake and sampling path that turn them into a picture.
     #[test]
-    fn the_cloud_tile_repeats_on_the_oblique_lattice_and_not_the_time_axis() {
+    fn the_cloud_tile_repeats_on_the_rotated_lattice_and_not_the_pane_axes() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
@@ -3799,30 +3719,33 @@ fn cs_wrap_probe() {
                 let frame = fresh_frame(&device, &queue, &cb);
                 let pixels = |cells: i32| (cells * PIXELS_PER_CELL) as u32;
                 let p = pixels(period);
-                let s = pixels(10);
-                let (time, oblique, pitch) = if pitch_vertical {
-                    ([p, 0], [p, s], [0, p])
+                let a = pixels(period * 4 / 5);
+                let b = pixels(period * 3 / 5);
+                let (time, pitch, repeats) = if pitch_vertical {
+                    ([p, 0], [0, p], [([16, 16], [16 + a, 16 + b]), ([16 + b, 16], [16, 16 + a])])
                 } else {
-                    ([0, p], [s, p], [p, 0])
+                    ([0, p], [p, 0], [([16, 16], [16 + b, 16 + a]), ([16, 16 + b], [16 + a, 16])])
                 };
                 let shifted = |delta: [u32; 2]| [base[0] + delta[0], base[1] + delta[1]];
-                let oblique_diff = compare(&frame, base, shifted(oblique));
-                let pitch_diff = compare(&frame, base, shifted(pitch));
                 let time_diff = compare(&frame, base, shifted(time));
-                assert!(
-                    oblique_diff.0 < 0.1 && oblique_diff.1 <= 1,
-                    "P{period} pitch_vertical={pitch_vertical} did not repeat along its oblique \
-                     vector: {oblique_diff:?}"
-                );
-                assert!(
-                    pitch_diff.0 < 0.1 && pitch_diff.1 <= 1,
-                    "P{period} pitch_vertical={pitch_vertical} did not repeat along pitch: \
-                     {pitch_diff:?}"
-                );
+                let pitch_diff = compare(&frame, base, shifted(pitch));
+                for (index, (from, to)) in repeats.into_iter().enumerate() {
+                    let repeat_diff = compare(&frame, from, to);
+                    assert!(
+                        repeat_diff.0 < 0.1 && repeat_diff.1 <= 1,
+                        "P{period} pitch_vertical={pitch_vertical} did not repeat along rotated \
+                         vector {index}: {repeat_diff:?}"
+                    );
+                }
                 assert!(
                     time_diff.0 > 1.0 && time_diff.2 > PATCH * PATCH / 10,
-                    "P{period} pitch_vertical={pitch_vertical} still repeated on the pure time \
-                     axis: {time_diff:?}"
+                    "P{period} pitch_vertical={pitch_vertical} still repeated on the pane's \
+                     pure time axis: {time_diff:?}"
+                );
+                assert!(
+                    pitch_diff.0 > 1.0 && pitch_diff.2 > PATCH * PATCH / 10,
+                    "P{period} pitch_vertical={pitch_vertical} still repeated on the pane's \
+                     pure pitch axis: {pitch_diff:?}"
                 );
             }
         }
@@ -3869,7 +3792,7 @@ fn cs_wrap_probe() {
         assert_ne!(
             key_at(|_| {}, 0.0, false),
             fresh,
-            "changing which axis is time kept a tile baked for the old oblique basis"
+            "changing which axis is time kept a tile baked for the old rotated basis"
         );
         for now in [0.5, 7.0, 600.0] {
             assert_eq!(key(|_| {}, now), fresh, "a clock of {now} rebaked a field that only slid");
@@ -3941,14 +3864,14 @@ fn cs_wrap_probe() {
         assert_eq!(
             passes(&resources) - after_dial,
             steady + 1,
-            "changing which axis is time did not rebake the oblique tile"
+            "changing which axis is time did not rebake the rotated tile"
         );
         let after_orientation = passes(&resources);
         frame_with(&device, &queue, &mut resources, &cb);
         assert_eq!(
             passes(&resources) - after_orientation,
             steady,
-            "an unchanged pane orientation rebaked the oblique tile again"
+            "an unchanged pane orientation rebaked the rotated tile again"
         );
     }
 

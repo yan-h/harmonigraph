@@ -290,12 +290,13 @@ struct Cloud {
     wash_pool: f32,
     wash_layers: f32,
     // The tile's period in cells, 0 for the live walk. Above zero the cell a
-    // hash is taken at is folded onto the oblique period described beside
+    // hash is taken at is folded onto the square period described beside
     // `wrap_cell`, `fs_cloud_tile` bakes one period of it, and the two paths
-    // below read that texture instead of walking the ring per pixel.
+    // below read that texture through the rotated coordinates instead of
+    // walking the ring per pixel.
     tile_cells: u32,
-    // 1 when pitch is the pane's Y axis, 0 when it is X. The repeat advances
-    // along time and shifts along pitch, so its basis follows this orientation.
+    // 1 when pitch is the pane's Y axis, 0 when it is X. The 3-4-5 rotation is
+    // defined in (time, pitch), so its basis follows this orientation.
     pitch_vertical: u32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
@@ -508,12 +509,12 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 // `Refraction` carries the lookup from this round's continuous slope onto round
 // 1's flat per-glob patch, and `Variety` is how much the globs differ in size.
 const CLOUD_UNITS: f32 = 10.0;
-// Each repeat along time shifts the field this many cells along pitch. All
-// offered periods and every derived lattice make the corresponding scaled
-// shift a whole number; the Rust closure proof holds that contract against the
-// shader text. At P40 this is the selected B10 quarter-tile stagger: the field
-// does not return to the same pitch row until four time periods, or 160 cells.
-const CLOUD_TILE_PITCH_SHIFT: f32 = 10.0;
+// The tiled field is turned by the exact 3-4-5 rotation: cosine 4/5, sine 3/5,
+// or 36.87 degrees. The square walk is baked in its own coordinates and this
+// rotation is applied only when it is read, so every octave still closes on
+// the ordinary square period and no resampling stretch is introduced.
+const CLOUD_TILE_ROT_COS: f32 = 0.8;
+const CLOUD_TILE_ROT_SIN: f32 = 0.6;
 // How many dome cells cross one cloud unit at `Scale size` 1x. Carries the
 // retired `Cloud size` default: the shipped picture was 6 cells per unit over a
 // frame half this one's, and `6 / 2.2` at the old `Scale size` default is what
@@ -522,58 +523,58 @@ const SCALE_CELLS: f32 = 6.0 / 2.2;
 
 // The cell a hash is taken at, folded onto the tile when one is being baked.
 //
-// The two lattice vectors are one period along PITCH and one period along TIME
-// plus `CLOUD_TILE_PITCH_SHIFT` cells along pitch. That quarter-tile stagger at
-// P40 stops a repeated cloud edge landing on the same horizontal harmonic line
-// every time-axis period. It changes the repetition lattice, not the cells:
-// a glob's or dome's CENTRE is still built from the unwrapped cell, so none of
-// the local geometry is sheared.
+// The tile is square in its OWN coordinates. Rotating the already-periodic
+// result below keeps every lattice the walk uses exact; trying instead to wrap
+// the world-cell hashes on the 3-4-5 vectors would leave the 2.1x and 0.9x
+// octaves on fractional cells and draw a seam.
 //
 // WGSL's `%` truncates toward zero, so `-1 % 20` is `-1` and the second fold is
-// what lands a negative cell in the range. The quotient is then exact floor
-// division, including on that negative side. A period of 0 is the live walk
-// and returns the cell whole, so the untiled arithmetic is untouched; the
-// branch is on a uniform, so no two lanes disagree about taking it.
-fn wrap_cell_for_tile(
-    cell: vec2<i32>,
-    period: i32,
-    tile_cells: u32,
-    pitch_vertical: u32,
-) -> vec2<i32> {
+// what lands a negative cell in the range. A period of 0 is the live walk and
+// returns the cell whole, so the untiled arithmetic is untouched; the branch
+// is on a uniform, so no two lanes disagree about taking it.
+fn wrap_cell_for_tile(cell: vec2<i32>, period: i32) -> vec2<i32> {
     if period <= 0 {
         return cell;
     }
-    let positive_mod = ((cell % vec2<i32>(period)) + vec2<i32>(period)) % vec2<i32>(period);
-    let shift = i32(round(f32(period) * CLOUD_TILE_PITCH_SHIFT / f32(tile_cells)));
-    if pitch_vertical == 1u {
-        let repeat = (cell.x - positive_mod.x) / period;
-        return vec2<i32>(
-            positive_mod.x,
-            ((cell.y - repeat * shift) % period + period) % period,
-        );
-    }
-    let repeat = (cell.y - positive_mod.y) / period;
-    return vec2<i32>(
-        ((cell.x - repeat * shift) % period + period) % period,
-        positive_mod.y,
-    );
+    return ((cell % vec2<i32>(period)) + vec2<i32>(period)) % vec2<i32>(period);
 }
 
 fn wrap_cell(cell: vec2<i32>, period: i32) -> vec2<i32> {
-    return wrap_cell_for_tile(cell, period, cloud.tile_cells, cloud.pitch_vertical);
+    return wrap_cell_for_tile(cell, period);
 }
 
-// Texture coordinates in the oblique basis. The texture itself stays square;
-// the bake below evaluates the walk over the corresponding parallelogram, so
-// this inverse mapping restores the original undistorted cell geometry.
+// Texture coordinates in the rotated basis. `semantic` is `(time, pitch)`
+// whichever way the pane is oriented; multiplying by R^-1 turns the world
+// point back into the square tile's coordinates. The repeating sampler then
+// makes its two screen-space repeat vectors `(4P/5, 3P/5)` and
+// `(-3P/5, 4P/5)` in `(time, pitch)`.
+fn cloud_tile_uv_for(r: vec2<f32>, period: f32, pitch_vertical: u32) -> vec2<f32> {
+    let semantic = select(vec2<f32>(r.y, r.x), r, pitch_vertical == 1u);
+    return vec2<f32>(
+        CLOUD_TILE_ROT_COS * semantic.x + CLOUD_TILE_ROT_SIN * semantic.y,
+        -CLOUD_TILE_ROT_SIN * semantic.x + CLOUD_TILE_ROT_COS * semantic.y,
+    ) / period;
+}
+
 fn cloud_tile_uv(r: vec2<f32>) -> vec2<f32> {
-    let period = f32(cloud.tile_cells);
-    if cloud.pitch_vertical == 1u {
-        let time = r.x / period;
-        return vec2<f32>(time, (r.y - time * CLOUD_TILE_PITCH_SHIFT) / period);
-    }
-    let time = r.y / period;
-    return vec2<f32>(time, (r.x - time * CLOUD_TILE_PITCH_SHIFT) / period);
+    return cloud_tile_uv_for(r, f32(cloud.tile_cells), cloud.pitch_vertical);
+}
+
+// The baked channels carry directions as well as scalars. Sampling them at a
+// rotated coordinate turns the geometry only if its vectors turn with it;
+// otherwise refraction and lighting would still point along the unrotated
+// field. Convert to `(time, pitch)`, apply R, and return to pane axes.
+fn rotate_tile_vector_for(v: vec2<f32>, pitch_vertical: u32) -> vec2<f32> {
+    let semantic = select(vec2<f32>(v.y, v.x), v, pitch_vertical == 1u);
+    let turned = vec2<f32>(
+        CLOUD_TILE_ROT_COS * semantic.x - CLOUD_TILE_ROT_SIN * semantic.y,
+        CLOUD_TILE_ROT_SIN * semantic.x + CLOUD_TILE_ROT_COS * semantic.y,
+    );
+    return select(vec2<f32>(turned.y, turned.x), turned, pitch_vertical == 1u);
+}
+
+fn rotate_tile_vector(v: vec2<f32>) -> vec2<f32> {
+    return rotate_tile_vector_for(v, cloud.pitch_vertical);
 }
 
 // One cell's dome, as four 10-bit fractions: where its centre sits inside the
@@ -862,8 +863,8 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
             cloud_tile_uv(r),
             0.0,
         );
-        pile.face = tile.xy;
-        pile.to_centre = tile.zw;
+        pile.face = rotate_tile_vector(tile.xy);
+        pile.to_centre = rotate_tile_vector(tile.zw);
     } else {
         pile = cloud_domes(r, 0);
     }
@@ -1512,12 +1513,12 @@ fn wash_tile_field(r: vec2<f32>) -> WashField {
     let uv = cloud_tile_uv(r);
     let a = textureSampleLevel(cloud_tile_a, tile_sampler, uv, 0.0);
     var out: WashField;
-    out.coarse = Wet(a.xy, a.z);
+    out.coarse = Wet(rotate_tile_vector(a.xy), a.z);
     out.fine = Wet(vec2<f32>(0.0), 0.0);
     out.cover = 0.0;
     if cloud.wash_layers > 0.0 {
         let b = textureSampleLevel(cloud_tile_b, tile_sampler, uv, 0.0);
-        out.fine = Wet(b.xy, b.z);
+        out.fine = Wet(rotate_tile_vector(b.xy), b.z);
         out.cover = b.w;
     }
     return out;
@@ -1585,9 +1586,10 @@ fn fs_cloud_tone(in: VertexOut) -> @location(0) vec4<f32> {
 // ====================== ONE PERIOD OF THE CELL WALK ========================
 //
 // The tile, baked when `Cloud tile` is on and read by both paths above. It has
-// no pane, no drift and no light in it: it is one parallelogram period of
-// whichever walk the style selects, stored in a square texture. That is why a
-// resize, a drift or a note never touches it and `Scale size` reaches it only
+// no pane, no drift and no light in it: it is one square period of whichever
+// walk the style selects. The read turns that whole field by 36.87 degrees.
+// That is why a resize, a drift or a note never touches it and `Scale size`
+// reaches it only
 // through how many texels the renderer spends on a cell.
 struct TileVertex {
     @builtin(position) position: vec4<f32>,
@@ -1613,12 +1615,13 @@ struct TileBake {
 @fragment
 fn fs_cloud_tile(in: TileVertex) -> TileBake {
     let period = i32(cloud.tile_cells);
-    // A texel centre lands exactly where the inverse `cloud_tile_uv` mapping
-    // reads it back. `fraction.x` advances along TIME; `fraction.y` advances
-    // along PITCH. Their forward basis carries the ten-cell pitch stagger.
+    // A texel centre lands in the square tile coordinates that the inverse
+    // `cloud_tile_uv` rotation reads back. `fraction.x` advances along TIME;
+    // `fraction.y` advances along PITCH. The whole baked field, including its
+    // vectors above, is turned only when sampled.
     let period_f = f32(cloud.tile_cells);
     let time = in.fraction.x * period_f;
-    let pitch = in.fraction.y * period_f + in.fraction.x * CLOUD_TILE_PITCH_SHIFT;
+    let pitch = in.fraction.y * period_f;
     let cell = select(vec2<f32>(pitch, time), vec2<f32>(time, pitch), cloud.pitch_vertical == 1u);
     var out: TileBake;
     out.a = vec4<f32>(0.0);

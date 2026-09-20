@@ -111,10 +111,6 @@ pub(super) fn tone_size(
 const CLOUD_UNITS: f32 = 10.0;
 const SCALE_CELLS: f32 = 6.0 / 2.2;
 const WASH_CELLS: f32 = 5.25;
-/// The oblique tile's pitch displacement per time-axis repeat. Mirrored from
-/// the shader and held against it by the tile-resolution test below.
-const TILE_PITCH_SHIFT: f32 = 10.0;
-
 /// The tile's texel size: a whole number of these, and never fewer or more.
 ///
 /// Quantised because the pane's own pixels feed it: at one texel per pixel a
@@ -157,8 +153,8 @@ pub(super) struct TileKey {
     period: u32,
     /// One side of the square tile, in texels.
     texels: u32,
-    /// Which pane axis is pitch. The oblique repeat follows TIME and shifts in
-    /// PITCH, so changing orientation changes the field baked into the tile.
+    /// Which pane axis is pitch. The rotation is defined in `(time, pitch)`, so
+    /// changing orientation changes the field and vectors baked into the tile.
     pitch_vertical: bool,
     /// The walk's own dials as bits, so this compares by value. Sanitized, so
     /// there is no NaN here to compare unequal to itself. The mosaic reads one
@@ -198,14 +194,10 @@ pub(super) fn tile_key(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> O
     };
     // As fine as the pane itself draws a cell, so a tiled picture is the walk
     // resampled rather than a coarser one — and then rounded UP to a whole
-    // [`TILE_STEP`], which is what keeps a resize off the bake.
-    // A square texture samples the shear through its two square axes. Its
-    // longest stretch is the largest singular value of [[1, 0], [k, 1]], not
-    // merely the slanted edge's length; spend enough texels for that direction
-    // so the stagger does not make the tile coarser than the pane draws a cell.
-    let shear = TILE_PITCH_SHIFT / settings.cloud_tile;
-    let stretch = ((2.0 + shear * shear + shear * (shear * shear + 4.0).sqrt()) * 0.5).sqrt();
-    let wanted = settings.cloud_tile * stretch * (pixels[1] as f32 / CLOUD_UNITS / cells);
+    // [`TILE_STEP`], which is what keeps a resize off the bake. The 3-4-5
+    // transform is a pure rotation, so unlike the former shear it has singular
+    // value one and asks for no extra texels in any direction.
+    let wanted = settings.cloud_tile * (pixels[1] as f32 / CLOUD_UNITS / cells);
     let texels = ((wanted / TILE_STEP as f32).ceil().max(1.0) as u32)
         .saturating_mul(TILE_STEP)
         .min(TILE_MAX);
@@ -897,12 +889,11 @@ fn source_group(
 mod tests {
     use super::{
         retained_size, tile_key, tone_size, SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS,
-        TILE_MAX, TILE_PITCH_SHIFT, TILE_STEP, WASH_CELLS,
+        TILE_MAX, TILE_STEP, WASH_CELLS,
     };
 
     /// The tile is as fine as the pane draws a cell, in whole [`TILE_STEP`]s —
-    /// across the oblique basis's longest edge — and the cell and stagger it
-    /// divides by are the SHADER's own.
+    /// and the cell counts it divides by are the SHADER's own.
     ///
     /// Both halves matter. Finer than the pane buys nothing and coarser is a
     /// blur the dial did not ask for, so the size follows the pane; but at one
@@ -910,9 +901,9 @@ mod tests {
     /// frame of the drag, which is the too-wide key this repo ships. The step
     /// is what makes a drag cross a boundary a handful of times.
     ///
-    /// The three constants are a mirror of the shader's, since only this side
-    /// needs to know what a cell is. Read off the shipped text, because a
-    /// mirror that drifted would size every tile wrong with nothing saying so.
+    /// The constants are a mirror of the shader's, since only this side needs
+    /// to know what a cell is. Read off the shipped text, because a mirror that
+    /// drifted would size every tile wrong with nothing saying so.
     #[test]
     fn the_tile_is_as_fine_as_the_pane_draws_a_cell() {
         let number = |name: &str| -> f32 {
@@ -925,7 +916,6 @@ mod tests {
         assert_eq!(CLOUD_UNITS, number("CLOUD_UNITS"));
         assert_eq!(SCALE_CELLS, number("SCALE_CELLS"));
         assert_eq!(WASH_CELLS, number("WASH_CELLS"));
-        assert_eq!(TILE_PITCH_SHIFT, number("CLOUD_TILE_PITCH_SHIFT"));
 
         let at = |cloud_tile, wash_size, height| {
             tile_key(
@@ -947,9 +937,8 @@ mod tests {
             .map(|key| key.texels())
         };
         // A 1080-pixel pane draws 20.6 pixels to a glob cell at the fresh size.
-        // P20's half-period shear stretches the worst sampling direction 1.281x,
-        // so its 527 wanted texels get the next whole step up.
-        assert_eq!(at(20.0, 1.0, 1080), Some(3 * TILE_STEP));
+        // Rotation is an isometry, so P20 wants 412 texels and rounds to 512.
+        assert_eq!(at(20.0, 1.0, 1080), Some(2 * TILE_STEP));
         assert_eq!(at(40.0, 1.0, 1080), Some(4 * TILE_STEP));
         // A pane resized by a tenth stays on the same step.
         assert_eq!(at(20.0, 1.0, 1188), at(20.0, 1.0, 1080));
