@@ -1,42 +1,24 @@
-# Adaptive tuning laboratory
+# Adaptive tuning reference model
 
-A standalone desktop simulator for the [moving-neighbourhood design](../../docs/adaptive-tuning-design.md).
+A headless JavaScript reference implementation of the [moving-neighbourhood design](../../docs/adaptive-tuning-design.md).
 It runs independently of the Rust plugin and does not install or load a DAW build.
 The model is a testable first hypothesis, not the final adaptive policy.
+The interactive browser laboratory that once sat on top of this model was retired in [#975](https://github.com/yan-h/harmonigraph/issues/975); this directory now holds only the model, its worked examples, its Node test suite and the plugin-fixture exporter.
+There are no package installs, CDN resources, telemetry or external service dependencies.
 
 ## Run
 
-From the repository root:
-
 ```sh
-python3 -m http.server 8765 --bind 127.0.0.1 --directory tools/adaptive-tuning-simulator
+node --test tools/adaptive-tuning-simulator/model.test.mjs
 ```
 
-Open [the laboratory](http://127.0.0.1:8765/).
-Serve the folder over HTTP rather than opening `index.html` directly: modules and the background reachability worker need a server origin.
-There are no package installs, CDN resources, telemetry or external service dependencies.
-A current browser with ES modules, Web Workers and optional Web Audio is sufficient.
+Regenerate the Rust policy parity fixtures after an intentional model change with:
 
-Choose an example and use **Step**, **Play** or **Run to end**.
-The position slider replays the experiment up to a particular event.
-Parameter changes also replay from the original starting context; they do not retroactively change a note inside a single performance.
-The event cadence is for stepping through decisions, not a sample-accurate musical transport.
-`wait` advances virtual time immediately; the playback interval controls how quickly you inspect events.
+```sh
+node tools/adaptive-tuning-simulator/export-plugin-fixtures.mjs
+```
 
-**Try the next note** accepts arbitrary pitch, including `E5`, `Eb3`, `E5+7.82c`, `7607.82c` (absolute cents) and `76.0782m` (fractional MIDI note).
-The convention is C4 = MIDI 60, A4 = 6900 cents = 440 Hz.
-The displayed lattice node is its nominal spelling; the adjacent output pitch is the actual sounding frequency described relative to 12-TET.
-Extended accidentals use compact counts, for example `D♯10`; the lattice coordinates remain definitive.
-
-The preview leaves context untouched.
-**Play note** adds a real event, **Release** acts on one voice, and **Release all** releases every voice.
-Manual actions append at the current cursor and replace any future events, so rewinding and trying another note creates a new continuation.
-**Sound** enables a quiet sine-wave audition of the current sounding notes; it is off initially.
-The audition omits frequencies below 10 Hz or above 20 kHz, but the mathematical simulation retains their pitches.
-
-The score inspector can show the next-input preview or the frozen decision for the last actual onset, including the context and moving reference used at that attack.
-The displacement plot records each onset's full output-minus-input correction.
-It oscillates slightly inside each chord; root-to-root displacement is the relevant quantity for the diesis examples.
+That command writes `crates/harmonigraph-core/src/policy/fixtures.txt`, which the Rust policy tests `include_str!` directly; run `cargo test -p harmonigraph-core` afterward to confirm parity.
 
 ## The model
 
@@ -113,23 +95,23 @@ All other fixtures use the baseline.
 
 The adaptive correction of a sounding note is frozen.
 A player's subsequent bend is added to its audible output but does not change the onset pitch used by the policy.
-The bend field is recorded in event history and exported experiments.
+The bend field is recorded in event history.
 
 Silence means no held voices in this simulator; virtual elapsed time then counts toward the timeout.
 Zero timeout means no automatic silence reset, and merely waiting otherwise does not decay memory.
 A stop releases all voices and optionally clears released memory and displacement.
 A loop optionally clears released memory and displacement while leaving existing held notes and their frozen corrections intact.
 Start does not itself reset.
-The explicit **Reset context** action releases all voices and clears memory and displacement.
-Pedals and real DAW transport semantics are not implemented here; these choices are documented hypotheses for the standalone tool.
+An explicit reset event releases all voices and clears memory and displacement.
+Pedals and real DAW transport semantics are not implemented here; these choices are documented hypotheses for the reference model.
 
 ## Reachability
 
-The lattice distinguishes eligible nodes from nodes that can actually win for some input.
-The input-range controls define the absolute register span being inspected, initially C2 through C7.
-The reported set is the union across that entire range and all seventh layers, not just the displayed layer or a single octave.
+`Simulator.reachability` distinguishes eligible nodes from nodes that can actually win for some input.
+Its range argument defines the absolute register span being inspected.
+The reported set is the union across that entire range and all seventh layers, not just a single octave.
 The range is limited to ten octaves per calculation; this is an inspection bound, not a limit on accumulated drift.
-It makes no claim about inputs outside the shown range.
+It makes no claim about inputs outside the given range.
 
 Each candidate/octave realization has constant harmonic benefit because its register weights use its realized output `q`.
 First solve the interval where its pitch cost is smaller than that benefit.
@@ -138,19 +120,17 @@ Inputs where every node costs more than staying unsnapped leave gaps in the repo
 Boundary-only winners are also evaluated explicitly using the selector's tie behaviour.
 Calculations use JavaScript floating-point arithmetic.
 
-The result is not a coarse pitch sweep: narrow winning intervals count, and selected-node inspection shows their input boundaries.
-A worker performs the calculation so large 7-limit neighbourhoods do not block controls; changing the experiment cancels obsolete work.
-Results can take seconds for many widely separated references and a large radius.
+The result is not a coarse pitch sweep: narrow winning intervals count, and `model.test.mjs` checks selected-node results against direct selection at their input boundaries.
 No context or candidate set is silently truncated to make that work cheaper.
 
-## Reproducible experiments
+## Worked examples and program text
 
-The built-in examples distinguish actual sequenced attacks from exact seeded starting pitches.
-Seeded fixtures say so explicitly and show those notes in the context table.
+`examples.mjs` distinguishes actual sequenced attacks from exact seeded starting pitches.
+Seeded fixtures say so explicitly and carry those notes in their seed list.
 They isolate policy comparisons without pretending the algorithm itself produced the starting pitches.
 The fifth-chain and drift journeys use actual assignments, including their resulting moving reference updates.
 
-**Edit the sequence** accepts one event per line:
+Each example's `program` is `parseProgram`'s text format, one event per line:
 
 ```text
 on C3 c
@@ -168,10 +148,7 @@ reset
 
 Pitch strings may use sharps or flats; event IDs name note lifetimes.
 `//` begins a comment.
-Editing a built-in sequence retains its explicitly seeded starting context; **Start empty** removes that seed.
-**Export experiment** saves the parameters, seed, complete event sequence, current cursor and reachability range as JSON.
-**Import experiment** restores those inputs rather than trusting serialized derived results.
-Browser state is not otherwise persisted automatically.
+`export-plugin-fixtures.mjs` replays every example's program against the model and writes the assigned onsets, in the plugin's own integer units, to the committed Rust fixture.
 
 ## Verification
 
@@ -180,10 +157,10 @@ node --test tools/adaptive-tuning-simulator/model.test.mjs
 ```
 
 The suite checks the eighteen musical fixtures with declared profiles, 101 full major-third cycles with over three octaves of unwrapped drift, octave transposition, release-recency replacement, repeated pitches, frozen corrections and player bends, reset settings, axis eligibility, an onset no node is worth snapping to, and analytic reachability against direct selection.
-The browser also offers **Musical checks** for running the eighteen fixture outcomes interactively.
 Changing parameters may produce a different result and the current example reports that difference rather than declaring every run a pass.
+Nothing currently runs this suite automatically: no workflow, `ci.sh` group or `package.json` script references it, so it is a by-hand tool rather than a CI gate; whether to change that is tracked in [#1001](https://github.com/yan-h/harmonigraph/issues/1001).
 
 This verifies the model's mechanics and the stated fixtures, not perceptual quality or suitability for every progression.
 The main open choices remain the last-onset reference, union-shaped neighbourhood, scoring behaviour away from the examples, and replacing fixed-capacity memory with a better musical rule.
-Changing display tolerance is not wired to musical intent; precision currently acts entirely through the pitch-cost term.
-The prototype models just tuning only, not the plugin's arbitrary tuning axes or temperament locks, and has no MIDI-device or DAW integration.
+Changing tolerance is not wired to musical intent; precision currently acts entirely through the pitch-cost term.
+The model covers just tuning only, not the plugin's arbitrary tuning axes or temperament locks, and has no MIDI-device or DAW integration.

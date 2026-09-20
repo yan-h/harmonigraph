@@ -2,6 +2,7 @@
 
 **Implementation relevance:** Playhead was retired in [#988](https://github.com/yan-h/harmonigraph/pull/988).
 Public single-pane/custom export layouts are retired under [#974](https://github.com/yan-h/harmonigraph/issues/974), with internal single-pane pixel fixtures retained.
+The browser tuning laboratory's presentation (`index.html`, `app.mjs`, `style.css`, `reach-worker.mjs`) is retired under [#975](https://github.com/yan-h/harmonigraph/issues/975), with `model.mjs`, `examples.mjs`, `model.test.mjs` and `export-plugin-fixtures.mjs` retained per this doc's own recommendation; the Notes pane in the same decision is a separate lane.
 The owner names and preset/load examples below describe the pinned discovery baseline, not current interfaces.
 
 Date: 2026-09-19.
