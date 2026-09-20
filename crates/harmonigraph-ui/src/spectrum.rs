@@ -276,7 +276,7 @@ impl AudioSpectrum {
     /// Start a new retained source run after loss, reset or a format change.
     /// Keep historical columns, but never combine samples across the boundary.
     pub fn restart_source(&mut self, channels: usize, sample_rate: f32) {
-        self.analyzer = harmonigraph_analysis::ChannelBank::new(sample_rate, channels);
+        self.analyzer.restart(sample_rate, channels);
         self.frames_seen = 0;
         self.next_hop = 0;
         self.anchor = None;
