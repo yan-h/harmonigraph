@@ -1028,7 +1028,7 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// If `base` (or its `.wav` companion) already sits on disk — two takes
 /// started within the same UTC second — append `_1`, `_2`, ... until a name
 /// neither file uses, rather than let the second take silently truncate the
-/// first's. Distinct from the writer's `Open::path_for` suffix `-N`, which numbers later
+/// first's. Distinct from the writer's `Pass::path_for` suffix `-N`, which numbers later
 /// PASSES of one take rather than takes that collided on a name.
 fn disambiguate(base: std::path::PathBuf) -> std::path::PathBuf {
     let taken = |path: &std::path::Path| path.exists() || path.with_extension("wav").exists();
