@@ -108,7 +108,7 @@ impl WindowHandler for Host {
             }
             return;
         }
-        let mut graphics = super::graphics_config();
+        let mut graphics = super::window::graphics_config();
         if self.opening == 0 {
             // A command-line application can start behind another window.
             // Metal deliberately skips presentation while it is occluded.
@@ -184,7 +184,7 @@ impl WindowHandler for Host {
                 }
                 .draw();
                 assert!(requested.is_none(), "startup fixture unexpectedly resized");
-                let interval = super::target_frame_interval(
+                let interval = super::frame::target_frame_interval(
                     shared.workspace.interaction.fps_cap,
                     queue.display_max_fps(),
                 );

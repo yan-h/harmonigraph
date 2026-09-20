@@ -247,7 +247,7 @@ const DISPLAY_OVERSAMPLE: f64 = 2.0;
 /// throttles to 60, not to 30 — so hitting 30 means an oversampled timer plus
 /// deliberately skipping presents, not a timer slow enough to land on the
 /// right refresh by luck.
-fn target_frame_interval(fps_cap: Option<f32>, display_max_fps: Option<f64>) -> f64 {
+pub(super) fn target_frame_interval(fps_cap: Option<f32>, display_max_fps: Option<f64>) -> f64 {
     let display_hz = display_max_fps.filter(|hz| hz.is_finite() && *hz > 0.0);
     let cap = fps_cap.filter(|fps| fps.is_finite() && *fps > 0.0).map(|fps| fps as f64);
     match (cap, display_hz) {

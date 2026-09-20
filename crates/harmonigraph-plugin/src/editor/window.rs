@@ -33,7 +33,7 @@ use super::MIN_SIZE;
 /// costs a frame of latency (~7 ms at 144 Hz) on a picture meant to track
 /// what you just played — so it is not worth carrying. 3 was the whole knob
 /// anyway: wgpu-hal clamps to 2..=3 for `CAMetalLayer.maximumDrawableCount`.
-fn graphics_config() -> GraphicsConfig {
+pub(super) fn graphics_config() -> GraphicsConfig {
     harmonigraph_render::shader_assets::initialize();
     use egui_baseview::WgpuSetup;
     use harmonigraph_render::wgpu;
