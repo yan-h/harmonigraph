@@ -1,5 +1,5 @@
 {
-  "description": "Refuse to read a skill only Yan starts; see .claude/owner-only-skills.sh",
+  "description": "Refuse to read a skill only Yan starts; see .claude/owner-only-skills.sh. This layer loads ONLY in a trusted project, so it covers the main checkout and NOT the managed worktrees Codex sessions actually run in — user-hooks.json beside it is the copy that reaches those.",
   "hooks": {
     "PreToolUse": [
       {

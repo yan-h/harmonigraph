@@ -36,9 +36,25 @@ set -uo pipefail
 
 OWNER_ONLY="audit-merges"
 
+payload=$(cat)
+
+# Fast path first. Codex's gate has to be USER-level — project-local hooks
+# load only in a trusted project, and every Codex session runs in a fresh
+# managed worktree whose path was never trusted — so this runs on every shell
+# call in every repo on the machine. A bash string test costs nothing; the
+# python start-up below would be ~30ms on each one.
+# Derived from OWNER_ONLY, never spelled out: a fast path keyed on one name
+# while the list holds two is the too-narrow key this repo keeps shipping,
+# and it would fail open silently for whatever was added second.
+hit=
+for owned in $OWNER_ONLY; do
+  case "$payload" in *"$owned"*) hit=1 ;; esac
+done
+[ -n "$hit" ] || exit 0
+
 # Unreadable payloads allow. Failing closed on a harness JSON change would
 # block ordinary shell calls, which is far worse than a missed audit.
-target=$(python3 -c '
+target=$(printf '%s' "$payload" | python3 -c '
 import json, sys
 try:
     ti = json.load(sys.stdin).get("tool_input", {})

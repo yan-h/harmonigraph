@@ -1,0 +1,17 @@
+{
+  "description": "Tracked source for ~/.codex/hooks.json. Install with: cp .codex/user-hooks.json ~/.codex/hooks.json — see CLAUDE.md. User-level on purpose: Codex loads a project's own .codex/ hooks ONLY in a trusted project, and every Codex session runs in a fresh managed worktree whose path was never trusted, so the repo-scoped copy beside this file is inert exactly where Codex sessions run. This no-ops in any repo that does not ship .claude/owner-only-skills.sh, so it is safe to have on for every project.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -c 'g=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; s=\"$g/.claude/owner-only-skills.sh\"; [ -x \"$s\" ] || exit 0; \"$s\"; exit 0'",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

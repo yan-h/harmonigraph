@@ -296,8 +296,14 @@ This one is enforced rather than asked, in two pieces, because the hosts differ.
 The skill carries `disable-model-invocation: true`, which hides it from the model in Claude and is ignored by Codex;
 `.claude/owner-only-skills.sh` then refuses the route that leaves — reading `SKILL.md` with a shell command — from a `PreToolUse` hook in both.
 Neither touches Yan, because a typed invocation never reaches a hook.
-Editing the skill stays possible through `.shared-skills/`, which the gate exempts.
-What is left is pointing `merge-auditor` subagents at a range directly, and that is the same act with the gate stepped around.
+Reading the file at all is refused, including through `.shared-skills/` —
+a second path to one file is the gate's bypass rather than an exemption, and an earlier version that named that path in its own refusal was followed straight through it.
+
+**Codex's half has to be installed per machine, and the repo copy is not enough.** Codex loads a project's `.codex/` hooks only in a TRUSTED project, and every Codex session runs in a fresh managed worktree whose path was never trusted —
+so `.codex/hooks.json` covers the main checkout and nothing a session runs in, the same way a gitignored `settings.local.json` misses every worktree.
+`cp .codex/user-hooks.json ~/.codex/hooks.json` installs the copy that reaches them;
+it no-ops in any repo without `.claude/owner-only-skills.sh`, so it is safe to leave on globally.
+What is left after all that is pointing `merge-auditor` subagents at a range directly, and that is the same act with the gate stepped around.
 
 ## Never lock an agent-owned worktree by hand
 

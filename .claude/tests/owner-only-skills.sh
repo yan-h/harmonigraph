@@ -76,6 +76,21 @@ print(json.load(sys.stdin)["hookSpecificOutput"].get("permissionDecisionReason",
   esac
 done
 
+# The gate's fast path skips the JSON parse for payloads that mention no
+# owned skill. With one name in the list, a fast path hardcoding that name
+# and one derived from the list behave identically, so the loop above cannot
+# tell them apart — run a copy with a DIFFERENT name to reach the difference.
+FAKE=$(mktemp -t owner-only-skills)
+sed 's/^OWNER_ONLY=.*/OWNER_ONLY="probe-skill"/' "$GATE" > "$FAKE"
+chmod +x "$FAKE"
+got=$(printf '{"tool_input":{"command":"cat .claude/skills/probe-skill/SKILL.md"}}' | "$FAKE" | head -c 4)
+rm -f "$FAKE"
+[ -n "$got" ] || {
+  echo "✗ a renamed OWNER_ONLY entry is not gated — the fast path is keyed on a literal" >&2
+  echo "    so anything added to the list after the first name fails open, silently" >&2
+  fail=1
+}
+
 # Ordinary work must pass through untouched.
 expect allow "cargo test --workspace" "the gate is on every shell call in the tree"
 expect allow "cat .claude/skills/pr-hygiene/SKILL.md" "no other skill is restricted"
@@ -119,10 +134,15 @@ else:
     ]:
         missing.append(".codex/hooks.json (Codex)")
 
+user_path = os.path.join(root, ".codex", "user-hooks.json")
+if not os.path.exists(user_path):
+    missing.append(".codex/user-hooks.json (the copy Codex worktrees load)")
+
 if missing:
     print("✗ the gate is not registered in: " + ", ".join(missing), file=sys.stderr)
     print("    Codex is the host that needs it most — it ignores", file=sys.stderr)
-    print("    disable-model-invocation, so this hook is its only gate.", file=sys.stderr)
+    print("    disable-model-invocation, so this hook is its only gate, and its", file=sys.stderr)
+    print("    project layer does not load in the worktrees sessions run in.", file=sys.stderr)
     sys.exit(1)
 PY
 
