@@ -355,18 +355,11 @@ struct RollBloom {
     /// chain's threshold reads, standing where the lattice's own scene
     /// texture stands.
     ///
-    /// Half rather than the roll's full size is the one place the two
-    /// pictures are not the same thing, so it is worth saying what the
-    /// difference is. `fs_bright` only ever SAMPLES at half, so drawing there
-    /// skips a resample the lattice pays for; what it costs is that a ribbon
-    /// narrower than one of these pixels is measured by the note shader's own
-    /// box filter rather than by a bilinear tap over a sharper raster, and on
-    /// a shape that lands between two of these pixels the two readings of its
-    /// peak differ by up to a factor of two. At the width the spectral pane
-    /// floors a ribbon to — 1.5 points, which is 3 device pixels and so one
-    /// and a half of these — they are close, and the alternative is a
-    /// full-resolution copy of the roll, four times this, for a picture
-    /// nothing downstream reads at full resolution.
+    /// Drawing at half skips a resample the lattice pays for. A ribbon at the
+    /// roll's two-device-pixel length floor is only one texel here, so its peak
+    /// depends on sub-texel phase; the roll's coverage-aware bright pass
+    /// thresholds its straight color and applies coverage afterwards, keeping
+    /// that phase from becoming a brightness pulse.
     notes_view: wgpu::TextureView,
     /// Notes mapped into that texture rather than onto the surface.
     notes_uniform: wgpu::Buffer,
@@ -487,7 +480,7 @@ impl RollResources {
             core_pipeline: note_pipeline("core"),
             shadow_cell_pipeline: create_shadow_cell_pipeline(device, &layout),
             layout,
-            bright_pipeline: filter("fs_bright"),
+            bright_pipeline: filter("fs_bright_coverage"),
             downsample_pipeline: filter("fs_blit"),
             blur_h_pipeline: filter("fs_blur_h"),
             blur_v_pipeline: filter("fs_blur_v"),
@@ -570,9 +563,7 @@ impl RollPane {
 impl RollBloom {
     /// Build the chain for a roll `size` device pixels across. Half and
     /// quarter of THAT, so the halo is a constant share of the roll's own
-    /// screen size — the same rule the lattice's chain follows, which is what
-    /// makes one bloom strength mean the same thing in every picture that
-    /// grows one.
+    /// screen size — the same rule the lattice's chain follows.
     fn new(device: &wgpu::Device, shared: &RollBloomShared<'_>, size: [u32; 2]) -> Self {
         let (hw, hh) = (size[0].div_ceil(2).max(1), size[1].div_ceil(2).max(1));
         let notes_view = device
@@ -849,8 +840,7 @@ impl CallbackTrait for RollCallback {
         let bloom_pass = wants_bloom.then(|| {
             // Half the roll's size for the notes, so this is what one pixel of
             // THAT target measures in points — twice the display's, and the
-            // ramp has to follow it or a hairline ribbon comes out at the wrong
-            // weight in the halo.
+            // ramp has to follow it to conserve a hairline ribbon's weight.
             let half_ppp = ppp * 0.5;
             // The viewport's own edges, back in points: the texture covers
             // exactly the pixels `paint` will lay it over, so the notes in it
@@ -1185,6 +1175,50 @@ mod tests {
             );
         });
         (readback(device, queue, &texture, SIZE), resources)
+    }
+
+    /// One roll frame with an explicitly selected shadow style. Kept separate
+    /// from `draw_bloomed_resourced` so the ordinary shape tests retain their
+    /// fixed Distance fixture while Gaussian atlas tests exercise that path.
+    fn draw_shadowed(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        instances: Vec<RollInstance>,
+        shadow: harmonigraph_scene::ShadowStyle,
+        clear: wgpu::Color,
+    ) -> Vec<u8> {
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        let cb = RollCallback {
+            rect,
+            instances,
+            axes: TOP,
+            shadow,
+            bloom: 0.0,
+            target_format: FORMAT,
+            pane_id: 0,
+            shadow_surface_id: 0,
+            pass_nr: 0,
+        };
+        let mut resources = CallbackResources::default();
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(device, queue, &screen, &mut encoder, &mut resources);
+        crate::spectral_shadow::finish(device, queue, &screen, &mut encoder, &mut resources, 0);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let texture = render_to_texture(device, queue, SIZE, FORMAT, clear, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(device, queue, &texture, SIZE)
     }
 
     fn pixel(frame: &[u8], x: u32, y: u32) -> [u8; 4] {
@@ -1986,6 +2020,132 @@ mod tests {
             hairline > 0.3,
             "a one-pixel note only pulsed by {:.0}%, so the floor above is guarding nothing",
             hairline * 100.0,
+        );
+    }
+
+    /// The sharp pass is the control for the two low-resolution effects around
+    /// it. A two-pixel note must move by fractional coverage, not sit for seven
+    /// frames and jump on the eighth. Total ink alone cannot say that: a
+    /// snapped shape conserves just as much, so read its coverage-weighted
+    /// centre as well.
+    #[test]
+    fn a_two_pixel_notes_coverage_centroid_moves_sub_pixel() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let bare = RollInstance {
+            half_extent: [12.0, 1.0],
+            outline_reach: 0.0,
+            core: [255; 4],
+            outline: [0; 4],
+            ..centered_note()
+        };
+        let mut centres = Vec::new();
+        let mut ink = Vec::new();
+        for step in 0..8 {
+            let note = RollInstance { center: [128.0, 128.0 + step as f32 / 8.0], ..bare };
+            let frame = draw(&device, &queue, vec![note], wgpu::Color::BLACK);
+            let mut mass = 0.0f64;
+            let mut moment = 0.0f64;
+            for y in 0..SIZE[1] {
+                for x in 0..SIZE[0] {
+                    let coverage = f64::from(pixel(&frame, x, y)[0]) / 255.0;
+                    mass += coverage;
+                    moment += coverage * (f64::from(y) + 0.5);
+                }
+            }
+            centres.push(moment / mass);
+            ink.push(mass);
+        }
+        for pair in centres.windows(2) {
+            let moved = pair[1] - pair[0];
+            assert!(
+                (moved - 0.125).abs() < 0.01,
+                "the sharp note moved {moved:.4} px in one eighth-pixel step: {centres:?}",
+            );
+        }
+        let spread = ink.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+            - ink.iter().copied().fold(f64::INFINITY, f64::min);
+        assert!(spread < 0.1, "the sharp note changed {spread:.4} px of ink: {ink:?}");
+    }
+
+    /// Bloom thresholds the note before blurring it. Its source therefore has
+    /// to preserve the sharp pass's sub-pixel coverage: at half resolution the
+    /// roll's two-device-pixel minimum note was only one source texel, whose
+    /// peak pulsed as it crossed that grid and made the halo pulse with it.
+    #[test]
+    fn a_two_pixel_notes_bloom_holds_its_energy_as_it_scrolls() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let bare = RollInstance {
+            half_extent: [12.0, 1.0],
+            outline_reach: 0.0,
+            core: [160, 96, 48, 204],
+            outline: [0; 4],
+            ..centered_note()
+        };
+        let energy: Vec<f64> = (0..8)
+            .map(|step| {
+                let note = RollInstance { center: [128.0, 128.0 + step as f32 / 8.0], ..bare };
+                let plain = draw_bloomed(&device, &queue, vec![note], TOP, 0.0, wgpu::Color::BLACK);
+                let bloomed =
+                    draw_bloomed(&device, &queue, vec![note], TOP, 1.5, wgpu::Color::BLACK);
+                bloomed
+                    .chunks_exact(4)
+                    .zip(plain.chunks_exact(4))
+                    .map(|(lit, base)| f64::from(lit[0].saturating_sub(base[0])))
+                    .sum()
+            })
+            .collect();
+        let lo = energy.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = energy.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            (hi - lo) / hi.max(1.0) < 0.04,
+            "the two-pixel note's bloom energy pulsed across sub-pixel phases: {energy:?}",
+        );
+    }
+
+    /// A held note grows through the Gaussian atlas's deliberately coarser
+    /// texel grid. Its mask must be antialiased at that grid's resolution;
+    /// using the display's narrower one-pixel ramp makes the shadow gain ink in
+    /// steps whenever the packed cell gains a texel.
+    #[test]
+    fn a_growing_notes_gaussian_shadow_crosses_cell_boundaries_smoothly() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let shadow = harmonigraph_scene::ShadowStyle {
+            width: harmonigraph_scene::SPECTRAL_SHADOW_MAX,
+            depth: 0.85,
+            kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+            ..Default::default()
+        };
+        let plain = harmonigraph_scene::ShadowStyle { depth: 0.0, ..shadow };
+        let darkness: Vec<f64> = (0..33)
+            .map(|step| {
+                let growth = step as f32 / 8.0;
+                // Keep the leading edge fixed while the trailing edge grows,
+                // matching a sounding note beside the now-line.
+                let note = RollInstance {
+                    center: [128.0, 118.0 + 0.5 * growth],
+                    half_extent: [5.0, 10.0 + 0.5 * growth],
+                    ..centered_note()
+                };
+                let base = draw_shadowed(&device, &queue, vec![note], plain, bg_color());
+                let cast = draw_shadowed(&device, &queue, vec![note], shadow, bg_color());
+                base.chunks_exact(4)
+                    .zip(cast.chunks_exact(4))
+                    .map(|(a, b)| f64::from(a[2].saturating_sub(b[2])))
+                    .sum()
+            })
+            .collect();
+        let steps: Vec<f64> = darkness.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        let lo = steps.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = steps.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            lo > 0.0 && hi - lo < 250.0,
+            "the Gaussian shadow grew in atlas-texel steps {steps:?} from {darkness:?}",
         );
     }
 

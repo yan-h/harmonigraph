@@ -37,7 +37,7 @@ struct VertexOut {
     metal::float4 outline;
     metal::float2 at;
     uint who;
-    char _pad13[4];
+    float feather;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -115,6 +115,7 @@ struct vs_shadow_cellOutput {
     metal::float4 outline [[user(loc9), flat]];
     metal::float2 at [[user(loc10), center_perspective]];
     uint who [[user(loc11), flat]];
+    float feather [[user(loc12), flat]];
 };
 struct vb_15_type { metal::uchar data[48]; };
 struct vb_14_type { metal::uchar data[64]; };
@@ -192,7 +193,8 @@ vertex vs_shadow_cellOutput vs_shadow_cell(
     out.outline = outline;
     out.at = point;
     out.who = naga_f2u32(box_who.x + 0.5);
-    VertexOut _e83 = out;
-    const auto _tmp = _e83;
-    return vs_shadow_cellOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.lead_fade, _tmp.lead_alpha, _tmp.cap_reach, _tmp.core, _tmp.outline, _tmp.at, _tmp.who };
+    out.feather = 1.0 / metal::max(box_meta.x, 0.000001);
+    VertexOut _e89 = out;
+    const auto _tmp = _e89;
+    return vs_shadow_cellOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.lead_fade, _tmp.lead_alpha, _tmp.cap_reach, _tmp.core, _tmp.outline, _tmp.at, _tmp.who, _tmp.feather };
 }
