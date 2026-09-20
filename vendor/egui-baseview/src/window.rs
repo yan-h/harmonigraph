@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use baseview::{
     Event, EventStatus, PhySize, Size, Window, WindowHandle, WindowHandler, WindowOpenOptions,
@@ -361,6 +361,16 @@ where
     bg_color: Rgba,
     close_requested: bool,
     repaint_after: Option<Instant>,
+    /// How many frames in a row the surface has refused to present. Reset by
+    /// the first one that lands. See [`REFUSALS_BEFORE_BACKOFF`].
+    refused_presents: u32,
+    /// When the next frame offered to a refusing surface is due, or `None`
+    /// while the surface is still being trusted to take one every tick.
+    ///
+    /// Separate from `repaint_after` because it paces something else:
+    /// `repaint_after` is what the UI asked for, this is what the surface has
+    /// shown it will accept. See [`wants_render`].
+    retry_after: Option<Instant>,
     key_capture: KeyCapture,
     /// Tessellation time from the PREVIOUS frame — it is measured inside
     /// `render`, which runs after the update closure, so the closure can only
@@ -522,6 +532,8 @@ where
             bg_color,
             close_requested,
             repaint_after: Some(start_time),
+            refused_presents: 0,
+            retry_after: None,
             key_capture,
             tess_ms: 0.0,
             egui_gpu_ms: 0.0,
@@ -612,6 +624,206 @@ where
         self.egui_input.modifiers.alt = !(*modifiers & Modifiers::ALT).is_empty();
         self.egui_input.modifiers.shift = !(*modifiers & Modifiers::SHIFT).is_empty();
         self.egui_input.modifiers.command = !(*modifiers & Modifiers::CONTROL).is_empty();
+    }
+}
+
+/// Consecutive refused presents before the loop stops offering one every tick.
+///
+/// Small on purpose. The refusals this rides through are the transient ones —
+/// a surface going Outdated or Lost while a resize is in flight, where
+/// retrying on the very next tick is what keeps the drag smooth and is the
+/// behaviour [`SURFACE_RETRY`] must not slow down. Refusal that outlasts a
+/// few ticks is not transient, and that is what the backoff is for.
+const REFUSALS_BEFORE_BACKOFF: u32 = 3;
+
+/// How often a surface that keeps refusing is offered another frame.
+///
+/// Two things set it. Below the GPU's own frame time it stops bounding
+/// anything, since the whole point is to submit slower than the device
+/// drains; a hidden editor costs 4 unpresented frames a second here against
+/// the 60-144 it used to. Above a few hundred milliseconds it starts being
+/// visible in the case the poll exists for — a surface that has quietly
+/// become available again without anything saying so — where this interval is
+/// how long the window stays frozen.
+const SURFACE_RETRY: Duration = Duration::from_millis(250);
+
+/// Whether this tick paints, or stops after the egui pass it has already run.
+///
+/// Split out of the frame because it is the whole of the decision and the only
+/// part of it a test can reach: the tick around it needs a live window, a
+/// surface and a device.
+///
+/// `retry_after` is the term that is not about what the UI wants. A surface
+/// that refuses to present — which is what an occluded window does, on every
+/// tick, for as long as the editor is hidden behind something — makes the
+/// frame one nobody sees. Drawing it anyway is not merely waste: the acquire
+/// is ALSO where a presenting frame waits for vsync,
+/// and that wait is the only backpressure in this loop. Refused immediately
+/// instead of waited on, it leaves the tick free to encode and submit a whole
+/// scene every timer tick while the GPU is still working through the last one.
+/// wgpu reclaims a frame's staged uploads when its submission COMPLETES — the
+/// poll at the end of `Queue::submit` is non-blocking, so it frees only what
+/// has already landed — so submitting faster than the device drains grows the
+/// in-flight set without bound: gigabytes within a minute of switching away
+/// from the host, handed back all at once when the window comes forward and
+/// vsync starts pacing again. Submitting slower than the device drains is what
+/// bounds it. The flush in the renderer's `Occluded` arm is a different fix,
+/// and only stops a frame that DID draw from stranding its uploads.
+///
+/// Keyed on the refusals themselves rather than on the occlusion event,
+/// because the event decides nothing here and can disagree. wgpu-hal reads the
+/// occlusion state by walking its own layer up to a delegate's window, while
+/// baseview reads the view's; `Occluded(false)` can be lost or filtered
+/// outright — a view momentarily without a window, a host reparenting the
+/// plugin — and a window that never paints again is a far worse failure than
+/// the memory this saves. The acquire is the one authority both agree on, the
+/// same reasoning the renderer's `before_present` uses to un-hide the layer.
+/// So a refusing surface is still offered a frame every [`SURFACE_RETRY`], and
+/// the first one that presents clears the backoff.
+///
+/// Texture deltas are the exception, and they come first. They are uploaded
+/// only inside `render()`, and a frame carrying one that is skipped drops it
+/// permanently, leaving egui's glyph coordinates pointing into a stale atlas
+/// (scrambled text). Honouring them during a backoff costs nothing that
+/// repeats: consuming the delta is what clears it, so each one buys a single
+/// frame rather than re-arming the loop this exists to stop.
+fn wants_render(
+    has_texture_updates: bool,
+    repaint_after: Option<Instant>,
+    retry_after: Option<Instant>,
+    repaint_delay: Duration,
+    now: Instant,
+) -> bool {
+    if has_texture_updates {
+        return true;
+    }
+    if let Some(t) = retry_after {
+        // Deliberately not `repaint_delay`: the UI asks for a zero-delay
+        // repaint on every animating frame, and honouring that is the spin
+        // this exists to stop. A refusing surface is paced by its own clock
+        // and by nothing the UI has to say about it.
+        return now >= t;
+    }
+    match repaint_after {
+        Some(t) => now >= t || repaint_delay.is_zero(),
+        None => repaint_delay.is_zero(),
+    }
+}
+
+/// What a finished render leaves behind for [`wants_render`] to read next
+/// tick: how many presents have now been refused in a row, and when to offer
+/// the surface another frame.
+///
+/// The other half of the decision, and split out for the same reason — a
+/// refusal is only reachable through a real surface, and the counter is the
+/// whole of what separates a transient one from occlusion.
+fn after_render(presented: bool, refused: u32, now: Instant) -> (u32, Option<Instant>) {
+    if presented {
+        return (0, None);
+    }
+    let refused = refused.saturating_add(1);
+    let retry =
+        (refused >= REFUSALS_BEFORE_BACKOFF).then(|| now.checked_add(SURFACE_RETRY)).flatten();
+    (refused, retry)
+}
+
+#[cfg(test)]
+mod wants_render_tests {
+    use super::*;
+
+    /// The shape the plugin's UI actually asks for while anything is moving:
+    /// `request_repaint()`, which is a repaint delay of zero, and a deadline
+    /// already behind us. Under it a visible window paints every tick.
+    fn animating(now: Instant) -> (Option<Instant>, Duration) {
+        (now.checked_sub(Duration::from_millis(1)), Duration::ZERO)
+    }
+
+    #[test]
+    fn a_backed_off_surface_is_not_offered_a_frame_every_tick() {
+        let now = Instant::now();
+        let (repaint_after, delay) = animating(now);
+        assert!(wants_render(false, repaint_after, None, delay, now));
+        // Same frame, same zero-delay request, and the only difference is
+        // that the surface has shown it will refuse: the unpaced submit loop
+        // is exactly this assertion coming back true.
+        let armed = now.checked_add(SURFACE_RETRY);
+        assert!(!wants_render(false, repaint_after, armed, delay, now));
+    }
+
+    #[test]
+    fn a_backed_off_surface_is_still_offered_a_frame_each_interval() {
+        let now = Instant::now();
+        // An idle UI, whose own deadline is an interval away and whose delay
+        // is not zero: with the backoff gone this tick paints nothing, so a
+        // due retry is the only thing that can explain the frame — which is
+        // what makes this measure the poll rather than agree with it.
+        let idle = Duration::from_secs(1);
+        let ahead = now.checked_add(idle);
+        assert!(!wants_render(false, ahead, None, idle, now));
+        // Armed one interval ago, so this tick tries the acquire — the offer
+        // whose success is the only thing that has to be believed for a
+        // window with no `Occluded(false)` to come back.
+        assert!(wants_render(false, ahead, now.checked_sub(SURFACE_RETRY), idle, now));
+    }
+
+    #[test]
+    fn a_transient_refusal_still_retries_on_the_next_tick() {
+        let now = Instant::now();
+        let (_, delay) = animating(now);
+        // A resize's surface goes Outdated for a frame or two. Every refusal
+        // below the threshold must leave the backoff unarmed, so the retry is
+        // the very next tick and the drag stays smooth — 250 ms of stale
+        // content per hitch is exactly what this must not buy.
+        let mut refused = 0;
+        for _ in 1..REFUSALS_BEFORE_BACKOFF {
+            let retry;
+            (refused, retry) = after_render(false, refused, now);
+            assert_eq!(retry, None);
+            assert!(wants_render(false, Some(now), retry, delay, now));
+        }
+        // One more, and it is no longer transient.
+        let (_, retry) = after_render(false, refused, now);
+        assert!(retry.is_some());
+        assert!(!wants_render(false, Some(now), retry, delay, now));
+    }
+
+    #[test]
+    fn one_present_ends_the_backoff() {
+        let now = Instant::now();
+        let (repaint_after, delay) = animating(now);
+        // However long it has been refusing — this is the recovery that has
+        // to work without any occlusion event arriving to announce it.
+        let (refused, retry) = after_render(false, u32::MAX - 1, now);
+        assert!(retry.is_some());
+        assert!(!wants_render(false, repaint_after, retry, delay, now));
+        let (refused, retry) = after_render(true, refused, now);
+        assert_eq!((refused, retry), (0, None));
+        assert!(wants_render(false, repaint_after, retry, delay, now));
+    }
+
+    #[test]
+    fn a_texture_delta_is_uploaded_even_while_backed_off() {
+        let now = Instant::now();
+        let idle = Duration::from_secs(1);
+        // Not due, and the UI is asking for nothing, so this tick paints
+        // nothing at all — which is what would drop the atlas upload for good.
+        let armed = now.checked_add(SURFACE_RETRY);
+        let ahead = now.checked_add(idle);
+        assert!(!wants_render(false, ahead, armed, idle, now));
+        assert!(wants_render(true, ahead, armed, idle, now));
+    }
+
+    #[test]
+    fn a_presenting_window_keeps_its_deadline() {
+        let now = Instant::now();
+        let capped = Duration::from_millis(16);
+        // A frame-rate cap, with no backoff because the surface is taking
+        // frames: the deadline is ahead, so this tick waits.
+        assert!(!wants_render(false, now.checked_add(capped), None, capped, now));
+        // Reached, so it paints.
+        assert!(wants_render(false, now.checked_sub(capped), None, capped, now));
+        // No deadline yet and nothing urgent asked for: still waits.
+        assert!(!wants_render(false, None, None, capped, now));
     }
 }
 
@@ -722,22 +934,18 @@ where
         }
 
         let now = Instant::now();
-        // Texture updates (font atlas rebuilds after set_fonts, new images)
-        // are only uploaded inside render(); skipping this frame would drop
-        // them permanently, leaving egui's glyph coordinates pointing into a
-        // stale atlas (scrambled text). Force a render whenever deltas are
-        // pending.
         let has_texture_updates = !full_output.textures_delta.set.is_empty()
             || !full_output.textures_delta.free.is_empty();
         // Copied out of the borrow so it stays readable after `render()` takes
         // `&mut full_output` below (Duration is Copy, so this costs nothing).
         let repaint_delay = viewport_output.repaint_delay;
-        let do_repaint_now = has_texture_updates
-            || if let Some(t) = self.repaint_after {
-                now >= t || repaint_delay.is_zero()
-            } else {
-                repaint_delay.is_zero()
-            };
+        let do_repaint_now = wants_render(
+            has_texture_updates,
+            self.repaint_after,
+            self.retry_after,
+            repaint_delay,
+            now,
+        );
 
         if do_repaint_now {
             // The renderer half of the callback, whole. `tick` minus this is
@@ -768,6 +976,13 @@ where
             // interval silently ran one tick long.
             self.repaint_after =
                 if presented { now.checked_add(repaint_delay) } else { Some(now) };
+
+            // A present PROVES the surface is available — the acquire refuses
+            // an occluded window — so it is what the backoff defers to, and
+            // the only thing that has to be believed for the window to come
+            // back. See `after_render`.
+            (self.refused_presents, self.retry_after) =
+                after_render(presented, self.refused_presents, now);
             self.tess_ms = self.renderer.last_tess_ms();
             self.egui_gpu_ms = self.renderer.last_gpu_ms();
             self.acquire_ms = self.renderer.last_acquire_ms();
@@ -1074,6 +1289,13 @@ where
                         // have kept showing a stale snapshot of the
                         // window; repaint and present a fresh frame now.
                         self.repaint_after = Some(Instant::now());
+                        // And drop the backoff the occlusion earned, so that
+                        // frame is not held behind it. This is a shortcut,
+                        // never the way back: the poll recovers a window whose
+                        // `Occluded(false)` never arrives, which is why
+                        // `wants_render` is keyed on refusals and not on this.
+                        self.refused_presents = 0;
+                        self.retry_after = None;
                     }
                 }
                 baseview::WindowEvent::WillClose => {}

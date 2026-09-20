@@ -555,6 +555,29 @@ impl Renderer {
         let _ = occluded;
     }
 
+    /// Apply the `free` half of egui's texture delta.
+    ///
+    /// Every exit from `render` has to run it, including the ones that bail
+    /// before the pass. `TexturesDelta` is DRAINED out of egui's texture
+    /// manager once per pass, so a frame that drops the list is the last
+    /// mention those ids ever get and their textures stay allocated for the
+    /// life of the window. The `set` half is already uploaded before the
+    /// acquire for the same reason; this is the other half of it.
+    ///
+    /// Safe on a bailing frame precisely because it drew nothing — egui only
+    /// lists a texture here once no primitive references it, and a texture
+    /// still in flight from an earlier submit is kept alive by wgpu's own
+    /// refcount rather than by this handle.
+    fn free_textures(&self, full_output: &FullOutput) {
+        if full_output.textures_delta.free.is_empty() {
+            return;
+        }
+        let mut renderer = self.render_state.renderer.write();
+        for id in &full_output.textures_delta.free {
+            renderer.free_texture(id);
+        }
+    }
+
     /// Returns whether a frame was actually presented; `false` means the
     /// surface wasn't available (occluded window, outdated/lost surface)
     /// and the caller should retry rather than treat the frame as shown.
@@ -716,6 +739,7 @@ impl Renderer {
                 // frame's submit drains the whole backlog at once. No drawable
                 // was acquired, so this submits the uploads without presenting;
                 // the window stays frozen (expected while hidden) but flat.
+                self.free_textures(full_output);
                 self.render_state
                     .queue
                     .submit(user_cmd_bufs.into_iter().chain([encoder.finish()]));
@@ -756,6 +780,7 @@ impl Renderer {
             // Same staged-upload reclamation as the Occluded/Timeout arm above:
             // flush so pending writes don't accumulate across frames while the
             // surface stays unavailable (Suboptimal/Outdated/Lost).
+            self.free_textures(full_output);
             self.render_state
                 .queue
                 .submit(user_cmd_bufs.into_iter().chain([encoder.finish()]));
@@ -821,12 +846,7 @@ impl Renderer {
             }
         }
 
-        {
-            let mut renderer = self.render_state.renderer.write();
-            for id in &full_output.textures_delta.free {
-                renderer.free_texture(id);
-            }
-        }
+        self.free_textures(full_output);
 
         let submit_start = std::time::Instant::now();
         let encoded = encoder.finish();
