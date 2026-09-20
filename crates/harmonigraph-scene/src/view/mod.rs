@@ -34,6 +34,20 @@ use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 /// One range for the three of them: they are the same control over three kinds
 /// of text, and a reader comparing two of them should not have to check
 /// whether they mean the same thing by 2.
+///
+/// The bar and the load clamp are the same two numbers BY REFERENCE, which is
+/// the whole of the guarantee and the reason no test asserts it: an assertion
+/// that clamping to this constant lands inside it only restates `clamp`. What
+/// it buys is that widening the bar cannot leave a saved view loading at the
+/// old ceiling — a setting that will not stay where it is put, silently.
+///
+/// It used to be able to. This constant lived a crate UP, in
+/// `harmonigraph-ui`, which `ViewConfig` cannot see from here — so
+/// [`ViewConfig::sanitize`] clamped `label_scale` to a written-out copy of
+/// 0.3 and 3.0 with nothing tying the copy to the original, and the lattice's
+/// was the one of the three bars that could drift. A test watched that gap
+/// and is gone with it. Keep the reference: reintroduce a literal and the
+/// drift comes back with nothing left watching for it.
 pub const SCALE_BAR_RANGE: std::ops::RangeInclusive<f32> = 0.3..=3.0;
 
 /// Arithmetic guard on a derived extent, not a picture-shaping limit:

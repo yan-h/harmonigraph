@@ -646,22 +646,39 @@ fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
     assert_eq!(level(1e9, MARK_DELAY_MAX as f64 + ATTACK), 1.0, "a huge delay stops at 1s");
 }
 
-/// A non-finite delay is the one value that would take the mark layer down
-/// silently: `clamp` passes a NaN straight through (every comparison against
-/// it is false), the ease comes out NaN, and `Mark::add`'s `>=` is false
-/// against it — so the node keeps a level of 0 and no slot at all. No mark
-/// anywhere, and nothing to say why. `ViewConfig::sanitize` is the only
-/// guard, and this is the test that keeps it from being deleted as redundant
-/// with the clamp above.
+/// A non-finite delay is the one value the range clamp above cannot catch,
+/// `clamp` passing a NaN straight through because every comparison against
+/// one is false. What it costs is not a mark drawn wrong but every mark drawn
+/// ARRIVED: `since + NaN` is NaN, and `Envelope::approach` answers a
+/// non-finite elapsed with 1.0 — so the wait itself is gone, and with it the
+/// whole of what the bar is for, while the picture still looks like a
+/// picture. Finite-but-wrong rather than unfinishable, which is exactly why
+/// the crate's whole-scene finite sweep passes over this one: there is no NaN
+/// left in the scene for it to find.
+///
+/// BOTH doors, because the picture is reached through both. A blob crosses
+/// `sanitize`; the offline layout, take replay and the harness each build a
+/// view in code and never do, which is the shell class `derive_scene`'s own
+/// `finite_or` exists for.
 #[test]
-fn a_non_finite_delay_loads_as_no_delay_at_all() {
+fn a_non_finite_delay_draws_as_no_delay_at_all() {
     let tracker = held(60);
-    let mut view = delayed_view(f32::NAN);
-    view.sanitize();
-    assert_eq!(view.mark_delay, 0.0, "the blob's door is where a NaN is repaired");
+    let poisoned = delayed_view(f32::NAN);
+    let mut sane = poisoned.clone();
+    sane.sanitize();
+    assert_eq!(sane.mark_delay, 0.0, "the blob's door is where a NaN is repaired");
 
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), ATTACK);
-    assert_eq!(origin_node(&scene).melody_level, 1.0, "and the marks draw as they always did");
+    let level = |view: &ViewConfig, now: f64| {
+        origin_node(&scene_of(&tracker, &Tuning::default(), view, &attack_frame(), now))
+            .melody_level
+    };
+    // Sampled at the ramp's START, which is the one instant that tells a
+    // repaired delay from an unrepaired one: with no delay the mark has not
+    // eased in yet, and through a NaN it is already full.
+    assert_eq!(level(&poisoned, 0.0), 0.0, "a NaN delay shipped its marks already arrived");
+    assert_eq!(level(&poisoned, 0.0), level(&sane, 0.0), "the two doors must answer alike");
+    // And it is the undelayed ramp rather than a mark layer that never comes.
+    assert_eq!(level(&poisoned, ATTACK), 1.0, "the marks draw as they always did");
 }
 
 #[test]
