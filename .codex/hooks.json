@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$(git rev-parse --show-toplevel)/.claude/owner-only-skills.sh\"",
+            "command": "/bin/sh -c 'exec \"$(git rev-parse --show-toplevel)\"/.claude/owner-only-skills.sh'",
             "timeout": 10
           }
         ]

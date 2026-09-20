@@ -17,8 +17,13 @@
 #
 # So a session's route is a tool call and Yan's is not, in both hosts.
 #
-# `.shared-skills` is deliberately not matched: the file lives in the
-# agent-config submodule, and editing it there has to stay possible.
+# The submodule path is matched too, and the refusal names no alternative.
+# An earlier version exempted `.shared-skills/` so the skill stayed editable,
+# and said so in the deny reason — whereupon Claude read the refusal, followed
+# the path it named, and got the procedure anyway (measured 2026-09-19). An
+# exemption for a second path to the SAME FILE is not an exemption, it is the
+# gate's own bypass, and naming it in the refusal is handing it over. To edit
+# this skill, ask Yan.
 #
 # One script for two hosts rather than a copy each, per CLAUDE.md's rule that
 # a Claude path may hold procedure any agent reads.
@@ -42,8 +47,6 @@ except Exception:
 print(" ".join(str(ti.get(k, "")) for k in ("command", "file_path", "path")))
 ' 2>/dev/null)
 
-case "$target" in *.shared-skills*) exit 0 ;; esac
-
 for owned in $OWNER_ONLY; do
   case "$target" in
     *"skills/$owned/SKILL.md"*) ;;
@@ -54,7 +57,7 @@ for owned in $OWNER_ONLY; do
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "deny",
-    "permissionDecisionReason": "/$owned is Yan's to start, not a session's, so reading its SKILL.md to run the procedure by hand is refused. If a range looks worth auditing, say so and let Yan invoke it. To EDIT the skill, read it at .shared-skills/skills/$owned/SKILL.md instead."
+    "permissionDecisionReason": "/$owned is Yan's to start, not a session's, so reading its SKILL.md is refused. Do not look for another path to the same file. If a range looks worth auditing, say so in your reply and let Yan invoke it; if you need to change the skill itself, ask him."
   }
 }
 JSON

@@ -53,9 +53,27 @@ for skill in $owned; do
   expect deny "cat .claude/skills/$skill/SKILL.md" "a session could hand-run the audit"
   expect deny "sed -n 1,40p .agents/skills/$skill/SKILL.md" "the gate matched the verb, not the path"
 
-  # Editing the skill has to stay possible: it lives in the agent-config
-  # submodule, and that path is deliberately exempt.
-  expect allow ".shared-skills/skills/$skill/SKILL.md" "the submodule copy is the maintenance path"
+  # The submodule path is the SAME FILE through the gitlink. Exempting it so
+  # the skill stayed editable is what defeated the first version of this gate:
+  # the deny reason named that path, and Claude read the refusal and followed
+  # it. A second route to the file is not an exemption, it is the bypass.
+  expect deny ".shared-skills/skills/$skill/SKILL.md" "the submodule path reaches the same file"
+
+  # And the refusal must not hand over a route. This is the finding above
+  # turned into a check: the gate held, and the message defeated it.
+  reason=$(printf '{"tool_input":{"command":"cat .claude/skills/%s/SKILL.md"}}' "$skill" | "$GATE" | python3 -c '
+import json, sys
+print(json.load(sys.stdin)["hookSpecificOutput"].get("permissionDecisionReason", ""))
+')
+  # A path, not the bare filename: naming the file is how the refusal makes
+  # sense, but naming a route to it is what handed the bypass over.
+  case "$reason" in
+    */SKILL.md*|*.shared-skills*|*skills/*)
+      echo "✗ the deny reason names a path to the file it just refused:" >&2
+      echo "    $reason" >&2
+      fail=1
+      ;;
+  esac
 done
 
 # Ordinary work must pass through untouched.
