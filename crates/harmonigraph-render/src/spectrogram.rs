@@ -1128,6 +1128,23 @@ mod tests {
         [cb.rect.width() as u32, cb.rect.height() as u32]
     }
 
+    /// Re-lay the quad over `slabs` of the run across the callback's OWN pane,
+    /// and the slab width that goes with it.
+    ///
+    /// One call rather than two lines, because the two cannot disagree.
+    /// `Blur time step` bounds the light field against `points_per_slab` and
+    /// ships at a step of one, so a fixture that re-lays the quad and leaves
+    /// that number where [`cloud_fixture`] set it draws its light field at the
+    /// resolution of a pane it no longer has — measuring the wrong picture
+    /// without a word about it.
+    fn relay_quad(cb: &mut SpectrogramCallback, slabs: u32) {
+        let pane = pane_of(cb);
+        cb.vertices = full_quad_in(slabs, pane);
+        if let Some(atmosphere) = cb.atmosphere.as_mut() {
+            atmosphere.points_per_slab = pane[0] as f32 / slabs as f32;
+        }
+    }
+
     /// The pitch fraction pixel row `py` of the frame samples, as
     /// [`full_quad`] lays the coordinate out.
     fn t_at(py: u32) -> f32 {
@@ -1377,6 +1394,10 @@ mod tests {
             pitch_vertical: true,
             points_per_cent: 0.03,
             points_per_ms: 0.01,
+            // The twelve slabs `full_quad` lays across the pane's width. A
+            // fixture that re-lays the quad owes this number too, which is what
+            // `relay_quad` is for.
+            points_per_slab: SIZE[0] as f32 / 12.0,
             now: 0.0,
         });
         cb
@@ -1538,7 +1559,7 @@ mod tests {
         // reach the live cap with the production bin count, not a tiny grid.
         let bins = harmonigraph_core::spectrum::SPECTRUM_BINS as u32;
         cb.grid = grid_of(Arc::new(vec![96; 1024 * bins as usize]), bins, 1024, 0);
-        cb.vertices = full_quad(1024);
+        relay_quad(&mut cb, 1024);
         cb.read.span = bins as f32 / BINS_PER_SEMITONE;
         cb.atmosphere.as_mut().unwrap().settings.contour_strength = 1.0;
         for width in [0.0, -1.0] {
@@ -1591,7 +1612,7 @@ mod tests {
     fn wide_musical_blur_integrates_periodic_broadband_without_phase_aliasing() {
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = cloud_fixture();
-        cb.vertices = full_quad(512);
+        relay_quad(&mut cb, 512);
         cb.atmosphere.as_mut().unwrap().settings.time_softness = 2000.0;
         cb.atmosphere.as_mut().unwrap().points_per_ms = 0.128;
         let mut frames = Vec::new();
@@ -1609,6 +1630,125 @@ mod tests {
         // display intensity instead of this brighter decoded result.
         let expected = (255.0_f32 / (0.1 + 1.81_f32.sqrt())).round() as u8;
         assert!(blue.abs_diff(expected) <= 2, "all encoded columns contribute, got {blue}");
+    }
+
+    #[test]
+    fn a_wide_kernel_narrower_than_its_quadrature_reads_the_texel_grid() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = cloud_fixture();
+        // One slab per source texel with one of them lit, read through the wide
+        // field alone. A time softness this small leaves the time axis at full
+        // resolution, which is the zoomed-out pane's own case: the wide kernel
+        // is then narrower than the seventeen taps the sparse quadrature would
+        // spread over it, and the filter walks integer offsets instead.
+        //
+        // A slab a PIXEL, which is also what keeps `Blur time step` off this
+        // axis at its fresh step of one: a texel a slab is the full resolution
+        // here, so the dial has nothing to take down and the arm below is
+        // reached under the shipped settings rather than beside them.
+        relay_quad(&mut cb, 128);
+        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+        (settings.pitch_softness, settings.time_softness, settings.spread) = (0.0, 30.0, 1.0);
+        let mut bytes = vec![0; 128 * BINS as usize];
+        bytes[64 * BINS as usize..65 * BINS as usize].fill(255);
+        cb.grid = grid_of(Arc::new(bytes), BINS, 128, 0);
+        // That arm's own predicate, restated so the fixture is checked to reach
+        // it rather than assumed to: `Targets::update` hands the filter
+        // `time_softness * points_per_ms` over the pane's width and the wide
+        // pass takes five times it, which is 1.5 texels here.
+        let source = atmosphere::source_size(SIZE, 1.0, cb.atmosphere.unwrap());
+        let sigma = 5.0 * 30.0 * 0.01 / SIZE[0] as f32 * source[0] as f32;
+        assert_eq!(source[0], SIZE[0], "the time axis was reduced away from the dense arm");
+        assert!(6.0 * sigma < 17.0, "the fixture missed the dense arm at {sigma} texels");
+        let frame = fresh_frame(&device, &queue, &cb);
+        let blue = |x: usize| frame[(64 * 128 + x) * 4 + 2];
+        assert!(blue(64) > 96, "the fixture never lit the slab it filled");
+        for k in 1..6 {
+            let (left, right) = (blue(64 - k), blue(64 + k));
+            assert!(left.abs_diff(right) <= 1, "the kernel leaned {k} texels off centre");
+            assert!(right < blue(63 + k), "the light rose {k} texels out");
+        }
+        // Three sigma is four and a half texels, so the taps are the four
+        // either side; the lit slab reaches one texel past its own peak, and
+        // nothing at all reaches six.
+        assert!(blue(69) > 0, "the kernel stopped short of its own three sigma");
+        assert_eq!(blue(70), 0, "the kernel reached past three sigma");
+    }
+
+    /// At one source texel a slab, the light field is the same picture the
+    /// full-resolution one draws — on a fixture smooth in time, which is the
+    /// only thing the dial claims.
+    ///
+    /// **The bound is derived rather than dialled to green.** The field is
+    /// affine between slab centres and the source integrates each texel's whole
+    /// footprint, so capping the axis at a texel per slab replaces a linear
+    /// interpolant stepped every quarter slab with one stepped every slab. The
+    /// difference of the two is what a linear interpolant misses on a curve:
+    /// `|g''| h^2 / 8` over a span `h`, plus `|g''| h^2 / 24` between a
+    /// footprint's mean and its midpoint — so `(1 - 1/16) * (1/8 + 1/24)`, about
+    /// `0.156 |g''|`, where `g` is the DISPLAYED intensity against slabs.
+    ///
+    /// The fixture runs two cosine periods over the 32 slabs, so `f''` peaks at
+    /// `0.45 (2 pi / 16)^2` = 0.069 of the encoded range per slab squared, at
+    /// the two ends of the cosine where `f'` is zero. The decode's own slope is
+    /// steepest down at the dark end (2.3 at a tenth of the range, against 0.74
+    /// at the middle), so `|g''|` is about 0.16 of display intensity there,
+    /// 0.156 of that is 0.025, and a palette channel moving over the whole
+    /// 0..255 turns it into about 6 levels. That is the MAX; the mean runs a
+    /// fraction of it, since most of the picture is where the cosine is
+    /// straight. Measured: mean 0.82, max 3.
+    #[test]
+    fn a_time_stepped_light_field_draws_the_smooth_picture_from_one_texel_a_slab() {
+        let Some((device, queue)) = headless_device() else { return };
+        const SLABS: u32 = 32;
+        let mut cb = cloud_fixture();
+        // Four pane points to a slab, which is the zoomed-out pane's own
+        // geometry at this fixture's size.
+        relay_quad(&mut cb, SLABS);
+        // Smooth along TIME and flat along pitch, so what the two frames differ
+        // by is the resample and nothing else. Two periods of a cosine over the
+        // run — sixteen slabs each, well sampled, and the curvature the bound
+        // below is derived from.
+        let bytes = (0..SLABS as usize)
+            .flat_map(|slab| {
+                let phase = slab as f32 / 16.0 * std::f32::consts::TAU;
+                let level = (0.5 + 0.45 * phase.cos()) * 255.0;
+                vec![level.round() as u8; BINS as usize]
+            })
+            .collect();
+        cb.grid = grid_of(Arc::new(bytes), BINS, SLABS, 0);
+        let a = cb.atmosphere.as_mut().unwrap();
+        (a.settings.pitch_softness, a.settings.time_softness) = (0.0, 20.0);
+        // The comparison's OFF arm, asked for rather than inherited: a step of
+        // one is what a fresh pane carries, and this is the frame it is being
+        // compared against.
+        a.settings.blur_time_step = 0.0;
+        // The fixture's own precondition: at this softness the time sigma is a
+        // fifth of a pixel, so the musical reduction leaves that axis at full
+        // resolution and the dial is the only thing that can take it down.
+        let pane = pane_of(&cb);
+        let full = atmosphere::source_size(pane, 1.0, cb.atmosphere.unwrap());
+        assert_eq!(full[0], pane[0], "the time axis was reduced with the dial off");
+        let native = fresh_frame(&device, &queue, &cb);
+
+        cb.atmosphere.as_mut().unwrap().settings.blur_time_step = 1.0;
+        let stepped_size = atmosphere::source_size(pane, 1.0, cb.atmosphere.unwrap());
+        assert_eq!(stepped_size, [SLABS, full[1]], "the capped path was never taken");
+        let stepped = fresh_frame(&device, &queue, &cb);
+        assert_ne!(native, stepped, "one texel a slab drew the full-resolution frame");
+
+        let (max, _) = compare(&native, &stepped);
+        let channels = native.len() / 4 * 3;
+        let mean = native
+            .chunks_exact(4)
+            .zip(stepped.chunks_exact(4))
+            .flat_map(|(a, b)| (0..3).map(move |c| f64::from(a[c].abs_diff(b[c]))))
+            .sum::<f64>()
+            / channels as f64;
+        assert!(
+            mean < 2.0 && max <= 7,
+            "the resample moved the picture: mean {mean:.3}, max {max}"
+        );
     }
 
     #[test]
@@ -1741,7 +1881,7 @@ mod tests {
                     }
                 }
                 cb.grid = grid_of(Arc::new(bytes), BINS, 128, 0);
-                cb.vertices = full_quad(128);
+                relay_quad(&mut cb, 128);
                 // The measured grain first, then the same picture softened.
                 let soft = fresh_frame(&device, &queue, &cb);
                 every_effect_off(&mut cb);
@@ -1907,6 +2047,12 @@ mod tests {
                     settings.points_per_cent = 0.128 * scale;
                 } else {
                     settings.points_per_ms = 0.04 / scale;
+                    // A Span drag carries the slab's WIDTH with the window,
+                    // since the rung holds through it — and `Blur time step`
+                    // bounds the time axis on exactly that number, so a drag
+                    // that left it behind would hold the axis at one size and
+                    // exercise no churn at all.
+                    settings.points_per_slab = SIZE[0] as f32 / 12.0 / scale;
                 }
                 let requested = atmosphere::source_size(SIZE, 1.0, *settings);
                 exact_allocations += usize::from(previous_requested != Some(requested));
@@ -1928,8 +2074,23 @@ mod tests {
                 }
             }
             eprintln!("pitch={pitch}: {allocations} target allocations vs {exact_allocations} exact-size allocations over 240 drag frames");
-            assert!(exact_allocations > 25, "fixture did not exercise size churn");
-            assert!(allocations <= 8 && allocations * 5 < exact_allocations);
+            // The first frame allocates under any policy, so the drag's own
+            // churn is what is left of each count after it.
+            let (churn, reallocations) = (exact_allocations - 1, allocations - 1);
+            // What the band is worth depends on how finely the dragged axis
+            // churns, and the two arms differ by construction. The PITCH axis
+            // is reduced by the musical radius and moves nearly every frame, so
+            // the band absorbs 34 size changes into 5. The TIME axis is bounded
+            // by the SLABS instead and steps a whole texel at a time — 12 of
+            // them where this drag starts and 18 where its window has widened
+            // by 1.003^119 — so one step is already a twelfth of the size and
+            // the tenth the band allows swallows every second one, no more.
+            let (floor, band) = if pitch { (24, 5) } else { (12, 2) };
+            assert!(churn >= floor, "fixture did not exercise size churn: {churn}");
+            assert!(
+                reallocations <= 7 && reallocations * band <= churn,
+                "the drag reallocated {reallocations} times against {churn} size changes"
+            );
         }
     }
 
@@ -2757,7 +2918,7 @@ mod tests {
             egui::Pos2::ZERO,
             egui::vec2(ROUGH_BAND_SIZE[0] as f32, ROUGH_BAND_SIZE[1] as f32),
         );
-        cb.vertices = full_quad_in(12, ROUGH_BAND_SIZE);
+        relay_quad(&mut cb, 12);
         cb.read.rows = ROUGH_BAND_SIZE[1];
         cb.atmosphere.as_mut().unwrap().region = cb.rect;
         let mut bytes = vec![0u8; 12 * BINS as usize];
@@ -2800,6 +2961,16 @@ mod tests {
         // this is measuring — and the relief of 1 above already drives it to 0,
         // which is the raw Lambert the defect lived in. It is the same line it
         // always was, now spelled by the dial that absorbed it.
+        //
+        // The full-resolution light field every figure in the test below was
+        // measured over. Twelve slabs across this pane is ten points each, so
+        // the fresh step of one bounds the field to twelve texels and its
+        // reconstruction kinks at every slab centre — which at THESE dials (a
+        // facet read at the cell centres, relief 1, no floor) is two pixels of
+        // 25/255 against a threshold of 24, at a step of one and at no other.
+        // That is a graze of the instrument rather than the row of tears it
+        // hunts, so the instrument keeps the resolution it was calibrated at.
+        s.blur_time_step = 0.0;
         cb
     }
 
@@ -3680,7 +3851,7 @@ fn cs_wrap_probe() {
             egui::Pos2::ZERO,
             egui::vec2(TILE_SIZE[0] as f32, TILE_SIZE[1] as f32),
         );
-        cb.vertices = full_quad_in(12, TILE_SIZE);
+        relay_quad(&mut cb, 12);
         cb.read.rows = TILE_SIZE[1];
         cb.grid = grid_of(noisy_grid(BINS as usize, 12), BINS, 12, 0);
         cb.atmosphere.as_mut().unwrap().region = cb.rect;
@@ -3789,7 +3960,7 @@ fn cs_wrap_probe() {
                 egui::Pos2::ZERO,
                 egui::vec2(TILE_SIZE[0] as f32, TILE_SIZE[1] as f32),
             );
-            cb.vertices = full_quad_in(12, TILE_SIZE);
+            relay_quad(&mut cb, 12);
             cb.read.rows = TILE_SIZE[1];
             cb.grid = grid_of(Arc::new(vec![180; BINS as usize * 12]), BINS, 12, 0);
             let atmosphere = cb.atmosphere.as_mut().unwrap();
@@ -4099,7 +4270,7 @@ fn cs_rotation_probe() {
                     egui::Pos2::ZERO,
                     egui::vec2(PERIODIC_SIZE[0] as f32, PERIODIC_SIZE[1] as f32),
                 );
-                cb.vertices = full_quad_in(12, PERIODIC_SIZE);
+                relay_quad(&mut cb, 12);
                 cb.read.rows = PERIODIC_SIZE[1];
                 cb.grid = grid_of(Arc::new(vec![180; BINS as usize * 12]), BINS, 12, 0);
                 let atmosphere = cb.atmosphere.as_mut().unwrap();
@@ -4180,6 +4351,7 @@ fn cs_rotation_probe() {
                         pitch_vertical,
                         points_per_cent: 0.03,
                         points_per_ms: 0.01,
+                        points_per_slab: 0.0,
                         now,
                     },
                 )
@@ -4254,6 +4426,13 @@ fn cs_rotation_probe() {
         };
         let mut cb = wash_fixture();
         cb.atmosphere.as_mut().unwrap().settings.cloud_tile = 20.0;
+        // `encoded_passes` lives on the TARGETS, so it only counts across
+        // frames that hold on to them — and the orientation flip below
+        // transposes the light field's size as soon as `Blur time step` bounds
+        // the time axis (12 texels one way round, 128 the other), which rebuilds
+        // them and starts the counter over. The tile survives that rebuild;
+        // the instrument watching it does not, so the field stays square.
+        cb.atmosphere.as_mut().unwrap().settings.blur_time_step = 0.0;
         let mut resources = CallbackResources::default();
         frame_with(&device, &queue, &mut resources, &cb);
         let first = passes(&resources);

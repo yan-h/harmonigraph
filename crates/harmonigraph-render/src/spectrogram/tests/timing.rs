@@ -7,16 +7,49 @@
 //! ```
 //!
 //! `PROBE_SIZE=WxH` (pixels, default 3840x2160), `PROBE_PPP` (default 2),
-//! `PROBE_FRAMES` (default 60) and `PROBE_CASE` (a substring of a case's name)
-//! narrow it. `docs/spectrogram-cloud-performance.md` holds the readings.
+//! `PROBE_FRAMES` (default 60) and `PROBE_CASE` (comma-separated substrings of
+//! the case names, any of which selects a case) narrow it, and `PROBE_FILLS`
+//! replaces the pair of coverages below.
+//! `docs/spectrogram-cloud-performance.md` holds the readings.
+//! `PROBE_HISTORY_SECONDS` (default 10) is the visible span, not elapsed age;
+//! it controls the time-softness scale, without changing the supplied grid.
+//! Comma-separated values interleave multiple history durations in one run.
+//! `PROBE_SLABS` (default 1024, range 2..=1024) controls the visible grid width.
+//! The fixture uses a live-sized 1032-slot ring. Fill changes rasterized area,
+//! not slab count: it is a coverage comparison, not simulated history growth.
+//! Callback CPU time excludes aggregation, egui, submission and polling;
+//! the fixed grid has no steady-state dirty uploads. Synchronous GPU waits
+//! also mean these durations are not end-to-end DAW frame times.
 //!
-//! `PROBE_CLOUD_PIXEL` (points per cloud sample) and `PROBE_CLOUD_TILE` (the
-//! walk's period in cells, 0 for the live walk), each defaulting to whatever
-//! `SpectralAtmosphere::default` says, apply to EVERY case after its own `turn`,
-//! so one run reads the whole table at one setting and two runs are what that
-//! setting is worth. They are dials rather than cases because the question is
-//! how much each of the rows above falls, not how one of them does — and they
-//! stack, which is the other thing two runs cannot show.
+//! `PROBE_SPAN_SEMITONES` (default 96) is how much of the spectrum the pane
+//! shows, and `PROBE_PITCH_SOFTNESS`, `PROBE_TIME_SOFTNESS` and `PROBE_SPREAD`
+//! replace the light field's own dials in every case that draws one — which is
+//! what replays a SAVED pane's settings instead of the fresh ones. They
+//! override a case's `turn`, so a control that works by turning a softness to
+//! zero is not one under them; `plain` still is.
+//!
+//! `PROBE_CLOUD_PIXEL` (points per cloud sample), `PROBE_CLOUD_TILE` (the
+//! walk's period in cells, 0 for the live walk) and `PROBE_BLUR_TIME_STEP`
+//! (slabs per source texel on the light field's time axis, 0 for off), each
+//! defaulting to whatever `SpectralAtmosphere::default` says, apply to EVERY
+//! case after its own `turn`, so one run reads the whole table at one setting
+//! and two runs are what that setting is worth. They are dials rather than
+//! cases because the question is how much each of the rows above falls, not how
+//! one of them does — and they stack, which is the other thing two runs cannot
+//! show.
+//!
+//! `PROBE_BLUR_TIME_STEP` now defaults to a step of ONE, so every case runs
+//! with the light field's time axis capped unless the run says
+//! `PROBE_BLUR_TIME_STEP=0`. Every figure in
+//! `docs/spectrogram-cloud-performance.md` and in issue #1015 was taken before
+//! that default landed, which is to say uncapped, and a fresh run is only
+//! comparable to them at 0.
+//!
+//! `PROBE_BLUR_TIME_STEP` is measured against the slab width `quad` actually
+//! lays out, `points.x * fill / PROBE_SLABS`, rather than against the whole
+//! pane's: the fixture puts every slab inside the filled fraction, so at a fill
+//! below one the data really is finer per point than the pane and the dial is
+//! right to bound nothing. At `PROBE_FILLS=1` the two are the same number.
 
 use super::*;
 use harmonigraph_scene::{CloudStyle, SpectralAtmosphere};
@@ -36,6 +69,12 @@ const CASES: &[(&str, Option<Turn>)] = &[
     ("plain", None),
     ("blur only", Some(|s| (s.contour_strength, s.cloud_depth) = (0.0, 0.0))),
     ("blur + terraces", Some(|s| s.cloud_depth = 0.0)),
+    (
+        "terraces only",
+        Some(|s| {
+            (s.pitch_softness, s.time_softness, s.cloud_depth) = (0.0, 0.0, 0.0);
+        }),
+    ),
     ("mosaic, defaults", Some(|_| {})),
     ("mosaic, no terraces", Some(|s| s.contour_strength = 0.0)),
     ("mosaic, variety 0", Some(|s| s.scale_variety = 0.0)),
@@ -55,11 +94,14 @@ const CASES: &[(&str, Option<Turn>)] = &[
 struct Case {
     name: &'static str,
     fill: f32,
+    history_seconds: f32,
     turn: Option<Turn>,
     cb: SpectrogramCallback,
     resources: CallbackResources,
     /// Light field, paint, and submit-to-completion, in ms.
     samples: [Vec<f64>; 3],
+    gpu_total: Vec<f64>,
+    cpu_prepare: Vec<f64>,
 }
 
 #[test]
@@ -75,10 +117,27 @@ fn cloud_costs_by_style_and_dial() {
     let ppp: f32 = std::env::var("PROBE_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(2.0);
     let frames: usize =
         std::env::var("PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
-    let cloud_pixel: Option<f32> =
-        std::env::var("PROBE_CLOUD_PIXEL").ok().and_then(|v| v.parse().ok());
-    let cloud_tile: Option<f32> =
-        std::env::var("PROBE_CLOUD_TILE").ok().and_then(|v| v.parse().ok());
+    let histories: Vec<f32> = std::env::var("PROBE_HISTORY_SECONDS")
+        .unwrap_or_else(|_| "10".to_owned())
+        .split(',')
+        .map(|v| {
+            let seconds: f32 = v.trim().parse().expect("history duration in seconds");
+            assert!(seconds.is_finite() && seconds > 0.0);
+            seconds
+        })
+        .collect();
+    let fills: Vec<f32> = std::env::var("PROBE_FILLS")
+        .ok()
+        .map(|v| v.split(',').map(|v| v.trim().parse().expect("a fill fraction")).collect())
+        .unwrap_or_else(|| FILLS.to_vec());
+    let dial =
+        |name: &str| -> Option<f32> { std::env::var(name).ok().and_then(|v| v.parse().ok()) };
+    let cloud_pixel = dial("PROBE_CLOUD_PIXEL");
+    let cloud_tile = dial("PROBE_CLOUD_TILE");
+    let blur_time_step = dial("PROBE_BLUR_TIME_STEP");
+    let pitch_softness = dial("PROBE_PITCH_SOFTNESS");
+    let time_softness = dial("PROBE_TIME_SOFTNESS");
+    let spread = dial("PROBE_SPREAD");
     crate::shader_assets::initialize();
     let instance = wgpu::Instance::default();
     let Ok(adapter) =
@@ -99,10 +158,19 @@ fn cloud_costs_by_style_and_dial() {
     }))
     .expect("a device with timestamps");
 
-    // The analyzer's own shape: a whole-song ring of 3828-bucket slabs, of
-    // which a thousand are on screen, read over eight octaves.
-    let (bins, slabs, span) = (3828u32, 1024u32, 96.0f32);
-    let grid = grid_of(noisy_grid(bins as usize, slabs as usize), bins, 4096, 0);
+    // A full-size live ring: 1024 slabs plus eight of retention headroom,
+    // read over eight octaves. Smaller runs keep the same allocation.
+    let slabs: u32 = std::env::var("PROBE_SLABS").ok().and_then(|v| v.parse().ok()).unwrap_or(1024);
+    assert!((2..=1024).contains(&slabs));
+    // The grid is the whole 20 Hz - 20 kHz spectrum; `span` is how much of it
+    // the pane shows, which decides both the pitch footprint under one pixel
+    // and the points per cent the pitch softness is measured in. The default
+    // shows eight octaves of it; the live pane at full zoom-out shows all
+    // 119.59 semitones.
+    let span: f32 =
+        std::env::var("PROBE_SPAN_SEMITONES").ok().and_then(|v| v.parse().ok()).unwrap_or(96.0);
+    let bins = 3828u32;
+    let grid = grid_of(noisy_grid(bins as usize, slabs as usize), bins, 1032, 0);
     let mut read = read_of(SPECTRUM_MIN_MIDI + 10.0, span, size[1]);
     read.level_per_step = 1.0 / 255.0;
     let points = egui::vec2(size[0] as f32 / ppp, size[1] as f32 / ppp);
@@ -184,14 +252,29 @@ fn cloud_costs_by_style_and_dial() {
     let mut cases: Vec<Case> = CASES
         .iter()
         .filter(|(name, _)| {
-            std::env::var("PROBE_CASE").ok().is_none_or(|v| name.contains(v.as_str()))
+            std::env::var("PROBE_CASE")
+                .ok()
+                .is_none_or(|v| v.split(',').any(|v| name.contains(v.trim())))
         })
-        .flat_map(|&(name, turn)| FILLS.map(|fill| (name, turn, fill)))
-        .map(|(name, turn, fill)| {
+        .flat_map(|&(name, turn)| fills.clone().into_iter().map(move |fill| (name, turn, fill)))
+        .flat_map(|(name, turn, fill)| {
+            histories.iter().map(move |&history_seconds| (name, turn, fill, history_seconds))
+        })
+        .map(|(name, turn, fill, history_seconds)| {
             let mut cb = callback(quad(fill), &grid, &read);
             cb.rect = rect;
             let resources = CallbackResources::default();
-            Case { name, fill, turn, cb, resources, samples: Default::default() }
+            Case {
+                name,
+                fill,
+                history_seconds,
+                turn,
+                cb,
+                resources,
+                samples: Default::default(),
+                gpu_total: Vec::new(),
+                cpu_prepare: Vec::new(),
+            }
         })
         .collect();
 
@@ -200,7 +283,17 @@ fn cloud_costs_by_style_and_dial() {
     // every case together rather than whichever ran last.
     for frame in 0..frames + 10 {
         for case in &mut cases {
-            let Case { turn, cb, resources, samples, .. } = case;
+            let Case {
+                turn,
+                cb,
+                resources,
+                samples,
+                gpu_total,
+                cpu_prepare,
+                history_seconds,
+                fill,
+                ..
+            } = case;
             cb.pass_nr = frame as u64;
             cb.atmosphere = turn.map(|turn| {
                 let mut settings = SpectralAtmosphere::default();
@@ -213,19 +306,40 @@ fn cloud_costs_by_style_and_dial() {
                 if let Some(cloud_tile) = cloud_tile {
                     settings.cloud_tile = cloud_tile;
                 }
+                if let Some(blur_time_step) = blur_time_step {
+                    settings.blur_time_step = blur_time_step;
+                }
+                // The light field's own dials, for replaying a saved pane's
+                // settings rather than the fresh ones. A case that turns a
+                // softness to zero to BE a control loses that here, so a run
+                // with these set wants `plain` as its control.
+                if let Some(pitch_softness) = pitch_softness {
+                    settings.pitch_softness = pitch_softness;
+                }
+                if let Some(time_softness) = time_softness {
+                    settings.time_softness = time_softness;
+                }
+                if let Some(spread) = spread {
+                    settings.spread = spread;
+                }
                 SpectrogramAtmosphere {
                     settings,
                     region: rect,
                     pitch_vertical: true,
                     points_per_cent: points.y / (span * 100.0),
-                    // Ten seconds of history across the pane.
-                    points_per_ms: points.x / 10_000.0,
+                    points_per_ms: points.x / (*history_seconds * 1000.0),
+                    // What `quad` lays out: every slab inside the filled
+                    // fraction, so this is `w / n` and not the pane's width
+                    // over the slab count.
+                    points_per_slab: points.x * *fill / slabs as f32,
                     now: 1.0 + frame as f64 / 144.0,
                 }
             });
             let mut encoder = device.create_command_encoder(&Default::default());
             drop(pass_ending_at(&mut encoder, &stamp_view, 0));
+            let prepare_start = std::time::Instant::now();
             let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
+            let prepare_ms = prepare_start.elapsed().as_secs_f64() * 1000.0;
             drop(pass_ending_at(&mut encoder, &stamp_view, 1));
             {
                 let mut pass = pass_ending_at(&mut encoder, &pane_view, 2);
@@ -257,21 +371,41 @@ fn cloud_costs_by_style_and_dial() {
                 samples[0].push(ms(0, 1));
                 samples[1].push(ms(1, 2));
                 samples[2].push(wall_ms);
+                gpu_total.push(ms(0, 2));
+                cpu_prepare.push(prepare_ms);
             }
         }
     }
 
-    // The minimum beside the median: on a shared GPU the fastest frame is the
-    // one nothing else interrupted, and it is the steadier of the two.
+    // Keep the historical split columns, but prefer the directly measured
+    // total: independent timestamp passes can overlap on a tile-based GPU.
+    // Split minima can be zero and do not establish an uncontended cost.
     eprintln!(
-        "{:<38} {:>5}  {:>15}  {:>15}  {:>15}",
-        "case", "fill", "light med/min", "paint med/min", "wall med/min"
+        "{:<38} {:>5} {:>8}  {:>15}  {:>15}  {:>15}  {:>10}  {:>10}  source px",
+        "case",
+        "fill",
+        "span s",
+        "light med/min",
+        "paint med/min",
+        "wall med/min",
+        "GPU med",
+        "CPU prep"
     );
     for case in &mut cases {
         let [light, paint, wall] = case.samples.each_mut().map(|samples| {
             samples.sort_by(f64::total_cmp);
             format!("{:>7.2}/{:>7.2}", samples[samples.len() / 2], samples[0])
         });
-        eprintln!("{:<38} {:>5.2}  {light}  {paint}  {wall}", case.name, case.fill);
+        case.gpu_total.sort_by(f64::total_cmp);
+        case.cpu_prepare.sort_by(f64::total_cmp);
+        let source = case.cb.atmosphere.map(|a| atmosphere::source_size(size, ppp, a));
+        eprintln!(
+            "{:<38} {:>5.2} {:>8.1}  {light}  {paint}  {wall}  {:>10.3}  {:>10.3}  {source:?}",
+            case.name,
+            case.fill,
+            case.history_seconds,
+            case.gpu_total[case.gpu_total.len() / 2],
+            case.cpu_prepare[case.cpu_prepare.len() / 2]
+        );
     }
 }

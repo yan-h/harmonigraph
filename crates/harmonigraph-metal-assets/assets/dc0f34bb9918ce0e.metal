@@ -250,7 +250,6 @@ fragment fs_density_sourceOutput fs_density_source(
     const VertexOut in = { position, varyings.slab, varyings.t };
     float at = {};
     VertexOut tap = {};
-    float left = {};
     float integral = 0.0;
     uint i = 0u;
     float next = {};
@@ -268,54 +267,48 @@ fragment fs_density_sourceOutput fs_density_source(
         return fs_density_sourceOutput { metal::float4(_e25, 0.0, 0.0, 1.0) };
     }
     tap = in;
-    float _e32 = at;
-    tap.slab = _e32;
-    VertexOut _e33 = tap;
-    float _e35 = field_level(_e33, true, locals, grid, _buffer_sizes);
-    left = _e35;
-    uint _e41 = locals.run_slabs;
-    float last_center = static_cast<float>(_e41) - 0.5;
+    uint _e35 = locals.run_slabs;
+    float last_center = static_cast<float>(_e35) - 0.5;
     uint2 loop_bound_1 = uint2(4294967295u);
     bool loop_init_1 = true;
     while(true) {
         if (metal::all(loop_bound_1 == uint2(0u))) { break; }
         loop_bound_1 -= uint2(loop_bound_1.y == 0u, 1u);
         if (!loop_init_1) {
-            uint _e84 = i;
-            i = _e84 + 1u;
+            uint _e78 = i;
+            i = _e78 + 1u;
         }
         loop_init_1 = false;
-        uint _e47 = i;
-        uint _e50 = locals.run_slabs;
-        if (_e47 < (_e50 + 2u)) {
+        uint _e41 = i;
+        uint _e44 = locals.run_slabs;
+        if (_e41 < (_e44 + 2u)) {
         } else {
             break;
         }
         {
-            float _e54 = at;
-            if (_e54 >= high) {
+            float _e48 = at;
+            if (_e48 >= high) {
                 break;
             }
-            float _e56 = at;
-            next = metal::min(high, metal::max(0.5, metal::floor(_e56 - 0.5) + 1.5));
-            float _e66 = at;
-            if (_e66 >= last_center) {
+            float _e50 = at;
+            next = metal::min(high, metal::max(0.5, metal::floor(_e50 - 0.5) + 1.5));
+            float _e60 = at;
+            if (_e60 >= last_center) {
                 next = high;
             }
-            float _e69 = next;
-            tap.slab = _e69;
-            VertexOut _e70 = tap;
-            float _e72 = field_level(_e70, true, locals, grid, _buffer_sizes);
-            float _e73 = integral;
-            float _e74 = left;
-            float _e78 = next;
-            float _e79 = at;
-            integral = _e73 + (((_e74 + _e72) * 0.5) * (_e78 - _e79));
-            left = _e72;
-            float _e83 = next;
-            at = _e83;
+            float _e63 = at;
+            float _e64 = next;
+            tap.slab = (_e63 + _e64) * 0.5;
+            float _e68 = integral;
+            VertexOut _e69 = tap;
+            float _e71 = field_level(_e69, true, locals, grid, _buffer_sizes);
+            float _e72 = next;
+            float _e73 = at;
+            integral = _e68 + (_e71 * (_e72 - _e73));
+            float _e77 = next;
+            at = _e77;
         }
     }
-    float _e87 = integral;
-    return fs_density_sourceOutput { metal::float4(_e87 / covered, 0.0, 0.0, 1.0) };
+    float _e81 = integral;
+    return fs_density_sourceOutput { metal::float4(_e81 / covered, 0.0, 0.0, 1.0) };
 }

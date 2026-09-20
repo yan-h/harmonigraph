@@ -337,20 +337,23 @@ fn fs_density_source(in: VertexOut) -> @location(0) vec4<f32> {
     let covered = high - at;
     if covered <= 0.0 { return vec4<f32>(field_level(in, true), 0.0, 0.0, 1.0); }
     var tap = in;
-    tap.slab = at;
-    var left = field_level(tap, true);
     var integral = 0.0;
     let last_center = f32(locals.run_slabs) - 0.5;
+    // The field is affine BETWEEN those centers, so a segment's exact integral
+    // is its width times the level at its midpoint: one `field_level` per
+    // segment, where a trapezoid rule reads both ends and so reads every
+    // interior kink twice over. The same number, off only in the last
+    // bit, for one read per segment fewer — and at full zoom-out a source
+    // texel spans well under a slab, so a footprint is one or two segments and
+    // that read is a third to a half of the whole integration.
     // Outside the run the read holds its edge; skip that constant interval in
     // one step. Inside, each original slab contributes to this footprint.
     for (var i = 0u; i < locals.run_slabs + 2u; i += 1u) {
         if at >= high { break; }
         var next = min(high, max(0.5, floor(at - 0.5) + 1.5));
         if at >= last_center { next = high; }
-        tap.slab = next;
-        let right = field_level(tap, true);
-        integral += (left + right) * 0.5 * (next - at);
-        left = right;
+        tap.slab = (at + next) * 0.5;
+        integral += field_level(tap, true) * (next - at);
         at = next;
     }
     return vec4<f32>(integral / covered, 0.0, 0.0, 1.0);

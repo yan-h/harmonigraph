@@ -293,6 +293,7 @@ pub(crate) fn draw_spectrogram(
     };
 
     let (d_near, d_far) = strip_depths(&time, split, &layout, columns.newest);
+    let points_per_ms = time.region_depth_len(axes) / (time.window() as f32 * 1000.0);
 
     let vertices = heatmap_vertices(axes, &time, &layout, d_near, d_far);
     let Some((grid, shades)) = frame_data(surfaces, surface, &cfg) else {
@@ -317,7 +318,11 @@ pub(crate) fn draw_spectrogram(
             region: egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0)),
             pitch_vertical: axes.dir_pitch().y.abs() > 0.5,
             points_per_cent: axes.pitch_len() / (scale.span * 100.0),
-            points_per_ms: time.region_depth_len(axes) / (time.window() as f32 * 1000.0),
+            points_per_ms,
+            // The width of a slab of the run being DRAWN — `layout` carries the
+            // rung `run_for` settled on, hysteresis included, where the window
+            // alone would name the rung this frame would freshly choose.
+            points_per_slab: (layout.bucket * 1000.0) as f32 * points_per_ms,
             now,
         }),
     ));

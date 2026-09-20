@@ -29,11 +29,32 @@ fn vs_fullscreen(@builtin(vertex_index) vertex: u32) -> Vertex {
     out.uv = uv;
     return out;
 }
+/// One tap's weighted level and its weight, so the two quadratures below
+/// accumulate the same way and differ only in where they put their taps.
+fn gaussian_tap(uv: vec2<f32>, direction: vec2<f32>, offset: f32, sigma: f32) -> vec2<f32> {
+    let x = offset / sigma;
+    let weight = exp(-0.5 * x * x);
+    let level = textureSampleLevel(source, linear_sampler, uv + direction * offset, 0.0).r;
+    return vec2<f32>(level * weight, weight);
+}
 fn filtered(uv: vec2<f32>, step: vec2<f32>, close: bool) -> vec4<f32> {
     // The source resolution follows the close radius (roughly two texels
     // per sigma). Seventeen taps therefore remain dense at every zoom; the
     // wide pass reads an already low-passed field. Clip the integration range
     // to real texels and normalize there, preserving constant fields at edges.
+    //
+    // Which quadrature to use is decided by the kernel's width in TEXELS
+    // rather than by which pass asks. Where the whole +-3 sigma support is
+    // narrower than seventeen texels, seventeen sub-texel-spaced taps ask the
+    // grid for more than it holds, and integer offsets on the texel centers
+    // are both the better rule and the cheaper one: they beat nothing against
+    // near-Nyquist broadband patterns, and the loop stops where the Gaussian
+    // does instead of always stepping seventeen times. The close pass is
+    // always in that regime, since its source follows its own radius. The
+    // wide pass joins it whenever its axis was left at full resolution
+    // because the softness on it is well under a pixel — which is the whole
+    // time axis of a zoomed-out pane, where a 600 s span puts a wide sigma of
+    // two thirds of a device pixel under seventeen taps.
     let dims = vec2<f32>(textureDimensions(source));
     let horizontal = step.x > 0.0;
     let sigma = select(step.y, step.x, horizontal);
@@ -43,22 +64,24 @@ fn filtered(uv: vec2<f32>, step: vec2<f32>, close: bool) -> vec4<f32> {
     let low = max(-3.0 * sigma, 0.5 / pixels - coordinate);
     let high = min(3.0 * sigma, 1.0 - 0.5 / pixels - coordinate);
     let direction = select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), horizontal);
-    var level = 0.0;
-    var total = 0.0;
-    for (var i = 0u; i < 17u; i += 1u) {
-        var offset = mix(low, high, (f32(i) + 0.5) / 17.0);
-        if close {
-            // Integer offsets sample the source's texel centers, avoiding
-            // quadrature beats against near-Nyquist broadband patterns.
-            offset = (f32(i) - 8.0) / pixels;
+    var sum = vec2<f32>(0.0);
+    if close || 6.0 * sigma * pixels < 17.0 {
+        // The taps within +-3 sigma, and never more than the seventeen the
+        // sparse arm spends — which is what keeps this bit-identical to the
+        // close pass's own loop, where the eight either side were stepped
+        // through and the ones past the Gaussian skipped.
+        let reach = i32(min(8.0, ceil(3.0 * sigma * pixels)));
+        for (var i = -reach; i <= reach; i += 1) {
+            let offset = f32(i) / pixels;
             if offset < low || offset > high { continue; }
+            sum += gaussian_tap(uv, direction, offset, sigma);
         }
-        let x = offset / sigma;
-        let weight = exp(-0.5 * x * x);
-        level += textureSampleLevel(source, linear_sampler, uv + direction * offset, 0.0).r * weight;
-        total += weight;
+    } else {
+        for (var i = 0u; i < 17u; i += 1u) {
+            sum += gaussian_tap(uv, direction, mix(low, high, (f32(i) + 0.5) / 17.0), sigma);
+        }
     }
-    return vec4<f32>(level / total, 0.0, 0.0, 1.0);
+    return vec4<f32>(sum.x / sum.y, 0.0, 0.0, 1.0);
 }
 @fragment
 fn fs_close_h(in: Vertex) -> @location(0) vec4<f32> {
