@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Canonical full CI gate: formatting, markdown clause breaks and local links, workspace clippy with warnings denied,
 # workspace tests with harmonigraph-render excluded, the plugin package check, the release all-targets check, harmonigraph-render's own tests,
-# the committed Metal corpus under strict resolution,
+# the adaptive-tuning Node model, the committed Metal corpus under strict resolution,
 # vendored GUI crates' tests, the optional CLAP probe fixture and the gated startup-probe example, doc links, the harmonigraph-core dependency
 # guard, the security-audit trigger split, the CI group split, worktree reclaim
 # safety, and the registered-worktree bundle swap.
@@ -91,6 +91,11 @@ run python3 -B .claude/tests/semantic-breaks.py
 # resolve to tracked targets and current headings, including after docs move.
 run python3 -B .claude/markdown-links.py
 run python3 -B .claude/tests/markdown-links.py
+
+# The adaptive-tuning browser retired, but its Node model remains the musical
+# reference that generates the fixtures consumed by harmonigraph-core. Its
+# focused suite uses only Node's built-ins and costs under a second.
+run node --test tools/adaptive-tuning-simulator/model.test.mjs
 
 run cargo clippy --workspace --all-targets -- -D warnings
 # Guard the existing production performance scenarios at their exported callbacks.
@@ -377,7 +382,7 @@ sccache --show-stats 2>/dev/null \
 
 echo
 if [ "$CI_GROUP" = all ]; then
-  echo "✅ full CI passed (fmt + markdown breaks + markdown links + workspace clippy + workspace tests + plugin check + startup probe + release check + render tests + strict Metal corpus + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + reclaim safety + plugin swap)"
+  echo "✅ full CI passed (fmt + markdown breaks + markdown links + adaptive-tuning model + workspace clippy + workspace tests + plugin check + startup probe + release check + render tests + strict Metal corpus + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + reclaim safety + plugin swap)"
 else
   echo "✅ CI group '$CI_GROUP' passed — one of: ${CI_GROUPS[*]}"
 fi

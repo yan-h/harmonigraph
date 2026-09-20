@@ -158,7 +158,7 @@ node --test tools/adaptive-tuning-simulator/model.test.mjs
 
 The suite checks the eighteen musical fixtures with declared profiles, 101 full major-third cycles with over three octaves of unwrapped drift, octave transposition, release-recency replacement, repeated pitches, frozen corrections and player bends, reset settings, axis eligibility, an onset no node is worth snapping to, and analytic reachability against direct selection.
 Changing parameters may produce a different result and the current example reports that difference rather than declaring every run a pass.
-Nothing currently runs this suite automatically: no workflow, `ci.sh` group or `package.json` script references it, so it is a by-hand tool rather than a CI gate; whether to change that is tracked in [#1001](https://github.com/yan-h/harmonigraph/issues/1001).
+The workspace group in `ci.sh` runs this suite on every pull request.
 
 This verifies the model's mechanics and the stated fixtures, not perceptual quality or suitability for every progression.
 The main open choices remain the last-onset reference, union-shaped neighbourhood, scoring behaviour away from the examples, and replacing fixed-capacity memory with a better musical rule.

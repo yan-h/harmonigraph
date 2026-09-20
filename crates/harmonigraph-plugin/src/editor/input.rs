@@ -4,10 +4,6 @@ use std::time::Instant;
 
 use super::clock::ClockMapper;
 
-/// Host-shell setup, intentionally outside the picture shared with video export.
-/// Two controls survive the fault cut: Reset, and the delay every Tune owns
-/// its own copy of. Pairing is a load of one process-wide slot, so there is no
-/// hub to choose and no routing offset to calibrate.
 /// The sole display and analyzer ingress, retained for the plugin lifetime.
 /// Synchronous draining never acquires the audio callback or a window.
 pub(crate) struct LiveInput {
