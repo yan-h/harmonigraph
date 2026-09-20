@@ -289,6 +289,14 @@ A Codex coordinator creates a separate top-level app task, and therefore a separ
 Subagents inside one task share its worktree;
 use them for read-only exploration or review, not parallel edits.
 
+**The audit itself is Yan's to start, and no session's.** He types `/audit-merges` or `$audit-merges`;
+when a batch looks worth auditing, the most a session does is say so in its reply.
+That covers reading the procedure out of `SKILL.md` and running it by hand, and pointing `merge-auditor` subagents at a range directly —
+both are the same act with the invocation skipped.
+
+The skill carries `disable-model-invocation: true`, so in Claude it is not offered to the model at all.
+Codex ignores that field and reaches a skill by reading its `SKILL.md`, so there the rule is the first paragraph of a file it reads in full, plus this one.
+
 ## Never lock an agent-owned worktree by hand
 
 The Claude harness locks its worktree when a session enters it and unlocks it when the session exits, while Codex owns the lifecycle of its managed worktree.

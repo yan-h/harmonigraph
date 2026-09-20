@@ -56,8 +56,9 @@ Re-baseline with `HARMONIGRAPH_BLESS=1 cargo test --workspace golden` —
 and read the contact sheet the failure names before you do:
 a bless nobody looked at is the failure the gate exists to catch, not a step on the way past it.
 
-**Yan:
-run `/audit-merges` in Claude or `$audit-merges` in Codex after a batch of merges lands.** Parallel sessions produce branches that are each correct against the `main` they started from, so the interesting bugs are the ones that do not exist until two of them are combined —
+**Yan, and only Yan:
+run `/audit-merges` in Claude or `$audit-merges` in Codex after a batch of merges lands.** A session never starts one for itself — see CLAUDE.md's rule and the `PreToolUse` gate that holds it — it says the range looks worth auditing and leaves the call to him.
+Parallel sessions produce branches that are each correct against the `main` they started from, so the interesting bugs are the ones that do not exist until two of them are combined —
 and a per-branch review is structurally blind to those.
 PR #85 is the worked example:
 12 PRs merged in one night, two real bugs, both of them a cache whose missing input arrived in a *different* PR.
@@ -145,4 +146,7 @@ and it checks the skills and the scripts harder, since this rule is what keeps t
 
 CLAUDE.md owns when a PR is required;
 this file owns what happens at the merge boundary after one exists.
-An agent without the skill runs the same procedure out of `.claude/skills/audit-merges/SKILL.md` rather than substituting a per-branch review for it.
+
+This file used to close by telling an agent without the skill to run the procedure out of `.claude/skills/audit-merges/SKILL.md` itself.
+That was permission for the one thing this rule exists to stop:
+**a session does not start an audit, with or without the skill.** Say the range looks worth auditing and stop there.
