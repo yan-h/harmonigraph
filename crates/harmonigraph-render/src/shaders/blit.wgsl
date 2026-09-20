@@ -5,6 +5,7 @@
 //
 // Every pass draws the same viewport-filling quad (vs_blit):
 //   fs_bright     scene -> half res, soft-knee luminance threshold
+//   fs_bright_coverage  premultiplied mark -> half res, threshold before coverage
 //   fs_blit       plain copy (half -> quarter downsample)
 //   fs_blur_h/v   separable 9-tap Gaussian over the quarter-res texture
 //   fs_composite  scene + bloom * strength, premultiplied over the pane
@@ -102,6 +103,20 @@ const BLOOM_KNEE: f32 = 0.25;
 fn fs_bright(in: BlitOut) -> @location(0) vec4<f32> {
     let c = textureSample(scene_tex, scene_samp, in.uv);
     return bright(c.rgb);
+}
+
+// Marks rendered over transparency carry geometric coverage in alpha and
+// premultiply their color by it. Thresholding that premultiplied value makes a
+// one-texel ribbon cross the knee as its subpixel phase changes, turning
+// conserved coverage into a pulsing halo. Decide whether the straight color
+// glows first, then spend coverage once on the result.
+@fragment
+fn fs_bright_coverage(in: BlitOut) -> @location(0) vec4<f32> {
+    let c = textureSample(scene_tex, scene_samp, in.uv);
+    let straight = c.rgb / max(c.a, 1e-6);
+    let lum = dot(straight, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let keep = smoothstep(BLOOM_THRESHOLD - BLOOM_KNEE, BLOOM_THRESHOLD + BLOOM_KNEE, lum);
+    return vec4<f32>(c.rgb * keep, 0.0);
 }
 
 fn bright(rgb: vec3<f32>) -> vec4<f32> {

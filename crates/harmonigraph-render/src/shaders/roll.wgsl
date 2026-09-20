@@ -96,6 +96,9 @@ struct VertexOut {
     /// Surface point and caster index for the Gaussian atlas read.
     @location(10) at: vec2<f32>,
     @location(11) @interpolate(flat) who: u32,
+    /// Width of one coverage sample in points. A visible note uses one display
+    /// pixel; a Gaussian cell uses one of its own deliberately coarser texels.
+    @location(12) @interpolate(flat) feather: f32,
 };
 
 @vertex
@@ -166,6 +169,7 @@ fn vs_note(
     out.outline = outline;
     out.at = pos;
     out.who = who;
+    out.feather = locals.feather;
     return out;
 }
 
@@ -215,13 +219,14 @@ fn vs_shadow_cell(
     out.outline = outline;
     out.at = point;
     out.who = u32(box_who.x + 0.5);
+    out.feather = 1.0 / max(box_meta.x, 1e-6);
     return out;
 }
 
 @fragment
 fn fs_shadow_coverage(in: VertexOut) -> @location(0) vec4<f32> {
     let d = box_distance(in);
-    let coverage = inside(d, 0.0) * lead_coverage(in);
+    let coverage = inside(in, d, 0.0) * lead_coverage(in);
     return vec4<f32>(coverage, 0.0, 0.0, 1.0);
 }
 
@@ -232,8 +237,8 @@ fn fs_shadow_coverage(in: VertexOut) -> @location(0) vec4<f32> {
 /// edge and is what makes a shape thinner than a pixel come out FAINTER rather
 /// than snapping to a full pixel — the same bargain epaint's feathering makes,
 /// so a hairline ribbon reads the way it does through the tessellator.
-fn inside(d: f32, edge: f32) -> f32 {
-    let f = max(locals.feather, 1e-6);
+fn inside(in: VertexOut, d: f32, edge: f32) -> f32 {
+    let f = max(in.feather, 1e-6);
     return clamp((edge - d) / f + 0.5, 0.0, 1.0);
 }
 
@@ -252,7 +257,7 @@ fn outline_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
     // interior cap when the pane has less room before its now-line. Keep that
     // geometric bound hard: shortening a cap moves its end instead of dimming
     // the whole profile.
-    return (1.0 - shadow_transmittance(full, locals.shadow.y, 1.0)) * inside(d, reach);
+    return (1.0 - shadow_transmittance(full, locals.shadow.y, 1.0)) * inside(in, d, reach);
 }
 
 /// How much of the ribbon survives at this fragment: 1 across the NOTE, and
@@ -308,7 +313,7 @@ fn lead_coverage(in: VertexOut) -> f32 {
     if (in.lead <= 0.0) {
         return 1.0;
     }
-    let f = max(locals.feather, 1e-6);
+    let f = max(in.feather, 1e-6);
     let u = in.local.y + in.half_extent.y;
     // The lead's own coverage: its opacity, taken out over the fade at the tip.
     var led = in.lead_alpha;
@@ -402,7 +407,7 @@ fn cap_coverage(in: VertexOut) -> f32 {
         return 0.0;
     }
     let d = box_distance_trimmed(in, in.lead);
-    return outline_coverage(in, d, reach) * (1.0 - inside(d, 0.0));
+    return outline_coverage(in, d, reach) * (1.0 - inside(in, d, 0.0));
 }
 
 /// Premultiplied gamma-space color of the OUTLINE layer: the dark surround
@@ -432,7 +437,7 @@ fn cap_coverage(in: VertexOut) -> f32 {
 fn outline_color(in: VertexOut) -> vec4<f32> {
     let d = box_distance(in);
     let wrap =
-        outline_coverage(in, d, in.outline_reach) * (1.0 - inside(d, 0.0)) * lead_coverage(in);
+        outline_coverage(in, d, in.outline_reach) * (1.0 - inside(in, d, 0.0)) * lead_coverage(in);
     return in.outline * max(wrap, cap_coverage(in));
 }
 
@@ -440,7 +445,7 @@ fn outline_color(in: VertexOut) -> vec4<f32> {
 /// its contribution through
 /// [`lead_coverage`].
 fn core_color(in: VertexOut) -> vec4<f32> {
-    return in.core * inside(box_distance(in), 0.0) * lead_coverage(in);
+    return in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in);
 }
 
 // 0-1 linear from 0-1 sRGB gamma. Lifted from egui's own shader, and used
