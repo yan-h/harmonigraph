@@ -2,7 +2,8 @@
 
 **Implementation relevance:** Playhead was retired in [#988](https://github.com/yan-h/harmonigraph/pull/988).
 Public single-pane/custom export layouts are retired under [#974](https://github.com/yan-h/harmonigraph/issues/974), with internal single-pane pixel fixtures retained.
-The browser tuning laboratory's presentation (`index.html`, `app.mjs`, `style.css`, `reach-worker.mjs`) is retired under [#975](https://github.com/yan-h/harmonigraph/issues/975), with `model.mjs`, `examples.mjs`, `model.test.mjs` and `export-plugin-fixtures.mjs` retained per this doc's own recommendation; the Notes pane in the same decision is a separate lane.
+The browser tuning laboratory's presentation (`index.html`, `app.mjs`, `style.css`, `reach-worker.mjs`) is retired under [#975](https://github.com/yan-h/harmonigraph/issues/975), with `model.mjs`, `examples.mjs`, `model.test.mjs` and `export-plugin-fixtures.mjs` retained per this doc's own recommendation.
+The Notes pane in the same decision is retired too, in its own lane: the held-voice table and the nearest-visible-node lookup are gone, shared tracking, naming and the Analyzer off-lattice warning stay, and Console is kept for the reason the table below gives.
 The owner names and preset/load examples below describe the pinned discovery baseline, not current interfaces.
 
 Date: 2026-09-19.
@@ -38,7 +39,7 @@ the later direct decision settles #973 and #974 only.
 | --- | --- | --- |
 | Playhead export | Retire a distinct precomputed spectrogram/full-note-roll path and many fixed-timeline branches. | Accepted, implementation deferred. Retain Scrolling, Whole video and live history; check shared constants and tests below. |
 | Single-pane/custom export options | Retire public preset choices and custom file input without deleting the shared preview/render layout engine. | Accepted, implementation deferred. Combined controls and internal single-pane test compositions remain useful. |
-| Notes pane | Retire a held-voice debug table and its exclusive nearest-node lookup. | Small candidate; retain shared note tracking, naming and Analyzer off-lattice warning. |
+| Notes pane | Retire a held-voice debug table and its exclusive nearest-node lookup. | Retired under #975. Shared note tracking, naming and the Analyzer off-lattice warning were retained; `nearest_shown_node` had no other caller and went with the pane. Dropping the persisted `Tab::Notes` variant refuses any saved dock naming it, layout and camera with it. |
 | Console | UI is small, but its buffer is the only current in-app sink for several important failures. | Recommend keeping the existing small pane: the completed consumer check found no equivalent plugin diagnostic for two retained behaviors. This is an audit recommendation, not a new user requirement. |
 | Standalone application | Retire a separate eframe/midir shell, mock input, screenshots and manual take-generation workflow. | Recommend leaving it in place at this checkpoint. Current launch frequency is unknown; no existing replacement for native interactive debugging was established. Do not create a replacement framework to justify retirement. |
 | Browser tuning lab | Retire browser presentation/worker while retaining the model that generates Rust musical fixtures. | Browser-only retirement is a credible candidate. Retain the headless musical reference unless its replacement is separately justified. |

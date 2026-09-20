@@ -5,6 +5,7 @@ use crate::widgets::{RangeBar, ValueBar};
 use crate::PictureState;
 
 pub mod color;
+pub mod console;
 pub mod display;
 pub mod plus;
 // Not a pane either — the node glow's own clock, run by the Lattice pane over
@@ -16,7 +17,6 @@ mod lattice_atmosphere;
 pub mod lighting;
 pub(crate) mod node_motion;
 pub mod nodes;
-pub mod notes;
 /// The offline video frame, composed live so you can preview and adjust it
 /// before rendering. The "Video" tab.
 pub mod render;
@@ -29,9 +29,9 @@ pub mod system;
 pub mod tuning;
 pub mod view;
 
+use console::console_pane;
 use display::display_pane;
 use lattice::lattice_pane;
-use notes::{console_pane, notes_pane};
 use render::render_pane;
 use spectral::spectral_pane;
 use spiral::spiral_pane;
@@ -64,8 +64,8 @@ pub(super) fn normalize_deg(deg: f32) -> f32 {
     (deg + 180.0).rem_euclid(360.0) - 180.0
 }
 
-/// 12-TET key spellings for MIDI-note readouts (the Notes pane's rows, the
-/// color range's ends in [`color`]). Octave numbers next to these use
+/// 12-TET key spellings for MIDI-note readouts (the color range's ends in
+/// [`color`], via [`pitch_readout`]). Octave numbers next to these use
 /// Bitwig's convention (middle C = C3).
 pub(super) const KEY_NAMES: [&str; 12] = [
     "C",
@@ -104,8 +104,16 @@ pub(super) fn pitch_readout(midi: f32) -> String {
 /// that has it open. Retiring a tab is the same problem from the other side —
 /// an unknown variant fails the whole `UiPersist` parse and takes the
 /// dialed-in camera, view and analyzer settings down with it, not just the
-/// arrangement. Either change needs a `UI_PERSIST_VERSION` bump behind it
-/// (see [`load_persist`](crate::SharedState::load_persist)).
+/// arrangement.
+///
+/// A `UI_PERSIST_VERSION` bump is no cover for either, and reading it as one is
+/// the mistake to avoid: the version is read out of a value that never parsed,
+/// so the floor never runs, and raising it only spreads the same loss to the
+/// blobs that WOULD have loaded. What makes the break acceptable instead is
+/// that the refusal is AUDIBLE — [`load_persist`](crate::SharedState::load_persist)
+/// logs the parse error to the Console pane and returns false. So retiring a
+/// tab is allowed, and saying so in the PR body with the count of saved docks
+/// it costs is the price. #975 retired `Notes` on those terms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Lattice,
@@ -123,7 +131,6 @@ pub enum Tab {
     /// octave, with the sounding notes dotted on it and named around its rim.
     /// Titled "Spiral".
     Spiral,
-    Notes,
     /// A live preview of the offline video frame, composed and adjusted here.
     /// Titled "Video".
     Video,
@@ -185,7 +192,6 @@ pub fn tab_title(tab: &Tab) -> &'static str {
         // knobs" rather than as two things to tell apart.
         Tab::Spectral => "Analyzer",
         Tab::Spiral => "Spiral",
-        Tab::Notes => "Notes",
         Tab::Video => "Video",
     }
 }
@@ -284,7 +290,6 @@ impl egui_dock::TabViewer for Viewer<'_> {
                 )
             }
             Tab::Spiral => spiral_pane(ui, self.state, self.now, DOCKED_SURFACE),
-            Tab::Notes => notes_pane(ui, self.state),
             Tab::Video => render_pane(ui, self.state, self.interaction, self.now),
         }
     }
@@ -333,49 +338,33 @@ pub(super) fn display_note_name(
     pos.respell(tempered).note_name()
 }
 
-/// The node in `window` whose pitch class most closely matches `pc` under the
-/// current tuning (several can match when the tolerance is wide).
+/// Whether `window` holds any node at all for `pc` under the current tuning:
+/// the analyzer's red band for a voice the lattice has nowhere to light.
 ///
-/// The question is "is this PLAYED pitch on the lattice, and where", and every
-/// pane that asks it uses this, so they can't disagree: the Notes pane's node
-/// column, and the analyzer's red band for a voice with no node to light.
-/// `Tuning::tolerance` is load-bearing in both — a note off every node is a
-/// note the lattice cannot show, and saying so is the point.
+/// The question is "is this PLAYED pitch on the lattice", and
+/// `Tuning::tolerance` is load-bearing in it — a note off every node is a note
+/// the lattice cannot show, and saying so is the point.
 ///
-/// `window` is [`PictureState::shown`](crate::PictureState::shown) for both of
-/// them, which is the picture's own window and not the view's reach. Taking a
-/// window rather than a view is what makes that a choice a caller has to make
-/// rather than one it can fall into.
+/// `window` is [`PictureState::shown`](crate::PictureState::shown), the
+/// picture's own window and not the view's reach. Taking a window rather than a
+/// view is what makes that a choice a caller has to make rather than one it can
+/// fall into.
 ///
-/// One neighbour is close enough to be reached for by mistake and does not
-/// want the tolerance: [`names`](crate::panes::spectral::names)'s `naming_node`
-/// takes the same played pitch but asks what to CALL it, where a collapsed
-/// equal temperament makes the choice AMONG matches the whole problem rather
-/// than an afterthought.
-pub(super) fn nearest_shown_node(
-    window: &harmonigraph_scene::DrawnWindow,
-    tuning: &harmonigraph_core::Tuning,
-    pc: harmonigraph_core::PitchClass,
-) -> Option<harmonigraph_core::LatticePos> {
-    window
-        .positions()
-        .filter(|&pos| tuning.matches(pc, tuning.pitch_class(pos)))
-        .min_by_key(|&pos| pc.distance_to(tuning.pitch_class(pos)))
-}
-
-/// Whether `window` holds any node at all for `pc` — the same match
-/// [`nearest_shown_node`] makes, stopping at the first one.
+/// It answers WHETHER and not WHICH, so it stops at the first match. That was
+/// once one half of a pair: the Notes pane printed which node a voice sat on,
+/// so it drained the same walk to pick a nearest. #975 retired that pane and
+/// the nearest with it, which leaves the half worth having — the walk is not
+/// small. The window is the camera's now, and a tilted one takes it to twenty
+/// thousand positions against the reach's thousand, per voice, per frame.
+/// Draining that to pick a winner measured 2.34ms on ten held voices where
+/// stopping at the first match measured 40µs, against a whole `derive_scene`
+/// priced at 1.2ms.
 ///
-/// Its own function because the analyzer's band asks only WHETHER there is a
-/// node, and that question can stop early where "which is nearest" cannot.
-/// What makes the difference worth a function is the size of the walk: the
-/// window is the camera's now, and a tilted one takes it to twenty thousand
-/// positions against the reach's thousand — per voice, per frame. Draining
-/// that to pick a winner the caller drops measured 2.34ms on ten held voices
-/// where stopping at the first match measured 40µs, against a whole
-/// `derive_scene` priced at 1.2ms.
-///
-/// The Notes pane still takes the nearest, because it prints which node.
+/// WHICH node is still a live question one caller away, and deliberately not
+/// this one: [`names`](crate::panes::spectral::names)'s `naming_node` takes the
+/// same played pitch and asks what to CALL it, where a collapsed equal
+/// temperament makes the choice AMONG matches the whole problem rather than an
+/// afterthought.
 pub(super) fn window_shows_node(
     window: &harmonigraph_scene::DrawnWindow,
     tuning: &harmonigraph_core::Tuning,
