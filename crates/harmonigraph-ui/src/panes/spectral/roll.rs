@@ -447,7 +447,7 @@ fn note_instances_with_floor(
     // the octave zoom — a comparison each. What it buys is a cull that is
     // exact instead of one that is wrong by however steep the picture is.
     let mut notes: Vec<&RollNote> = roll.notes().filter(|note| note.stop(now) >= edge).collect();
-    notes.sort_unstable_by(|a, b| a.start.total_cmp(&b.start).then(a.key().cmp(&b.key())));
+    notes.sort_unstable_by(|a, b| a.start.total_cmp(&b.start).then_with(|| a.key().cmp(&b.key())));
 
     // One segment per note is the common case (a note is bent rarely), so the
     // note count is the right first guess at how many instances this makes.
@@ -625,9 +625,6 @@ fn note_instances_with_floor(
             // number that decides nothing is still worth not carrying.
             let cap_px = outline_px.min((behind_px - 0.5 * feather_px).max(0.0));
 
-            let pitch = (p0 + p1) * 0.5;
-            // A flat pitch color with the configured background show-through.
-            let core = note_color(state, pitch, cfg.roll_opacity);
             // Reading outward: the note, the dark outline standing against
             // every one of its edges and fading out, then whatever the
             // spectrogram is doing.
@@ -735,6 +732,10 @@ fn note_instances_with_floor(
             if center_pitch + ink_pitch < 0.0 || center_pitch - ink_pitch > 1.0 {
                 continue;
             }
+            // A flat pitch color with the configured background show-through.
+            // Read it only for segments that survive the pitch cull.
+            let pitch = (p0 + p1) * 0.5;
+            let core = note_color(state, pitch, cfg.roll_opacity);
             // The lead: the ribbon carried on past the now-line, so a sounding
             // note crosses into the spectrum peak it is making instead of
             // stopping square on the join. Half of it goes on the length and
