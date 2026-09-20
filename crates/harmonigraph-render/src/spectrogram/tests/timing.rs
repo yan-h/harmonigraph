@@ -7,8 +7,10 @@
 //! ```
 //!
 //! `PROBE_SIZE=WxH` (pixels, default 3840x2160), `PROBE_PPP` (default 2),
-//! `PROBE_FRAMES` (default 60) and `PROBE_CASE` (a substring of a case's name)
-//! narrow it. `docs/spectrogram-cloud-performance.md` holds the readings.
+//! `PROBE_FRAMES` (default 60) and `PROBE_CASE` (comma-separated substrings of
+//! the case names, any of which selects a case) narrow it, and `PROBE_FILLS`
+//! replaces the pair of coverages below.
+//! `docs/spectrogram-cloud-performance.md` holds the readings.
 //! `PROBE_HISTORY_SECONDS` (default 10) is the visible span, not elapsed age;
 //! it controls the time-softness scale, without changing the supplied grid.
 //! Comma-separated values interleave multiple history durations in one run.
@@ -18,6 +20,13 @@
 //! Callback CPU time excludes aggregation, egui, submission and polling;
 //! the fixed grid has no steady-state dirty uploads. Synchronous GPU waits
 //! also mean these durations are not end-to-end DAW frame times.
+//!
+//! `PROBE_SPAN_SEMITONES` (default 96) is how much of the spectrum the pane
+//! shows, and `PROBE_PITCH_SOFTNESS`, `PROBE_TIME_SOFTNESS` and `PROBE_SPREAD`
+//! replace the light field's own dials in every case that draws one — which is
+//! what replays a SAVED pane's settings instead of the fresh ones. They
+//! override a case's `turn`, so a control that works by turning a softness to
+//! zero is not one under them; `plain` still is.
 //!
 //! `PROBE_CLOUD_PIXEL` (points per cloud sample) and `PROBE_CLOUD_TILE` (the
 //! walk's period in cells, 0 for the live walk), each defaulting to whatever
@@ -102,10 +111,17 @@ fn cloud_costs_by_style_and_dial() {
             seconds
         })
         .collect();
-    let cloud_pixel: Option<f32> =
-        std::env::var("PROBE_CLOUD_PIXEL").ok().and_then(|v| v.parse().ok());
-    let cloud_tile: Option<f32> =
-        std::env::var("PROBE_CLOUD_TILE").ok().and_then(|v| v.parse().ok());
+    let fills: Vec<f32> = std::env::var("PROBE_FILLS")
+        .ok()
+        .map(|v| v.split(',').map(|v| v.trim().parse().expect("a fill fraction")).collect())
+        .unwrap_or_else(|| FILLS.to_vec());
+    let dial =
+        |name: &str| -> Option<f32> { std::env::var(name).ok().and_then(|v| v.parse().ok()) };
+    let cloud_pixel = dial("PROBE_CLOUD_PIXEL");
+    let cloud_tile = dial("PROBE_CLOUD_TILE");
+    let pitch_softness = dial("PROBE_PITCH_SOFTNESS");
+    let time_softness = dial("PROBE_TIME_SOFTNESS");
+    let spread = dial("PROBE_SPREAD");
     crate::shader_assets::initialize();
     let instance = wgpu::Instance::default();
     let Ok(adapter) =
@@ -130,7 +146,14 @@ fn cloud_costs_by_style_and_dial() {
     // read over eight octaves. Smaller runs keep the same allocation.
     let slabs: u32 = std::env::var("PROBE_SLABS").ok().and_then(|v| v.parse().ok()).unwrap_or(1024);
     assert!((2..=1024).contains(&slabs));
-    let (bins, span) = (3828u32, 96.0f32);
+    // The grid is the whole 20 Hz - 20 kHz spectrum; `span` is how much of it
+    // the pane shows, which decides both the pitch footprint under one pixel
+    // and the points per cent the pitch softness is measured in. The default
+    // shows eight octaves of it; the live pane at full zoom-out shows all
+    // 119.59 semitones.
+    let span: f32 =
+        std::env::var("PROBE_SPAN_SEMITONES").ok().and_then(|v| v.parse().ok()).unwrap_or(96.0);
+    let bins = 3828u32;
     let grid = grid_of(noisy_grid(bins as usize, slabs as usize), bins, 1032, 0);
     let mut read = read_of(SPECTRUM_MIN_MIDI + 10.0, span, size[1]);
     read.level_per_step = 1.0 / 255.0;
@@ -213,9 +236,11 @@ fn cloud_costs_by_style_and_dial() {
     let mut cases: Vec<Case> = CASES
         .iter()
         .filter(|(name, _)| {
-            std::env::var("PROBE_CASE").ok().is_none_or(|v| name.contains(v.as_str()))
+            std::env::var("PROBE_CASE")
+                .ok()
+                .is_none_or(|v| v.split(',').any(|v| name.contains(v.trim())))
         })
-        .flat_map(|&(name, turn)| FILLS.map(|fill| (name, turn, fill)))
+        .flat_map(|&(name, turn)| fills.clone().into_iter().map(move |fill| (name, turn, fill)))
         .flat_map(|(name, turn, fill)| {
             histories.iter().map(move |&history_seconds| (name, turn, fill, history_seconds))
         })
@@ -256,6 +281,19 @@ fn cloud_costs_by_style_and_dial() {
                 }
                 if let Some(cloud_tile) = cloud_tile {
                     settings.cloud_tile = cloud_tile;
+                }
+                // The light field's own dials, for replaying a saved pane's
+                // settings rather than the fresh ones. A case that turns a
+                // softness to zero to BE a control loses that here, so a run
+                // with these set wants `plain` as its control.
+                if let Some(pitch_softness) = pitch_softness {
+                    settings.pitch_softness = pitch_softness;
+                }
+                if let Some(time_softness) = time_softness {
+                    settings.time_softness = time_softness;
+                }
+                if let Some(spread) = spread {
+                    settings.spread = spread;
                 }
                 SpectrogramAtmosphere {
                     settings,
