@@ -26,19 +26,18 @@ fn opening_analyzer_settings_does_not_change_loaded_values() {
     assert_eq!(ron::to_string(&state.picture.appearance.spectrum).unwrap(), before);
 }
 
-/// Put the Notes/Console leaf back on screen, which is what the two wheel
+/// Put the Console leaf back on screen, which is what the two wheel
 /// harnesses below are written against: they read the settings leaf as the box
 /// from the tab bar down to the 0.55 split, and the default layout opens that
-/// leaf folded (see
-/// `the_default_layout_opens_with_the_two_readout_panes_folded`, in
+/// leaf folded (see `the_default_layout_opens_with_the_console_folded`, in
 /// `tests/fold.rs`) so the
 /// settings column runs the whole height instead.
 ///
 /// Unfolded rather than measured where it now is, because a taller pane is the
 /// wrong pane to ask these questions of: both tests need content that
 /// OVERFLOWS, and the short window they pick is short relative to this box.
-fn unfold_the_readout_panes(state: &mut SharedState) {
-    let path = state.workspace.dock.find_tab(&panes::Tab::Notes).expect("Notes is docked");
+fn unfold_the_console_pane(state: &mut SharedState) {
+    let path = state.workspace.dock.find_tab(&panes::Tab::Console).expect("Console is docked");
     state.workspace.dock[path.surface][path.node].set_collapsed(false);
 }
 
@@ -52,7 +51,7 @@ fn unfold_the_readout_panes(state: &mut SharedState) {
 /// movement that is). The y of a string drawn in both frames cannot lie.
 fn wheel_over_settings_pane(pane: SettingsPane, screen_h: f32) -> f32 {
     let mut state = fresh();
-    unfold_the_readout_panes(&mut state);
+    unfold_the_console_pane(&mut state);
     // The settings leaf opens on Tuning; every other settings pane is a tab
     // behind it (a Page is the Display tab with that page selected).
     let tab = pane.install(&mut state);
@@ -885,7 +884,7 @@ enum Grab {
 /// told along the way.
 fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>) {
     let mut state = fresh();
-    unfold_the_readout_panes(&mut state);
+    unfold_the_console_pane(&mut state);
     // The Analyzer settings, on the Display tab's Analyzer page.
     let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
     let path = state.workspace.dock.find_tab(&tab).expect("the Display tab");
@@ -998,7 +997,7 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
 #[test]
 fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     let mut state = fresh();
-    unfold_the_readout_panes(&mut state);
+    unfold_the_console_pane(&mut state);
     // The Analyzer settings, on the Display tab's Analyzer page.
     let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
     let path = state.workspace.dock.find_tab(&tab).expect("the Display tab");
@@ -1302,11 +1301,10 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
             let left = right - bar;
 
             // Where the lane lands: against the pane edge for a pane the dock
-            // scrolls, whose area IS the body. The two readout panes scroll in an
-            // area of their own — a row that must not scroll sits above each — so
-            // theirs stands one content margin further in.
-            let own_area =
-                matches!(pane, SettingsPane::Tab(panes::Tab::Console | panes::Tab::Notes));
+            // scrolls, whose area IS the body. The Console scrolls in an area of
+            // its own — the Clear row above it must not scroll — so its lane
+            // stands one content margin further in.
+            let own_area = matches!(pane, SettingsPane::Tab(panes::Tab::Console));
             let edge = body.right() - if own_area { margin } else { 0.0 };
             assert!(
                 (right - edge).abs() < 0.5,

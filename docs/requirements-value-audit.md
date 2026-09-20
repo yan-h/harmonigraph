@@ -1,5 +1,9 @@
 # Requirements-value audit
 
+**Implementation relevance:** the whole-feature usage inventory below is dated evidence, and two of its four unused interfaces have since been decided.
+[#975](https://github.com/yan-h/harmonigraph/issues/975) retired the Notes pane and the browser tuning laboratory's presentation and kept Console and the standalone application;
+that table's "Next audit boundary" column predates it.
+
 Date: 2026-09-19.
 Inspected revision: `2a5595fd770f02108206592f3dee2bab328a8053`;
 product sources remain at `1786c5ba1a4e2994c20dc2672eb7d200fd605d9b`.

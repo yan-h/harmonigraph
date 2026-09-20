@@ -5,14 +5,14 @@ use super::*;
 const FRAME_HEIGHT: f32 = 600.0;
 
 /// The plugin's own arrangement: the lattice and the analyzer share the
-/// left half, the settings column and the notes are stacked on the right.
+/// left half, the settings column and the console are stacked on the right.
 /// Node indices come out as they do in the real dock — 1 is the picture
 /// pair, 2 the settings column, 3 and 4 the pictures themselves.
 fn dock() -> DockState<Tab> {
     let mut dock = DockState::new(vec![Tab::Lattice]);
     let surface = dock.main_surface_mut();
     let [pictures, settings] = surface.split_right(NodeIndex::root(), 0.7, vec![Tab::Tuning]);
-    surface.split_below(settings, 0.5, vec![Tab::Notes]);
+    surface.split_below(settings, 0.5, vec![Tab::Console]);
     surface.split_right(pictures, 0.7, vec![Tab::Spectral]);
     dock
 }
@@ -437,7 +437,7 @@ fn a_column_of_collapsed_panes_folds_as_a_single_rail() {
     let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
     let (column, pictures) = (width(&dock, SETTINGS), width(&dock, PICTURES));
     collapse(&mut dock, Tab::Tuning, true);
-    collapse(&mut dock, Tab::Notes, true);
+    collapse(&mut dock, Tab::Console, true);
     let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
     assert!((window - (1000.0 - (column - rail()))).abs() < 0.01);
     let window = frame(&mut folds, &mut dock, &mut dial, window);
@@ -447,7 +447,7 @@ fn a_column_of_collapsed_panes_folds_as_a_single_rail() {
     // pane coming back is the one whose width the split does NOT count
     // from — get that the wrong way round and the two swap widths.
     collapse(&mut dock, Tab::Tuning, false);
-    collapse(&mut dock, Tab::Notes, false);
+    collapse(&mut dock, Tab::Console, false);
     let window = settle(&mut folds, &mut dock, &mut dial, window);
     assert!((window - 1000.0).abs() < 0.01, "the window it came out of");
     assert!((width(&dock, SETTINGS) - column).abs() < 0.01, "the column, as it was");
@@ -520,7 +520,7 @@ fn a_dock_folded_whole_is_a_strip_of_rails() {
     let mut folds = Folds::default();
     let mut dial = Dial::default();
     let mut window = settle(&mut folds, &mut dock, &mut dial, 1000.0);
-    for tab in [Tab::Lattice, Tab::Spectral, Tab::Tuning, Tab::Notes] {
+    for tab in [Tab::Lattice, Tab::Spectral, Tab::Tuning, Tab::Console] {
         collapse(&mut dock, tab, true);
         window = settle(&mut folds, &mut dock, &mut dial, window);
     }
@@ -712,7 +712,7 @@ fn two_folds_released_at_once_hand_back_what_each_took() {
     // A settled frame before the click, as the editor always has: the
     // layout is dialled in at the window it is being drawn in.
     let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
-    let tabs = [Tab::Lattice, Tab::Spectral, Tab::Tuning, Tab::Notes];
+    let tabs = [Tab::Lattice, Tab::Spectral, Tab::Tuning, Tab::Console];
     let mut window = 1000.0;
     for tab in tabs {
         collapse(&mut dock, tab, true);
@@ -818,7 +818,7 @@ fn a_rail_is_the_same_width_in_a_window_that_would_not_shrink() {
 /// frame late. Two of the leaks this found lived in exactly that gap.
 #[test]
 fn every_round_trip_of_clicks_lands_where_it_started() {
-    let tabs = [Tab::Lattice, Tab::Spectral, Tab::Tuning, Tab::Notes];
+    let tabs = [Tab::Lattice, Tab::Spectral, Tab::Tuning, Tab::Console];
     let mut drifted = Vec::new();
     for start in [700.0f32, 1000.0, 1512.0] {
         for length in [2usize, 4, 6] {
@@ -897,7 +897,7 @@ fn row() -> DockState<Tab> {
     let surface = dock.main_surface_mut();
     let [_, rest] = surface.split_right(NodeIndex::root(), 0.4, vec![Tab::Spectral]);
     let [_, rest] = surface.split_right(rest, 0.34, vec![Tab::Tuning]);
-    surface.split_right(rest, 0.5, vec![Tab::Notes]);
+    surface.split_right(rest, 0.5, vec![Tab::Console]);
     dock
 }
 
@@ -908,7 +908,7 @@ fn pair_row() -> DockState<Tab> {
     let mut dock = DockState::new(vec![Tab::Lattice]);
     let surface = dock.main_surface_mut();
     let [_, right] = surface.split_right(NodeIndex::root(), 0.4, vec![Tab::Spectral]);
-    let [pair, _] = surface.split_right(right, 0.5, vec![Tab::Notes]);
+    let [pair, _] = surface.split_right(right, 0.5, vec![Tab::Console]);
     surface.split_right(pair, 0.5, vec![Tab::Tuning]);
     dock
 }
@@ -1293,7 +1293,7 @@ fn a_pane_is_never_drawn_collapsed_at_more_than_a_rail() {
 /// `Folds` is for the sideways folds alone — `folded_side` reads horizontal
 /// splits and nothing else — and egui_dock does the whole of a vertical one.
 /// A hold armed for a gesture that moves no boundary is a frame of latency
-/// bought for nothing, and the settings column's Notes/Console bar, which
+/// bought for nothing, and the settings column's Console bar, which
 /// ships folded, is the arrow it would be bought on.
 ///
 /// The settled frame first is the whole of why this can fail: a fresh `Dial`
@@ -1400,19 +1400,19 @@ fn a_folded_subtree_gives_each_side_the_rails_it_holds() {
     let mut dock = DockState::new(vec![Tab::Lattice]);
     let surface = dock.main_surface_mut();
     // Three panes across, nested so one side of the picture split holds two
-    // of them: [[Lattice | Spectral] | Notes] beside the settings column.
+    // of them: [[Lattice | Spectral] | Console] beside the settings column.
     let [pictures, _] = surface.split_right(NodeIndex::root(), 0.7, vec![Tab::Tuning]);
-    let [pair, _] = surface.split_right(pictures, 0.7, vec![Tab::Notes]);
+    let [pair, _] = surface.split_right(pictures, 0.7, vec![Tab::Console]);
     surface.split_right(pair, 0.5, vec![Tab::Spectral]);
     let mut folds = Folds::default();
     let mut dial = Dial::default();
     let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
-    for tab in [Tab::Lattice, Tab::Spectral, Tab::Notes] {
+    for tab in [Tab::Lattice, Tab::Spectral, Tab::Console] {
         collapse(&mut dock, tab, true);
     }
     let window = settle(&mut folds, &mut dock, &mut dial, 1000.0);
     let _ = settle(&mut folds, &mut dock, &mut dial, window);
-    for tab in [Tab::Lattice, Tab::Spectral, Tab::Notes] {
+    for tab in [Tab::Lattice, Tab::Spectral, Tab::Console] {
         let path = dock.find_tab(&tab).expect("docked");
         let width = dock[path.surface][path.node].rect().expect("on screen").width();
         assert!((width - rail()).abs() < 0.01, "{tab:?} came out {width} wide, not a rail");
@@ -1712,7 +1712,7 @@ fn a_drag_stops_at_the_floor_of_the_pane_it_is_drawn_against() {
 fn pairs() -> DockState<Tab> {
     let mut dock = DockState::new(vec![Tab::Lattice]);
     let surface = dock.main_surface_mut();
-    let [left, right] = surface.split_right(NodeIndex::root(), 0.5, vec![Tab::Notes]);
+    let [left, right] = surface.split_right(NodeIndex::root(), 0.5, vec![Tab::Console]);
     surface.split_right(left, 0.5, vec![Tab::Spectral]);
     surface.split_right(right, 0.5, vec![Tab::Tuning]);
     dock
@@ -1732,7 +1732,7 @@ fn a_separator_between_two_pairs_moves_the_inner_pane_of_each() {
             width(dock, dock.find_tab(&tab).expect("the tab is docked").node)
         };
         // Left to right, which is not the order the tree nests them in.
-        let row = [Tab::Lattice, Tab::Spectral, Tab::Notes, Tab::Tuning];
+        let row = [Tab::Lattice, Tab::Spectral, Tab::Console, Tab::Tuning];
         let before = row.map(|tab| at(&dock, tab));
         for _ in 0..3 {
             drag(&mut window.dial, &mut dock, NodeIndex::root(), step);
@@ -1762,7 +1762,7 @@ fn column_with_a_pair() -> DockState<Tab> {
     let mut dock = DockState::new(vec![Tab::Lattice]);
     let surface = dock.main_surface_mut();
     let [_, column] = surface.split_right(NodeIndex::root(), 0.5, vec![Tab::Tuning]);
-    let [_, bottom] = surface.split_below(column, 0.5, vec![Tab::Notes]);
+    let [_, bottom] = surface.split_below(column, 0.5, vec![Tab::Console]);
     surface.split_right(bottom, 0.5, vec![Tab::Display]);
     dock
 }
@@ -1796,9 +1796,9 @@ fn a_column_with_a_pair_in_it_is_squeezed_no_further_than_the_pair_allows() {
         window.frame(&mut folds, &mut dock);
     }
     assert!(
-        at(&dock, Tab::Notes) > floor - 1.0,
+        at(&dock, Tab::Console) > floor - 1.0,
         "the pane facing the boundary is drawn at {:.1}, under its {floor} floor",
-        at(&dock, Tab::Notes),
+        at(&dock, Tab::Console),
     );
     assert!(
         (at(&dock, Tab::Display) - behind).abs() < 1.0,
@@ -1806,7 +1806,7 @@ fn a_column_with_a_pair_in_it_is_squeezed_no_further_than_the_pair_allows() {
         at(&dock, Tab::Display) - behind,
     );
     // The column is one column, however deep either row nests.
-    let (top, bottom) = (at(&dock, Tab::Tuning), node(&dock, Tab::Notes).parent().unwrap());
+    let (top, bottom) = (at(&dock, Tab::Tuning), node(&dock, Tab::Console).parent().unwrap());
     assert!(
         (top - width(&dock, bottom)).abs() < 1.0,
         "the column's rows came out {top:.1} and {:.1} wide",

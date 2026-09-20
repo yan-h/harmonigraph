@@ -19,7 +19,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 **Level color range** controls audio colors independently.
 With the audio ring set to **Octave levels**, **Pitch tolerance** controls how far neighboring frequencies can light a slice;
 in **Spectrum** mode, **Pitch span** sets the displayed range.
-**Note match tolerance** on Tuning controls which MIDI pitches match lattice nodes, the Notes pane's node column, and the Analyzer's off-lattice band.
+**Note match tolerance** on Tuning controls which MIDI pitches match lattice nodes, and the Analyzer's off-lattice band.
 
 ## Reading and entering values
 

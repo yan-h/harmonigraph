@@ -518,7 +518,7 @@ pub(crate) const SETTINGS_SPLIT: f32 = 0.72;
 
 /// The default pane arrangement: big lattice with the Spectral pane
 /// beside it on the right (sharing the pitch intuition: what sounds is
-/// what lights up), the tuning column further right, console and notes
+/// what lights up), the tuning column further right, the console
 /// folded to a tab bar below that. Users can re-dock at runtime; the result
 /// persists via UiPersist, and the System page's "Reset layout" button
 /// returns here.
@@ -538,18 +538,18 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
             panes::Tab::Video,
         ],
     );
-    // Notes first so it sits left of Console and is the selected tab by
-    // default (egui_dock makes tab index 0 active).
-    let [_, log] = surface.split_below(right, 0.55, vec![panes::Tab::Notes, panes::Tab::Console]);
-    // Folded to its tab bar, because neither pane is looked at while playing:
-    // Notes is a readout of what the tracker already draws on the lattice and
-    // Console is a diagnostic. Open they take 45% of the settings column's
+    // Its own leaf below the settings column rather than a tab among them,
+    // because it folds on its own (below) and the settings do not. Notes shared
+    // this leaf until #975 retired it.
+    let [_, log] = surface.split_below(right, 0.55, vec![panes::Tab::Console]);
+    // Folded to its tab bar, because the console is a diagnostic and is not
+    // looked at while playing. Open it takes 45% of the settings column's
     // height, which is the half of it the settings themselves want -- see the
     // scroll every settings pane carries.
     //
-    // The COLLAPSE ARROW is what brings them back, not the tab name: egui_dock
+    // The COLLAPSE ARROW is what brings it back, not the tab name: egui_dock
     // reaches `set_collapsed` from the arrow's own square alone, and clicking
-    // "Notes" on a folded bar only selects a tab whose body stays hidden. The
+    // "Console" on a folded bar only selects a tab whose body stays hidden. The
     // split fraction survives the fold, so the pane comes back the size it
     // went away.
     //
@@ -558,10 +558,11 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
     //
     // This is the DEFAULT, which is to say it reaches a fresh instance and
     // "Reset layout" and nothing else. A project that has saved a layout keeps
-    // the one it saved, since the arrangement is persisted and
-    // `UI_PERSIST_VERSION` is bumped for a changed tab SET rather than a
-    // changed default -- and throwing away a dialed-in layout to deliver a
-    // default is the worse trade.
+    // the one it saved, and throwing that away to deliver a default is the
+    // worse trade. A RETIRED tab is the one case where it does not keep it --
+    // but that is the parse refusing a variant it has never heard of, not the
+    // `UI_PERSIST_VERSION` floor, which cannot reach a value that never parsed
+    // (see `panes::Tab` and `load_persist`).
     surface[log].set_collapsed(true);
     // Spectral as a column just right of the lattice: what sounds is directly
     // beside what lights up. Paired with the "Right" default orientation
@@ -621,8 +622,10 @@ impl SharedState {
             Ok(persist) => persist,
             // SAYING SO is the whole point of this arm. Nothing in the tree
             // reads an older spelling any more, so a blob naming a variant
-            // this build has dropped — a retired orientation or sweep mode —
-            // fails the parse HERE, and what falls out is the dock, the camera
+            // this build has dropped — a retired orientation or sweep mode, or
+            // the `Notes` TAB #975 retired, which every default layout carried
+            // and which therefore reaches nearly every saved dock — fails the
+            // parse HERE, and what falls out is the dock, the camera
             // and every view setting reverting at once. A dropped KEY is the
             // other case entirely and costs nothing: serde skips one it has no
             // field for, which is how a blob still naming `node_style` or

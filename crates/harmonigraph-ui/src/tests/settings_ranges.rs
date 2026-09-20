@@ -210,7 +210,7 @@ fn scenarios() -> Vec<Scenario> {
             SettingsPane::Page(DisplayPage::Analyzer) => 28,
             SettingsPane::Page(DisplayPage::Lighting) => 26,
             SettingsPane::Page(DisplayPage::System) => 2,
-            SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console | panes::Tab::Notes) => 0,
+            SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console) => 0,
             _ => panic!("add the new settings page's range scenario"),
         };
         cases.push(Scenario { pane, visits, ..base });

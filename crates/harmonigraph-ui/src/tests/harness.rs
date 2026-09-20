@@ -264,7 +264,7 @@ impl SettingsPane {
 }
 
 /// Every settings pane, and the tabs that share the column with them.
-pub(super) const SETTINGS_PANES: [SettingsPane; 9] = [
+pub(super) const SETTINGS_PANES: [SettingsPane; 8] = [
     SettingsPane::Tab(panes::Tab::Tuning),
     SettingsPane::Page(DisplayPage::Colors),
     SettingsPane::Page(DisplayPage::Lattice),
@@ -273,7 +273,6 @@ pub(super) const SETTINGS_PANES: [SettingsPane; 9] = [
     SettingsPane::Page(DisplayPage::System),
     SettingsPane::Tab(panes::Tab::Video),
     SettingsPane::Tab(panes::Tab::Console),
-    SettingsPane::Tab(panes::Tab::Notes),
 ];
 
 /// One settings pane whose content box is `width` points wide, as the shapes it
