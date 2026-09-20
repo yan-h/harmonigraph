@@ -2235,8 +2235,6 @@ mod tests {
     /// two layers under it that must turn a miss into O(one slab).
     #[test]
     fn no_cache_layer_falls_back_as_the_window_scrolls() {
-        let interval = crate::AudioSpectrum::FFT_INTERVAL;
-
         // Every FFT window the pane offers, by the lag it gives a column: a
         // column is stamped at the middle of the window it measured.
         let windows = [
@@ -2248,86 +2246,116 @@ mod tests {
         // holds at LIVE_SLAB_CAP) and a narrow one.
         let panes = [("wide", LIVE_SLAB_CAP as f64), ("narrow", 384.0)];
 
-        for (algo, lag) in windows {
-            for (pane, cols) in panes {
-                // Where a slab is exactly the lag — the crossing this pair's
-                // ring behaviour turns on — plus a close-up to anchor it.
-                //
-                // The close-up is 12 s rather than the three-minute Span a
-                // fresh view opens on, and the two crossing-relative spans are
-                // why that costs no coverage: they land either side of the
-                // crossing for each window and pane, which is a longer Span
-                // than the default for some of those pairs and a shorter one
-                // for others. Driving the default outright would add 24,000
-                // columns per pair (the loop below runs `(span + 15) /
-                // interval` of them) to make a case these already bracket.
-                let crossing = lag * cols;
-                for span in [12.0f64, crossing * 0.6, crossing * 1.4] {
-                    let planned = ring_slots(cols as usize);
-                    let bucket = live_slab(span, cols as usize);
-                    let at = format!("{algo} window, {pane} pane, {span:.1} s Span");
-
-                    let mut agg = SpectrogramAgg::new();
-                    let mut history = crate::SpectrumHistory::default();
-                    let mut gpu = GpuGrid::default();
-                    let (mut caps, mut widest) = (std::collections::BTreeSet::new(), 0usize);
-
-                    // Long enough to fill the window and then scroll a while
-                    // inside it, which is where the run starts breathing.
-                    let columns = ((span + 15.0) / interval) as usize;
-                    for i in 0..columns {
-                        let t = i as f64 * interval;
-                        history.push(col(t, &[(4, 0.5), (10, 1.0)]));
-                        // The shell clock: the newest column always lags it.
-                        let now = t + lag;
-
-                        // Exactly what `draw_spectrogram` asks for each frame.
-                        let first =
-                            history.partition_point(|c| c.time < now - span).saturating_sub(1);
-                        let (centers, power) = agg.window(&history, first, bucket, planned);
-                        let visible = centers.len();
-                        let first_key = (centers[0] / bucket).floor() as i64;
-                        let capacity = ring_capacity(planned, visible);
-                        caps.insert(capacity);
-                        let layout = TexLayout {
-                            bucket,
-                            t_origin: centers[0] - 0.5 * bucket,
-                            tex_span: visible as f64 * bucket,
-                        };
-                        gpu.accept(
-                            run_key(first, history.len(), t, bucket),
-                            first_key,
-                            capacity,
-                            power,
-                            layout,
+        // A thread per grid point, because there is nothing between them to
+        // serialize: each case below builds its own [`SpectrogramAgg`],
+        // [`crate::SpectrumHistory`] and [`GpuGrid`], reads only the numbers it
+        // was handed, and asserts only on those three. Threading them keeps
+        // every point — the grid here is the same grid, run eighteen ways at
+        // once instead of one after another. It is the run time that moves, and
+        // it is most of this crate's test wall clock.
+        std::thread::scope(|scope| {
+            let mut running = Vec::new();
+            for (algo, lag) in windows {
+                for (pane, cols) in panes {
+                    // Where a slab is exactly the lag — the crossing this pair's
+                    // ring behaviour turns on — plus a close-up to anchor it.
+                    //
+                    // The close-up is 12 s rather than the three-minute Span a
+                    // fresh view opens on, and the two crossing-relative spans
+                    // are why that costs no coverage: they land either side of
+                    // the crossing for each window and pane, which is a longer
+                    // Span than the default for some of those pairs and a
+                    // shorter one for others. Driving the default outright would
+                    // add 24,000 columns per pair (`scroll_the_window` runs
+                    // `(span + 15) / interval` of them) to make a case these
+                    // already bracket.
+                    let crossing = lag * cols;
+                    for span in [12.0f64, crossing * 0.6, crossing * 1.4] {
+                        running.push(
+                            scope.spawn(move || scroll_the_window(algo, lag, pane, cols, span)),
                         );
-                        // Every frame here draws, so the next one's delta is
-                        // measured against a buffer that has the run — see
-                        // [`GpuGrid::uploaded`].
-                        acknowledge(&gpu);
-                        // Past the frames that fill the window, where the run is
-                        // still growing at both ends.
-                        if t > span + 1.0 {
-                            let dirty = gpu.sent.as_ref().expect("just accepted").dirty.len();
-                            widest = widest.max(dirty);
-                        }
                     }
-
-                    // One of each to get started, and none after: from then on a
-                    // frame folds one column and writes a slab or two.
-                    assert_eq!(agg.rebuilds, 1, "the aggregator rescans the window: {at}");
-                    assert_eq!(
-                        gpu.full_uploads(),
-                        1,
-                        "the grid is uploaded whole ({caps:?} slabs): {at}",
-                    );
-                    // The window's first slab (repruned as columns leave it),
-                    // the newest (still accumulating), and whichever one has
-                    // just appeared.
-                    assert!(widest <= 3, "a scrolling frame wrote {widest} slabs: {at}");
                 }
             }
+            // Joined by hand rather than left to the scope's own join at the
+            // end of this block, which panics with "a scoped thread panicked"
+            // and leaves the `at` of the case that actually failed in captured
+            // output. Resuming the first failure's payload instead fails the
+            // test with that case's own message, as the serial sweep did — a
+            // sweep that will not say WHICH grid point broke is worse than a
+            // slow one.
+            for case in running {
+                if let Err(panic) = case.join() {
+                    std::panic::resume_unwind(panic);
+                }
+            }
+        });
+    }
+
+    /// One grid point of [`no_cache_layer_falls_back_as_the_window_scrolls`]:
+    /// scroll a `span`-second window across a pane cut into `cols` depth
+    /// pixels, fed by an analyzer that stamps each column `lag` behind the
+    /// shell clock, and assert no cache layer fell back while it moved.
+    ///
+    /// Split out of the sweep so the sweep can hand it to a thread; `algo` and
+    /// `pane` are carried only to name the case in an assertion.
+    fn scroll_the_window(algo: &str, lag: f64, pane: &str, cols: f64, span: f64) {
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let planned = ring_slots(cols as usize);
+        let bucket = live_slab(span, cols as usize);
+        let at = format!("{algo} window, {pane} pane, {span:.1} s Span");
+
+        let mut agg = SpectrogramAgg::new();
+        let mut history = crate::SpectrumHistory::default();
+        let mut gpu = GpuGrid::default();
+        let (mut caps, mut widest) = (std::collections::BTreeSet::new(), 0usize);
+
+        // Long enough to fill the window and then scroll a while inside it,
+        // which is where the run starts breathing.
+        let columns = ((span + 15.0) / interval) as usize;
+        for i in 0..columns {
+            let t = i as f64 * interval;
+            history.push(col(t, &[(4, 0.5), (10, 1.0)]));
+            // The shell clock: the newest column always lags it.
+            let now = t + lag;
+
+            // Exactly what `draw_spectrogram` asks for each frame.
+            let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
+            let (centers, power) = agg.window(&history, first, bucket, planned);
+            let visible = centers.len();
+            let first_key = (centers[0] / bucket).floor() as i64;
+            let capacity = ring_capacity(planned, visible);
+            caps.insert(capacity);
+            let layout = TexLayout {
+                bucket,
+                t_origin: centers[0] - 0.5 * bucket,
+                tex_span: visible as f64 * bucket,
+            };
+            gpu.accept(
+                run_key(first, history.len(), t, bucket),
+                first_key,
+                capacity,
+                power,
+                layout,
+            );
+            // Every frame here draws, so the next one's delta is measured
+            // against a buffer that has the run — see [`GpuGrid::uploaded`].
+            acknowledge(&gpu);
+            // Past the frames that fill the window, where the run is still
+            // growing at both ends.
+            if t > span + 1.0 {
+                let dirty = gpu.sent.as_ref().expect("just accepted").dirty.len();
+                widest = widest.max(dirty);
+            }
         }
+
+        // One of each to get started, and none after: from then on a frame folds
+        // one column and writes a slab or two.
+        assert_eq!(agg.rebuilds, 1, "the aggregator rescans the window: {at}");
+        assert_eq!(gpu.full_uploads(), 1, "the grid is uploaded whole ({caps:?} slabs): {at}");
+        // The window's first slab (repruned as columns leave it), the newest
+        // (still accumulating), and whichever one has just appeared.
+        assert!(widest <= 3, "a scrolling frame wrote {widest} slabs: {at}");
     }
 
     /// Dragging the Span must not re-lay the grid on every frame of the drag.
