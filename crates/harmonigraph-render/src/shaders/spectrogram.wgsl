@@ -315,9 +315,10 @@ struct Cloud {
 /// `to_centre`); the wash fills both (see `WashField`).
 @group(1) @binding(5) var cloud_tile_a: texture_2d<f32>;
 @group(1) @binding(6) var cloud_tile_b: texture_2d<f32>;
-/// The tile's own sampler, and the only REPEATING one here: the whole point of
-/// the tile is that a cell coordinate divided by the period is a texture
-/// coordinate that wraps. `cloud_sampler` clamps, which every other read wants —
+/// The tile's own sampler, and the only REPEATING one here: the mosaic divides
+/// its cell coordinate by the period, while the wash first turns it into the
+/// rotated basis; either texture coordinate wraps. `cloud_sampler` clamps,
+/// which every other read wants —
 /// a refracted lookup that ran off the pane must hold its edge rather than
 /// return the light from the far side of the picture.
 @group(1) @binding(7) var tile_sampler: sampler;
@@ -1509,9 +1510,10 @@ fn wash_field(r: vec2<f32>, period: i32, want_fine: bool) -> WashField {
     return out;
 }
 
-// The same field out of the baked tile: the cell coordinate divided by the
-// period is the repeating texture coordinate, and that is the whole of what the
-// drift does here — it slides a fixed field rather than changing one.
+// The same field out of the baked tile: the cell coordinate is turned into the
+// wash's rotated basis and divided by the period. That repeating coordinate is
+// the whole of what the drift does here — it slides a fixed field rather than
+// changing one.
 fn wash_tile_field(r: vec2<f32>) -> WashField {
     let uv = watercolor_tile_uv(r);
     let a = textureSampleLevel(cloud_tile_a, tile_sampler, uv, 0.0);

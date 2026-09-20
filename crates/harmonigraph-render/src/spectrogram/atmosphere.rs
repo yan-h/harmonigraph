@@ -270,6 +270,18 @@ const _: () = assert!(
      struct is larger than the buffer Rust writes",
 );
 
+/// The production uniform fields read by `wash_tile_field`, for its direct
+/// shader probe. Returned as bytes so the parent test need not widen
+/// [`Uniforms`]' visibility just to bind the same layout production uses.
+#[cfg(test)]
+pub(super) fn watercolor_tile_probe_uniform(pitch_vertical: bool) -> Vec<u8> {
+    let mut uniforms: Uniforms = bytemuck::Zeroable::zeroed();
+    uniforms.wash_layers = 1.0;
+    uniforms.tile_cells = 40;
+    uniforms.pitch_vertical = u32::from(pitch_vertical);
+    bytemuck::bytes_of(&uniforms).to_vec()
+}
+
 pub(super) struct Pipelines {
     pub source: wgpu::RenderPipeline,
     pub bake: wgpu::RenderPipeline,

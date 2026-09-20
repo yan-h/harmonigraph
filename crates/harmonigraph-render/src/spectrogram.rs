@@ -3640,6 +3640,148 @@ fn cs_wrap_probe() {
         );
     }
 
+    /// Watercolor's square bake remains the live wash field before the read
+    /// rotates it. Compare each tiled pixel with the live pixel reached by the
+    /// same inverse 3-4-5 transform, in both pane orientations.
+    ///
+    /// Constant light deliberately isolates the bake's pigments and cover;
+    /// the production tile-reader probe below separately owns the two offset
+    /// channels, with nonzero synthetic vectors in both tile textures.
+    #[test]
+    fn the_watercolor_tile_keeps_the_live_field_at_rotation_mapped_points() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        const TILE_SIZE: [u32; 2] = [SIZE[0] * 2, SIZE[1] * 2];
+        let number = |name: &str| -> f32 {
+            crate::shadow::tests::shader_const(SPECTROGRAM_SRC, name)
+                .split('/')
+                .map(|part| part.trim().parse::<f32>().expect("a number"))
+                .reduce(|a, b| a / b)
+                .expect("a constant has a value")
+        };
+        let units = number("CLOUD_UNITS");
+        let cells = number("WASH_CELLS") / harmonigraph_scene::CLOUD_SIZE_MAX;
+        let lacunarity = number("WASH_LACUNARITY");
+        let ring = number("WASH_RING");
+        let period = 20.0_f32;
+        let drift = [0.0_f32, 0.6];
+        let half = [TILE_SIZE[0] as f32 * 0.5, TILE_SIZE[1] as f32 * 0.5];
+        let pixel = |frame: &[u8], point: [f32; 2], channel: usize| -> Option<f32> {
+            let sample = [point[0] - 0.5, point[1] - 0.5];
+            let base = [sample[0].floor() as i32, sample[1].floor() as i32];
+            if base[0] < 0
+                || base[1] < 0
+                || base[0] + 1 >= TILE_SIZE[0] as i32
+                || base[1] + 1 >= TILE_SIZE[1] as i32
+            {
+                return None;
+            }
+            let fraction = [sample[0] - base[0] as f32, sample[1] - base[1] as f32];
+            let at = |x: i32, y: i32| {
+                frame[((y as u32 * TILE_SIZE[0] + x as u32) * 4) as usize + channel] as f32
+            };
+            let top =
+                at(base[0], base[1]) * (1.0 - fraction[0]) + at(base[0] + 1, base[1]) * fraction[0];
+            let bottom = at(base[0], base[1] + 1) * (1.0 - fraction[0])
+                + at(base[0] + 1, base[1] + 1) * fraction[0];
+            Some(top * (1.0 - fraction[1]) + bottom * fraction[1])
+        };
+
+        for pitch_vertical in [true, false] {
+            let mut cb = wash_fixture();
+            cb.rect = egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(TILE_SIZE[0] as f32, TILE_SIZE[1] as f32),
+            );
+            cb.vertices = full_quad_in(12, TILE_SIZE);
+            cb.read.rows = TILE_SIZE[1];
+            cb.grid = grid_of(Arc::new(vec![180; BINS as usize * 12]), BINS, 12, 0);
+            let atmosphere = cb.atmosphere.as_mut().unwrap();
+            atmosphere.region = cb.rect;
+            atmosphere.pitch_vertical = pitch_vertical;
+            let settings = &mut atmosphere.settings;
+            settings.cloud_depth = 1.0;
+            settings.cloud_speed = 0.0;
+            settings.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX;
+            settings.wash_lobe = 0.0;
+            settings.wash_refract = 0.0;
+            settings.wash_layers = 1.0;
+            let live = fresh_frame(&device, &queue, &cb);
+            cb.atmosphere.as_mut().unwrap().settings.cloud_tile = period;
+            let tiled = fresh_frame(&device, &queue, &cb);
+
+            let physical_to_semantic = |value: [f32; 2]| {
+                if pitch_vertical {
+                    value
+                } else {
+                    [value[1], value[0]]
+                }
+            };
+            let semantic_to_physical = physical_to_semantic;
+            let mut compared = 0u32;
+            let mut moved = 0u32;
+            let mut worst = 0.0_f32;
+            let mut total = 0.0_f64;
+            for y in 0..TILE_SIZE[1] {
+                for x in 0..TILE_SIZE[0] {
+                    let point = [x as f32 + 0.5, y as f32 + 0.5];
+                    let r = [
+                        ((point[0] - half[0]) / TILE_SIZE[1] as f32 * units + drift[0]) * cells,
+                        ((point[1] - half[1]) / TILE_SIZE[1] as f32 * units + drift[1]) * cells,
+                    ];
+                    let semantic = physical_to_semantic(r);
+                    let source_semantic = [
+                        0.8 * semantic[0] + 0.6 * semantic[1],
+                        -0.6 * semantic[0] + 0.8 * semantic[1],
+                    ];
+                    let source = semantic_to_physical(source_semantic);
+                    let fine = [source[0] * lacunarity + 17.3, source[1] * lacunarity + 5.9];
+                    let held =
+                        |value: f32, last: f32| value >= ring + 1.0 && value <= last - ring - 1.0;
+                    if !(held(source[0], period)
+                        && held(source[1], period)
+                        && held(fine[0], (period * lacunarity).round())
+                        && held(fine[1], (period * lacunarity).round()))
+                    {
+                        continue;
+                    }
+                    let source_point = [
+                        (source[0] / cells - drift[0]) / units * TILE_SIZE[1] as f32 + half[0],
+                        (source[1] / cells - drift[1]) / units * TILE_SIZE[1] as f32 + half[1],
+                    ];
+                    let [Some(red), Some(green), Some(blue)] = [
+                        pixel(&live, source_point, 0),
+                        pixel(&live, source_point, 1),
+                        pixel(&live, source_point, 2),
+                    ] else {
+                        continue;
+                    };
+                    let tiled_at = ((y * TILE_SIZE[0] + x) * 4) as usize;
+                    let mut pixel_moved = false;
+                    for (channel, expected) in [red, green, blue].into_iter().enumerate() {
+                        let diff = (f32::from(tiled[tiled_at + channel]) - expected).abs();
+                        total += f64::from(diff);
+                        worst = worst.max(diff);
+                        pixel_moved |= diff > 4.0;
+                    }
+                    moved += u32::from(pixel_moved);
+                    compared += 1;
+                }
+            }
+            let mean = total / f64::from(compared * 3);
+            assert!(
+                compared > 1_000,
+                "pitch_vertical={pitch_vertical} compared only {compared} mapped pixels"
+            );
+            assert!(
+                mean < 2.0 && worst < 24.0 && moved < compared / 8,
+                "pitch_vertical={pitch_vertical} tiled wash is not its rotated live field: \
+                 compared={compared}, mean={mean}, worst={worst}, moved={moved}"
+            );
+        }
+    }
+
     /// The production Watercolor lookup is the exact 3-4-5 rotation in
     /// semantic `(time, pitch)` coordinates, whichever pane axis carries
     /// pitch.
@@ -3654,12 +3796,12 @@ fn cs_wrap_probe() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        const COUNT: u64 = 8;
+        const COUNT: u64 = 10;
         let source = format!(
             "{}\n{}",
             SPECTROGRAM_SRC,
             r#"
-struct RotationProbe { values: array<vec2<f32>, 8> }
+struct RotationProbe { values: array<vec2<f32>, 10> }
 @group(0) @binding(3) var<storage, read_write> rotation_probe: RotationProbe;
 
 @compute @workgroup_size(1)
@@ -3676,6 +3818,11 @@ fn cs_rotation_probe() {
     rotation_probe.values[6] = watercolor_tile_uv_for(vec2<f32>(0.0, 40.0), 40.0, 0u);
     rotation_probe.values[7] =
         rotate_watercolor_tile_vector_for(vec2<f32>(0.0, 1.0), 0u);
+    // The production tile reader must apply that vector transform to BOTH
+    // sampled octaves, rather than merely leaving the helper correct but dead.
+    let field = wash_tile_field(vec2<f32>(0.0));
+    rotation_probe.values[8] = field.coarse.offset;
+    rotation_probe.values[9] = field.fine.offset;
 }
 "#,
         );
@@ -3698,10 +3845,73 @@ fn cs_rotation_probe() {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let output_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("spectral_cloud_rotation_probe"),
             layout: &pipeline.get_bind_group_layout(0),
             entries: &[wgpu::BindGroupEntry { binding: 3, resource: output.as_entire_binding() }],
+        });
+        let make_tile = |label, rgba: [u8; 4]| {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                texture.as_image_copy(),
+                &rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4),
+                    rows_per_image: Some(1),
+                },
+                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            );
+            let view = texture.create_view(&Default::default());
+            (texture, view)
+        };
+        let (_coarse_texture, coarse_view) =
+            make_tile("spectral_cloud_rotation_coarse", [255, 0, 64, 0]);
+        let (_fine_texture, fine_view) =
+            make_tile("spectral_cloud_rotation_fine", [0, 255, 128, 255]);
+        let uniform_bytes = atmosphere::watercolor_tile_probe_uniform(true);
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("spectral_cloud_rotation_uniform"),
+            size: uniform_bytes.len() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&uniform, 0, &uniform_bytes);
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("spectral_cloud_rotation_sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let tile_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("spectral_cloud_rotation_tiles"),
+            layout: &pipeline.get_bind_group_layout(1),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&coarse_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&fine_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
         });
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("spectral_cloud_rotation_probe_readback"),
@@ -3713,7 +3923,8 @@ fn cs_rotation_probe() {
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &group, &[]);
+            pass.set_bind_group(0, &output_group, &[]);
+            pass.set_bind_group(1, &tile_group, &[]);
             pass.dispatch_workgroups(1, 1, 1);
         }
         encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, bytes);
@@ -3740,6 +3951,8 @@ fn cs_rotation_probe() {
         }
         close(values[3], [0.8, 0.6]);
         close(values[7], [0.6, 0.8]);
+        close(values[8], [0.8, 0.6]);
+        close(values[9], [-0.6, 0.8]);
     }
     /// The exact 3-4-5 rotation repeats along `(time = 4P/5, pitch = 3P/5)`
     /// and `(-3P/5, 4P/5)`, but NOT along either unrotated axis.
