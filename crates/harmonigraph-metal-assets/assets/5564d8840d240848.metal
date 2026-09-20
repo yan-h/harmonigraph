@@ -43,7 +43,7 @@ struct VertexOut {
     metal::float4 outline;
     metal::float2 at;
     uint who;
-    char _pad13[4];
+    float feather;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -161,37 +161,34 @@ float box_distance(
 }
 
 float inside(
+    VertexOut in_3,
     float d_1,
-    float edge,
-    constant Locals& locals
+    float edge
 ) {
-    float _e4 = locals.feather;
-    float f_1 = metal::max(_e4, 0.000001);
+    float f_1 = metal::max(in_3.feather, 0.000001);
     return metal::clamp(((edge - d_1) / f_1) + 0.5, 0.0, 1.0);
 }
 
 float lead_coverage(
-    VertexOut in_3,
-    constant Locals& locals
+    VertexOut in_4
 ) {
     float led = {};
-    if (in_3.lead <= 0.0) {
+    if (in_4.lead <= 0.0) {
         return 1.0;
     }
-    float _e7 = locals.feather;
-    float f_2 = metal::max(_e7, 0.000001);
-    float u_1 = in_3.local.y + in_3.half_extent.y;
-    led = in_3.lead_alpha;
-    if (in_3.lead_fade > 0.0) {
-        led = in_3.lead_alpha * metal::clamp(u_1 / metal::max(metal::min(in_3.lead_fade, in_3.lead), f_2), 0.0, 1.0);
+    float f_2 = metal::max(in_4.feather, 0.000001);
+    float u_1 = in_4.local.y + in_4.half_extent.y;
+    led = in_4.lead_alpha;
+    if (in_4.lead_fade > 0.0) {
+        led = in_4.lead_alpha * metal::clamp(u_1 / metal::max(metal::min(in_4.lead_fade, in_4.lead), f_2), 0.0, 1.0);
     }
-    float note = metal::clamp(((u_1 - in_3.lead) / f_2) + 0.5, 0.0, 1.0);
-    float _e38 = led;
-    return metal::mix(_e38, 1.0, note);
+    float note = metal::clamp(((u_1 - in_4.lead) / f_2) + 0.5, 0.0, 1.0);
+    float _e36 = led;
+    return metal::mix(_e36, 1.0, note);
 }
 
 float outline_coverage(
-    VertexOut in_4,
+    VertexOut in_5,
     float d_2,
     float reach,
     metal::texture2d<float, metal::access::sample> shadow_atlas,
@@ -218,18 +215,18 @@ float outline_coverage(
     full_1 = _e26;
     float _e31 = locals.shadow.z;
     if (_e31 < 0.5) {
-        float _e36 = shadow_kernel(in_4.who, in_4.at, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+        float _e36 = shadow_kernel(in_5.who, in_5.at, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
         full_1 = _e36;
     }
     float _e37 = full_1;
     float _e41 = locals.shadow.y;
     float _e43 = shadow_transmittance(_e37, _e41, 1.0);
-    float _e46 = inside(d_2, reach, locals);
+    float _e46 = inside(in_5, d_2, reach);
     return (1.0 - _e43) * _e46;
 }
 
 float cap_coverage(
-    VertexOut in_5,
+    VertexOut in_6,
     metal::texture2d<float, metal::access::sample> shadow_atlas,
     metal::sampler shadow_sampler,
     device type_5 const& shadow_casters,
@@ -237,8 +234,8 @@ float cap_coverage(
     constant _mslBufferSizes& _buffer_sizes
 ) {
     bool local_2 = {};
-    float reach_1 = metal::min(in_5.cap_reach, in_5.outline_reach);
-    if (!((in_5.lead <= 0.0))) {
+    float reach_1 = metal::min(in_6.cap_reach, in_6.outline_reach);
+    if (!((in_6.lead <= 0.0))) {
         local_2 = reach_1 <= 0.0;
     } else {
         local_2 = true;
@@ -247,27 +244,27 @@ float cap_coverage(
     if (_e13) {
         return 0.0;
     }
-    float _e16 = box_distance_trimmed(in_5, in_5.lead);
-    float _e17 = outline_coverage(in_5, _e16, reach_1, shadow_atlas, shadow_sampler, shadow_casters, locals, _buffer_sizes);
-    float _e19 = inside(_e16, 0.0, locals);
+    float _e16 = box_distance_trimmed(in_6, in_6.lead);
+    float _e17 = outline_coverage(in_6, _e16, reach_1, shadow_atlas, shadow_sampler, shadow_casters, locals, _buffer_sizes);
+    float _e19 = inside(in_6, _e16, 0.0);
     return _e17 * (1.0 - _e19);
 }
 
 metal::float4 outline_color(
-    VertexOut in_6,
+    VertexOut in_7,
     metal::texture2d<float, metal::access::sample> shadow_atlas,
     metal::sampler shadow_sampler,
     device type_5 const& shadow_casters,
     constant Locals& locals,
     constant _mslBufferSizes& _buffer_sizes
 ) {
-    float _e1 = box_distance(in_6);
-    float _e3 = outline_coverage(in_6, _e1, in_6.outline_reach, shadow_atlas, shadow_sampler, shadow_casters, locals, _buffer_sizes);
-    float _e5 = inside(_e1, 0.0, locals);
-    float _e9 = lead_coverage(in_6, locals);
+    float _e1 = box_distance(in_7);
+    float _e3 = outline_coverage(in_7, _e1, in_7.outline_reach, shadow_atlas, shadow_sampler, shadow_casters, locals, _buffer_sizes);
+    float _e5 = inside(in_7, _e1, 0.0);
+    float _e9 = lead_coverage(in_7);
     float wrap = (_e3 * (1.0 - _e5)) * _e9;
-    float _e12 = cap_coverage(in_6, shadow_atlas, shadow_sampler, shadow_casters, locals, _buffer_sizes);
-    return in_6.outline * metal::max(wrap, _e12);
+    float _e12 = cap_coverage(in_7, shadow_atlas, shadow_sampler, shadow_casters, locals, _buffer_sizes);
+    return in_7.outline * metal::max(wrap, _e12);
 }
 
 struct fs_outline_gammaInput {
@@ -283,6 +280,7 @@ struct fs_outline_gammaInput {
     metal::float4 outline [[user(loc9), flat]];
     metal::float2 at [[user(loc10), center_perspective]];
     uint who [[user(loc11), flat]];
+    float feather [[user(loc12), flat]];
 };
 struct fs_outline_gammaOutput {
     metal::float4 member [[color(0)]];
@@ -296,7 +294,7 @@ fragment fs_outline_gammaOutput fs_outline_gamma(
 , constant Locals& locals [[buffer(0)]]
 , constant _mslBufferSizes& _buffer_sizes [[buffer(2)]]
 ) {
-    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, varyings.lead, varyings.lead_fade, varyings.lead_alpha, varyings.cap_reach, {}, varyings.core, varyings.outline, varyings.at, varyings.who };
+    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, varyings.lead, varyings.lead_fade, varyings.lead_alpha, varyings.cap_reach, {}, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather };
     metal::float4 _e1 = outline_color(in, shadow_atlas, shadow_sampler, shadow_casters, locals, _buffer_sizes);
     return fs_outline_gammaOutput { _e1 };
 }
