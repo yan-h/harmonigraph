@@ -37,8 +37,12 @@ pub mod trail;
 pub mod view;
 
 pub use atmosphere::{
-    AtmosphereSettings, CloudStyle, SpectralAtmosphere, SpectralEffects, CLOUD_SIZE_MAX,
-    CLOUD_SIZE_MIN,
+    AtmosphereSettings, CloudStyle, SpectralAtmosphere, SpectralEffects, BREATH_SPEED_MAX,
+    BREATH_SPEED_MIN, CLOUD_PIXEL_MAX, CLOUD_PIXEL_MIN, CLOUD_SIZE_MAX, CLOUD_SIZE_MIN,
+    CLOUD_SPEED_MAX, CLOUD_SPEED_MIN, CONTOURS_MAX, CONTOURS_MIN, CONTOUR_SOFTNESS_MAX,
+    CONTOUR_SOFTNESS_MIN, NEBULA_SCALE_MAX, NEBULA_SCALE_MIN, NEBULA_SPEED_MAX, NEBULA_SPEED_MIN,
+    PITCH_SOFTNESS_MAX, PITCH_SOFTNESS_MIN, SCALE_REFRACT_MAX, SCALE_REFRACT_MIN,
+    TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
 };
 pub use camera::{Camera, Projection, Projector, VisibleSheet};
 pub use color::{
@@ -63,7 +67,7 @@ pub use style::{
 };
 pub use view::{
     AnimationOrder, DrawnWindow, FrameParams, GlowCurve, NoteAnimation, NoteAnimationConfig,
-    RingStack, ViewConfig, SEVENS_LAYER_LIMIT,
+    RingStack, ViewConfig, SCALE_BAR_RANGE, SEVENS_LAYER_LIMIT,
 };
 
 use glam::{Vec3, Vec4};

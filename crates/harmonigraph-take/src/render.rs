@@ -357,6 +357,11 @@ pub struct RenderFrame {
 }
 
 impl RenderFrame {
+    /// Smallest lattice share offered by the preview divider and composed layout.
+    pub const SPLIT_MIN: f32 = 0.05;
+    /// Largest lattice share; the spectral pane retains the same minimum share.
+    pub const SPLIT_MAX: f32 = 0.95;
+
     /// Output pixels for this aspect with its SHORT edge at `short_edge`: 16:9
     /// at 1080 is 1920x1080, 9:16 at 1080 is 1080x1920.
     ///
@@ -390,15 +395,16 @@ impl RenderFrame {
     /// nothing here that isn't already caught where it is used.
     ///
     /// `split` is different: the Video pane's preview divider holds it to
-    /// `0.05..=0.95`, and `Layout::split` clamps into that same literal
-    /// range — which cannot itself panic (the bounds are constants, not a
-    /// second field), but does not repair a NaN either, `clamp` losing every
+    /// [`SPLIT_MIN`](Self::SPLIT_MIN)..=[`SPLIT_MAX`](Self::SPLIT_MAX),
+    /// and `Layout::split` clamps into that same range — which cannot itself
+    /// panic (the bounds are constants, not a second field), but does not repair
+    /// a NaN either, `clamp` losing every
     /// comparison against one. A NaN split would then reach `Layout::resolve`
     /// as a rect with no finite side — not a crash, but a frame with a torn
     /// composition and nothing in the picture to say why.
     pub fn sanitize(&mut self) {
         self.split = if self.split.is_finite() {
-            self.split.clamp(0.05, 0.95)
+            self.split.clamp(Self::SPLIT_MIN, Self::SPLIT_MAX)
         } else {
             RenderFrame::default().split
         };

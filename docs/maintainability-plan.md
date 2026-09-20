@@ -26,7 +26,16 @@ Notes and browser-only lab retirement remain optional product decisions;
 Console and standalone are recommended keeps for now.
 Naming/FOV comparisons and GUI-stack feasibility remain lower-priority,
 independent investigations.
-Implementation has now begun with package A's guidance corrections.
+Guidance corrections ([A, #977](https://github.com/yan-h/harmonigraph/pull/977)),
+nested settings coverage ([B1, #980](https://github.com/yan-h/harmonigraph/pull/980)),
+recording parity ([B2, #979](https://github.com/yan-h/harmonigraph/pull/979)) and tracing cleanup ([D2, #981](https://github.com/yan-h/harmonigraph/pull/981)) have landed.
+Spacing retirement ([C5, #982](https://github.com/yan-h/harmonigraph/pull/982)) and separate-WAV/dormant export-field retirement ([C1, #983](https://github.com/yan-h/harmonigraph/pull/983)) have also landed.
+Next-note outline retirement ([C4, #984](https://github.com/yan-h/harmonigraph/pull/984)) has landed.
+Shared setting rules (D1) are in progress;
+Playhead retirement (C2),
+extra export-layout retirement (C3),
+combined retained-workflow verification and the final built pair remain.
+Yan will run the merge audit manually later.
 The coordinator owns review and merge order;
 workers deliver draft PRs.
 Live package status and PR links stay in the existing issues.

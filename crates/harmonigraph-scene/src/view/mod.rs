@@ -30,6 +30,12 @@ use crate::{
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
+/// What every text-size bar offers, and so what a persisted scale is fit to.
+/// One range for the three of them: they are the same control over three kinds
+/// of text, and a reader comparing two of them should not have to check
+/// whether they mean the same thing by 2.
+pub const SCALE_BAR_RANGE: std::ops::RangeInclusive<f32> = 0.3..=3.0;
+
 /// Arithmetic guard on a derived extent, not a picture-shaping limit:
 /// [`MAX_DRAWN_NODES`] is what bounds the work, and it is reached long before
 /// this. What this stops is the step before that bound is even computable — a
@@ -1347,7 +1353,7 @@ impl ViewConfig {
         // no image, so every label silently vanishes, and a huge one asks the
         // rasterizer for a glyph wider than the texture atlas can hold.
         self.label_scale = if self.label_scale.is_finite() {
-            self.label_scale.clamp(0.3, 3.0)
+            self.label_scale.clamp(*SCALE_BAR_RANGE.start(), *SCALE_BAR_RANGE.end())
         } else {
             fresh.label_scale
         };
@@ -1405,15 +1411,7 @@ impl ViewConfig {
         // the bar reads out, which is exactly what this door is for. The
         // duration beside it is the Fade param rather than a blob field, and
         // has no door here to need.
-        self.note_animation.radial_start =
-            finite_or(self.note_animation.radial_start, 0.0).clamp(-1.0, 1.0);
-        self.note_animation.start_size =
-            finite_or(self.note_animation.start_size, 1.0).clamp(0.0, 2.0);
-        self.note_animation.stagger_spread = finite_or(
-            self.note_animation.stagger_spread,
-            NoteAnimationConfig::default().stagger_spread,
-        )
-        .clamp(0.0, 0.9);
+        self.note_animation = self.note_animation.sanitized();
         self.fade_shape = finite_or(self.fade_shape, 0.0).clamp(0.0, 1.0);
 
         // The spectral kernel's width, against that same hole and one more: it

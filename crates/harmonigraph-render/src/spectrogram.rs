@@ -688,10 +688,23 @@ impl CallbackTrait for SpectrogramCallback {
                 );
                 let grid = &pane.grid.as_ref().expect("drawable grid").buffer;
                 let lut = &pane.lut.as_ref().expect("drawable gradient").view;
-                let resize = pane.cloud.as_ref().is_none_or(|c| c.size != size);
+                let tone_size = atmosphere::tone_size(pixels, ppp, settings);
+                // Either size rebuilds the whole set, and that is deliberate:
+                // nothing here is retained across frames — every target is
+                // refilled every frame — so a rebuild costs an allocation and
+                // no picture. The tone size moves on a pane resize or a drag of
+                // `Cloud pixel size` and on nothing else, where the LIGHT size
+                // follows the musical radius and would otherwise be reallocated
+                // through every zoom and Span drag, which is what
+                // `retained_size` is here to stop.
+                let resize = pane
+                    .cloud
+                    .as_ref()
+                    .is_none_or(|c| c.size != size || c.tone_size() != tone_size);
                 if resize {
-                    pane.cloud =
-                        Some(atmosphere::Targets::new(device, cloud, size, layout, grid, lut));
+                    pane.cloud = Some(atmosphere::Targets::new(
+                        device, cloud, size, tone_size, layout, grid, lut,
+                    ));
                 }
                 let target = pane.cloud.as_mut().expect("allocated above");
                 target.update(queue, uniforms, rect, ppp, settings);
@@ -749,6 +762,37 @@ impl CallbackTrait for SpectrogramCallback {
                         pass.set_pipeline(&cloud.bake);
                         pass.set_bind_group(0, &target.source_group, &[]);
                         pass.set_bind_group(1, &target.bake_group, &[]);
+                        pass.set_vertex_buffer(0, target.coverage_vertices.slice(..));
+                        pass.draw(0..6, 0..1);
+                    }
+                    // The cloud's own tone, once per `Cloud pixel size` of pane
+                    // rather than once per pixel of the composite. After the
+                    // bake because it reads the finished material out of the
+                    // same coverage quad, and only when the dial asks for a
+                    // reduction — at the fresh size there is no target and the
+                    // composite walks the cells itself.
+                    if let Some(((tone_view, _), tone_group)) =
+                        target.tone.as_ref().zip(target.tone_group.as_ref())
+                    {
+                        #[cfg(test)]
+                        target.encoded_passes.fetch_add(1, Ordering::Relaxed);
+                        let mut pass =
+                            egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("spectral_cloud_tone"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: tone_view,
+                                    depth_slice: None,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                ..Default::default()
+                            });
+                        pass.set_pipeline(&cloud.tone);
+                        pass.set_bind_group(0, &target.source_group, &[]);
+                        pass.set_bind_group(1, tone_group, &[]);
                         pass.set_vertex_buffer(0, target.coverage_vertices.slice(..));
                         pass.draw(0..6, 0..1);
                     }
@@ -3240,6 +3284,99 @@ mod tests {
             assert!(moved > 0.02, "{name} moved almost none of the pane: {moved}");
         }
     }
+
+    /// `Cloud pixel size` draws the SAME PICTURE, softened — which is the whole
+    /// claim of the reduced path, and the only reason a performance dial is
+    /// allowed to be one dial rather than a second look.
+    ///
+    /// Both halves are load-bearing. That the frame CHANGED is what says the
+    /// reduced path ran at all, and it is checked twice over — once on the
+    /// pixels and once on the pass count, because a frame can differ for any
+    /// number of reasons while a third light pass appearing can only be this.
+    /// That the change is SMALL is the claim itself: a reduced tone stretched
+    /// back over the picture has to land within a rim's softening of the walk it
+    /// replaces, and a reduction that had lost the drift, the pane offset or the
+    /// style would differ by a great deal more. Measured at 2 pt against a
+    /// 1 px/pt fixture — a quarter resolution — the mean absolute channel
+    /// difference is 0.73/255 for the mosaic and 0.93/255 for the wash, no
+    /// channel anywhere moves more than 9 and 18, and 1.7% and 6.3% of the pane
+    /// moves past 4 at all.
+    #[test]
+    fn a_reduced_cloud_draws_the_same_picture_softened() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let passes = |resources: &CallbackResources| {
+            resources
+                .get::<SpectrogramResources>()
+                .unwrap()
+                .panes
+                .get(0)
+                .expect("the spectrogram prepared a pane")
+                .cloud
+                .as_ref()
+                .expect("a clouded pane holds its targets")
+                .encoded_passes
+                .load(Ordering::Relaxed)
+        };
+        use harmonigraph_scene::CloudStyle;
+        let mut means = Vec::new();
+        for style in [CloudStyle::Mosaic, CloudStyle::Watercolor] {
+            // The wash fixture's coarse glob, and the same coarseness asked of
+            // the scales: at the fresh size this 128-point pane draws either
+            // texture a handful of pixels wide, which measures its own aliasing
+            // rather than what the tone target lost.
+            let mut cb = wash_fixture();
+            // The noisy grid rather than the fixture's own band, and that is the
+            // fixture-reach half of this test rather than dressing. Neither
+            // texture has much to say over a picture that is FLAT — the sun
+            // stands overhead where the light has no gradient, and the wash's
+            // paper is one tone — so over a fixture that is mostly silence both
+            // resolutions draw nearly the same few levels and a reduction
+            // reading its tone in the WRONG PLACE passes a mean bound
+            // comfortably. Measured both ways: with the lookup deliberately
+            // flipped end to end, the band fixture reads 0.93 and 2.0 against a
+            // correct 0.26 and 0.90, which this bound would pass; over the noisy
+            // grid it reads 29.9 and 37.9 against the 0.73 and 0.93 below.
+            cb.grid = grid_of(noisy_grid(BINS as usize, 12), BINS, 12, 0);
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.cloud_style = style;
+            s.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
+            let mut native_resources = CallbackResources::default();
+            let native = frame_with(&device, &queue, &mut native_resources, &cb);
+            // 2 pt against the fixture's 1 pixel per point: a 64 by 64 tone
+            // target under a 128 by 128 pane, which is a quarter of the walk.
+            cb.atmosphere.as_mut().unwrap().settings.cloud_pixel = 2.0;
+            let mut reduced_resources = CallbackResources::default();
+            let reduced = frame_with(&device, &queue, &mut reduced_resources, &cb);
+            assert_eq!(
+                passes(&reduced_resources),
+                passes(&native_resources) + 1,
+                "{style:?} encoded no tone pass, so the reduced path never ran"
+            );
+            assert_ne!(native, reduced, "{style:?} drew the same frame at a quarter resolution");
+            let channels = native.len() / 4 * 3;
+            let mean = native
+                .chunks_exact(4)
+                .zip(reduced.chunks_exact(4))
+                .flat_map(|(a, b)| (0..3).map(move |c| f64::from(a[c].abs_diff(b[c]))))
+                .sum::<f64>()
+                / channels as f64;
+            let moved = native
+                .chunks_exact(4)
+                .zip(reduced.chunks_exact(4))
+                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+                .count() as f64
+                / (native.len() / 4) as f64;
+            means.push((style, mean, moved));
+        }
+        assert!(
+            means.iter().all(|&(_, mean, _)| mean < 3.0),
+            "a reduced cloud is not the picture the walk draws: {means:?}"
+        );
+    }
+
+    mod timing;
 }
 
 #[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
