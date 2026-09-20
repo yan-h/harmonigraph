@@ -569,7 +569,9 @@ pub(super) fn plan(
     // held. Held notes are lifted out for DRAWING afterwards, which is a
     // separate question from where they sit here — keeping the two apart is
     // what leaves the held-note exemption below with any teeth.
-    notes.sort_unstable_by(|a, b| a.1.time.total_cmp(&b.1.time).then(a.0.key().cmp(&b.0.key())));
+    notes.sort_unstable_by(|a, b| {
+        a.1.time.total_cmp(&b.1.time).then_with(|| a.0.key().cmp(&b.0.key()))
+    });
 
     // The name's ROOM is memoized with it, and has to be: measuring one asks
     // the name for its marks, and each of those builds a String. Per class
