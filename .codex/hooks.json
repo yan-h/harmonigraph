@@ -1,0 +1,17 @@
+{
+  "description": "Refuse to read a skill only Yan starts; see .claude/owner-only-skills.sh",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$(git rev-parse --show-toplevel)/.claude/owner-only-skills.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

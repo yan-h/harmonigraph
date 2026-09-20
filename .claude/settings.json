@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Skill",
+        "matcher": "Bash|Read",
         "hooks": [
           {
             "type": "command",

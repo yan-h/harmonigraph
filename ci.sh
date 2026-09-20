@@ -321,11 +321,11 @@ run .claude/tests/ci-groups.sh
 # both referenced files must come from the older gitlink, not the source tip.
 run .claude/tests/shared-skills-worktrees.sh
 
-# That same submodule holds the one skill a session may not start for itself,
-# and the hook that stops it sits on PreToolUse(Skill) — an event EVERY skill
-# invocation passes through. Too narrow and an audit runs unasked; too wide
-# and no skill in the tree loads at all, which reads to a session as "no such
-# procedure" rather than as an error. Neither end is reachable from Rust.
+# That same submodule holds the one skill a session may not start for itself.
+# The hook that holds that sits on PreToolUse in both Claude and Codex, so it
+# sees every shell call in the tree: too narrow and an audit runs unasked, too
+# wide and ordinary commands start getting denied. Neither end is reachable
+# from Rust.
 run .claude/tests/owner-only-skills.sh
 
 # harmonigraph-core is MIT OR Apache-2.0 while the rest of the workspace is GPL.

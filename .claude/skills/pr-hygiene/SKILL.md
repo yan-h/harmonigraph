@@ -147,7 +147,6 @@ and it checks the skills and the scripts harder, since this rule is what keeps t
 CLAUDE.md owns when a PR is required;
 this file owns what happens at the merge boundary after one exists.
 
-That last paragraph used to end by telling an agent without the skill to run the procedure out of `.claude/skills/audit-merges/SKILL.md` itself.
-It no longer does, and the line is worth its own sentence because it read as permission for the exact thing the gate now refuses:
-**a session does not start an audit, with or without the skill.** `.claude/owner-only-skills.sh` denies the Claude invocation, Yan's typed `/audit-merges` bypasses the hook entirely, and reading the procedure out of the file by hand is the same act with the gate stepped around.
-Say the range looks worth auditing and stop there.
+This file used to close by telling an agent without the skill to run the procedure out of `.claude/skills/audit-merges/SKILL.md` itself.
+That was permission for the thing `.claude/owner-only-skills.sh` now refuses:
+**a session does not start an audit, with or without the skill.** Say the range looks worth auditing and stop there.
