@@ -243,7 +243,7 @@ The tone reads the sound, so a stale tone lags the music; the walk is the only p
 - The backdrop and composite draws: `SpectrogramCallback::paint`.
 
 
-## Long history with clouds disabled (2026-09-19)
+## Long visible spans with clouds disabled (2026-09-19)
 
 The report was declining FPS during continuous improvisation,
 with little improvement from hiding note names and ribbons,
@@ -262,7 +262,8 @@ Sample counts are not per-frame timings.
 
 The probe now varies visible history duration while keeping the 1024-slab grid fixed,
 uses the live-sized 1032-slot allocation,
-and includes contours without either softness or cloud depth as a control.
+and includes a “terraces only” control (Contour strength enabled,
+with softness and Cloud depth at zero).
 It reports the median complete GPU interval,
 CPU callback preparation time,
 and density-source dimensions.
@@ -277,7 +278,7 @@ PROBE_CASE=only PROBE_FRAMES=180 PROBE_HISTORY_SECONDS=10,170,600 \
 On the Apple M1 Pro at 3840×2160 and 2 px/pt,
 with history covering the full pane and production shaders from `c7e5a542`:
 
-| Visible span | Blur only, GPU median ms | Contours only, GPU median ms | Blur density-source pixels |
+| Visible span | Blur only, GPU median ms | Terraces only, GPU median ms | Blur density-source pixels |
 | --- | --- | --- | --- |
 | 10 s | 2.052 | 3.931 | 167×549 |
 | 170 s | 9.705 | 3.968 | 2834×549 |
@@ -309,7 +310,7 @@ A temporary shader shortcut used the midpoint when a source pixel's time footpri
 where the encoded field is affine.
 It was reverted:
 at 170 seconds GPU time fell from 9.705 to 7.949 ms,
-but the unchanged contours control also fell from 3.968 to 3.303 ms.
+but the unchanged terraces control also fell from 3.968 to 3.303 ms.
 At 600 seconds the candidate fell only from 11.023 to 10.324 ms while its control fell from 4.138 to 3.239 ms.
 Those runs provide no convincing long-span gain after accounting for the control's movement.
 No production shader or cache change is retained.
@@ -318,3 +319,5 @@ Further optimization should first isolate density-source and blur costs under st
 then compare candidates against an unchanged interleaved control and check image equivalence.
 Changing source resolution needs an explicit quality check for narrow transients and pitch detail.
 A CPU cache rewrite is not justified by the measurements here.
+
+[Issue #1015](https://github.com/yan-h/harmonigraph/issues/1015) tracks that remaining optimization work.
