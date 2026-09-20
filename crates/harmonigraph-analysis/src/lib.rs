@@ -109,6 +109,16 @@ pub struct SpectrumAnalyzer {
     /// end is ever written; the rest is allocated once so the fill never has to
     /// grow it.
     bin_mag: Vec<f32>,
+    /// The pitch buckets [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum)
+    /// hands back, owned here rather than returned by value: at 32 buckets to
+    /// the semitone one spectrum is 15.3 KB, and returning it copied that much
+    /// per channel per column for nothing.
+    ///
+    /// SCRATCH and not a cache: it has no key, because every call rewrites it
+    /// whole — `pitch_spectrum` zeroes it before its bucket loop precisely so
+    /// that the loop's one `continue` cannot leave a bucket reading the
+    /// previous column. Nothing reads it that did not just write it.
+    buckets: Box<[f32; SPECTRUM_BINS]>,
 }
 
 impl SpectrumAnalyzer {
@@ -129,6 +139,7 @@ impl SpectrumAnalyzer {
             fft_scratch: Vec::new(),
             bin_power: Vec::new(),
             bin_mag: Vec::new(),
+            buckets: Box::new([0.0; SPECTRUM_BINS]),
         };
         analyzer.configure(DEFAULT_FFT_SIZE, 1);
         analyzer
@@ -219,10 +230,21 @@ impl SpectrumAnalyzer {
         let sample_rate = sample_rate.max(1.0);
         if (sample_rate - self.sample_rate).abs() > f32::EPSILON {
             self.sample_rate = sample_rate;
-            self.ring.fill(0.0);
-            self.write = 0;
-            self.filled = 0;
+            self.clear_window();
         }
+    }
+
+    /// Forget the retained audio, keeping the plan, the tapers and their
+    /// normalization — none of which the window's CONTENTS decide.
+    ///
+    /// This is what a source restart owes (see
+    /// [`ChannelBank::restart`](ChannelBank::restart)): the analyzer must not
+    /// read a spectrum across the boundary, and nothing about a new run
+    /// changes which transform it is read through.
+    fn clear_window(&mut self) {
+        self.ring.fill(0.0);
+        self.write = 0;
+        self.filled = 0;
     }
 
     /// Append mono samples (most recent last). Any chunk size works; only
@@ -237,6 +259,10 @@ impl SpectrumAnalyzer {
 
     /// The current power spectrum over the MIDI-pitch axis, or None until
     /// a full window has been seen.
+    ///
+    /// Borrowed from the analyzer's own [`buckets`](Self::buckets) rather than
+    /// returned by value, because one spectrum is 15.3 KB and every caller
+    /// reads it in place. The next call overwrites it.
     ///
     /// Bucket values are absolute power: a full-scale sine reads ~1.0 at
     /// its pitch, so successive frames are comparable and the display can
@@ -264,7 +290,7 @@ impl SpectrumAnalyzer {
     /// semitone, where before it was two buckets wide wherever it sat.
     /// The refinement had been hiding how little the FFT actually
     /// resolves down low; this shows it.
-    pub fn pitch_spectrum(&mut self) -> Option<[f32; SPECTRUM_BINS]> {
+    pub fn pitch_spectrum(&mut self) -> Option<&[f32; SPECTRUM_BINS]> {
         if self.filled < self.fft_size {
             return None;
         }
@@ -272,7 +298,8 @@ impl SpectrumAnalyzer {
         // Inspect the retained window, not just the newest input block. Return
         // a measurement so callers keep advancing history and display decay.
         if self.ring.iter().all(|sample| *sample == 0.0) {
-            return Some([0.0; SPECTRUM_BINS]);
+            self.buckets.fill(0.0);
+            return Some(&self.buckets);
         }
 
         // One transform per taper, summed into `bin_power`. The tapers are
@@ -348,8 +375,12 @@ impl SpectrumAnalyzer {
         }
         let bin_mag = &self.bin_mag[..mag_to];
 
-        let mut buckets = [0.0f32; SPECTRUM_BINS];
-        for (b, out) in buckets.iter_mut().enumerate() {
+        // The retained buffer starts at silence every call, exactly as the
+        // fresh array it replaced did. The loop's `continue` below leaves a
+        // bucket unwritten, and an unwritten bucket has to read as nothing
+        // rather than as whatever the previous column left there.
+        self.buckets.fill(0.0);
+        for (b, out) in self.buckets.iter_mut().enumerate() {
             let frequencies = &self.bucket_frequencies[b];
             // The bucket's own frequency band, in bins.
             let x0 = frequencies.lower_hz / bin_hz;
@@ -387,7 +418,7 @@ impl SpectrumAnalyzer {
             };
             *out = p * norm_power;
         }
-        Some(buckets)
+        Some(&self.buckets)
     }
 }
 
@@ -539,6 +570,31 @@ impl ChannelBank {
         }
     }
 
+    /// Begin a new source run: match `channels` and `sample_rate`, and empty
+    /// every retained window so no spectrum is ever read across the boundary.
+    ///
+    /// What this is NOT is `ChannelBank::new`, which is the obvious form and
+    /// throws a set of FFT plans away for every restart. A fresh bank starts
+    /// at [`DEFAULT_FFT_SIZE`] with one taper, so it plans a transform, builds
+    /// tapers for it and sizes four buffers to it — and the caller's next feed
+    /// re-plans all of that to the configured window and taper count before
+    /// pushing a sample. Those two settings are the only inputs
+    /// [`SpectrumAnalyzer::configure`] has; a restart changes neither, so the
+    /// plan a restart discarded was always the plan the next call rebuilt.
+    ///
+    /// A channel-count change is the one case that still rebuilds, because
+    /// there is an analyzer that did not exist before. That is exactly what
+    /// [`set_channels`](Self::set_channels) already costs on the feed path.
+    pub fn restart(&mut self, sample_rate: f32, channels: usize) {
+        self.set_channels(channels);
+        self.set_sample_rate(sample_rate);
+        // Unconditional, where `set_sample_rate` only clears on a CHANGE: a
+        // restart at the same rate is still a new run.
+        for analyzer in &mut self.per_channel {
+            analyzer.clear_window();
+        }
+    }
+
     /// Append INTERLEAVED frames (`channels()` samples per frame, most recent
     /// last). A partial frame at the end is ignored rather than shifting every
     /// later channel by one, which would silently swap the channels for good.
@@ -582,11 +638,18 @@ impl ChannelBank {
     /// panned hard left reads the same 3 dB below center that it would at any
     /// other pan position, where a mono mixdown puts it 6 dB down — and an
     /// anti-phase pair, which a mixdown erases entirely, reads at full level.
+    ///
+    /// BY VALUE, where [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum) is
+    /// borrowed — deliberately, and not an oversight to fix next. The per-
+    /// channel copies it removed were one per channel per column; this one is
+    /// one per column, and its caller holds the result across a `&mut self`
+    /// call of its own (the history push), so borrowing here would cost that
+    /// caller a restructure to buy a single 15.3 KB copy at the column rate.
     pub fn power_sum(&mut self) -> Option<[f32; SPECTRUM_BINS]> {
         let mut total = [0.0f32; SPECTRUM_BINS];
         for analyzer in &mut self.per_channel {
             let channel = analyzer.pitch_spectrum()?;
-            for (sum, p) in total.iter_mut().zip(&channel) {
+            for (sum, p) in total.iter_mut().zip(channel) {
                 *sum += p;
             }
         }
@@ -727,7 +790,7 @@ mod tests {
         for chunk in samples.chunks(701) {
             analyzer.push_samples(chunk);
         }
-        analyzer.pitch_spectrum().expect("window filled")
+        *analyzer.pitch_spectrum().expect("window filled")
     }
 
     fn peak_bucket(buckets: &[f32; SPECTRUM_BINS]) -> usize {
@@ -1072,6 +1135,38 @@ mod tests {
         // Setting the same size again is a no-op: the filled window survives.
         analyzer.set_fft_size(DEFAULT_FFT_SIZE * 2);
         assert!(analyzer.pitch_spectrum().is_some(), "no-op resize kept the window");
+    }
+
+    /// The bottom of the axis sits BELOW the first usable bin at short
+    /// windows — 20 Hz against a first usable bin at 23.4 Hz through a
+    /// 4096-point window at 48 kHz — so those buckets are skipped rather than
+    /// measured, and skipped has to read as silence.
+    ///
+    /// It is a test rather than an obvious property because
+    /// [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum) fills a RETAINED
+    /// buffer: a longer window does reach those buckets, so shortening it is a
+    /// column that writes them followed by a column that does not, and without
+    /// the zeroing the second column would report the first one's levels. The
+    /// window length is a setting on the Analyzer bar, so that is a dial away.
+    #[test]
+    fn shortening_the_window_darkens_the_buckets_it_can_no_longer_reach() {
+        let mut analyzer = SpectrumAnalyzer::new(48_000.0);
+        // 20 Hz: the axis floor, and the bucket whose centre a 4096-point
+        // window puts below its own first usable bin.
+        let tone: Vec<f32> = (0..20_000)
+            .map(|i| 0.5 * (std::f32::consts::TAU * 20.0 * i as f32 / 48_000.0).sin())
+            .collect();
+        analyzer.set_fft_size(16_384);
+        analyzer.push_samples(&tone);
+        let lit = analyzer.pitch_spectrum().expect("window filled")[0];
+        assert!(lit > 0.0, "fixture must light the bottom bucket at the long window");
+        analyzer.set_fft_size(4096);
+        analyzer.push_samples(&tone);
+        assert_eq!(
+            analyzer.pitch_spectrum().expect("window filled")[0],
+            0.0,
+            "a bucket the window cannot reach reported the previous window's level",
+        );
     }
 
     /// Feed a stereo pair through a bank and return the combined spectrum.
@@ -1420,5 +1515,35 @@ mod tests {
         // the count goes back to the default and the caller has to re-set it.
         bank.set_channels(1);
         assert_eq!(bank.per_channel[0].tapers(), 1, "a rebuilt bank kept a stale count");
+    }
+
+    /// A restart at the SAME rate and channel count is the case that has to be
+    /// asserted, and the only one [`ChannelBank::restart`] does any work in.
+    ///
+    /// Emptying the windows used to be a side effect of replacing the bank
+    /// wholesale; now it is the whole job, while the transform the windows are
+    /// read through deliberately survives. Both halves are load-bearing: a
+    /// window that carried over would analyze one spectrum from two runs, and a
+    /// configuration that did not carry over would be rebuilt by the next feed
+    /// anyway, which is the work this exists to stop doing.
+    #[test]
+    fn a_restart_empties_the_windows_and_keeps_the_configuration() {
+        let mut bank = ChannelBank::new(48_000.0, 2);
+        bank.set_fft_size(4096);
+        bank.set_tapers(3);
+        bank.push_frames(&vec![0.2; 4096 * 2]);
+        assert!(bank.power_sum().is_some(), "fixture must fill both windows first");
+
+        bank.restart(48_000.0, 2);
+        assert!(bank.power_sum().is_none(), "a restart must not analyze across the boundary");
+        for (channel, analyzer) in bank.per_channel.iter().enumerate() {
+            assert_eq!(analyzer.fft_size, 4096, "channel {channel} lost its window length");
+            assert_eq!(analyzer.tapers(), 3, "channel {channel} lost its taper count");
+        }
+
+        // And the run resumes at that same configuration, without the caller
+        // having to re-set anything.
+        bank.push_frames(&vec![0.2; 4096 * 2]);
+        assert!(bank.power_sum().is_some());
     }
 }
