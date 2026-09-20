@@ -176,7 +176,8 @@ pub(crate) fn spectrum_settings_pane(
         .show(ui)
         .on_hover_text(
             "How far the levels are gathered into smooth terraces. 0% leaves the measured \
-             levels alone and costs nothing.",
+             levels alone and costs nothing. Applies after texture refraction, so the \
+             same controls set the stepping of the refracted picture.",
         );
     ui.add_enabled_ui(atmosphere.contour_strength > 0.0, |ui| {
         ValueBar::new(&mut atmosphere.contours, CONTOURS_MIN..=CONTOURS_MAX, "Contours")
@@ -195,17 +196,15 @@ pub(crate) fn spectrum_settings_pane(
         .percent()
         .show(ui)
         .on_hover_text(
-            "A drifting texture over the WHOLE pane, reading the sound's light so the \
-             picture is seen THROUGH it rather than under something painted over it. \
-             0% removes it and anything below full lets the plain picture back through \
-             \u{2014} under Watercolor that reads as a double exposure, the sharp bands \
-             showing under their own washed copy. It reads whatever the softness above \
-             leaves: with none, the measured picture itself.",
+            "How strongly the refracted levels replace the original picture. 0% removes \
+             the texture; 100% uses only the displaced readings. Contours and the palette \
+             apply afterward, without extra lighting or pigment. Reads whatever the \
+             softness above leaves: with none, the measured picture itself.",
         );
     ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
         // Two constructions rather than two presets of one, so the dials below
         // the shared three are per style: nothing a wash carries means anything
-        // to a lit scale, and the page would otherwise be a list of controls
+        // to a refracting scale, and the page would otherwise be a list of controls
         // most of which do nothing.
         use harmonigraph_scene::CloudStyle;
         choice_row(
@@ -216,15 +215,14 @@ pub(crate) fn spectrum_settings_pane(
                 (
                     CloudStyle::Mosaic,
                     "Mosaic",
-                    "A pile of soft domes, lit by a sun that leans with the sound and \
-                     refracting the picture through their faces",
+                    "A pile of soft domes refracting the sound through their faces, \
+                     then colored by the shared Contours and palette controls",
                 ),
                 (
                     CloudStyle::Watercolor,
                     "Watercolor",
-                    "A field of translucent globs laid over each other, each reading the \
-                     picture at its own centre. No light in it at all: tone is paper minus \
-                     pigment",
+                    "A field of overlapping globs, each reading the sound near its own \
+                     centre. Layers blends their levels before Contours and the palette",
                 ),
             ],
         );
@@ -279,7 +277,7 @@ pub(crate) fn spectrum_settings_pane(
                  repeat reading different sound. It stacks with Cloud pixel size.",
             );
         // Two constructions, so two sets of dials: nothing a wash carries means
-        // anything to a lit scale, and a page listing both would be mostly
+        // anything to a refracting scale, and a page listing both would be mostly
         // controls that do nothing wherever it stands.
         if atmosphere.cloud_style == CloudStyle::Watercolor {
             wash_bars(ui, atmosphere);
@@ -318,20 +316,8 @@ pub(crate) fn spectrum_settings_pane(
                  each scale's face points, as a share of its own width, so the bands break \
                  and bend through the cloud. Below 0 it is pulled toward the scale's own \
                  centre instead \u{2014} at -100% one value for the whole scale, so the \
-                 cloud comes apart into flat quantized patches. 0 leaves the light where \
-                 it is and the cloud is just a lit body.",
+                 cloud comes apart into flat quantized patches. 0 leaves the picture unchanged.",
             );
-            ValueBar::new(&mut atmosphere.scale_relief, 0.0..=1.0, "Scale relief")
-                .percent()
-                .show(ui)
-                .on_hover_text(
-                    "How domed the scales are, and so how much shading the light casts on \
-                 them. 0 is a smooth body with no scales in it at all; the top of the dial \
-                 is every face picked out separately and a face turned away going black. \
-                 It carries the old Shade floor with it \u{2014} how dark a turned-away face \
-                 may get falls as the relief rises, because a floor decides nothing where \
-                 there is no tilt to shade.",
-                );
         }
     });
     ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")
@@ -580,11 +566,9 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
              before the bottom.",
         );
     ValueBar::new(&mut atmosphere.wash_fuzz, 0.0..=1.0, "Fuzz").percent().show(ui).on_hover_text(
-        "ONE dial over everything that dissolves a glob's rim: how far it feathers into \
-             what lies beneath, how far it bleeds into what is about to cover it, and \u{2014} \
-             falling as those rise \u{2014} how much of the dark edge is left. They move \
-             together because a crisp dark crescent on an edge that is no longer there reads \
-             as a line floating in fog. 0 is hard-edged pebbles, 100% is dissolved paint.",
+        "How far a glob's lookup feathers into the one beneath it and bleeds into the \
+             one about to cover it. 0 is hard-edged pebbles, 100% is dissolved paint. \
+             The sampled levels stay unchanged.",
     );
     ValueBar::new(&mut atmosphere.wash_lobe, 0.0..=1.0, "Lobe shape")
         .percent()
@@ -602,14 +586,6 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
              makes the layer a lens rather than paint: the spectrogram is read one value per \
              glob, so the bands come apart into the field. 0 reads the light exactly under \
              the pixel and moves nothing at all.",
-        );
-    ValueBar::new(&mut atmosphere.wash_pool, 0.0..=1.0, "Edge pooling")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How dark the pigment pools along the edge a later glob lays over this one \
-             \u{2014} the one edge cue the watercolor reference has. Fuzz fades it as the \
-             rim dissolves, so this is its strength before that.",
         );
     ValueBar::new(&mut atmosphere.wash_layers, 0.0..=1.0, "Layers")
         .percent()

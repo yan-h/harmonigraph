@@ -83,8 +83,8 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // the blob keeps; this is what holds the bar and the clamp to one pair of
     // numbers.
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness, analyzer_softness, note_glow,
-        cloud_depth, cloud_speed, cloud_pixel, cloud_tile, scale_size, scale_variety, scale_refract, scale_relief,
-        wash_size, wash_fuzz, wash_lobe, wash_refract, wash_pool, wash_layers);
+        cloud_depth, cloud_speed, cloud_pixel, cloud_tile, scale_size, scale_variety, scale_refract,
+        wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers);
     saved.workspace.interaction.ui_scale = v;
     // These owners have NO ValueBar/RangeBar today. Still pass through their
     // real shared load boundary; zero Video visits below explicitly records
@@ -235,7 +235,7 @@ fn scenarios() -> Vec<Scenario> {
             SettingsPane::Tab(panes::Tab::Tuning) => 7,
             SettingsPane::Page(DisplayPage::Colors) => 2,
             SettingsPane::Page(DisplayPage::Lattice) => 26,
-            SettingsPane::Page(DisplayPage::Analyzer) => 29,
+            SettingsPane::Page(DisplayPage::Analyzer) => 28,
             SettingsPane::Page(DisplayPage::Lighting) => 26,
             SettingsPane::Page(DisplayPage::System) => 2,
             SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console) => 0,
@@ -246,15 +246,15 @@ fn scenarios() -> Vec<Scenario> {
         // marks, audio reading, sevens, roll/note names, glow and shadow falloff.
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
-    // The wash's own inventory: it takes the four scale bars off the Analyzer
-    // page and puts six of its own there, and nothing else on the page moves.
+    // The wash's own inventory: it takes the three scale bars off the Analyzer
+    // page and puts five of its own there, and nothing else on the page moves.
     // Its own scenario rather than a flag on the loop above because the fresh
-    // state selects the scales, so without this the six are drawn by no case
+    // state selects the scales, so without this the five are drawn by no case
     // here at all.
     cases.push(Scenario {
         pane: SettingsPane::Page(DisplayPage::Analyzer),
         wash: true,
-        visits: 31,
+        visits: 30,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {

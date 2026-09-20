@@ -278,7 +278,6 @@ struct Cloud {
     scale_size: f32,
     scale_variety: f32,
     scale_refract: f32,
-    scale_relief: f32,
     // Which texture the layer draws: 0 the refracting scales above, 1 the
     // watercolour wash below. Nothing is shared between the two but the blurred
     // light, the palette, the clock and `cloud_depth`.
@@ -287,7 +286,6 @@ struct Cloud {
     wash_fuzz: f32,
     wash_lobe: f32,
     wash_refract: f32,
-    wash_pool: f32,
     wash_layers: f32,
     // The tile's period in cells, 0 for the live walk. Above zero the cell a
     // hash is taken at is folded onto the square period described beside
@@ -299,6 +297,7 @@ struct Cloud {
     // rotation is defined in (time, pitch), so its basis follows this
     // orientation. The unrotated mosaic does not read it.
     pitch_vertical: u32,
+    _pad: vec2<u32>,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -471,15 +470,8 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 // just make it softer" — the softness is a property of the construction rather
 // than a blur applied to a hard thing afterwards.
 //
-// What is kept from round 1: the light is LIFTED so a glob over a ridge glows
-// nearly as bright as the ridge rather than reading as a shadow on it, and the
-// sun leans with the picture's own gradient, which is what moves the shading as
-// the sound scrolls.
-//
-// What is NOT kept, both on Yan seeing the built thing: the specular glint and
-// its exponent (*"I don't like glint or sparkle, we can remove them"*), and the
-// ambient floor (*"'Ambient' slider is useless"*). Diffuse alone shapes the
-// texture now, and over silence the layer draws the palette's own bottom.
+// The geometry now displaces levels only; Contours and the palette are
+// shared with the source picture. No material exposure or shading remains.
 //
 // Two things that are NOT round 1:
 //
@@ -509,7 +501,7 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 // observables. Pinning the frame here leaves each texture one size dial that
 // means its own size, and leaves the drift to the dial named after it.
 //
-// Three qualities are on DIALS rather than decided here, because describing
+// These qualities are on DIALS rather than decided here, because describing
 // which of them Yan wants has failed in words repeatedly: the NEGATIVE half of
 // `Refraction` carries the lookup from this round's continuous slope onto round
 // 1's flat per-glob patch, and `Variety` is how much the globs differ in size.
@@ -569,7 +561,7 @@ fn watercolor_tile_uv(r: vec2<f32>) -> vec2<f32> {
 
 // The baked channels carry directions as well as scalars. Sampling them at a
 // rotated coordinate turns the geometry only if its vectors turn with it;
-// otherwise refraction and lighting would still point along the unrotated
+// otherwise refraction would still point along the unrotated
 // field. Convert to `(time, pitch)`, apply R, and return to pane axes.
 fn rotate_watercolor_tile_vector_for(v: vec2<f32>, pitch_vertical: u32) -> vec2<f32> {
     let semantic = select(vec2<f32>(v.y, v.x), v, pitch_vertical == 1u);
@@ -670,16 +662,6 @@ const DOME_VARIETY_GAIN: f32 = 5.0;
 // as far as it is wide, and a dome at the base radius bends exactly what it did
 // before `Variety` existed.
 const DOME_FACE: f32 = 2.0 / (DOME_RADIUS * DOME_RADIUS);
-// How far the sun may lean off vertical, and the gradient at which it has leant
-// half that far. `SUN_LEAN` of 1 against a height of 1 is 45 degrees, which is
-// where the sun stood before it was allowed to stand up.
-const SUN_LEAN: f32 = 1.0;
-const SUN_KNEE: f32 = 0.03;
-// How fast the shade floor falls as `Relief` rises — see `diffuse` below, where
-// the merge of the two dials is spelled out. `ln(0.25) / ln(0.65)`, which is the
-// exponent that carries the retired pair's defaults.
-const RELIEF_FLOOR_FALL: f32 = 3.22;
-
 struct Pile {
     // The face the scales here present to the light: each covering dome's own
     // slope, normalised by `DOME_FACE` and blended by the union's weights.
@@ -816,40 +798,14 @@ fn cloud_domes(r: vec2<f32>, period: i32) -> Pile {
     return out;
 }
 
-// The light under a pane point, display intensity 0..1: the wide blur, floored
-// by most of the finished material so a cloud over a ridge is nearly as bright
-// as the ridge. The wide blur alone spreads a narrow ridge's energy so thin
-// that a cloud over it reads as a shadow, which is what makes the layer look
-// like something laid ON the picture rather than lit BY it.
-//
-// `close_light` is NOT decoded: that attachment holds the finished scalar
-// material `fs_cloud_light` already decoded on its way out, which is why
-// `baked_density` reads it raw too. Decoding it twice lifts a flat 0.59 to 0.75
-// and invents structure out of a picture that has none.
+// `close_light` already holds the decoded, Spread-combined scalar material.
+// Both textures read the SAME Spread-combined scalar picture. Geometry only
+// selects the lookup: no gain, lighting, paper, pigment or independent wide tap.
 fn cloud_light(pt: vec2<f32>) -> f32 {
-    let uv = pt / cloud.size;
-    let wide = density_decode(textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r);
-    let material = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
-    return 1.4 * max(wide, 0.85 * material);
+    return textureSampleLevel(close_light, cloud_sampler, pt / cloud.size, 0.0).r;
 }
 
-
-// How much of the light survives the layer, now that the layer is everywhere.
-//
-// It used to be `(1.2 - 0.4 * density) * (0.8 + 0.6 * rim)`: a body darker than
-// its own lit edge, which is what made a cloud read as a thing with a front and
-// a middle. With no sky to have an edge against, both terms are constants —
-// `density` is 1 and `rim` is 0 — and this is what they multiply to. It dims the
-// WHOLE pane now rather than only the parts a cloud covered, and `Cloud depth`
-// is the dial that lets the picture back through.
-const CLOUD_SHADE: f32 = 0.64;
-
-// The mosaic's scalar TONE at a pane-relative point, ahead of the palette.
-//
-// Split out of the colour because it is the whole of what the layer costs: two
-// 3x3 dome rings per pixel, of which not one term reads the sound. `clouded`
-// turns it into a colour at full resolution either way; what changes is whether
-// this ran under that pixel or once per `Cloud pixel size` in `fs_cloud_tone`.
+// The mosaic's displaced level, before Contours and the palette.
 fn scale_tone(pt: vec2<f32>) -> f32 {
     let q = (pt - cloud.size * 0.5) / cloud.size.y * CLOUD_UNITS + cloud.drift;
 
@@ -861,7 +817,7 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
     // Either the ring walked under this pixel, or one tap into the period of it
     // `fs_cloud_tile` already walked. The whole of the walk's output is the two
     // vectors below, so the tile is one `Rgba16Float` read and the rest of this
-    // function — the refraction, the sun, the shading — is unchanged.
+    // function — the refraction — is unchanged.
     var pile: Pile;
     if cloud.tile_cells > 0u {
         let tile = textureSampleLevel(
@@ -900,88 +856,9 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
     // `Refraction` alone always drew, bit for bit.
     let gather = max(-cloud.scale_refract, 0.0) * scale_points;
     let lookup = -face * bend + pile.to_centre * gather;
-    let bent = cloud_light(pt + lookup);
-
-    // Which way the picture's light grows, from taps about a scale apart, so the
-    // sun leans with the sound and the shading travels as it scrolls.
-    //
-    // **The lean is the gradient, NOT its direction, and that is the whole of
-    // what stopped this tearing.** It used to be
-    // `normalize(mix(fallback, grad / magnitude, smoothstep(0, 0.03, magnitude)))`
-    // — a UNIT vector aimed along the gradient. A gradient reverses across every
-    // crest of the picture, so the sun jumped to the opposite side of the sky
-    // along the top of every band, and every face that had been lit turned away
-    // in one pixel step. That is the row of near-black vertical tears Yan found
-    // along a loud band, and no dial could reach it because the flip is in the
-    // sun rather than in the scales. The `smoothstep` was meant to fade the
-    // direction out where the field is flat, but its window is far too narrow to
-    // matter: inside a loud band `magnitude` stays well above 0.03, so the
-    // fallback never engaged and the raw flip ran at full strength.
-    //
-    // Scaling instead of normalising, the lean passes THROUGH zero at a crest —
-    // the sun stands overhead there and comes back down the other side — which
-    // is continuous, and it needs no fallback direction at all. That also
-    // retires the fixed screen-space `(0.55, -0.83)`, which gave the layer an up
-    // and a down that Yan has said he does not want.
-    //
-    // `SUN_KNEE` is where the lean reaches half of `SUN_LEAN`; a gradient well
-    // past it leans the full 45 degrees the old sun always stood at.
-    let reach = vec2<f32>(scale_points * 0.75, 0.0);
-    let grad = vec2<f32>(
-        cloud_light(pt + reach.xy) - cloud_light(pt - reach.xy),
-        cloud_light(pt + reach.yx) - cloud_light(pt - reach.yx),
-    );
-    let lean = grad * (SUN_LEAN / (SUN_KNEE + length(grad)));
-
-    // The scales' normal, from the same face that bent the light, flattened by
-    // `scale_relief` so 0 is a smooth body with no faces at all.
-    let relief = cloud.scale_relief;
-    let normal = normalize(vec3<f32>(-face * relief, 1.0));
-    // Diffuse is 1 on a flat face, so a relief of 0 leaves the light alone.
-    //
-    // The floor — how much a face turned right away still keeps — is DERIVED
-    // from the relief and used to be its own dial. The two were never
-    // independent: both of them only ever decide how far `diffuse` dips below
-    // 1, relief by shrinking the tilt the light is read against and the floor by
-    // lifting the bottom of the range it lands in, and near the flat end they
-    // multiply. Two dials for one product read as one dial spread over two,
-    // which is what Yan found when he said the shading knobs all did the same
-    // thing.
-    //
-    // They differ in exactly one place, and the law below is chosen to keep it.
-    // A floor stops mattering where the light never reaches a face turned right
-    // away, and that is the whole of the low end; it starts mattering as the
-    // tilt grows, which is the high end. So it FALLS as relief rises: 1 at a
-    // relief of 0, where there is nothing to floor, and 0 at a relief of 1,
-    // where the scales are meant to be harsh. The exponent is not a taste — it
-    // is fixed by making the merged dial pass exactly through the pair Yan had
-    // dialled in, a relief of 0.35 against a floor of 0.25, so `0.65 ^ 3.22`.
-    // The top of the dial is harsher than the pair could reach and the bottom is
-    // flatter, which is the range he asked the four sliders to cover.
-    //
-    // What the merge costs is strong relief over LIFTED blacks: a relief of 0.7
-    // now floors at 0.02 where the pair could hold it at 0.25. The dark end
-    // still only reaches 0.45 of the light there, because a face turned right
-    // away is rare, but it is a look the two dials could draw and this one
-    // cannot.
-    let sun = normalize(vec3<f32>(lean, 1.0));
-    let lambert = max(dot(normal, sun), 0.0) / sun.z;
-    let diffuse = mix(pow(1.0 - relief, RELIEF_FLOOR_FALL), 1.0, lambert);
-
-    let lit = bent * diffuse * CLOUD_SHADE;
-    // `softened` used to sit after the palette lookup this feeds, compressing
-    // anything whose brightest channel ran past 0.75. It was holding back the
-    // ADDITIVE glint, and with the glint gone the body is
-    // `palette_color(clamp(lit, 0, 1))` — a colour the palette itself chose,
-    // which cannot leave the ramp. Measured on the shipped look it was a
-    // complete no-op, byte for byte, at the defaults and at every dial up; the
-    // only input that still reached it was an EDITED bright palette, where it
-    // dimmed 231k pixels by up to 24/255 — darkening colours Yan had asked for
-    // to prevent a clipping that can no longer happen.
-    return clamp(lit, 0.0, 1.0);
+    return cloud_light(pt + lookup);
 }
-// ======================= A watercolour WASH of globs ========================
-//
+
 // The second texture, beside the scales above and sharing nothing with them but
 // the blurred light, the palette and the drift clock. It is what Yan asked for
 // first, on a sheet of watercolour cumulus: *"this watercolor clouds example is
@@ -990,7 +867,7 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
 // different sized cloud globs, with some variation"*, *"I want the texture, not
 // the exact shape of how clouds behave in real life"*. So again one continuous
 // isotropic field with no sky, no up and no gaps — but a WATERCOLOUR one, where
-// the shape comes from globs laid over each other rather than from a lit relief.
+// the shape comes from overlapping globs rather than a soft union of domes.
 //
 // Prototyped in numpy over a real recording across two contact sheets; Yan's
 // pick was *"I like J1, J2 and J5 the most"*, which are one construction at
@@ -999,7 +876,7 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
 // NOT here: a z-buffer of spheres instead of a paint order (cracked mud), an
 // even outline on each glob (a contour map), transparency where the paper is
 // lightest (the raw stripes show through as a screen door), any additive
-// highlight (wet plastic), tone quantisation (cel shading), and elongated globs
+// highlight (wet plastic), a separate paint quantizer (cel shading), and elongated globs
 // (rice grains).
 //
 // **Paint order, not depth.** Every cell hashes a centre, a radius and a PAINT
@@ -1008,12 +885,8 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
 // bisector between two, which is the straight crossing that made the z-buffered
 // version read as cracked mud.
 //
-// **Subtractive tone.** A glob's tone is `paper - pigment`, both bounded, and
-// nothing anywhere lightens. `paper` is the lifted light read AT THE GLOB'S OWN
-// CENTRE — the whole refraction, and the only term carrying the sound — and
-// `pigment` is the tide line, the rim and the grain. Because a wash can only
-// darken what is under it, the metal/gel clipping the scales needed a tone map
-// to hold back cannot happen here at all.
+// Each glob reads the displaced scalar level without a tone adjustment.
+// Layers mixes those levels before the shared Contours and palette transfer.
 //
 // **Feather is the fuzziness.** A visible glob dissolves at its OWN rim into
 // whatever lies beneath it, reaching half and half exactly on the boundary so
@@ -1051,14 +924,8 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
 // than 1.63:1 is a LOOK change and is deliberately not taken here.
 //
 // Both bounds are about globs that COVER the pixel, which is what the visible
-// glob, the one beneath it and `cover` are all read off. The tide line is
-// the one term that reads a glob it is OUTSIDE, and its window runs `POOL_WIDTH`
-// of a radius past the rim — further than this ring reaches. What holds that is
-// not the ring but the top-two rule in `wash_scan`: the front is chosen from the
-// two nearest non-covering globs, and at a radius near the cell spacing those
-// are always neighbours, never the ring's outer edge. A pixel would have to be
-// covered by every cell within two of it before the second-nearest miss sat that
-// far out, and the crescent at that distance is under a tenth of its strength.
+// glob, the one beneath it and `cover` are all read off. The front used for
+// bleed is chosen from the two nearest non-covering globs in `wash_scan`.
 //
 // A 5x5 ring rather than 3x3, and it is the jitter and the variety that buy it.
 // At 3x3 these same inequalities leave a radius band of about 1.2:1 with a
@@ -1085,74 +952,10 @@ const WASH_CELLS: f32 = 5.25;
 const WASH_LACUNARITY: f32 = 2.1;
 const WASH_FINE_OCCUPANCY: f32 = 0.20;
 
-// The tops of the two dials whose shader value is not a plain 0..1: the domain
-// warp in cells and the tide line. The warp draws bubbles at 0, lobes around
-// 0.25 and flames past 0.55, so the dial stops short of where it stops being
-// paint.
-//
-// The SCALE between them is the lattice the shared warp noise is read on, in
-// cells, and it is also one of the four numbers a tile period has to make a
-// whole number of — see `wrap_cell` and `wash_fbm`.
+// The domain warp's maximum displacement and noise frequency, in cells.
+// The frequency must close over the tile period, like the finer octave.
 const WASH_WARP: f32 = 0.45;
 const WASH_WARP_SCALE: f32 = 0.9;
-const WASH_POOL: f32 = 0.44;
-
-// How wide the tide line lies outside the covering glob's boundary, and how
-// hard it comes on. A crescent on the OVERLAPPED glob hugging the outside of the
-// front glob's arc — the one edge cue the reference has and the one this look
-// keeps. An even line on a glob's own rim was tried and is a contour map.
-const WASH_POOL_WIDTH: f32 = 0.55;
-
-// Pigment that is a property of the paint rather than of an edge: `SURF` settles
-// toward a glob's own rim, and `PIG_DEPTH` makes every pigment bite in
-// proportion to the paper under it. Without the latter the crevices go black and
-// the field reads as mortar between stones rather than as paint on paper.
-const WASH_SURF: f32 = 0.07;
-const WASH_PIG_DEPTH: f32 = 0.35;
-const WASH_TONE_FLOOR: f32 = 0.05;
-
-// The paper: the light, expanded about a pivot and lifted, before any pigment.
-// The expansion is what keeps a wash over a ridge nearly as bright as the ridge
-// instead of reading as a shadow on it — the same job `cloud_light`'s `max` does
-// for the scales, done here in the tone because the wash reads a POINT rather
-// than a neighbourhood and has no blurred copy to floor itself against.
-const WASH_PIVOT: f32 = 0.45;
-const WASH_LIFT_A: f32 = 1.15;
-const WASH_LIFT_B: f32 = 0.16;
-
-// How far up the dark end the hold that returns silence to the palette reaches.
-//
-// The lift above is an OFFSET, not a gain: written out it is
-// `1.15 * light + 0.0925`, so the paper over silence is palette level 0.0925
-// and nothing in the texture puts it back on the floor. `Cloud depth` only
-// decides how much of that is mixed in, so the quiet half of the pane would go
-// from the palette's floor to mid-tone as the layer came up — which is the one
-// thing the scales beside it never do, since their own light reaches 0.
-//
-// So the whole tone is scaled by how much light the glob found, over a band
-// that runs from nothing to `light` this high. Scaled and not clipped: a
-// subtracted floor would drive `paper - pigment` through zero and leave the
-// tide lines as flat black holes, where a scale walks the tone down the
-// palette's own ramp and the texture fades with it. Above the band the factor
-// is exactly 1, so every tone the picture actually spends its contrast on is
-// left byte for byte where it was, which is the whole point of a knee rather
-// than a smaller `LIFT_B`.
-//
-// The light it reads is the REFRACTED one — the same value `paper` is built
-// from, at the glob's own centre. Gating on the light under the PIXEL instead
-// would cut every glob off at the picture's own silhouette and undo the
-// displacement that is the look.
-//
-// **This is not a dial and should not become one again.** It was one, and its
-// travel was a fade between the lifted paper and the palette's floor: measured
-// over the wash fixture, silence drew `[0, 14, 21]` at 0, `[0, 7, 10]` halfway
-// and the floor at 100%. Every setting but the top therefore parked the quiet
-// half of the pane at a colour the gradient never named, which is the one thing
-// the layer is not allowed to decide — how light the bottom of the range sits
-// is `Lightness` with `Lightness ramp` and nothing else. A knob whose only
-// correct position is its maximum is a knob to delete, and the earlier one
-// shipped at exactly that maximum.
-const WASH_BLACK_KNEE: f32 = 0.175;
 
 // Three 10-bit fractions off a salted cell hash. Two of these per cell: one for
 // the paint order and the occupancy draw, one for the centre and the radius.
@@ -1204,8 +1007,8 @@ fn wash_fbm(p: vec2<f32>, salt: u32, period: i32) -> f32 {
 struct Glob {
     centre: vec2<f32>,
     // Where the pixel sits on this glob's rim: under 1 is inside it. A rim
-    // coordinate rather than a distance, so every glob's feather and tide line
-    // are worked out in fractions of its own radius.
+    // coordinate rather than a distance, so feather and bleed are measured
+    // in fractions of each glob's own radius.
     edge: f32,
     order: f32,
 }
@@ -1282,31 +1085,13 @@ struct Wash {
 // is defined against an answer the same walk is still computing, since the
 // visible glob's order is not known until the last cell.
 //
-// So the walk keeps the two NEAREST non-covering globs and picks the front out
-// of them at the end. It is EXACT where the tide line is strongest and
-// approximate below that, and the shape of the error is worth spelling out
-// rather than waving at. A glob ordered above the visible one cannot be covering
-// — the visible one is the highest order that does — and a crescent only reaches
-// full strength where the front's rim is right against the pixel, which makes it
-// the nearest non-covering glob there is. The approximation bites when BOTH of
-// the two nearest are ordered BELOW the visible glob and a third, further one is
-// not: the walk then draws no crescent where an exhaustive search would draw a
-// weaker one. What is dropped is a fraction of a tide line rather than a whole
-// one, since the third-nearest sits well inside the crescent's `-0.55` window —
-// but it is neither nothing nor rare. Measured against the two-walk render at
-// the J2 default, 19% of pixels differ by more than 4/255 and 5.6% by more than
-// 16, worst 109.
-//
-// The one-walk picture is the one KEPT, and for the look rather than for the
-// clock: the exhaustive front lays a thin dark hairline along every glob edge —
-// toward the cracked mud the prototype's z-buffered version was rejected for —
-// where dropping the weakest crescents leaves the same texture with a softer
-// edge. That it also costs 2.8 ms a frame against a second walk's 6.5 is the
-// smaller half of the reason.
+// Keep the two nearest non-covering globs, then choose the higher-ordered
+// neighbour for the lookup bleed. This retains the established single-walk
+// geometry; a full second search would change which edges blend together.
 fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, period: i32) -> Wash {
     var out: Wash;
-    // What an uncovered pixel would draw: its own light, unmoved, and no
-    // pigment. Unreachable for the base octave while the constants hold — see
+    // An uncovered pixel reads its own light, unmoved. Unreachable for the
+    // base octave while the constants hold — see
     // the proof above — and the ordinary case for a sparse finer one, which is
     // composited by `cover` and so never shows it.
     out.centre = r;
@@ -1368,58 +1153,16 @@ fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, period: i32) -> Wash {
     return out;
 }
 
-// The light one wash reads, display intensity 0..1.
-//
-// `close_light` is NOT decoded: at composite time that attachment holds the
-// finished scalar material `fs_cloud_light` already decoded on its way out, and
-// `Spread` has already mixed the two blurs into it.
-//
-// That mix is why there is no `Softness` dial here any more. It carried this
-// reading further toward the wide blur — `mix(mix(close, wide, spread), wide,
-// soften)`, which is `Spread` again with a larger argument, and measured
-// against the equivalent `Spread` the two pictures differed by an eighth of
-// what either moved. One tap, and the pre-blur is the dial that already says so.
-fn wash_light(pt: vec2<f32>) -> f32 {
-    return textureSampleLevel(close_light, cloud_sampler, pt / cloud.size, 0.0).r;
-}
-
-// One wash's tone, and how much of the picture's own black it has to keep.
-//
-// The two travel together because `hold` is read off the same refracted light
-// `tone` is built from, and an octave's tone means nothing without the hold
-// that goes with it: a coarse glob over silence and a fine one over a band
-// must each carry their own.
-struct Painted {
-    tone: f32,
-    hold: f32,
-};
-
-// The half of one wash's tone that reads no light — which is the half a tile
-// can hold, since it is a function of the glob field and the dials alone.
+// A wash tile holds only the lookup offset, in its own octave's cell units.
 struct Wet {
-    // Where this wash reads the picture, as an offset from the pixel in THIS
-    // octave's cell units. The finished one: the feather and the bleed are
-    // already in it.
     offset: vec2<f32>,
-    // The tide line, the rim and nothing that adds light, already floored.
-    pigment: f32,
 };
 
-// The geometry half of one wash's tone: where it looks, and how much pigment
-// lies there. Split out of [`wash_paint`] below because THIS is what the cell
-// walk costs and what `fs_cloud_tile` bakes; the light half is a texture tap.
+// The cell walk chooses the lookup. Fuzz feathers and bleeds that lookup
+// across glob boundaries; it never changes the sampled level.
 fn wash_wet(f: Wash, r: vec2<f32>) -> Wet {
-    // ONE dial over the rim. The tide line has to fade as the edge dissolves: a
-    // crisp dark crescent drawn on a boundary that is no longer there reads as a
-    // line floating in fog, and at small glob sizes it is what turns a field into
-    // caviar — the same relative width with sixty times as many of them is a dark
-    // net over the picture. A quarter of it is kept at full fuzz, or the field
-    // goes to featureless mist.
-    let fuzz = cloud.wash_fuzz;
-    let feather = 0.10 + 0.80 * fuzz;
-    let bleed = 0.12 + 0.78 * fuzz;
-    let tide = WASH_POOL * cloud.wash_pool * (1.0 - 0.75 * fuzz);
-    let surf = WASH_SURF * (1.0 - 0.45 * fuzz);
+    let feather = 0.10 + 0.80 * cloud.wash_fuzz;
+    let bleed = 0.12 + 0.78 * cloud.wash_fuzz;
 
     var look = f.centre;
     // FEATHER: the visible wash dissolves at its own rim into whatever lies
@@ -1436,39 +1179,17 @@ fn wash_wet(f: Wash, r: vec2<f32>) -> Wet {
     bl = bl * bl * (3.0 - 2.0 * bl) * 0.5;
     look = mix(look, f.front, bl);
 
-    let rim = clamp(f.edge, 0.0, 1.0);
-    var pigment = surf * rim * rim;
-    // The tide line: a broad soft crescent lying on the OVERLAPPED glob, hugging
-    // the outside of the front glob's arc. Squared, so it comes on gently.
-    let crescent = clamp((f.near + WASH_POOL_WIDTH) / WASH_POOL_WIDTH, 0.0, 1.0);
-    pigment += tide * crescent * crescent;
-    return Wet(look - r, max(pigment, 0.0));
+    return Wet(look - r);
 }
 
-// The light half: one tap, the paper it lifts to, and the pigment biting it.
-//
-// `pane_per_cell` converts this octave's cell units to pane points, so a lookup
-// offset measured in cells lands where the glob's centre really is.
-fn wash_paint(wet: Wet, pane_per_cell: f32, pt: vec2<f32>) -> Painted {
-    // THE REFRACTION, and the only term that carries the sound. The offset is
-    // measured from the WARPED pixel — which is where the glob geometry lives —
-    // and applied from the real one, so at 0 the light is read exactly under the
-    // pixel and the layer displaces nothing at all.
-    let light = wash_light(pt + wet.offset * pane_per_cell * cloud.wash_refract);
-    let paper = clamp(WASH_PIVOT + WASH_LIFT_A * (light - WASH_PIVOT) + WASH_LIFT_B, 0.0, 1.0);
-    // Subtractive, and biting in proportion to the paper under it: a pigment
-    // that took the same bite out of a dark tone as out of a light one turns
-    // every crevice black, which is mortar between stones rather than paint.
-    let tone = paper - wet.pigment * (WASH_PIG_DEPTH + (1.0 - WASH_PIG_DEPTH) * paper);
-    // The hold that returns silence to the palette's own floor, undoing the
-    // lift where the glob found no light and leaving every brighter tone alone.
-    return Painted(tone, smoothstep(0.0, WASH_BLACK_KNEE, light));
+fn wash_level(wet: Wet, pane_per_cell: f32, pt: vec2<f32>) -> f32 {
+    return cloud_light(pt + wet.offset * pane_per_cell * cloud.wash_refract);
 }
 
 // The whole of the wash's geometry at a point, in cells: what each octave
 // carries and how much of the pixel the finer one covers.
 //
-// Seven numbers, not one of which reads the light, the sound or the clock —
+// Five numbers, not one of which reads the light, the sound or the clock —
 // which is exactly why `fs_cloud_tile` can bake them into two `Rgba16Float`
 // targets and the per-frame shader can read them back. `want_fine` is the live
 // path's `Layers` 0 saving, which drops the second ring walk outright; the BAKE
@@ -1497,7 +1218,7 @@ fn wash_field(r: vec2<f32>, period: i32, want_fine: bool) -> WashField {
     }
     var out: WashField;
     out.coarse = wash_wet(wash_scan(warped, 1u, 1.0, period), warped);
-    out.fine = Wet(vec2<f32>(0.0), 0.0);
+    out.fine = Wet(vec2<f32>(0.0));
     out.cover = 0.0;
     // Coarse to fine, the finer octave a translucent wash over the one below and
     // sparse, so a big wash sometimes carries a small one and sometimes sits
@@ -1521,12 +1242,12 @@ fn wash_tile_field(r: vec2<f32>) -> WashField {
     let uv = watercolor_tile_uv(r);
     let a = textureSampleLevel(cloud_tile_a, tile_sampler, uv, 0.0);
     var out: WashField;
-    out.coarse = Wet(rotate_watercolor_tile_vector(a.xy), a.z);
-    out.fine = Wet(vec2<f32>(0.0), 0.0);
+    out.coarse = Wet(rotate_watercolor_tile_vector(a.xy));
+    out.fine = Wet(vec2<f32>(0.0));
     out.cover = 0.0;
     if cloud.wash_layers > 0.0 {
         let b = textureSampleLevel(cloud_tile_b, tile_sampler, uv, 0.0);
-        out.fine = Wet(rotate_watercolor_tile_vector(b.xy), b.z);
+        out.fine = Wet(rotate_watercolor_tile_vector(b.xy));
         out.cover = b.w;
     }
     return out;
@@ -1558,19 +1279,14 @@ fn wash_cloud_tone(pt: vec2<f32>) -> f32 {
     } else {
         field = wash_field(r, 0, cloud.wash_layers > 0.0);
     }
-    var paint = wash_paint(field.coarse, pane_per_cell, pt);
+    var level = wash_level(field.coarse, pane_per_cell, pt);
     if cloud.wash_layers > 0.0 {
-        let fine_paint = wash_paint(field.fine, pane_per_cell / WASH_LACUNARITY, pt);
+        let fine_level = wash_level(field.fine, pane_per_cell / WASH_LACUNARITY, pt);
         let over = cloud.wash_layers * field.cover;
-        paint.tone = mix(paint.tone, fine_paint.tone, over);
-        paint.hold = mix(paint.hold, fine_paint.hold, over);
+        level = mix(level, fine_level, over);
     }
 
-    // The floor is what stops pigment alone reading as mortar between stones,
-    // so it is a floor on the PAINT and not on the picture: the hold scales it
-    // too, or the tone the wash draws over silence would be `TONE_FLOOR`
-    // whatever the black point says.
-    return clamp(paint.tone, WASH_TONE_FLOOR, 1.0) * paint.hold;
+    return level;
 }
 
 // Whichever texture is selected, as one scalar. The branch is on a uniform, so
@@ -1636,11 +1352,11 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
     out.a = vec4<f32>(0.0);
     out.b = vec4<f32>(0.0);
     if cloud.cloud_style == 1u {
-        // Seven channels of glob geometry. `want_fine` is true whatever `Layers`
+        // Five channels of glob geometry. `want_fine` is true whatever `Layers`
         // says, so turning that dial up is a mix and never a rebake.
         let field = wash_field(wash_cell, period, true);
-        out.a = vec4<f32>(field.coarse.offset, field.coarse.pigment, 0.0);
-        out.b = vec4<f32>(field.fine.offset, field.fine.pigment, field.cover);
+        out.a = vec4<f32>(field.coarse.offset, 0.0, 0.0);
+        out.b = vec4<f32>(field.fine.offset, 0.0, field.cover);
     } else {
         // The mosaic's whole walk is these two vectors, so its second target is
         // never read. It is still allocated and still written, which is what
@@ -1652,13 +1368,12 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 }
 
 fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
-    let base = density_color(level);
     // There is no gate on the blur here, and there used to be: the light field
     // was only built when a softness was above zero, so the cloud quietly
     // vanished with the blur. The field is built whenever a cloud is drawn now,
     // and at zero softness it holds the measured picture unblurred.
     if cloud.cloud_depth <= 0.0 {
-        return base;
+        return density_color(level);
     }
     let pt = position / cloud.ppp - cloud.origin;
     // Either the walk under this pixel, or one bilinear tap into what
@@ -1671,7 +1386,9 @@ fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
     } else {
         tone = cloud_tone_at(pt);
     }
-    return vec4<f32>(mix(base.rgb, palette_color(tone), cloud.cloud_depth), 1.0);
+    // Mix levels before the one shared style/palette lookup: Cloud depth and
+    // Watercolor Layers cannot introduce RGB blends outside the authored ramp.
+    return density_color(mix(level, tone, cloud.cloud_depth));
 }
 // Empty history uses the same field and palette with a zero measured core.
 // This quad never samples the grid, so the oldest column cannot be smeared.

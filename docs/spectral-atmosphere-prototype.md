@@ -7,6 +7,7 @@ and PRs #888, #909, #913, #918 and #933 added, renamed and re-ranged the whole C
 `SpectralAtmosphere` now carries twenty-five persisted fields where the shape section below describes six.
 The current inventory is `crates/harmonigraph-ui/src/panes/spectral/settings.rs`'s "Softness and glow" section and `impl Default for SpectralAtmosphere` in `crates/harmonigraph-scene/src/atmosphere.rs`;
 those are the source rather than a copy of it here.
+The current [texture level contract](spectral-texture-levels.md) describes the shared displacement and color behavior.
 
 The Spectral pane draws the measured audio field with independent spectrogram style,
 analyzer softness and note glow controls under Display → Analyzer → Softness and glow.

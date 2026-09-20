@@ -19,16 +19,15 @@ struct Cloud {
     float scale_size;
     float scale_variety;
     float scale_refract;
-    float scale_relief;
     uint cloud_style;
     float wash_size;
     float wash_fuzz;
     float wash_lobe;
     float wash_refract;
-    float wash_pool;
     float wash_layers;
     uint tile_cells;
     uint pitch_vertical;
+    metal::uint2 _pad;
 };
 struct Pile {
     metal::float2 face;
@@ -50,8 +49,6 @@ struct Wash {
 };
 struct Wet {
     metal::float2 offset;
-    float pigment;
-    char _pad2[4];
 };
 struct WashField {
     Wet coarse;
@@ -79,12 +76,8 @@ constant float DOME_RADIUS_MAX = 1.32;
 constant float DOME_UNION = 9.0;
 constant float DOME_VARIETY_GAIN = 5.0;
 constant float DOME_FACE = 1.5122874;
-constant float SUN_LEAN = 1.0;
-constant float SUN_KNEE = 0.03;
-constant float RELIEF_FLOOR_FALL = 3.22;
 constant float DOME_LACUNARITY = 2.1;
 constant float DOME_FINE_GAIN = 0.22;
-constant float CLOUD_SHADE = 0.64;
 constant int WASH_RING = 2;
 constant float WASH_JITTER = 0.4;
 constant float WASH_RADIUS_MIN = 1.17;
@@ -94,15 +87,6 @@ constant float WASH_LACUNARITY = 2.1;
 constant float WASH_FINE_OCCUPANCY = 0.2;
 constant float WASH_WARP = 0.45;
 constant float WASH_WARP_SCALE = 0.9;
-constant float WASH_POOL = 0.44;
-constant float WASH_POOL_WIDTH = 0.55;
-constant float WASH_SURF = 0.07;
-constant float WASH_PIG_DEPTH = 0.35;
-constant float WASH_TONE_FLOOR = 0.05;
-constant float WASH_PIVOT = 0.45;
-constant float WASH_LIFT_A = 1.15;
-constant float WASH_LIFT_B = 0.16;
-constant float WASH_BLACK_KNEE = 0.175;
 constant float WASH_FBM_FINE = 2.07;
 constant float WASH_FBM_FINE_TILED = 2.0;
 
@@ -495,38 +479,29 @@ Wet wash_wet(
     metal::float2 look = {};
     float fa = {};
     float bl = {};
-    float pigment = {};
-    float fuzz = cloud.wash_fuzz;
-    float feather = 0.1 + (0.8 * fuzz);
-    float bleed = 0.12 + (0.78 * fuzz);
-    float _e16 = cloud.wash_pool;
-    float tide = (WASH_POOL * _e16) * (1.0 - (0.75 * fuzz));
-    float surf = WASH_SURF * (1.0 - (0.45 * fuzz));
+    float _e4 = cloud.wash_fuzz;
+    float feather = 0.1 + (0.8 * _e4);
+    float _e11 = cloud.wash_fuzz;
+    float bleed = 0.12 + (0.78 * _e11);
     look = f.centre;
     fa = metal::clamp((f.edge - (1.0 - feather)) / feather, 0.0, 1.0);
+    float _e27 = fa;
+    float _e28 = fa;
+    float _e30 = fa;
+    fa = ((_e27 * _e28) * (3.0 - (2.0 * _e30))) * 0.5;
+    metal::float2 _e38 = look;
     float _e40 = fa;
-    float _e41 = fa;
-    float _e43 = fa;
-    fa = ((_e40 * _e41) * (3.0 - (2.0 * _e43))) * 0.5;
-    metal::float2 _e51 = look;
-    float _e53 = fa;
-    look = metal::mix(_e51, f.under, _e53);
+    look = metal::mix(_e38, f.under, _e40);
     bl = metal::clamp((f.near + bleed) / bleed, 0.0, 1.0);
+    float _e49 = bl;
+    float _e50 = bl;
+    float _e52 = bl;
+    bl = ((_e49 * _e50) * (3.0 - (2.0 * _e52))) * 0.5;
+    metal::float2 _e60 = look;
     float _e62 = bl;
-    float _e63 = bl;
-    float _e65 = bl;
-    bl = ((_e62 * _e63) * (3.0 - (2.0 * _e65))) * 0.5;
-    metal::float2 _e73 = look;
-    float _e75 = bl;
-    look = metal::mix(_e73, f.front, _e75);
-    float rim = metal::clamp(f.edge, 0.0, 1.0);
-    pigment = (surf * rim) * rim;
-    float crescent = metal::clamp((f.near + WASH_POOL_WIDTH) / WASH_POOL_WIDTH, 0.0, 1.0);
-    float _e92 = pigment;
-    pigment = _e92 + ((tide * crescent) * crescent);
-    metal::float2 _e96 = look;
-    float _e98 = pigment;
-    return Wet {_e96 - r_4, metal::max(_e98, 0.0)};
+    look = metal::mix(_e60, f.front, _e62);
+    metal::float2 _e64 = look;
+    return Wet {_e64 - r_4};
 }
 
 WashField wash_field(
@@ -553,18 +528,18 @@ WashField wash_field(
     metal::float2 _e47 = warped;
     Wet _e48 = wash_wet(_e46, _e47, cloud);
     out_5.coarse = _e48;
-    out_5.fine = Wet {metal::float2(0.0), 0.0};
+    out_5.fine = Wet {metal::float2(0.0)};
     out_5.cover = 0.0;
     if (want_fine) {
-        metal::float2 _e56 = warped;
-        metal::float2 fine_r = (_e56 * WASH_LACUNARITY) + metal::float2(17.3, 5.9);
-        Wash _e70 = wash_scan(fine_r, 2u, WASH_FINE_OCCUPANCY, naga_f2i32(metal::rint(WASH_LACUNARITY * static_cast<float>(period_8))));
-        Wet _e72 = wash_wet(_e70, fine_r, cloud);
-        out_5.fine = _e72;
-        out_5.cover = _e70.cover;
+        metal::float2 _e55 = warped;
+        metal::float2 fine_r = (_e55 * WASH_LACUNARITY) + metal::float2(17.3, 5.9);
+        Wash _e69 = wash_scan(fine_r, 2u, WASH_FINE_OCCUPANCY, naga_f2i32(metal::rint(WASH_LACUNARITY * static_cast<float>(period_8))));
+        Wet _e71 = wash_wet(_e69, fine_r, cloud);
+        out_5.fine = _e71;
+        out_5.cover = _e69.cover;
     }
-    WashField _e75 = out_5;
-    return _e75;
+    WashField _e74 = out_5;
+    return _e74;
 }
 
 struct fs_cloud_tileInput {
@@ -595,13 +570,13 @@ fragment fs_cloud_tileOutput fs_cloud_tile(
     uint _e34 = cloud.cloud_style;
     if (_e34 == 1u) {
         WashField _e38 = wash_field(wash_cell, period_9, true, cloud);
-        out.a = metal::float4(_e38.coarse.offset, _e38.coarse.pigment, 0.0);
-        out.b = metal::float4(_e38.fine.offset, _e38.fine.pigment, _e38.cover);
+        out.a = metal::float4(_e38.coarse.offset, 0.0, 0.0);
+        out.b = metal::float4(_e38.fine.offset, 0.0, _e38.cover);
     } else {
-        Pile _e53 = cloud_domes(mosaic_cell, period_9, cloud);
-        out.a = metal::float4(_e53.face, _e53.to_centre);
+        Pile _e51 = cloud_domes(mosaic_cell, period_9, cloud);
+        out.a = metal::float4(_e51.face, _e51.to_centre);
     }
-    TileBake _e58 = out;
-    const auto _tmp = _e58;
+    TileBake _e56 = out;
+    const auto _tmp = _e56;
     return fs_cloud_tileOutput { _tmp.a, _tmp.b };
 }
