@@ -1,5 +1,9 @@
 # RealFFT adoption (#743)
 
+Playhead export and its whole-song fixtures were retired under #973.
+References and measurements for that path below are historical;
+Scrolling and Whole video retain the shared live analyzer.
+
 This adopts the backend evaluated in [PR #803's report](fft-backend-evaluation.md).
 Baseline: freshly fetched `origin/main` at `d34d66cfd5e739fbe2528e084ddab001bb4e8b4b`.
 Yan requested merge after the documented numerical, picture and gate differences and comparisons were presented.

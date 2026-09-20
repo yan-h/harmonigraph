@@ -39,7 +39,7 @@ pub(super) use settings::spectrum_settings_pane;
 use crate::panes::window_shows_node;
 use crate::{theme, PictureState};
 use axes::{
-    frequency_grid, label_anchor, level_grid, plot_budget, text_scales, Axes, PitchScale, TimeAxis,
+    frequency_grid, label_anchor, level_grid, plot_budget, text_scales, Axes, PitchScale,
     LABEL_GAP_PT, LABEL_INSET_PT, MARKING_PT,
 };
 use egui::Sense;
@@ -208,21 +208,15 @@ pub(crate) fn spectral_pane(
     let orientation_drag =
         navigation.is_preview().then(|| gestures::drag_orientation(ui, &response, rect));
 
-    // Offline playhead render: the whole take laid out statically with a
-    // sweeping playhead. It takes the whole pane (split = 0), which also drops
-    // the live curve and voice bars via their `split > 0` guards — leaving the
-    // spectrogram, roll, and playhead.
-    let whole_song = state.runtime.whole_song.is_some();
     // The divider is grabbable whenever the far region is turned ON, even
     // where it has been dragged shut (`roll_fraction` 0 or 1) — otherwise
-    // shutting it would be one-way. Whole-song has no divider: the spectrum
-    // isn't drawn at all there.
+    // shutting it would be one-way.
     // Where the divider stands as the frame opens: the dial, or the docked
     // pane's hold on the spectrum's size (see `spectrum_split`). Both gestures
     // take it rather than reading the config themselves, so the band a hand
     // grabs is the line the picture shows.
     let at_split = spectrum_split(state, surface);
-    let divider = (!whole_song && (cfg.show_roll || cfg.show_spectrogram))
+    let divider = (cfg.show_roll || cfg.show_spectrogram)
         .then(|| drag_split(ui, &axes, state, surface, at_split));
     drag_zoom(ui, &axes, &response, state, surface, at_split, navigation);
     // Re-snapshot: the two drags above just wrote `roll_fraction`, the pitch
@@ -236,7 +230,7 @@ pub(crate) fn spectral_pane(
     // reads as the hold no longer describing this picture — so the divider
     // follows the pointer this frame, and the hold re-takes it on the next.
     let cfg = state.appearance.spectrum;
-    let split = if whole_song { 0.0 } else { spectrum_split(state, surface) };
+    let split = spectrum_split(state, surface);
 
     // The axis: absolute pitch, linear in MIDI note = logarithmic in
     // frequency, so every octave gets equal room and every note draws at
@@ -331,11 +325,8 @@ pub(crate) fn spectral_pane(
     // as history accumulates (#914) — and sit bare on the bed ahead of it.
     //
     // The guard is that same rule at its limit rather than a crash guard: a
-    // `split` of 0 is a pane with no spectrum on it at all (whole-song mode,
-    // and a roll dragged shut over the curve), so there is nothing to rule.
-    // egui tessellates a zero-length segment to an invisible degenerate quad,
-    // so what this saves is a shape per ruling in every frame of a `--playhead`
-    // export, not a NaN.
+    // `split` of 0 is a roll dragged shut over the curve, so there is nothing
+    // to rule. Avoid generating invisible zero-length ruling segments.
     if split > 0.0 {
         for ruling in &grid {
             let fade = if ruling.decade { RULING_FADE.0 } else { RULING_FADE.1 } * 0.4;
@@ -442,7 +433,7 @@ pub(crate) fn spectral_pane(
     // for it, instead of recoloring the note and costing you the one thing the
     // ribbon's color is for. Same match the Notes pane
     // uses, over the same window.
-    if split > 0.0 && !whole_song {
+    if split > 0.0 {
         let shown = state.shown();
         let mut voices: Vec<&harmonigraph_core::Voice> = state
             .runtime
@@ -509,27 +500,11 @@ pub(crate) fn spectral_pane(
     // Always drawn (there is no setting): the handover is what the pane is
     // built around, so the boundary is marked whether or not anything is
     // sounding on it.
-    if !whole_song && split < 1.0 && split > 0.0 {
+    if split < 1.0 && split > 0.0 {
         let fade = 0.6;
         painter.line_segment(
             axes.across_pitch(split),
             egui::Stroke::new(1.0, theme::hairline().gamma_multiply(fade)),
-        );
-    }
-
-    // Whole-song mode marks `now` with a playhead instead — the one moving
-    // thing sweeping across a static spectrogram and roll — and it goes here,
-    // beside the line it replaces, for the identical reason. This mode gives
-    // the roll the WHOLE depth axis (`split` is 0), so the playhead crosses
-    // every ribbon on the pane rather than meeting them end-on: drawn under
-    // the roll it comes out dashed, notched by each note it passes, and this
-    // is the mark the mode is built around. It is also the render behind
-    // `--playhead` video export, where a notched sweep is baked into a file.
-    if whole_song {
-        let time = TimeAxis::new(state, split, now);
-        painter.line_segment(
-            axes.across_pitch(time.playhead_depth()),
-            egui::Stroke::new(1.5, theme::accent()),
         );
     }
 
@@ -638,23 +613,6 @@ pub(crate) fn spectral_pane(
     if let Some(drag) = orientation_drag {
         drag.finish(&painter, rect, state);
     }
-}
-
-/// The preview's interaction layer when Playhead mode replaces the live pane
-/// with a placeholder. Replacing the drawing must not turn its surface dead:
-/// these edits remain ready when live mode returns, while orientation and pitch
-/// framing also feed the eventual render.
-pub(crate) fn preview_gestures(ui: &mut egui::Ui, state: &mut PictureState, surface: usize) {
-    let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::drag());
-    if rect.width() < 10.0 || rect.height() < 10.0 {
-        return;
-    }
-    let cfg = state.appearance.spectrum;
-    let axes = Axes::new(rect, &cfg);
-    let orientation = gestures::drag_orientation(ui, &response, rect);
-    let split = spectrum_split(state, surface);
-    drag_zoom(ui, &axes, &response, state, surface, split, Navigation::Preview);
-    orientation.finish(&ui.painter_at(rect), rect, state);
 }
 
 /// Which way this pane's text travels, for the glyph shader's reconstruction

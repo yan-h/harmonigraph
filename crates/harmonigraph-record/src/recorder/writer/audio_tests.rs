@@ -94,7 +94,6 @@ impl Worker {
             program,
             appearance: None,
             size: [16, 16],
-            playhead: None,
         }));
         let recorder = self.recorder.as_mut().unwrap();
         assert_no_alloc(|| {

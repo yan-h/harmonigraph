@@ -126,47 +126,12 @@ pub struct Settings {
     /// read the wrong part of the bounce, by exactly however far in you
     /// started.
     pub audio_start: f64,
-    /// Lay the render window's spectrogram out at once and sweep a playhead
-    /// across it, instead of the live scrolling window. Needs audio.
-    pub whole_song_spectrogram: bool,
 }
 
 impl Settings {
     pub fn frame_count(&self) -> u64 {
         ((self.end - self.start).max(0.0) * self.fps).round() as u64
     }
-}
-
-/// Why this render's whole-song spectrogram will draw nothing, if it will.
-///
-/// The heatmap is built from the columns inside the window
-/// (`WholeSong::drawn_columns`), and a window can miss the audio entirely — a
-/// `--start` past the end of the bounce, or before `audio_start`. The frame
-/// then draws the roll and the lattice over a bare bed, which is the right
-/// picture and an easy one to mistake for a bug in the analyzer.
-///
-/// It has to be SAID, because the alternative failure is loud: before the
-/// window bounded the fold, this same input built a texture spanning the whole
-/// take and panicked on the upload. Trading that for a silent blank is only
-/// acceptable with a line to read, on the same reasoning as the refused
-/// `appearance` above — the console the editor would log to is not drawn here.
-///
-/// Two columns rather than one, because that is what `spectrogram::build`
-/// refuses under: a single slab has no time axis to stretch over.
-fn empty_window_warning(
-    ws: &harmonigraph_ui::WholeSong,
-    audio_start: f64,
-    audio_end: f64,
-) -> Option<String> {
-    let drawn = ws.drawn_columns(ws.window()).take(2).count();
-    (drawn < 2).then(|| {
-        format!(
-            "warning: no audio inside the render's window, so the spectrogram is blank \
-             (window {:.3}s-{:.3}s, audio {audio_start:.3}s-{audio_end:.3}s in take time)",
-            ws.start,
-            ws.start + ws.window(),
-        )
-    })
 }
 
 /// The input every offline frame is drawn with.
@@ -243,45 +208,6 @@ pub fn render(
     let spectrogram = state.appearance.render.spectrogram;
     if spectrogram == SpectrogramRender::WholeVideo {
         state.appearance.spectrum.span_history(settings.end - settings.start);
-    }
-
-    // Playhead mode: precompute the render window's spectrogram from the full
-    // audio source, once, up front. It's a pure function of the audio, window
-    // and analyzer config, so the per-frame draw just reads it and the render
-    // stays byte-identical between runs. The live ring scrolls with `now`, hence
-    // the separate precomputed set.
-    // `--playhead` on the command line, or the take's own "Playhead"
-    // spectrogram — either turns it on.
-    if settings.whole_song_spectrogram || spectrogram == SpectrogramRender::Playhead {
-        if let Some(audio) = audio.as_deref_mut() {
-            let span = (settings.end - settings.start).max(0.0);
-            if span > 0.0 {
-                state.runtime.whole_song = Some(harmonigraph_ui::WholeSong::precompute(
-                    audio.frames(),
-                    audio.channels,
-                    audio.sample_rate,
-                    settings.audio_start,
-                    settings.start,
-                    span,
-                    &state.appearance.spectrum,
-                    |range, analyzer| audio.for_frames(range, |chunk| analyzer.push_frames(chunk)),
-                )?);
-            }
-        }
-        // The whole take's notes, laid out from the start — the roll shows the
-        // whole piece at once, not filling in as the playhead passes over it.
-        if let Some(ws) = state.runtime.whole_song.as_mut() {
-            ws.roll = replay.full_roll();
-        }
-        if let (Some(ws), Some(audio)) = (state.runtime.whole_song.as_ref(), audio.as_deref()) {
-            if let Some(warning) = empty_window_warning(
-                ws,
-                settings.audio_start,
-                settings.audio_start + audio.seconds(),
-            ) {
-                eprintln!("{warning}");
-            }
-        }
     }
 
     let points = egui::vec2(
@@ -792,7 +718,6 @@ mod tests {
             start: 0.0,
             end: 1.0,
             audio_start: 0.0,
-            whole_song_spectrogram: false,
         }
     }
 
@@ -1054,7 +979,6 @@ mod tests {
                 start: 0.0,
                 end: 0.5,
                 audio_start: 0.0,
-                whole_song_spectrogram: false,
             };
             let Some(shadowed) = render_take(spectral_shadow_take(true), &settings) else {
                 return;
@@ -1076,108 +1000,5 @@ mod tests {
         let settings = settings();
         let Some(frames) = render_frames(&settings) else { return };
         assert!(frames[0] != frames[frames.len() / 2], "nothing changed as notes arrived");
-    }
-
-    /// **A window with no audio in it says so.**
-    ///
-    /// The heatmap draws the columns inside the render's window, so a `--start`
-    /// past the end of the bounce — or before `audio_start` — leaves it blank
-    /// while the roll and the lattice keep drawing. Verified on the real
-    /// thing: `--playhead --start 100 --end 102` on a 78 s take renders its ten
-    /// frames and reports "done", with nothing about the spectrogram.
-    ///
-    /// Worth a line because the alternative failure was LOUD: before the window
-    /// bounded the fold, that input built a texture spanning the whole take and
-    /// panicked on the upload. A silent blank in its place is a fair trade only
-    /// with something to read.
-    ///
-    /// The message is asserted rather than just its presence, because what
-    /// makes it useful is the two ranges side by side — a window and an audio
-    /// extent that do not overlap is the whole diagnosis. `eprintln!` itself is
-    /// the one line here no test covers; it has no branch of its own.
-    #[test]
-    fn a_render_window_with_no_audio_in_it_says_so() {
-        let column = |t: f64| {
-            harmonigraph_ui::SpectrogramColumn::from_power(
-                t,
-                &[0.25; harmonigraph_core::spectrum::SPECTRUM_BINS],
-            )
-        };
-        let take = |start: f64, span: f64| harmonigraph_ui::WholeSong {
-            start,
-            span,
-            columns: (0..=78).map(|i| column(i as f64)).collect(),
-            roll: harmonigraph_core::NoteRoll::default(),
-        };
-
-        let past =
-            empty_window_warning(&take(100.0, 2.0), 0.0, 78.0).expect("a window past the audio");
-        assert!(past.contains("100.000s-102.000s"), "the window is not in {past:?}");
-        assert!(past.contains("0.000s-78.000s"), "the audio's extent is not in {past:?}");
-
-        // A bounded precompute stores no columns when the two ranges miss, so
-        // the source extent must remain reportable without reading the store.
-        let empty = harmonigraph_ui::WholeSong { columns: Vec::new(), ..take(100.0, 2.0) };
-        let empty_warning =
-            empty_window_warning(&empty, 0.0, 78.0).expect("an empty bounded precompute");
-        assert!(empty_warning.contains("0.000s-78.000s"));
-        assert!(!empty_warning.contains("NaN"), "the source extent was lost: {empty_warning}");
-
-        // And a window that DOES hold audio says nothing — a warning on every
-        // ordinary render is a warning nobody reads.
-        assert_eq!(empty_window_warning(&take(20.0, 4.0), 0.0, 78.0), None);
-
-        // One column in the window is still nothing to draw: `build` refuses
-        // under two, so the blank is the same blank.
-        let sparse = harmonigraph_ui::WholeSong {
-            start: 10.0,
-            span: 0.5,
-            columns: vec![column(10.25)],
-            roll: harmonigraph_core::NoteRoll::default(),
-        };
-        assert!(empty_window_warning(&sparse, 0.0, 78.0).is_some(), "one column is not a heatmap",);
-    }
-
-    /// Whole-song playhead mode: the render window's spectrogram is precomputed
-    /// up front, so it must stay as reproducible as the scrolling view, and the
-    /// playhead must actually sweep.
-    #[test]
-    fn whole_song_playhead_render_is_deterministic_and_moves() {
-        // A synthetic tone, so the precomputed spectrogram has content to lay
-        // out across the frame.
-        let sr = 48_000.0f32;
-        let n = (sr as f64) as usize; // one second
-        let samples: Vec<f32> =
-            (0..n).map(|i| 0.6 * (std::f32::consts::TAU * 440.0 * i as f32 / sr).sin()).collect();
-        let mut audio = Audio::from_samples(sr, samples, 1);
-
-        let mut settings = settings();
-        settings.whole_song_spectrogram = true;
-        settings.layout = Layout::preset("spectral").unwrap();
-
-        let mut run = || -> Option<Vec<Vec<u8>>> {
-            let mut replay = Replay::new(take());
-            let mut frames = Vec::new();
-            let appearance = appearance_for(replay.take(), None);
-            match render(&mut replay, Some(&mut audio), &settings, appearance, |bytes| {
-                frames.push(bytes);
-                Ok(Some(Vec::new()))
-            }) {
-                Ok(_) => Some(frames),
-                Err(e) if e.contains("no usable GPU adapter") => {
-                    eprintln!("skipping: {e}");
-                    None
-                }
-                Err(e) => panic!("{e}"),
-            }
-        };
-
-        let Some(first) = run() else { return };
-        let second = run().expect("second run also has a GPU");
-        assert_eq!(first.len(), second.len());
-        for (i, (a, b)) in first.iter().zip(&second).enumerate() {
-            assert!(a == b, "whole-song frame {i} differs between runs");
-        }
-        assert!(first[0] != first[first.len() / 2], "the playhead should sweep across the frame");
     }
 }

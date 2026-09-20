@@ -38,6 +38,7 @@ pub struct Audio {
 }
 
 impl Audio {
+    #[cfg(test)]
     pub fn frames(&self) -> usize {
         self.frames
     }

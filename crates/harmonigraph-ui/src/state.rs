@@ -956,13 +956,8 @@ impl PictureState {
         self.runtime.spectrum.clear_history();
         self.surfaces.glow_fade.clear();
     }
-    /// The roll currently on screen: the take's own, laid out statically, in
-    /// offline playhead mode; the causal tracker's rolling window, filling in
-    /// as notes arrive, live.
+    /// The causal tracker's rolling window, filling in as notes arrive.
     pub fn roll(&self) -> &harmonigraph_core::NoteRoll {
-        match self.runtime.whole_song.as_ref() {
-            Some(ws) => &ws.roll,
-            None => self.runtime.tracker.roll(),
-        }
+        self.runtime.tracker.roll()
     }
 }

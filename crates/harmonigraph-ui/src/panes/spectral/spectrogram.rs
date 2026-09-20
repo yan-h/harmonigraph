@@ -146,10 +146,7 @@ pub(super) fn heatmap_vertices(
     };
 
     // Split at the corner in `slab_drawn`: one quad whose slab coordinate is
-    // straight in time (the data) and one whose coordinate is CONSTANT (the
-    // sliver past the newest slab — leading for the live window, trailing for
-    // the whole-song build, which is the only reason `d_hold` is clamped into
-    // the pair rather than assumed to sit inside it).
+    // straight in time and one constant over the sliver past the newest slab.
     //
     // Letting one quad span the corner instead is what the vertex rule forbids:
     // a vertex sitting mid-bend rescales the whole picture, and the bend crosses
@@ -226,24 +223,14 @@ pub(super) fn heatmap_vertices(
 /// above. Stopping at the newest column always is what `7f2b3d38` already did
 /// for a stale stream, now that there is nothing to be graceful about.
 ///
-/// **Whole-song** (offline playhead) takes the other branch entirely: the take
-/// is present from the first frame, so the strip fills the run end to end and
-/// only the playhead moves. [`precompute`](crate::WholeSong::precompute) feeds
-/// half a window past the far edge for exactly this reason, so its last
-/// measurement is centred on that edge and there is no sliver to leave out.
 pub(super) fn strip_depths(
     time: &TimeAxis,
     split: f32,
     layout: &TexLayout,
     newest: f64,
 ) -> (f32, f32) {
-    if time.whole_song() {
-        (time.depth_of(layout.t_origin), time.depth_of(layout.t_origin + layout.tex_span))
-    } else {
-        // Far edge: the oldest slab's depth, which is 1 once history spans the
-        // window (depth_of clamps there) and nearer while it is still filling.
-        (time.depth_of(newest).max(split), time.depth_of(layout.t_origin))
-    }
+    // Far edge reaches 1 once history spans the window.
+    (time.depth_of(newest).max(split), time.depth_of(layout.t_origin))
 }
 
 /// Draw the spectrogram across the roll's depth region (`split..1`), sharing
@@ -273,18 +260,11 @@ pub(crate) fn draw_spectrogram(
     // fighting the config reads.
     let cfg = state.appearance.spectrum;
     let target_format = state.surfaces.target_format;
-    // Shared time<->depth mapping: a `now`-anchored scrolling window live, or
-    // the whole take laid out statically (offline playhead mode).
+    // The roll and heatmap share the same scrolling time window.
     let time = TimeAxis::new(state, split, now);
-    let whole = state.runtime.whole_song.as_ref();
     let spectrum = &state.runtime.spectrum;
     let surfaces = &mut state.surfaces.spectrogram;
-    // Columns come from the precomputed render-window set (playhead mode) or
-    // the live store.
-    let enough = match whole {
-        Some(ws) => ws.columns.len() >= 2,
-        None => spectrum.history().len() >= 2,
-    };
+    let enough = spectrum.history().len() >= 2;
     if !enough {
         return;
     }
@@ -296,29 +276,19 @@ pub(crate) fn draw_spectrogram(
         window: time.window(),
         scale: *scale,
         cfg,
-        whole: whole.is_some(),
     };
-    let columns = match whole {
-        Some(ws) => Columns {
-            first: 0,
-            len: ws.columns.len(),
-            newest: ws.columns.last().map_or(now, |c| c.time),
-        },
-        None => {
-            let hist = spectrum.history();
-            Columns {
-                first: hist.partition_point(|c| c.time < time.oldest()).saturating_sub(1),
-                len: hist.len(),
-                newest: hist.back().map_or(now, |c| c.time),
-            }
-        }
+    let hist = spectrum.history();
+    let columns = Columns {
+        first: hist.partition_point(|c| c.time < time.oldest()).saturating_sub(1),
+        len: hist.len(),
+        newest: hist.back().map_or(now, |c| c.time),
     };
     let plan = Plan::new(&view, &columns, surfaces.at(surface).held_bucket);
 
     // The run on the GPU when the plan's key still names it, and a fresh fold
     // otherwise. The pitch axis, the rows and the colours are uniforms, so a
     // zoom, a resize or a palette drag reaches neither.
-    let Some(layout) = run_for(spectrum.history(), surfaces, whole, surface, &plan, &view) else {
+    let Some(layout) = run_for(spectrum.history(), surfaces, surface, &plan) else {
         return;
     };
 
@@ -329,8 +299,7 @@ pub(crate) fn draw_spectrogram(
         return;
     };
     // The painter's own clip is what bounds the heatmap: the quads reach past
-    // the pane wherever the strip does (the whole-song build's oldest slab
-    // starts before the region), and the callback draws against the whole
+    // the pane wherever the oldest slab starts before the region, and the callback draws against the whole
     // surface and leaves the scissor egui set from this rect alone.
     painter.add(harmonigraph_render::spectrogram_paint_callback(
         painter.clip_rect(),
@@ -440,16 +409,13 @@ mod gap_tests {
                     window: time.window(),
                     scale,
                     cfg,
-                    whole: false,
                 };
                 let plan = Plan::new(&view, &columns, None);
                 let layout = run_for(
                     state.runtime.spectrum.history(),
                     &mut state.surfaces.spectrogram,
-                    None,
                     0,
                     &plan,
-                    &view,
                 )
                 .unwrap();
                 let far = time.depth_of(layout.t_origin);

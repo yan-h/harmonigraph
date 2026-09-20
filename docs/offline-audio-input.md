@@ -1,13 +1,15 @@
 # Bounded offline WAV input
 
-One of the three consumers measured here no longer exists.
+Two of the three consumers measured here no longer exist.
 PR #903 deleted the offline audio aligner — `crates/harmonigraph-offline/src/align.rs`, `align_replacement`, `midi_onsets` and `Align::Auto` — so every sentence below about alignment, onset envelopes and correlation arrays is a record of a consumer that is gone, not a description of the code.
 `--align` survives as a plain number-or-`off` offset for the take's recorded audio;
 `--align auto` is refused and `--align none` no longer parses.
 Separate-WAV replacement (`--audio`) was retired under #972.
 The commands below reproduce the dated measurements only with the pinned baseline and implementation revisions named under Measurement method;
 they are not commands for the current renderer.
-The WAV reader itself, `WholeSong::precompute` and the frame-analysis consumer are unchanged and are described accurately.
+Playhead export and `WholeSong::precompute` were retired under #973;
+that consumer and its measurements below are historical too.
+The WAV reader and frame-analysis consumer remain.
 
 Issue [#734](https://github.com/yan-h/harmonigraph/issues/734) replaces whole-file encoded and decoded allocations with one concrete seekable WAV reader.
 Supported encodings remain unsigned PCM8, signed PCM16/24/32, and float32, including their existing WAVE_FORMAT_EXTENSIBLE handling.

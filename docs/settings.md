@@ -14,8 +14,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | System | Lattice render resolution, frame limit and performance overlay; interface scale, tab-bar visibility and layout reset. |
 
 **History duration** sets the live MIDI-ribbon and spectrogram window, and the Video page's **Scrolling** render uses the same span.
-**Whole video** stretches that scrolling history to the render length, up to 10 minutes;
-**Playhead** shows the full recorded spectrogram with a moving playhead and requires recorded audio.
+**Whole video** stretches that scrolling history to the render length, up to 10 minutes.
 **Spectrum level range** controls curve height and lattice audio-ring levels;
 **Level color range** controls audio colors independently.
 With the audio ring set to **Octave levels**, **Pitch tolerance** controls how far neighboring frequencies can light a slice;

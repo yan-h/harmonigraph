@@ -10,6 +10,11 @@ and the test that asserted that peak (`a_peak_survives_being_merged_into_the_coa
 A fixture written to line 80's contract would be measuring the wrong property.
 The memory figure in the component table is stale by the same change.
 
+Playhead export and its `WholeSong` precompute were retired under [#973](https://github.com/yan-h/harmonigraph/issues/973).
+The whole-song architecture, risks, fixtures and commands below are historical;
+SG3 is retired with that feature, not deferred for implementation.
+The live time axis retains its independent 0.05-second geometry floor.
+
 ## Status, evidence, and scope
 
 Audited on 2026-09-05 from current `origin/main`, `70e9f48dddb3c14e5cb2d2173d5604f8a4c34e84`, in the Codex-managed `codex/spectrogram-rendering-audit` worktree.
@@ -35,14 +40,14 @@ It closed [#654](https://github.com/yan-h/harmonigraph/issues/654), [#655](https
 | SG1: bounded gap recovery | [#655](https://github.com/yan-h/harmonigraph/issues/655) | **Done** in #710; closed completed |
 | SG2: offline slice timestamps | [#656](https://github.com/yan-h/harmonigraph/issues/656) | **Done** in #710; closed completed |
 | SG4A: upload staging only | [#658](https://github.com/yan-h/harmonigraph/issues/658) | **Done** in #710; closed completed |
-| SG3: whole-song temporal coverage | [#657](https://github.com/yan-h/harmonigraph/issues/657) | Deferred, not planned; the known missed-transient defect remains |
+| SG3: whole-song temporal coverage | [#657](https://github.com/yan-h/harmonigraph/issues/657) | Retired with Playhead under #973; historical defect belongs to the removed path |
 | SG4B/C: CPU handoff/storage refactors | [#670](https://github.com/yan-h/harmonigraph/issues/670) | Deferred, not planned; it did not follow SG1/SG4A |
 | SG5: lifetime/retention | [#659](https://github.com/yan-h/harmonigraph/issues/659) | Deferred, not planned |
 | SG6: attribution and experiments | [#660](https://github.com/yan-h/harmonigraph/issues/660) | Deferred as a dedicated project; the selected fixes carried their own verification |
 
 | Deferred work | Reopening condition, followed by explicit reprioritization |
 |---|---|
-| SG3 | A concrete export needs the missing temporal detail or reliably exhibits the archived artifact. Coverage, attenuation, memory and non-nested placements must then be resolved together; deferral does not mean the defect was fixed. |
+| SG3 | Retired with Playhead under #973; no implementation is planned. |
 | SG4B/C | A reproduced CPU preparation problem or necessary ownership change justifies a simpler local improvement. Require representative stage evidence before explicit dirty tracking; circular storage additionally needs material cost remaining after smaller changes. |
 | SG5 | A concrete memory-pressure/lifetime problem remains after SG1. Preserve folded temporal fidelity and compare retirement against reopen cost. |
 | SG6 | A concrete rendering performance or visual problem requires attribution to decide a necessary change. Start with the smallest probe for that question; broader GPU/text/export experiments require a demonstrated bottleneck. |

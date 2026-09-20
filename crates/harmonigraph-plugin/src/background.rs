@@ -32,7 +32,7 @@
 //! Memory remains bounded by [`SpectrumHistory`]'s ~120 MiB power sums;
 //! the history already outlives the window. A different hop is not the only
 //! possible cost reduction, and would need to preserve the store tiers,
-//! `live_slab` ladder and `COLUMNS_PER_SLAB` on their shared `FFT_INTERVAL` grid.
+//! `live_slab` ladder on their shared `FFT_INTERVAL` grid.
 //!
 //! Nothing here analyzes anything itself. It calls
 //! [`LiveInput::drain`](crate::editor::LiveInput::drain) and

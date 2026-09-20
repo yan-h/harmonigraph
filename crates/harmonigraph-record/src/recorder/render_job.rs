@@ -26,15 +26,6 @@ pub struct RenderRequest {
     /// default knows the take's aspect but not which resolution was picked
     /// beside it.
     pub size: [u32; 2],
-    /// Whether to bake the whole-song playhead spectrogram rather than the
-    /// live scrolling one.
-    ///
-    /// `None` leaves it to the take's own recorded setting, which is what the
-    /// Video pane's Spectrogram row writes — so the choice reaches the render
-    /// through the take rather than through a flag. `Some(true)` forces it on;
-    /// there is no forcing it off, because the renderer ORs the flag with the
-    /// take's setting and a flag cannot subtract.
-    pub playhead: Option<bool>,
 }
 
 impl RenderRequest {
@@ -68,16 +59,7 @@ impl RenderRequest {
         } else {
             std::path::PathBuf::from(config.renderer_path.trim())
         };
-        RenderRequest {
-            program,
-            appearance,
-            size: config.frame.pixels(config.short_edge),
-            // Not forced: the take carries the Video pane's Spectrogram choice
-            // and the renderer reads it, so passing `--playhead` here would
-            // OR itself over a "Scrolling" the user had picked and the row would
-            // control nothing.
-            playhead: None,
-        }
+        RenderRequest { program, appearance, size: config.frame.pixels(config.short_edge) }
     }
 }
 
@@ -446,16 +428,6 @@ pub(super) fn spawn_render(
         }
         let [w, h] = request.size;
         command.arg("--size").arg(format!("{w}x{h}"));
-        // Only when something forces it. The renderer turns the whole-song
-        // playhead on for `--playhead` OR the take's own recorded setting,
-        // so a flag passed unconditionally here is one the Video pane's
-        // Spectrogram row can never turn back off — which is exactly what
-        // it was, and why picking "Scrolling" did nothing. Left alone, the
-        // take's setting is the whole answer, in both directions.
-        if request.playhead == Some(true) {
-            command.arg("--playhead");
-        }
-
         // stdout is the renderer's `--dump-layout` channel and nothing
         // else; stderr carries everything this cares about, so pipe that
         // one and follow it.

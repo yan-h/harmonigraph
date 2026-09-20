@@ -527,11 +527,6 @@ pub struct SpectrumConfig {
     /// reach past — and only where [`roll_fraction`](Self::roll_fraction)
     /// leaves the analyzer too narrow to lie over.
     ///
-    /// The offline whole-song layout is outside all of this and takes the
-    /// onset in every orientation, at either setting: it lays the take out as
-    /// a still, and an onset is the one end of a note that stands in one place
-    /// there — see [`Anchor::of`](crate::panes::spectral::names).
-    ///
     /// The default is off, which is the look the naming was dialled in at.
     pub note_names_travel: bool,
     /// Overall size of those names, as a multiple of their built-in size.

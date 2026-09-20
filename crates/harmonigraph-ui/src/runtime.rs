@@ -2,7 +2,7 @@
 //! configuration, consume analyzed input, or advance bounded histories.
 
 use crate::params::{self, ParamBackend};
-use crate::{AudioSpectrum, Console, WholeSong};
+use crate::{AudioSpectrum, Console};
 use harmonigraph_core::{Comma, NoteTracker, PitchClass, Tuning};
 use harmonigraph_scene::FrameParams;
 
@@ -63,11 +63,6 @@ pub struct VisualRuntime {
     /// [`ring_fade`](Self::ring_fade) above is whether the annulus is there at
     /// all. Both belong to the shared reading, not to viewport geometry.
     pub ring_levels: crate::panes::spectral_fold::RingLevels,
-    /// Offline playhead render: the whole take's spectrogram laid out
-    /// statically with a playhead at `now`, instead of the live scrolling
-    /// window. `Some` only in the offline renderer. Runtime-only, never
-    /// persisted (mirrors `learn_active`).
-    pub whole_song: Option<WholeSong>,
 }
 impl Default for VisualRuntime {
     fn default() -> Self {
@@ -89,7 +84,6 @@ impl Default for VisualRuntime {
             spectrum: AudioSpectrum::default(),
             ring_fade: harmonigraph_scene::RingFade::default(),
             ring_levels: crate::panes::spectral_fold::RingLevels::default(),
-            whole_song: None,
         }
     }
 }
