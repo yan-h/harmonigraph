@@ -61,10 +61,19 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     for shadow in a.view.shadow.groups_mut() {
         poison!(shadow; width, depth, falloff);
     }
-    poison!(a.camera; yaw, pitch, cabinet_angle, cabinet_scale);
+    // `distance` is the zoom and has no bar of its own — navigation rather
+    // than a dial — but it crosses this same door and `Camera::sanitize`
+    // clamps it there, so it is poisoned like the other no-bar owners below
+    // and checked directly in `loaded`.
+    poison!(a.camera; yaw, pitch, distance, cabinet_angle, cabinet_scale);
     poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
         attack, release, keyline, roll_seconds, roll_thickness, roll_opacity, roll_lead,
         roll_lead_fade, roll_lead_release, note_name_scale, volume_floor_db, volume_ceiling_db);
+    // Two more that cross this door without a bar of their own. `tilt` is a
+    // CHOICE that happens to be spelled as a float — its repair snaps to the
+    // nearest offered step rather than clamping — and `roll_fraction` is set
+    // by dragging the divider. Both are checked directly in `loaded`.
+    poison!(a.spectrum; tilt, roll_fraction);
     // Every dialled float on the atmosphere, not just the eight that predate
     // the cloud. #888, #909, #913, #918, #928 and #933 each added, retired or
     // re-ranged bars here and each walked past this list, so the cloud dials
@@ -103,6 +112,25 @@ fn loaded(edge: Edge) -> SharedState {
         (STOP_BAR_RANGE.0..=STOP_BAR_RANGE.1).contains(&state.picture.appearance.render.stop_bar)
     );
     assert!((0.05..=0.95).contains(&state.picture.appearance.render.frame.split));
+    // The zoom, for the same reason: no bar, but `Camera::sanitize` is the one
+    // door holding it to the range `zoom`/`zoom_by` hold a drag to.
+    let camera = &state.picture.appearance.camera;
+    assert!(
+        (harmonigraph_scene::Camera::MIN_DISTANCE..=harmonigraph_scene::Camera::MAX_DISTANCE)
+            .contains(&camera.distance),
+        "a poisoned zoom loaded at {}",
+        camera.distance,
+    );
+    // The spectrum's own two: a choice spelled as a float, which must come
+    // back as one of the settings actually offered rather than merely inside
+    // their span, and the divider's split.
+    let spectrum = &state.picture.appearance.spectrum;
+    assert!(
+        TILT_STEPS.contains(&spectrum.tilt),
+        "a poisoned tilt loaded at {}, which is no step the control offers",
+        spectrum.tilt,
+    );
+    assert!((0.0..=1.0).contains(&spectrum.roll_fraction));
     // The sevens stack is a LayerStrip rather than a pair of bars, so it left
     // the recorded set when the two merged. Its three integers still cross this
     // door, and the invariant is the strip's own: both ends on the axis, home
@@ -447,6 +475,12 @@ fn the_loaded_state_guard_poisons_every_dialled_view_float() {
     let old = &opened.picture.appearance;
     let new = &saved.picture.appearance;
     assert_poisoned_float_fields("view", &old.view, &new.view);
+    // The two owners still hand-listed in `poison` whose OWN completeness
+    // nothing checked. Neither is short a field today; both are where the next
+    // added float would have gone missing quietly, this range alone having
+    // removed one from `camera` and reshaped `spectrum`'s surroundings.
+    assert_poisoned_float_fields("camera", &old.camera, &new.camera);
+    assert_poisoned_float_fields("spectrum", &old.spectrum, &new.spectrum);
     assert_poisoned_float_fields(
         "view.note_animation",
         &old.view.note_animation,

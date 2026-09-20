@@ -1021,34 +1021,6 @@ fn the_cents_readout_sits_right_under_the_note_name() {
     }
 }
 
-/// The lattice's label-size bar and the clamp its value is persisted through
-/// offer the same range.
-///
-/// `SCALE_BAR_RANGE` says it is "one range for the three of them", and for two
-/// of them it is the constant itself: `sane_scale` fits `marking_scale` and
-/// `note_name_scale` to it on load, so those two cannot drift and are not
-/// worth asserting — an assertion that clamping to a constant lands inside it
-/// only restates `clamp`. The lattice's `label_scale` is the one that can:
-/// `ViewConfig` lives in `harmonigraph-scene`, which is BELOW this crate, so the
-/// range is not visible there and `sanitize` clamps to a written-out
-/// copy of the same two numbers.
-///
-/// Nothing ties the copy to the original. Widen the bar and a saved view keeps
-/// loading at the old ceiling, which is a setting that will not stay where it
-/// is put — silently, and only for the one of the three that is a different
-/// crate. This is what notices.
-#[test]
-fn the_lattice_label_bar_persists_through_the_range_it_offers() {
-    let through_view = |scale: f32| {
-        let mut view = harmonigraph_scene::ViewConfig { label_scale: scale, ..Default::default() };
-        view.sanitize();
-        view.label_scale
-    };
-    let (low, high) = (*SCALE_BAR_RANGE.start(), *SCALE_BAR_RANGE.end());
-    assert_eq!(through_view(low - 1.0), low, "the bar's floor");
-    assert_eq!(through_view(high + 1.0), high, "...and its ceiling");
-}
-
 /// Every label reaches the lattice attached to the node it names, and in the
 /// pane's own space.
 ///

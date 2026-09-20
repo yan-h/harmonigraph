@@ -29,6 +29,24 @@ use harmonigraph_core::Tuning;
 fn poisoned_view() -> ViewConfig {
     let nan = f32::NAN;
     let base = ViewConfig::default();
+    // Written out for the same reason the view is, and it has to be its own
+    // literal: taken from `base` the six knobs arrive CLEAN, and the 256-entry
+    // `pitch_lut` the sweep walks would be asserted over a gradient nothing
+    // ever poisoned — the one float the "written WHOLE" mechanism above cannot
+    // catch by itself, since the field is one name here and six there.
+    //
+    // Green today because every consumer funnels through `color::with_lut`,
+    // which calls `Gradient::sanitized` before keying its memo. That is the
+    // claim this pins; a knob added to `Gradient` and left out of that repair
+    // is what it goes red for.
+    let pitch_gradient = Gradient {
+        hue_start: nan,
+        hue_span: nan,
+        lightness: nan,
+        lightness_ramp: nan,
+        chroma: nan,
+        chroma_ramp: nan,
+    };
     let shadow = ShadowStyle {
         kernel: base.shadow.lattice_geometry.kernel,
         width: nan,
@@ -50,7 +68,7 @@ fn poisoned_view() -> ViewConfig {
         show_cents: true,
         note_names: NoteNames::Played,
         sounding_ink: nan,
-        pitch_gradient: base.pitch_gradient,
+        pitch_gradient,
         band_width: nan,
         ring_inner: nan,
         ring_gap: nan,

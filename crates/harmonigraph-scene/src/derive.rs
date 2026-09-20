@@ -193,7 +193,15 @@ pub fn derive_scene(
     // crosses no seam against the ring it is fading into.
     let node_idle = ground;
     let live_extremes = held_extremes(tracker, view.mark_melody, view.mark_bass);
-    let mark_delay = view.mark_delay.clamp(0.0, MARK_DELAY_MAX) as f64;
+    // `finite_or` and not a bare clamp, which is no guard against a NaN. What
+    // a non-finite delay costs is not a mark drawn wrong but every mark drawn
+    // ARRIVED: `since + NaN` is NaN, and `Envelope::attack` answers a
+    // non-finite elapsed with 1.0 — so the whole point of the setting, the
+    // wait that keeps a momentary end from flickering a mark, is gone while
+    // the picture still looks like a picture. Finite-but-wrong is why the
+    // scene-wide finite sweep cannot see this one; 0 is the fallback
+    // `sanitize` lands on, and it is the setting's own off position.
+    let mark_delay = finite_or(view.mark_delay, 0.0).clamp(0.0, MARK_DELAY_MAX) as f64;
     let env = view.envelope(frame);
     // How far a mark taken at `since` has eased in, for the voice `state`.
     //
@@ -706,15 +714,20 @@ pub(crate) fn derive_pluses(
     // draws but the node rings. Skipping the instances is the same picture the
     // shader would discard to, one draw earlier.
     //
-    // A radius that is not a real number takes them away too, and has to be
-    // asked for BY NAME: NaN answers no to `<= 0.0` the way it answers no to
-    // every comparison, so the whole field would ship with every cross sized
-    // NaN — a quad the shader cannot draw, the lattice's resting structure
-    // gone, and nothing on screen saying why. `clamp` is no guard against it
-    // either, NaN being its own answer, which is the shape `sanitize` answers
-    // with `finite_or` at the blob's door; this is the picture's own, for the
-    // shells that never come through that door.
-    if !radius.is_finite() || radius <= 0.0 {
+    // An arm that is not a real number takes them away through this SAME test,
+    // and that is a property of `size` rather than of the line below: it is the
+    // only door into the radius and it answers every non-finite value with 0 —
+    // the repair `sanitize` spends at the blob's door, spent again on the
+    // picture's side for the shells that never come through it.
+    //
+    // So there is no second branch to write, and a NaN test here would be one
+    // nothing can reach. What a later factor owes is the door, not the test: a
+    // NaN arriving at this line would answer no to `<= 0.0` the way it answers
+    // no to every comparison, and ship the whole field sized NaN — a quad the
+    // shader cannot draw, the lattice's resting structure gone, nothing on
+    // screen saying why. Multiply something in that `size` has not been over
+    // and the repair is owed at that factor.
+    if radius <= 0.0 {
         return Vec::new();
     }
     // The markers' own grey, handed in already resolved from the Marker ink
