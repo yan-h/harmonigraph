@@ -14,7 +14,7 @@ THE ONE THING THAT WILL WASTE YOUR TIME
 ---------------------------------------
 The UI state (dock layout, camera, spiral framing, ViewConfig) is written
 into the plugin state ONLY when the editor window is CLOSED — see `impl Drop for
-LatticeEditorHandle` in crates/harmonigraph-plugin/src/editor.rs. Saving a
+LatticeEditorHandle` in crates/harmonigraph-plugin/src/editor/window.rs. Saving a
 project with the plugin window open stores whatever was there before.
 
 So the procedure is, in this order:
