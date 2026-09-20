@@ -614,12 +614,17 @@ fn one_name(scene: &Scene, size: [u32; 2]) -> LatticeLabels {
 /// is handed a new one when that happens.
 ///
 /// Both answers used to be read AFTER three `wgpu::TextureView`s had been
-/// minted for them; `pane_buffers` now builds those off this same question.
-/// What that puts at risk is only one direction of it — a frame that decides
-/// it needs no views has no views to bind WITH — and that is the direction
-/// this reads: `glyph_sheet_keys` is assigned inside the rebuild, so a
-/// publication that failed to reach it leaves the old keys standing. Views
-/// built and dropped unused cost an allocation and are invisible from here.
+/// minted for them; `pane_buffers` now builds those off this same question, so
+/// both directions of it are worth holding: a frame that wrongly decides it
+/// needs no views has none to bind WITH, and one that wrongly decides it does
+/// rebuilds a bind group every frame for sheets that never moved.
+///
+/// The bind group ITSELF is what separates them, and the keys cannot: they are
+/// assigned the same value whether the rebuild ran or was skipped, because
+/// nothing moved. A `wgpu::BindGroup` compares by handle identity, and the
+/// handle this holds keeps the old group alive across the frames below — so a
+/// replacement cannot be handed the identity just freed, and equality here
+/// means the same group, not a lookalike.
 #[test]
 fn a_pane_rebinds_its_sheets_only_when_one_moves() {
     const SIZE: [u32; 2] = [256, 256];
@@ -629,7 +634,7 @@ fn a_pane_rebinds_its_sheets_only_when_one_moves() {
     let scene = lit_node_and_a_name(0.0, FRESH_SHADOW, 0.0);
     // `shot_with` opens a fresh pane per call and this reading is about one
     // pane across frames, so the shots below go through `draw`.
-    let keys = |shooter: &Shooter| {
+    let bound = |shooter: &Shooter| {
         let pane = shooter
             .resources
             .get::<LatticeResources>()
@@ -638,21 +643,22 @@ fn a_pane_rebinds_its_sheets_only_when_one_moves() {
             .values()
             .next()
             .expect("the shot drew a pane");
-        assert!(
-            pane.glyph_bind_group.is_some(),
+        let group = pane.glyph_bind_group.clone().expect(
             "the fixture bound no sheets, so the keys below are the empty sentinel \
              and every comparison passes for nothing",
         );
-        pane.glyph_sheet_keys
+        (group, pane.glyph_sheet_keys)
     };
 
     shooter.draw(&scene, one_name(&scene, SIZE));
-    let first = keys(&shooter);
+    let (first_group, first_keys) = bound(&shooter);
 
     // The same two publications again. `AtlasTexture::holds` recognizes both,
     // nothing is recreated, and the pane keeps what it has.
     shooter.draw(&scene, one_name(&scene, SIZE));
-    assert_eq!(keys(&shooter), first, "an unchanged publication rebound the pane");
+    let (again, keys) = bound(&shooter);
+    assert_eq!(again, first_group, "an unchanged publication rebuilt the pane's bind group");
+    assert_eq!(keys, first_keys, "an unchanged publication moved the pane's sheet keys");
 
     // A mark sheet of another size, which cannot be written into the texture
     // in hand and so makes every bind group naming it stale.
@@ -662,10 +668,11 @@ fn a_pane_rebinds_its_sheets_only_when_one_moves() {
         key: 7,
     });
     shooter.draw(&scene, moved);
-    let after = keys(&shooter);
-    assert_ne!(after.1, first.1, "a grown mark sheet left the pane on the old texture");
+    let (rebuilt, after) = bound(&shooter);
+    assert_ne!(rebuilt, first_group, "a grown mark sheet left the pane on the old bind group");
+    assert_ne!(after.1, first_keys.1, "a grown mark sheet left the pane on the old texture");
     assert_eq!(
-        after.0, first.0,
+        after.0, first_keys.0,
         "the font atlas moved as well, so this says nothing about the mark sheet",
     );
 }
