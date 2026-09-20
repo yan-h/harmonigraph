@@ -1,5 +1,5 @@
 //! A small scalar image diffuses the heatmap before its single palette lookup.
-//! Targets belong to one pane and are keyed only on their size; source pixels and uniforms are refreshed every
+//! Targets belong to one pane and are keyed only on their two sizes — the light field's and the cloud tone's; source pixels and uniforms are refreshed every
 //! draw, including paused zooms and palette edits.
 
 use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex};
@@ -72,6 +72,27 @@ pub(super) fn retained_size(
         .unwrap_or(requested)
 }
 
+/// How big the cloud's scalar tone target is, or `None` where the layer is
+/// drawn natively under every pixel of the composite.
+///
+/// Native is both the no-cloud case and every `Cloud pixel size` at or under one
+/// DEVICE pixel — the fresh half point on a Retina pane and on a plain one —
+/// where a reduced target would be the pane's own resolution or larger and the
+/// extra pass would buy nothing. Above that each axis is divided by the same
+/// number of pixels per sample, so the walk's cost falls with its square.
+pub(super) fn tone_size(
+    pixels: [u32; 2],
+    ppp: f32,
+    atmosphere: SpectrogramAtmosphere,
+) -> Option<[u32; 2]> {
+    let settings = atmosphere.settings.sanitized();
+    let pixel = settings.cloud_pixel * ppp;
+    if !settings.effects().cloud || pixel <= 1.0 {
+        return None;
+    }
+    Some(std::array::from_fn(|axis| ((pixels[axis] as f32 / pixel).ceil() as u32).max(1)))
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -83,7 +104,9 @@ struct Uniforms {
     contours: f32,
     contour_softness: f32,
     contour_strength: f32,
-    _pad: u32,
+    /// 1 when the tone target exists and holds this frame's cloud, so the
+    /// composite reads it instead of walking the cells under every pixel.
+    tone_baked: u32,
     /// Cloud-space offset of the scale clouds and a bounded clock. Both are
     /// reduced from f64 on the CPU.
     ///
@@ -134,6 +157,9 @@ const _: () = assert!(
 pub(super) struct Pipelines {
     pub source: wgpu::RenderPipeline,
     pub bake: wgpu::RenderPipeline,
+    /// The cloud's scalar tone into its own reduced target, for the composite to
+    /// read instead of walking the cells per pixel.
+    pub tone: wgpu::RenderPipeline,
     pub composite: wgpu::RenderPipeline,
     pub backdrop: wgpu::RenderPipeline,
     filter_layout: wgpu::BindGroupLayout,
@@ -180,7 +206,7 @@ impl Pipelines {
         });
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("spectral_cloud_composite_layout"),
-            entries: &[texture(0), texture(1), sampler_entry(2), uniform(3)],
+            entries: &[texture(0), texture(1), sampler_entry(2), uniform(3), texture(4)],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("spectral_cloud_filter"),
@@ -233,6 +259,13 @@ impl Pipelines {
                 Some(&composite_layout),
                 "fs_cloud_light",
             ),
+            tone: create_spectrogram_pipeline(
+                device,
+                FORMAT,
+                source_layout,
+                Some(&composite_layout),
+                "fs_cloud_tone",
+            ),
             composite: create_spectrogram_pipeline(
                 device,
                 format,
@@ -275,11 +308,18 @@ pub(super) struct Targets {
     pub source_view: wgpu::TextureView,
     pub coverage_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 3],
+    /// The reduced tone target and its size, `None` where the cloud is drawn
+    /// natively. Part of the allocation key beside [`Self::size`] — see
+    /// `SpectrogramCallback::prepare`.
+    pub tone: Option<(wgpu::TextureView, [u32; 2])>,
     source_uniform: wgpu::Buffer,
     pub source_group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     filter_groups: [wgpu::BindGroup; 3],
     pub bake_group: wgpu::BindGroup,
+    /// Reads the baked material and writes the tone target, so the tone target
+    /// is the one view this group must NOT carry.
+    pub tone_group: Option<wgpu::BindGroup>,
     pub composite_group: wgpu::BindGroup,
 }
 
@@ -288,11 +328,12 @@ impl Targets {
         device: &wgpu::Device,
         pipelines: &Pipelines,
         size: [u32; 2],
+        tone_size: Option<[u32; 2]>,
         source_layout: &wgpu::BindGroupLayout,
         grid: &wgpu::Buffer,
         lut: &wgpu::TextureView,
     ) -> Self {
-        let view = |label| {
+        let sized = |label, size: [u32; 2]| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
@@ -311,12 +352,14 @@ impl Targets {
                 })
                 .create_view(&Default::default())
         };
+        let view = |label| sized(label, size);
         let source_view = view("spectral_cloud_source");
         let views = [
             view("spectral_cloud_scratch"),
             view("spectral_cloud_close"),
             view("spectral_cloud_wide"),
         ];
+        let tone = tone_size.map(|size| (sized("spectral_cloud_tone", size), size));
         let buffer = |label, size| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -347,7 +390,13 @@ impl Targets {
                 ],
             })
         });
-        let cloud_group = |front| {
+        // wgpu validates every resource a bound group carries against the pass's
+        // attachments whether the shader reads it or not, so the binding-4 view
+        // is a PARAMETER: a pass that renders into the tone target has to bind
+        // something else there, and the scratch target is the harmless choice —
+        // `fs_cloud_tone`, the one entry point drawn into that target, never
+        // reads binding 4 at all.
+        let cloud_group = |front, tone| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("spectral_cloud_composite_group"),
                 layout: &pipelines.composite_layout,
@@ -365,11 +414,19 @@ impl Targets {
                         resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
                     },
                     wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::TextureView(tone),
+                    },
                 ],
             })
         };
-        let bake_group = cloud_group(&views[1]);
-        let composite_group = cloud_group(&source_view);
+        let bake_group = cloud_group(&views[1], &views[0]);
+        // Reads the baked material the light passes just wrote, and writes the
+        // tone target — so that is the one view it stands a scratch in for.
+        let tone_group = tone.as_ref().map(|_| cloud_group(&source_view, &views[0]));
+        let composite_group =
+            cloud_group(&source_view, tone.as_ref().map_or(&views[0], |(view, _)| view));
         let source_group = source_group(device, source_layout, &source_uniform, grid, lut);
         Self {
             #[cfg(test)]
@@ -382,13 +439,21 @@ impl Targets {
                 6,
             ),
             views,
+            tone,
             source_uniform,
             source_group,
             uniform,
             filter_groups,
             bake_group,
+            tone_group,
             composite_group,
         }
+    }
+
+    /// The reduced tone target's size, for the allocation key to compare
+    /// against what this frame's settings ask for.
+    pub fn tone_size(&self) -> Option<[u32; 2]> {
+        self.tone.as_ref().map(|&(_, size)| size)
     }
 
     pub fn rebind(
@@ -420,10 +485,15 @@ impl Targets {
         };
         let corners =
             [region.left_top(), region.right_top(), region.right_bottom(), region.left_bottom()];
-        let vertices = [0, 1, 2, 0, 2, 3].map(|i| SpectrogramVertex {
-            pos: corners[i].into(),
-            slab: 0.0,
-            t: 0.0,
+        // `slab` and `t` carry the corner's PANE-RELATIVE fraction here rather
+        // than a run position, which is what `fs_cloud_tone` reads to recover
+        // the same point the composite would have walked under its own pixel.
+        // The region is a sub-rect of the pane, so these need not reach 0 and 1.
+        // Nothing else reads these two on this quad: the bake and the backdrop
+        // both work off `in.position` alone.
+        let vertices = [0, 1, 2, 0, 2, 3].map(|i| {
+            let fraction = (corners[i] - rect.min) / rect.size();
+            SpectrogramVertex { pos: corners[i].into(), slab: fraction.x, t: fraction.y }
         });
         queue.write_buffer(&self.coverage_vertices, 0, bytemuck::cast_slice(&vertices));
         read.origin_points = rect.min.into();
@@ -461,7 +531,7 @@ impl Targets {
             contours: settings.contours,
             contour_softness: settings.contour_softness,
             contour_strength: settings.contour_strength,
-            _pad: 0,
+            tone_baked: u32::from(self.tone.is_some()),
             drift,
             time: (cloud_time % 1000.0) as f32,
             cloud_depth: settings.cloud_depth,
@@ -534,7 +604,47 @@ fn source_group(
 
 #[cfg(test)]
 mod tests {
-    use super::retained_size;
+    use super::{retained_size, tone_size, SpectrogramAtmosphere};
+
+    /// A reduced tone target exists only where it would be SMALLER than the
+    /// pane, and it is the pane's pixels divided by device pixels per sample.
+    #[test]
+    fn the_tone_target_appears_only_where_it_is_coarser_than_the_pane() {
+        let at = |cloud_pixel, cloud_depth, ppp| {
+            tone_size(
+                [1920, 1081],
+                ppp,
+                SpectrogramAtmosphere {
+                    settings: harmonigraph_scene::SpectralAtmosphere {
+                        cloud_pixel,
+                        cloud_depth,
+                        ..Default::default()
+                    },
+                    region: egui::Rect::ZERO,
+                    pitch_vertical: true,
+                    points_per_cent: 0.03,
+                    points_per_ms: 0.01,
+                    now: 0.0,
+                },
+            )
+        };
+        // The fresh half point is one device pixel on a Retina pane and half of
+        // one on a plain pane: native on both, which is what keeps the default
+        // picture the full-resolution one.
+        assert_eq!(at(0.5, 1.0, 2.0), None);
+        assert_eq!(at(0.5, 1.0, 1.0), None);
+        // One point is native at 1x and halves each axis at 2x — a quarter of
+        // the walk — and the odd axis rounds UP so the target still covers the
+        // pane.
+        assert_eq!(at(1.0, 1.0, 1.0), None);
+        assert_eq!(at(1.0, 1.0, 2.0), Some([960, 541]));
+        assert_eq!(at(4.0, 1.0, 2.0), Some([240, 136]));
+        // No cloud, nothing to reduce, however the dial stands.
+        assert_eq!(at(4.0, 0.0, 2.0), None);
+        // Past the bar's top the clamp holds, so the dial cannot ask for a
+        // target of no texels at all.
+        assert_eq!(at(1.0e6, 1.0, 2.0), at(4.0, 1.0, 2.0));
+    }
 
     #[test]
     fn retained_targets_bound_resolution_and_preserve_full_axes() {

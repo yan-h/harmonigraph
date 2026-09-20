@@ -4,9 +4,9 @@
 //! both of those are on the Colors page ([`super::super::color`]).
 
 use harmonigraph_scene::{
-    CLOUD_SPEED_MAX, CLOUD_SPEED_MIN, CONTOURS_MAX, CONTOURS_MIN, CONTOUR_SOFTNESS_MAX,
-    CONTOUR_SOFTNESS_MIN, PITCH_SOFTNESS_MAX, PITCH_SOFTNESS_MIN, SCALE_REFRACT_MAX,
-    SCALE_REFRACT_MIN, TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
+    CLOUD_PIXEL_MAX, CLOUD_PIXEL_MIN, CLOUD_SPEED_MAX, CLOUD_SPEED_MIN, CONTOURS_MAX, CONTOURS_MIN,
+    CONTOUR_SOFTNESS_MAX, CONTOUR_SOFTNESS_MIN, PITCH_SOFTNESS_MAX, PITCH_SOFTNESS_MIN,
+    SCALE_REFRACT_MAX, SCALE_REFRACT_MIN, TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
 };
 
 use crate::config::BALLISTICS_MAX;
@@ -212,6 +212,28 @@ pub(crate) fn spectrum_settings_pane(
         .on_hover_text(
             "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds \
                  it still, and holds Rock with it.",
+        );
+        ValueBar::new(
+            &mut atmosphere.cloud_pixel,
+            CLOUD_PIXEL_MIN..=CLOUD_PIXEL_MAX,
+            "Cloud pixel size",
+        )
+        .unit(1.0, " pt")
+        .decimals(1)
+        // The halves `sanitized` snaps to, so the bar never reads 2.3 over a
+        // cloud drawn at 2.5.
+        .step(0.5)
+        .show(ui)
+        .on_hover_text(
+            "A PERFORMANCE control. Both textures walk their cells under every \
+             pixel, which is nearly all they cost, so drawing the texture coarser \
+             and stretching it over the picture saves with the SQUARE of this: 1 pt \
+             is a quarter of the work, 2 pt a sixteenth. 0.5 pt is one pixel on a \
+             Retina display, where the layer is drawn at full resolution and \
+             nothing is spent. What it costs as it grows is the texture's own \
+             fineness \u{2014} rims soften by about one of these steps and detail \
+             smaller than one is gone. The picture underneath, its terraces and the \
+             gradient stay sharp.",
         );
         // Two constructions, so two sets of dials: nothing a wash carries means
         // anything to a lit scale, and a page listing both would be mostly

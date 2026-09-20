@@ -363,7 +363,7 @@ fn a_zoomed_in_pane_draws_the_frame_on_record() {
 /// scales, which is what makes the three of them the proof that a second texture
 /// landed without disturbing the first. This is the one that has the wash in
 /// it, and it earns its place because nothing else committed here executes
-/// `wash_clouds` end to end — the claim tests beside the shader each turn one
+/// `wash_cloud_tone` end to end — the claim tests beside the shader each turn one
 /// dial and compare two frames, where this pins the whole construction, every
 /// constant in it, at the settings the page opens the texture at.
 #[test]
