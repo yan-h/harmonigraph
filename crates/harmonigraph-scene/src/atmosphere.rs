@@ -195,18 +195,40 @@ pub struct SpectralAtmosphere {
     /// data-limited rather than pane-limited. Runs over
     /// 0..=[`BLUR_TIME_STEP_MAX`], snapped to halves.
     ///
-    /// **Computed by hand, still never measured moving.** Yan judged a step of
-    /// one live in the DAW at a 600 s Span on 2026-09-20 and made it the
-    /// default; what follows is arithmetic he did not see. The source's texels
-    /// are fixed to the PANE while the slabs scroll under them, so the
-    /// softening is not constant in time. By hand, a transient one slab wide
-    /// peaks at 0.75 of its level when a texel is centred on it and 0.5 when it
-    /// straddles two, once per slab scrolled (about 1 Hz at a 600 s Span); at a
-    /// step of a half that is 0.75 to 0.875, and with the dial off the pane's
-    /// own pixels already give about 0.8 to 1. Every FRAME measured of this
-    /// dial is a still one, so the pulse has only ever been reasoned about.
-    /// Laying the source out in SLAB space on this axis, so a texel is always
-    /// centred on a slab, removes the pulse and the softening together.
+    /// **Computed by hand, then looked for in motion and not seen.** The
+    /// source's texels are fixed to the PANE while the slabs scroll under them,
+    /// so the box each one integrates slides across the slab grid and the
+    /// effective kernel breathes: `[1, 6, 1] / 8` where a texel is centred on a
+    /// slab, `[1, 1] / 2` where it straddles two, once per slab scrolled (about
+    /// 1 Hz at a 600 s Span). A maximal isolated transient one slab wide reads
+    /// 0.75 of its encoded level and then 0.5, about a fifth of its DISPLAYED
+    /// level once `density_decode` has run. A step of a half gives 0.875 to
+    /// 0.75, and with the dial off the pane's own pixels already breathe about
+    /// 0.90 to 0.79 — this deepens a pulse it did not create. The time Gaussian
+    /// damps none of it: at full zoom-out it is sub-pixel (32 ms of
+    /// `time_softness` is 0.08 px at a 600 s Span), so this box is all the
+    /// smoothing the time axis gets.
+    ///
+    /// Yan judged a step of one live in the DAW at a 600 s Span on 2026-09-20,
+    /// made it the default, and looked for the shimmer in the moving picture
+    /// without finding one. That agrees with the arithmetic rather than
+    /// contradicting it: the swing falls as `0.25 * (1 - h)` with the
+    /// neighbouring slabs' level, so the worst case wants an isolated event
+    /// about a second long with near-silence either side, which continuous
+    /// playing does not contain.
+    ///
+    /// **If it ever does show, the fix is not the slab-space relayout** that
+    /// stood here: the pulse needs the texel centres to LAND on slab centres,
+    /// not the texture to be laid out in slab space. Give this axis a spacing
+    /// of exactly one slab — covering a hair more than the pane, so the spacing
+    /// is the slab width rather than the pane's over a `ceil` — and shift the
+    /// origin each frame by the fractional scroll phase. The kernel is then
+    /// always `[1, 6, 1] / 8` and the softening it costs stays. Downstream the
+    /// open-coded `pt / cloud.size` light lookups become one helper over a new
+    /// origin/extent uniform, a multiply-add per fragment, so this dial's
+    /// saving survives. It wants an integer number of texels per slab, and the
+    /// lock breaks wherever `retained_size` holds a stale size through a Span
+    /// drag.
     pub blur_time_step: f32,
     /// How far the levels are gathered into terraces, 0 for none. What the
     /// `Lava` style used to switch on whole.
