@@ -31,9 +31,9 @@
 //! `PROBE_CLOUD_PIXEL` (points per cloud sample), `PROBE_CLOUD_TILE` (the
 //! walk's period in cells, 0 for the live walk) and `PROBE_BLUR_TIME_STEP`
 //! (slabs per source texel on the light field's time axis, 0 for off), each
-//! defaulting to whatever `SpectralAtmosphere::default` says, apply to EVERY
-//! case after its own `turn`, so one run reads the whole table at one setting
-//! and two runs are what that setting is worth. They are dials rather than
+//! defaulting to the production values (0.5 pt, 40 cells and the saved blur
+//! default), apply to EVERY case after its own `turn`, so one run reads the whole table at one setting
+//! and two runs are what that setting is worth. They are probe controls rather than
 //! cases because the question is how much each of the rows above falls, not how
 //! one of them does — and they stack, which is the other thing two runs cannot
 //! show.
@@ -263,7 +263,15 @@ fn cloud_costs_by_style_and_dial() {
         .map(|(name, turn, fill, history_seconds)| {
             let mut cb = callback(quad(fill), &grid, &read);
             cb.rect = rect;
-            let resources = CallbackResources::default();
+            let mut resources = CallbackResources::default();
+            let mut sampling = atmosphere::CloudSampling::default();
+            if let Some(pixel) = cloud_pixel {
+                sampling.pixel_points = pixel;
+            }
+            if let Some(period) = cloud_tile {
+                sampling.tile_cells = period as u32;
+            }
+            resources.insert(sampling);
             Case {
                 name,
                 fill,
@@ -298,14 +306,7 @@ fn cloud_costs_by_style_and_dial() {
             cb.atmosphere = turn.map(|turn| {
                 let mut settings = SpectralAtmosphere::default();
                 turn(&mut settings);
-                // After the turn, so a case that dials the cloud cannot also
-                // decide its resolution or its period behind these knobs' back.
-                if let Some(cloud_pixel) = cloud_pixel {
-                    settings.cloud_pixel = cloud_pixel;
-                }
-                if let Some(cloud_tile) = cloud_tile {
-                    settings.cloud_tile = cloud_tile;
-                }
+                // After the turn, so each case uses the requested blur step.
                 if let Some(blur_time_step) = blur_time_step {
                     settings.blur_time_step = blur_time_step;
                 }

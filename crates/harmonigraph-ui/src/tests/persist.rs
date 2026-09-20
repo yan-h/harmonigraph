@@ -14,6 +14,27 @@ fn set_console_collapsed(state: &mut SharedState, collapsed: bool) {
 }
 
 #[test]
+fn retired_cloud_sampling_preserves_editor_and_recorded_appearance() {
+    let mut state = fresh();
+    state.picture.appearance.camera.distance = 18.0;
+    state.workspace.interaction.ui_scale = 1.25;
+    let saved = state.save_persist();
+    let appearance = state.picture.appearance.serialize();
+    for tile in [0, 20, 40] {
+        let retired = format!("cloud_tile:{tile}.0,cloud_pixel:4.0,cloud_depth:");
+        let old = saved.replacen("cloud_depth:", &retired, 1);
+        assert_ne!(old, saved, "the fixture must insert the retired keys");
+        let mut restored = fresh();
+        assert!(restored.load_persist(&old));
+        assert_eq!(restored.save_persist(), saved);
+
+        let old = appearance.replacen("cloud_depth:", &retired, 1);
+        assert_ne!(old, appearance);
+        assert_eq!(AppearanceDocument::parse(&old).unwrap().serialize(), appearance);
+    }
+}
+
+#[test]
 fn retired_spacing_preserves_appearance_and_workspace() {
     let mut state = fresh();
     state.picture.appearance.view.label_scale = 0.7;

@@ -102,8 +102,10 @@ The cost is `pixels x cell visits x frames`, the walk is arithmetic-bound, and n
 so each lever removes one of the three.
 These are proposals; only the first has a measured bound.
 
-**Lever 1 is built**, as the `Cloud pixel size` dial:
-it runs 0.5 to 4 points per sample, is native at the fresh 0.5 on a Retina pane, and swallows lever 3 by being a dial rather than one fixed reduction.
+**Lever 1 was built** as the `Cloud pixel size` dial,
+running 0.5 to 4 points per sample.
+It is now fixed at 0.5 pt and the control is retired;
+these measurements describe the original comparison.
 `PROBE_CLOUD_PIXEL` re-reads the table above at any of its settings.
 Measured at 3840x2160 and 2 px/pt, light plus paint, median ms per frame:
 
@@ -158,7 +160,15 @@ So the drift does not belong in a cache key at all: it is a UV offset into a fie
 Snapping it, rebaking per step, spreading a 35 ms rebake over frames and losing the lever at `Cloud speed` 20x were the price of reproducing the live walk texel for texel.
 Sampled bilinearly at the fractional offset instead, the motion stays smooth and nothing is ever rebaked because of time.
 
-### The periodic tile (built: the `Cloud tile` dial, PR #991)
+### The periodic tile (introduced in PR #991)
+
+**Decision, 2026-09-20:** cloud sampling is fixed at 40 cells and 0.5 pt;
+both controls and their saved fields are retired.
+Existing appearances use these values when reopened,
+including recorded appearances used for video export.
+The live walk remains a test reference,
+and the timing probe can still override sampling for comparisons.
+The measurements and dial descriptions below record the exploration that led to this choice.
 
 Wrap the cell hash every `P` cells and the field is periodic, so ONE tile of `P` by `P` cells, baked once and read through a repeat sampler, is the whole plane.
 `Cloud tile` is `P` in cells: 0 is off — the live walk, and the fresh value, so the goldens do not move — and 20 and 40 are the two periods on offer.
@@ -242,10 +252,10 @@ The tone reads the sound, so a stale tone lags the music; the walk is the only p
 
 ### Open questions for whoever continues
 
-1. Does repetition read at `P = 20` and `P = 40`, on both styles, over real music and at `Cloud speed` 1x and 20x? (Yan's eye; the `Cloud tile` dial.)
+1. Yan selected `P = 40`; revisit only if its repetition becomes visible over real music.
 2. Does the drift-phase softening shimmer at `Fuzz` 0 and on Mosaic's creases? If it does, bake at 1.5x texel density before reaching for anything cleverer.
-3. Which `Cloud tile` becomes the default, and whether it stays a dial at all once a period is picked — a default change moves the goldens and owes a regenerated Metal corpus.
-4. If the tile becomes the default: retire `Cloud pixel size`, and retire the live walk with it? The live walk is then only the reference the first-period test compares against.
+3. Resolved: fixed 40-cell tiles, with updated golden frames. The shader and pipeline layouts are unchanged; strict catalog validation checks the existing Metal corpus.
+4. Resolved: `Cloud pixel size` is fixed at 0.5 pt and its control is retired. The live walk stays as the reference for the tile comparison tests.
 5. ~~`Ragged`~~ RETIRED in the PR stacked on #991. It shipped at 1.0 and its wobble was one-sided, so the radius band was scaled by 1.15 (`WASH_RADIUS_MIN` 1.02 → 1.17, `WASH_RADIUS_MAX` 1.66 → 1.91) to keep the default globs their size. The reach bound stopped carrying `(1 + RAGGED)` and `RADIUS_MAX` now sits 1.91 against a bound of 2.217, so a band WIDER than 1.63:1 is available and deliberately untaken — a look change for Yan's eye (#992).
 6. The scrolling window above, only if 1 fails.
 

@@ -457,6 +457,10 @@ impl CallbackTrait for SpectrogramCallback {
         egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
+        let sampling = atmosphere::CloudSampling::default();
+        #[cfg(test)]
+        let sampling =
+            callback_resources.get::<atmosphere::CloudSampling>().copied().unwrap_or(sampling);
         let recreate = callback_resources
             .get::<SpectrogramResources>()
             .is_none_or(|r| r.target_format != self.target_format);
@@ -685,13 +689,13 @@ impl CallbackTrait for SpectrogramCallback {
                 );
                 let grid = &pane.grid.as_ref().expect("drawable grid").buffer;
                 let lut = &pane.lut.as_ref().expect("drawable gradient").view;
-                let tone_size = atmosphere::tone_size(pixels, ppp, settings);
-                let tile = atmosphere::tile_key(pixels, settings);
+                let tone_size = atmosphere::tone_size(pixels, ppp, settings, sampling.pixel_points);
+                let tile = atmosphere::tile_key(pixels, settings, sampling.tile_cells);
                 // Any of the three sizes rebuilds the whole set, and that is
                 // deliberate: nothing here is retained across frames — every
                 // target is refilled every frame — so a rebuild costs an
                 // allocation and no picture. The tone size moves on a pane
-                // resize or a drag of `Cloud pixel size` and on nothing else,
+                // resize or a change of display scale and on nothing else,
                 // where the LIGHT size follows the musical radius and would
                 // otherwise be reallocated through every zoom and Span drag,
                 // which is what `retained_size` is here to stop.
@@ -777,8 +781,8 @@ impl CallbackTrait for SpectrogramCallback {
                         pass.set_vertex_buffer(0, target.tone_vertices.slice(..));
                         pass.draw(0..6, 0..1);
                     }
-                    // One period of the cell walk, when `Cloud tile` asks for
-                    // one and what is in the tile is not already it. Before the
+                    // One period of the cell walk, when the cached tile
+                    // does not already hold it. Before the
                     // tone pass and the composite because both read it; it
                     // reads neither the light nor the pane, so where it sits
                     // among the light passes decides nothing.
@@ -817,10 +821,10 @@ impl CallbackTrait for SpectrogramCallback {
                             target.tile_baked(key);
                         }
                     }
-                    // The cloud's own tone, once per `Cloud pixel size` of pane
+                    // The cloud's own tone, once per half point of pane
                     // rather than once per pixel of the composite. After the
                     // bake because it reads the finished material out of the
-                    // same coverage quad, and only when the dial asks for a
+                    // same coverage quad, and only when display scale calls for a
                     // reduction — at the fresh size there is no target and the
                     // composite walks the cells itself.
                     if let Some(((tone_view, _), tone_group)) =
@@ -1400,14 +1404,14 @@ mod tests {
         use harmonigraph_scene::CloudStyle::{Mosaic, Watercolor};
         let Some((device, queue)) = headless_device() else { return };
         for style in [Mosaic, Watercolor] {
-            for (pixel, tile) in [(0.5, 0.0), (2.0, 0.0), (0.5, 20.0), (2.0, 20.0)] {
+            for (pixel, tile) in [(0.5, 0), (2.0, 0), (0.5, 40), (2.0, 40)] {
                 let mut cb = refracted_fixture();
                 let mut resources = CallbackResources::default();
+                resources
+                    .insert(atmosphere::CloudSampling { pixel_points: pixel, tile_cells: tile });
                 {
                     let s = &mut cb.atmosphere.as_mut().unwrap().settings;
                     s.cloud_style = style;
-                    s.cloud_pixel = pixel;
-                    s.cloud_tile = tile;
                     s.contour_strength = 1.0;
                 }
                 for (soft, contours) in [(false, 0.0), (false, 1.0), (true, 1.0)] {
@@ -1444,7 +1448,7 @@ mod tests {
                     .as_ref()
                     .unwrap();
                 assert_eq!(targets.tone_size().is_some(), pixel > 1.0);
-                assert_eq!(targets.tile_texels().is_some(), tile > 0.0);
+                assert_eq!(targets.tile_texels().is_some(), tile > 0);
                 // Intermediate depth must stay on the curved palette too.
                 // Mixing RGB endpoints would cut across this ramp's curve.
                 cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.5;
@@ -1489,12 +1493,15 @@ mod tests {
                 let s = &mut cb.atmosphere.as_mut().unwrap().settings;
                 s.cloud_style = style;
                 s.cloud_depth = 1.0;
-                s.cloud_pixel = pixel;
                 s.contour_strength = 1.0;
                 s.contour_softness = 0.01;
                 s.contours = 4.0;
                 let baseline = *s;
                 let mut resources = CallbackResources::default();
+                resources.insert(atmosphere::CloudSampling {
+                    pixel_points: pixel,
+                    ..Default::default()
+                });
                 let stepped = frame_with(&device, &queue, &mut resources, &cb);
                 for (name, turn) in [
                     ("strength", (|s| s.contour_strength = 0.0) as Turn),
@@ -1513,6 +1520,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn frame_with_sampling(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cb: &SpectrogramCallback,
+        sampling: atmosphere::CloudSampling,
+    ) -> Vec<u8> {
+        let mut resources = CallbackResources::default();
+        resources.insert(sampling);
+        frame_with(device, queue, &mut resources, cb)
     }
 
     fn cloud_fixture() -> SpectrogramCallback {
@@ -3057,7 +3075,7 @@ mod tests {
         );
     }
 
-    /// Every period the `Cloud tile` bar offers makes a whole number of cells
+    /// The fixed tile period makes a whole number of cells
     /// out of EVERY lattice the two walks hash on.
     ///
     /// A tile is one period of the walk read through a REPEATING sampler, so the
@@ -3087,20 +3105,15 @@ mod tests {
             ("the warp noise", warp),
             ("the warp noise's own second octave", warp * fine),
         ];
-        let step = harmonigraph_scene::CLOUD_TILE_STEP;
-        let steps = (harmonigraph_scene::CLOUD_TILE_MAX / step) as u32;
-        assert!(steps > 0, "the bar offers no period at all, so the dial cannot be turned on");
-        for offered in 1..=steps {
-            let period = offered as f32 * step;
-            for (name, lattice) in lattices {
-                let cells = lattice * period;
-                assert!(
-                    (cells - cells.round()).abs() < 1.0e-3,
-                    "a period of {period} leaves {name} {cells} cells across, which is not a \
-                     whole number of them, so the walk does not close on itself and the tile \
-                     draws a seam every period"
-                );
-            }
+        let period = atmosphere::CloudSampling::default().tile_cells as f32;
+        for (name, lattice) in lattices {
+            let cells = lattice * period;
+            assert!(
+                (cells - cells.round()).abs() < 1.0e-3,
+                "a period of {period} leaves {name} {cells} cells across, which is not a \
+                 whole number of them, so the walk does not close on itself and the tile \
+                 draws a seam every period"
+            );
         }
     }
 
@@ -3390,7 +3403,7 @@ fn cs_wrap_probe() {
         }
     }
 
-    /// `Cloud pixel size` draws the SAME PICTURE, softened — which is the whole
+    /// A coarser tone target draws the SAME PICTURE, softened — which is the whole
     /// claim of the reduced path, and the only reason a performance dial is
     /// allowed to be one dial rather than a second look.
     ///
@@ -3442,8 +3455,9 @@ fn cs_wrap_probe() {
             let native = frame_with(&device, &queue, &mut native_resources, &cb);
             // 2 pt against the fixture's 1 pixel per point: a 64 by 64 tone
             // target under a 128 by 128 pane, which is a quarter of the walk.
-            cb.atmosphere.as_mut().unwrap().settings.cloud_pixel = 2.0;
             let mut reduced_resources = CallbackResources::default();
+            reduced_resources
+                .insert(atmosphere::CloudSampling { pixel_points: 2.0, ..Default::default() });
             let reduced = frame_with(&device, &queue, &mut reduced_resources, &cb);
             assert_eq!(
                 passes(&reduced_resources),
@@ -3530,8 +3544,8 @@ fn cs_wrap_probe() {
         let native = frame_with(&device, &queue, &mut native_res, &cb);
         // 4 pt against the fixture's 1 pixel per point, so a cleared texel
         // reaches two pixels into the region.
-        cb.atmosphere.as_mut().unwrap().settings.cloud_pixel = 4.0;
         let mut reduced_res = CallbackResources::default();
+        reduced_res.insert(atmosphere::CloudSampling { pixel_points: 4.0, ..Default::default() });
         let reduced = frame_with(&device, &queue, &mut reduced_res, &cb);
         let (w, h) = (SIZE[0] as usize, SIZE[1] as usize);
         let row_mean = |y: usize| {
@@ -3604,15 +3618,19 @@ fn cs_wrap_probe() {
         settings.cloud_depth = 1.0;
         settings.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
         settings.cloud_speed = 0.0;
-        let live = fresh_frame(&device, &queue, &cb);
-        cb.atmosphere.as_mut().unwrap().settings.cloud_tile = 20.0;
+        let live = frame_with_sampling(
+            &device,
+            &queue,
+            &cb,
+            atmosphere::CloudSampling { tile_cells: 0, ..Default::default() },
+        );
         let tiled = fresh_frame(&device, &queue, &cb);
         assert_ne!(live, tiled, "the tile never ran");
 
         let units = number("CLOUD_UNITS");
         let cells = number("SCALE_CELLS") / harmonigraph_scene::CLOUD_SIZE_MAX;
         let lacunarity = number("DOME_LACUNARITY");
-        let period = 20.0_f32;
+        let period = atmosphere::CloudSampling::default().tile_cells as f32;
         let drift = [0.0_f32, 0.6];
         let inside = |axis: usize, point: f32| {
             let half = TILE_SIZE[axis] as f32 / 2.0;
@@ -3841,7 +3859,6 @@ fn cs_rotation_probe() {
         let key_at =
             |turn: fn(&mut harmonigraph_scene::SpectralAtmosphere), now, pitch_vertical| {
                 let mut settings = harmonigraph_scene::SpectralAtmosphere {
-                    cloud_tile: 20.0,
                     cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
                     ..Default::default()
                 };
@@ -3857,6 +3874,7 @@ fn cs_rotation_probe() {
                         points_per_slab: 0.0,
                         now,
                     },
+                    atmosphere::CloudSampling::default().tile_cells,
                 )
             };
         let key = |turn, now| key_at(turn, now, true);
@@ -3886,7 +3904,6 @@ fn cs_rotation_probe() {
         for (name, turn) in [
             ("Cloud speed", (|s| s.cloud_speed = 20.0) as Turn),
             ("Cloud depth", |s| s.cloud_depth = 0.5),
-            ("Cloud pixel size", |s| s.cloud_pixel = 4.0),
             ("Refraction", |s| s.wash_refract = 0.2),
             ("Layers", |s| s.wash_layers = 0.0),
             ("Pitch softness", |s| s.pitch_softness = 300.0),
@@ -3900,7 +3917,6 @@ fn cs_rotation_probe() {
         for (name, turn) in [
             ("Lobe shape", (|s| s.wash_lobe = 0.0) as Turn),
             ("Fuzz", |s| s.wash_fuzz = 0.0),
-            ("Cloud tile", |s| s.cloud_tile = 40.0),
             ("Texture", |s| s.cloud_style = harmonigraph_scene::CloudStyle::Mosaic),
             // Through the tile's texel size alone — how many cells cross the
             // pane, not what a cell draws.
@@ -3908,7 +3924,11 @@ fn cs_rotation_probe() {
         ] {
             assert_ne!(key(turn, 0.0), fresh, "{name} reaches the walk and did not rebake");
         }
-        assert_eq!(key(|s| s.cloud_tile = 0.0, 0.0), None, "the dial at 0 still allocated a tile");
+        assert_eq!(
+            key(|s| s.cloud_depth = 0.0, 0.0),
+            None,
+            "a disabled cloud still allocated a tile"
+        );
 
         let Some((device, queue)) = headless_device() else {
             return;
@@ -3927,7 +3947,6 @@ fn cs_rotation_probe() {
                 .load(Ordering::Relaxed)
         };
         let mut cb = wash_fixture();
-        cb.atmosphere.as_mut().unwrap().settings.cloud_tile = 20.0;
         // `encoded_passes` lives on the TARGETS, so it only counts across
         // frames that hold on to them — and the orientation flip below
         // transposes the light field's size as soon as `Blur time step` bounds
