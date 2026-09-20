@@ -224,3 +224,11 @@ start a new agent session to refresh its skill catalog.
 Project-specific skills remain in `.claude/skills`.
 The shared skill is optional for development and CI,
 but must be installed before Yan invokes a merge audit.
+
+When upgrading an existing checkout that still has the old submodule,
+run `git submodule deinit -- .shared-skills` before pulling the removal commit.
+Do not force it if Git reports local changes;
+preserve those changes first.
+This avoids leaving the populated directory behind as untracked files.
+Older worktrees can keep their own pinned copy until they are retired;
+the Git checkout hook and reclaimer still support them.
