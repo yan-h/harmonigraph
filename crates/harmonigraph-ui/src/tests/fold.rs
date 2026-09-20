@@ -4,16 +4,16 @@
 use super::harness::*;
 use crate::*;
 
-/// The layout opens with Notes and Console folded to their tab bar, and with
-/// nothing else folded.
+/// The layout opens with the Console folded to its tab bar, and with nothing
+/// else folded.
 ///
-/// Both are read on demand — Notes restates what the lattice is already
-/// drawing, Console is a diagnostic — and open they take 45% of the settings
-/// column, the half the settings themselves want. The collapse arrow on the
-/// folded bar brings either back at the size it went away, so this is a
-/// starting point rather than a decision taken away.
+/// It is read on demand — a diagnostic rather than something watched while
+/// playing — and open it takes 45% of the settings column, the half the
+/// settings themselves want. The collapse arrow on the folded bar brings it
+/// back at the size it went away, so this is a starting point rather than a
+/// decision taken away.
 #[test]
-fn the_default_layout_opens_with_the_two_readout_panes_folded() {
+fn the_default_layout_opens_with_the_console_folded() {
     let dock = default_dock();
     let folded = |tab: panes::Tab| {
         let path = dock.find_tab(&tab).expect("docked by default");
@@ -22,7 +22,6 @@ fn the_default_layout_opens_with_the_two_readout_panes_folded() {
         };
         leaf.collapsed
     };
-    assert!(folded(panes::Tab::Notes), "Notes should open folded");
     assert!(folded(panes::Tab::Console), "Console should open folded");
     for tab in [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning] {
         assert!(!folded(tab), "{tab:?} should open on screen");
@@ -79,7 +78,7 @@ fn every_separator_a_fold_has_pinned_resizes_the_open_panes_across_it() {
         panes::Tab::Lattice,
         panes::Tab::Spectral,
         panes::Tab::Tuning,
-        panes::Tab::Notes,
+        panes::Tab::Console,
         panes::Tab::Video,
     ];
     // Two collapsed panes and then three, since each rail nests the next fold one
@@ -410,13 +409,13 @@ fn a_pinned_separator_resizes_in_frameless_mode_too() {
 fn the_separator_inside_a_folded_pair_resizes_the_open_panes_around_it() {
     let mut h = DockHarness::new();
     let mut state = fresh();
-    // Lattice | (Spectral Tuning) | Notes, the middle two siblings.
+    // Lattice | (Spectral Tuning) | Console, the middle two siblings.
     let mut dock = egui_dock::DockState::new(vec![panes::Tab::Lattice]);
     {
         let surface = dock.main_surface_mut();
         let [_, right] =
             surface.split_right(egui_dock::NodeIndex::root(), 0.4, vec![panes::Tab::Spectral]);
-        let [pair, _] = surface.split_right(right, 0.5, vec![panes::Tab::Notes]);
+        let [pair, _] = surface.split_right(right, 0.5, vec![panes::Tab::Console]);
         surface.split_right(pair, 0.5, vec![panes::Tab::Tuning]);
     }
     state.workspace.dock = dock;
@@ -425,7 +424,7 @@ fn the_separator_inside_a_folded_pair_resizes_the_open_panes_around_it() {
     let _ = h.collapse_click(&mut state, panes::Tab::Tuning);
     let _ = h.settle_folds(&mut state);
 
-    let (first, last) = (panes::Tab::Lattice, panes::Tab::Notes);
+    let (first, last) = (panes::Tab::Lattice, panes::Tab::Console);
     let before = (pane_width(&state, first), pane_width(&state, last));
     // Between the two rails, which is one fold's inside rather than its edge.
     let rails = (pane_rect(&state, panes::Tab::Spectral), pane_rect(&state, panes::Tab::Tuning));
@@ -468,7 +467,7 @@ fn the_handle_beside_an_outermost_rail_does_nothing() {
     let mut h = DockHarness::new();
     let mut state = fresh();
     h.settle(&mut state);
-    // The Notes/Console leaf opens folded, so folding the settings leaf too
+    // The Console leaf opens folded, so folding the settings leaf too
     // folds the whole column sideways into one rail down the right edge — and
     // leaves that fold with nothing outward to pass a drag to.
     let _ = h.collapse_click(&mut state, panes::Tab::Tuning);
@@ -746,7 +745,7 @@ fn rail_rect(state: &SharedState, tabs: &[panes::Tab]) -> egui::Rect {
 ///
 /// egui_dock stacks a collapsed leaf's tab bar at the top of the column and
 /// hands everything below it to whichever leaf is LAST, so the rail carried a
-/// single name — "Notes", the pane at the bottom of the settings column and
+/// single name — the pane at the bottom of the settings column, and
 /// the one that says least about what folded. The names now divide the rail
 /// by the fractions the column is dialled at, so both of them are on it.
 #[test]
@@ -755,16 +754,16 @@ fn a_folded_column_names_every_pane_in_it() {
     state.workspace.min_window_width = 400.0;
     let mut h = DockHarness::new();
     h.settle(&mut state);
-    // Notes/Console is folded in the default layout, so collapsing the
+    // The Console leaf is folded in the default layout, so collapsing the
     // settings leaf collapses the column itself and the whole of it folds
     // sideways to one rail.
     let output = h.collapse_click(&mut state, panes::Tab::Tuning);
-    let rail = rail_rect(&state, &[panes::Tab::Tuning, panes::Tab::Notes]);
+    let rail = rail_rect(&state, &[panes::Tab::Tuning, panes::Tab::Console]);
     assert!(rail.width() < 40.0, "the column should have folded to a rail ({rail:?})");
     let labels = rail_labels(&output, rail);
     assert_eq!(
         labels.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(),
-        ["Tuning", "Notes"],
+        ["Tuning", "Console"],
         "both panes in the folded column should be named, in the order they are stacked",
     );
     // Each in ITS share of the rail, under its own arrow: the shares are the
@@ -834,8 +833,8 @@ fn a_folded_columns_lower_arrow_opens_its_own_pane() {
     let mut h = DockHarness::new();
     h.settle(&mut state);
     h.collapse_click(&mut state, panes::Tab::Tuning);
-    let rail = rail_rect(&state, &[panes::Tab::Tuning, panes::Tab::Notes]);
-    assert!(collapsed(&state, panes::Tab::Tuning) && collapsed(&state, panes::Tab::Notes));
+    let rail = rail_rect(&state, &[panes::Tab::Tuning, panes::Tab::Console]);
+    assert!(collapsed(&state, panes::Tab::Tuning) && collapsed(&state, panes::Tab::Console));
 
     // The lower share's own arrow, at 0.55 down the rail.
     let at = egui::pos2(
@@ -847,7 +846,7 @@ fn a_folded_columns_lower_arrow_opens_its_own_pane() {
     h.frame(&mut state, vec![press(at, false)]);
     h.settle_folds(&mut state);
 
-    assert!(!collapsed(&state, panes::Tab::Notes), "the lower arrow opens the lower pane");
+    assert!(!collapsed(&state, panes::Tab::Console), "the lower arrow opens the lower pane");
     assert!(
         collapsed(&state, panes::Tab::Tuning),
         "and only that one — the settings leaf keeps its own arrow",
@@ -876,11 +875,11 @@ fn a_folded_columns_stacked_arrow_is_inert() {
     let mut h = DockHarness::new();
     h.settle(&mut state);
     h.collapse_click(&mut state, panes::Tab::Tuning);
-    let rail = rail_rect(&state, &[panes::Tab::Tuning, panes::Tab::Notes]);
+    let rail = rail_rect(&state, &[panes::Tab::Tuning, panes::Tab::Console]);
 
     // Where egui_dock puts the log leaf's button: directly under the settings
     // leaf's, one tab bar down from the top of the rail.
-    let path = state.workspace.dock.find_tab(&panes::Tab::Notes).expect("tab is in the dock");
+    let path = state.workspace.dock.find_tab(&panes::Tab::Console).expect("tab is in the dock");
     let stacked = state.workspace.dock[path.surface][path.node].rect().expect("laid out");
     let at = stacked.left_top() + egui::vec2(12.0, crate::theme::TAB_BAR_HEIGHT * 0.5);
     assert!(
@@ -893,7 +892,7 @@ fn a_folded_columns_stacked_arrow_is_inert() {
     h.settle_folds(&mut state);
 
     assert!(
-        collapsed(&state, panes::Tab::Notes),
+        collapsed(&state, panes::Tab::Console),
         "the log pane should not open from a button that is no longer drawn",
     );
 }
@@ -1001,7 +1000,7 @@ fn a_dock_folded_whole_is_a_strip_of_named_rails() {
 
     let rail = rail_rect(
         &state,
-        &[panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning, panes::Tab::Notes],
+        &[panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning, panes::Tab::Console],
     );
     let mut named: Vec<String> =
         rail_labels(&output, rail).into_iter().map(|(name, _)| name).collect();
@@ -1010,7 +1009,7 @@ fn a_dock_folded_whole_is_a_strip_of_named_rails() {
     // (`Tab::Spectral`'s own title), the settings column and the log under it.
     assert_eq!(
         named,
-        ["Analyzer", "Lattice", "Notes", "Tuning"],
+        ["Analyzer", "Console", "Lattice", "Tuning"],
         "every rail in the strip should name the pane it opens",
     );
 }

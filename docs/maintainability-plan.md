@@ -1,5 +1,10 @@
 # Long-term maintainability
 
+**Implementation relevance:** the usage inventory recorded below is the state on 2026-09-19 and two of its leads have since been decided and built.
+Playhead is retired under [#988](https://github.com/yan-h/harmonigraph/pull/988) and the extra public export layouts under [#974](https://github.com/yan-h/harmonigraph/issues/974).
+[#975](https://github.com/yan-h/harmonigraph/issues/975) then retired the Notes pane and the browser tuning laboratory's presentation, and explicitly KEPT Console and the standalone application.
+Read the inventory's "not approved removals" as the position before that decision, not as current standing.
+
 Last updated: 2026-09-19.
 Status: the ten-package first batch is complete; the technical follow-up is tracked in #954.
 
@@ -107,9 +112,14 @@ standalone application or adaptive-tuning laboratory.
 He also reported no use of Playhead,
 single-pane exports or custom export arrangements,
 while explicitly retaining the controls to arrange and orient Lattice and Analyzer together.
-The four unused panes/developer interfaces remain [usage leads](requirements-value-audit.md#whole-feature-usage-inventory),
+The four unused panes/developer interfaces were [usage leads](requirements-value-audit.md#whole-feature-usage-inventory) at that point,
 not approved removals.
-The later explicit approval settles Playhead and extra public export layouts only.
+Yan then decided two of them on 2026-09-19 ([#975](https://github.com/yan-h/harmonigraph/issues/975)):
+the Notes pane and the browser laboratory's presentation are retired,
+and Console and the standalone application are kept.
+Console is kept for a reason worth carrying forward rather than revisiting:
+its buffer is the only in-app sink a refused saved blob has,
+and retiring the Notes pane made that sink carry more, not less.
 The [feature-retirement trace](feature-retirement-discovery.md) now identifies concrete removal boundaries,
 including shared tests, musical reference data and diagnostic sinks that need to remain available.
 

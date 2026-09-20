@@ -143,7 +143,12 @@ impl Settings {
 /// A second `RawInput` built by hand is a second place for that field to go
 /// missing, and nothing downstream reports the loss — the frames still render,
 /// with labels the atlas had no room for.
-fn frame_input(screen: egui::Rect, now: f64, max_texture_side: usize) -> egui::RawInput {
+///
+/// `pub(crate)` for the probes in [`crate::frames`], which each used to build
+/// their own: a probe is a picture of what the export draws, so a probe drawn
+/// against a ceiling this constructor does not set is a picture of nothing that
+/// ships.
+pub(crate) fn frame_input(screen: egui::Rect, now: f64, max_texture_side: usize) -> egui::RawInput {
     egui::RawInput {
         screen_rect: Some(screen),
         time: Some(now),

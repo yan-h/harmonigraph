@@ -628,6 +628,9 @@ pub(crate) fn draw_node_labels(
             // external monitor and soft on the laptop panel.
             let want = want * node.scale.max(0.6);
             let (scale, magnify) = crate::text::ladder(want, NAME_SIZE, ppp);
+            let size = crate::marks::NameSize { scale, magnify };
+            let name_ink =
+                crate::marks::NameInk { fill: ink.gamma_multiply(strength), outline: shadow };
             // What an off-sheet node says, and whether it says anything: its
             // name shares a LETTER and an accidental with the node two fifths
             // down, but not the whole string — the septimal mark is the column
@@ -642,10 +645,8 @@ pub(crate) fn draw_node_labels(
                     ui.painter(),
                     center,
                     &format!("{:.0}", node.cents),
-                    ink.gamma_multiply(strength),
-                    shadow,
-                    scale,
-                    magnify,
+                    name_ink,
+                    size,
                 ),
                 SevensLabel::Name => {
                     let name = display_note_name(node.lattice_pos, view.tempered());
@@ -654,10 +655,8 @@ pub(crate) fn draw_node_labels(
                         ui.painter(),
                         center,
                         name,
-                        ink.gamma_multiply(strength),
-                        shadow,
-                        scale,
-                        magnify,
+                        name_ink,
+                        size,
                         // A node's label sits ON its node, so the node is the
                         // middle of it.
                         crate::marks::NameLead::Centred,

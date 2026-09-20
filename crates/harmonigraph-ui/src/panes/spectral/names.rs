@@ -1195,26 +1195,26 @@ pub(crate) fn note_name(
 /// The node in `window` to name a pitch by: the closest match, and among
 /// matches equally close the one that spells most plainly.
 ///
-/// Its own function rather than
-/// [`nearest_shown_node`](crate::panes::nearest_shown_node), which it otherwise
-/// mirrors exactly, because of the tiebreak — and the tiebreak matters only
-/// where that function has nothing to go on.
+/// The second half of that sentence is the whole function. A plain minimum
+/// over the same filter would do everywhere the tiebreak has nothing to go on,
+/// and would be wrong everywhere else.
 ///
-/// In a JUST tuning the two agree and there is nothing to break: distinct
-/// lattice positions are distinct pitches, so at the half-cent tolerance
-/// exactly one node can match. In an EQUAL temperament — which is the default
-/// this plugin opens on — the lattice collapses: twelve fifths are seven
-/// octaves exactly, so the origin and `(12,0,0)` are one pitch, three major
-/// thirds are an octave, and a dozen visible nodes answer to middle C. All are
-/// the same distance (zero) from it, so the plain minimum returns whichever
-/// the iteration reached first, which is the CORNER of the visible window:
-/// middle C names itself `F♭5+6`, and renames itself whenever the view is
-/// panned. True, useless, and not what the lattice shows you, which is the lit
-/// node you were looking at.
+/// In a JUST tuning there is nothing to break: distinct lattice positions are
+/// distinct pitches, so at the half-cent tolerance exactly one node can match.
+/// In an EQUAL temperament — which is the default this plugin opens on — the
+/// lattice collapses: twelve fifths are seven octaves exactly, so the origin
+/// and `(12,0,0)` are one pitch, three major thirds are an octave, and a dozen
+/// visible nodes answer to middle C. All are the same distance (zero) from it,
+/// so a plain minimum returns whichever the iteration reached first, which is
+/// the CORNER of the visible window: middle C names itself `F♭5+6`, and
+/// renames itself whenever the view is panned. True, useless, and not what the
+/// lattice shows you, which is the lit node you were looking at.
 ///
-/// Left where it is rather than pushed into the shared function because the
-/// shared one answers "which node do I light", where any of a collapsed set
-/// will do, and this one answers "what do I call it", where they differ.
+/// Kept apart from [`window_shows_node`](crate::panes::window_shows_node),
+/// which walks the same filter, because that one asks whether the pitch is on
+/// the lattice AT ALL — where any of a collapsed set will do and the walk can
+/// stop at the first — and this one asks what to call it, where they differ and
+/// it cannot.
 fn naming_node(
     window: &DrawnWindow,
     view: &ViewConfig,
@@ -1336,10 +1336,8 @@ pub(super) fn draw(
             painter,
             label.lead,
             label.name,
-            theme::text(),
-            theme::picture(),
-            scale,
-            magnify,
+            marks::NameInk { fill: theme::text(), outline: theme::picture() },
+            marks::NameSize { scale, magnify },
             // Against the LETTER's ink, not the box's centre — which is the
             // whole of issue #349's fix and the reason `NoteLabel` carries a
             // point of its own. The box is an estimate and has to stay one

@@ -2137,3 +2137,33 @@ fn retired_playhead_refuses_the_entire_editor_and_appearance_document() {
     assert_ne!(appearance, dropped);
     assert!(AppearanceDocument::parse(&dropped).is_err());
 }
+
+/// A saved dock naming the retired `Notes` tab is refused WHOLE, and says so.
+///
+/// Its own test beside the retired-variant ones above because the fixture is
+/// the one every previous build wrote: `Notes` shipped in `default_dock`, so a
+/// project that never re-docked anything has it, and the refusal therefore
+/// reaches nearly every blob in existence rather than the corner an
+/// orientation or a spectrogram mode reaches. What it costs is the rest of the
+/// document — `dock` is the one `UiPersist` field with no `serde(default)` to
+/// fall back on, so the camera goes with it — and the floor is no help at any
+/// value, because the version is read out of a value that never parsed.
+#[test]
+fn a_saved_dock_naming_the_retired_notes_tab_is_refused_whole() {
+    let mut state = fresh();
+    state.picture.appearance.camera.yaw = 1.23;
+    let saved = state.save_persist();
+    // The log leaf as every build before #975 wrote it, Notes first.
+    let dropped = saved.replace("tabs:[Console]", "tabs:[Notes,Console]");
+    assert_ne!(dropped, saved, "the splice must land for this to test anything");
+
+    let mut restored = fresh();
+    let before = restored.save_persist();
+    assert!(!restored.load_persist(&dropped), "a dock naming Notes is not applied");
+    assert_eq!(restored.save_persist(), before, "the camera and the layout go with it");
+    assert!(
+        restored.picture.runtime.console.lines().any(|line| line.contains("did not parse")),
+        "the refusal was silent; console holds {:?}",
+        restored.picture.runtime.console.lines().collect::<Vec<_>>(),
+    );
+}

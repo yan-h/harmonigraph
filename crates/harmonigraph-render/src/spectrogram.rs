@@ -165,10 +165,9 @@ impl SpectrogramVertex {
     };
 }
 
-/// Draw `vertices` (a triangle list) into `rect`. `pane_id` must be unique per
-/// spectrogram shown in the same frame — each gets its own grid copy, which is
-/// the expensive thing here, and the pipeline is shared.
-/// `pass_nr` is the painter context's cumulative pass number.
+/// Draw `vertices` (a triangle list) into `rect`. See [`crate::PaneIds`]: each
+/// pane id gets its own grid copy, which is the expensive thing here, and the
+/// pipeline is shared.
 #[allow(clippy::too_many_arguments)]
 pub fn spectrogram_paint_callback(
     rect: egui::Rect,
@@ -177,8 +176,7 @@ pub fn spectrogram_paint_callback(
     read: SpectrogramRead,
     shades: SpectrogramShades,
     target_format: wgpu::TextureFormat,
-    pane_id: u64,
-    pass_nr: u64,
+    ids: crate::PaneIds,
     atmosphere: Option<SpectrogramAtmosphere>,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
@@ -190,8 +188,8 @@ pub fn spectrogram_paint_callback(
             read,
             shades,
             target_format,
-            pane_id,
-            pass_nr,
+            pane_id: ids.pane,
+            pass_nr: ids.pass_nr,
             atmosphere,
         },
     )

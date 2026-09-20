@@ -53,19 +53,18 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
         image: std::sync::Arc::new(egui::ColorImage::filled([4, 4], egui::Color32::WHITE)),
         key: 99,
     };
-    window.atlas.upload(&shooter.device, &shooter.queue, &atlas);
-    window.marks.upload(&shooter.device, &shooter.queue, &atlas);
-    window.sdf_key = 99;
+    window.sheets.atlas.upload(&shooter.device, &shooter.queue, &atlas);
+    window.sheets.marks.upload(&shooter.device, &shooter.queue, &atlas);
+    window.sheets.sdf_key = 99;
     // Clone the compiled owner out of a populated, still-live context. Its
     // type excludes mutable state, and constructing another context must
     // initialize every such field independently.
     let reset =
         LatticeResources::from_compiled(window.compiled.clone(), &shooter.device, &shooter.queue);
     assert!(reset.panes.is_empty());
-    assert!(reset.atlas.view().is_none() && reset.marks.view().is_none());
-    assert_eq!(reset.sdf_key, 0);
+    assert!(reset.sheets.atlas.view().is_none() && reset.sheets.marks.view().is_none());
+    assert_eq!(reset.sheets.sdf_key, 0);
     assert_eq!(reset.compiled.scenes[0].nodes, pipeline);
-    assert_eq!(reset.compiled.blank, window.compiled.blank);
     if let Some(timer) = &window.timer {
         let fresh = reset.timer.as_ref().expect("same timestamp-capable device");
         assert_ne!(fresh.set, timer.set);
@@ -73,8 +72,8 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
         assert!(fresh.state == TimerState::Idle);
         assert!(!std::sync::Arc::ptr_eq(&fresh.ready, &timer.ready));
     }
-    assert_eq!(window.sdf_key, 99);
-    assert!(window.atlas.holds(&atlas) && window.marks.holds(&atlas));
+    assert_eq!(window.sheets.sdf_key, 99);
+    assert!(window.sheets.atlas.holds(&atlas) && window.sheets.marks.holds(&atlas));
     drop(reset);
     shooter.resources = CallbackResources::default();
 
@@ -120,12 +119,12 @@ fn startup_worker_preserves_pixels_and_reuses_its_completed_pipelines() {
         wgpu::TextureFormat::Bgra8Unorm
     };
     assert!(matches!(
-        cache.poll_startup(&instance, &shooter.device, &shooter.queue, old_format),
+        cache.poll_startup(&instance, &shooter.device, old_format),
         Status::Preparing(_)
     ));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        match cache.poll_startup(&instance, &shooter.device, &shooter.queue, shooter.format) {
+        match cache.poll_startup(&instance, &shooter.device, shooter.format) {
             Status::Ready { built: true } => break,
             Status::Preparing(_) => {
                 assert!(std::time::Instant::now() < deadline, "startup worker did not finish");
@@ -145,7 +144,7 @@ fn startup_worker_preserves_pixels_and_reuses_its_completed_pipelines() {
     );
     shooter.resources = CallbackResources::default();
     assert_eq!(
-        cache.poll_startup(&instance, &shooter.device, &shooter.queue, shooter.format),
+        cache.poll_startup(&instance, &shooter.device, shooter.format),
         Status::Ready { built: false },
         "a second window must reuse the completed job"
     );

@@ -63,20 +63,34 @@ impl CallbackTrait for LatticeCallback {
         // inside the scene pass below, so the textures they read have to be the
         // current ones by the time that pass is recorded.
         let write_start = std::time::Instant::now();
-        resources.bind_sheets(
-            device,
-            queue,
-            shared_atlas.as_ref(),
-            self.atlas.as_ref(),
-            self.marks.as_ref(),
-            shared_sdf.key,
-        );
+        // The return says whether a binding was replaced, and this callback
+        // has nothing to do about it where the text callback carries every
+        // pane already prepared this frame onto the new texture
+        // (`text::TextResources::bind_sheets`). The difference is not an
+        // omission — it is where the two record their draws. That callback
+        // draws in `paint`, after every `prepare` in the frame, so a pane's
+        // bind group and uniforms have to still be right once some LATER pane
+        // has grown a sheet under it. A lattice pane draws in its OWN
+        // `prepare`, into its own offscreen: by the time a later pane uploads
+        // anything, this one's pass is encoded, holding the bind group it was
+        // recorded with.
+        //
+        // Which makes the carry-over not merely unnecessary here but wrong.
+        // The pass is encoded, not submitted — egui-wgpu runs the shared
+        // encoder after every prepare — and a `write_buffer` is ordered ahead
+        // of that encoder, so rewriting a prepared pane's atlas size would
+        // reach a pass that is still going to sample the texture it was
+        // recorded against. Old texture, new size, which is exactly the
+        // mismatch the text callback's version exists to prevent, arriving by
+        // the other road.
+        let _ =
+            resources.sheets.bind(device, queue, shared_atlas.as_ref(), &self.sheets, &shared_sdf);
         // The first frames of a session can arrive before any pane has drawn a
         // glyph, and the labels wait for a font texture. Gated on the FONT
         // atlas alone: a mark is always drawn beside a letter, so a frame with
         // a mark in it is a frame with type in it.
-        let has_atlas = !resources.atlas.is_empty();
-        let sheet_sizes = resources.sheet_sizes();
+        let has_atlas = !resources.sheets.atlas.is_empty();
+        let sheet_sizes = resources.sheets.sizes();
 
         let frame = self.prepare_targets(device, screen_descriptor);
         let pane = resources.pane_buffers(

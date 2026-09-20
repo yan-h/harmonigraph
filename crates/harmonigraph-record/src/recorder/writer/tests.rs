@@ -921,7 +921,7 @@ fn a_take_ending_on_an_unvoiced_pass_renders_the_pass_that_was_played() {
     let status = Mutex::new(String::new());
     let (mut producer, mut consumer) = rtrb::RingBuffer::new(64);
     let mut open =
-        Open::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status);
+        Recording::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status);
     assert!(open.is_some(), "the fixture has to actually open a file to write into");
 
     let note = Entry::Note {
@@ -935,7 +935,11 @@ fn a_take_ending_on_an_unvoiced_pass_renders_the_pass_that_was_played() {
     producer.push(Entry::NewPass).expect("ring has room");
     producer.push(Entry::Param { t: 1.0, key: 0, value: 0.5 }).expect("ring has room");
     drain(&mut consumer, &mut open, &status);
-    assert_eq!(open.as_ref().expect("still open").pass, 2, "the split did open a second file");
+    assert_eq!(
+        open.as_ref().expect("still open").current.number,
+        2,
+        "the split did open a second file"
+    );
     assert_eq!(
         open.expect("still open").take_path(),
         base,
@@ -945,16 +949,79 @@ fn a_take_ending_on_an_unvoiced_pass_renders_the_pass_that_was_played() {
     // A voiced tail renders itself, which is the ordinary loop-recording
     // case and the reason this cannot just always pick the first pass.
     let mut open =
-        Open::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status);
+        Recording::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status);
     producer.push(note).expect("ring has room");
     producer.push(Entry::NewPass).expect("ring has room");
     producer.push(note).expect("ring has room");
     drain(&mut consumer, &mut open, &status);
     assert_eq!(
         open.expect("still open").take_path(),
-        Open::path_for(&base, 2),
+        Pass::path_for(&base, 2),
         "the second pass was played too, so it is the take",
     );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// What a pass boundary carries, and what it resets.
+///
+/// The [`Recording`] / [`Pass`] split is what makes the carry structural —
+/// nothing is copied across a rollover any more — so what this pins is the
+/// split itself rather than a list of assignments that has to be kept in step
+/// with the struct. Getting one entry of that list wrong is what left a take
+/// exportable with its history missing and nothing saying so (#712).
+#[test]
+fn a_rollover_carries_the_recording_and_resets_the_file() {
+    let dir = std::env::temp_dir().join(format!("harmonigraph-rollover-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let base = dir.join("take.take");
+    let status = Mutex::new(String::new());
+    let mut recording =
+        Recording::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status)
+            .expect("the fixture has to open a real file to roll over from");
+    recording.epoch = 4;
+    recording.configuration_enabled = true;
+    recording.source_enabled = true;
+    let marker = harmonigraph_take::IncompleteRecord {
+        first_publication: 7,
+        last_publication: 9,
+        reason: harmonigraph_take::canonical::GapReasonRecord::PublicationFull,
+    };
+    recording.mark_incomplete(marker).expect("the first pass takes the marker");
+    let first = &mut recording.current;
+    first.voiced = true;
+    first.producer_closed = true;
+    first.configuration_closed = true;
+    first.source_closed = true;
+    first.configuration_complete = true;
+    first.source_complete = true;
+
+    recording.next_pass(&status).expect("the rollover opens pass 2");
+
+    assert_eq!(
+        recording.current.number, 2,
+        "the fixture must cross the boundary to prove anything"
+    );
+    assert_eq!(recording.epoch, 4, "the epoch is the recording's");
+    assert!(recording.configuration_enabled, "so is each lane switch");
+    assert!(recording.source_enabled, "so is each lane switch");
+    assert_eq!(recording.incomplete, Some(marker), "and so is the incomplete marker (#712)");
+    assert_eq!(
+        harmonigraph_take::Take::read(&recording.current.path).unwrap().incomplete,
+        Some(marker),
+        "which the new FILE holds too, not merely the recording",
+    );
+    assert_eq!(recording.last_voiced.as_deref(), Some(base.as_path()));
+    assert_eq!(recording.last_voiced_number, 1);
+    assert_eq!(recording.take_path(), base, "so an unvoiced pass 2 renders the one with the music");
+    assert_eq!(recording.retained.len(), 1, "and pass 1 waits for the lanes that are enabled");
+    let second = &recording.current;
+    assert!(!second.voiced, "nothing has played in the new file");
+    assert!(!second.producer_closed, "and no lane has closed over it");
+    assert!(!second.configuration_closed);
+    assert!(!second.source_closed);
+    assert!(!second.configuration_complete);
+    assert!(!second.source_complete);
 
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -986,7 +1053,7 @@ fn source_scoped_notes_reach_the_take_with_their_original_times() {
     let path = dir.join("source.take");
     let status = Mutex::new(String::new());
     let mut open =
-        Open::create(header_for(48_000.0, String::new()), path.clone(), 1, None, &status);
+        Recording::create(header_for(48_000.0, String::new()), path.clone(), 1, None, &status);
     assert!(open.is_some(), "fixture must reach the file writer");
     assert!(drain(&mut b.entries, &mut open, &status));
     drop(open);
@@ -1008,7 +1075,7 @@ fn configuration_pass_capacity_requires_actual_retirement_before_reuse() {
             .join(format!("harmonigraph-pass-bound-{}-{retire}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let status = Mutex::new(String::new());
-        let mut open = Open::create(
+        let mut open = Recording::create(
             header_for(48_000.0, String::new()),
             dir.join("record.take"),
             1,
@@ -1404,7 +1471,7 @@ fn re_rendering_with_no_take_yet_explains_itself() {
 #[test]
 fn the_first_pass_keeps_the_takes_name_and_later_passes_are_suffixed() {
     let base = std::path::Path::new("/takes/take-1700000000.take");
-    assert_eq!(Open::path_for(base, 1), base);
-    assert_eq!(Open::path_for(base, 2), std::path::Path::new("/takes/take-1700000000-2.take"));
-    assert_eq!(Open::path_for(base, 3), std::path::Path::new("/takes/take-1700000000-3.take"));
+    assert_eq!(Pass::path_for(base, 1), base);
+    assert_eq!(Pass::path_for(base, 2), std::path::Path::new("/takes/take-1700000000-2.take"));
+    assert_eq!(Pass::path_for(base, 3), std::path::Path::new("/takes/take-1700000000-3.take"));
 }

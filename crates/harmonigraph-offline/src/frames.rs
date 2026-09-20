@@ -281,6 +281,7 @@ fn clear_value(color: egui::Color32) -> wgpu::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use harmonigraph_ui::PictureState;
 
     #[test]
     fn row_stride_is_padded_to_wgpus_alignment() {
@@ -302,6 +303,105 @@ mod tests {
         assert_eq!(value.g, 0.0);
         assert_eq!(value.b, 1.0);
         assert_eq!(value.a, 1.0);
+    }
+
+    /// The standing setup every probe below shares: a headless renderer, a
+    /// themed context at one scale, and the single-pane lattice layout all of
+    /// them shoot through.
+    ///
+    /// It exists for the `RawInput` rather than for the line count. Each probe
+    /// used to build one by hand, and the field that decides whether a probe is
+    /// a picture of what the EXPORT draws is invisible by its absence —
+    /// `max_texture_side`, issue #368. [`Self::frame`] therefore goes through
+    /// [`crate::render::frame_input`], the render loop's own constructor, so a
+    /// field added there arrives here rather than being forgotten eight times.
+    ///
+    /// What stays with each probe is its `PictureState`: the ground, the
+    /// tuning, the clocks, the notes and the dial under test are the reading
+    /// conditions, and those are the expensive part of a probe rather than the
+    /// plumbing this holds.
+    struct ProbeSheet {
+        renderer: Renderer,
+        context: egui::Context,
+        /// Where each pane stands, in points.
+        placements: Vec<(harmonigraph_ui::Pane, egui::Rect)>,
+        screen: egui::Rect,
+        /// The LAYOUT's ground, which is the render pass's clear colour — not
+        /// the same thing as the ground a probe sets on its own state, and the
+        /// probes that want them to agree pass this to `set_background`.
+        background: (u8, u8, u8),
+        size: [u32; 2],
+        pixels_per_point: f32,
+    }
+
+    impl ProbeSheet {
+        /// `None` when the machine has no usable GPU adapter — every caller
+        /// says so and returns, a probe having nothing to assert.
+        fn new(size: [u32; 2], pixels_per_point: f32) -> Option<ProbeSheet> {
+            let renderer = Renderer::new(size)?;
+            let context = egui::Context::default();
+            harmonigraph_ui::theme::apply_theme(&context);
+            context.set_pixels_per_point(pixels_per_point);
+
+            let layout = single_pane(harmonigraph_ui::Pane::Lattice);
+            let points =
+                egui::vec2(size[0] as f32 / pixels_per_point, size[1] as f32 / pixels_per_point);
+            Some(ProbeSheet {
+                renderer,
+                context,
+                placements: layout.resolve(points),
+                screen: egui::Rect::from_min_size(egui::Pos2::ZERO, points),
+                background: layout.background,
+                size,
+                pixels_per_point,
+            })
+        }
+
+        /// Draw one frame at `now` and hand back its pixels, tightly packed
+        /// RGBA8 — for the fixture that MEASURES a frame rather than saving it,
+        /// and for the probe that steps a clock and keeps only some of what it
+        /// draws.
+        fn frame(&mut self, state: &mut PictureState, now: f64) -> Vec<u8> {
+            let input =
+                crate::render::frame_input(self.screen, now, self.renderer.max_texture_side());
+            let placements = &self.placements;
+            let output = self.context.run_ui(input, |ui| {
+                for (surface, (pane, rect)) in placements.iter().enumerate() {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                    harmonigraph_ui::draw_pane(&mut child, *pane, state, now, surface);
+                }
+            });
+            let primitives = self.context.tessellate(output.shapes, self.pixels_per_point);
+            self.renderer.render_to_vec(
+                &primitives,
+                &output.textures_delta,
+                self.pixels_per_point,
+                egui::Color32::from_rgb(self.background.0, self.background.1, self.background.2),
+            )
+        }
+
+        /// [`Self::frame`], written to `target/scratch/<name>.png`.
+        fn shoot(&mut self, state: &mut PictureState, now: f64, name: &str) {
+            let bytes = self.frame(state, now);
+            self.save(&bytes, name);
+        }
+
+        /// Write already-drawn pixels and print where they went, which is what
+        /// makes a probe readable under `--nocapture`.
+        fn save(&self, bytes: &[u8], name: &str) {
+            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
+            std::fs::create_dir_all(&dir).expect("a scratch directory");
+            let path = dir.join(format!("{name}.png"));
+            image::save_buffer(
+                &path,
+                bytes,
+                self.size[0],
+                self.size[1],
+                image::ExtendedColorType::Rgba8,
+            )
+            .expect("write the png");
+            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+        }
     }
 
     /// Which of the ring's readings a shot is of: none of them (the MIDI
@@ -363,21 +463,14 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_node_glow_draws_a_picture() {
-        use harmonigraph_ui::{draw_pane, PictureState};
-
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
         const NOW: f64 = 1.0;
 
-        let Some(mut renderer) = Renderer::new(SIZE) else {
+        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
             eprintln!("no usable GPU adapter; nothing rendered");
             return;
         };
-        let context = egui::Context::default();
-        harmonigraph_ui::theme::apply_theme(&context);
-        context.set_pixels_per_point(PPP);
-
-        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
         let mut state = PictureState::new(FORMAT);
         // The DAW's own lattice ground rather than the fixture's near-black, so
         // what the light lands on here is what it lands on there.
@@ -397,14 +490,6 @@ mod tests {
             ));
         }
 
-        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
-        let placements = layout.resolve(points);
-        let background =
-            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
-
         let fresh = harmonigraph_scene::ViewConfig::default();
         let shots: Vec<(f32, f32)> = vec![
             (fresh.glow_reach, fresh.glow_strength),
@@ -419,34 +504,9 @@ mod tests {
             state.appearance.camera.zoom_by(2.5);
             state.appearance.view.glow_reach = reach;
             state.appearance.view.glow_strength = strength;
-            let output = context.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(screen),
-                    time: Some(NOW),
-                    // The device's own limit, as the render loop reports it —
-                    // a probe drawn against a different ceiling from the export
-                    // is a probe of a picture nothing ships.
-                    max_texture_side: Some(renderer.max_texture_side()),
-                    ..Default::default()
-                },
-                |ui| {
-                    for (surface, (pane, rect)) in placements.iter().enumerate() {
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW, surface);
-                    }
-                },
-            );
-            let primitives = context.tessellate(output.shapes, PPP);
-            let bytes =
-                renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
-            let path = dir.join(format!(
-                "node-glow-reach{:.0}-strength{:.0}.png",
-                reach * 100.0,
-                strength * 100.0,
-            ));
-            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
-                .expect("write the png");
-            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+            let name =
+                format!("node-glow-reach{:.0}-strength{:.0}", reach * 100.0, strength * 100.0);
+            sheet.shoot(&mut state, NOW, &name);
         }
     }
 
@@ -476,21 +536,14 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_shadow_against_the_octave_gap() {
-        use harmonigraph_ui::{draw_pane, PictureState};
-
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
         const NOW: f64 = 1.0;
 
-        let Some(mut renderer) = Renderer::new(SIZE) else {
+        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
             eprintln!("no usable GPU adapter; nothing rendered");
             return;
         };
-        let context = egui::Context::default();
-        harmonigraph_ui::theme::apply_theme(&context);
-        context.set_pixels_per_point(PPP);
-
-        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
         let mut state = PictureState::new(FORMAT);
         state.set_background((24, 25, 29));
         state.runtime.frame_params.fade_time = 0.0;
@@ -508,13 +561,6 @@ mod tests {
             ));
         }
 
-        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
-        let placements = layout.resolve(points);
-        let background =
-            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
         let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "after".to_string());
 
         let home = state.appearance.camera;
@@ -522,27 +568,7 @@ mod tests {
             state.appearance.camera = home;
             state.appearance.camera.zoom_by(3.5);
             state.appearance.view.octave_gap = gap;
-            let output = context.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(screen),
-                    time: Some(NOW),
-                    max_texture_side: Some(renderer.max_texture_side()),
-                    ..Default::default()
-                },
-                |ui| {
-                    for (surface, (pane, rect)) in placements.iter().enumerate() {
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW, surface);
-                    }
-                },
-            );
-            let primitives = context.tessellate(output.shapes, PPP);
-            let bytes =
-                renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
-            let path = dir.join(format!("gap{:.0}-{tag}.png", gap * 100.0));
-            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
-                .expect("write the png");
-            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+            sheet.shoot(&mut state, NOW, &format!("gap{:.0}-{tag}", gap * 100.0));
         }
     }
 
@@ -580,28 +606,14 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_resting_markers_draw_a_picture() {
-        use harmonigraph_ui::{draw_pane, PictureState};
-
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
         const NOW: f64 = 1.0;
 
-        let Some(mut renderer) = Renderer::new(SIZE) else {
+        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
             eprintln!("no usable GPU adapter; nothing rendered");
             return;
         };
-        let context = egui::Context::default();
-        harmonigraph_ui::theme::apply_theme(&context);
-        context.set_pixels_per_point(PPP);
-
-        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
-        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
-        let placements = layout.resolve(points);
-        let background =
-            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
 
         let fresh = harmonigraph_scene::ViewConfig::default();
         use harmonigraph_scene::NoteNames;
@@ -653,36 +665,14 @@ mod tests {
             state.appearance.view.plus_arm = size;
             state.appearance.view.plus_width = width;
             state.appearance.view.plus_taper = taper;
-            let output = context.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(screen),
-                    time: Some(NOW),
-                    // The device's own limit, as the render loop reports it —
-                    // a probe drawn against a different ceiling from the export
-                    // is a probe of a picture nothing ships.
-                    max_texture_side: Some(renderer.max_texture_side()),
-                    ..Default::default()
-                },
-                |ui| {
-                    for (surface, (pane, rect)) in placements.iter().enumerate() {
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW, surface);
-                    }
-                },
-            );
-            let primitives = context.tessellate(output.shapes, PPP);
-            let bytes =
-                renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
-            let path = dir.join(format!(
-                "plus-arm{:.0}-width{:.0}-taper{:.0}{}-{names:?}.png",
+            let name = format!(
+                "plus-arm{:.0}-width{:.0}-taper{:.0}{}-{names:?}",
                 size * 100.0,
                 width * 100.0,
                 taper * 100.0,
                 if chord { "-chord" } else { "" },
-            ));
-            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
-                .expect("write the png");
-            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+            );
+            sheet.shoot(&mut state, NOW, &name);
         }
     }
 
@@ -713,28 +703,14 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_lattice_shadows_draw_a_picture() {
-        use harmonigraph_ui::{draw_pane, PictureState};
-
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
         const NOW: f64 = 1.0;
 
-        let Some(mut renderer) = Renderer::new(SIZE) else {
+        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
             eprintln!("no usable GPU adapter; nothing rendered");
             return;
         };
-        let context = egui::Context::default();
-        harmonigraph_ui::theme::apply_theme(&context);
-        context.set_pixels_per_point(PPP);
-
-        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
-        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
-        let placements = layout.resolve(points);
-        let background =
-            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
         let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "after".to_string());
 
         let fresh = harmonigraph_scene::ShadowStyle::default();
@@ -757,27 +733,7 @@ mod tests {
             for style in state.appearance.view.shadow.groups_mut() {
                 style.width = shadow;
             }
-            let output = context.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(screen),
-                    time: Some(NOW),
-                    max_texture_side: Some(renderer.max_texture_side()),
-                    ..Default::default()
-                },
-                |ui| {
-                    for (surface, (pane, rect)) in placements.iter().enumerate() {
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW, surface);
-                    }
-                },
-            );
-            let primitives = context.tessellate(output.shapes, PPP);
-            let bytes =
-                renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
-            let path = dir.join(format!("shadows-{:.0}-{tag}.png", shadow * 100.0));
-            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
-                .expect("write the png");
-            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+            sheet.shoot(&mut state, NOW, &format!("shadows-{:.0}-{tag}", shadow * 100.0));
         }
     }
 
@@ -805,26 +761,14 @@ mod tests {
     /// fixture sets its own rather than taking the layout's.
     #[test]
     fn a_node_with_a_sheet_behind_it_is_still_a_lamp() {
-        use harmonigraph_ui::{draw_pane, PictureState};
-
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
         const NOW: f64 = 1.0;
 
-        let Some(mut renderer) = Renderer::new(SIZE) else {
+        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
             eprintln!("no usable GPU adapter; nothing rendered");
             return;
         };
-        let context = egui::Context::default();
-        harmonigraph_ui::theme::apply_theme(&context);
-        context.set_pixels_per_point(PPP);
-
-        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
-        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
-        let placements = layout.resolve(points);
-        let background =
-            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
 
         // One luma out of a pixel, the same weighting for both points.
         let at = |b: &[u8], x: u32, y: u32| {
@@ -863,23 +807,7 @@ mod tests {
                 ));
             }
             state.appearance.camera.zoom_by(2.0);
-            let output = context.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(screen),
-                    time: Some(NOW),
-                    max_texture_side: Some(renderer.max_texture_side()),
-                    ..Default::default()
-                },
-                |ui| {
-                    for (surface, (pane, rect)) in placements.iter().enumerate() {
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW, surface);
-                    }
-                },
-            );
-            let primitives = context.tessellate(output.shapes, PPP);
-            let bytes =
-                renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
+            let bytes = sheet.frame(&mut state, NOW);
             (at(&bytes, 600, 500), at(&bytes, 600, 690))
         };
 
@@ -934,8 +862,6 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_audio_ring_draws_a_picture() {
-        use harmonigraph_ui::{draw_pane, PictureState};
-
         const SIZE: [u32; 2] = [1200, 1000];
         // Retina-ish, so the wedges and the note names are resolved rather
         // than aliased — this is a picture to be looked at, not a fixture to
@@ -946,17 +872,12 @@ mod tests {
         // steady spectrum rather than of its own attack.
         const NOW: f64 = 1.0;
 
-        let Some(mut renderer) = Renderer::new(SIZE) else {
+        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
             eprintln!("no usable GPU adapter; nothing rendered");
             return;
         };
-        let context = egui::Context::default();
-        harmonigraph_ui::theme::apply_theme(&context);
-        context.set_pixels_per_point(PPP);
-
-        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
         let mut state = PictureState::new(FORMAT);
-        state.set_background(layout.background);
+        state.set_background(sheet.background);
         // Just intonation, which is what the panel is aimed at: a partial of a
         // just-tuned note lands ON its node rather than near it.
         state.runtime.tuning = harmonigraph_core::Tuning::just();
@@ -987,14 +908,6 @@ mod tests {
         ));
         let cfg = state.appearance.spectrum;
         state.runtime.spectrum.push_samples(&sawtooth(48.0, RATE), 1, RATE, NOW, &cfg);
-
-        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
-        let placements = layout.resolve(points);
-        let background =
-            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
 
         // Two distances, because the two questions are asked at different
         // ones. Whether the constellation READS is a question about a screen
@@ -1084,30 +997,7 @@ mod tests {
             // than it does, and by more the higher the gate is set.
             state.reset_ring();
             state.appearance.camera.zoom_by(zoom);
-            let output = context.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(screen),
-                    time: Some(NOW),
-                    // The device's own limit, as the render loop reports it —
-                    // a probe drawn against a different ceiling from the export
-                    // is a probe of a picture nothing ships.
-                    max_texture_side: Some(renderer.max_texture_side()),
-                    ..Default::default()
-                },
-                |ui| {
-                    for (surface, (pane, rect)) in placements.iter().enumerate() {
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW, surface);
-                    }
-                },
-            );
-            let primitives = context.tessellate(output.shapes, PPP);
-            let bytes =
-                renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
-            let path = dir.join(format!("{source}{at}.png"));
-            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
-                .expect("write the png");
-            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+            sheet.shoot(&mut state, NOW, &format!("{source}{at}"));
         }
     }
 
@@ -1140,8 +1030,6 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn a_released_note_lets_go_of_its_light() {
-        use harmonigraph_ui::{draw_pane, PictureState};
-
         const SIZE: [u32; 2] = [900, 900];
         const PPP: f32 = 2.0;
         const STEP: f64 = 1.0 / 30.0;
@@ -1150,22 +1038,10 @@ mod tests {
         // note still arriving says nothing about one leaving.
         const OFF: f64 = 1.5;
 
-        let Some(mut renderer) = Renderer::new(SIZE) else {
+        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
             eprintln!("no usable GPU adapter; nothing rendered");
             return;
         };
-        let context = egui::Context::default();
-        harmonigraph_ui::theme::apply_theme(&context);
-        context.set_pixels_per_point(PPP);
-
-        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
-        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
-        let placements = layout.resolve(points);
-        let background =
-            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
 
         // (tag, depth). The first is the fresh setting, as the reference.
         let shots: Vec<(&str, f32)> = vec![("fresh", 0.85), ("deep", 1.0)];
@@ -1204,34 +1080,13 @@ mod tests {
                     ));
                     released = true;
                 }
-                let output = context.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(screen),
-                        time: Some(now),
-                        max_texture_side: Some(renderer.max_texture_side()),
-                        ..Default::default()
-                    },
-                    |ui| {
-                        for (surface, (pane, rect)) in placements.iter().enumerate() {
-                            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                            draw_pane(&mut child, *pane, &mut state, now, surface);
-                        }
-                    },
-                );
-                let primitives = context.tessellate(output.shapes, PPP);
-                let bytes =
-                    renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
+                // Every step is DRAWN and only the wanted ones are kept: the
+                // picture is a function of the clock the frames before it ran
+                // on, so skipping the draw between two shots would change what
+                // the second of them shows.
+                let bytes = sheet.frame(&mut state, now);
                 if now + STEP * 0.5 >= want[shot] {
-                    let path = dir.join(format!("release-{tag}-t{:03.0}.png", (now - OFF) * 100.0));
-                    image::save_buffer(
-                        &path,
-                        &bytes,
-                        SIZE[0],
-                        SIZE[1],
-                        image::ExtendedColorType::Rgba8,
-                    )
-                    .expect("write the png");
-                    eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+                    sheet.save(&bytes, &format!("release-{tag}-t{:03.0}", (now - OFF) * 100.0));
                     shot += 1;
                 }
                 now += STEP;
@@ -1265,28 +1120,14 @@ mod tests {
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_marker_depth_order_draws_a_picture() {
-        use harmonigraph_ui::{draw_pane, PictureState};
-
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
         const NOW: f64 = 1.0;
 
-        let Some(mut renderer) = Renderer::new(SIZE) else {
+        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
             eprintln!("no usable GPU adapter; nothing rendered");
             return;
         };
-        let context = egui::Context::default();
-        harmonigraph_ui::theme::apply_theme(&context);
-        context.set_pixels_per_point(PPP);
-
-        let layout = crate::frames::single_pane(harmonigraph_ui::Pane::Lattice);
-        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
-        let placements = layout.resolve(points);
-        let background =
-            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
 
         for (tag, pitch, yaw) in [
             ("cabinet", 0.3f32, 0.4f32),
@@ -1316,27 +1157,7 @@ mod tests {
             state.appearance.camera.pitch = pitch;
             state.appearance.camera.yaw = yaw;
             state.appearance.camera.zoom_by(1.6);
-            let output = context.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(screen),
-                    time: Some(NOW),
-                    max_texture_side: Some(renderer.max_texture_side()),
-                    ..Default::default()
-                },
-                |ui| {
-                    for (surface, (pane, rect)) in placements.iter().enumerate() {
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW, surface);
-                    }
-                },
-            );
-            let primitives = context.tessellate(output.shapes, PPP);
-            let bytes =
-                renderer.render_to_vec(&primitives, &output.textures_delta, PPP, background);
-            let path = dir.join(format!("marker-depth-{tag}.png"));
-            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
-                .expect("write the png");
-            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+            sheet.shoot(&mut state, NOW, &format!("marker-depth-{tag}"));
         }
     }
 }

@@ -729,14 +729,15 @@ impl TextBatch {
             std::mem::take(&mut self.glyphs),
             std::mem::take(&mut self.layer_ends),
             shadow,
-            atlas,
-            marks,
+            harmonigraph_render::SheetUploads { font: atlas, marks },
             sdf,
             slide,
             state.surfaces.target_format,
-            pane_id,
+            harmonigraph_render::PaneIds {
+                pane: pane_id,
+                pass_nr: painter.ctx().cumulative_pass_nr(),
+            },
             shadow_surface_id,
-            painter.ctx().cumulative_pass_nr(),
         ));
     }
 
