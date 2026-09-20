@@ -142,12 +142,13 @@ impl FileWriter {
         self.pump.open.as_ref().map_or(0, |o| o.retained.len())
     }
     pub fn current_pass(&self) -> Option<u32> {
-        self.pump.open.as_ref().map(|o| o.pass)
+        self.pump.open.as_ref().map(|o| o.current.number)
     }
     pub fn new(capture: &Capture, path: std::path::PathBuf, spec: Option<AudioSpec>) -> Self {
         let status = Mutex::new(String::new());
         let mut open =
-            Open::create(harmonigraph_take::Header::default(), path, 1, spec, &status).unwrap();
+            Recording::create(harmonigraph_take::Header::default(), path, 1, spec, &status)
+                .unwrap();
         open.epoch = capture.fence.epoch();
         open.configuration_enabled = capture.fence.enabled.load(Ordering::Acquire);
         open.source_enabled = capture.fence.canonical_enabled.load(Ordering::Acquire);

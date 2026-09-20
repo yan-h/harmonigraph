@@ -56,7 +56,7 @@ pub fn channel() -> (Recorder, Control) {
                         thread_fence.fail();
                     } else {
                         pump.open =
-                            Open::create(*header, path, 1, spec, &thread_status).map(|mut open| {
+                            Recording::create(*header, path, 1, spec, &thread_status).map(|mut open| {
                                 #[cfg(all(test, feature = "test-support"))]
                                 { open.fail_marker_on_pass = *thread_fence.test_marker_failure.lock(); }
                                 open.epoch = epoch;
@@ -66,7 +66,8 @@ pub fn channel() -> (Recorder, Control) {
                                 open
                             });
                         #[cfg(feature = "test-support")]
-                        if let Some(audio) = pump.open.as_mut().and_then(|o| o.audio.as_mut()) {
+                        if let Some(audio) = pump.open.as_mut().and_then(|o| o.current.audio.as_mut())
+                        {
                             if let Some(limit) = *thread_fence.test_wav_limit.lock() {
                                 audio.limit_frames_for_test(limit);
                             }
@@ -74,7 +75,11 @@ pub fn channel() -> (Recorder, Control) {
                                 audio.fail_finish_for_test();
                             }
                         }
-                        if pump.open.as_ref().is_none_or(|o| spec.is_some() && o.audio.is_none()) {
+                        if pump
+                            .open
+                            .as_ref()
+                            .is_none_or(|o| spec.is_some() && o.current.audio.is_none())
+                        {
                             thread_fence.fail_with_message(thread_status.lock().clone());
                             pump.failure.account(&mut pump.open, epoch, &thread_status, Some(&thread_fence), harmonigraph_take::IncompleteRecord {
                                 reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
@@ -194,7 +199,7 @@ pub fn channel() -> (Recorder, Control) {
 /// files across two crates were testing a pump the plugin does not run (#895).
 #[derive(Default)]
 struct Pump {
-    open: Option<Open>,
+    open: Option<Recording>,
     fanout: CanonicalFanout,
     failure: FailureAccount,
     /// The Stop whose prefix is not closed yet, and the render it asked for.
@@ -234,8 +239,8 @@ impl Pump {
         // Acquire idle ownership BEFORE draining: the callback's release
         // follows its last AudioSamples record. A later callback's RMW
         // sees disarmed, so it cannot extend this prefix behind the drain.
-        if let Some(current) = self.open.as_mut() {
-            current.observe_idle_producer(fence);
+        if let Some(recording) = self.open.as_mut() {
+            recording.observe_idle_producer(fence);
         }
         let fanout = &mut self.fanout;
         let failure = &self.failure;
@@ -368,15 +373,15 @@ impl FailureAccount {
 
     fn account(
         &self,
-        open: &mut Option<Open>,
+        open: &mut Option<Recording>,
         epoch: u64,
         status: &Mutex<String>,
         fence: Option<&RecordFence>,
         record: harmonigraph_take::IncompleteRecord,
     ) {
         *status.lock() = CONFIGURATION_FAILURE.into();
-        if let Some(current) = open.as_mut() {
-            if let Err(error) = current.mark_incomplete(record) {
+        if let Some(recording) = open.as_mut() {
+            if let Err(error) = recording.mark_incomplete(record) {
                 if let Some(fence) = fence {
                     fence.fail_with_message(error.to_string());
                 } else {
@@ -399,7 +404,7 @@ struct CanonicalFanout {
     ///
     /// **The marker's lifetime is the recording, not the file:** it waits here
     /// until the recording has a file, is written into that one, and is then
-    /// carried by [`Open`] into every pass the recording opens afterwards. The
+    /// carried by [`Recording`] into every pass it opens afterwards. The
     /// two halves are what put it beyond a caller's memory — a gap cannot be
     /// dropped for arriving too early, and it cannot be left behind by a
     /// rollover, so the set of files a marked recording can export unmarked is
@@ -427,24 +432,24 @@ impl CanonicalFanout {
     fn drain(
         &mut self,
         publications: &mut publication::Consumer,
-        open: &mut Option<Open>,
+        open: &mut Option<Recording>,
         fence: &RecordFence,
         failure: &FailureAccount,
     ) -> usize {
         use harmonigraph_core::canonical::CanonicalEvent;
         self.waiting_file = false;
         // The first file to open after an unplaceable gap carries its warning,
-        // and from there the recording carries it — `Open::next_pass` writes it
-        // into every pass opened after this one, so the marker survives a
-        // rollover the same way it survives having arrived too early.
+        // and from there the recording carries it — `Recording::next_pass`
+        // writes it into every pass opened after this one, so the marker
+        // survives a rollover the same way it survives having arrived too early.
         //
         // STATED RESIDUAL rather than a reconciler: that file need not be the
         // one whose history was lost. An outage entirely inside a disarmed
         // stretch marks the next take too, which warns about a hole that take
         // does not have. Conservative in the direction #712 asks for — the
         // export still runs, and the alternative is the silence this repairs.
-        if let (Some(record), Some(current)) = (self.unplaced, open.as_mut()) {
-            if let Err(error) = current.mark_incomplete(record) {
+        if let (Some(record), Some(recording)) = (self.unplaced, open.as_mut()) {
+            if let Err(error) = recording.mark_incomplete(record) {
                 fence.fail_with_message(error.to_string());
             }
             self.unplaced = None;
@@ -470,7 +475,7 @@ impl CanonicalFanout {
                 if !failure.contains(address.epoch)
                     && open.as_ref().is_none_or(|o| {
                         o.epoch < address.epoch
-                            || (o.epoch == address.epoch && o.pass < address.pass)
+                            || (o.epoch == address.epoch && o.current.number < address.pass)
                     })
                 {
                     self.waiting_file = true;
@@ -482,10 +487,10 @@ impl CanonicalFanout {
                     if failure.contains(address.epoch) {
                         return true;
                     }
-                    if let Some(current) = open.as_mut() {
-                        if let Some(pass) = current.addressed(address) {
+                    if let Some(recording) = open.as_mut() {
+                        if let Some(pass) = recording.addressed(address) {
                             pass.source_complete = true;
-                            if let Err(error) = current.finish_completed_passes() {
+                            if let Err(error) = recording.finish_completed_passes() {
                                 fence.fail_with_message(error.to_string());
                             }
                         } else {
@@ -499,8 +504,8 @@ impl CanonicalFanout {
                     if failure.contains(epoch) {
                         return true;
                     }
-                    if let Some(current) = open.as_mut().filter(|o| o.epoch == epoch) {
-                        current.source_closed = true;
+                    if let Some(recording) = open.as_mut().filter(|o| o.epoch == epoch) {
+                        recording.current.source_closed = true;
                     } else {
                         fence.fail();
                     }
@@ -561,8 +566,8 @@ impl CanonicalFanout {
                             reason: harmonigraph_take::canonical::GapRecord::from(gap).reason,
                         };
                         match open.as_mut() {
-                            Some(current) => {
-                                if let Err(error) = current.mark_incomplete(record) {
+                            Some(recording) => {
+                                if let Err(error) = recording.mark_incomplete(record) {
                                     fence.fail_with_message(error.to_string());
                                 }
                             }
@@ -591,49 +596,281 @@ impl CanonicalFanout {
     }
 }
 
-/// The file currently being written, and what it takes to open the next
-/// one when the transport loops.
-struct Open {
+/// Everything the RECORDING owns: the state that outlives any one of its
+/// files, plus the pass currently being written.
+///
+/// **The split is the whole point.** Every field here crosses a pass boundary
+/// and every field on [`Pass`] is reset by one, so [`Recording::next_pass`]
+/// swaps `current` and carries the rest structurally. This used to be one
+/// struct with seven recording-scoped fields re-assigned by hand at the
+/// boundary and nothing checking the list was complete — `incomplete` failing
+/// to cross it was #712's silent export bug, and the shape of that bug was
+/// "the carry list is a list".
+struct Recording {
     epoch: u64,
-    retained: Vec<Open>,
-    producer_closed: bool,
+    /// Whether the configuration and source lanes publish for this recording,
+    /// read off the fence once at `Start`. They decide whether a rolled-over
+    /// pass is retained until its lane reports complete or finished on the
+    /// spot, so they belong to the recording rather than to any file.
     configuration_enabled: bool,
-    configuration_closed: bool,
-    configuration_complete: bool,
     source_enabled: bool,
-    source_closed: bool,
-    source_complete: bool,
-    last_voiced_number: u32,
-    /// The marker this RECORDING carries, not this file: whatever was written
-    /// into this pass, so [`Open::next_pass`] can write it into the next one.
-    incomplete: Option<harmonigraph_take::IncompleteRecord>,
-    #[cfg(all(test, feature = "test-support"))]
-    fail_marker_on_pass: Option<u32>,
-    writer: harmonigraph_take::Writer,
+    /// The header every pass of this recording opens with. A pass's own copy
+    /// names that file's WAV and alignment; this one names neither.
     header: harmonigraph_take::Header,
     /// The first pass's path; later passes append `-2`, `-3`, ...
     base: std::path::PathBuf,
-    pass: u32,
-    /// The WAV recorded beside this pass, if audio was asked for.
-    audio: Option<harmonigraph_take::WavWriter>,
     spec: Option<AudioSpec>,
-    /// Whether a note has STARTED in this pass. A pass without one draws an
-    /// empty lattice however many parameter records it holds, so it is not a
-    /// pass worth rendering; see [`Open::finish`].
-    voiced: bool,
-    /// The most recent earlier pass that was voiced, to fall back to.
+    /// The marker this RECORDING carries, not this file: written into
+    /// `current`, into everything in `retained`, and by [`Recording::next_pass`]
+    /// into every pass opened from here on.
+    incomplete: Option<harmonigraph_take::IncompleteRecord>,
+    /// Test hook: fail the marker write on the pass with this number, once.
+    /// Recording-scoped because that is how it is set — one value at `Start`,
+    /// naming a pass this recording has usually not opened yet.
+    #[cfg(all(test, feature = "test-support"))]
+    fail_marker_on_pass: Option<u32>,
+    /// The most recent pass BEFORE `current` that anything played in, and its
+    /// number, so a run of unvoiced passes keeps pointing at the music.
     last_voiced: Option<std::path::PathBuf>,
+    last_voiced_number: u32,
+    /// Passes the transport has rolled past that a lane has not released yet.
+    retained: Vec<Pass>,
+    current: Pass,
 }
 
-impl Open {
+/// One file of a recording: its two writers, and the state a rollover resets.
+struct Pass {
+    /// 1 for the first pass of the recording, 2 for the next, ...
+    number: u32,
+    path: std::path::PathBuf,
+    writer: harmonigraph_take::Writer,
+    /// The header THIS file was opened with, kept so the alignment rewrite
+    /// below can supersede it without re-deriving the rest.
+    header: harmonigraph_take::Header,
+    /// The WAV recorded beside this pass, if audio was asked for.
+    audio: Option<harmonigraph_take::WavWriter>,
+    /// The three closed flags below are addressed to the EPOCH rather than to
+    /// this pass, and are only ever read on `current` — but they reset with the
+    /// file the way they did before the split, and nothing is lost by it: an
+    /// epoch's closing records are the last the producer writes for it, so no
+    /// `NewPass` can follow one and clear it.
+    producer_closed: bool,
+    configuration_closed: bool,
+    source_closed: bool,
+    /// These two are addressed to this pass by number, and a later pass's
+    /// completion says nothing about this one's.
+    configuration_complete: bool,
+    source_complete: bool,
+    /// Whether a note has STARTED in this pass. A pass without one draws an
+    /// empty lattice however many parameter records it holds, so it is not a
+    /// pass worth rendering; see [`Recording::finish`].
+    voiced: bool,
+    /// Whether this FILE already holds the recording's incomplete marker.
+    marked: bool,
+}
+
+impl Recording {
     fn create(
-        mut header: harmonigraph_take::Header,
+        header: harmonigraph_take::Header,
         base: std::path::PathBuf,
         pass: u32,
         spec: Option<AudioSpec>,
         status: &Mutex<String>,
-    ) -> Option<Open> {
-        let path = Self::path_for(&base, pass);
+    ) -> Option<Recording> {
+        let current = Pass::create(header.clone(), &base, pass, spec, status)?;
+        Some(Recording {
+            epoch: 0,
+            configuration_enabled: false,
+            source_enabled: false,
+            header,
+            base,
+            spec,
+            incomplete: None,
+            #[cfg(all(test, feature = "test-support"))]
+            fail_marker_on_pass: None,
+            last_voiced: None,
+            last_voiced_number: 0,
+            retained: Vec::new(),
+            current,
+        })
+    }
+
+    /// Close both of the current pass's files and hand back the take to render.
+    ///
+    /// **That is the last VOICED pass, not simply the last one opened.** A take
+    /// can end on a pass that holds parameter records and no notes — a host
+    /// restoring the playhead when an audio export finishes lands as a backward
+    /// jump, and a split rewrites every parameter into the pass it opens — and
+    /// rendering that one produces a video of an empty lattice while the pass
+    /// with the music sits unused beside it. An unvoiced tail is left on disk
+    /// rather than deleted: it is evidence about what the host did, and it costs
+    /// a few hundred bytes.
+    fn finish(&mut self) -> std::io::Result<std::path::PathBuf> {
+        let path = self.take_path();
+        self.current.finish().map(|_| path)
+    }
+
+    /// Which of the current pass and its predecessors is the take: this one if
+    /// anything played in it, else the last one where something did. A first
+    /// pass with no notes has nothing to fall back to and stands as the (empty)
+    /// take, which is what "you recorded nothing" looks like.
+    fn take_path(&self) -> std::path::PathBuf {
+        match &self.last_voiced {
+            Some(previous) if !self.current.voiced => previous.clone(),
+            _ => self.current.path.clone(),
+        }
+    }
+
+    /// Open the next pass's files and make it `current`, retaining or closing
+    /// the one it replaces.
+    ///
+    /// Nothing is copied across the boundary here: everything the new pass
+    /// inherits is a field of `self` that neither moved nor was rewritten, so
+    /// there is no list to keep in step with the struct.
+    fn next_pass(&mut self, status: &Mutex<String>) -> std::io::Result<()> {
+        if self.epoch != 0 && self.retained.len() + 1 >= RECORD_PASSES {
+            return Err(std::io::Error::other("recording pass capacity exhausted"));
+        }
+        let number = self
+            .current
+            .number
+            .checked_add(1)
+            .ok_or_else(|| std::io::Error::other("recording pass number exhausted"))?;
+        let Some(mut next) =
+            Pass::create(self.header.clone(), &self.base, number, self.spec, status)
+        else {
+            return Err(std::io::Error::other(status.lock().clone()));
+        };
+        if self.spec.is_some() && next.audio.is_none() {
+            return Err(std::io::Error::other(status.lock().clone()));
+        }
+        // Incompleteness belongs to the RECORDING, so the new file takes the
+        // marker before it becomes the one being written into.
+        //
+        // A gap that named no pass covers whatever this recording still owns,
+        // and that includes passes it has not opened yet: an outage spanning a
+        // boundary is exactly the one that arrives address-less. Marking only
+        // the passes that existed when it arrived left the take EXPORTABLE and
+        // unmarked whenever a later pass was the voiced one, because
+        // [`Recording::take_path`] picks the last voiced pass and
+        // `mark_incomplete` reaches downward into `retained` rather than
+        // forward in time (#712).
+        if let Some(record) = self.incomplete {
+            #[cfg(all(test, feature = "test-support"))]
+            if self.fail_marker_on_pass == Some(next.number) {
+                next.writer.make_read_only_for_test(&next.path)?;
+                self.fail_marker_on_pass = None;
+            }
+            next.write_incomplete(record)?;
+        }
+        // Read before the swap, applied after it: a pass that cannot close is
+        // not a pass this recording has rolled past.
+        let voiced = self.current.voiced.then(|| (self.current.path.clone(), self.current.number));
+        // Keep the old owner until the next file and its inherited marker exist.
+        let mut previous = std::mem::replace(&mut self.current, next);
+        if self.configuration_enabled || self.source_enabled {
+            self.retained.push(previous);
+        } else if let Err(error) = previous.finish() {
+            self.current = previous;
+            return Err(error);
+        }
+        if let Some((path, number)) = voiced {
+            self.last_voiced = Some(path);
+            self.last_voiced_number = number;
+        }
+        Ok(())
+    }
+
+    fn observe_idle_producer(&mut self, fence: &RecordFence) {
+        if !self.configuration_enabled && fence.intent.load(Ordering::Acquire) == self.epoch << 1 {
+            self.current.producer_closed = true;
+        }
+    }
+
+    fn ready(&self, epoch: u64) -> bool {
+        self.epoch == epoch
+            && self.current.producer_closed
+            && (!self.configuration_enabled || self.current.configuration_closed)
+            && (!self.source_enabled || self.current.source_closed)
+            && self.retained.is_empty()
+    }
+
+    fn finish_completed_passes(&mut self) -> std::io::Result<()> {
+        let mut index = 0;
+        while index < self.retained.len() {
+            if (!self.configuration_enabled || self.retained[index].configuration_complete)
+                && (!self.source_enabled || self.retained[index].source_complete)
+            {
+                self.retained[index].finish()?;
+                let old = self.retained.remove(index);
+                if old.voiced && old.number > self.last_voiced_number {
+                    self.last_voiced = Some(old.path);
+                    self.last_voiced_number = old.number;
+                }
+            } else {
+                index += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Mark this recording — the current pass, every pass it still retains, and
+    /// by [`Recording::next_pass`] every pass it opens from here on.
+    ///
+    /// **The FIRST gap is the one the file names**, and a later one adds
+    /// nothing: the marker says this take has a hole, and the reader has to
+    /// name the same hole the writer did. `Take::parse` reads it back under the
+    /// same rule, which it did not before (#895). A gap that arrives second is
+    /// still written into its pass as an ordinary `Gap` record, so nothing
+    /// about the hole is lost — only the marker is singular.
+    fn mark_incomplete(
+        &mut self,
+        record: harmonigraph_take::IncompleteRecord,
+    ) -> std::io::Result<()> {
+        let mut result = Ok(());
+        if self.incomplete.is_none() {
+            #[cfg(all(test, feature = "test-support"))]
+            if self.fail_marker_on_pass == Some(self.current.number) {
+                self.current.writer.make_read_only_for_test(&self.current.path)?;
+                self.fail_marker_on_pass = None;
+            }
+            result = self.current.write_incomplete(record);
+            if result.is_ok() {
+                self.incomplete = Some(record);
+            }
+        }
+        for pass in &mut self.retained {
+            #[cfg(all(test, feature = "test-support"))]
+            if self.fail_marker_on_pass == Some(pass.number) {
+                pass.writer.make_read_only_for_test(&pass.path)?;
+                self.fail_marker_on_pass = None;
+            }
+            // Visit every retained pass, keeping the first useful I/O cause.
+            result = result.and(pass.write_incomplete(record));
+        }
+        result
+    }
+
+    fn addressed(&mut self, address: RecordAddress) -> Option<&mut Pass> {
+        if self.epoch != address.epoch {
+            return None;
+        }
+        if self.current.number == address.pass {
+            return Some(&mut self.current);
+        }
+        self.retained.iter_mut().find(|pass| pass.number == address.pass)
+    }
+}
+
+impl Pass {
+    fn create(
+        mut header: harmonigraph_take::Header,
+        base: &std::path::Path,
+        number: u32,
+        spec: Option<AudioSpec>,
+        status: &Mutex<String>,
+    ) -> Option<Pass> {
+        let path = Self::path_for(base, number);
 
         // The WAV opens first, so its name can go in the take's header —
         // which is the take's first line and cannot be revised later.
@@ -654,34 +891,25 @@ impl Open {
         match harmonigraph_take::Writer::create(&path, &header) {
             Ok(writer) => {
                 if spec.is_none() || audio.is_some() {
-                    *status.lock() = if pass <= 1 {
+                    *status.lock() = if number <= 1 {
                         format!("recording to {}", path.display())
                     } else {
-                        format!("pass {pass} -> {}", path.display())
+                        format!("pass {number} -> {}", path.display())
                     };
                 }
-                Some(Open {
-                    epoch: 0,
-                    retained: Vec::new(),
-                    producer_closed: false,
-                    configuration_enabled: false,
-                    configuration_closed: false,
-                    configuration_complete: false,
-                    source_enabled: false,
-                    source_closed: false,
-                    source_complete: false,
-                    last_voiced_number: 0,
-                    incomplete: None,
-                    #[cfg(all(test, feature = "test-support"))]
-                    fail_marker_on_pass: None,
+                Some(Pass {
+                    number,
+                    path,
                     writer,
                     header,
-                    base,
-                    pass,
                     audio,
-                    spec,
+                    producer_closed: false,
+                    configuration_closed: false,
+                    source_closed: false,
+                    configuration_complete: false,
+                    source_complete: false,
                     voiced: false,
-                    last_voiced: None,
+                    marked: false,
                 })
             }
             Err(err) => {
@@ -700,28 +928,18 @@ impl Open {
         }
     }
 
-    /// Close both files and hand back the take to render.
-    ///
-    /// **That is the last VOICED pass, not simply the last one opened.** A take
-    /// can end on a pass that holds parameter records and no notes — a host
-    /// restoring the playhead when an audio export finishes lands as a backward
-    /// jump, and a split rewrites every parameter into the pass it opens — and
-    /// rendering that one produces a video of an empty lattice while the pass
-    /// with the music sits unused beside it. An unvoiced tail is left on disk
-    /// rather than deleted: it is evidence about what the host did, and it costs
-    /// a few hundred bytes.
-    fn finish(&mut self) -> std::io::Result<std::path::PathBuf> {
-        let path = self.take_path();
+    /// Close this pass's two files.
+    fn finish(&mut self) -> std::io::Result<()> {
         // Attempt both even if one fails. Keep this owner available so the
         // caller can write its incomplete marker before retiring it.
         let notes = self.writer.flush().map_err(|error| {
             std::io::Error::new(
                 error.kind(),
-                format!("cannot finalize {}: {error}", self.path().display()),
+                format!("cannot finalize {}: {error}", self.path.display()),
             )
         });
         let audio = self.finish_audio();
-        notes.and(audio).map(|_| path)
+        notes.and(audio)
     }
 
     fn finish_audio(&mut self) -> std::io::Result<()> {
@@ -731,7 +949,7 @@ impl Open {
                     error.kind(),
                     format!(
                         "cannot finalize {}: {error}",
-                        self.path().with_extension("wav").display()
+                        self.path.with_extension("wav").display()
                     ),
                 )
             })
@@ -741,7 +959,7 @@ impl Open {
     fn write_audio(&mut self, first: &[f32], second: &[f32]) -> std::io::Result<()> {
         let Some(audio) = self.audio.as_mut() else { return Ok(()) };
         if let Err(error) = audio.write(first).and_then(|_| audio.write(second)) {
-            let path = self.path().with_extension("wav");
+            let path = self.path.with_extension("wav");
             let repair = self.finish_audio();
             let repair = repair.err().map(|error| format!("; {error}")).unwrap_or_default();
             return Err(std::io::Error::new(
@@ -752,173 +970,30 @@ impl Open {
         Ok(())
     }
 
-    /// Which of this pass and its predecessors is the take: this one if anything
-    /// played in it, else the last one where something did. A first pass with no
-    /// notes has nothing to fall back to and stands as the (empty) take, which
-    /// is what "you recorded nothing" looks like.
-    fn take_path(&self) -> std::path::PathBuf {
-        match &self.last_voiced {
-            Some(previous) if !self.voiced => previous.clone(),
-            _ => self.path(),
-        }
-    }
-
-    /// The file this pass is writing to.
-    fn path(&self) -> std::path::PathBuf {
-        Self::path_for(&self.base, self.pass)
-    }
-
-    /// Close this pass's files and open the next pass's.
-    fn next_pass(open: &mut Option<Open>, status: &Mutex<String>) -> std::io::Result<()> {
-        let Some(current) = open.as_ref() else { return Ok(()) };
-        if current.epoch != 0 && current.retained.len() + 1 >= RECORD_PASSES {
-            return Err(std::io::Error::other("recording pass capacity exhausted"));
-        }
-        let pass = current
-            .pass
-            .checked_add(1)
-            .ok_or_else(|| std::io::Error::other("recording pass number exhausted"))?;
-        let mut header = current.header.clone();
-        header.audio_start = None;
-        let Some(mut next) = Open::create(header, current.base.clone(), pass, current.spec, status)
-        else {
-            return Err(std::io::Error::other(status.lock().clone()));
-        };
-        if current.spec.is_some() && next.audio.is_none() {
-            return Err(std::io::Error::other(status.lock().clone()));
-        }
-        #[cfg(all(test, feature = "test-support"))]
-        {
-            next.fail_marker_on_pass = current.fail_marker_on_pass;
-        }
-        next.last_voiced = current.voiced_so_far();
-        // Incompleteness belongs to the RECORDING, so it crosses the rollover
-        // with everything else the new pass inherits.
-        //
-        // A gap that named no pass covers whatever this recording still owns,
-        // and that includes passes it has not opened yet: an outage spanning a
-        // boundary is exactly the one that arrives address-less. Marking only
-        // the passes that existed when it arrived left the take EXPORTABLE and
-        // unmarked whenever a later pass was the voiced one, because
-        // [`Open::take_path`] picks the last voiced pass and `mark_incomplete`
-        // reaches downward into `retained` rather than forward in time (#712).
-        if let Some(record) = current.incomplete {
-            next.mark_incomplete(record)?;
-        }
-        // Keep the old owner until the next file and its inherited marker exist.
-        let mut previous = open.take().unwrap();
-        next.epoch = previous.epoch;
-        next.configuration_enabled = previous.configuration_enabled;
-        next.source_enabled = previous.source_enabled;
-        if previous.configuration_enabled || previous.source_enabled {
-            next.last_voiced_number =
-                if previous.voiced { previous.pass } else { previous.last_voiced_number };
-            next.retained = std::mem::take(&mut previous.retained);
-            next.retained.push(previous);
-        } else if let Err(error) = previous.finish() {
-            *open = Some(previous);
-            return Err(error);
-        }
-        *open = Some(next);
-        Ok(())
-    }
-
-    fn observe_idle_producer(&mut self, fence: &RecordFence) {
-        if !self.configuration_enabled && fence.intent.load(Ordering::Acquire) == self.epoch << 1 {
-            self.producer_closed = true;
-        }
-    }
-
-    fn ready(&self, epoch: u64) -> bool {
-        self.epoch == epoch
-            && self.producer_closed
-            && (!self.configuration_enabled || self.configuration_closed)
-            && (!self.source_enabled || self.source_closed)
-            && self.retained.is_empty()
-    }
-
-    fn finish_completed_passes(&mut self) -> std::io::Result<()> {
-        let mut index = 0;
-        while index < self.retained.len() {
-            if (!self.configuration_enabled || self.retained[index].configuration_complete)
-                && (!self.source_enabled || self.retained[index].source_complete)
-            {
-                self.retained[index].finish()?;
-                let old = self.retained.remove(index);
-                if old.voiced && old.pass > self.last_voiced_number {
-                    self.last_voiced = Some(old.path());
-                    self.last_voiced_number = old.pass;
-                }
-            } else {
-                index += 1;
-            }
-        }
-        Ok(())
-    }
-
-    /// Mark this recording — this pass, every pass it still retains, and by
-    /// [`Open::next_pass`] every pass it opens from here on.
-    ///
-    /// **The FIRST gap is the one the file names**, and a later one adds
-    /// nothing: the marker says this take has a hole, and the reader has to
-    /// name the same hole the writer did. `Take::parse` reads it back under the
-    /// same rule, which it did not before (#895). A gap that arrives second is
-    /// still written into its pass as an ordinary `Gap` record, so nothing
-    /// about the hole is lost — only the marker is singular.
-    fn mark_incomplete(
+    /// Write the recording's marker into THIS file, once.
+    fn write_incomplete(
         &mut self,
         record: harmonigraph_take::IncompleteRecord,
     ) -> std::io::Result<()> {
-        let mut result = Ok(());
-        if self.incomplete.is_none() {
-            #[cfg(all(test, feature = "test-support"))]
-            if self.fail_marker_on_pass == Some(self.pass) {
-                self.writer.make_read_only_for_test(self.path())?;
-                self.fail_marker_on_pass = None;
-            }
-            result =
-                self.writer.incomplete(record).and_then(|_| self.writer.flush()).map_err(|error| {
-                    std::io::Error::new(
-                        error.kind(),
-                        format!(
-                            "cannot write incomplete marker {}: {error}",
-                            self.path().display()
-                        ),
-                    )
-                });
-            if result.is_ok() {
-                self.incomplete = Some(record);
-            }
+        if self.marked {
+            return Ok(());
         }
-        for pass in &mut self.retained {
-            // Visit every retained pass, keeping the first useful I/O cause.
-            result = result.and(pass.mark_incomplete(record));
+        let result =
+            self.writer.incomplete(record).and_then(|_| self.writer.flush()).map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!("cannot write incomplete marker {}: {error}", self.path.display()),
+                )
+            });
+        if result.is_ok() {
+            self.marked = true;
         }
         result
-    }
-    fn addressed(&mut self, address: RecordAddress) -> Option<&mut Open> {
-        if self.epoch != address.epoch {
-            return None;
-        }
-        if self.pass == address.pass {
-            return Some(self);
-        }
-        self.retained.iter_mut().find(|pass| pass.pass == address.pass)
-    }
-
-    /// The latest pass up to and including this one that anything played in, so
-    /// a run of unvoiced passes keeps pointing at the last one carrying music.
-    fn voiced_so_far(&self) -> Option<std::path::PathBuf> {
-        if self.voiced {
-            Some(self.path())
-        } else {
-            self.last_voiced.clone()
-        }
     }
 }
 
 fn finish_ready(
-    open: &mut Option<Open>,
+    open: &mut Option<Recording>,
     epoch: u64,
     fence: &RecordFence,
 ) -> Option<std::path::PathBuf> {
@@ -928,7 +1003,7 @@ fn finish_ready(
     finish_open(open, fence)
 }
 
-fn finish_open(open: &mut Option<Open>, fence: &RecordFence) -> Option<std::path::PathBuf> {
+fn finish_open(open: &mut Option<Recording>, fence: &RecordFence) -> Option<std::path::PathBuf> {
     match open.as_mut()?.finish() {
         Ok(path) => {
             *open = None;
@@ -946,7 +1021,7 @@ fn finish_open(open: &mut Option<Open>, fence: &RecordFence) -> Option<std::path
 #[cfg(test)]
 fn drain(
     consumer: &mut rtrb::Consumer<Entry>,
-    open: &mut Option<Open>,
+    open: &mut Option<Recording>,
     status: &Mutex<String>,
 ) -> bool {
     drain_with_audio(consumer, None, open, status, None)
@@ -956,7 +1031,7 @@ fn drain(
 fn drain_with_audio(
     consumer: &mut rtrb::Consumer<Entry>,
     audio: Option<&mut rtrb::Consumer<f32>>,
-    open: &mut Option<Open>,
+    open: &mut Option<Recording>,
     status: &Mutex<String>,
     fence: Option<&RecordFence>,
 ) -> bool {
@@ -966,11 +1041,11 @@ fn drain_with_audio(
 fn drain_with_boundaries(
     consumer: &mut rtrb::Consumer<Entry>,
     mut audio: Option<&mut rtrb::Consumer<f32>>,
-    open: &mut Option<Open>,
+    open: &mut Option<Recording>,
     status: &Mutex<String>,
     fence: Option<&RecordFence>,
     failure: &FailureAccount,
-    mut before_new_pass: impl FnMut(&mut Option<Open>),
+    mut before_new_pass: impl FnMut(&mut Option<Recording>),
 ) -> bool {
     // Start is a separate off-thread message, published before arming. Retain
     // records if this iteration observed the ring before that command.
@@ -995,7 +1070,7 @@ fn drain_with_boundaries(
             // A completed source cut in the other lane can release a pass
             // before this allocation. Queue ordering alone is not exhaustion.
             before_new_pass(open);
-            if let Err(error) = Open::next_pass(open, status) {
+            if let Some(error) = open.as_mut().and_then(|r| r.next_pass(status).err()) {
                 if let Some(fence) = fence {
                     fence.fail_with_message(error.to_string());
                 }
@@ -1032,17 +1107,12 @@ fn drain_with_boundaries(
                 continue;
             }
             Entry::ConfigurationPassComplete(address) => {
-                if let Some(current) = open.as_mut().filter(|o| o.epoch == address.epoch) {
-                    if current.pass == address.pass {
-                        current.configuration_complete = true;
-                    } else if let Some(pass) =
-                        current.retained.iter_mut().find(|p| p.pass == address.pass)
-                    {
-                        pass.configuration_complete = true;
-                    } else {
-                        fail();
+                if let Some(recording) = open.as_mut().filter(|o| o.epoch == address.epoch) {
+                    match recording.addressed(address) {
+                        Some(pass) => pass.configuration_complete = true,
+                        None => fail(),
                     }
-                    if let Err(error) = current.finish_completed_passes() {
+                    if let Err(error) = recording.finish_completed_passes() {
                         if let Some(fence) = fence {
                             fence.fail_with_message(error.to_string());
                         }
@@ -1054,11 +1124,11 @@ fn drain_with_boundaries(
                 continue;
             }
             Entry::ProducerClosed(epoch) | Entry::ConfigurationEpochComplete(epoch) => {
-                if let Some(current) = open.as_mut().filter(|o| o.epoch == epoch) {
+                if let Some(recording) = open.as_mut().filter(|o| o.epoch == epoch) {
                     if matches!(entry, Entry::ProducerClosed(_)) {
-                        current.producer_closed = true;
+                        recording.current.producer_closed = true;
                     } else {
-                        current.configuration_closed = true;
+                        recording.current.configuration_closed = true;
                     }
                 } else {
                     fail();
@@ -1072,9 +1142,9 @@ fn drain_with_boundaries(
                         continue;
                     }
                     if let Ok(chunk) = consumer.read_chunk(count) {
-                        if let Some(current) = open.as_mut() {
+                        if let Some(recording) = open.as_mut() {
                             let (first, second) = chunk.as_slices();
-                            if let Err(error) = current.write_audio(first, second) {
+                            if let Err(error) = recording.current.write_audio(first, second) {
                                 if let Some(fence) = fence {
                                     fence.fail_with_message(error.to_string());
                                 }
@@ -1097,21 +1167,21 @@ fn drain_with_boundaries(
             // The format is line-oriented and the reader takes the LAST
             // Header record, so a corrected one simply supersedes the
             // first — no seeking, no fixed-width fields.
-            if let Some(current) = open.as_mut() {
-                current.header.audio_start = Some(t);
-                let header = current.header.clone();
-                if current.writer.write(&harmonigraph_take::Record::Header(header)).is_err() {
+            if let Some(pass) = open.as_mut().map(|recording| &mut recording.current) {
+                pass.header.audio_start = Some(t);
+                let header = pass.header.clone();
+                if pass.writer.write(&harmonigraph_take::Record::Header(header)).is_err() {
                     fail();
                 }
             }
             continue;
         }
-        let Some(current) = open.as_mut() else { continue };
+        let Some(pass) = open.as_mut().map(|recording| &mut recording.current) else { continue };
         // A note starting is what makes this pass the one worth rendering.
         if matches!(entry, Entry::Note { kind: NoteEventKind::On { .. }, .. }) {
-            current.voiced = true;
+            pass.voiced = true;
         }
-        let writer = &mut current.writer;
+        let writer = &mut pass.writer;
         let result = match entry {
             Entry::Configuration(config) => writer.configuration(config),
             Entry::Note { t, source, channel, note, kind } => {

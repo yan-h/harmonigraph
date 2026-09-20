@@ -662,7 +662,7 @@ fn a_gap_with_no_file_open_marks_the_take_that_opens_after_it() {
     let failure = FailureAccount::default();
     let file = path("unplaced-gap");
     // `Start` is queued and unpolled, so the writer holds no file at all.
-    let mut nothing_open: Option<Open> = None;
+    let mut nothing_open: Option<Recording> = None;
     fanout.drain(&mut consumer, &mut nothing_open, &fence, &failure);
     assert!(
         !fence.failed.load(Ordering::Acquire),
@@ -671,7 +671,8 @@ fn a_gap_with_no_file_open_marks_the_take_that_opens_after_it() {
 
     let status = Mutex::new(String::new());
     let mut opened =
-        Open::create(harmonigraph_take::Header::default(), file.clone(), 1, None, &status).unwrap();
+        Recording::create(harmonigraph_take::Header::default(), file.clone(), 1, None, &status)
+            .unwrap();
     opened.epoch = 1;
     let mut open = Some(opened);
     fanout.drain(&mut consumer, &mut open, &fence, &failure);
@@ -734,7 +735,7 @@ fn a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take() {
     // Released into the drain that has no file, then into the poll that opens
     // one — in that order, because the pause is inside the arm that found no
     // command and the loop drains before it polls again. `recording to` is the
-    // status only `Open::create` writes, so waiting for it waits for both.
+    // status only `Pass::create` writes, so waiting for it waits for both.
     fence.worker_after_empty.enabled.store(false, Ordering::Release);
     let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !control.status().starts_with("recording to") && std::time::Instant::now() < until {
@@ -785,8 +786,8 @@ fn a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take() {
 /// that consumes the gap has no file — the round-2 case — and the ONE that
 /// follows opens pass 1, marks it, and rolls straight over to pass 2 without
 /// leaving the loop: `drain_with_boundaries` calls the fanout from
-/// `before_new_pass`, ahead of `Open::next_pass`. Pass 2 is where the music
-/// is, so pass 2 is what `Open::take_path` seals and hands to the renderer,
+/// `before_new_pass`, ahead of `Recording::next_pass`. Pass 2 is where the music
+/// is, so pass 2 is what `Recording::take_path` seals and hands to the renderer,
 /// and pass 1 is not even retained by then.
 ///
 /// What the range proves is that the fixture reaches the case rather than one
@@ -827,8 +828,8 @@ fn a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports() {
     let failure = FailureAccount::default();
     let status = Mutex::new(String::new());
     let mut fanout = CanonicalFanout::default();
-    let mut open: Option<Open> = None;
-    let pump = |open: &mut Option<Open>,
+    let mut open: Option<Recording> = None;
+    let pump = |open: &mut Option<Recording>,
                 entries: &mut rtrb::Consumer<Entry>,
                 consumer: &mut publication::Consumer,
                 fanout: &mut CanonicalFanout| {
@@ -845,12 +846,17 @@ fn a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports() {
 
     let file = path("rollover-gap");
     let mut opened =
-        Open::create(harmonigraph_take::Header::default(), file.clone(), 1, None, &status).unwrap();
+        Recording::create(harmonigraph_take::Header::default(), file.clone(), 1, None, &status)
+            .unwrap();
     opened.epoch = 1;
     opened.source_enabled = true;
     open = Some(opened);
     assert!(pump(&mut open, &mut queued, &mut consumer, &mut fanout));
-    assert_eq!(open.as_ref().unwrap().pass, 2, "the queued NewPass rolled the recording over");
+    assert_eq!(
+        open.as_ref().unwrap().current.number,
+        2,
+        "the queued NewPass rolled the recording over"
+    );
 
     // Pass 2 is the voiced one, and both passes close cleanly.
     publisher
@@ -864,7 +870,7 @@ fn a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports() {
     entries.push(Entry::ProducerClosed(1)).expect("ring has room");
     entries.push(Entry::ConfigurationEpochComplete(1)).expect("ring has room");
     assert!(pump(&mut open, &mut queued, &mut consumer, &mut fanout));
-    assert!(open.as_ref().unwrap().voiced, "pass 2 is the one holding the music");
+    assert!(open.as_ref().unwrap().current.voiced, "pass 2 is the one holding the music");
     assert!(open.as_ref().unwrap().retained.is_empty(), "and pass 1 has already been sealed");
 
     let sealed = finish_ready(&mut open, 1, &fence).expect("the take seals");
@@ -888,7 +894,7 @@ fn a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports() {
 /// answer must be the same gap.
 ///
 /// The two encodings of "this take is incomplete" used to coalesce in opposite
-/// directions — `Open::mark_incomplete` keeps the first, `Take::parse` took the
+/// directions — `Recording::mark_incomplete` keeps the first, `Take::parse` took the
 /// last line it saw — so the export warned about a range the file's own marker
 /// did not hold. One gap cannot show that: the first and the last are the same
 /// record, and the assertion passes under either rule. So the fixture carries
@@ -902,7 +908,7 @@ fn a_second_gap_leaves_the_reader_naming_the_gap_the_file_marked() {
     use harmonigraph_take::canonical::{GapReasonRecord, GapRecord};
     let file = path("two-gaps");
     let status = Mutex::new(String::new());
-    let mut open = Open::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+    let mut open = Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
     let first = harmonigraph_take::IncompleteRecord {
         first_publication: 7,
         last_publication: 9,
@@ -922,7 +928,7 @@ fn a_second_gap_leaves_the_reader_naming_the_gap_the_file_marked() {
             last: record.last_publication,
             reason: record.reason,
         };
-        open.writer.canonical(harmonigraph_take::CanonicalRecord::Gap(gap)).unwrap();
+        open.current.writer.canonical(harmonigraph_take::CanonicalRecord::Gap(gap)).unwrap();
         open.mark_incomplete(record).unwrap();
     }
     let sealed = open.finish().unwrap();
@@ -1011,15 +1017,25 @@ fn a_marker_flush_failure_refuses_stop_and_render() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+/// The marker reaches every retained pass, and the cause that survives is the
+/// FIRST one — not whichever pass failed last.
+///
+/// The fixture makes two of the three passes refuse the write and leaves the
+/// LAST retained one writable, because that one is the assertion: a marker on
+/// pass 2 can only be there if the loop carried on past pass 1's error, and
+/// pass 1's error is the one that must not replace pass 3's in the status.
 #[test]
 fn carried_marker_failure_visits_retained_passes_and_keeps_the_first_error() {
     let file = path("carried-marker-failure");
     let status = Mutex::new(String::new());
-    let mut current = Open::create(Default::default(), file.clone(), 3, None, &status).unwrap();
+    let mut current =
+        Recording::create(Default::default(), file.clone(), 3, None, &status).unwrap();
     current.fail_marker_on_pass = Some(3);
     for pass in 1..3 {
-        let mut old = Open::create(Default::default(), file.clone(), pass, None, &status).unwrap();
-        old.fail_marker_on_pass = Some(pass);
+        let mut old = Pass::create(Default::default(), &file, pass, None, &status).unwrap();
+        if pass == 1 {
+            old.writer.make_read_only_for_test(&old.path).unwrap();
+        }
         current.retained.push(old);
     }
     let mut open = Some(current);
@@ -1032,11 +1048,17 @@ fn carried_marker_failure_visits_retained_passes_and_keeps_the_first_error() {
     let cause = fence.failure_message.lock().clone().unwrap();
     assert!(cause.contains("capture-3.take"), "first error must survive retained errors: {cause}");
     let current = open.as_ref().unwrap();
-    for pass in std::iter::once(current).chain(current.retained.iter()) {
-        assert_eq!(pass.fail_marker_on_pass, None, "every retained writer must be visited");
-        assert!(pass.incomplete.is_none());
-        assert!(harmonigraph_take::Take::read(pass.path()).unwrap().incomplete.is_none());
-    }
+    assert!(!current.current.marked, "the pass that refused the write holds no marker");
+    assert!(current.incomplete.is_none(), "and neither does the recording");
+    let marked: Vec<_> = std::iter::once(&current.current)
+        .chain(current.retained.iter())
+        .map(|pass| harmonigraph_take::Take::read(&pass.path).unwrap().incomplete.is_some())
+        .collect();
+    assert_eq!(
+        marked,
+        [false, false, true],
+        "the visit runs past a failing retained pass to the last one",
+    );
     failure.account(&mut open, 1, &status, Some(&fence), Default::default());
     assert_eq!(fence.failure_message.lock().as_ref(), Some(&cause));
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
@@ -1046,7 +1068,8 @@ fn carried_marker_failure_visits_retained_passes_and_keeps_the_first_error() {
 fn rollover_marker_failure_keeps_the_old_owner_until_failure_accounting() {
     let file = path("rollover-marker-failure");
     let status = Mutex::new(String::new());
-    let mut current = Open::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+    let mut current =
+        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
     current.epoch = 1;
     current.mark_incomplete(Default::default()).unwrap();
     current.fail_marker_on_pass = Some(2);
@@ -1073,7 +1096,8 @@ fn rollover_marker_failure_keeps_the_old_owner_until_failure_accounting() {
 fn failure_accounting_latches_its_marker_io_error() {
     let file = path("accounting-marker-failure");
     let status = Mutex::new(String::new());
-    let mut current = Open::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+    let mut current =
+        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
     current.fail_marker_on_pass = Some(1);
     let mut open = Some(current);
     let fence = RecordFence::default();
