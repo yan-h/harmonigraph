@@ -353,27 +353,60 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// different moments.
 fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
     section(ui, "Note layers");
-    let width = ui.available_width().min(180.0);
-    ui.label("Animation");
-    egui::ComboBox::from_id_salt("note-animation")
-        .width(width)
-        .truncate()
-        .selected_text(view.note_animation.animation.label())
-        .show_ui(ui, |ui| {
-            for mode in NoteAnimation::ALL {
-                ui.selectable_value(&mut view.note_animation.animation, mode, mode.label());
-            }
-        });
-    ui.label("Order");
-    egui::ComboBox::from_id_salt("animation-order")
-        .width(width)
-        .truncate()
-        .selected_text(view.note_animation.order.label())
-        .show_ui(ui, |ui| {
-            for order in AnimationOrder::ALL {
-                ui.selectable_value(&mut view.note_animation.order, order, order.label());
-            }
-        });
+    // `choice_row`, which these two were the last enum settings in the panes
+    // not to be, and the HINTS are what the move buys: not one of the five
+    // orders was named anywhere in the UI, so what each does was findable only
+    // by picking it and watching. The cost is height — a `choice_row` wraps,
+    // so five order labels take about three lines where the popup took a label
+    // and one row — and it was taken deliberately. Animation is the other half
+    // of the trade, two rows becoming one.
+    //
+    // Both lists are built off `ALL` with an exhaustive match rather than
+    // written out, the way `SpectralOrientation`'s row is and for its reason: a
+    // sixth order cannot reach this pane without a name and a hint of its own.
+    let animations = NoteAnimation::ALL.map(|animation| {
+        let (label, hint) = match animation {
+            NoteAnimation::Fade => (
+                "Fade",
+                "Slices ease in to their resting size and position and stop there.",
+            ),
+            NoteAnimation::Pop => (
+                "Pop",
+                "Slices swell a little past full size partway in, then settle back. A Starting size or position away from rest is overshot before it settles.",
+            ),
+        };
+        (animation, label, hint)
+    });
+    choice_row(ui, "Animation", &mut view.note_animation.animation, &animations);
+    // Every hint here is about WHEN a slice starts and nothing else: the orders
+    // differ in the delay each slice waits, never in what it then does, which
+    // is the Animation row above.
+    let orders = AnimationOrder::ALL.map(|order| {
+        let (label, hint) = match order {
+            AnimationOrder::Simultaneous => (
+                "Simultaneous",
+                "Every octave slice of a node starts at the same moment. Stagger spread has no effect.",
+            ),
+            AnimationOrder::Circular => (
+                "Circular",
+                "Slices start one after another, sweeping once round the ring from the top slice — the one at the Center pitch — in the direction of rising pitch.",
+            ),
+            AnimationOrder::Bidirectional => (
+                "Bidirectional",
+                "Both halves of the ring sweep away from the top slice at once and meet at the bottom.",
+            ),
+            AnimationOrder::RandomStagger => (
+                "Random stagger",
+                "Each slice takes a delay of its own, in an order scrambled per node and per press. The note's release reuses the same order.",
+            ),
+            AnimationOrder::OddEvenStagger => (
+                "Odd/even stagger",
+                "Alternate slices start together and the ones between them follow as a second group, counting round from the top slice.",
+            ),
+        };
+        (order, label, hint)
+    });
+    choice_row(ui, "Order", &mut view.note_animation.order, &orders);
     ui.add_enabled_ui(view.note_animation.order != AnimationOrder::Simultaneous, |ui| {
         ValueBar::new(&mut view.note_animation.stagger_spread, 0.0..=0.9, "Stagger spread")
             .unit(100.0, "%")

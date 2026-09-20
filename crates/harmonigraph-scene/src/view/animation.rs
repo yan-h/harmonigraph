@@ -30,12 +30,6 @@ impl NoteAnimation {
         covered(NoteAnimation::Fade);
         [Self::Fade, Self::Pop]
     };
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Fade => "Fade",
-            Self::Pop => "Pop",
-        }
-    }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AnimationOrder {
@@ -65,15 +59,6 @@ impl AnimationOrder {
             Self::OddEvenStagger,
         ]
     };
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Simultaneous => "Simultaneous",
-            Self::Circular => "Circular",
-            Self::Bidirectional => "Bidirectional",
-            Self::RandomStagger => "Random stagger",
-            Self::OddEvenStagger => "Odd/even stagger",
-        }
-    }
 }
 /// Starting pose of complete slices. Radial -1 places each anchor at the node centre.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
