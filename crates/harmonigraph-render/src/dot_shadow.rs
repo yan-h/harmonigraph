@@ -651,7 +651,9 @@ mod tests {
                     let i = ((y * size[0] + x) * 4) as usize;
                     [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
                 };
-                assert!(pixel(38.0, 32.0)[0] < 250, "{kernel:?} at {ppp} ppp cast no edge");
+                // Distance ends two points outside the dot; Gaussian reaches three.
+                let edge_x = if kernel.is_distance() { 37.0 } else { 38.0 };
+                assert!(pixel(edge_x, 32.0)[0] < 250, "{kernel:?} at {ppp} ppp cast no edge");
                 assert_eq!(pixel(4.0, 4.0), [255; 4], "{kernel:?} at {ppp} ppp escaped");
             }
         }

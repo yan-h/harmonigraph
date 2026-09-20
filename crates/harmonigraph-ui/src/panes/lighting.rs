@@ -186,9 +186,7 @@ fn shadow_group(
                  100% turns the area beneath solid shapes black. \
                  Thin strokes may cast lighter shadows.",
     );
-    // Distance only. On a blur the same exponent would be a rescale of σ — the
-    // Shadow width bar again, under a second name — because a Gaussian is its
-    // own family under a power. `ShadowStyle::falloff` has the arithmetic.
+    // The Gaussian has its own profile; only Contour uses this bend.
     ui.add_enabled_ui(style.kernel.is_distance(), |ui| {
         ValueBar::new(
             &mut style.falloff,
@@ -202,11 +200,9 @@ fn shadow_group(
         .show(ui)
         .on_hover_text(
             "Where inside the width the shadow spends its darkness. \
-             Low values keep a sharp edge against the shape and trail off; \
-             high values hold the darkness out to a plateau and drop late. \
-             The width and darkness both keep their meaning at every setting. \
-             Below 0.64 the shadow is drawn on a larger surface to hold its \
-             longer tail, which costs memory and speed for this group. \
+             Negative values fall early; 0 is linear; positive values fall late. \
+             The curve bends in one direction throughout, without an S shape. \
+             Every setting reaches zero at one Shadow width. \
              Contour shadows only.",
         );
     });

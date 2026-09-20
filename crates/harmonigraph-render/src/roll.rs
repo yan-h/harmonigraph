@@ -1391,10 +1391,11 @@ mod tests {
         // reach of the full one, which the lead has taken to half.
         let note = RollInstance { outline: [128, 128, 128, 255], ..led_note(40.0, 0.0, 0.5) };
         let frame = draw(&device, &queue, vec![note], bg_color());
-        let corner = pixel(&frame, 141, 106);
+        let corner = pixel(&frame, 140, 107);
         let cap_only = RollInstance { lead_alpha: 0.0, ..note };
         let cap_frame = draw(&device, &queue, vec![cap_only], bg_color());
-        let expected = pixel(&cap_frame, 141, 106);
+        let expected = pixel(&cap_frame, 140, 107);
+        assert!(!near(expected, BG), "the cap probe missed its support");
         assert!(
             near(corner, expected),
             "the overlap {corner:?} differs from the cap alone {expected:?} — the wrap and \
@@ -1501,8 +1502,15 @@ mod tests {
             for (ppp, width) in [1.0f32, 1.5, 2.0, 4.0].into_iter().flat_map(|ppp| {
                 [0.5, harmonigraph_scene::SPECTRAL_SHADOW_MAX].map(|width| (ppp, width))
             }) {
-                let (shadow_x, clear) =
-                    if width > 1.0 { (17.0, [0.0, 0.0]) } else { (25.0, [12.0, 12.0]) };
+                // Probe inside each kernel's support. The wide readings still
+                // sit beyond the old eight-point limit at every pixel scale.
+                let shadow_x = match (kernel.is_distance(), width > 1.0) {
+                    (true, false) => 26.0,
+                    (false, false) => 25.0,
+                    (true, true) => 18.0,
+                    (false, true) => 17.0,
+                };
+                let clear = if width > 1.0 { [0.0, 0.0] } else { [12.0, 12.0] };
                 let physical = (64.0 * ppp).round() as u32;
                 let size = [physical.div_ceil(64) * 64, physical];
                 let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
@@ -1621,17 +1629,16 @@ mod tests {
             }
         }
         let frame = draw(&device, &queue, vec![note], bg_color());
-        // The note's edge is at x = 140 and the outline runs to 144.
+        // The note's edge is at x = 140; this Distance style reaches two points.
         let at = |x: u32| pixel(&frame, x, 128);
         let opaque = draw(&device, &queue, vec![centered_note()], bg_color());
         for x in 140..145 {
             assert_eq!(at(x), pixel(&opaque, x, 128), "body opacity changed the shadow at {x}");
         }
         assert!(shadowed(at(141)), "no outline standing against the note's edge: {:?}", at(141),);
-        // Solid nearly all the way out — the last half pixel of the reach is
-        // the antialiasing ramp a hard edge still gets — and gone past it.
-        assert!(shadowed(at(142)), "the outline is short of its reach: {:?}", at(142));
-        assert!(near(at(145), BG), "the outline reaches further than it should: {:?}", at(145));
+        // The adjacent pixel is beyond the profile, even though the instance
+        // allows a four-point outline bound. That bound must not extend it.
+        assert!(near(at(142), BG), "the outline reaches further than it should: {:?}", at(142));
     }
 
     /// The outline wraps EVERY side of the note — its ends as much as its
@@ -1650,23 +1657,23 @@ mod tests {
             return;
         };
         // The note spans +-12 across pitch (x) and +-60 along time (y), so its
-        // corner is at (140, 188) and the outline reaches 4 past it.
+        // corner is at (140, 188) and the Distance profile reaches 2 past it.
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
         let at = |x: u32, y: u32| pixel(&frame, x, y);
         const RED: [u8; 4] = [255, 0, 0, 255];
         assert!(near(at(138, 128), RED), "the note's body went missing: {:?}", at(138, 128));
-        assert!(shadowed(at(142, 128)), "no outline along the flank: {:?}", at(142, 128));
+        assert!(shadowed(at(141, 128)), "no outline along the flank: {:?}", at(141, 128));
         assert!(near(at(128, 186), RED), "the note's body was cut at its end: {:?}", at(128, 186));
-        assert!(shadowed(at(128, 190)), "no outline across the end: {:?}", at(128, 190));
+        assert!(shadowed(at(128, 189)), "no outline across the end: {:?}", at(128, 189));
         assert!(near(at(128, 193), BG), "the outline runs past its reach: {:?}", at(128, 193));
-        // Diagonally off the corner: 2.8 points out is inside the radius, 5.0
-        // is outside it, and four bands butted together would paint both.
-        assert!(shadowed(at(141, 189)), "the corner is missing: {:?}", at(141, 189));
+        // Pixel centres diagonally off the corner: 0.7 points is inside the
+        // two-point radius, 2.1 is outside, but both fit a square expansion.
+        assert!(shadowed(at(140, 188)), "the corner is missing: {:?}", at(140, 188));
         assert!(
-            near(at(143, 191), BG),
+            near(at(141, 189), BG),
             "the corner is square ({:?}) — the outline is being drawn as bands rather \
              than as a distance",
-            at(143, 191),
+            at(141, 189),
         );
     }
 
@@ -1695,7 +1702,7 @@ mod tests {
         }
         // And it keeps going past the end, around the corner, rather than being
         // cut there: the flank and the cap are one shape.
-        assert!(dark(140, 190), "the outline is cut at the note's end");
+        assert!(dark(140, 189), "the outline is cut at the note's end");
     }
 
     /// A leading fade takes the ribbon out gradually toward its tip, and takes
@@ -2619,23 +2626,23 @@ mod tests {
         };
         // 8 points across pitch, 40 along time, bending 3 points of pitch per
         // point of depth: steep enough that `skew` is 3.16, so the outline
-        // stands 12.6 points out along pitch rather than 4.
+        // stands 6.3 points out along pitch rather than 2.
         let steep = RollInstance { half_extent: [4.0, 20.0], shear: 3.0, ..centered_note() };
         let frame = draw(&device, &queue, vec![steep], bg_color());
         // Row 147 samples `local.y = 19.5` — inside the note's box, half a
         // point short of its end. There the note's center line has drifted 58.5
         // points, so the far flank's ribbon ends at 190.5 and its outline runs
-        // out to 203.2 — where an outline that kept its width along pitch
-        // rather than perpendicular to the edge would stop at 194.5.
+        // out to 196.8 — where an outline that kept its width along pitch
+        // rather than perpendicular to the edge would stop at 192.5.
         let at = |x: u32| pixel(&frame, x, 147);
         assert!(shadowed(at(193)), "the outline is missing at the note's end: {:?}", at(193),);
         assert!(
-            shadowed(at(199)),
+            shadowed(at(195)),
             "the outline is cut off at the note's end ({:?}) — it thins with the angle, \
              or the quad was grown by its flat reach rather than its sheared one",
-            at(199),
+            at(195),
         );
-        assert!(near(at(206), BG), "the outline reaches further than it should: {:?}", at(206));
+        assert!(near(at(197), BG), "the outline reaches further than it should: {:?}", at(197));
     }
 }
 

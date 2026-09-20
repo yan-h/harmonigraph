@@ -18,9 +18,9 @@ fn shadows_below_one_percent_still_fade_over_glow() {
     };
     for (kernel, falloff) in [
         (harmonigraph_scene::ShadowKernel::Gaussian, 1.0),
-        (harmonigraph_scene::ShadowKernel::Distance, 0.35),
-        (harmonigraph_scene::ShadowKernel::Distance, 1.0),
-        (harmonigraph_scene::ShadowKernel::Distance, 3.0),
+        (harmonigraph_scene::ShadowKernel::Distance, -6.0),
+        (harmonigraph_scene::ShadowKernel::Distance, 0.0),
+        (harmonigraph_scene::ShadowKernel::Distance, 6.0),
     ] {
         for marker in [false, true] {
             let mut scene = single_marked_node(0, 0);
