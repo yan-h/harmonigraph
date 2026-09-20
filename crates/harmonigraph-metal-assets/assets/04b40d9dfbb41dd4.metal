@@ -10,6 +10,7 @@ struct TileVertex {
     char _pad2[8];
 };
 constant float CLOUD_UNITS = 10.0;
+constant float CLOUD_TILE_PITCH_SHIFT = 10.0;
 constant float SCALE_CELLS = 2.7272727;
 constant float DOME_RADIUS = 1.15;
 constant float DOME_JITTER = 0.3;
