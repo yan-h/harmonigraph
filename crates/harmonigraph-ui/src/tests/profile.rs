@@ -270,9 +270,11 @@ fn profile_frame() {
 /// What a frame takes off the heap, by phase — the churn behind the timings,
 /// which is where a p95 well clear of the mean usually comes from.
 ///
-/// The spectrogram's fallback counters print alongside, because a run that
+/// The spectrogram's re-aggregation count prints alongside, because a run that
 /// was quietly re-aggregating its whole window every frame would read as an
 /// expensive heatmap rather than as a broken ring.
+/// Upload fallbacks cannot be measured here: DockHarness has no GPU to
+/// acknowledge uploads. The GPU-backed resize test covers that path.
 #[test]
 #[ignore]
 fn profile_allocations() {
@@ -291,12 +293,12 @@ fn profile_allocations() {
 
     let mut phase = 0.0f64;
     let mut phases = [(0usize, 0usize); 3];
-    let mut at_warmup = (0, 0);
+    let mut at_warmup = 0;
 
     for i in 0..(WARMUP + FRAMES) {
         let t = h.next_time();
         if i == WARMUP {
-            at_warmup = state.picture.surfaces.spectrogram.spectrogram_fallbacks();
+            at_warmup = state.picture.surfaces.spectrogram.spectrogram_fallbacks().0;
         }
         let counting = i >= WARMUP;
         let mut charge = |slot: usize, from: (usize, usize)| {
@@ -330,11 +332,10 @@ fn profile_allocations() {
             bytes as f64 / FRAMES as f64 / 1024.0,
         );
     }
-    let (rebuilds, uploads) = state.picture.surfaces.spectrogram.spectrogram_fallbacks();
+    let (rebuilds, _) = state.picture.surfaces.spectrogram.spectrogram_fallbacks();
     println!(
-        "spectrogram over {FRAMES} frames: {} re-aggregations, {} full uploads",
-        rebuilds - at_warmup.0,
-        uploads - at_warmup.1,
+        "spectrogram over {FRAMES} frames: {} re-aggregations; uploads unmeasured (no GPU acknowledgement)",
+        rebuilds - at_warmup,
     );
 }
 

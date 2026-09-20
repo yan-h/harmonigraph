@@ -1,6 +1,6 @@
 ---
 name: persistence-contract
-description: How a saved blob survives a change — the container-level serde(default) rule and its two field-level exceptions, and why the UI_PERSIST_VERSION floor is no guard against a dropped enum variant. Use before adding, renaming or dropping a persisted field, struct or enum variant.
+description: How a saved blob survives a change — the container-level serde(default) rule and its field-level exception, and why the UI_PERSIST_VERSION floor is no guard against a dropped enum variant. Use before adding, renaming or dropping a persisted field, struct or enum variant.
 ---
 
 # The persistence contract
@@ -28,13 +28,15 @@ To see which structs currently carry it:
 grep -rn --include='*.rs' -A4 '#\[serde(default)\]' crates/ | grep 'pub struct'
 ```
 
-### The two field-level exceptions
+### The field-level exception
 
 `UiPersist::ui_scale` is the blob's one field-level `default = "..."`, and only because an `f32`'s own default of 0.0 is a scale of nothing.
 Don't add others to it.
 
-The offline renderer's `Layout` is outside the rule on purpose.
-It is a `.ron` a person writes by hand (`--dump-layout` prints a preset to start from) rather than state the plugin saves, so `panes` is REQUIRED, the struct carries no container-level default at all, and `background` holds the tree's only other field-level `default = "..."`.
+The offline renderer's `Layout` and `Placement` are runtime composition types, not serialized state.
+Custom layout RON input and its dump interface were retired under #974, so their former field-level exception is gone.
+`Pane` still serializes for the editor dock;
+`RenderFrame` still carries the captured placement and proportion.
 
 ## The floor is no guard against a dropped variant
 

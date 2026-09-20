@@ -7,12 +7,12 @@ the rest of the repo explains itself by being read.
 ## Agent guidance has one source
 
 `AGENTS.md` and `GEMINI.md` are symlinks to this file, and `.agents/skills` is a symlink to `.claude/skills`.
-Cross-project skills are pinned in the `.shared-skills` submodule and exposed from `.claude/skills` through relative project-internal symlinks;
-project-specific skills stay directly under `.claude/skills`.
-Claude's `SessionStart` prepares an uninitialised checkout and reloads its skill list,
-while the tracked `post-checkout` hook prepares each later `git worktree add` before its owner hands the worktree to an agent.
-Both paths validate the exact gitlink commit and the shared audit brief;
-an unavailable pin is a visible setup failure rather than permission to read another checkout's copy.
+Cross-project skills are installed globally from the personal `agent-config` checkout:
+`~/.claude/skills/<name>` and `~/.agents/skills/<name>` link to its `skills/<name>` directory.
+Project-specific skills stay directly under `.claude/skills`.
+Shared skills follow the installed checkout across projects and worktrees;
+they are not pinned by this repository.
+See [the development setup](docs/development.md#shared-agent-skills) for installation.
 Keep each skill's guidance at that single source rather than copying it per agent;
 copies drift while symlinks make every session read the same contract.
 Tool-specific hooks, permissions and commands stay in each tool's native configuration —
@@ -288,6 +288,14 @@ Overlapping work is better run in sequence, and variants of a single decision (t
 A Codex coordinator creates a separate top-level app task, and therefore a separate managed worktree, for each mutating stream.
 Subagents inside one task share its worktree;
 use them for read-only exploration or review, not parallel edits.
+
+**The audit itself is Yan's to start, and no session's.** He types `/audit-merges` or `$audit-merges`;
+when a batch looks worth auditing, the most a session does is say so in its reply.
+That covers reading the procedure out of `SKILL.md` and running it by hand, and pointing `merge-auditor` subagents at a range directly —
+both are the same act with the invocation skipped.
+
+The skill carries `disable-model-invocation: true`, so in Claude it is not offered to the model at all.
+Codex ignores that field and reaches a skill by reading its `SKILL.md`, so there the rule is the first paragraph of a file it reads in full, plus this one.
 
 ## Never lock an agent-owned worktree by hand
 

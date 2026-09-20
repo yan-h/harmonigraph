@@ -7,7 +7,8 @@ description: >-
 tools: Read, Grep, Glob, Bash
 ---
 
-Read `.claude/skills/audit-merges/references/merge-auditor.md` completely, then follow that brief for the range and subsystem supplied by the caller.
+Read the globally installed `audit-merges/references/merge-auditor.md` under `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills` completely, then follow that brief for the range and subsystem supplied by the caller.
+If it is unavailable, report the missing global skill rather than substituting another checkout's copy.
 
 This file is only the Claude subagent adapter.
 The shared brief is the source of the audit method used by both Claude and Codex agents.

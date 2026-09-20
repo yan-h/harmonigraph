@@ -1,21 +1,22 @@
 # Long-term maintainability
 
 Last updated: 2026-09-19.
-Status: bounded first-batch implementation launched; six product removals accepted; coordinator authorized to merge in-scope PRs after checks and review.
+Status: the ten-package first batch is complete; the technical follow-up is tracked in #954.
 
 ## Start here
 
 **Aim:** make Harmonigraph easier for future agents to change correctly,
 while reducing the attention Yan must spend understanding and supervising those changes.
 
-**Implementation scope:** use [the single-coordinator handoff](maintainability-handoff.md).
-It contains the bounded batch,
-package dependencies,
-overlap constraints,
-verification and completion criteria,
-and a copyable launch request that can authorize implementation and merging once for the batch.
-Yan's 2026-09-19 launch authorized implementation of that bounded first batch and its in-scope merges after checks and appropriate review.
-The template itself grants no authority beyond an actual launch request.
+**Resume here:** read the [first-batch completion record](https://github.com/yan-h/harmonigraph/issues/954#issuecomment-5746459598) and the [next-session scope](https://github.com/yan-h/harmonigraph/issues/954#issuecomment-5746476887).
+The [single-coordinator handoff](maintainability-handoff.md) is the completed first batch's historical implementation contract;
+do not relaunch its package list or reuse its launch template as new authority.
+The follow-up covers worktree skill preparation (#855),
+allocation-probe reporting (#971),
+current entry points and bounded GUI dependency feasibility (#968).
+Start from current main,
+check issue/PR status and active file ownership,
+and follow the actual continuation request for implementation and merge authority.
 
 **Current position:** the recommended historical change-cost analysis and developer-tool investigation are complete for this checkpoint.
 The [historical report](historical-change-cost.md) inventories 100 merged changes and traces representative repairs,
@@ -24,21 +25,25 @@ It supports existing settings/test and replay-parity issues alongside the accept
 not a broad architecture rewrite.
 Notes and browser-only lab retirement remain optional product decisions;
 Console and standalone are recommended keeps for now.
-Naming/FOV comparisons and GUI-stack feasibility remain lower-priority,
-independent investigations.
+Naming/FOV comparisons remain separate investigations.
+GUI-stack feasibility is now a bounded follow-up investigation,
+not an approved migration.
 Guidance corrections ([A, #977](https://github.com/yan-h/harmonigraph/pull/977)),
 nested settings coverage ([B1, #980](https://github.com/yan-h/harmonigraph/pull/980)),
 recording parity ([B2, #979](https://github.com/yan-h/harmonigraph/pull/979)) and tracing cleanup ([D2, #981](https://github.com/yan-h/harmonigraph/pull/981)) have landed.
 Spacing retirement ([C5, #982](https://github.com/yan-h/harmonigraph/pull/982)) and separate-WAV/dormant export-field retirement ([C1, #983](https://github.com/yan-h/harmonigraph/pull/983)) have also landed.
 Next-note outline retirement ([C4, #984](https://github.com/yan-h/harmonigraph/pull/984)) has landed.
-Shared setting rules (D1) are in progress;
-Playhead retirement (C2),
-extra export-layout retirement (C3),
-combined retained-workflow verification and the final built pair remain.
-Yan will run the merge audit manually later.
-The coordinator owns review and merge order;
-workers deliver draft PRs.
-Live package status and PR links stay in the existing issues.
+Shared setting rules ([D1, #986](https://github.com/yan-h/harmonigraph/pull/986)) and Playhead retirement ([C2, #988](https://github.com/yan-h/harmonigraph/pull/988)) have landed.
+Extra public export-layout retirement ([C3, #990](https://github.com/yan-h/harmonigraph/pull/990)) completed the named implementation batch.
+Package PRs,
+combined retained-workflow verification,
+and the final combined plugin/offline build record belong in the existing [#954 index](https://github.com/yan-h/harmonigraph/issues/954).
+The [completion record](https://github.com/yan-h/harmonigraph/issues/954#issuecomment-5746459598) records the combined verification,
+its limits and the matched plugin/offline build at `6a4d80a5`.
+It does not claim a live DAW acceptance check.
+Yan explicitly deferred the merge audit for a later manual run;
+ordinary PR review and final combined workflow checks completed with the first batch.
+Existing issues hold completion evidence and follow-up status.
 
 **Discovery history (2026-09-19, before launch):** the discovery phase systematically compared opportunities before selecting implementation work.
 Spacing was a worked example of the method,
@@ -64,7 +69,7 @@ Yan directly confirmed that he does not use next-note outlines,
 then approved removing that feature ([#970](https://github.com/yan-h/harmonigraph/issues/970)).
 Implementation was deferred while he asked about other removable requirements.
 
-**Latest instruction (2026-09-19 launch):** implement the handoff's named first batch,
+**Historical first-batch instruction (2026-09-19 launch, now completed):** implement the handoff's named first batch,
 including its technical prerequisites and documentation corrections,
 and merge its in-scope PRs after the repository's checks and appropriate review.
 Deferred features and investigations stay outside the batch.
@@ -89,7 +94,7 @@ He subsequently approved Playhead retirement ([#973](https://github.com/yan-h/ha
 Preserve Scrolling,
 Whole video and the combined Lattice/Analyzer arrangement,
 proportion and orientation controls he uses.
-These implementations are included in the launched batch.
+These implementations landed in the completed first batch.
 He chose to keep the cold-start shader optimization,
 and explicitly requires an accurate current lattice plus spectrogram history from while the editor was closed,
 within the existing history limits.
@@ -108,9 +113,11 @@ The later explicit approval settles Playhead and extra public export layouts onl
 The [feature-retirement trace](feature-retirement-discovery.md) now identifies concrete removal boundaries,
 including shared tests, musical reference data and diagnostic sinks that need to remain available.
 
-**How to return:** resume with the single coordinator and [handoff](maintainability-handoff.md#start-and-authority).
-Inspect current issue/PR status and proceed through the batch within the launch authority,
-without repeating the discovery or the accepted product questions.
+**How to return:** read the [completion record](https://github.com/yan-h/harmonigraph/issues/954#issuecomment-5746459598) and [next-session scope](https://github.com/yan-h/harmonigraph/issues/954#issuecomment-5746476887).
+Inspect current main,
+issue/PR status and active ownership before continuing within the actual request's authority.
+The first batch is complete;
+its old launch does not authorize new merges or optional product removals.
 The following chronology records the earlier discovery-only decisions on 2026-09-19;
 its deferred language does not supersede the later launch.
 Yan authorized the first pilot and its expanded sample on 2026-09-19.
@@ -121,15 +128,15 @@ He then requested individual issues for the leads and continued investigation on
 He subsequently authorized the requirements-value audit and broadened its coverage beyond a sample.
 Those issues preserve evidence and deferred scope;
 opening one does not begin its implementation.
-Yan later requested the handoff and documentation merge;
-the implementation boundary now lives in the handoff and its actual launch request.
+Yan later requested the first-batch handoff and documentation merge,
+then launched that now-completed implementation.
 
 ## Discovery record (2026-09-19, before launch)
 
 The remaining sections preserve the discovery's preferences,
 proposed sequence and evidence at their recorded checkpoints.
 Their implementation deferrals are historical;
-the current position above and the handoff govern the launched batch.
+the current position and return instructions above govern continuation.
 
 ## Confirmed preferences and the concern behind this work
 
@@ -489,6 +496,13 @@ Hidden knobs remain secondary.
 Product choices should still arrive as a small batch with concrete losses;
 implementation remains deferred.
 
+**Subsequent #968 checkpoint (2026-09-19):** the [published-cohort feasibility report](gui-cohort-feasibility.md) completes that bounded investigation.
+It recommends retaining the current stack after the patch inventory and native prototypes;
+the publication trigger is satisfied,
+not an outstanding reason to wait.
+Most obligations still need porting,
+and the texture probe's lack of a successful presentation remains an explicit limit.
+
 Do not create a parallel backlog or a second copy of the architectural documentation.
 
 For a consequential product decision,
@@ -521,7 +535,8 @@ linked work and next step.
 If code or requirements have changed since an investigation,
 recheck its relevant premises before implementing it.
 
-For implementation resumption,
-use the [single-coordinator handoff](maintainability-handoff.md#start-and-authority).
-The historical pilot and discovery phases are complete;
+For continuation,
+use the [current return instructions](#start-here).
+The pilot,
+discovery and first implementation batch are complete;
 do not restart them from an older resumption prompt.
