@@ -5,7 +5,7 @@ PR #928 retired the Plain/Blur/Lava style selector described below,
 replacing it with independent dials whose zero is off,
 and PRs #888, #909, #913, #918 and #933 added, renamed and re-ranged the whole Cloud texture section this file predates.
 `SpectralAtmosphere` now carries twenty-five persisted fields where the shape section below describes six.
-The current inventory is `crates/harmonigraph-ui/src/panes/spectral/settings.rs`'s "Softness and glow" section and `impl Default for SpectralAtmosphere` in `crates/harmonigraph-scene/src/atmosphere.rs`;
+The current inventory is the Analyzer and Spectrogram pages in `crates/harmonigraph-ui/src/panes/spectral/settings.rs` and `impl Default for SpectralAtmosphere` in `crates/harmonigraph-scene/src/atmosphere.rs`;
 those are the source rather than a copy of it here.
 The current [texture level contract](spectral-texture-levels.md) describes the shared displacement and color behavior.
 

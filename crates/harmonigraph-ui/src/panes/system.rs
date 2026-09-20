@@ -1,13 +1,5 @@
-//! The Display tab's System page: the plugin's own knobs rather than the
-//! lattice's — how sharply and how hard it renders, and how the panes are
-//! arranged. None of this is part of a picture; it's what surrounds them, which
-//! is why it is a page of its own rather than the foot of [`super::view`],
-//! where it would sit under the camera looking like a view setting.
-//!
-//! Called System because the picker is where a name has to do its work.
-//! "Panel" names the thing being looked AT rather than anything the page
-//! changes, and sits one letter from "pane", which is what every tab in the
-//! dock is.
+//! Rendering cost and editor workspace controls. Quality settings also reach
+//! exports; frame cadence and interface controls apply only to the editor.
 
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
@@ -30,7 +22,7 @@ pub(super) fn system_pane(
     // edge is already soft-banded before the extra samples see it. Described as
     // "higher supersamples" it read as a quality knob that did nothing.
     ui.heading("Performance");
-    ValueBar::new(&mut appearance.view.render_scale, 0.5..=2.0, "Render resolution")
+    ValueBar::new(&mut appearance.view.render_scale, 0.5..=2.0, "Lattice resolution")
         .percent()
         .show(ui)
         .on_hover_text(
@@ -38,15 +30,33 @@ pub(super) fn system_pane(
                  100% is native; \
                  50% uses a quarter of the pixels; \
                  200% uses four times as many. \
-                 Lower values reduce GPU load and detail.",
+                 Lower values reduce GPU load and detail in the editor, preview and exported lattice. Video output size is set separately.",
         );
+    let atmosphere = &mut appearance.spectrum.atmosphere;
+    ui.add_enabled_ui(atmosphere.effects().light(), |ui| {
+        ValueBar::new(
+            &mut atmosphere.blur_time_step,
+            0.0..=harmonigraph_scene::BLUR_TIME_STEP_MAX,
+            "Spectrogram time step",
+        )
+        .unit(1.0, "×")
+        .decimals(1)
+        .step(0.5)
+        .show(ui)
+        .on_hover_text(
+            "Sample spacing along time for spectrogram softness and cloud effects, as a multiple of one displayed history column. \
+             Higher values reduce GPU cost at long history durations, with extra softening along time. \
+             0 disables this additional reduction; 1 is the default. Pitch detail and MIDI ribbons are unaffected. \
+             Requires spectrogram softness or cloud texture.",
+        );
+    });
     // The other half of the cost dial: render scale sets what each frame
     // costs, this sets how many of them there are. Presented as a ceiling
     // rather than a target — the shell decides the actual cadence, and a
     // ceiling above what it can offer simply doesn't bind.
     choice_row(
         ui,
-        "Frame limit (fps)",
+        "Editor frame limit (fps)",
         &mut interaction.fps_cap,
         &[
             (None, "Uncapped", "Repaint as often as the host window allows."),
@@ -55,7 +65,11 @@ pub(super) fn system_pane(
                 "30",
                 "Limit redraws to 30 frames per second to reduce display processing cost.",
             ),
-            (Some(60.0), "60", "Limit redraws to 60 frames per second."),
+            (
+                Some(60.0),
+                "60",
+                "Limit editor redraws to 60 frames per second. Video exports always use 60 fps.",
+            ),
             (Some(120.0), "120", "For a high-refresh display."),
             (Some(144.0), "144", "For a high-refresh display."),
         ],
@@ -72,7 +86,7 @@ pub(super) fn system_pane(
     }
 
     // Layout: how big the chrome draws, then the pane arrangement itself.
-    section(ui, "Layout");
+    section(ui, "Interface and layout");
     // Sizes the panel, not the picture. Everything the lattice, the roll and
     // the spectrogram draw is measured off the pane it lands in, so this moves
     // the knobs and the tab bars out of the way and leaves what they are

@@ -1,12 +1,10 @@
-//! The Display tab's Analyzer page: every setting the Spectral display
-//! carries, and the readouts its bars are dragged against. The heatmap's
-//! colors are the one thing dialled elsewhere — they are a color table, and
-//! both of those are on the Colors page ([`super::super::color`]).
+//! Analyzer layout, spectrogram appearance, and shared audio analysis each
+//! have a Display page. Color tables live on [`super::super::color`].
 
 use harmonigraph_scene::{
-    BLUR_TIME_STEP_MAX, CLOUD_SPEED_MAX, CLOUD_SPEED_MIN, CONTOURS_MAX, CONTOURS_MIN,
-    CONTOUR_SOFTNESS_MAX, CONTOUR_SOFTNESS_MIN, PITCH_SOFTNESS_MAX, PITCH_SOFTNESS_MIN,
-    SCALE_REFRACT_MAX, SCALE_REFRACT_MIN, TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
+    CLOUD_SPEED_MAX, CLOUD_SPEED_MIN, CONTOURS_MAX, CONTOURS_MIN, CONTOUR_SOFTNESS_MAX,
+    CONTOUR_SOFTNESS_MIN, PITCH_SOFTNESS_MAX, PITCH_SOFTNESS_MIN, SCALE_REFRACT_MAX,
+    SCALE_REFRACT_MIN, TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
 };
 
 use crate::config::BALLISTICS_MAX;
@@ -41,22 +39,9 @@ pub(crate) fn span_readout(seconds: f32) -> String {
     format!("{:.1} s", seconds.max(0.0))
 }
 
-/// Settings for the Spectral pane's display and analyzer (persisted with
-/// the UI state). The Display tab's Analyzer page.
-pub(crate) fn spectrum_settings_pane(
-    ui: &mut egui::Ui,
-    state: &mut PictureState,
-    params: &dyn ParamBackend,
-) {
-    use crate::{SpectralOrientation, SpectrumTapers, SpectrumWindow};
-
-    // What the page reaches, said once at the top rather than repeated on the
-    // sections: every setting here is the analyzer's, and the Spiral is the
-    // same analyzed frame wound onto a disc rather than a second one.
-    ui.weak(
-        "Audio analysis is shared by the Analyzer, Spiral and lattice audio rings. \
-                 View and history controls arrange the Analyzer picture.",
-    );
+/// The Analyzer picture: arrangement, live spectrum, history and MIDI ribbons.
+pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut PictureState) {
+    use crate::SpectralOrientation;
 
     ui.heading("View");
     let cfg = &mut state.appearance.spectrum;
@@ -118,299 +103,14 @@ pub(crate) fn spectrum_settings_pane(
                  1× is the reference size; labels stay the same size when you zoom.",
         );
 
-    section(ui, "Softness and glow");
-    let atmosphere = &mut cfg.atmosphere;
-    // No style selector. Plain, Blur and Lava were three presets over three
-    // independent effects — the blur, the terraces and the cloud — and each of
-    // those now has a dial whose zero is off. The measured picture is all three
-    // at zero, and the renderer takes its plain path there, so nothing is paid
-    // for an effect that is not drawn. A row whose effect is off is greyed
-    // rather than hidden, like every other section of this page, so the page's
-    // inventory does not move under a drag.
-    ValueBar::new(
-        &mut atmosphere.pitch_softness,
-        PITCH_SOFTNESS_MIN..=PITCH_SOFTNESS_MAX,
-        "Pitch softness",
-    )
-    .unit(1.0, " ct")
-    .show(ui);
-    ValueBar::new(
-        &mut atmosphere.time_softness,
-        TIME_SOFTNESS_MIN..=TIME_SOFTNESS_MAX,
-        "Time softness",
-    )
-    .unit(1.0, " ms")
-    .show(ui);
-    let soft = atmosphere.pitch_softness > 0.0 || atmosphere.time_softness > 0.0;
-    ui.add_enabled_ui(soft, |ui| {
-        ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Spread").percent().show(ui);
-    });
-    // Greyed on the light FIELD rather than on the softness above, because a
-    // cloud reads that field too and pays for its resolution at zero softness.
-    let light = atmosphere.effects().light();
-    ui.add_enabled_ui(light, |ui| {
-        ValueBar::new(&mut atmosphere.blur_time_step, 0.0..=BLUR_TIME_STEP_MAX, "Blur time step")
-            .unit(1.0, " slabs")
-            .decimals(1)
-            // The halves `sanitized` snaps to, so the bar never reads 0.7 over
-            // a field drawn at 0.5.
-            .step(0.5)
-            .show(ui)
-            .on_hover_text(
-                "A PERFORMANCE control, and 1 slab is what a fresh pane draws. \
-                 The softened picture is \
-                 drawn into its own image first, and zoomed out that image is as \
-                 fine as the PANE while the sound under it is a few hundred \
-                 slabs, two or three pixels each. This is how many of those slabs \
-                 one sample of the image may cover, and its cost falls with it: \
-                 on a 1400-pixel pane at a 600 s span, 1 slab draws the picture \
-                 from 587 samples where 0 draws it from 1416, and the blur runs \
-                 half as long. What it costs is a smear along TIME of about one \
-                 of these steps \u{2014} pitch is untouched, and so is everything \
-                 drawn over the softened picture. 0 is off.",
-            );
-    });
-    ValueBar::new(&mut atmosphere.contour_strength, 0.0..=1.0, "Contour strength")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How far the levels are gathered into smooth terraces. 0% leaves the measured \
-             levels alone and costs nothing. Applies after texture refraction, so the \
-             same controls set the stepping of the refracted picture.",
-        );
-    ui.add_enabled_ui(atmosphere.contour_strength > 0.0, |ui| {
-        ValueBar::new(&mut atmosphere.contours, CONTOURS_MIN..=CONTOURS_MAX, "Contours")
-            .integer()
-            .show(ui);
-        ValueBar::new(
-            &mut atmosphere.contour_softness,
-            CONTOUR_SOFTNESS_MIN..=CONTOUR_SOFTNESS_MAX,
-            "Edge softness",
-        )
-        .percent()
-        .show(ui);
-    });
-    ui.label(egui::RichText::new("Cloud texture").strong());
-    ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Cloud depth")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How strongly the refracted levels replace the original picture. 0% removes \
-             the texture; 100% uses only the displaced readings. Contours and the palette \
-             apply afterward, without extra lighting or pigment. Reads whatever the \
-             softness above leaves: with none, the measured picture itself.",
-        );
-    ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
-        // Two constructions rather than two presets of one, so the dials below
-        // the shared three are per style: nothing a wash carries means anything
-        // to a refracting scale, and the page would otherwise be a list of controls
-        // most of which do nothing.
-        use harmonigraph_scene::CloudStyle;
-        choice_row(
-            ui,
-            "Texture",
-            &mut atmosphere.cloud_style,
-            &[
-                (
-                    CloudStyle::Mosaic,
-                    "Mosaic",
-                    "A pile of soft domes refracting the sound through their faces, \
-                     then colored by the shared Contours and palette controls",
-                ),
-                (
-                    CloudStyle::Watercolor,
-                    "Watercolor",
-                    "A field of overlapping globs, each reading the sound near its own \
-                     centre. Layers blends their levels before Contours and the palette",
-                ),
-            ],
-        );
-        ValueBar::new(
-            &mut atmosphere.cloud_speed,
-            CLOUD_SPEED_MIN..=CLOUD_SPEED_MAX,
-            "Cloud speed",
-        )
-        .unit(1.0, "\u{d7}")
-        .show(ui)
-        .on_hover_text(
-            "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds \
-                 it still.",
-        );
-        // Two constructions, so two sets of dials: nothing a wash carries means
-        // anything to a refracting scale, and a page listing both would be mostly
-        // controls that do nothing wherever it stands.
-        if atmosphere.cloud_style == CloudStyle::Watercolor {
-            wash_bars(ui, atmosphere);
-        } else {
-            ValueBar::new(&mut atmosphere.scale_size, cloud_size_range(), "Scale size")
-                .eased(true)
-                .unit(1.0, "\u{d7}")
-                .show(ui)
-                .on_hover_text(
-                    "Size of one scale. Small is a fine grain over the whole pane; large is a \
-                 few broad faces. Changing it does not change how far the light bends \
-                 \u{2014} Refraction is measured in scale widths \u{2014} nor how fast the \
-                 texture drifts, which is Cloud speed's alone.",
-                );
-            ValueBar::new(&mut atmosphere.scale_variety, 0.0..=1.0, "Variety")
-                .percent()
-                .show(ui)
-                .on_hover_text(
-                    "How much the scales differ in size from EACH OTHER. 0 is one scale per \
-                 cell of an even grid, which is the most regular texture there is. Turning \
-                 it up both redraws each glob's width and lets a loud one take its \
-                 neighbour's ground, so the biggest scales run about four times the \
-                 smallest at 100%. It never opens a hole \u{2014} a scale that loses its \
-                 cell loses it to a neighbour already covering it.",
-                );
-            ValueBar::new(
-                &mut atmosphere.scale_refract,
-                SCALE_REFRACT_MIN..=SCALE_REFRACT_MAX,
-                "Refraction",
-            )
-            .unit(100.0, "%")
-            .show(ui)
-            .on_hover_text(
-                "How far a scale carries the light behind it, and which way. This is the \
-                 dial that makes the layer a LENS. Above 0 the spectrogram is read where \
-                 each scale's face points, as a share of its own width, so the bands break \
-                 and bend through the cloud. Below 0 it is pulled toward the scale's own \
-                 centre instead \u{2014} at -100% one value for the whole scale, so the \
-                 cloud comes apart into flat quantized patches. 0 leaves the picture unchanged.",
-            );
-        }
-    });
-    ValueBar::new(&mut atmosphere.analyzer_softness, 0.0..=1.0, "Analyzer softness")
-        .percent().show(ui).on_hover_text("Blend the live analyzer from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram style and outline opacity.");
-    ValueBar::new(&mut atmosphere.note_glow, 0.0..=1.0, "Note glow")
-        .percent().show(ui).on_hover_text("Additional glow around note ribbons. Adjust their shadows under Display → Lighting → Shadows.");
-
-    // ---- Audio spectrum -------------------------------------------------
-    // Always analyzed: the pane IS the analyzer, the spectrogram reads the
-    // same buckets, and giving the whole depth axis to the roll is what the
-    // divider is for.
-    section(ui, "Audio analysis");
-    if let Some(mut input) = params.analysis_input() {
-        let before = input;
-        choice_row(
-            ui,
-            "Audio input",
-            &mut input,
-            &[
-                (
-                    AnalysisInput::Main,
-                    "Main",
-                    "Analyze the plug-in's main input without changing its pass-through audio",
-                ),
-                (
-                    AnalysisInput::Sidechain,
-                    "Sidechain",
-                    "Analyze the sidechain routed by the host. An unrouted sidechain is silence",
-                ),
-            ],
-        );
-        if input != before {
-            params.set_analysis_input(input);
-        }
-    }
-    button_row(ui, |ui| {
-        ui.label("Resolution");
-        for (window, label) in [
-            (SpectrumWindow::Fast, "Fast"),
-            (SpectrumWindow::Balanced, "Balanced"),
-            (SpectrumWindow::Precise, "Precise"),
-        ] {
-            ui.selectable_value(&mut cfg.window, window, label).on_hover_text(format!(
-                "{} samples: {}",
-                window.samples(),
-                match window {
-                    SpectrumWindow::Fast => "snappy response, coarse bass pitch",
-                    SpectrumWindow::Balanced => "the default tradeoff",
-                    SpectrumWindow::Precise => "sharp bass pitch, slower response",
-                },
-            ));
-        }
-    });
-    // Beside the window rather than folded into it: the window trades time
-    // against pitch, this trades cost and contrast against the estimate's own
-    // noise, and no single row of buttons can name both.
-    button_row(ui, |ui| {
-        ui.label("Smoothing passes");
-        for (tapers, label) in
-            [(SpectrumTapers::One, "1"), (SpectrumTapers::Three, "3"), (SpectrumTapers::Five, "5")]
-        {
-            ui.selectable_value(&mut cfg.tapers, tapers, label).on_hover_text(match tapers {
-                SpectrumTapers::One => "Sharpest frequency detail, with the most flicker and speckle. Lowest processing cost.",
-                SpectrumTapers::Three => {
-                    "Average three tapers of the same audio for less speckle, with softer frequency detail and higher processing cost."
-                }
-                SpectrumTapers::Five => {
-                    "Average five tapers for the steadiest levels, with the softest frequency detail and highest processing cost."
-                }
-            });
-        }
-    });
-
-    // Both ends of the height scale on one control, like the pitch range: the
-    // window on the spectrum's dynamics rather than just where it bottoms out.
-    RangeBar::new(
-        &mut cfg.floor_db,
-        &mut cfg.ceiling_db,
-        crate::LEVEL_MIN_DB..=crate::LEVEL_MAX_DB,
-        "Spectrum level range",
-    )
-    .min_span(crate::LEVEL_RANGE_MIN_SPAN)
-    .display(db_readout)
-    .show(ui)
-    .on_hover_text(
-        "Levels mapped to zero and full spectrum height, also used by lattice audio rings. \
-                 Lower the upper end to enlarge quiet signals. \
-                 Audio colors have their own Level color range on Colors.",
-    );
-    // Two bars and not one, because a spectrum's two directions are different
-    // events: a partial arriving is worth seeing when it happens, and the same
-    // partial's noise wobbling down is not worth drawing at all.
-    ValueBar::new(&mut cfg.attack, 0.0..=BALLISTICS_MAX, "Spectrum attack")
-        .unit(1000.0, " ms").decimals(0)
-        .show(ui)
-        .on_hover_text("Response time for the spectrum curve to rise when audio gets louder. 0 ms responds immediately.");
-    ValueBar::new(&mut cfg.release, 0.0..=BALLISTICS_MAX, "Spectrum release")
-        .unit(1000.0, " ms")
-        .decimals(0)
-        .show(ui)
-        .on_hover_text(
-            "Response time for the spectrum curve to fall when audio gets quieter. \
-                 Increase for a steadier curve. \
-                 0 ms responds immediately.",
-        );
-    button_row(ui, |ui| {
-        ui.label("Tilt (dB/oct)").on_hover_text(
-            "Reference slope in decibels per octave. \
-                 0 shows raw power; -3 makes pink noise appear flat; more negative values lift high frequencies further. \
-                 Affects every audio view.",
-        );
-        // Five signed numbers side by side, so `option_label` sets them in
-        // monospace: a proportional face gives "0.0" and "-1.5" different
-        // widths and leaves the row visibly uneven, where digits of one width
-        // make it a scale.
-        for step in crate::TILT_STEPS {
-            ui.selectable_value(&mut cfg.tilt, step, option_label(&format!("{step:.1}")));
-        }
-    });
-
-    ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Outline opacity").percent().show(ui).on_hover_text(
-        "Opacity of the white spectrum outline. Independent of Analyzer softness; 0% hides it.",
+    section(ui, "Live spectrum");
+    ValueBar::new(&mut cfg.atmosphere.analyzer_softness, 0.0..=1.0, "Spectrum fill softness")
+        .percent().show(ui).on_hover_text("Blend the live spectrum from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram effects and Spectrum outline.");
+    ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Spectrum outline").percent().show(ui).on_hover_text(
+        "Opacity of the white spectrum outline. Independent of Spectrum fill softness; 0% hides it.",
     );
 
     section(ui, "History");
-    ui.checkbox(&mut cfg.show_roll, "Show MIDI notes").on_hover_text(
-        "Show played MIDI notes as ribbons over the shared time axis. \
-                 Their colors come from MIDI note colors on Colors.",
-    );
-    ui.checkbox(&mut cfg.show_spectrogram, "Show spectrogram").on_hover_text(
-        "Show audio levels as a frequency-versus-time heatmap. \
-                 Uses the shared History duration and the Audio level colors on Colors.",
-    );
     ValueBar::new(&mut cfg.roll_seconds, crate::ROLL_SECONDS_MIN..=crate::ROLL_SECONDS_MAX, "History duration")
         .eased(true)
         .decimals(1)
@@ -433,6 +133,11 @@ pub(crate) fn spectrum_settings_pane(
         }
     });
     section(ui, "MIDI ribbons");
+    ui.checkbox(&mut cfg.show_roll, "Show MIDI ribbons").on_hover_text(
+        "Show played MIDI notes as ribbons over the shared time axis. \
+                 Their colors come from MIDI note colors on Colors.",
+    );
+
     ui.add_enabled_ui(cfg.show_roll, |ui| {
         ValueBar::new(&mut cfg.roll_thickness, crate::config::ROLL_THICKNESS_RANGE, "Ribbon width")
             .unit(1.0, " st")
@@ -448,6 +153,9 @@ pub(crate) fn spectrum_settings_pane(
                 "Opacity of MIDI ribbon colors over the spectrogram. \
                  Their dark surrounds keep their full strength.",
             );
+
+        ValueBar::new(&mut cfg.atmosphere.note_glow, 0.0..=1.0, "Ribbon glow")
+            .percent().show(ui).on_hover_text("Additional glow around note ribbons. Adjust their shadows under Display → Lighting → Shadows.");
         edge_bar(
             ui,
             (&mut cfg.roll_lead, &mut cfg.roll_lead_fade),
@@ -494,6 +202,273 @@ pub(crate) fn spectrum_settings_pane(
     });
 }
 
+/// Measurement controls shared by every audio view.
+pub(crate) fn analysis_settings_pane(
+    ui: &mut egui::Ui,
+    state: &mut PictureState,
+    params: &dyn ParamBackend,
+) {
+    use crate::{SpectrumTapers, SpectrumWindow};
+
+    ui.weak(
+        "Audio measurement and display mapping. These settings do not change pass-through audio.",
+    );
+    ui.heading("Audio analysis");
+    let cfg = &mut state.appearance.spectrum;
+    if let Some(mut input) = params.analysis_input() {
+        let before = input;
+        choice_row(
+            ui,
+            "Audio input",
+            &mut input,
+            &[
+                (
+                    AnalysisInput::Main,
+                    "Main",
+                    "Analyze the plug-in's main input without changing its pass-through audio",
+                ),
+                (
+                    AnalysisInput::Sidechain,
+                    "Sidechain",
+                    "Analyze the sidechain routed by the host. An unrouted sidechain is silence",
+                ),
+            ],
+        );
+        if input != before {
+            params.set_analysis_input(input);
+        }
+    }
+    button_row(ui, |ui| {
+        ui.label("Frequency resolution");
+        for (window, label) in [
+            (SpectrumWindow::Fast, "Fast"),
+            (SpectrumWindow::Balanced, "Balanced"),
+            (SpectrumWindow::Precise, "Precise"),
+        ] {
+            ui.selectable_value(&mut cfg.window, window, label).on_hover_text(format!(
+                "{} samples: {}",
+                window.samples(),
+                match window {
+                    SpectrumWindow::Fast => "snappy response, coarse bass pitch",
+                    SpectrumWindow::Balanced => "the default tradeoff",
+                    SpectrumWindow::Precise => "sharp bass pitch, slower response",
+                },
+            ));
+        }
+    });
+    // Beside the window rather than folded into it: the window trades time
+    // against pitch, this trades cost and contrast against the estimate's own
+    // noise, and no single row of buttons can name both.
+    button_row(ui, |ui| {
+        ui.label("Spectrum averaging");
+        for (tapers, label) in
+            [(SpectrumTapers::One, "1"), (SpectrumTapers::Three, "3"), (SpectrumTapers::Five, "5")]
+        {
+            ui.selectable_value(&mut cfg.tapers, tapers, label).on_hover_text(match tapers {
+                SpectrumTapers::One => "Sharpest frequency detail, with the most flicker and speckle. Lowest processing cost.",
+                SpectrumTapers::Three => {
+                    "Average three tapers of the same audio for less speckle, with softer frequency detail and higher processing cost."
+                }
+                SpectrumTapers::Five => {
+                    "Average five tapers for the steadiest levels, with the softest frequency detail and highest processing cost."
+                }
+            });
+        }
+    });
+
+    section(ui, "Level mapping");
+    // Both ends of the height scale on one control, like the pitch range: the
+    // window on the spectrum's dynamics rather than just where it bottoms out.
+    RangeBar::new(
+        &mut cfg.floor_db,
+        &mut cfg.ceiling_db,
+        crate::LEVEL_MIN_DB..=crate::LEVEL_MAX_DB,
+        "Spectrum level range",
+    )
+    .min_span(crate::LEVEL_RANGE_MIN_SPAN)
+    .display(db_readout)
+    .show(ui)
+    .on_hover_text(
+        "Levels mapped to zero and full height in the Analyzer and Spiral, also used by lattice audio rings. \
+                 Lower the upper end to enlarge quiet signals. \
+                 Audio colors have their own Level color range on Colors.",
+    );
+    button_row(ui, |ui| {
+        ui.label("Tilt (dB/oct)").on_hover_text(
+            "Reference slope in decibels per octave. \
+                 0 shows raw power; -3 makes pink noise appear flat; more negative values lift high frequencies further. \
+                 Affects every audio view.",
+        );
+        // Five signed numbers side by side, so `option_label` sets them in
+        // monospace: a proportional face gives "0.0" and "-1.5" different
+        // widths and leaves the row visibly uneven, where digits of one width
+        // make it a scale.
+        for step in crate::TILT_STEPS {
+            ui.selectable_value(&mut cfg.tilt, step, option_label(&format!("{step:.1}")));
+        }
+    });
+    section(ui, "Live response");
+    // Two bars and not one, because a spectrum's two directions are different
+    // events: a partial arriving is worth seeing when it happens, and the same
+    // partial's noise wobbling down is not worth drawing at all.
+    ValueBar::new(&mut cfg.attack, 0.0..=BALLISTICS_MAX, "Live attack")
+        .unit(1000.0, " ms").decimals(0)
+        .show(ui)
+        .on_hover_text("Response time for levels to rise in the live Analyzer, Spiral and lattice audio rings. Spectrogram history keeps the unsmoothed measurements. 0 ms responds immediately.");
+    ValueBar::new(&mut cfg.release, 0.0..=BALLISTICS_MAX, "Live release")
+        .unit(1000.0, " ms")
+        .decimals(0)
+        .show(ui)
+        .on_hover_text(
+            "Response time for levels to fall in the live Analyzer, Spiral and lattice audio rings. Spectrogram history keeps the unsmoothed measurements. \
+                 Increase for a steadier curve. \
+                 0 ms responds immediately.",
+        );
+}
+
+/// Heatmap appearance, independent of the live spectrum and MIDI ribbons.
+pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureState) {
+    ui.heading("Spectrogram");
+    let cfg = &mut state.appearance.spectrum;
+    ui.checkbox(&mut cfg.show_spectrogram, "Show spectrogram").on_hover_text(
+        "Show audio levels as a frequency-versus-time heatmap. \
+                 Uses the shared History duration and the Audio level colors on Colors.",
+    );
+    ui.weak(
+        "History duration and frequency range are on Analyzer; the audio palette is on Colors.",
+    );
+    section(ui, "Softness");
+    let atmosphere = &mut cfg.atmosphere;
+    // No style selector. Plain, Blur and Lava were three presets over three
+    // independent effects — the blur, the terraces and the cloud — and each of
+    // those now has a dial whose zero is off. The measured picture is all three
+    // at zero, and the renderer takes its plain path there, so nothing is paid
+    // for an effect that is not drawn. A row whose effect is off is greyed
+    // rather than hidden, like every other section of this page, so the page's
+    // inventory does not move under a drag.
+    ValueBar::new(
+        &mut atmosphere.pitch_softness,
+        PITCH_SOFTNESS_MIN..=PITCH_SOFTNESS_MAX,
+        "Pitch softness",
+    )
+    .unit(1.0, "¢")
+    .show(ui)
+    .on_hover_text("Blur width along pitch, in cents; 100 cents is one semitone. 0 leaves pitch unblurred. Applies only to the spectrogram.");
+    ValueBar::new(
+        &mut atmosphere.time_softness,
+        TIME_SOFTNESS_MIN..=TIME_SOFTNESS_MAX,
+        "Time softness",
+    )
+    .unit(1.0, " ms")
+    .show(ui)
+    .on_hover_text("Blur width along time, in milliseconds. 0 leaves time unblurred. Applies only to the spectrogram.");
+    let soft = atmosphere.pitch_softness > 0.0 || atmosphere.time_softness > 0.0;
+    ui.add_enabled_ui(soft, |ui| {
+        ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Wide blur mix").percent().show(ui)
+            .on_hover_text("Blend the close blur with a blur five times wider. 0% uses the close blur only; 100% uses the wider field. Pitch and Time softness set their base widths.");
+    });
+    section(ui, "Level contours");
+    ValueBar::new(&mut atmosphere.contour_strength, 0.0..=1.0, "Contour strength")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How far the levels are gathered into smooth terraces. 0% leaves the measured \
+             levels alone and costs nothing. Applies after texture refraction, so the \
+             same controls set the stepping of the refracted picture.",
+        );
+    ui.add_enabled_ui(atmosphere.contour_strength > 0.0, |ui| {
+        ValueBar::new(&mut atmosphere.contours, CONTOURS_MIN..=CONTOURS_MAX, "Contour levels")
+            .integer()
+            .show(ui)
+            .on_hover_text("Number of level bands between the low and high audio-color endpoints. More bands make finer steps.");
+        ValueBar::new(
+            &mut atmosphere.contour_softness,
+            CONTOUR_SOFTNESS_MIN..=CONTOUR_SOFTNESS_MAX,
+            "Contour edge softness",
+        )
+        .percent()
+        .show(ui)
+        .on_hover_text("Blend across adjacent level bands. 0% makes sharp boundaries; higher values soften the transitions.");
+    });
+    section(ui, "Cloud texture");
+    ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How strongly the refracted levels replace the original picture. 0% removes \
+             the texture; 100% uses only the displaced readings. Contours and the palette \
+             apply afterward, without extra lighting or pigment. Reads whatever the \
+             softness above leaves: with none, the measured picture itself.",
+        );
+    ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
+        // Two constructions rather than two presets of one, so the dials below
+        // the shared three are per style: nothing a wash carries means anything
+        // to a refracting scale, and the page would otherwise be a list of controls
+        // most of which do nothing.
+        use harmonigraph_scene::CloudStyle;
+        choice_row(
+            ui,
+            "Texture",
+            &mut atmosphere.cloud_style,
+            &[
+                (
+                    CloudStyle::Mosaic,
+                    "Mosaic",
+                    "A pile of soft domes refracting the sound through their faces, \
+                     then colored by the shared Contour levels and palette controls",
+                ),
+                (
+                    CloudStyle::Watercolor,
+                    "Watercolor",
+                    "A field of overlapping globs, each reading the sound near its own \
+                     centre. Fine layer mix blends their levels before Contour levels and the palette",
+                ),
+            ],
+        );
+        ValueBar::new(
+            &mut atmosphere.cloud_speed,
+            CLOUD_SPEED_MIN..=CLOUD_SPEED_MAX,
+            "Cloud speed",
+        )
+        .unit(1.0, "\u{d7}")
+        .show(ui)
+        .on_hover_text(
+            "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds \
+                 it still.",
+        );
+        // Two constructions, so two sets of dials: nothing a wash carries means
+        // anything to a refracting scale, and a page listing both would be mostly
+        // controls that do nothing wherever it stands.
+        if atmosphere.cloud_style == CloudStyle::Watercolor {
+            wash_bars(ui, atmosphere);
+        } else {
+            ValueBar::new(&mut atmosphere.scale_size, cloud_size_range(), "Cell size")
+                .eased(true)
+                .unit(1.0, "\u{d7}")
+                .show(ui)
+                .on_hover_text(
+                    "Size of each mosaic cell relative to the pane. 1× is the reference size; larger values make broader cells. Refraction is a fraction of each cell's width, so larger cells also displace the picture farther.",
+                );
+            ValueBar::new(&mut atmosphere.scale_variety, 0.0..=1.0, "Size variation")
+                .percent()
+                .show(ui)
+                .on_hover_text(
+                    "Variation in mosaic cell size. 0% makes an even grid; 100% mixes small and large cells, with the largest about four times the smallest. The cells continue to cover the whole picture.",
+                );
+            ValueBar::new(
+                &mut atmosphere.scale_refract,
+                SCALE_REFRACT_MIN..=SCALE_REFRACT_MAX,
+                "Refraction",
+            )
+            .unit(100.0, "%")
+            .show(ui)
+            .on_hover_text(
+                "Displacement of the spectrogram within each mosaic cell, as a percentage of cell width. Positive values bend bands outward; negative values pull toward the center. -100% gives each cell one level; 0% leaves the picture unchanged.",
+            );
+        }
+    });
+}
+
 /// The band both texture size bars run over, taken from the same constants the
 /// load door clamps to rather than written out here.
 ///
@@ -518,43 +493,28 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .unit(1.0, "\u{d7}")
         .show(ui)
         .on_hover_text(
-            "Size of one glob. At 1\u{d7} a glob is about a twentieth of the pane's height \
-             across, which is roughly two harmonic lines; halve it and a glob is one line \
-             wide and the music reads through the paint. The bar runs a further four \
-             halvings below that, to where the globs stop shrinking and start aliasing \
-             instead; the wash is closer to a flat film than a field of globs well \
-             before the bottom.",
+            "Size of watercolor globs relative to the pane. 1× is about one twentieth of the pane's height; smaller values make finer grain and larger values make broader patches. The apparent pitch width depends on the frequency range.",
         );
-    ValueBar::new(&mut atmosphere.wash_fuzz, 0.0..=1.0, "Fuzz").percent().show(ui).on_hover_text(
-        "How far a glob's lookup feathers into the one beneath it and bleeds into the \
-             one about to cover it. 0 is hard-edged pebbles, 100% is dissolved paint. \
-             The sampled levels stay unchanged.",
+    ValueBar::new(&mut atmosphere.wash_fuzz, 0.0..=1.0, "Edge feathering").percent().show(ui).on_hover_text(
+        "Blend between neighboring watercolor patches. 0% makes hard-edged patches; 100% dissolves their edges. Does not change where each patch samples the audio.",
     );
-    ValueBar::new(&mut atmosphere.wash_lobe, 0.0..=1.0, "Lobe shape")
+    ValueBar::new(&mut atmosphere.wash_lobe, 0.0..=1.0, "Shape warp")
         .percent()
         .show(ui)
         .on_hover_text(
-            "How far a slow shared warp carries glob space off its grid. 0 is a bath of \
-             round bubbles; halfway is lobes leaning into each other; the top shears them \
-             into streaks.",
+            "Distort round watercolor patches into lobes and streaks. 0% keeps them round; higher values stretch and bend their shapes.",
         );
     ValueBar::new(&mut atmosphere.wash_refract, 0.0..=1.0, "Refraction")
         .percent()
         .show(ui)
         .on_hover_text(
-            "How far each glob's tone is pulled to the light at its OWN CENTRE. This is what \
-             makes the layer a lens rather than paint: the spectrogram is read one value per \
-             glob, so the bands come apart into the field. 0 reads the light exactly under \
-             the pixel and moves nothing at all.",
+            "Pull the sampled audio toward each glob's center. 0% keeps the original picture; 100% gives each glob the level at its center.",
         );
-    ValueBar::new(&mut atmosphere.wash_layers, 0.0..=1.0, "Layers")
+    ValueBar::new(&mut atmosphere.wash_layers, 0.0..=1.0, "Fine layer mix")
         .percent()
         .show(ui)
         .on_hover_text(
-            "How opaque a second, finer and sparser wash is over the first. It is where the \
-             field gets its small lobes crowding the big ones, and where two washes meet the \
-             tone steps. It is also where the field's range of glob sizes comes from. 0 \
-             draws the coarse field alone, which is also the cheapest this texture runs.",
+            "Mix a second layer of smaller watercolor patches over the broad layer. 0% uses the broad layer alone; 100% gives the fine layer its full strength.",
         );
 }
 
@@ -612,7 +572,7 @@ mod tests {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 1600.0));
         ctx.run_ui(
             egui::RawInput { screen_rect: Some(screen), events, ..Default::default() },
-            |ui| spectrum_settings_pane(ui, state, backend),
+            |ui| analysis_settings_pane(ui, state, backend),
         )
     }
 

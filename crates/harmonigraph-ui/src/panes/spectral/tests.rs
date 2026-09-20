@@ -28,16 +28,6 @@ const SCREEN: egui::Vec2 = egui::vec2(500.0, 500.0);
 const BODY_EDGE_ALPHA: u8 =
     (atmosphere::BODY_STOPS[atmosphere::BODY_STOPS.len() - 1].1 * 255.0 + 0.5) as u8;
 
-struct SettingsParams;
-
-impl crate::params::ParamBackend for SettingsParams {
-    fn get(&self, _key: crate::params::ParamKey) -> f32 {
-        0.0
-    }
-
-    fn set(&self, _key: crate::params::ParamKey, _value: f32) {}
-}
-
 /// One frame of the whole Spectral pane into `rect` at `now`, on a themed
 /// context of its own.
 fn painted_pane(rect: egui::Rect, state: &mut PictureState, now: f64) -> egui::FullOutput {
@@ -2764,8 +2754,7 @@ fn the_settings_pane_paints_at_either_extreme_of_the_pitch_range() {
         // A settings column rather than a picture: narrow and tall, and the
         // pane takes the whole of it.
         let column = egui::vec2(320.0, 700.0);
-        let output =
-            painted_full(column, |ui| spectrum_settings_pane(ui, &mut state, &SettingsParams));
+        let output = painted_full(column, |ui| spectrum_settings_pane(ui, &mut state));
         assert!(!output.shapes.is_empty(), "{low}..{high} drew nothing");
     }
 }

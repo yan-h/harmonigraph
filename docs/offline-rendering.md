@@ -107,7 +107,7 @@ The status line under the toggle tells you where the file is going and how many 
 The plugin also writes a WAV beside the take —
 always, with nothing to tick —
 so the render gets its spectrum and its soundtrack with no separate bounce and nothing to point at.
-It records whichever **Audio input** is selected on Display → Analyzer:
+It records whichever **Audio input** is selected on Display → Analysis:
 Main, or the host-routed Sidechain.
 An unrouted Sidechain records silence and never falls back to Main.
 The catch is placement:
@@ -182,9 +182,9 @@ A finished take always renders:
 the plugin runs `harmonigraph-offline` itself and writes the video next to the take.
 There is nothing to enable, and no field for the renderer's path —
 it uses the copy `update-plugin.sh` installs, and the audio it muxes and analyzes is the take's own recording.
-What you do choose is **when** a take counts as finished, in the **Render when** row below.
+What you do choose is **when** a take counts as finished, in the **Finish recording** row below.
 
-The video's size comes from **Aspect ratio** and **Short edge (px)** in the Frame section, which the plugin passes as `--size`.
+The video's size comes from **Aspect ratio** and **Output size (px)** in the Frame section, which the plugin passes as `--size`.
 There is no field for raw renderer flags:
 there was one, defaulting to `--size 1920x1080`, and since the renderer reads `--size` *after* resolving the take's frame it outranked every Aspect but 16:9 —
 a 9:16 frame previewed tall and rendered wide.
@@ -197,14 +197,14 @@ under **Whole video**, the fresh choice, the export spans the render's own lengt
 The display can skip ahead between updates during a fast bounce;
 it does not need to draw every video frame to preserve those proportions.
 
-**Render when** has four settings:
+**Finish recording** has four settings:
 
 | setting | what ends the take |
 |---|---|
-| Record off | you switch Record take off — predictable, and it works however the transport behaves |
+| Manually | you switch Record take off — predictable, and it works however the transport behaves |
 | Transport stop | the transport stops after something was recorded, or goes backwards — whichever is first; recording disarms at the same moment |
 | Loop end | one arranger-loop pass, ending the moment the loop wraps. Needs looping ON; with looping off it waits for a disarm |
-| Bar | the transport plays through the bar set beside it, ending there. A rewind splits rather than ends, so the pass that renders is the last run through the range |
+| At bar | the transport plays through the bar set beside it, ending there. A rewind splits rather than ends, so the pass that renders is the last run through the range |
 
 *Transport stop* is what makes **exporting audio produce a video with nothing further to click**:
 arm Record take, export, and both files land together.

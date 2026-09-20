@@ -36,6 +36,7 @@ pub(super) fn color_pane(
                  Drag an end to resize, or the middle to shift both.",
     );
     section(ui, "Audio level colors");
+    ui.weak("Shared by the audio views. Lattice rings use Idle ring brightness and gray at the quiet end.");
     spectrogram_gradient_group(ui, &mut appearance.spectrum);
 }
 
@@ -140,7 +141,7 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
     .show(ui)
     .on_hover_text(
         "Audio levels assigned the first and last colors. \
-                 Independent of Spectrum level range on Analyzer, which sets curve height and ring levels. \
+                 Independent of Spectrum level range on Analysis, which sets curve height and ring levels. \
                  Double-click resets to the full dB range.",
     );
     preview.show(ui, &cfg.spectrogram_gradient).on_hover_text(

@@ -211,7 +211,7 @@ struct Scenario {
     enabled: bool,
     meantone: bool,
     marvel: bool,
-    /// Draw the Analyzer page's cloud dials for the watercolour wash rather
+    /// Draw the Spectrogram page's cloud dials for the watercolour wash rather
     /// than for the refracting scales. Two constructions sharing three bars, so
     /// the page has two inventories and only one of them is the fresh state's.
     wash: bool,
@@ -235,9 +235,11 @@ fn scenarios() -> Vec<Scenario> {
             SettingsPane::Tab(panes::Tab::Tuning) => 7,
             SettingsPane::Page(DisplayPage::Colors) => 2,
             SettingsPane::Page(DisplayPage::Lattice) => 26,
-            SettingsPane::Page(DisplayPage::Analyzer) => 26,
+            SettingsPane::Page(DisplayPage::Analyzer) => 11,
+            SettingsPane::Page(DisplayPage::Analysis) => 3,
+            SettingsPane::Page(DisplayPage::Spectrogram) => 11,
             SettingsPane::Page(DisplayPage::Lighting) => 26,
-            SettingsPane::Page(DisplayPage::System) => 2,
+            SettingsPane::Page(DisplayPage::System) => 3,
             SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console) => 0,
             _ => panic!("add the new settings page's range scenario"),
         };
@@ -246,15 +248,15 @@ fn scenarios() -> Vec<Scenario> {
         // marks, audio reading, sevens, roll/note names, glow and shadow falloff.
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
-    // The wash's own inventory: it takes the three scale bars off the Analyzer
+    // The wash's own inventory: it takes the three scale bars off the Spectrogram
     // page and puts five of its own there, and nothing else on the page moves.
     // Its own scenario rather than a flag on the loop above because the fresh
     // state selects the scales, so without this the five are drawn by no case
     // here at all.
     cases.push(Scenario {
-        pane: SettingsPane::Page(DisplayPage::Analyzer),
+        pane: SettingsPane::Page(DisplayPage::Spectrogram),
         wash: true,
-        visits: 28,
+        visits: 13,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
@@ -350,7 +352,7 @@ fn check(edge: Edge) {
             assert_eq!(saw("Fifth") && saw("Half-life"), scenario.expanded);
         }
         for visit in visits {
-            if visit.label == "Contours" {
+            if visit.label == "Contour levels" {
                 assert_eq!(visit.range, 2.0..=64.0);
                 assert_eq!(
                     visit.values,

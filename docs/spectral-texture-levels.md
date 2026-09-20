@@ -17,7 +17,7 @@ Mosaic keeps positive face refraction and negative gathering toward scale center
 Watercolor keeps its overlapping globs,
 lookup feathering and bleed,
 and the Layers blend between coarse and fine sampled levels.
-Cloud depth blends original and displaced levels before the shared Contours and palette lookup.
+Texture mix blends original and displaced levels before the shared Contours and palette lookup.
 Cloud pixel size still reduces the displaced scalar field before that lookup.
 Tile geometry and the Watercolor tile rotation are unchanged.
 
@@ -26,7 +26,7 @@ so the picture is byte-identical and no texture work is needed.
 Refraction over a constant source cannot invent a pattern;
 half-float intermediate storage and filtering can round the output by one channel byte.
 Contour strength,
-Contours and Edge softness remain the quantization controls and now affect the refracted picture even at full Cloud depth.
+Contour levels and Contour edge softness remain the quantization controls and now affect the refracted picture even at full Texture mix.
 
 Scale relief and Edge pooling are removed because they only changed lighting and pigment.
 Their old saved keys are ignored;

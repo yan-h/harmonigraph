@@ -18,7 +18,7 @@ the remaining sections record the implementation boundaries, rejected alternativ
 
 For explicit passage tuning with saved maps,
 see [Lattice Map tuning](lattice-maps.md).
-The shared Tuning mode selector chooses Off,
+The shared Note retuning selector chooses Pass through,
 Adaptive or Lattice Map for subsequent attacks.
 
 

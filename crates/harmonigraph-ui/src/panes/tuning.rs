@@ -158,8 +158,7 @@ fn tuning_hint(key: ParamKey) -> &'static str {
         }
         ParamKey::Tolerance => {
             "How far off a node's pitch a note may land and still light it, in \
-             cents. Also decides the Notes pane's node column and the \
-             Analyzer's off-lattice band."
+             cents. Also sets the Analyzer's off-lattice band."
         }
         // Not on this pane: Fade is a node setting and the two pitch ends are
         // the Colors page's Color range.
@@ -289,12 +288,12 @@ pub(super) fn tuning_pane(
     // A plain heading rather than `section`: this is the top of the pane, and
     // the leading rule `section` draws would be a line under nothing. Matches
     // the Display tab's pages, which open the same way under their picker.
-    ui.heading("Tuning");
+    ui.heading("Lattice tuning");
     ui.weak("Set the pitch of each lattice step. 100 cents (¢) equals one semitone.");
     // Tuning sliders. A comma that is tempered out derives one of these axes
     // (meantone the major third, marvel the harmonic seventh), so that axis's
     // bar shows the derived value and is where the mode is released.
-    for &key in &ParamKey::TUNING {
+    for &key in ParamKey::TUNING.iter().filter(|&&key| key != ParamKey::Tolerance) {
         match comma_deriving(key, &state.appearance.view) {
             Some(comma) => tempered_bar(ui, state, params, comma),
             None => {
@@ -375,7 +374,8 @@ pub(super) fn tuning_pane(
             );
         }
     });
-    keyboard_controls(ui, state, params);
+    section(ui, "Note matching");
+    param_bar(ui, params, ParamKey::Tolerance).on_hover_text(tuning_hint(ParamKey::Tolerance));
 
     // Which commas the lattice tempers out: the same question as the bars
     // above (what IS this tuning), but the answer is a set of identities
@@ -398,12 +398,12 @@ pub(super) fn tuning_pane(
         false
     };
 
-    section(ui, "Sources");
-    instance_controls(ui, params);
     let mode = map_controls(ui, state, params);
     if mode == harmonigraph_core::lattice_map::TuningEngine::Adaptive {
         adaptive_controls(ui, state, params);
     }
+    section(ui, "Instances");
+    instance_controls(ui, params);
 
     // After every control: `configuration_pending` can come and go between
     // consecutive frames while a drag submits policy edits and the audio
@@ -435,7 +435,7 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                 adaptive_value(ui, *value as u32, 0..=1_200_000_000, 1_000_000.0, label, "¢", "")
                     as i32;
         }
-        if ui.button("Derive from fifth").clicked() {
+        if ui.button("Derive from fifth").on_hover_text("Set the input keyboard's third and seventh from its fifth.").clicked() {
             p.keyboard = tuning::fifth_generated(p.keyboard[0]);
         }
         let [third, seventh] = tuning::fifth_generated_steps(p.keyboard[0]).map(fifths);
@@ -443,7 +443,7 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     })
     .header_response
     .on_hover_text(
-        "A key may only become a lattice node this keyboard would play at the pitch the key \
+        "Tuning of the incoming keyboard. A key may only become a lattice node this keyboard would play at the pitch the key \
          sent; when no key matches, all local nodes compete. A note stays unsnapped when \
          pitch cost outweighs harmonic benefit. Learn sets the keyboard from the \
          fifth it hears.",
@@ -465,6 +465,7 @@ fn fifths(steps: i32) -> String {
 
 fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
     section(ui, "Adaptive tuning");
+    keyboard_controls(ui, state, params);
     let mut p = state.runtime.adaptive_policy;
     let before = p;
     p.pitch_flexibility = adaptive_value(
@@ -472,8 +473,10 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
         "Cents of displacement beyond accumulated drift that cost one point. The exponential penalty rises increasingly quickly; a note stays unsnapped when its harmonic benefit cannot cover that cost.",
     ) as u16;
     p.radius =
-        adaptive_value(ui, p.radius.into(), 1..=5, 1.0, "Neighbourhood steps", "", "").max(1) as u8;
-    ui.label("Allowed axes");
+        adaptive_value(ui, p.radius.into(), 1..=5, 1.0, "Search radius", " steps", "Candidate distance along each enabled lattice axis. Larger radii consider more tuning alternatives and cost more processing.").max(1) as u8;
+    ui.label("Search axes").on_hover_text(
+        "Lattice axes the adaptive tuner may use when looking for a note's candidate pitches.",
+    );
     theme::reserve_scroll_gutter(ui);
     egui::ScrollArea::horizontal().id_salt("adaptive-axes-scroll").show(ui, |ui| {
         egui::ComboBox::from_id_salt("adaptive-axes")
@@ -777,15 +780,27 @@ fn map_controls(
     // editor want the same view, and cloning it copies the name list again.
     state.runtime.lattice_maps = Some(view);
     let view = state.runtime.lattice_maps.as_ref().expect("just stored");
-    section(ui, "Tuning mode");
+    section(ui, "Note retuning");
     let mut mode = view.playback.engine;
     ui.horizontal_wrapped(|ui| {
-        for (value, name) in [
-            (TuningEngine::Off, "Off"),
-            (TuningEngine::Adaptive, "Adaptive"),
-            (TuningEngine::LatticeMap, "Lattice Map"),
+        for (value, name, hint) in [
+            (
+                TuningEngine::Off,
+                "Pass through",
+                "Leave incoming note pitches unchanged. Lattice display tuning still applies.",
+            ),
+            (
+                TuningEngine::Adaptive,
+                "Adaptive",
+                "Choose tuning for new notes from the musical context.",
+            ),
+            (
+                TuningEngine::LatticeMap,
+                "Lattice Map",
+                "Tune new notes using the selected saved lattice map.",
+            ),
         ] {
-            if ui.selectable_value(&mut mode, value, name).changed() {
+            if ui.selectable_value(&mut mode, value, name).on_hover_text(hint).changed() {
                 params.edit_lattice_map(MapEdit::Engine(mode));
             }
         }
@@ -830,7 +845,7 @@ fn map_controls(
             params.edit_lattice_map(MapEdit::Return);
         }
     });
-    ui.weak("Automate Map Fifths, Map Thirds and Map Harmonic sevenths to offset any shape.");
+    ui.weak("Automate the Map Fifth, Third and Seventh Offset parameters to move any shape in whole lattice steps.");
     let mut pos = view.playback.offset;
     ui.horizontal_wrapped(|ui| {
         for (label, value, axis) in [

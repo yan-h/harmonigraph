@@ -56,7 +56,7 @@ pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut PictureState) {
             .show(ui)
             .on_hover_text(
                 "Brightness of note labels while sounding: 0% is black, 100% is white. \
-                 Released labels return to Idle label brightness over the Note fade time.",
+                 Released labels return to Idle label/cross brightness over the Note fade time.",
             );
         clear_button(ui, &state.appearance.view, &mut state.runtime.tracker);
     });
@@ -80,7 +80,11 @@ fn names_row(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 "History",
                 "Keep labels on nodes that have been played, as well as nodes sounding now.",
             ),
-            (NoteNames::Played, "Sounding", "Only the nodes sounding now"),
+            (
+                NoteNames::Played,
+                "Sounding",
+                "Sounding and fading nodes, plus the node under the pointer",
+            ),
         ],
     );
 }
@@ -98,8 +102,10 @@ fn clear_button(ui: &mut egui::Ui, view: &ViewConfig, tracker: &mut NoteTracker)
     }
     button_row(ui, |ui| {
         if ui
-            .button("Clear note names")
-            .on_hover_text("Forget everything played so far; sounding notes stay")
+            .button("Clear label history")
+            .on_hover_text(
+                "Forget previously visited lattice nodes; sounding notes and Analyzer history stay",
+            )
             .clicked()
         {
             tracker.clear_history();

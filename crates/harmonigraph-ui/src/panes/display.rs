@@ -1,5 +1,5 @@
-//! Display settings are grouped by picture, with shared Colors and Lighting
-//! pages and a System page for interface and performance controls.
+//! Display settings are grouped by picture, with shared Analysis, Colors and
+//! Lighting pages and a System page for interface and performance controls.
 //! Pages wrap within one dock tab so every destination stays reachable.
 
 use super::color::color_pane;
@@ -7,7 +7,7 @@ use super::labels::labels_pane;
 use super::lighting::lighting_pane;
 use super::nodes::nodes_pane;
 use super::plus::plus_pane;
-use super::spectral::spectrum_settings_pane;
+use super::spectral::{analysis_settings_pane, spectrogram_settings_pane, spectrum_settings_pane};
 use super::system::system_pane;
 use super::view::view_pane;
 use crate::params::ParamBackend;
@@ -17,10 +17,12 @@ use crate::PictureState;
 /// Picture settings first, then shared appearance and system controls.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DisplayPage {
-    #[default]
     Colors,
+    #[default]
     Lattice,
     Analyzer,
+    Spectrogram,
+    Analysis,
     Lighting,
     System,
 }
@@ -31,17 +33,17 @@ impl DisplayPage {
     /// Built from an exhaustive `match` rather than written out as a bare
     /// literal, so the list cannot fall behind the enum — the same guard
     /// `SpectralOrientation::ALL` in this crate uses, for the same reason.
-    pub const ALL: [DisplayPage; 5] = {
+    pub const ALL: [DisplayPage; 7] = {
         use DisplayPage::*;
         // Exhaustive, and the compiler checks it. The arm is `()` because
         // what is wanted is the coverage error, not the value.
         const fn covered(page: DisplayPage) {
             match page {
-                Colors | Lattice | Analyzer | Lighting | System => (),
+                Colors | Lattice | Analyzer | Spectrogram | Analysis | Lighting | System => (),
             }
         }
         covered(Colors);
-        [Lattice, Analyzer, Colors, Lighting, System]
+        [Lattice, Analyzer, Spectrogram, Analysis, Colors, Lighting, System]
     };
 
     /// The page's name, on its picker label and nowhere else.
@@ -50,6 +52,8 @@ impl DisplayPage {
             DisplayPage::Colors => "Colors",
             DisplayPage::Lattice => "Lattice",
             DisplayPage::Analyzer => "Analyzer",
+            DisplayPage::Spectrogram => "Spectrogram",
+            DisplayPage::Analysis => "Analysis",
             DisplayPage::Lighting => "Lighting",
             DisplayPage::System => "System",
         }
@@ -79,7 +83,9 @@ pub(super) fn display_pane(
     match page {
         DisplayPage::Colors => color_pane(ui, &mut state.appearance, params),
         DisplayPage::Lattice => lattice_page(ui, state, interaction, params),
-        DisplayPage::Analyzer => spectrum_settings_pane(ui, state, params),
+        DisplayPage::Analyzer => spectrum_settings_pane(ui, state),
+        DisplayPage::Spectrogram => spectrogram_settings_pane(ui, state),
+        DisplayPage::Analysis => analysis_settings_pane(ui, state, params),
         DisplayPage::Lighting => lighting_pane(ui, &mut state.appearance),
         DisplayPage::System => system_pane(ui, &mut state.appearance, interaction),
     }
