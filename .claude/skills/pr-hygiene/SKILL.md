@@ -114,7 +114,7 @@ it does not go from "this looks wrong" to a commit without the failing test in b
 The host that invokes the skill owns the whole run.
 Claude's `/audit-merges` uses the Claude `merge-auditor` adapter;
 Codex's `$audit-merges` spawns Codex subagents directly.
-Both read `.claude/skills/audit-merges/references/merge-auditor.md` as the one audit brief, and neither shells out to the other agent product.
+Both read `references/merge-auditor.md` from the globally installed `audit-merges` skill as the one audit brief, and neither shells out to the other agent product.
 
 Be precise about how much of that is enforced, because it is easy to read as more than it is.
 The Claude adapter is granted `Read, Grep, Glob, Bash`, while Codex subagents inherit the tools available to their Codex task.
@@ -147,6 +147,6 @@ and it checks the skills and the scripts harder, since this rule is what keeps t
 CLAUDE.md owns when a PR is required;
 this file owns what happens at the merge boundary after one exists.
 
-This file used to close by telling an agent without the skill to run the procedure out of `.claude/skills/audit-merges/SKILL.md` itself.
+This file used to close by telling an agent without the skill to run the procedure out of the skill's `SKILL.md` itself.
 That was permission for the one thing this rule exists to stop:
 **a session does not start an audit, with or without the skill.** Say the range looks worth auditing and stop there.

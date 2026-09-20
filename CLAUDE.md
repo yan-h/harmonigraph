@@ -7,19 +7,12 @@ the rest of the repo explains itself by being read.
 ## Agent guidance has one source
 
 `AGENTS.md` and `GEMINI.md` are symlinks to this file, and `.agents/skills` is a symlink to `.claude/skills`.
-Cross-project skills are pinned in the `.shared-skills` submodule and exposed from `.claude/skills` through relative project-internal symlinks;
-project-specific skills stay directly under `.claude/skills`.
-Claude's `SessionStart` prepares an uninitialised checkout and reloads its skill list.
-The tracked `post-checkout` hook prepares ordinary `git worktree add` checkouts;
-Claude's native `EnterWorktree` and isolated-agent creation bypass that Git hook,
-so `PostToolUse(EnterWorktree)` and `SubagentStart` prepare their payload's worktree cwd before its first tool runs.
-These hooks preserve Claude's own creation and cleanup;
-they do not replace its worktree lifecycle or claim a skill-list reload outside `SessionStart`.
-Claude's cached `Skill` invocation can still resolve to its launch checkout after a worktree switch:
-read shared guidance through the current worktree's local paths,
-or start a new session there to refresh the catalog before relying on a changed pin.
-All paths validate the exact gitlink commit and the shared audit brief;
-an unavailable pin is a visible setup failure rather than permission to read another checkout's copy.
+Cross-project skills are installed globally from the personal `agent-config` checkout:
+`~/.claude/skills/<name>` and `~/.agents/skills/<name>` link to its `skills/<name>` directory.
+Project-specific skills stay directly under `.claude/skills`.
+Shared skills follow the installed checkout across projects and worktrees;
+they are not pinned by this repository.
+See [the development setup](docs/development.md#shared-agent-skills) for installation.
 Keep each skill's guidance at that single source rather than copying it per agent;
 copies drift while symlinks make every session read the same contract.
 Tool-specific hooks, permissions and commands stay in each tool's native configuration —
