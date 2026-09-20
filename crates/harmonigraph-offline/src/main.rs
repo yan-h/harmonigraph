@@ -220,6 +220,30 @@ fn start_of_audio(align: Option<f64>, recorded_start: Option<f64>) -> f64 {
     align.unwrap_or(recorded_start.unwrap_or(0.0))
 }
 
+/// Whether the recording still has samples where the render opens.
+///
+/// It does not when the render's window sits entirely after the recording —
+/// a take whose MIDI outlives its WAV rendered from a later `--start`, or an
+/// `--align` that moves the soundtrack out from under the render. ffmpeg is
+/// asked to seek past the end of the file, reads nothing, and `-shortest`
+/// then ends the mp4 on the priming pad: a soundtrack and one frame of
+/// picture, written by a run that drew every frame and exited 0 (#1023).
+///
+/// The comparison is against [`sink::soundtrack_seek`] rather than the raw
+/// offset so there is one definition of where the audio input is opened; the
+/// priming pulls the seek 21 ms further in, which is the difference between
+/// reading the recording's last samples and reading none of it.
+///
+/// Reaching it is not the same as covering it, and only this end is answered
+/// here: a seek that lands INSIDE the recording but leaves less of it than the
+/// render asks for still cuts the file short under `-shortest`, silently and
+/// by the same continuum (0.5 s of a 5 s recording left, 31 frames of 600).
+/// That case shares its shape with the fade tail `Sink::push` documents as
+/// normal, so telling the two apart is its own question (#1033).
+fn soundtrack_reaches_the_render(audio_offset: f64, seconds: f64) -> bool {
+    sink::soundtrack_seek(audio_offset) < seconds
+}
+
 fn parse_size(text: &str) -> Result<[u32; 2], String> {
     let (w, h) = text
         .split_once(['x', 'X', '*'])
@@ -453,15 +477,35 @@ fn export(args: Args) -> Result<(), String> {
         std::path::Path::new(&take_path).with_extension("mp4").display().to_string()
     });
     let out = std::path::PathBuf::from(out);
+    let audio_offset = start - audio_start;
+    // An unreachable soundtrack is muxed as no soundtrack at all, loudly: the
+    // seek past its end reads nothing and takes the picture down with it
+    // (see `soundtrack_reaches_the_render`). Dropped rather than refused —
+    // the render has a picture to draw, there is no flag for rendering a take
+    // without its recording, and a silent video beats no video.
+    //
+    // The warning and the drop are one expression so they cannot part company.
+    let soundtrack = match audio.as_ref().map(crate::wav::Audio::seconds) {
+        Some(seconds) if !soundtrack_reaches_the_render(audio_offset, seconds) => {
+            eprintln!(
+                "warning: the render opens {audio_offset:.2}s into a {seconds:.2}s recording — \
+                 past its end, so no soundtrack is muxed and the analyzer draws silence. \
+                 Render from earlier (--start), or place the recording under the render \
+                 (--align).",
+            );
+            None
+        }
+        _ => audio_path.as_deref(),
+    };
     let mut sink = Sink::create(
         &out,
         &VideoOptions {
             size,
             fps: args.fps,
-            audio: audio_path.as_deref(),
+            audio: soundtrack,
             crf: args.crf,
             ffmpeg: args.ffmpeg.as_deref(),
-            audio_offset: start - audio_start,
+            audio_offset,
         },
     )?;
 
@@ -805,6 +849,27 @@ mod tests {
         assert_eq!(start_of_audio(Some(2.5), Some(5.48)), 2.5);
         assert_eq!(start_of_audio(Some(0.0), Some(5.48)), 0.0);
         assert_eq!(start_of_audio(Some(-1.25), Some(5.48)), -1.25);
+    }
+
+    /// A soundtrack the render opens after is dropped, not seeked past.
+    ///
+    /// The seek is what ffmpeg acts on, so the boundary is the seek's and not
+    /// the offset's: the last 21 ms of a recording are already unreachable,
+    /// because the priming shift opens the input that much further in (#1023).
+    #[test]
+    fn a_soundtrack_the_render_opens_after_is_not_muxed() {
+        // Inside the recording, from both directions: seeked, or delayed.
+        assert!(soundtrack_reaches_the_render(0.0, 30.0));
+        assert!(soundtrack_reaches_the_render(29.0, 30.0));
+        assert!(soundtrack_reaches_the_render(-60.0, 30.0));
+        // At its end and past it — `--start` beyond a take's own recording,
+        // and the `--align -60` that puts a 30 s bounce a minute early.
+        assert!(!soundtrack_reaches_the_render(30.0, 30.0));
+        assert!(!soundtrack_reaches_the_render(60.0, 30.0));
+        // The priming band: an offset still inside the file whose seek is not.
+        assert!(!soundtrack_reaches_the_render(29.99, 30.0));
+        // A take naming a WAV that decoded to nothing has none of it to reach.
+        assert!(!soundtrack_reaches_the_render(0.0, 0.0));
     }
 
     #[test]
