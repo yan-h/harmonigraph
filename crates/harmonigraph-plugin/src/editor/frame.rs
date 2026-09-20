@@ -13,7 +13,7 @@ use super::shared::EditorShared;
 // Reached only through `tests` below, which builds an `EditorShared` to
 // satisfy `WindowState`'s constructor.
 #[cfg(test)]
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 
 /// The plugin's per-frame GUI work: take the frame's lock, close out the note
 /// frame, drain the MIDI and audio rings, reconcile the take — and then hand
@@ -373,6 +373,7 @@ mod tests {
                 consumer,
                 audio_consumer,
                 Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
+                Arc::new(super::AtomicBool::new(true)),
                 take_control,
             ))),
             Arc::new(HarmonigraphParams::default()),

@@ -325,7 +325,7 @@ fn run(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicU32;
+    use std::sync::atomic::{AtomicBool, AtomicU32};
     use std::time::Instant;
 
     use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind, SourceId};
@@ -359,6 +359,9 @@ mod tests {
             note_consumer,
             audio_consumer,
             Arc::new(AtomicU32::new(48_000.0f32.to_bits())),
+            // Tests publish large source spans without sleeping; model that as
+            // buffered processing so their synthetic clock owns presentation.
+            Arc::new(AtomicBool::new(false)),
             take_control,
         );
         let ui_state = Arc::new(RwLock::new(String::new()));

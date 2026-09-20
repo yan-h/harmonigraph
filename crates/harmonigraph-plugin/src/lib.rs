@@ -3,7 +3,7 @@
 //! crate only adapts them to the plugin world.
 
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind, SourceId};
@@ -104,6 +104,9 @@ pub struct Harmonigraph {
     audio_producer: audio_ingress::Producer,
     /// Current rate for recording controls only; queued audio carries its own.
     sample_rate_bits: Arc<AtomicU32>,
+    /// Whether the host declared fixed-rate realtime processing. Buffered and
+    /// offline modes let source time own the display instead.
+    processing_realtime: Arc<AtomicBool>,
     /// State shared with the editor; created eagerly so the ring buffer's
     /// consumer end has somewhere to live before the GUI opens.
     editor_shared: Arc<Mutex<editor::EditorShared>>,
@@ -581,6 +584,7 @@ impl Default for Harmonigraph {
     fn default() -> Self {
         let (audio_producer, audio_consumer) = audio_ingress::channel(AUDIO_RING_CAPACITY);
         let sample_rate_bits = Arc::new(AtomicU32::new((DEFAULT_SAMPLE_RATE as f32).to_bits()));
+        let processing_realtime = Arc::new(AtomicBool::new(true));
         let (take, take_control) = harmonigraph_record::channel();
         let consumer = take_control.take_display().expect("one display consumer");
         #[cfg(test)]
@@ -592,6 +596,7 @@ impl Default for Harmonigraph {
             consumer,
             audio_consumer,
             sample_rate_bits.clone(),
+            processing_realtime.clone(),
             take_control,
         )));
         // From HERE, not from `initialize` or the editor: the point of the
@@ -614,6 +619,7 @@ impl Default for Harmonigraph {
             params,
             audio_producer,
             sample_rate_bits,
+            processing_realtime,
             editor_shared,
             sample_rate: DEFAULT_SAMPLE_RATE,
             samples_processed: 0,
@@ -672,6 +678,8 @@ impl Plugin for Harmonigraph {
     ) -> bool {
         self.sample_rate = f64::from(buffer_config.sample_rate);
         self.sample_rate_bits.store(buffer_config.sample_rate.to_bits(), Ordering::Relaxed);
+        self.processing_realtime
+            .store(buffer_config.process_mode == ProcessMode::Realtime, Ordering::Relaxed);
         true
     }
 
