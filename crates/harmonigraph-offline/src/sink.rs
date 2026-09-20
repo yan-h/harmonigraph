@@ -241,75 +241,7 @@ impl Sink {
         }
         let ffmpeg = find_ffmpeg(options.ffmpeg)?;
         let mut command = Command::new(&ffmpeg);
-        command
-            .args(["-hide_banner", "-loglevel", "warning", "-y"])
-            // `key=value` lines on stdout, twice a second: see [`Encoded`].
-            .args(["-progress", "pipe:1"])
-            .args(["-f", "rawvideo", "-pix_fmt", "rgba"])
-            .args(["-s", &format!("{w}x{h}")])
-            .args(["-r", &format!("{}", options.fps)])
-            .args(["-i", "-"]);
-        // Line the soundtrack up with frame 0, and pull it earlier by the AAC
-        // encoder's priming, which a decoder only knows to skip through an
-        // edit list this file no longer carries (see the muxer flags below).
-        // Forward is a seek into the input, so it goes BEFORE the `-i` it
-        // applies to; backward is real silence, because
-        // `-itsoffset` delays by an edit list too — ignored, it put a render
-        // that opens before the bounce 510 ms out of sync.
-        let shift = options.audio_offset + AAC_PRIMING_SECONDS;
-        if let Some(audio) = options.audio {
-            if shift > 0.0 {
-                command.args(["-ss", &format!("{shift:.6}")]);
-            }
-            command.arg("-i").arg(audio);
-        }
-        // YouTube's recommended upload encoding, setting by setting
-        // (support.google.com/youtube/answer/1722171): High profile, two
-        // B-frames, a closed GOP of half the frame rate (x264 closes its GOPs
-        // by default), 4:2:0, BT.709.
-        let gop = ((options.fps / 2.0).round() as u32).max(1);
-        command
-            .args(["-c:v", "libx264", "-preset", "slow", "-profile:v", "high"])
-            .args(["-crf", &options.crf.to_string()])
-            // The spectrogram's noise floor is grain to an encoder, and half a
-            // second of GOP puts a keyframe in front of it twice a second.
-            // Each re-draws the grain afresh, which reads as a flicker; grain
-            // tuning narrows how differently I, P and B frames draw it. On a
-            // 720p60 take at the default CRF, the keyframe jump fell from 0.77
-            // to 0.59 grey levels for 5.0 -> 7.4 Mbps — where YouTube puts
-            // 720p60.
-            .args(["-tune", "grain"])
-            .args(["-bf", "2", "-g", &gop.to_string()])
-            // Converted AND tagged. ffmpeg's default conversion is BT.601 and
-            // writes no tag, which YouTube reads as BT.709 — every saturated
-            // colour shifted. A tag without the conversion is the same shift
-            // stated as correct. The tags go on the FRAMES: ffmpeg 7 takes an
-            // encoder's colour from what the filters hand it, and silently
-            // drops `-color_primaries`/`-color_trc` given as output options.
-            .args([
-                "-vf",
-                "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,\
-                 setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv",
-            ])
-            // Frames arrive at exactly `fps` because the replay steps time
-            // itself, so the output rate is simply the input rate. No
-            // -vsync/-fps_mode: there is nothing to reconcile, and the two
-            // spellings of that flag disagree across ffmpeg versions.
-            .args(["-r", &format!("{}", options.fps)]);
-        if options.audio.is_some() {
-            if shift < 0.0 {
-                command.args(["-af", &format!("adelay={:.3}:all=1", -shift * 1000.0)]);
-            }
-            // The visual tail usually outlives the bounce (or the other
-            // way round); end on whichever runs out first.
-            command.args(["-c:a", "aac", "-b:a", "384k", "-ar", "48000", "-shortest"]);
-        }
-        // YouTube asks for the index up front and no edit lists. Signed
-        // composition offsets are what let the B-frames' reorder delay go
-        // without one: the first frame is presented at 0 rather than an edit
-        // later, which would put the audio ahead by two frames' worth.
-        command.args(["-movflags", "+faststart+negative_cts_offsets", "-use_editlist", "0"]);
-        command.arg(path).stdin(Stdio::piped()).stdout(Stdio::piped());
+        command.args(video_args(options, path)).stdin(Stdio::piped()).stdout(Stdio::piped());
 
         let mut child =
             command.spawn().map_err(|e| format!("could not start {}: {e}", ffmpeg.display()))?;
@@ -396,6 +328,102 @@ impl Sink {
             Sink::Pngs { .. } => Ok(()),
         }
     }
+}
+
+/// Every argument ffmpeg is started with, bar the program itself.
+///
+/// Split out of [`Sink::video`] so that what it builds can be read back
+/// without running an encoder. Constructed straight into a `Command`, the
+/// audio branches below were observable from no test at all — the sink's own
+/// tests pass `audio: None` — and the tail the `apad` here pays back went
+/// missing through exactly that gap (#985).
+///
+/// Paths arrive as UTF-8 and stay it: the output path comes from argv and the
+/// audio file from a take header beside it, both `String`s upstream.
+fn video_args(options: &VideoOptions, path: &std::path::Path) -> Vec<String> {
+    let [w, h] = options.size;
+    let mut args: Vec<String> = Vec::new();
+    args.extend(["-hide_banner", "-loglevel", "warning", "-y"].map(String::from));
+    // `key=value` lines on stdout, twice a second: see [`Encoded`].
+    args.extend(["-progress", "pipe:1"].map(String::from));
+    args.extend(["-f", "rawvideo", "-pix_fmt", "rgba"].map(String::from));
+    args.extend(["-s".to_string(), format!("{w}x{h}")]);
+    args.extend(["-r".to_string(), format!("{}", options.fps)]);
+    args.extend(["-i", "-"].map(String::from));
+    // Line the soundtrack up with frame 0, and pull it earlier by the AAC
+    // encoder's priming, which a decoder only knows to skip through an
+    // edit list this file no longer carries (see the muxer flags below).
+    // Forward is a seek into the input, so it goes BEFORE the `-i` it
+    // applies to; backward is real silence, because
+    // `-itsoffset` delays by an edit list too — ignored, it put a render
+    // that opens before the bounce 510 ms out of sync.
+    let shift = options.audio_offset + AAC_PRIMING_SECONDS;
+    if let Some(audio) = options.audio {
+        if shift > 0.0 {
+            args.extend(["-ss".to_string(), format!("{shift:.6}")]);
+        }
+        args.extend(["-i".to_string(), audio.to_string_lossy().into_owned()]);
+    }
+    // YouTube's recommended upload encoding, setting by setting
+    // (support.google.com/youtube/answer/1722171): High profile, two
+    // B-frames, a closed GOP of half the frame rate (x264 closes its GOPs
+    // by default), 4:2:0, BT.709.
+    let gop = ((options.fps / 2.0).round() as u32).max(1);
+    args.extend(["-c:v", "libx264", "-preset", "slow", "-profile:v", "high"].map(String::from));
+    args.extend(["-crf".to_string(), options.crf.to_string()]);
+    // The spectrogram's noise floor is grain to an encoder, and half a
+    // second of GOP puts a keyframe in front of it twice a second.
+    // Each re-draws the grain afresh, which reads as a flicker; grain
+    // tuning narrows how differently I, P and B frames draw it. On a
+    // 720p60 take at the default CRF, the keyframe jump fell from 0.77
+    // to 0.59 grey levels for 5.0 -> 7.4 Mbps — where YouTube puts
+    // 720p60.
+    args.extend(["-tune", "grain"].map(String::from));
+    args.extend(["-bf".to_string(), "2".to_string(), "-g".to_string(), gop.to_string()]);
+    // Converted AND tagged. ffmpeg's default conversion is BT.601 and
+    // writes no tag, which YouTube reads as BT.709 — every saturated
+    // colour shifted. A tag without the conversion is the same shift
+    // stated as correct. The tags go on the FRAMES: ffmpeg 7 takes an
+    // encoder's colour from what the filters hand it, and silently
+    // drops `-color_primaries`/`-color_trc` given as output options.
+    args.push("-vf".to_string());
+    args.push(
+        "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,\
+         setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv"
+            .to_string(),
+    );
+    // Frames arrive at exactly `fps` because the replay steps time
+    // itself, so the output rate is simply the input rate. No
+    // -vsync/-fps_mode: there is nothing to reconcile, and the two
+    // spellings of that flag disagree across ffmpeg versions.
+    args.extend(["-r".to_string(), format!("{}", options.fps)]);
+    if options.audio.is_some() {
+        let mut filters = Vec::new();
+        if shift < 0.0 {
+            filters.push(format!("adelay={:.3}:all=1", -shift * 1000.0));
+        }
+        // The priming shift above takes its 21 ms off the soundtrack's END as
+        // well as its front — a seek drops the last 21 ms, a reduced delay
+        // never reaches them — and `-shortest` then ends the FILE there, one
+        // video frame short of the picture that was drawn (#985). Hand
+        // exactly that much silence back. Bounded by `pad_dur`: a bare `apad`
+        // pads until the longest stream ends, which makes the soundtrack
+        // never the shortest one and so defeats `-shortest` outright.
+        filters.push(format!("apad=pad_dur={AAC_PRIMING_SECONDS:.6}"));
+        args.extend(["-af".to_string(), filters.join(",")]);
+        // The visual tail usually outlives the bounce (or the other
+        // way round); end on whichever runs out first.
+        args.extend(["-c:a", "aac", "-b:a", "384k", "-ar", "48000", "-shortest"].map(String::from));
+    }
+    // YouTube asks for the index up front and no edit lists. Signed
+    // composition offsets are what let the B-frames' reorder delay go
+    // without one: the first frame is presented at 0 rather than an edit
+    // later, which would put the audio ahead by two frames' worth.
+    args.extend(
+        ["-movflags", "+faststart+negative_cts_offsets", "-use_editlist", "0"].map(String::from),
+    );
+    args.push(path.to_string_lossy().into_owned());
+    args
 }
 
 /// Where ffmpeg is installed, when it isn't simply on `PATH`.
@@ -495,6 +523,51 @@ mod tests {
             },
         )
         .expect("the fake encoder should start")
+    }
+
+    /// The soundtrack is never left ending before the picture does.
+    ///
+    /// The priming shift pulls the audio earlier, which takes the same 21 ms
+    /// off its END as well as its front; `-shortest` then ends the file
+    /// there, one video frame short of what was drawn (#985). Every branch of
+    /// the shift is here — the seek, the reduced delay, and the offset that
+    /// takes neither — and each must hand that 21 ms back as a pad.
+    #[test]
+    fn the_priming_shift_is_handed_back_at_the_soundtracks_tail() {
+        let value = |args: &[String], flag: &str| {
+            args.iter().position(|a| a == flag).map(|at| args[at + 1].clone())
+        };
+        for offset in [-1.0, -0.25, -AAC_PRIMING_SECONDS, 0.0, 0.25, 3.5] {
+            for fps in [20.0, 24.0, 60.0] {
+                let options = VideoOptions {
+                    size: [4, 2],
+                    fps,
+                    audio: Some(std::path::Path::new("bounce.wav")),
+                    crf: 20,
+                    ffmpeg: None,
+                    audio_offset: offset,
+                };
+                let args = video_args(&options, std::path::Path::new("out.mp4"));
+                let chain = value(&args, "-af").expect("an audio filter chain");
+                let seconds = |name: &str| {
+                    chain.split(',').find_map(|f| f.strip_prefix(name)).map(|argument| {
+                        let number = argument.split(':').next().unwrap_or_default();
+                        number.parse::<f64>().expect("a filter argument in seconds or ms")
+                    })
+                };
+                let seek = value(&args, "-ss").map_or(0.0, |s| s.parse::<f64>().expect("seconds"));
+                let pad = seconds("apad=pad_dur=").expect("the priming pad");
+                let delay = seconds("adelay=").unwrap_or(0.0) / 1000.0;
+                // Where the soundtrack now ends, measured against where it
+                // would end unshifted: the picture needs that no earlier than
+                // `-offset`, which is the render's own span into the audio. A
+                // microsecond of slack, the grain the arguments are printed at.
+                assert!(
+                    delay + pad - seek >= -offset - 1e-6,
+                    "offset {offset} at {fps} fps ends the audio early: -ss {seek}, -af {chain}",
+                );
+            }
+        }
     }
 
     /// Every frame reaches the encoder, whole and in order.
