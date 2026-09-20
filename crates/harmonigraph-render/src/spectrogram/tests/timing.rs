@@ -43,12 +43,11 @@ const CASES: &[(&str, Option<Turn>)] = &[
     ("watercolor, defaults", Some(watercolor)),
     ("watercolor, layers 0", Some(|s| (watercolor(s), s.wash_layers = 0.0).0)),
     ("watercolor, lobe 0", Some(|s| (watercolor(s), s.wash_lobe = 0.0).0)),
-    ("watercolor, ragged 0", Some(|s| (watercolor(s), s.wash_ragged = 0.0).0)),
     (
-        "watercolor, lobe 0 ragged 0 layers 0",
+        "watercolor, lobe 0 layers 0",
         Some(|s| {
             watercolor(s);
-            (s.wash_lobe, s.wash_ragged, s.wash_layers) = (0.0, 0.0, 0.0);
+            (s.wash_lobe, s.wash_layers) = (0.0, 0.0);
         }),
     ),
 ];

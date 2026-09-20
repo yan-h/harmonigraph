@@ -130,9 +130,8 @@ const TILE_MAX: u32 = 2048;
 /// picture; anything carried here that decides nothing rebakes a full cell walk
 /// at the rate of whatever it should not be watching. So the key is the STYLE,
 /// the period, the texel size, and the dials the WALK reads — `Variety` for the
-/// mosaic; `Lobe shape`, `Ragged`, `Fuzz` and `Edge pooling` for the wash, which
-/// are the warp, the rim wobble, the feather/bleed/tide widths and the tide's
-/// own strength.
+/// mosaic; `Lobe shape`, `Fuzz` and `Edge pooling` for the wash, which are the
+/// warp, the feather/bleed/tide widths and the tide's own strength.
 ///
 /// Not the DRIFT and not the clock. The walk's output is a fixed field that the
 /// drift slides over — `drift` enters both styles only as a translation of the
@@ -156,7 +155,7 @@ pub(super) struct TileKey {
     /// The walk's own dials as bits, so this compares by value. Sanitized, so
     /// there is no NaN here to compare unequal to itself. The mosaic reads one
     /// and leaves the rest at zero.
-    dials: [u32; 4],
+    dials: [u32; 3],
 }
 
 impl TileKey {
@@ -181,12 +180,12 @@ pub(super) fn tile_key(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> O
     }
     let (style, cells, dials) = match settings.cloud_style {
         harmonigraph_scene::CloudStyle::Mosaic => {
-            (0, SCALE_CELLS / settings.scale_size, [settings.scale_variety, 0.0, 0.0, 0.0])
+            (0, SCALE_CELLS / settings.scale_size, [settings.scale_variety, 0.0, 0.0])
         }
         harmonigraph_scene::CloudStyle::Watercolor => (
             1,
             WASH_CELLS / settings.wash_size,
-            [settings.wash_lobe, settings.wash_ragged, settings.wash_fuzz, settings.wash_pool],
+            [settings.wash_lobe, settings.wash_fuzz, settings.wash_pool],
         ),
     };
     // As fine as the pane itself draws a cell, so a tiled picture is the walk
@@ -236,13 +235,16 @@ struct Uniforms {
     cloud_style: u32,
     wash_size: f32,
     wash_fuzz: f32,
-    wash_ragged: f32,
     wash_lobe: f32,
     wash_refract: f32,
     wash_pool: f32,
     wash_layers: f32,
     /// The tile's period in cells, 0 for the live walk. See [`TileKey`].
     tile_cells: u32,
+    /// Tail padding to the whole 16-byte row the assertion below is about. The
+    /// members close four bytes short of one since `Ragged` was retired, and the
+    /// WGSL struct is rounded up whether this is here or not.
+    _tail: u32,
 }
 
 /// The `Cloud` struct's size in the uniform address space, which WGSL rounds up
@@ -253,9 +255,10 @@ struct Uniforms {
 /// compile-time check on a runtime failure that would otherwise arrive as a
 /// validation error on the first clouded frame.
 ///
-/// The members above happen to close on a whole row, so there is no explicit
-/// tail here. A field added or dropped may well need one back, and that is what
-/// this catches.
+/// The members above need an explicit tail to close on a whole row, and that is
+/// exactly what dropping a field did: retiring `Ragged` left them four bytes
+/// short of 112. A field added or dropped moves that again, and this is what
+/// catches it.
 const _: () = assert!(
     std::mem::size_of::<Uniforms>().is_multiple_of(16),
     "the cloud uniform is not a whole number of 16-byte rows, so the shader's rounded-up \
@@ -820,7 +823,6 @@ impl Targets {
             },
             wash_size: settings.wash_size,
             wash_fuzz: settings.wash_fuzz,
-            wash_ragged: settings.wash_ragged,
             wash_lobe: settings.wash_lobe,
             wash_refract: settings.wash_refract,
             wash_pool: settings.wash_pool,
@@ -828,6 +830,7 @@ impl Targets {
             // Zero where no tile was allocated, which is the live walk — so the
             // shader never reads a tile that is not there.
             tile_cells: tile.map_or(0, TileKey::period),
+            _tail: 0,
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }

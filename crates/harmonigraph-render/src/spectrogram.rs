@@ -2966,17 +2966,20 @@ mod tests {
     /// the jitter box can point along either axis, where an unturned one is at
     /// most `JITTER / 2` along it.
     ///
-    /// `Ragged` pushes a RIM outward and never inward, which is the whole reason
-    /// it is one-sided in the shader: coverage reads the untouched
-    /// `WASH_RADIUS_MIN` while only reach pays `* (1 + WASH_RAGGED)`. A zero-mean
-    /// wobble of the same visible amplitude would cost both ends and buy a
-    /// narrower `Variety` band for the same picture.
+    /// A retired `Ragged` dial pushed a RIM outward and never inward, so reach
+    /// paid `* (1 + WASH_RAGGED)` where coverage read `WASH_RADIUS_MIN`
+    /// untouched. One-sided also inflated every rim by about 15% at the setting
+    /// that shipped, so the band was scaled by 1.15 as the wobble went and the
+    /// globs are the size they always drew. Reach now carries `WASH_RADIUS_MAX`
+    /// alone, which leaves room for a band wider than 1.63:1 — a look change,
+    /// and Yan's, so the numbers here do not take it.
     ///
     /// And the ring is `WASH_RING` cells rather than a hard-coded 1, because at
     /// 3x3 these inequalities leave a radius band of about 1.2:1 at a jitter of
     /// 0.20 — a nearly regular grid of nearly equal globs, which is the one thing
     /// a field of DIFFERENT SIZED globs cannot be. At 5x5 they leave 1.63:1 at a
-    /// jitter of 0.40, with 3.0% of a radius spare on coverage and 2.7% on reach.
+    /// jitter of 0.40, with 15.4% of a radius spare on coverage and 16.1% on
+    /// reach.
     ///
     /// Both bounds are about globs that COVER the pixel. The tide line reads a
     /// glob it is OUTSIDE, over a window that runs past the rim and so past this
@@ -3002,11 +3005,10 @@ mod tests {
              the cell grid no glob of the base octave covers the pane and the wash reads its \
              own light with no centre to borrow"
         );
-        let rim = largest * (1.0 + number("WASH_RAGGED"));
         let unvisited = number("WASH_RING") + 0.5 - slack;
         assert!(
-            rim < unvisited,
-            "a rim of {rim} reaches {unvisited} into a pixel the ring never visits it from, \
+            largest < unvisited,
+            "a rim of {largest} reaches {unvisited} into a pixel the ring never visits it from, \
              so the wash gains and loses that glob as `floor(r)` crosses a cell"
         );
     }
@@ -3020,12 +3022,11 @@ mod tests {
     /// failure the two ring proofs above exist to keep off the cell grid.
     ///
     /// Neither walk runs on one lattice. Each has a second octave at its own
-    /// lacunarity, and the wash reads two shared noises whose cells are
-    /// `WASH_WARP_SCALE` and `WASH_RAGGED_SCALE` across, each with a second
-    /// octave of its own. `WASH_FBM_FINE`'s 2.07 is the one no period can make
-    /// whole, which is why the tiled path runs that octave at
-    /// `WASH_FBM_FINE_TILED` — so that constant is read here too, and moving it
-    /// off a whole number fails this.
+    /// lacunarity, and the wash reads a shared warp noise whose cells are
+    /// `WASH_WARP_SCALE` across, with a second octave of its own.
+    /// `WASH_FBM_FINE`'s 2.07 is the one no period can make whole, which is why
+    /// the tiled path runs that octave at `WASH_FBM_FINE_TILED` — so that
+    /// constant is read here too, and moving it off a whole number fails this.
     ///
     /// Read off the shipped shader text rather than a transcription of it, for
     /// the reason the two proofs above give.
@@ -3036,14 +3037,11 @@ mod tests {
         };
         let fine = number("WASH_FBM_FINE_TILED");
         let warp = number("WASH_WARP_SCALE");
-        let ragged = number("WASH_RAGGED_SCALE");
         let lattices = [
             ("the mosaic's fine octave", number("DOME_LACUNARITY")),
             ("the wash's fine octave", number("WASH_LACUNARITY")),
             ("the warp noise", warp),
             ("the warp noise's own second octave", warp * fine),
-            ("the ragged noise", ragged),
-            ("the ragged noise's own second octave", ragged * fine),
         ];
         let step = harmonigraph_scene::CLOUD_TILE_STEP;
         let steps = (harmonigraph_scene::CLOUD_TILE_MAX / step) as u32;
@@ -3301,7 +3299,7 @@ mod tests {
 
     /// Every wash dial separately reaches the shader.
     ///
-    /// Eight `f32`s ride in one uniform read by OFFSET rather than by name,
+    /// Seven `f32`s ride in one uniform read by OFFSET rather than by name,
     /// so a field added in the wrong place swaps two values silently and nothing
     /// in either type system notices. Folded into one test the way
     /// [`the_variety_reaches_the_scales`] is, because what each
@@ -3330,7 +3328,6 @@ mod tests {
             cb.grid.run = Arc::new(cb.grid.run.iter().map(|&v| v.max(80)).collect());
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
             s.wash_fuzz = 0.5;
-            s.wash_ragged = 0.5;
             s.wash_lobe = 0.5;
             s.wash_pool = 0.5;
             s.wash_layers = 0.5;
@@ -3345,7 +3342,6 @@ mod tests {
                     as fn(&mut harmonigraph_scene::SpectralAtmosphere),
             ),
             ("Fuzz", |s| s.wash_fuzz = 0.0),
-            ("Ragged", |s| s.wash_ragged = 0.0),
             ("Lobe shape", |s| s.wash_lobe = 0.0),
             ("Edge pooling", |s| s.wash_pool = 1.0),
             ("Layers", |s| s.wash_layers = 0.0),
@@ -3475,17 +3471,17 @@ mod tests {
     /// lookup — a scale, an offset, a `q` that forgot the drift, a missing
     /// second octave — cannot pass.
     ///
-    /// Measured with both noises OFF (`Lobe shape` and `Ragged` at 0) because
-    /// they are the one place the tiled path deliberately differs: their second
-    /// octave runs at `WASH_FBM_FINE_TILED` rather than 2.07, which is not the
-    /// same field anywhere. Everything else is expected to agree.
+    /// Measured with the warp noise OFF (`Lobe shape` at 0) because it is the
+    /// one place the tiled path deliberately differs: its second octave runs at
+    /// `WASH_FBM_FINE_TILED` rather than 2.07, which is not the same field
+    /// anywhere. Everything else is expected to agree.
     ///
     /// The window is worked out per pixel from the shader's own geometry, and
     /// the count of pixels in it is asserted — a mask that had drifted off the
     /// pane would otherwise compare nothing and pass. Measured over 9,540 pixels
     /// for the mosaic and 8,208 for the wash, out of a 65,536-pixel pane: a mean
-    /// absolute channel difference of 0.02/255 and 0.37/255, NO mosaic pixel
-    /// moving past 4 at all and 2.4% of the wash's, worst channel 1 and 21.
+    /// absolute channel difference of 0.02/255 and 0.36/255, NO mosaic pixel
+    /// moving past 4 at all and 2.2% of the wash's, worst channel 1 and 21.
     ///
     /// The wash's worst is where its stored offset STEPS — the glob under the
     /// visible one changing, which the feather only smooths on the visible
@@ -3540,7 +3536,6 @@ mod tests {
             s.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
             s.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX;
             s.wash_lobe = 0.0;
-            s.wash_ragged = 0.0;
             // A still texture: `cloud_time` is zero, so the drift is the
             // constant `[0, 0.6]` its cosine starts at and both frames read the
             // field in the same place.
@@ -3651,7 +3646,6 @@ mod tests {
         }
         for (name, turn) in [
             ("Lobe shape", (|s| s.wash_lobe = 0.0) as Turn),
-            ("Ragged", |s| s.wash_ragged = 0.0),
             ("Fuzz", |s| s.wash_fuzz = 0.0),
             ("Edge pooling", |s| s.wash_pool = 1.0),
             ("Cloud tile", |s| s.cloud_tile = 40.0),
