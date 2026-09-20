@@ -1612,6 +1612,44 @@ mod tests {
     }
 
     #[test]
+    fn a_wide_kernel_narrower_than_its_quadrature_reads_the_texel_grid() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = cloud_fixture();
+        // One slab per source texel with one of them lit, read through the wide
+        // field alone. A time softness this small leaves the time axis at full
+        // resolution, which is the zoomed-out pane's own case: the wide kernel
+        // is then narrower than the seventeen taps the sparse quadrature would
+        // spread over it, and the filter walks integer offsets instead.
+        cb.vertices = full_quad(128);
+        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+        (settings.pitch_softness, settings.time_softness, settings.spread) = (0.0, 30.0, 1.0);
+        let mut bytes = vec![0; 128 * BINS as usize];
+        bytes[64 * BINS as usize..65 * BINS as usize].fill(255);
+        cb.grid = grid_of(Arc::new(bytes), BINS, 128, 0);
+        // That arm's own predicate, restated so the fixture is checked to reach
+        // it rather than assumed to: `Targets::update` hands the filter
+        // `time_softness * points_per_ms` over the pane's width and the wide
+        // pass takes five times it, which is 1.5 texels here.
+        let source = atmosphere::source_size(SIZE, 1.0, cb.atmosphere.unwrap());
+        let sigma = 5.0 * 30.0 * 0.01 / SIZE[0] as f32 * source[0] as f32;
+        assert_eq!(source[0], SIZE[0], "the time axis was reduced away from the dense arm");
+        assert!(6.0 * sigma < 17.0, "the fixture missed the dense arm at {sigma} texels");
+        let frame = fresh_frame(&device, &queue, &cb);
+        let blue = |x: usize| frame[(64 * 128 + x) * 4 + 2];
+        assert!(blue(64) > 96, "the fixture never lit the slab it filled");
+        for k in 1..6 {
+            let (left, right) = (blue(64 - k), blue(64 + k));
+            assert!(left.abs_diff(right) <= 1, "the kernel leaned {k} texels off centre");
+            assert!(right < blue(63 + k), "the light rose {k} texels out");
+        }
+        // Three sigma is four and a half texels, so the taps are the four
+        // either side; the lit slab reaches one texel past its own peak, and
+        // nothing at all reaches six.
+        assert!(blue(69) > 0, "the kernel stopped short of its own three sigma");
+        assert_eq!(blue(70), 0, "the kernel reached past three sigma");
+    }
+
+    #[test]
     fn density_weights_bright_buckets_before_pitch_source_reduction() {
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = cloud_fixture();
