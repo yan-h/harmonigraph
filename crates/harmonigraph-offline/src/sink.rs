@@ -15,7 +15,7 @@ use std::io::Write;
 use std::process::{Child, Command, Stdio};
 
 pub enum Sink {
-    Video { child: Child, writer: Writer, encoded: Encoded },
+    Video { child: Child, writer: Writer, encoded: Encoded, soundtrack: bool },
     Pngs { dir: std::path::PathBuf, stem: String, index: u32, size: [u32; 2] },
     Raw { file: std::fs::File },
 }
@@ -265,7 +265,24 @@ impl Sink {
         // frames through `finish`.
         let stdin = child.stdin.take().ok_or("ffmpeg stdin closed")?;
         let stdout = child.stdout.take().ok_or("ffmpeg stdout closed")?;
-        Ok(Sink::Video { child, writer: Writer::spawn(stdin), encoded: Encoded::spawn(stdout) })
+        Ok(Sink::Video {
+            child,
+            writer: Writer::spawn(stdin),
+            encoded: Encoded::spawn(stdout),
+            soundtrack: options.audio.is_some(),
+        })
+    }
+
+    /// Whether the file will end where the soundtrack does.
+    ///
+    /// `-shortest` rides with the soundtrack in [`video_args`], so a video
+    /// sink given one stops the PICTURE wherever the audio runs out first —
+    /// the documented behaviour for a one-loop take, and the reason a render
+    /// can quietly hold fewer frames than it drew (#1033). The other two
+    /// sinks write every frame they are pushed, and a video with nothing to
+    /// mux has nothing to be cut by.
+    pub fn ends_with_the_soundtrack(&self) -> bool {
+        matches!(self, Sink::Video { soundtrack: true, .. })
     }
 
     /// Frames the encoder has finished, for the sink that has one. `None` for
@@ -318,7 +335,7 @@ impl Sink {
     /// half-written video can't be mistaken for a finished one.
     pub fn finish(self, progress: impl FnMut(u64)) -> Result<(), String> {
         match self {
-            Sink::Video { mut child, mut writer, encoded } => {
+            Sink::Video { mut child, mut writer, encoded, .. } => {
                 // Close the queue without waiting on it: the writer drains
                 // what is queued — part of the video — and then drops the pipe,
                 // which is ffmpeg's EOF. ffmpeg closing its stdout on exit is
