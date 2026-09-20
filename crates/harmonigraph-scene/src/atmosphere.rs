@@ -109,9 +109,9 @@ pub const CLOUD_TILE_STEP: f32 = 20.0;
 /// fifths. Past it the dial would be spending picture for very little.
 ///
 /// Snapped to halves the way [`SpectralAtmosphere::cloud_pixel`] is, so the bar
-/// offers OFF and four resolutions to compare rather than a continuum — what is
-/// being judged is whether a resample along time reads at all, not where
-/// between two of them it starts to.
+/// offers OFF and four resolutions to compare rather than a continuum — what
+/// was being judged was whether a resample along time reads at all, not where
+/// between two of them it starts to. It does: step one is the default.
 pub const BLUR_TIME_STEP_MAX: f32 = 2.0;
 
 /// Bounds shared by the [`SpectralAtmosphere::pitch_softness`] control and sanitizer.
@@ -195,16 +195,18 @@ pub struct SpectralAtmosphere {
     /// data-limited rather than pane-limited. Runs over
     /// 0..=[`BLUR_TIME_STEP_MAX`], snapped to halves.
     ///
-    /// **Not yet measured, and owed before any step becomes the default:** the
-    /// source's texels are fixed to the PANE while the slabs scroll under them,
-    /// so the softening is not constant in time. By hand, a transient one slab
-    /// wide peaks at 0.75 of its level when a texel is centred on it and 0.5
-    /// when it straddles two, once per slab scrolled (about 1 Hz at a 600 s
-    /// Span); at a step of a half that is 0.75 to 0.875, and with the dial off
-    /// the pane's own pixels already give about 0.8 to 1. Every picture made
-    /// of this dial so far is a still frame. Laying the source out in SLAB
-    /// space on this axis, so a texel is always centred on a slab, removes the
-    /// pulse and the softening together.
+    /// **Computed by hand, still never measured moving.** Yan judged a step of
+    /// one live in the DAW at a 600 s Span on 2026-09-20 and made it the
+    /// default; what follows is arithmetic he did not see. The source's texels
+    /// are fixed to the PANE while the slabs scroll under them, so the
+    /// softening is not constant in time. By hand, a transient one slab wide
+    /// peaks at 0.75 of its level when a texel is centred on it and 0.5 when it
+    /// straddles two, once per slab scrolled (about 1 Hz at a 600 s Span); at a
+    /// step of a half that is 0.75 to 0.875, and with the dial off the pane's
+    /// own pixels already give about 0.8 to 1. Every FRAME measured of this
+    /// dial is a still one, so the pulse has only ever been reasoned about.
+    /// Laying the source out in SLAB space on this axis, so a texel is always
+    /// centred on a slab, removes the pulse and the softening together.
     pub blur_time_step: f32,
     /// How far the levels are gathered into terraces, 0 for none. What the
     /// `Lava` style used to switch on whole.
@@ -357,9 +359,10 @@ impl Default for SpectralAtmosphere {
             pitch_softness: 35.0,
             time_softness: 120.0,
             spread: 0.25,
-            // Off, so the light field is the full-resolution one it has always
-            // been until Yan judges what the resample costs the picture.
-            blur_time_step: 0.0,
+            // One texel a slab: Yan judged it live at a 600 s Span (2026-09-20),
+            // where it takes the pane from about 100 fps back to 144 and reads
+            // the same. It binds only where the pane is finer than the data.
+            blur_time_step: 1.0,
             // Full strength is what the `Lava` style drew, and that style was
             // the fresh one.
             contour_strength: 1.0,

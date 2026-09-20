@@ -158,7 +158,8 @@ pub(crate) fn spectrum_settings_pane(
             .step(0.5)
             .show(ui)
             .on_hover_text(
-                "EXPERIMENTAL, and a PERFORMANCE control. The softened picture is \
+                "A PERFORMANCE control, and 1 slab is what a fresh pane draws. \
+                 The softened picture is \
                  drawn into its own image first, and zoomed out that image is as \
                  fine as the PANE while the sound under it is a few hundred \
                  slabs, two or three pixels each. This is how many of those slabs \

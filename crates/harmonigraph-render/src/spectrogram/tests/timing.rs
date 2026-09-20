@@ -38,6 +38,13 @@
 //! one of them does — and they stack, which is the other thing two runs cannot
 //! show.
 //!
+//! `PROBE_BLUR_TIME_STEP` now defaults to a step of ONE, so every case runs
+//! with the light field's time axis capped unless the run says
+//! `PROBE_BLUR_TIME_STEP=0`. Every figure in
+//! `docs/spectrogram-cloud-performance.md` and in issue #1015 was taken before
+//! that default landed, which is to say uncapped, and a fresh run is only
+//! comparable to them at 0.
+//!
 //! `PROBE_BLUR_TIME_STEP` is measured against the slab width `quad` actually
 //! lays out, `points.x * fill / PROBE_SLABS`, rather than against the whole
 //! pane's: the fixture puts every slab inside the filled fraction, so at a fill
