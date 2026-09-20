@@ -54,12 +54,12 @@ struct Cloud {
     uint cloud_style;
     float wash_size;
     float wash_fuzz;
-    float wash_ragged;
     float wash_lobe;
     float wash_refract;
     float wash_pool;
     float wash_layers;
     uint tile_cells;
+    char _pad23[4];
 };
 struct Pile {
     metal::float2 face;
@@ -111,15 +111,13 @@ constant float DOME_FINE_GAIN = 0.22;
 constant float CLOUD_SHADE = 0.64;
 constant int WASH_RING = 2;
 constant float WASH_JITTER = 0.4;
-constant float WASH_RAGGED = 0.3;
-constant float WASH_RADIUS_MIN = 1.02;
-constant float WASH_RADIUS_MAX = 1.66;
+constant float WASH_RADIUS_MIN = 1.17;
+constant float WASH_RADIUS_MAX = 1.91;
 constant float WASH_CELLS = 5.25;
 constant float WASH_LACUNARITY = 2.1;
 constant float WASH_FINE_OCCUPANCY = 0.2;
 constant float WASH_WARP = 0.45;
 constant float WASH_WARP_SCALE = 0.9;
-constant float WASH_RAGGED_SCALE = 2.8;
 constant float WASH_POOL = 0.44;
 constant float WASH_POOL_WIDTH = 0.55;
 constant float WASH_SURF = 0.07;
@@ -680,34 +678,32 @@ Glob wash_glob(
     metal::int2 cell_3,
     uint salt_3,
     metal::float2 r_2,
-    float wob,
     float occupancy,
     int period_5
 ) {
     Glob out_2 = {};
-    metal::int2 _e6 = wrap_cell(cell_3, period_5);
-    metal::float3 _e9 = wash_hash(_e6, salt_3 + 77u);
-    out_2.order = _e9.x;
-    if (_e9.y > occupancy) {
+    metal::int2 _e5 = wrap_cell(cell_3, period_5);
+    metal::float3 _e8 = wash_hash(_e5, salt_3 + 77u);
+    out_2.order = _e8.x;
+    if (_e8.y > occupancy) {
         out_2.centre = r_2;
         out_2.edge = 1000000000.0;
-        Glob _e18 = out_2;
-        return _e18;
+        Glob _e17 = out_2;
+        return _e17;
     }
-    metal::float3 _e19 = wash_hash(_e6, salt_3);
-    metal::float2 centre_1 = (static_cast<metal::float2>(cell_3) + metal::float2(0.5)) + ((_e19.xy - metal::float2(0.5)) * WASH_JITTER);
-    float radius_1 = metal::mix(WASH_RADIUS_MIN, WASH_RADIUS_MAX, _e19.z);
+    metal::float3 _e18 = wash_hash(_e5, salt_3);
+    metal::float2 centre_1 = (static_cast<metal::float2>(cell_3) + metal::float2(0.5)) + ((_e18.xy - metal::float2(0.5)) * WASH_JITTER);
+    float radius_1 = metal::mix(WASH_RADIUS_MIN, WASH_RADIUS_MAX, _e18.z);
     out_2.centre = centre_1;
-    out_2.edge = (metal::length(r_2 - centre_1) / radius_1) + wob;
-    Glob _e41 = out_2;
-    return _e41;
+    out_2.edge = metal::length(r_2 - centre_1) / radius_1;
+    Glob _e39 = out_2;
+    return _e39;
 }
 
 Wash wash_scan(
     metal::float2 r_3,
     uint salt_4,
     float occupancy_1,
-    float wob_1,
     int period_6
 ) {
     Wash out_3 = {};
@@ -736,12 +732,12 @@ Wash wash_scan(
         if (metal::all(loop_bound_3 == uint2(0u))) { break; }
         loop_bound_3 -= uint2(loop_bound_3.y == 0u, 1u);
         if (!loop_init_3) {
-            int _e93 = j_1;
-            j_1 = as_type<int>(as_type<uint>(_e93) + as_type<uint>(1));
+            int _e92 = j_1;
+            j_1 = as_type<int>(as_type<uint>(_e92) + as_type<uint>(1));
         }
         loop_init_3 = false;
-        int _e33 = j_1;
-        if (_e33 <= WASH_RING) {
+        int _e32 = j_1;
+        if (_e32 <= WASH_RING) {
         } else {
             break;
         }
@@ -753,57 +749,57 @@ Wash wash_scan(
                 if (metal::all(loop_bound_4 == uint2(0u))) { break; }
                 loop_bound_4 -= uint2(loop_bound_4.y == 0u, 1u);
                 if (!loop_init_4) {
-                    int _e90 = i_1;
-                    i_1 = as_type<int>(as_type<uint>(_e90) + as_type<uint>(1));
+                    int _e89 = i_1;
+                    i_1 = as_type<int>(as_type<uint>(_e89) + as_type<uint>(1));
                 }
                 loop_init_4 = false;
-                int _e38 = i_1;
-                if (_e38 <= WASH_RING) {
+                int _e37 = i_1;
+                if (_e37 <= WASH_RING) {
                 } else {
                     break;
                 }
                 {
-                    int _e41 = i_1;
-                    int _e42 = j_1;
-                    Glob _e45 = wash_glob(as_type<metal::int2>(as_type<metal::uint2>(base_1) + as_type<metal::uint2>(metal::int2(_e41, _e42))), salt_4, r_3, wob_1, occupancy_1, period_6);
-                    float prox = 1.0 - _e45.edge;
-                    float _e51 = out_3.cover;
-                    out_3.cover = metal::max(_e51, metal::clamp(prox / 0.05, 0.0, 1.0));
-                    if (_e45.edge < 1.0) {
-                        float _e62 = best;
-                        if (_e45.order > _e62) {
-                            float _e64 = best;
-                            second = _e64;
-                            metal::float2 _e67 = out_3.centre;
-                            out_3.under = _e67;
-                            best = _e45.order;
-                            out_3.centre = _e45.centre;
-                            out_3.edge = _e45.edge;
+                    int _e40 = i_1;
+                    int _e41 = j_1;
+                    Glob _e44 = wash_glob(as_type<metal::int2>(as_type<metal::uint2>(base_1) + as_type<metal::uint2>(metal::int2(_e40, _e41))), salt_4, r_3, occupancy_1, period_6);
+                    float prox = 1.0 - _e44.edge;
+                    float _e50 = out_3.cover;
+                    out_3.cover = metal::max(_e50, metal::clamp(prox / 0.05, 0.0, 1.0));
+                    if (_e44.edge < 1.0) {
+                        float _e61 = best;
+                        if (_e44.order > _e61) {
+                            float _e63 = best;
+                            second = _e63;
+                            metal::float2 _e66 = out_3.centre;
+                            out_3.under = _e66;
+                            best = _e44.order;
+                            out_3.centre = _e44.centre;
+                            out_3.edge = _e44.edge;
                         } else {
-                            float _e74 = second;
-                            if (_e45.order > _e74) {
-                                second = _e45.order;
-                                out_3.under = _e45.centre;
+                            float _e73 = second;
+                            if (_e44.order > _e73) {
+                                second = _e44.order;
+                                out_3.under = _e44.centre;
                             }
                         }
                     } else {
-                        float _e79 = near_a;
-                        if (prox > _e79) {
-                            float _e81 = near_a;
-                            near_b = _e81;
-                            float _e82 = order_a;
-                            order_b = _e82;
-                            metal::float2 _e83 = front_a;
-                            front_b = _e83;
+                        float _e78 = near_a;
+                        if (prox > _e78) {
+                            float _e80 = near_a;
+                            near_b = _e80;
+                            float _e81 = order_a;
+                            order_b = _e81;
+                            metal::float2 _e82 = front_a;
+                            front_b = _e82;
                             near_a = prox;
-                            order_a = _e45.order;
-                            front_a = _e45.centre;
+                            order_a = _e44.order;
+                            front_a = _e44.centre;
                         } else {
-                            float _e86 = near_b;
-                            if (prox > _e86) {
+                            float _e85 = near_b;
+                            if (prox > _e85) {
                                 near_b = prox;
-                                order_b = _e45.order;
-                                front_b = _e45.centre;
+                                order_b = _e44.order;
+                                front_b = _e44.centre;
                             }
                         }
                     }
@@ -811,24 +807,24 @@ Wash wash_scan(
             }
         }
     }
-    float _e96 = order_b;
-    float _e97 = best;
-    if (_e96 > _e97) {
-        float _e100 = near_b;
-        out_3.near = _e100;
-        metal::float2 _e102 = front_b;
-        out_3.front = _e102;
+    float _e95 = order_b;
+    float _e96 = best;
+    if (_e95 > _e96) {
+        float _e99 = near_b;
+        out_3.near = _e99;
+        metal::float2 _e101 = front_b;
+        out_3.front = _e101;
     }
-    float _e103 = order_a;
-    float _e104 = best;
-    if (_e103 > _e104) {
-        float _e107 = near_a;
-        out_3.near = _e107;
-        metal::float2 _e109 = front_a;
-        out_3.front = _e109;
+    float _e102 = order_a;
+    float _e103 = best;
+    if (_e102 > _e103) {
+        float _e106 = near_a;
+        out_3.near = _e106;
+        metal::float2 _e108 = front_a;
+        out_3.front = _e108;
     }
-    Wash _e110 = out_3;
-    return _e110;
+    Wash _e109 = out_3;
+    return _e109;
 }
 
 float wash_light(
@@ -906,7 +902,6 @@ WashField wash_field(
     constant Cloud& cloud
 ) {
     metal::float2 warped = {};
-    float wob_2 = 0.0;
     WashField out_4 = {};
     warped = r_5;
     float _e6 = cloud.wash_lobe;
@@ -919,32 +914,23 @@ WashField wash_field(
         float _e35 = wash_fbm((r_5 * WASH_WARP_SCALE) + metal::float2(37.0, -19.0), 73u, warp_period);
         warped = _e19 + ((amp * 2.0) * metal::float2(_e25 - 0.5, _e35 - 0.5));
     }
-    float _e45 = cloud.wash_ragged;
-    if (_e45 > 0.0) {
-        int ragged_period = naga_f2i32(metal::rint(WASH_RAGGED_SCALE * static_cast<float>(period_7)));
-        float _e56 = cloud.wash_ragged;
-        float _e61 = wash_fbm(r_5 * WASH_RAGGED_SCALE, 41u, ragged_period);
-        wob_2 = (WASH_RAGGED * _e56) * (_e61 - 1.0);
-    }
-    metal::float2 _e67 = warped;
-    float _e70 = wob_2;
-    Wash _e71 = wash_scan(_e67, 1u, 1.0, _e70, period_7);
-    metal::float2 _e72 = warped;
-    Wet _e73 = wash_wet(_e71, _e72, cloud);
-    out_4.coarse = _e73;
+    metal::float2 _e43 = warped;
+    Wash _e46 = wash_scan(_e43, 1u, 1.0, period_7);
+    metal::float2 _e47 = warped;
+    Wet _e48 = wash_wet(_e46, _e47, cloud);
+    out_4.coarse = _e48;
     out_4.fine = Wet {metal::float2(0.0), 0.0};
     out_4.cover = 0.0;
     if (want_fine) {
-        metal::float2 _e81 = warped;
-        metal::float2 fine_r = (_e81 * WASH_LACUNARITY) + metal::float2(17.3, 5.9);
-        float _e90 = wob_2;
-        Wash _e96 = wash_scan(fine_r, 2u, WASH_FINE_OCCUPANCY, _e90, naga_f2i32(metal::rint(WASH_LACUNARITY * static_cast<float>(period_7))));
-        Wet _e98 = wash_wet(_e96, fine_r, cloud);
-        out_4.fine = _e98;
-        out_4.cover = _e96.cover;
+        metal::float2 _e56 = warped;
+        metal::float2 fine_r = (_e56 * WASH_LACUNARITY) + metal::float2(17.3, 5.9);
+        Wash _e70 = wash_scan(fine_r, 2u, WASH_FINE_OCCUPANCY, naga_f2i32(metal::rint(WASH_LACUNARITY * static_cast<float>(period_7))));
+        Wet _e72 = wash_wet(_e70, fine_r, cloud);
+        out_4.fine = _e72;
+        out_4.cover = _e70.cover;
     }
-    WashField _e101 = out_4;
-    return _e101;
+    WashField _e75 = out_4;
+    return _e75;
 }
 
 WashField wash_tile_field(
