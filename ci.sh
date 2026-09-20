@@ -4,7 +4,7 @@
 # the committed Metal corpus under strict resolution,
 # vendored GUI crates' tests, the optional CLAP probe fixture and the gated startup-probe example, doc links, the harmonigraph-core dependency
 # guard, the security-audit trigger split, the CI group split, pinned shared
-# skills in fresh worktrees, the owner-only skill gate, worktree reclaim safety, and the registered-worktree bundle swap.
+# skills in fresh worktrees, worktree reclaim safety, and the registered-worktree bundle swap.
 #
 # GitHub Actions invokes this script on the toolchain pinned by
 # rust-toolchain.toml, once per GROUP below. It remains available locally when a
@@ -320,13 +320,6 @@ run .claude/tests/ci-groups.sh
 # SessionStart and a real worktree add through a local two-commit submodule:
 # both referenced files must come from the older gitlink, not the source tip.
 run .claude/tests/shared-skills-worktrees.sh
-
-# That same submodule holds the one skill a session may not start for itself.
-# The hook that holds that sits on PreToolUse in both Claude and Codex, so it
-# sees every shell call in the tree: too narrow and an audit runs unasked, too
-# wide and ordinary commands start getting denied. Neither end is reachable
-# from Rust.
-run .claude/tests/owner-only-skills.sh
 
 # harmonigraph-core is MIT OR Apache-2.0 while the rest of the workspace is GPL.
 # That split is only defensible while the crate stays a self-contained

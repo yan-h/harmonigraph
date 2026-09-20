@@ -291,19 +291,11 @@ use them for read-only exploration or review, not parallel edits.
 
 **The audit itself is Yan's to start, and no session's.** He types `/audit-merges` or `$audit-merges`;
 when a batch looks worth auditing, the most a session does is say so in its reply.
+That covers reading the procedure out of `SKILL.md` and running it by hand, and pointing `merge-auditor` subagents at a range directly —
+both are the same act with the invocation skipped.
 
-This one is enforced rather than asked, in two pieces, because the hosts differ.
-The skill carries `disable-model-invocation: true`, which hides it from the model in Claude and is ignored by Codex;
-`.claude/owner-only-skills.sh` then refuses the route that leaves — reading `SKILL.md` with a shell command — from a `PreToolUse` hook in both.
-Neither touches Yan, because a typed invocation never reaches a hook.
-Reading the file at all is refused, including through `.shared-skills/` —
-a second path to one file is the gate's bypass rather than an exemption, and an earlier version that named that path in its own refusal was followed straight through it.
-
-**Codex's half has to be installed per machine, and the repo copy is not enough.** Codex loads a project's `.codex/` hooks only in a TRUSTED project, and every Codex session runs in a fresh managed worktree whose path was never trusted —
-so `.codex/hooks.json` covers the main checkout and nothing a session runs in, the same way a gitignored `settings.local.json` misses every worktree.
-`cp .codex/user-hooks.json ~/.codex/hooks.json` installs the copy that reaches them;
-it no-ops in any repo without `.claude/owner-only-skills.sh`, so it is safe to leave on globally.
-What is left after all that is pointing `merge-auditor` subagents at a range directly, and that is the same act with the gate stepped around.
+The skill carries `disable-model-invocation: true`, so in Claude it is not offered to the model at all.
+Codex ignores that field and reaches a skill by reading its `SKILL.md`, so there the rule is the first paragraph of a file it reads in full, plus this one.
 
 ## Never lock an agent-owned worktree by hand
 

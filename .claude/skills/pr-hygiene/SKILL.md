@@ -148,5 +148,5 @@ CLAUDE.md owns when a PR is required;
 this file owns what happens at the merge boundary after one exists.
 
 This file used to close by telling an agent without the skill to run the procedure out of `.claude/skills/audit-merges/SKILL.md` itself.
-That was permission for the thing `.claude/owner-only-skills.sh` now refuses:
+That was permission for the one thing this rule exists to stop:
 **a session does not start an audit, with or without the skill.** Say the range looks worth auditing and stop there.
