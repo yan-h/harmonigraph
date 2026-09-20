@@ -1336,10 +1336,8 @@ pub(super) fn draw(
             painter,
             label.lead,
             label.name,
-            theme::text(),
-            theme::picture(),
-            scale,
-            magnify,
+            marks::NameInk { fill: theme::text(), outline: theme::picture() },
+            marks::NameSize { scale, magnify },
             // Against the LETTER's ink, not the box's centre — which is the
             // whole of issue #349's fix and the reason `NoteLabel` carries a
             // point of its own. The box is an estimate and has to stay one

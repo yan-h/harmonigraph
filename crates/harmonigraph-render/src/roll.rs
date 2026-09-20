@@ -197,9 +197,9 @@ pub struct RollAxes {
     pub depth_dir: [f32; 2],
 }
 
-/// Draw `instances` into `rect`. `pane_id` must be unique per roll shown in
-/// the same frame (each gets its own instance buffer; the pipeline is
-/// shared).
+/// Draw `instances` into `rect`. See [`crate::PaneIds`] for what identifies
+/// the roll's own instance buffer (the pipeline is shared) and how long the
+/// buffers live.
 ///
 /// `rect` is the roll's own region rather than the pane's — it is what the
 /// bloom's offscreen chain covers, so a rect any larger would spend the halo's
@@ -207,8 +207,6 @@ pub struct RollAxes {
 ///
 /// `bloom` is the lattice's own bloom strength, applied to these notes through
 /// the lattice's own chain (see [`RollBloom`]). 0 skips it whole.
-/// `pass_nr` is the painter context's cumulative pass number, so cache lifetime
-/// follows frames rather than the number of sibling panes prepared in one.
 #[allow(clippy::too_many_arguments)]
 pub fn roll_paint_callback(
     rect: egui::Rect,
@@ -217,9 +215,8 @@ pub fn roll_paint_callback(
     bloom: f32,
     shadow: harmonigraph_scene::ShadowStyle,
     target_format: wgpu::TextureFormat,
-    pane_id: u64,
+    ids: crate::PaneIds,
     shadow_surface_id: u64,
-    pass_nr: u64,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
@@ -230,9 +227,9 @@ pub fn roll_paint_callback(
             bloom,
             shadow,
             target_format,
-            pane_id,
+            pane_id: ids.pane,
             shadow_surface_id,
-            pass_nr,
+            pass_nr: ids.pass_nr,
         },
     )
 }

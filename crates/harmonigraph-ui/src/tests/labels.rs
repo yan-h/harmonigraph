@@ -35,10 +35,8 @@ fn stacked_name(
             ui.painter(),
             anchor,
             name,
-            egui::Color32::WHITE,
-            egui::Color32::BLACK,
-            scale,
-            magnify,
+            marks::NameInk { fill: egui::Color32::WHITE, outline: egui::Color32::BLACK },
+            marks::NameSize { scale, magnify },
             marks::NameLead::Centred,
         );
     });

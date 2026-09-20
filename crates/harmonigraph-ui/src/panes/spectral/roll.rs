@@ -305,9 +305,11 @@ pub(super) fn draw_roll(
         ),
         state.appearance.view.shadow.spectral_geometry,
         state.surfaces.target_format,
-        crate::panes::lattice::pane_id(options.surface),
+        harmonigraph_render::PaneIds {
+            pane: crate::panes::lattice::pane_id(options.surface),
+            pass_nr: painter.ctx().cumulative_pass_nr(),
+        },
         crate::text::spectral_shadow_surface(options.surface),
-        painter.ctx().cumulative_pass_nr(),
     ));
 }
 

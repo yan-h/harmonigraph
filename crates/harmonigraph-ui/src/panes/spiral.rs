@@ -563,9 +563,11 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64,
         marks.clone(),
         dot_shadow,
         state.surfaces.target_format,
-        crate::panes::lattice::pane_id(surface),
+        harmonigraph_render::PaneIds {
+            pane: crate::panes::lattice::pane_id(surface),
+            pass_nr: painter.ctx().cumulative_pass_nr(),
+        },
         crate::text::spiral_shadow_surface(surface),
-        painter.ctx().cumulative_pass_nr(),
     ));
     for mark in &marks {
         painter.circle_filled(
@@ -596,8 +598,10 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64,
         marks,
         bloom,
         state.surfaces.target_format,
-        crate::panes::lattice::pane_id(surface),
-        painter.ctx().cumulative_pass_nr(),
+        harmonigraph_render::PaneIds {
+            pane: crate::panes::lattice::pane_id(surface),
+            pass_nr: painter.ctx().cumulative_pass_nr(),
+        },
     ));
     // The names last, and outside the disc, so nothing in the picture is over
     // them and they are over nothing in it — the halo above included, which is
@@ -968,10 +972,11 @@ fn names(
             painter,
             spiral.rim(voice.pitch),
             name,
-            crate::theme::text().gamma_multiply(voice.strength),
-            crate::theme::picture().gamma_multiply(voice.strength),
-            scale,
-            magnify,
+            crate::marks::NameInk {
+                fill: crate::theme::text().gamma_multiply(voice.strength),
+                outline: crate::theme::picture().gamma_multiply(voice.strength),
+            },
+            crate::marks::NameSize { scale, magnify },
             // Led by the LETTER's ink, growing out along the ray: the gap a
             // reader sees is between the rim and the ink, and the band outside
             // the disc is sized for a name that starts there. Placed by its box
