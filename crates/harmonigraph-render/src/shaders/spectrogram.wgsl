@@ -292,11 +292,12 @@ struct Cloud {
     // The tile's period in cells, 0 for the live walk. Above zero the cell a
     // hash is taken at is folded onto the square period described beside
     // `wrap_cell`, `fs_cloud_tile` bakes one period of it, and the two paths
-    // below read that texture through the rotated coordinates instead of
-    // walking the ring per pixel.
+    // below read that texture instead of walking the ring per pixel. The wash
+    // rotates that read; the mosaic keeps the square tile's original axes.
     tile_cells: u32,
-    // 1 when pitch is the pane's Y axis, 0 when it is X. The 3-4-5 rotation is
-    // defined in (time, pitch), so its basis follows this orientation.
+    // 1 when pitch is the pane's Y axis, 0 when it is X. The wash's 3-4-5
+    // rotation is defined in (time, pitch), so its basis follows this
+    // orientation. The unrotated mosaic does not read it.
     pitch_vertical: u32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
@@ -509,10 +510,12 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 // `Refraction` carries the lookup from this round's continuous slope onto round
 // 1's flat per-glob patch, and `Variety` is how much the globs differ in size.
 const CLOUD_UNITS: f32 = 10.0;
-// The tiled field is turned by the exact 3-4-5 rotation: cosine 4/5, sine 3/5,
-// or 36.87 degrees. The square walk is baked in its own coordinates and this
+// The tiled WASH is turned by the exact 3-4-5 rotation: cosine 4/5, sine 3/5,
+// or 36.87 degrees. Its square walk is baked in its own coordinates and this
 // rotation is applied only when it is read, so every octave still closes on
-// the ordinary square period and no resampling stretch is introduced.
+// the ordinary square period and no resampling stretch is introduced. Mosaic
+// deliberately keeps the square tile's original axes: turning its scale pile
+// changed the look rather than merely hiding its repetition.
 const CLOUD_TILE_ROT_COS: f32 = 0.8;
 const CLOUD_TILE_ROT_SIN: f32 = 0.6;
 // How many dome cells cross one cloud unit at `Scale size` 1x. Carries the
@@ -543,12 +546,12 @@ fn wrap_cell(cell: vec2<i32>, period: i32) -> vec2<i32> {
     return wrap_cell_for_tile(cell, period);
 }
 
-// Texture coordinates in the rotated basis. `semantic` is `(time, pitch)`
+// Watercolor texture coordinates in the rotated basis. `semantic` is `(time, pitch)`
 // whichever way the pane is oriented; multiplying by R^-1 turns the world
 // point back into the square tile's coordinates. The repeating sampler then
 // makes its two screen-space repeat vectors `(4P/5, 3P/5)` and
 // `(-3P/5, 4P/5)` in `(time, pitch)`.
-fn cloud_tile_uv_for(r: vec2<f32>, period: f32, pitch_vertical: u32) -> vec2<f32> {
+fn watercolor_tile_uv_for(r: vec2<f32>, period: f32, pitch_vertical: u32) -> vec2<f32> {
     let semantic = select(vec2<f32>(r.y, r.x), r, pitch_vertical == 1u);
     return vec2<f32>(
         CLOUD_TILE_ROT_COS * semantic.x + CLOUD_TILE_ROT_SIN * semantic.y,
@@ -556,15 +559,15 @@ fn cloud_tile_uv_for(r: vec2<f32>, period: f32, pitch_vertical: u32) -> vec2<f32
     ) / period;
 }
 
-fn cloud_tile_uv(r: vec2<f32>) -> vec2<f32> {
-    return cloud_tile_uv_for(r, f32(cloud.tile_cells), cloud.pitch_vertical);
+fn watercolor_tile_uv(r: vec2<f32>) -> vec2<f32> {
+    return watercolor_tile_uv_for(r, f32(cloud.tile_cells), cloud.pitch_vertical);
 }
 
 // The baked channels carry directions as well as scalars. Sampling them at a
 // rotated coordinate turns the geometry only if its vectors turn with it;
 // otherwise refraction and lighting would still point along the unrotated
 // field. Convert to `(time, pitch)`, apply R, and return to pane axes.
-fn rotate_tile_vector_for(v: vec2<f32>, pitch_vertical: u32) -> vec2<f32> {
+fn rotate_watercolor_tile_vector_for(v: vec2<f32>, pitch_vertical: u32) -> vec2<f32> {
     let semantic = select(vec2<f32>(v.y, v.x), v, pitch_vertical == 1u);
     let turned = vec2<f32>(
         CLOUD_TILE_ROT_COS * semantic.x - CLOUD_TILE_ROT_SIN * semantic.y,
@@ -573,8 +576,8 @@ fn rotate_tile_vector_for(v: vec2<f32>, pitch_vertical: u32) -> vec2<f32> {
     return select(vec2<f32>(turned.y, turned.x), turned, pitch_vertical == 1u);
 }
 
-fn rotate_tile_vector(v: vec2<f32>) -> vec2<f32> {
-    return rotate_tile_vector_for(v, cloud.pitch_vertical);
+fn rotate_watercolor_tile_vector(v: vec2<f32>) -> vec2<f32> {
+    return rotate_watercolor_tile_vector_for(v, cloud.pitch_vertical);
 }
 
 // One cell's dome, as four 10-bit fractions: where its centre sits inside the
@@ -860,11 +863,11 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
         let tile = textureSampleLevel(
             cloud_tile_a,
             tile_sampler,
-            cloud_tile_uv(r),
+            r / f32(cloud.tile_cells),
             0.0,
         );
-        pile.face = rotate_tile_vector(tile.xy);
-        pile.to_centre = rotate_tile_vector(tile.zw);
+        pile.face = tile.xy;
+        pile.to_centre = tile.zw;
     } else {
         pile = cloud_domes(r, 0);
     }
@@ -1510,15 +1513,15 @@ fn wash_field(r: vec2<f32>, period: i32, want_fine: bool) -> WashField {
 // period is the repeating texture coordinate, and that is the whole of what the
 // drift does here — it slides a fixed field rather than changing one.
 fn wash_tile_field(r: vec2<f32>) -> WashField {
-    let uv = cloud_tile_uv(r);
+    let uv = watercolor_tile_uv(r);
     let a = textureSampleLevel(cloud_tile_a, tile_sampler, uv, 0.0);
     var out: WashField;
-    out.coarse = Wet(rotate_tile_vector(a.xy), a.z);
+    out.coarse = Wet(rotate_watercolor_tile_vector(a.xy), a.z);
     out.fine = Wet(vec2<f32>(0.0), 0.0);
     out.cover = 0.0;
     if cloud.wash_layers > 0.0 {
         let b = textureSampleLevel(cloud_tile_b, tile_sampler, uv, 0.0);
-        out.fine = Wet(rotate_tile_vector(b.xy), b.z);
+        out.fine = Wet(rotate_watercolor_tile_vector(b.xy), b.z);
         out.cover = b.w;
     }
     return out;
@@ -1587,9 +1590,9 @@ fn fs_cloud_tone(in: VertexOut) -> @location(0) vec4<f32> {
 //
 // The tile, baked when `Cloud tile` is on and read by both paths above. It has
 // no pane, no drift and no light in it: it is one square period of whichever
-// walk the style selects. The read turns that whole field by 36.87 degrees.
-// That is why a resize, a drift or a note never touches it and `Scale size`
-// reaches it only
+// walk the style selects. The Watercolor read turns that whole field by 36.87
+// degrees; the Mosaic read leaves it square. That is why a resize, a drift or
+// a note never touches it and `Scale size` reaches it only
 // through how many texels the renderer spends on a cell.
 struct TileVertex {
     @builtin(position) position: vec4<f32>,
@@ -1615,28 +1618,29 @@ struct TileBake {
 @fragment
 fn fs_cloud_tile(in: TileVertex) -> TileBake {
     let period = i32(cloud.tile_cells);
-    // A texel centre lands in the square tile coordinates that the inverse
-    // `cloud_tile_uv` rotation reads back. `fraction.x` advances along TIME;
-    // `fraction.y` advances along PITCH. The whole baked field, including its
-    // vectors above, is turned only when sampled.
+    // The wash's texel centre lands in the square semantic coordinates that
+    // the inverse `watercolor_tile_uv` rotation reads back. The mosaic instead
+    // uses the original physical X/Y square so its bake matches `r / period`.
     let period_f = f32(cloud.tile_cells);
     let time = in.fraction.x * period_f;
     let pitch = in.fraction.y * period_f;
-    let cell = select(vec2<f32>(pitch, time), vec2<f32>(time, pitch), cloud.pitch_vertical == 1u);
+    let wash_cell =
+        select(vec2<f32>(pitch, time), vec2<f32>(time, pitch), cloud.pitch_vertical == 1u);
+    let mosaic_cell = in.fraction * period_f;
     var out: TileBake;
     out.a = vec4<f32>(0.0);
     out.b = vec4<f32>(0.0);
     if cloud.cloud_style == 1u {
         // Seven channels of glob geometry. `want_fine` is true whatever `Layers`
         // says, so turning that dial up is a mix and never a rebake.
-        let field = wash_field(cell, period, true);
+        let field = wash_field(wash_cell, period, true);
         out.a = vec4<f32>(field.coarse.offset, field.coarse.pigment, 0.0);
         out.b = vec4<f32>(field.fine.offset, field.fine.pigment, field.cover);
     } else {
         // The mosaic's whole walk is these two vectors, so its second target is
         // never read. It is still allocated and still written, which is what
         // keeps a change of style a rebake rather than a reallocation.
-        let pile = cloud_domes(cell, period);
+        let pile = cloud_domes(mosaic_cell, period);
         out.a = vec4<f32>(pile.face, pile.to_centre);
     }
     return out;

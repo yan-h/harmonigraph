@@ -3553,8 +3553,96 @@ fn cs_wrap_probe() {
         );
     }
 
-    /// The production lookup is the exact 3-4-5 rotation in semantic
-    /// `(time, pitch)` coordinates, whichever pane axis carries pitch.
+    /// The square Mosaic tile remains the live scale field inside its first
+    /// period. This is the visual contract behind leaving Mosaic unrotated:
+    /// its tile may repeat the field, but may not turn it into a second look.
+    ///
+    /// The comparison window contains only pixels whose coarse and fine rings
+    /// lie wholly inside `[0, P)`, where wrapping a hash changes nothing. Its
+    /// size is asserted so a stale fixture cannot pass by comparing no pixels.
+    #[test]
+    fn the_mosaic_tile_keeps_the_live_walk_inside_its_first_period() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        const TILE_SIZE: [u32; 2] = [SIZE[0] * 2, SIZE[1] * 2];
+        let number = |name: &str| -> f32 {
+            crate::shadow::tests::shader_const(SPECTROGRAM_SRC, name)
+                .split('/')
+                .map(|part| part.trim().parse::<f32>().expect("a number"))
+                .reduce(|a, b| a / b)
+                .expect("a constant has a value")
+        };
+        let fine_offset = [17.3_f32, 5.9];
+        assert_eq!(
+            SPECTROGRAM_SRC.matches("vec2<f32>(17.3, 5.9)").count(),
+            2,
+            "the fine octave moved away from the comparison window"
+        );
+
+        let mut cb = cloud_fixture();
+        cb.rect = egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(TILE_SIZE[0] as f32, TILE_SIZE[1] as f32),
+        );
+        cb.vertices = full_quad_in(12, TILE_SIZE);
+        cb.read.rows = TILE_SIZE[1];
+        cb.grid = grid_of(noisy_grid(BINS as usize, 12), BINS, 12, 0);
+        cb.atmosphere.as_mut().unwrap().region = cb.rect;
+        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+        settings.cloud_style = harmonigraph_scene::CloudStyle::Mosaic;
+        settings.cloud_depth = 1.0;
+        settings.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
+        settings.cloud_speed = 0.0;
+        let live = fresh_frame(&device, &queue, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.cloud_tile = 20.0;
+        let tiled = fresh_frame(&device, &queue, &cb);
+        assert_ne!(live, tiled, "the tile never ran");
+
+        let units = number("CLOUD_UNITS");
+        let cells = number("SCALE_CELLS") / harmonigraph_scene::CLOUD_SIZE_MAX;
+        let lacunarity = number("DOME_LACUNARITY");
+        let period = 20.0_f32;
+        let drift = [0.0_f32, 0.6];
+        let inside = |axis: usize, point: f32| {
+            let half = TILE_SIZE[axis] as f32 / 2.0;
+            let r = ((point - half) / TILE_SIZE[1] as f32 * units + drift[axis]) * cells;
+            let fine = lacunarity * r + fine_offset[axis];
+            let held = |value: f32, last: f32| value >= 2.0 && value <= last - 2.0;
+            held(r, period) && held(fine, (lacunarity * period).round())
+        };
+        let (mut compared, mut moved, mut worst, mut total) = (0u32, 0u32, 0u32, 0u64);
+        for y in 0..TILE_SIZE[1] {
+            for x in 0..TILE_SIZE[0] {
+                if !inside(0, x as f32 + 0.5) || !inside(1, y as f32 + 0.5) {
+                    continue;
+                }
+                compared += 1;
+                let at = (y * TILE_SIZE[0] + x) as usize * 4;
+                for channel in 0..3 {
+                    let diff = u32::from(live[at + channel].abs_diff(tiled[at + channel]));
+                    moved += u32::from(diff > 4);
+                    worst = worst.max(diff);
+                    total += u64::from(diff);
+                }
+            }
+        }
+        let pane = TILE_SIZE[0] * TILE_SIZE[1];
+        assert!(
+            compared * 20 > pane,
+            "compared only {compared} of {pane} pixels, too little to measure the look"
+        );
+        let mean = total as f64 / f64::from(compared * 3);
+        assert!(
+            mean < 0.1 && worst <= 2 && moved == 0,
+            "the square Mosaic tile changed the live look: compared={compared}, mean={mean}, \
+             worst={worst}, moved={moved}"
+        );
+    }
+
+    /// The production Watercolor lookup is the exact 3-4-5 rotation in
+    /// semantic `(time, pitch)` coordinates, whichever pane axis carries
+    /// pitch.
     ///
     /// This probes the helpers themselves through a compute entry point. A
     /// rendered repeat alone cannot tell a 36.87-degree turn from an arbitrary
@@ -3562,7 +3650,7 @@ fn cs_wrap_probe() {
     /// checks the directional channels: rotating the lookup without rotating
     /// those vectors would leave refraction and lighting on the old axes.
     #[test]
-    fn the_tile_uses_the_exact_rotation_in_both_pane_orientations() {
+    fn the_watercolor_tile_uses_the_exact_rotation_in_both_pane_orientations() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
@@ -3577,15 +3665,17 @@ struct RotationProbe { values: array<vec2<f32>, 8> }
 @compute @workgroup_size(1)
 fn cs_rotation_probe() {
     // Pitch vertical: the two P40 repeat vectors, pure time, and local time.
-    rotation_probe.values[0] = cloud_tile_uv_for(vec2<f32>(32.0, 24.0), 40.0, 1u);
-    rotation_probe.values[1] = cloud_tile_uv_for(vec2<f32>(-24.0, 32.0), 40.0, 1u);
-    rotation_probe.values[2] = cloud_tile_uv_for(vec2<f32>(40.0, 0.0), 40.0, 1u);
-    rotation_probe.values[3] = rotate_tile_vector_for(vec2<f32>(1.0, 0.0), 1u);
+    rotation_probe.values[0] = watercolor_tile_uv_for(vec2<f32>(32.0, 24.0), 40.0, 1u);
+    rotation_probe.values[1] = watercolor_tile_uv_for(vec2<f32>(-24.0, 32.0), 40.0, 1u);
+    rotation_probe.values[2] = watercolor_tile_uv_for(vec2<f32>(40.0, 0.0), 40.0, 1u);
+    rotation_probe.values[3] =
+        rotate_watercolor_tile_vector_for(vec2<f32>(1.0, 0.0), 1u);
     // The same semantic vectors when physical x is pitch and y is time.
-    rotation_probe.values[4] = cloud_tile_uv_for(vec2<f32>(24.0, 32.0), 40.0, 0u);
-    rotation_probe.values[5] = cloud_tile_uv_for(vec2<f32>(32.0, -24.0), 40.0, 0u);
-    rotation_probe.values[6] = cloud_tile_uv_for(vec2<f32>(0.0, 40.0), 40.0, 0u);
-    rotation_probe.values[7] = rotate_tile_vector_for(vec2<f32>(0.0, 1.0), 0u);
+    rotation_probe.values[4] = watercolor_tile_uv_for(vec2<f32>(24.0, 32.0), 40.0, 0u);
+    rotation_probe.values[5] = watercolor_tile_uv_for(vec2<f32>(32.0, -24.0), 40.0, 0u);
+    rotation_probe.values[6] = watercolor_tile_uv_for(vec2<f32>(0.0, 40.0), 40.0, 0u);
+    rotation_probe.values[7] =
+        rotate_watercolor_tile_vector_for(vec2<f32>(0.0, 1.0), 0u);
 }
 "#,
         );
@@ -3663,7 +3753,7 @@ fn cs_rotation_probe() {
     /// The direct shader probes above own hash closure and exact coefficients;
     /// this one owns the bake and sampling path that turn them into a picture.
     #[test]
-    fn the_cloud_tile_repeats_on_the_rotated_lattice_and_not_the_pane_axes() {
+    fn the_watercolor_tile_repeats_on_the_rotated_lattice_and_not_the_pane_axes() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
@@ -3792,7 +3882,19 @@ fn cs_rotation_probe() {
         assert_ne!(
             key_at(|_| {}, 0.0, false),
             fresh,
-            "changing which axis is time kept a tile baked for the old rotated basis"
+            "changing which axis is time kept a Watercolor tile baked for the old rotated basis"
+        );
+        let mosaic_at = |pitch_vertical| {
+            key_at(
+                |settings| settings.cloud_style = harmonigraph_scene::CloudStyle::Mosaic,
+                0.0,
+                pitch_vertical,
+            )
+        };
+        assert_eq!(
+            mosaic_at(true),
+            mosaic_at(false),
+            "the unrotated Mosaic tile rebaked for a pane orientation it does not read"
         );
         for now in [0.5, 7.0, 600.0] {
             assert_eq!(key(|_| {}, now), fresh, "a clock of {now} rebaked a field that only slid");

@@ -128,11 +128,11 @@ const TILE_MAX: u32 = 2048;
 /// Anything that feeds the baked channels and is missing here serves a stale
 /// picture; anything carried here that decides nothing rebakes a full cell walk
 /// at the rate of whatever it should not be watching. So the key is the STYLE,
-/// the period, the texel size, the pane orientation, and the dials the WALK
-/// reads — `Variety` for the mosaic; `Lobe shape`, `Fuzz` and `Edge pooling`
-/// for the wash, which are the warp, the feather/bleed/tide widths and the
-/// tide's own strength. Orientation decides which tile axis is time, so it
-/// decides which edge carries the pitch offset.
+/// the period, the texel size, the wash's pane orientation, and the dials the
+/// WALK reads — `Variety` for the mosaic; `Lobe shape`, `Fuzz` and `Edge
+/// pooling` for the wash, which are the warp, the feather/bleed/tide widths and
+/// the tide's own strength. Orientation decides the rotated wash basis; the
+/// unrotated mosaic neither bakes nor reads it.
 ///
 /// Not the DRIFT and not the clock. The walk's output is a fixed field that the
 /// drift slides over — `drift` enters both styles only as a translation of the
@@ -153,9 +153,9 @@ pub(super) struct TileKey {
     period: u32,
     /// One side of the square tile, in texels.
     texels: u32,
-    /// Which pane axis is pitch. The rotation is defined in `(time, pitch)`, so
-    /// changing orientation changes the field and vectors baked into the tile.
-    pitch_vertical: bool,
+    /// Which pane axis is pitch for the wash's rotation. Always false for the
+    /// mosaic, whose square bake stays in physical pane coordinates.
+    wash_pitch_vertical: bool,
     /// The walk's own dials as bits, so this compares by value. Sanitized, so
     /// there is no NaN here to compare unequal to itself. The mosaic reads one
     /// and leaves the rest at zero.
@@ -205,7 +205,7 @@ pub(super) fn tile_key(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> O
         style,
         period: settings.cloud_tile as u32,
         texels,
-        pitch_vertical: atmosphere.pitch_vertical,
+        wash_pitch_vertical: style == 1 && atmosphere.pitch_vertical,
         dials: dials.map(f32::to_bits),
     })
 }
