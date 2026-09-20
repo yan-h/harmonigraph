@@ -16,6 +16,22 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 /// mantissa is a thousandth of a cell.
 const TILE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+/// Fixed cloud sampling: native on 1x/2x displays, with a 40-cell repeat.
+/// Forty closes every hashed lattice and makes repetition less frequent than
+/// twenty at the same steady-frame cost. Tests retain the live walk as a
+/// reference through a callback-resource override, never persisted settings.
+#[derive(Clone, Copy)]
+pub(super) struct CloudSampling {
+    pub tile_cells: u32,
+    pub pixel_points: f32,
+}
+
+impl Default for CloudSampling {
+    fn default() -> Self {
+        Self { tile_cells: 40, pixel_points: 0.5 }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct SpectrogramAtmosphere {
     pub settings: harmonigraph_scene::SpectralAtmosphere,
@@ -122,8 +138,8 @@ pub(super) fn retained_size(
 /// How big the cloud's scalar tone target is, or `None` where the layer is
 /// drawn natively under every pixel of the composite.
 ///
-/// Native is both the no-cloud case and every `Cloud pixel size` at or under one
-/// DEVICE pixel — the fresh half point on a Retina pane and on a plain one —
+/// Native is both the no-cloud case and sample spacing at or under one
+/// DEVICE pixel — the fixed half point on a Retina pane and on a plain one —
 /// where a reduced target would be the pane's own resolution or larger and the
 /// extra pass would buy nothing. Above that each axis is divided by the same
 /// number of pixels per sample, so the walk's cost falls with its square.
@@ -131,9 +147,10 @@ pub(super) fn tone_size(
     pixels: [u32; 2],
     ppp: f32,
     atmosphere: SpectrogramAtmosphere,
+    pixel_points: f32,
 ) -> Option<[u32; 2]> {
     let settings = atmosphere.settings.sanitized();
-    let pixel = settings.cloud_pixel * ppp;
+    let pixel = pixel_points * ppp;
     if !settings.effects().cloud || pixel <= 1.0 {
         return None;
     }
@@ -157,7 +174,7 @@ const WASH_CELLS: f32 = 5.25;
 /// a 256-texel grain crosses a boundary a handful of times across a whole
 /// window. The ceiling is memory — two `Rgba16Float` targets, so 2048 is 67 MB —
 /// and past it the tile is simply coarser than the pane, which is the same
-/// trade `Cloud pixel size` makes on purpose.
+/// trade as reducing the tone target.
 const TILE_STEP: u32 = 256;
 const TILE_MAX: u32 = 2048;
 
@@ -187,7 +204,7 @@ const TILE_MAX: u32 = 2048;
 pub(super) struct TileKey {
     /// 0 for the mosaic, 1 for the wash — the same word the uniform carries.
     style: u32,
-    /// The period in cells, which is `Cloud tile` itself.
+    /// The period in cells; production always uses forty.
     period: u32,
     /// One side of the square tile, in texels.
     texels: u32,
@@ -215,9 +232,13 @@ impl TileKey {
 /// The tile this frame wants, or `None` where the cells are walked live.
 ///
 /// See [`TileKey`] for what is in it and what deliberately is not.
-pub(super) fn tile_key(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> Option<TileKey> {
+pub(super) fn tile_key(
+    pixels: [u32; 2],
+    atmosphere: SpectrogramAtmosphere,
+    period: u32,
+) -> Option<TileKey> {
     let settings = atmosphere.settings.sanitized();
-    if !settings.effects().cloud || settings.cloud_tile <= 0.0 {
+    if !settings.effects().cloud || period == 0 {
         return None;
     }
     let (style, cells, dials) = match settings.cloud_style {
@@ -233,13 +254,13 @@ pub(super) fn tile_key(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> O
     // [`TILE_STEP`], which is what keeps a resize off the bake. The 3-4-5
     // transform is a pure rotation, so unlike the former shear it has singular
     // value one and asks for no extra texels in any direction.
-    let wanted = settings.cloud_tile * (pixels[1] as f32 / CLOUD_UNITS / cells);
+    let wanted = period as f32 * (pixels[1] as f32 / CLOUD_UNITS / cells);
     let texels = ((wanted / TILE_STEP as f32).ceil().max(1.0) as u32)
         .saturating_mul(TILE_STEP)
         .min(TILE_MAX);
     Some(TileKey {
         style,
-        period: settings.cloud_tile as u32,
+        period,
         texels,
         wash_pitch_vertical: style == 1 && atmosphere.pitch_vertical,
         dials: dials.map(f32::to_bits),
@@ -585,8 +606,8 @@ pub(super) struct Targets {
 /// the previous set held.
 ///
 /// The three move independently — the light's size follows the musical radius,
-/// the tone's `Cloud pixel size`, the tile's `Cloud tile` and how many cells
-/// cross the pane — which is why `SpectrogramCallback::prepare` compares all
+/// the tone's follows pane pixels and display scale, and the tile's follows how
+/// many cloud cells cross the pane — which is why `SpectrogramCallback::prepare` compares all
 /// three before rebuilding, and why the tile alone is handed back in.
 pub(super) struct Allocation {
     pub size: [u32; 2],
@@ -987,7 +1008,6 @@ mod tests {
                 [1920, height],
                 SpectrogramAtmosphere {
                     settings: harmonigraph_scene::SpectralAtmosphere {
-                        cloud_tile,
                         wash_size,
                         cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
                         ..Default::default()
@@ -999,23 +1019,25 @@ mod tests {
                     points_per_slab: 0.0,
                     now: 0.0,
                 },
+                cloud_tile,
             )
             .map(|key| key.texels())
         };
         // A 1080-pixel pane draws 20.6 pixels to a glob cell at the fresh size.
         // Rotation is an isometry, so P20 wants 412 texels and rounds to 512.
-        assert_eq!(at(20.0, 1.0, 1080), Some(2 * TILE_STEP));
-        assert_eq!(at(40.0, 1.0, 1080), Some(4 * TILE_STEP));
+        assert_eq!(at(20, 1.0, 1080), Some(2 * TILE_STEP));
+        let period = super::CloudSampling::default().tile_cells;
+        assert_eq!(period, 40);
+        assert_eq!(at(period, 1.0, 1080), Some(4 * TILE_STEP));
         // A pane resized by a tenth stays on the same step.
-        assert_eq!(at(20.0, 1.0, 1188), at(20.0, 1.0, 1080));
+        assert_eq!(at(20, 1.0, 1188), at(20, 1.0, 1080));
         // Fine cells want few texels, and the floor is one step.
-        assert_eq!(at(20.0, harmonigraph_scene::CLOUD_SIZE_MIN, 1080), Some(TILE_STEP));
+        assert_eq!(at(20, harmonigraph_scene::CLOUD_SIZE_MIN, 1080), Some(TILE_STEP));
         // Coarse cells on a tall pane run past the ceiling, where the tile is
-        // simply coarser than the pane — the same trade `Cloud pixel size`
-        // makes on purpose.
-        assert_eq!(at(40.0, harmonigraph_scene::CLOUD_SIZE_MAX, 4320), Some(TILE_MAX));
-        // The dial's own zero is the live walk: nothing allocated at all.
-        assert_eq!(at(0.0, 1.0, 1080), None);
+        // simply coarser than the pane.
+        assert_eq!(at(40, harmonigraph_scene::CLOUD_SIZE_MAX, 4320), Some(TILE_MAX));
+        // The test-only zero period is the live reference: nothing allocated.
+        assert_eq!(at(0, 1.0, 1080), None);
     }
 
     /// A reduced tone target exists only where it would be SMALLER than the
@@ -1028,7 +1050,6 @@ mod tests {
                 ppp,
                 SpectrogramAtmosphere {
                     settings: harmonigraph_scene::SpectralAtmosphere {
-                        cloud_pixel,
                         cloud_depth,
                         ..Default::default()
                     },
@@ -1039,24 +1060,25 @@ mod tests {
                     points_per_slab: 0.0,
                     now: 0.0,
                 },
+                cloud_pixel,
             )
         };
         // The fresh half point is one device pixel on a Retina pane and half of
         // one on a plain pane: native on both, which is what keeps the default
         // picture the full-resolution one.
-        assert_eq!(at(0.5, 1.0, 2.0), None);
-        assert_eq!(at(0.5, 1.0, 1.0), None);
+        let pixel = super::CloudSampling::default().pixel_points;
+        assert_eq!(pixel, 0.5);
+        assert_eq!(at(pixel, 1.0, 2.0), None);
+        assert_eq!(at(pixel, 1.0, 1.0), None);
+        assert_eq!(at(pixel, 1.0, 4.0), Some([960, 541]));
         // One point is native at 1x and halves each axis at 2x — a quarter of
         // the walk — and the odd axis rounds UP so the target still covers the
         // pane.
         assert_eq!(at(1.0, 1.0, 1.0), None);
         assert_eq!(at(1.0, 1.0, 2.0), Some([960, 541]));
         assert_eq!(at(4.0, 1.0, 2.0), Some([240, 136]));
-        // No cloud, nothing to reduce, however the dial stands.
+        // No cloud, nothing to reduce, whatever the sample spacing.
         assert_eq!(at(4.0, 0.0, 2.0), None);
-        // Past the bar's top the clamp holds, so the dial cannot ask for a
-        // target of no texels at all.
-        assert_eq!(at(1.0e6, 1.0, 2.0), at(4.0, 1.0, 2.0));
     }
 
     /// `Blur time step` bounds the light field's TIME axis by the run's slab

@@ -69,35 +69,6 @@ pub const CLOUD_SIZE_MIN: f32 = 0.0625;
 /// See [`CLOUD_SIZE_MIN`].
 pub const CLOUD_SIZE_MAX: f32 = 2.0;
 
-/// The band [`SpectralAtmosphere::cloud_pixel`] runs over, in egui points per
-/// cloud sample — and exported for the same reason [`CLOUD_SIZE_MIN`] is: the
-/// bar and the load-door clamp have to stop at one pair of numbers.
-///
-/// The FLOOR is where the layer is native on the display this is drawn on. At 2
-/// pixels per point a sample every half point is a sample every pixel, so 0.5
-/// is already the whole texture and anything under it would only ask for a
-/// target larger than the pane. The CEILING is a sixteenth of that resolution,
-/// which on a 2160-pixel pane is a cloud 270 samples tall — past the point
-/// where a rim is a rim, and there is nothing to buy beyond it.
-pub const CLOUD_PIXEL_MIN: f32 = 0.5;
-/// See [`CLOUD_PIXEL_MIN`].
-pub const CLOUD_PIXEL_MAX: f32 = 4.0;
-
-/// The top of [`SpectralAtmosphere::cloud_tile`] and the step it lands on, so
-/// the bar offers OFF and two periods and nothing between them.
-///
-/// **A period is not a free number.** Both textures hash on more than one
-/// lattice — a second octave at a lacunarity of 2.1, and for the wash two shared
-/// noises at 0.9 and 2.8 cells — and a tile only closes when every one of those
-/// products is a whole number of ITS own cells. That makes the multiples of ten
-/// the candidates, which `the_tile_period_tiles_every_lattice` holds against the
-/// shipped shader text. Twenty and forty are the two worth comparing: below
-/// twenty a 4K pane repeats the same globs five times across, and above forty
-/// the tile stops fitting in the texels the renderer will spend on it.
-pub const CLOUD_TILE_MAX: f32 = 40.0;
-/// See [`CLOUD_TILE_MAX`].
-pub const CLOUD_TILE_STEP: f32 = 20.0;
-
 /// The top of [`SpectralAtmosphere::blur_time_step`], in slabs per texel.
 ///
 /// One texel per two slabs is where the resample has already halved the data
@@ -107,8 +78,8 @@ pub const CLOUD_TILE_STEP: f32 = 20.0;
 /// half of the bar removes a fifth of the texels where the first removed three
 /// fifths. Past it the dial would be spending picture for very little.
 ///
-/// Snapped to halves the way [`SpectralAtmosphere::cloud_pixel`] is, so the bar
-/// offers OFF and four resolutions to compare rather than a continuum — what
+/// Snapped to halves, so the bar offers OFF and four resolutions to compare
+/// rather than a continuum — what
 /// was being judged was whether a resample along time reads at all, not where
 /// between two of them it starts to. It does: step one is the default.
 pub const BLUR_TIME_STEP_MAX: f32 = 2.0;
@@ -245,54 +216,6 @@ pub struct SpectralAtmosphere {
     /// `scale_size`/`wash_size` for the texture's size and of this one for its
     /// travel.
     pub cloud_speed: f32,
-    /// How big one sample of the cloud's TONE is, in egui points: the layer's
-    /// resolution, and the one dial here that is about cost rather than about
-    /// the look.
-    ///
-    /// Both textures are per-pixel cell walks — eighteen domes or fifty globs
-    /// under every pixel — and nothing either walk computes depends on the
-    /// sound, so the scalar tone can be drawn once per sample this big and the
-    /// full-resolution composite can look the palette up from it. The cost
-    /// therefore falls with the SQUARE of this: 1 pt is a quarter of the walk, 2
-    /// pt a sixteenth. What is reduced is the tone alone — the base picture, its
-    /// terraces and the palette stay at full resolution under it.
-    ///
-    /// **POINTS and not device pixels**, so an exported frame and the editor
-    /// draw the same picture whatever the pixels-per-point is. The layer is
-    /// drawn NATIVELY whenever `cloud_pixel * pixels_per_point <= 1`, which is
-    /// what the fresh 0.5 is on a 2x display and on a 1x one: nothing is
-    /// allocated and no pass is encoded until the dial is turned up.
-    ///
-    /// What it spends is the texture's own fineness: a rim softens by about one
-    /// sample and detail below one sample is gone. Runs over
-    /// [`CLOUD_PIXEL_MIN`]..=[`CLOUD_PIXEL_MAX`], snapped to halves the way
-    /// [`Self::contours`] is snapped to whole numbers.
-    pub cloud_pixel: f32,
-    /// How many cells the cloud's walk repeats over, 0 for the live walk. The
-    /// second dial here that is about cost rather than about the look, and the
-    /// one that spends REPETITION for it.
-    ///
-    /// Neither walk reads the sound and neither reads the clock: the drift
-    /// enters both as a plain translation of the cell coordinate, so what the
-    /// walk draws is a fixed field that slides. Wrap every cell hash on a
-    /// repeating lattice and one period — baked once, read through a repeating
-    /// sampler — is the whole plane. Watercolor's complete baked field is
-    /// turned by the exact 3-4-5 rotation, 36.87 degrees, so at `P = 40` the
-    /// same cloud geometry does not return to one pitch row for 200 cells.
-    /// Mosaic keeps its original square axes because turning the scale pile
-    /// changes that look; it repeats every `P` cells along either pane axis.
-    /// What is left per pixel is the displaced levels and the palette, about
-    /// a tenth of the layer's cost.
-    ///
-    /// What it spends is that the texture REPEATS: at 20 a 4K pane carries about
-    /// two and a half periods of the wash across and four and a half down, its
-    /// two recurrence directions diagonal to the pane axes and each copy
-    /// refracting different sound. Mosaic repeats on the pane axes. Whether the
-    /// eye finds that is why this is a dial and not a decision, and why it runs over
-    /// 0..=[`CLOUD_TILE_MAX`] in steps of [`CLOUD_TILE_STEP`] rather than over a
-    /// continuum — the question is whether a repeat reads at all, not where
-    /// between two periods it stops reading.
-    pub cloud_tile: f32,
     /// Size of one scale, as a multiplier on that size: how many of them cross
     /// a cloud moves the other way, because the count is divided by this.
     /// Runs over [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`].
@@ -384,12 +307,6 @@ impl Default for SpectralAtmosphere {
             note_glow: 0.5,
             cloud_depth: 1.0,
             cloud_speed: 1.0,
-            // Native on a Retina display and on a plain one, so the fresh
-            // picture is the full-resolution one it always was.
-            cloud_pixel: 0.5,
-            // The live walk, so the fresh picture is the one the cells draw
-            // under every pixel and nothing repeats.
-            cloud_tile: 0.0,
             // 1.0x now draws what `cloud_scale` 0.5 against `scale_size` 2.2
             // drew, because `SCALE_CELLS` carries the retired dial's default.
             scale_size: 1.0,
@@ -447,22 +364,6 @@ impl SpectralAtmosphere {
         self.cloud_depth = clamp(self.cloud_depth, fresh.cloud_depth, 0.0, 1.0);
         self.cloud_speed =
             clamp(self.cloud_speed, fresh.cloud_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
-        // Snapped to halves, so the dial is a handful of RESOLUTIONS to compare
-        // rather than a continuum: 0.5 native, 1 a quarter of the work, 1.5,
-        // 2 a sixteenth, and so on to 4. Half a point is also the finest step
-        // that means anything on a 2x display, where it is one device pixel.
-        self.cloud_pixel =
-            (clamp(self.cloud_pixel, fresh.cloud_pixel, CLOUD_PIXEL_MIN, CLOUD_PIXEL_MAX) * 2.0)
-                .round()
-                / 2.0;
-        // Three settings and nothing between them, for the reason
-        // [`CLOUD_TILE_MAX`] gives: a period between two of these does not tile
-        // at all, so a free drag would draw a seam on the cell grid rather than
-        // a coarser repeat.
-        self.cloud_tile = (clamp(self.cloud_tile, fresh.cloud_tile, 0.0, CLOUD_TILE_MAX)
-            / CLOUD_TILE_STEP)
-            .round()
-            * CLOUD_TILE_STEP;
         self.scale_size = clamp(self.scale_size, fresh.scale_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
         self.scale_refract =
