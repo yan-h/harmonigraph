@@ -11,7 +11,7 @@ use crate::{create_vertex_buffer, wgpu};
 pub(super) const SOURCE: &str = include_str!("../shaders/spectral_atmosphere.wgsl");
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 /// The tile's own format. Four channels because the mosaic's walk produces two
-/// vectors and the wash's produces seven numbers over two targets; half floats
+/// vectors and the wash's produces five numbers over two targets; half floats
 /// because what is stored is a cell offset of order one, where the eleven-bit
 /// mantissa is a thousandth of a cell.
 const TILE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -168,10 +168,9 @@ const TILE_MAX: u32 = 2048;
 /// picture; anything carried here that decides nothing rebakes a full cell walk
 /// at the rate of whatever it should not be watching. So the key is the STYLE,
 /// the period, the texel size, the wash's pane orientation, and the dials the
-/// WALK reads — `Variety` for the mosaic; `Lobe shape`, `Fuzz` and `Edge
-/// pooling` for the wash, which are the warp, the feather/bleed/tide widths and
-/// the tide's own strength. Orientation decides the rotated wash basis; the
-/// unrotated mosaic neither bakes nor reads it.
+/// WALK reads — `Variety` for the mosaic; `Lobe shape` and `Fuzz` for the
+/// wash, which are the warp and the feather/bleed widths. Orientation decides
+/// the rotated wash basis; the unrotated mosaic neither bakes nor reads it.
 ///
 /// Not the DRIFT and not the clock. The walk's output is a fixed field that the
 /// drift slides over — `drift` enters both styles only as a translation of the
@@ -179,7 +178,7 @@ const TILE_MAX: u32 = 2048;
 /// and a tile is never rebaked because time passed.
 ///
 /// Not the light, the palette, the softness or `Cloud depth`: none of them
-/// reaches the walk at all. Not `Refraction`, `Relief` or `Layers`, which are
+/// reaches the walk at all. Not `Refraction` or `Layers`, which are
 /// read AFTER the tile, out of channels it already holds. Not `Scale size` or
 /// `Glob size`, which decide how many cells cross the pane rather than what a
 /// cell draws, and not the pane's pixels: both reach this only through
@@ -198,7 +197,7 @@ pub(super) struct TileKey {
     /// The walk's own dials as bits, so this compares by value. Sanitized, so
     /// there is no NaN here to compare unequal to itself. The mosaic reads one
     /// and leaves the rest at zero.
-    dials: [u32; 3],
+    dials: [u32; 2],
 }
 
 impl TileKey {
@@ -223,13 +222,11 @@ pub(super) fn tile_key(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> O
     }
     let (style, cells, dials) = match settings.cloud_style {
         harmonigraph_scene::CloudStyle::Mosaic => {
-            (0, SCALE_CELLS / settings.scale_size, [settings.scale_variety, 0.0, 0.0])
+            (0, SCALE_CELLS / settings.scale_size, [settings.scale_variety, 0.0])
         }
-        harmonigraph_scene::CloudStyle::Watercolor => (
-            1,
-            WASH_CELLS / settings.wash_size,
-            [settings.wash_lobe, settings.wash_fuzz, settings.wash_pool],
-        ),
+        harmonigraph_scene::CloudStyle::Watercolor => {
+            (1, WASH_CELLS / settings.wash_size, [settings.wash_lobe, settings.wash_fuzz])
+        }
     };
     // As fine as the pane itself draws a cell, so a tiled picture is the walk
     // resampled rather than a coarser one — and then rounded UP to a whole
@@ -274,7 +271,6 @@ struct Uniforms {
     scale_size: f32,
     scale_variety: f32,
     scale_refract: f32,
-    scale_relief: f32,
     /// 0 for the refracting scales, 1 for the watercolour wash. The wash reads
     /// none of the `scale_` settings and the scales read none of the `wash_`
     /// ones; both share what sits above them.
@@ -283,13 +279,12 @@ struct Uniforms {
     wash_fuzz: f32,
     wash_lobe: f32,
     wash_refract: f32,
-    wash_pool: f32,
     wash_layers: f32,
     /// The tile's period in cells, 0 for the live walk. See [`TileKey`].
     tile_cells: u32,
-    /// 1 when pitch is vertical, 0 when it is horizontal. This occupies the
-    /// uniform's former tail word, so the buffer shape does not change.
+    /// 1 when pitch is vertical, 0 when it is horizontal.
     pitch_vertical: u32,
+    _pad: [u32; 2],
 }
 
 /// The `Cloud` struct's size in the uniform address space, which WGSL rounds up
@@ -301,8 +296,8 @@ struct Uniforms {
 /// validation error on the first clouded frame.
 ///
 /// Retiring `Ragged` once left the members four bytes short of 112 and needed an
-/// explicit tail. `pitch_vertical` now occupies that word, but adding or
-/// dropping a field can move the edge again and this is what catches it.
+/// explicit tail. Retiring the tone controls leaves two tail words now;
+/// adding or dropping a field can move the edge again and this catches it.
 const _: () = assert!(
     std::mem::size_of::<Uniforms>().is_multiple_of(16),
     "the cloud uniform is not a whole number of 16-byte rows, so the shader's rounded-up \
@@ -559,18 +554,11 @@ pub(super) struct Targets {
     pub size: [u32; 2],
     pub source_view: wgpu::TextureView,
     pub coverage_vertices: wgpu::Buffer,
-    /// The tone pass's own quad: the WHOLE pane, where [`Self::coverage_vertices`]
-    /// is the atmosphere's region.
-    ///
-    /// The two differ on purpose. The light and the backdrop stop at the
-    /// analyzer divider because that is where the spectrogram's bed stops. The
-    /// tone target does not get to: it is sized from the whole pane and the
-    /// composite reads it at `pt / cloud.size` over that same whole pane, so a
-    /// texel the region quad never covers stays at the cleared zero and a
-    /// `Linear` tap on the region's inside edge blends up to half of it in —
-    /// drawing the gradient's floor as a dark seam along the divider. Writing
-    /// the tone everywhere its addressing can reach is what keeps the reduced
-    /// path a resampling of the walk rather than a different picture at its rim.
+    /// The whole-pane quad for the material and reduced-tone passes.
+    /// Final painting uses `coverage_vertices`, the atmosphere's region.
+    /// Both sampled fields must be filled beyond that region: a displaced or
+    /// bilinear read at the divider otherwise blends with a cleared texel and
+    /// draws a dark seam. The original data mesh still bounds measured sound.
     pub tone_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 3],
     /// The reduced tone target and its size, `None` where the cloud is drawn
@@ -849,7 +837,7 @@ impl Targets {
             SpectrogramVertex { pos: corners[i].into(), slab: fraction.x, t: fraction.y }
         });
         queue.write_buffer(&self.coverage_vertices, 0, bytemuck::cast_slice(&vertices));
-        // The same quad over the whole pane, for the tone pass alone — see
+        // The same quad over the whole pane, for the material and tone passes — see
         // `tone_vertices`. Built here rather than once at allocation because
         // `rect` is what moves, and this is where it arrives.
         let pane = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()];
@@ -895,11 +883,10 @@ impl Targets {
             contour_strength: settings.contour_strength,
             tone_baked: u32::from(self.tone.is_some()),
             drift,
-            cloud_depth: settings.cloud_depth,
+            cloud_depth: if settings.effects().cloud { settings.cloud_depth } else { 0.0 },
             scale_size: settings.scale_size,
             scale_variety: settings.scale_variety,
             scale_refract: settings.scale_refract,
-            scale_relief: settings.scale_relief,
             cloud_style: match settings.cloud_style {
                 harmonigraph_scene::CloudStyle::Mosaic => 0,
                 harmonigraph_scene::CloudStyle::Watercolor => 1,
@@ -908,12 +895,12 @@ impl Targets {
             wash_fuzz: settings.wash_fuzz,
             wash_lobe: settings.wash_lobe,
             wash_refract: settings.wash_refract,
-            wash_pool: settings.wash_pool,
             wash_layers: settings.wash_layers,
             // Zero where no tile was allocated, which is the live walk — so the
             // shader never reads a tile that is not there.
             tile_cells: tile.map_or(0, TileKey::period),
             pitch_vertical: u32::from(pitch_vertical),
+            _pad: [0; 2],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }

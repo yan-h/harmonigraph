@@ -6,14 +6,13 @@ use harmonigraph_core::LatticePos;
 /// Which texture the atmosphere layer draws over the spectrogram.
 ///
 /// Two constructions, not two presets of one: [`CloudStyle::Mosaic`] is a pile
-/// of soft domes joined by a soft union and lit by a leaning sun, and
-/// [`CloudStyle::Watercolor`] is a field of translucent globs whose tone is
-/// paper minus pigment and which has no light in it at all. They share the
-/// blurred light field, the palette and the drift clock, and nothing else.
+/// of soft domes joined by a soft union, and [`CloudStyle::Watercolor`] is a
+/// field of overlapping globs. Both displace the same scalar picture without
+/// altering its levels, then apply the shared Contours and palette controls.
 ///
 /// **These name what Yan sees on the page, and the code under each keeps the
 /// name of its own CONSTRUCTION** — `scale_*` and `dome_*` for the mosaic's
-/// lit relief, `wash_*` for the watercolour's laid-over globs. That split is
+/// dome geometry, `wash_*` for the watercolour's laid-over globs. That split is
 /// not new and is not an oversight: the variant was `Water` over `scale_*`
 /// fields before it was `Mosaic` over them. A menu entry names a look and may
 /// be renamed whenever the look is better described; a field names the thing
@@ -237,8 +236,8 @@ pub struct SpectralAtmosphere {
     pub contour_softness: f32,
     pub analyzer_softness: f32,
     pub note_glow: f32,
-    /// The cloud texture: how much of the picture it takes over where it is
-    /// thick, 0 for no cloud at all.
+    /// Blend from original to displaced levels before Contours and the palette.
+    /// Zero disables the texture; zero refraction is also exactly neutral.
     pub cloud_depth: f32,
     /// Drift speed, as a multiplier on a slow crossing like the lattice
     /// nebula's. The cloud FRAME it drifts in is fixed in the shader
@@ -282,7 +281,7 @@ pub struct SpectralAtmosphere {
     /// same cloud geometry does not return to one pitch row for 200 cells.
     /// Mosaic keeps its original square axes because turning the scale pile
     /// changes that look; it repeats every `P` cells along either pane axis.
-    /// What is left per pixel is the light, the palette and the shading, about
+    /// What is left per pixel is the displaced levels and the palette, about
     /// a tenth of the layer's cost.
     ///
     /// What it spends is that the texture REPEATS: at 20 a 4K pane carries about
@@ -315,12 +314,6 @@ pub struct SpectralAtmosphere {
     /// having lie on this line through it, which is also exactly what the
     /// watercolour's `wash_refract` has always meant by the word.
     pub scale_refract: f32,
-    /// How domed the scales are, which is what gives them faces to catch the
-    /// light with. 0 is a smooth body with no scales in it at all. It also sets
-    /// how dark a face turned away from the sun may get, which used to be its
-    /// own `shade_floor` dial: the floor falls as the relief rises, since a
-    /// floor decides nothing where there is no tilt to shade.
-    pub scale_relief: f32,
     /// Which texture the layer draws. `Mosaic` is the refracting scale clouds
     /// above; `Watercolor` is the glob field below, and every `wash_` setting
     /// belongs to it alone.
@@ -331,8 +324,7 @@ pub struct SpectralAtmosphere {
     /// [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`] band.
     pub wash_size: f32,
     /// One dial over everything that dissolves a glob's rim: how far it feathers
-    /// into what lies beneath, how far it bleeds into what is about to cover it,
-    /// and — falling as those rise — how much of the tide line is left.
+    /// into what lies beneath and how far it bleeds into what is about to cover it.
     pub wash_fuzz: f32,
     /// How far the shared domain warp carries glob space off the grid: 0 is
     /// bubbles, the top of the dial is shearing lobes.
@@ -340,8 +332,6 @@ pub struct SpectralAtmosphere {
     /// How far each glob's tone is pulled to the light at its own centre. 0
     /// leaves the picture exactly where it is.
     pub wash_refract: f32,
-    /// How dark the pigment pools along the edge a later glob lays over this one.
-    pub wash_pool: f32,
     /// How opaque the finer octave's wash is over the coarse one. 0 draws the
     /// coarse octave alone and skips the finer one's work.
     pub wash_layers: f32,
@@ -405,7 +395,6 @@ impl Default for SpectralAtmosphere {
             scale_size: 1.0,
             scale_variety: 0.5,
             scale_refract: 0.30,
-            scale_relief: 0.35,
             cloud_style: CloudStyle::Mosaic,
             // J2 "dissolved" from the prototype's sheet J, translated: globs
             // about two harmonic lines across and the rim fully dissolved. Its
@@ -415,7 +404,6 @@ impl Default for SpectralAtmosphere {
             wash_fuzz: 1.0,
             wash_lobe: 0.55,
             wash_refract: 0.85,
-            wash_pool: 0.5,
             wash_layers: 0.5,
         }
     }
@@ -479,12 +467,10 @@ impl SpectralAtmosphere {
         self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
         self.scale_refract =
             clamp(self.scale_refract, fresh.scale_refract, SCALE_REFRACT_MIN, SCALE_REFRACT_MAX);
-        self.scale_relief = clamp(self.scale_relief, fresh.scale_relief, 0.0, 1.0);
         self.wash_size = clamp(self.wash_size, fresh.wash_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.wash_fuzz = clamp(self.wash_fuzz, fresh.wash_fuzz, 0.0, 1.0);
         self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);
         self.wash_refract = clamp(self.wash_refract, fresh.wash_refract, 0.0, 1.0);
-        self.wash_pool = clamp(self.wash_pool, fresh.wash_pool, 0.0, 1.0);
         self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
         self
     }
@@ -496,7 +482,13 @@ impl SpectralAtmosphere {
         SpectralEffects {
             soft: self.pitch_softness > 0.0 || self.time_softness > 0.0,
             contours: self.contour_strength > 0.0,
-            cloud: self.cloud_depth > 0.0,
+            // Zero refraction takes the ordinary picture path, including its
+            // exact palette lookup, and spends nothing building a texture.
+            cloud: self.cloud_depth > 0.0
+                && match self.cloud_style {
+                    CloudStyle::Mosaic => self.scale_refract != 0.0,
+                    CloudStyle::Watercolor => self.wash_refract != 0.0,
+                },
         }
     }
 }
