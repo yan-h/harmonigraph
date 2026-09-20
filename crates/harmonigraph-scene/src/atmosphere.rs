@@ -194,6 +194,17 @@ pub struct SpectralAtmosphere {
     /// zoom-out it already carries a couple of buckets to the pixel and is
     /// data-limited rather than pane-limited. Runs over
     /// 0..=[`BLUR_TIME_STEP_MAX`], snapped to halves.
+    ///
+    /// **Not yet measured, and owed before any step becomes the default:** the
+    /// source's texels are fixed to the PANE while the slabs scroll under them,
+    /// so the softening is not constant in time. By hand, a transient one slab
+    /// wide peaks at 0.75 of its level when a texel is centred on it and 0.5
+    /// when it straddles two, once per slab scrolled (about 1 Hz at a 600 s
+    /// Span); at a step of a half that is 0.75 to 0.875, and with the dial off
+    /// the pane's own pixels already give about 0.8 to 1. Every picture made
+    /// of this dial so far is a still frame. Laying the source out in SLAB
+    /// space on this axis, so a texel is always centred on a slab, removes the
+    /// pulse and the softening together.
     pub blur_time_step: f32,
     /// How far the levels are gathered into terraces, 0 for none. What the
     /// `Lava` style used to switch on whole.
