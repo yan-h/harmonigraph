@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -48,7 +48,6 @@ impl EditorShared {
         consumer: harmonigraph_record::publication::Consumer,
         audio_consumer: crate::audio_ingress::Consumer,
         sample_rate_bits: Arc<AtomicU32>,
-        processing_realtime: Arc<AtomicBool>,
         take: harmonigraph_record::Control,
     ) -> Self {
         EditorShared {
@@ -56,7 +55,6 @@ impl EditorShared {
                 consumer,
                 audio_consumer,
                 sample_rate_bits,
-                processing_realtime,
                 start: Instant::now(),
                 clock: ClockMapper::new(),
                 audio_position: None,
@@ -244,7 +242,6 @@ mod tests {
             consumer,
             audio_consumer,
             Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            Arc::new(super::AtomicBool::new(true)),
             control,
         );
         shared.ui.picture.appearance.render.trigger =
@@ -299,7 +296,6 @@ mod tests {
             consumer,
             audio_consumer,
             Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            Arc::new(super::AtomicBool::new(true)),
             control,
         );
         shared.ui.picture.appearance.camera.yaw = 1.23;

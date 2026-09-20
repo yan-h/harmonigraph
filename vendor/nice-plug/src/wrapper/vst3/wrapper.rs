@@ -909,6 +909,14 @@ impl<P: Vst3Plugin> IAudioProcessorTrait for Wrapper<P> {
         let setup = unsafe { &*setup };
         crate::nice_debug_assert_eq!(setup.symbolicSampleSize, K_SYMBOLIC_SAMPLE_SIZE_32);
 
+        // This is needed when activating the plugin and when restoring state
+        self.inner.current_buffer_config.store(Some(BufferConfig {
+            sample_rate: setup.sampleRate as f32,
+            min_buffer_size: None,
+            max_buffer_size: setup.maxSamplesPerBlock as u32,
+            process_mode: self.inner.current_process_mode.load(),
+        }));
+
         #[allow(clippy::unnecessary_cast)]
         const K_REALTIME: i32 = ProcessModes_::kRealtime as i32;
         #[allow(clippy::unnecessary_cast)]
@@ -929,16 +937,6 @@ impl<P: Vst3Plugin> IAudioProcessorTrait for Wrapper<P> {
             }
         };
         self.inner.current_process_mode.store(mode);
-        // This is needed when activating the plugin and when restoring state.
-        // Carry the mode from THIS setup call: reading `current_process_mode`
-        // before the store above hands `Plugin::initialize` the previous mode,
-        // precisely when the host is switching into or out of offline render.
-        self.inner.current_buffer_config.store(Some(BufferConfig {
-            sample_rate: setup.sampleRate as f32,
-            min_buffer_size: None,
-            max_buffer_size: setup.maxSamplesPerBlock as u32,
-            process_mode: mode,
-        }));
 
         // Initializing the plugin happens in `IAudioProcessor::set_active()` because the host may
         // still change the channel layouts at this point

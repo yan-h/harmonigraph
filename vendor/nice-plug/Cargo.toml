@@ -91,11 +91,6 @@ name = "vst3_auxiliary"
 path = "tests/vst3_auxiliary.rs"
 required-features = ["vst3"]
 
-[[test]]
-name = "vst3_process_mode"
-path = "tests/vst3_process_mode.rs"
-required-features = ["vst3"]
-
 [dependencies.anyhow]
 version = "1.0"
 

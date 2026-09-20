@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -11,9 +11,6 @@ pub(crate) struct LiveInput {
     pub(super) audio_consumer: crate::audio_ingress::Consumer,
     /// Latest rate is for recording controls, never for interpreting queued audio.
     pub(super) sample_rate_bits: Arc<AtomicU32>,
-    /// Host processing mode, shared from `Plugin::initialize`: fixed-rate
-    /// realtime is wall-paced; buffered and offline processing are source-owned.
-    pub(super) processing_realtime: Arc<AtomicBool>,
     /// Expected next source frame and epoch; gaps restart the streaming analyzer.
     pub(super) audio_position: Option<(u64, u64)>,
     /// Presentation seconds of the retained run’s frame zero, before mapping.
@@ -51,9 +48,8 @@ impl LiveInput {
         runtime: &mut harmonigraph_ui::VisualRuntime,
         now: f64,
     ) -> bool {
-        let source_owned = !self.processing_realtime.load(Ordering::Relaxed);
         if let Some(observation) = self.consumer.clock() {
-            self.clock.observe(observation, now, source_owned);
+            self.clock.observe(observation, now);
         }
         let Some(offset) = self.clock.offset else { return false };
         let tracker = &mut runtime.tracker;
@@ -111,8 +107,7 @@ impl LiveInput {
         self.start.elapsed().as_secs_f64()
     }
     pub(crate) fn display_now(&mut self, wall_now: f64) -> f64 {
-        let source_owned = !self.processing_realtime.load(Ordering::Relaxed);
-        self.clock.now(wall_now, source_owned)
+        self.clock.now(wall_now)
     }
     /// Drain the sole note and audio streams into borrowed runtime storage.
     /// Both the open frame and closed scheduler use this ordering. Input feeding
@@ -145,10 +140,9 @@ mod tests {
             consumer,
             audio_consumer,
             Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            Arc::new(super::AtomicBool::new(true)),
             control,
         );
-        shared.input.clock.observe(0.0, 0.0, false);
+        shared.input.clock.observe(0.0, 0.0);
         (audio, shared)
     }
 
@@ -220,12 +214,10 @@ mod tests {
             let (mut audio, audio_consumer) =
                 crate::audio_ingress::channel(crate::AUDIO_RING_CAPACITY);
             let (_recorder, control) = harmonigraph_record::channel();
-            let realtime = Arc::new(super::AtomicBool::new(speed == 1.0));
             let mut shared = EditorShared::new(
                 consumer,
                 audio_consumer,
                 Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-                realtime,
                 control,
             );
             notes.observe_clock(0.0);
@@ -339,7 +331,6 @@ mod tests {
             consumer,
             audio_consumer,
             std::sync::Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            std::sync::Arc::new(super::AtomicBool::new(true)),
             take_control,
         );
         for (source, time) in [(1, 99.950), (2, 99.995)] {
@@ -553,7 +544,6 @@ mod tests {
             consumer,
             audio_consumer,
             std::sync::Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            std::sync::Arc::new(super::AtomicBool::new(true)),
             take_control,
         );
 
