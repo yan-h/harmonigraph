@@ -155,6 +155,20 @@ impl Writer {
 /// aac`; another encoder primes by its own amount (Apple's by 2112).
 const AAC_PRIMING_SECONDS: f64 = 1024.0 / 48_000.0;
 
+/// How far into the soundtrack the video's first frame falls: the `-ss`
+/// [`video_args`] seeks the audio input by, priming included. Negative means
+/// the soundtrack starts after the picture and is delayed instead of seeked.
+///
+/// Public because the caller has to answer a question this file cannot see:
+/// whether that seek lands inside the recording at all. Past its end ffmpeg
+/// reads NO samples, `-shortest` ends the file on the priming pad, and the
+/// mp4 comes out with a soundtrack and one frame of picture from a run that
+/// drew every frame and exited 0 (#1023). The seek is the number to compare,
+/// not `audio_offset` — the priming is part of what reaches past the end.
+pub fn soundtrack_seek(audio_offset: f64) -> f64 {
+    audio_offset + AAC_PRIMING_SECONDS
+}
+
 /// ffmpeg's own count of the frames it has encoded, read off its `-progress`
 /// report.
 ///
@@ -357,7 +371,7 @@ fn video_args(options: &VideoOptions, path: &std::path::Path) -> Vec<String> {
     // applies to; backward is real silence, because
     // `-itsoffset` delays by an edit list too — ignored, it put a render
     // that opens before the bounce 510 ms out of sync.
-    let shift = options.audio_offset + AAC_PRIMING_SECONDS;
+    let shift = soundtrack_seek(options.audio_offset);
     if let Some(audio) = options.audio {
         if shift > 0.0 {
             args.extend(["-ss".to_string(), format!("{shift:.6}")]);
