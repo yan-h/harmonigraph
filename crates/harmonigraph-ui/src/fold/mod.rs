@@ -1567,7 +1567,7 @@ fn rail_columns(tree: &Tree<Tab>, node: NodeIndex) -> i32 {
 ///
 /// Getting this wrong does not show up as a pane that fails to open; it shows
 /// up later, as a collapsed leaf drawn some multiple of a tab bar tall.
-fn uncollapse(tree: &mut Tree<Tab>, leaf: NodeIndex) {
+pub(crate) fn uncollapse(tree: &mut Tree<Tab>, leaf: NodeIndex) {
     tree[leaf].set_collapsed(false);
     let mut child = leaf;
     while let Some(parent) = child.parent() {

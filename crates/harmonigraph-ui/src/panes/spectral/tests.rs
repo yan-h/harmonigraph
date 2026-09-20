@@ -1786,25 +1786,14 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
         let axes = Axes::new(rect, &cfg);
         let mut nearest = f32::INFINITY;
         for shape in paint_tone(rect, cfg) {
-            // The spectrum's slabs, and nothing else on the pane: they are the
-            // only shapes drawn in a palette color at this opacity.
-            if let egui::Shape::LineSegment { points, stroke } = shape {
-                if stroke.color.a() != 210 {
-                    continue;
-                }
-                for point in points {
-                    let depth = (axes.depth_at(point) - edge).abs();
+            let egui::Shape::Mesh(mesh) = shape else { continue };
+            // The cloud material's body ends at the original measured
+            // contour, and that outermost stop's fill is the most opaque
+            // thing on the pane — distinct from every band of the halo.
+            for vertex in &mesh.vertices {
+                if vertex.color.a() == BODY_EDGE_ALPHA {
+                    let depth = (axes.depth_at(vertex.pos) - edge).abs();
                     nearest = nearest.min(depth * axes.depth_len());
-                }
-            } else if let egui::Shape::Mesh(mesh) = shape {
-                // The cloud material's body ends at the original measured
-                // contour, and that outermost stop's fill is the most opaque
-                // thing on the pane — distinct from every band of the halo.
-                for vertex in &mesh.vertices {
-                    if vertex.color.a() == BODY_EDGE_ALPHA {
-                        let depth = (axes.depth_at(vertex.pos) - edge).abs();
-                        nearest = nearest.min(depth * axes.depth_len());
-                    }
                 }
             }
         }
@@ -2719,10 +2708,6 @@ fn painted_rulings(rect: egui::Rect, mut cfg: SpectrumConfig) -> (Vec<PaintedRul
         let egui::Shape::LineSegment { points, stroke } = shape else { continue };
         if is_ruling(stroke.color) && rules_a_frequency(&axes, points) {
             rulings.push(PaintedRuling { index: i, points, strong: stroke.color == strong });
-        } else if stroke.color.a() == 210 {
-            // The spectrum's own slabs — the one thing on the pane drawn in a
-            // gradient color at that opacity.
-            slabs.push(i);
         }
     }
     (rulings, slabs)
@@ -2745,8 +2730,6 @@ fn painted_levels(rect: egui::Rect, mut cfg: SpectrumConfig) -> (Vec<PaintedRuli
         let egui::Shape::LineSegment { points, stroke } = shape else { continue };
         if is_ruling(stroke.color) && !rules_a_frequency(&axes, points) {
             levels.push(PaintedRuling { index: i, points, strong: stroke.color == strong });
-        } else if stroke.color.a() == 210 {
-            slabs.push(i);
         }
     }
     (levels, slabs)

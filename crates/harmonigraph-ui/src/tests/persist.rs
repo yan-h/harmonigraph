@@ -2,10 +2,16 @@
 //! floor under it, and what a blob costs when a key it carries — or one it is
 //! missing — is not the shape this build expects.
 
+use super::harness::collapsed;
 use super::probe::fresh;
 use crate::state::UI_PERSIST_VERSION;
 use crate::*;
 use harmonigraph_scene::{Camera, NoteNames};
+
+fn set_console_collapsed(state: &mut SharedState, collapsed: bool) {
+    let path = state.workspace.dock.find_tab(&panes::Tab::Console).expect("Console is docked");
+    state.workspace.dock[path.surface][path.node].set_collapsed(collapsed);
+}
 
 #[test]
 fn retired_spacing_preserves_appearance_and_workspace() {
@@ -719,6 +725,7 @@ fn corrupt_persist_is_ignored() {
     let default_distance = state.picture.appearance.camera.distance;
     assert!(!state.load_persist("not json at all"), "a corrupt blob is not applied");
     assert_eq!(state.picture.appearance.camera.distance, default_distance);
+    assert!(!collapsed(&state, panes::Tab::Console), "the explanation is visible");
 }
 
 /// A refused blob SAYS SO. Both refusals cost the whole document — dock,
@@ -749,6 +756,7 @@ fn a_refused_blob_says_why() {
         "the refusal was silent; console holds {:?}",
         restored.picture.runtime.console.lines().collect::<Vec<_>>(),
     );
+    assert!(!collapsed(&restored, panes::Tab::Console), "the parse refusal opens its report");
 
     // And the floor's own refusal, which is the other way a whole document
     // goes and must be just as loud.
@@ -763,11 +771,19 @@ fn a_refused_blob_says_why() {
         older.picture.runtime.console.lines().any(|line| line.contains("below the floor")),
         "the floor's refusal was silent",
     );
+    assert!(!collapsed(&older, panes::Tab::Console), "the version refusal opens its report");
     let unsupported = saved.replace("appearance:(version:1", "appearance:(version:0");
     assert_ne!(unsupported, saved);
+    set_console_collapsed(&mut restored, true);
     let before = restored.save_persist();
     assert!(!restored.load_persist(&unsupported));
-    assert_eq!(restored.save_persist(), before, "appearance refusal must apply no workspace state");
+    assert!(!collapsed(&restored, panes::Tab::Console), "appearance refusal opens its report");
+    set_console_collapsed(&mut restored, true);
+    assert_eq!(
+        restored.save_persist(),
+        before,
+        "appearance refusal must apply no workspace state beyond revealing Console",
+    );
     assert!(restored
         .picture
         .runtime
@@ -2130,7 +2146,13 @@ fn retired_playhead_refuses_the_entire_editor_and_appearance_document() {
     let mut restored = fresh();
     let before = restored.save_persist();
     assert!(!restored.load_persist(&dropped));
-    assert_eq!(restored.save_persist(), before, "no camera or workspace state is applied");
+    assert!(!collapsed(&restored, panes::Tab::Console), "the refusal opens its report");
+    set_console_collapsed(&mut restored, true);
+    assert_eq!(
+        restored.save_persist(),
+        before,
+        "no camera or workspace state beyond the visible report is applied",
+    );
     assert!(restored.picture.runtime.console.lines().any(|line| line.contains("did not parse")));
     let appearance = state.picture.appearance.serialize();
     let dropped = appearance.replace("spectrogram:Scrolling", "spectrogram:Playhead");
@@ -2160,7 +2182,13 @@ fn a_saved_dock_naming_the_retired_notes_tab_is_refused_whole() {
     let mut restored = fresh();
     let before = restored.save_persist();
     assert!(!restored.load_persist(&dropped), "a dock naming Notes is not applied");
-    assert_eq!(restored.save_persist(), before, "the camera and the layout go with it");
+    assert!(!collapsed(&restored, panes::Tab::Console), "the refusal opens its report");
+    set_console_collapsed(&mut restored, true);
+    assert_eq!(
+        restored.save_persist(),
+        before,
+        "the camera and the layout go with it apart from the visible report",
+    );
     assert!(
         restored.picture.runtime.console.lines().any(|line| line.contains("did not parse")),
         "the refusal was silent; console holds {:?}",

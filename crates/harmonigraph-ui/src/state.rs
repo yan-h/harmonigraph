@@ -614,9 +614,10 @@ impl SharedState {
         .unwrap_or_default()
     }
 
-    /// Restore the whole editor document. Refused input leaves the current state
-    /// intact and reports why on the console. Appearance normalization is shared
-    /// with recording/export; workspace restoration remains editor-only.
+    /// Restore the whole editor document. Refused input leaves the current
+    /// content intact, opens the Console so its explanation is visible, and
+    /// reports why there. Appearance normalization is shared with
+    /// recording/export; workspace restoration remains editor-only.
     pub fn load_persist(&mut self, serialized: &str) -> bool {
         let persist = match ron::from_str::<UiPersist>(serialized) {
             Ok(persist) => persist,
@@ -636,22 +637,19 @@ impl SharedState {
             // as data loss, and this is the difference between that and a
             // break someone chose.
             Err(err) => {
-                self.log(format!("persist ignored — the blob did not parse ({err})"));
-                return false;
+                return self.refuse_persist(format!("the blob did not parse ({err})"));
             }
         };
         if persist.version < UI_PERSIST_VERSION {
-            self.log(format!(
-                "persist ignored — version {} is below the floor of {UI_PERSIST_VERSION}",
+            return self.refuse_persist(format!(
+                "version {} is below the floor of {UI_PERSIST_VERSION}",
                 persist.version,
             ));
-            return false;
         }
         let appearance = match persist.appearance.normalize() {
             Ok(appearance) => appearance,
             Err(err) => {
-                self.log(format!("persist ignored — {err}"));
-                return false;
+                return self.refuse_persist(err);
             }
         };
         // The dock being installed is not the one the dial's points were
@@ -681,6 +679,20 @@ impl SharedState {
         // is a place the user can see it and drag it from.
         self.workspace.interaction.perf_pos = persist.perf_pos.filter(|pos| pos.is_finite());
         true
+    }
+
+    /// Reject a saved document loudly. The Console normally ships folded
+    /// because it is a diagnostic rather than a pane watched while playing;
+    /// refusal is the exceptional case where the diagnostic is the only thing
+    /// that explains why the editor opened on fresh state.
+    fn refuse_persist(&mut self, reason: String) -> bool {
+        self.log(format!("persist ignored — {reason}"));
+        if let Some(path) = self.workspace.dock.find_tab(&panes::Tab::Console) {
+            let (surface, node) = (path.surface, path.node);
+            let _ = self.workspace.dock.set_active_tab(path);
+            fold::uncollapse(&mut self.workspace.dock[surface], node);
+        }
+        false
     }
 }
 
@@ -759,7 +771,8 @@ fn default_ui_scale() -> f32 {
 pub(crate) const UI_PERSIST_VERSION: u32 = 7;
 
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
-/// failed deserialize reports refusal and leaves the current state intact.
+/// failed deserialize reports refusal and leaves the current content intact,
+/// apart from revealing the Console that carries the report.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct UiPersist {
     /// serde(default) reads a pre-versioning blob as version 0, which is below

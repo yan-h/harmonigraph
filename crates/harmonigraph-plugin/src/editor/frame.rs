@@ -270,8 +270,6 @@ pub(super) fn target_frame_interval(fps_cap: Option<f32>, display_max_fps: Optio
 pub(super) struct WindowState {
     pub(super) shared: Arc<Mutex<EditorShared>>,
     pub(super) params: Arc<HarmonigraphParams>,
-    /// The multiplier the "apply to all paired Tunes" button would send. It is
-    /// a draft in this menu, not anybody's saved value.
     /// The frame interval armed on THIS window's timer, so an unchanged
     /// cadence doesn't rebuild the run-loop timer every frame. `None` until
     /// the first frame arms one.
