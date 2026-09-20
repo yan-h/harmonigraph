@@ -10,11 +10,13 @@
 //! `PROBE_FRAMES` (default 60) and `PROBE_CASE` (a substring of a case's name)
 //! narrow it. `docs/spectrogram-cloud-performance.md` holds the readings.
 //!
-//! `PROBE_CLOUD_PIXEL` (points per cloud sample, default whatever
-//! `SpectralAtmosphere::default` says) applies to EVERY case, after its own
-//! `turn`, so one run reads the whole table at one cloud resolution and two runs
-//! are what the reduction is worth. It is a dial rather than a case because the
-//! question is how much each of the rows above falls, not how one of them does.
+//! `PROBE_CLOUD_PIXEL` (points per cloud sample) and `PROBE_CLOUD_TILE` (the
+//! walk's period in cells, 0 for the live walk), each defaulting to whatever
+//! `SpectralAtmosphere::default` says, apply to EVERY case after its own `turn`,
+//! so one run reads the whole table at one setting and two runs are what that
+//! setting is worth. They are dials rather than cases because the question is
+//! how much each of the rows above falls, not how one of them does — and they
+//! stack, which is the other thing two runs cannot show.
 
 use super::*;
 use harmonigraph_scene::{CloudStyle, SpectralAtmosphere};
@@ -37,7 +39,6 @@ const CASES: &[(&str, Option<Turn>)] = &[
     ("mosaic, defaults", Some(|_| {})),
     ("mosaic, no terraces", Some(|s| s.contour_strength = 0.0)),
     ("mosaic, variety 0", Some(|s| s.scale_variety = 0.0)),
-    ("mosaic, rock 1", Some(|s| s.scale_rock = 1.0)),
     ("mosaic, no blur", Some(|s| (s.pitch_softness, s.time_softness) = (0.0, 0.0))),
     ("watercolor, defaults", Some(watercolor)),
     ("watercolor, layers 0", Some(|s| (watercolor(s), s.wash_layers = 0.0).0)),
@@ -77,6 +78,8 @@ fn cloud_costs_by_style_and_dial() {
         std::env::var("PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
     let cloud_pixel: Option<f32> =
         std::env::var("PROBE_CLOUD_PIXEL").ok().and_then(|v| v.parse().ok());
+    let cloud_tile: Option<f32> =
+        std::env::var("PROBE_CLOUD_TILE").ok().and_then(|v| v.parse().ok());
     crate::shader_assets::initialize();
     let instance = wgpu::Instance::default();
     let Ok(adapter) =
@@ -204,9 +207,12 @@ fn cloud_costs_by_style_and_dial() {
                 let mut settings = SpectralAtmosphere::default();
                 turn(&mut settings);
                 // After the turn, so a case that dials the cloud cannot also
-                // decide its resolution behind this knob's back.
+                // decide its resolution or its period behind these knobs' back.
                 if let Some(cloud_pixel) = cloud_pixel {
                     settings.cloud_pixel = cloud_pixel;
+                }
+                if let Some(cloud_tile) = cloud_tile {
+                    settings.cloud_tile = cloud_tile;
                 }
                 SpectrogramAtmosphere {
                     settings,

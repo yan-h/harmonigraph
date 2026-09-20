@@ -4,9 +4,10 @@
 //! both of those are on the Colors page ([`super::super::color`]).
 
 use harmonigraph_scene::{
-    CLOUD_PIXEL_MAX, CLOUD_PIXEL_MIN, CLOUD_SPEED_MAX, CLOUD_SPEED_MIN, CONTOURS_MAX, CONTOURS_MIN,
-    CONTOUR_SOFTNESS_MAX, CONTOUR_SOFTNESS_MIN, PITCH_SOFTNESS_MAX, PITCH_SOFTNESS_MIN,
-    SCALE_REFRACT_MAX, SCALE_REFRACT_MIN, TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
+    CLOUD_PIXEL_MAX, CLOUD_PIXEL_MIN, CLOUD_SPEED_MAX, CLOUD_SPEED_MIN, CLOUD_TILE_MAX,
+    CLOUD_TILE_STEP, CONTOURS_MAX, CONTOURS_MIN, CONTOUR_SOFTNESS_MAX, CONTOUR_SOFTNESS_MIN,
+    PITCH_SOFTNESS_MAX, PITCH_SOFTNESS_MIN, SCALE_REFRACT_MAX, SCALE_REFRACT_MIN,
+    TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
 };
 
 use crate::config::BALLISTICS_MAX;
@@ -211,7 +212,7 @@ pub(crate) fn spectrum_settings_pane(
         .show(ui)
         .on_hover_text(
             "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds \
-                 it still, and holds Rock with it.",
+                 it still.",
         );
         ValueBar::new(
             &mut atmosphere.cloud_pixel,
@@ -235,6 +236,23 @@ pub(crate) fn spectrum_settings_pane(
              smaller than one is gone. The picture underneath, its terraces and the \
              gradient stay sharp.",
         );
+        ValueBar::new(&mut atmosphere.cloud_tile, 0.0..=CLOUD_TILE_MAX, "Cloud tile")
+            .unit(1.0, " cells")
+            // The three settings `sanitized` snaps to, in whole cells; a period
+            // between two of them does not tile at all.
+            .decimals(0)
+            .step(CLOUD_TILE_STEP)
+            .show(ui)
+            .on_hover_text(
+                "The other PERFORMANCE control, and the one that spends REPETITION. \
+                 Neither texture's cell walk reads the sound or the clock \u{2014} the \
+                 drift only slides it \u{2014} so wrapping the walk every so many cells \
+                 makes it a tile, drawn once and repeated over the pane. What is left \
+                 per pixel is the light, the refraction and the palette, about a tenth \
+                 of the cost. 0 is the live walk and repeats nothing; 20 cells repeats \
+                 the pattern a few times across a large pane and 40 once or twice, each \
+                 repeat reading different sound. It stacks with Cloud pixel size.",
+            );
         // Two constructions, so two sets of dials: nothing a wash carries means
         // anything to a lit scale, and a page listing both would be mostly
         // controls that do nothing wherever it stands.
@@ -288,14 +306,6 @@ pub(crate) fn spectrum_settings_pane(
                  It carries the old Shade floor with it \u{2014} how dark a turned-away face \
                  may get falls as the relief rises, because a floor decides nothing where \
                  there is no tilt to shade.",
-                );
-            ValueBar::new(&mut atmosphere.scale_rock, 0.0..=1.0, "Rock")
-                .percent()
-                .show(ui)
-                .on_hover_text(
-                    "Each scale rocks on its own slow clock, so the shading on its face sways \
-                 even under a picture holding still. It runs on the same clock as the \
-                 drift, so Cloud speed at 0 holds it too.",
                 );
         }
     });
@@ -584,10 +594,6 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
              \u{2014} the one edge cue the watercolor reference has. Fuzz fades it as the \
              rim dissolves, so this is its strength before that.",
         );
-    ValueBar::new(&mut atmosphere.wash_grain, 0.0..=1.0, "Grain").percent().show(ui).on_hover_text(
-        "Extra pigment settling where the washes are piled deepest, which is the \
-             granulation a heavy watercolor leaves in the paper's tooth.",
-    );
     ValueBar::new(&mut atmosphere.wash_layers, 0.0..=1.0, "Layers")
         .percent()
         .show(ui)
