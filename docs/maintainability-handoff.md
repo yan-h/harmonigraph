@@ -1,11 +1,18 @@
-# Coordinator handoff: maintainability implementation
+# Completed handoff: first maintainability batch
 
-Prepared on 2026-09-19 for one coordinator taking over the entire bounded batch.
+**Completed on 2026-09-19:** all ten packages below have landed.
+Read the [completion record](https://github.com/yan-h/harmonigraph/issues/954#issuecomment-5746459598) for verification and the final build,
+and the [next-session scope](https://github.com/yan-h/harmonigraph/issues/954#issuecomment-5746476887) for follow-up work.
+Do not relaunch this package list.
+The launch authority and template below belong to the completed first batch;
+a new continuation request determines new work and merge authority.
+
+Prepared on 2026-09-19 for one coordinator taking over that bounded batch.
 The aim is to reduce recurring maintenance work and Yan's supervision burden.
 The discovery is complete enough to act;
 do not restart the audit or make new trial features to measure change cost.
 
-## Start and authority
+## Historical start and authority
 
 Read this handoff,
 the current [project instructions](../CLAUDE.md),
@@ -15,23 +22,23 @@ The last historical audit ended at `8b4edf4e`;
 it is evidence tied to that revision,
 not a reason to start new implementation from an old checkout.
 
-**Launch update, 2026-09-19:** Yan has now authorized the bounded first-batch implementation and in-scope merges after checks and appropriate review.
-The coordinator owns review, merge order and integration;
-workers still deliver draft PRs for that coordinator.
+**Launch update, 2026-09-19 (completed):** Yan authorized the bounded first-batch implementation and in-scope merges after checks and appropriate review.
+The coordinator owned review, merge order and integration;
+workers delivered draft PRs for that coordinator.
 See the [plan's current position](maintainability-plan.md#start-here);
-existing issues hold live progress.
+existing issues hold completion evidence.
 
 Before that launch,
 Yan requested this handoff and merging documentation PR [#951](https://github.com/yan-h/harmonigraph/pull/951),
 superseding the earlier request to keep that PR open.
 That documentation merge did not itself launch implementation or authorize future code merges.
-The launch request below is retained as the template for activating the bounded scope in one message.
+The launch request below records how the first batch was activated in one message.
 If a different launch request authorizes implementation only,
 deliver draft PRs and use its actual merge authority;
 do not infer broader permission from the template's presence in the repository.
 An explicit batch merge authorization need not be requested again for every included PR.
 
-**Suggested launch request for Yan to send:**
+**Historical launch template (first batch completed):**
 
 > Act as the single coordinator for `docs/maintainability-handoff.md`.
 > Implement its named first batch from current main,

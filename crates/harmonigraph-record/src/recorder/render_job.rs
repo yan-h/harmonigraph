@@ -428,9 +428,7 @@ pub(super) fn spawn_render(
         }
         let [w, h] = request.size;
         command.arg("--size").arg(format!("{w}x{h}"));
-        // stdout is the renderer's `--dump-layout` channel and nothing
-        // else; stderr carries everything this cares about, so pipe that
-        // one and follow it.
+        // Progress and warnings arrive on stderr; pipe it for the status line.
         command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
 
         *status.lock() = format!("rendering {}...", out.display());

@@ -1,0 +1,31 @@
+--- a/egui-baseview-0.7.2/src/renderer/wgpu/renderer.rs
++++ b/egui-baseview-0.7.2/src/renderer/wgpu/renderer.rs
+@@ -178,6 +178,7 @@
+             let mut renderer = self.render_state.renderer.write();
+             for (id, image_deltas) in full_output.textures_delta.set.drain() {
+                 for image_delta in image_deltas {
++                    println!("GPU_UPLOAD {:?} size={:?} partial={:?}", id, image_delta.image.size(), image_delta.pos);
+                     renderer.update_texture(
+                         &self.render_state.device,
+                         &self.render_state.queue,
+@@ -206,8 +207,10 @@
+         let mut recreate_surface = false;
+         let output_frame = match self.surface.get_current_texture() {
+             wgpu::CurrentSurfaceTexture::Success(texture) => Some(texture),
+-            wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => return,
++            wgpu::CurrentSurfaceTexture::Occluded => { println!("ACQUIRE_OCCLUDED"); return; },
++            wgpu::CurrentSurfaceTexture::Timeout => { println!("ACQUIRE_TIMEOUT"); return; },
+             wgpu::CurrentSurfaceTexture::Suboptimal(_) | wgpu::CurrentSurfaceTexture::Outdated => {
++                println!("ACQUIRE_OUTDATED_OR_SUBOPTIMAL");
+                 None
+             }
+             wgpu::CurrentSurfaceTexture::Validation => {
+@@ -289,5 +292,6 @@
+             .submit(user_cmd_bufs.into_iter().chain([encoded]));
+ 
+         self.render_state.queue.present(output_frame);
+-    }
+-}
++        println!("PRESENT");
++    }
++}

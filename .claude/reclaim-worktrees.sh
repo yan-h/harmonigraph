@@ -134,8 +134,8 @@
 #
 # `git worktree remove` keeps the branch ref, so merged commits stay reachable
 # and the branch can be checked out again later. It also REFUSES any worktree
-# holding a submodule, which since `.shared-skills` is initialised everywhere
-# is every Claude worktree — so tier 2 retries with `--force` once its own
+# holding a submodule, including older worktrees with the shared-skills pin,
+# so tier 2 retries with `--force` once its own
 # clean-tree check has passed a second time. See the removal itself for why
 # `submodule deinit` is not the alternative it looks like (#898).
 #
@@ -621,12 +621,8 @@ remove_worktree() {
   #
   # What forces the retry at all is a SUBMODULE: `git worktree remove` refuses
   # any worktree containing one ("working trees containing submodules cannot be
-  # moved or removed"), and `.shared-skills` is one in every worktree that has
-  # run `.claude/ensure-shared-skills.sh` — which the post-checkout hook and
-  # SessionStart both do. Tier 2 worked at all only because a harness-made
-  # worktree used to arrive with that submodule EMPTY (#855), and an
-  # uninitialised gitlink removes plainly; initialising it turned every Claude
-  # worktree into a permanent resident (#898).
+  # moved or removed"). Older worktrees can still contain the shared-skills
+  # submodule even though new checkouts no longer pin it (#898).
   #
   # `submodule deinit -f` first, then a plain remove, is NOT the alternative it
   # looks like: git also refuses on the worktree's own `.git/worktrees/<n>/

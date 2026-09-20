@@ -317,6 +317,10 @@ Inventory reuses the preceding [dependency/support discovery](maintainability-pl
 with direct reads of current CI, core README, golden gate, appearance parser and vendor surface-format boundary.
 No new dependency build, platform certification, security audit or legal conclusion was performed.
 
+Subsequent [#968 feasibility work](gui-cohort-feasibility.md) built the published cohort and exercised bounded native prototypes.
+Its recommendation is to retain the current stack;
+the following table preserves the earlier audit's disposition.
+
 | Requirement cluster | Evidence and obligation | Disposition |
 | --- | --- | --- |
 | macOS/Bitwig and in-process CLAP scope | README/deferred records identify the personal tested environment. | Keep narrow scope. Portable upstream code does not imply a Windows/Linux/other-host support promise. |

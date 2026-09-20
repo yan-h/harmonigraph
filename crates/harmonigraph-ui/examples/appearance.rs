@@ -11,7 +11,7 @@
 //! ```text
 //! cargo run -p harmonigraph-ui --example appearance -- \
 //!     min_sevens=-1 max_sevens=1 sevens_size=0.55 cabinet_scale=0.71 > view.ron
-//! harmonigraph-offline chord.take --appearance view.ron --layout lattice -o frame.png
+//! harmonigraph-offline chord.take --appearance view.ron --layout side-by-side -o frame.png
 //! ```
 //!
 //! Unknown keys are an error rather than a shrug: a typo that silently

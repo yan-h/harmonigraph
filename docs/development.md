@@ -60,9 +60,6 @@ Enable the tracked pre-push formatting check once per clone:
 git config core.hooksPath .githooks
 ```
 
-Claude's checked-in `SessionStart` does this automatically.
-The same hook path also initialises the pinned shared-skills submodule when Git creates a worktree;
-other clients should run the command once after cloning.
 The pre-push hook checks formatting only.
 GitHub Actions runs the full `./ci.sh` gate for pull requests and pushes to `main`,
 split across parallel groups and reported as one `Full CI` check.
@@ -205,3 +202,33 @@ Almost all implementation is written through LLM coding sessions under Yan's dir
 
 The [long-term maintainability plan](maintainability-plan.md) records the proposed investigation,
 current focus and decisions for work intended to reduce the attention that future maintenance needs from Yan.
+
+## Shared agent skills
+
+Shared personal skills come from your local [agent-config](https://github.com/yan-h/agent-config) checkout,
+independently of this repository.
+Install `audit-merges` once for Claude and Codex:
+
+```sh
+mkdir -p ~/.claude/skills ~/.agents/skills
+ln -s ~/projects/agent-config/skills/audit-merges ~/.claude/skills/audit-merges
+ln -s ~/projects/agent-config/skills/audit-merges ~/.agents/skills/audit-merges
+```
+
+Use your checkout's actual path,
+and preserve any existing skill before replacing it.
+For a custom Claude configuration directory,
+use its `skills/` directory instead of `~/.claude/skills`.
+Update the `agent-config` checkout to update shared skills across projects;
+start a new agent session to refresh its skill catalog.
+Project-specific skills remain in `.claude/skills`.
+The shared skill is optional for development and CI,
+but must be installed before Yan invokes a merge audit.
+
+When upgrading an existing checkout that still has the old submodule,
+run `git submodule deinit -- .shared-skills` before pulling the removal commit.
+Do not force it if Git reports local changes;
+preserve those changes first.
+This avoids leaving the populated directory behind as untracked files.
+Older worktrees can keep their own pinned copy until they are retired;
+the Git checkout hook and reclaimer still support them.

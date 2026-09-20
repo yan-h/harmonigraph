@@ -1,5 +1,9 @@
 # Whole-feature retirement discovery
 
+**Implementation relevance:** Playhead was retired in [#988](https://github.com/yan-h/harmonigraph/pull/988).
+Public single-pane/custom export layouts are retired under [#974](https://github.com/yan-h/harmonigraph/issues/974), with internal single-pane pixel fixtures retained.
+The owner names and preset/load examples below describe the pinned discovery baseline, not current interfaces.
+
 Date: 2026-09-19.
 Source inspected: `0b6868a8`;
 product sources remain at `1786c5ba1a4e2994c20dc2672eb7d200fd605d9b`.

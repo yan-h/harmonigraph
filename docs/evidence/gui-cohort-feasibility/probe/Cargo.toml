@@ -1,0 +1,9 @@
+[package]
+name = "gui-feasibility-probe"
+version = "0.1.0"
+edition = "2024"
+[dependencies]
+egui-baseview = { path = "../egui-baseview-0.7.2", default-features = false, features = ["wgpu", "tracing"] }
+egui = { version = "=0.36.2", features = ["default_fonts"] }
+[profile.dev]
+debug = 0
