@@ -1388,7 +1388,7 @@ mod tests {
                 analyzer.push_samples(chunk);
             }
             let buckets = analyzer.pitch_spectrum().expect("window filled");
-            let peak = buckets[peak_bucket(&buckets)];
+            let peak = buckets[peak_bucket(buckets)];
             let db = 10.0 * peak.max(1e-12).log10();
             assert!(db.abs() < 1.5, "{tapers} tapers read a full-scale sine at {db:.2} dB, not 0");
         }
