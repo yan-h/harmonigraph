@@ -165,7 +165,8 @@ impl Regions {
                     if index == 0 { (0.0, rail / depth) } else { (1.0 - rail / depth, 1.0) };
                 Rect::from_two_pos(axes.at(0.0, a), axes.at(1.0, b)).intersect(rect)
             } else {
-                control_rect(&axes, divider, index, rail).intersect(rect)
+                control_rect(&axes, divider, index, theme::row_height(theme::ui_scale(ui.ctx())))
+                    .intersect(rect)
             };
             if !band.is_positive() {
                 continue;
@@ -193,6 +194,8 @@ fn extend(rect: &mut Rect, delta: Vec2) {
 
 /// The high-pitch end for vertical time, the top edge otherwise. Each button
 /// sits wholly on its own side of the divider, leaving its drag band clear.
+/// The button uses a control row's height, not a whole tab bar's: two full-size
+/// tabs over the picture obscure the very boundary they are meant to fold.
 fn control_rect(axes: &Axes, split: f32, index: usize, size: f32) -> Rect {
     let offset = size * 0.5 + gestures::SPLIT_GRAB_HALF;
     let pitch = 1.0 - (size * 0.5 + 4.0) / axes.pitch_len();
@@ -219,14 +222,9 @@ fn control(
         )
     });
     let painter = ui.painter_at(rect);
-    let style = theme::dock_style(ui.style(), theme::ui_scale(ui.ctx()));
-    let fill = if response.hovered() || response.has_focus() {
-        theme::accent_edge()
-    } else {
-        style.tab.active.bg_fill
-    };
-    painter.rect_filled(rect, if rail { 0.0 } else { 3.0 }, fill);
-    let size = theme::tab_bar_height(theme::ui_scale(ui.ctx()));
+    let scale = theme::ui_scale(ui.ctx());
+    let style = theme::dock_style(ui.style(), scale);
+    let size = theme::tab_bar_height(scale);
     let center = if rail {
         rect.left_top()
             + if vertical {
@@ -237,11 +235,31 @@ fn control(
     } else {
         rect.center()
     };
+    // A restore rail is tab chrome; only its arrow cell takes the dock's
+    // button fill. Open controls use the same arrow colors and a smaller cell.
+    if rail {
+        painter.rect_filled(rect, egui::CornerRadius::ZERO, style.tab.active.bg_fill);
+    }
+    let button = if rail { Rect::from_center_size(center, Vec2::splat(size)) } else { rect };
+    let hovered = response.hovered() || response.has_focus();
+    painter.rect_filled(
+        button,
+        egui::CornerRadius::ZERO,
+        if hovered { style.buttons.collapse_tabs_bg_fill } else { style.tab_bar.bg_fill },
+    );
     let cross = egui::vec2(-direction.y, direction.x);
-    let tip = center + direction * 3.0;
-    painter.add(egui::Shape::line(
-        vec![center - direction * 2.0 + cross * 4.0, tip, center - direction * 2.0 - cross * 4.0],
-        egui::Stroke::new(1.5, theme::text()),
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            center - direction * 4.0 + cross * 4.0,
+            center + direction * 4.0,
+            center - direction * 4.0 - cross * 4.0,
+        ],
+        if hovered {
+            style.buttons.collapse_tabs_active_color
+        } else {
+            style.buttons.collapse_tabs_color
+        },
+        egui::Stroke::NONE,
     ));
     if rail {
         let galley = painter.layout_no_wrap(
