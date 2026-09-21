@@ -471,10 +471,9 @@ pub struct SpectrumConfig {
     /// set. Taken out over a fifth of a second instead, the release is something
     /// the picture DOES rather than something that happens to it.
     ///
-    /// The lead dims rather than retracting, and rides the note's own leading
-    /// end while it does — so what a release looks like is the tongue letting go
-    /// of the line and dissolving as the ribbon scrolls away from it, which is
-    /// the shape of the gesture that made it.
+    /// The lead dims rather than retracting, and detaches at the now-line while
+    /// the note scrolls into history. The extension therefore stays on the
+    /// analyzer peak it marked until the fade is finished.
     ///
     /// In SECONDS, and so independent of the Span: the fade is the ear's
     /// timescale, not the picture's, and a release read as a fraction of the

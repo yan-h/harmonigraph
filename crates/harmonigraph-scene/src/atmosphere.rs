@@ -97,7 +97,7 @@ pub const TIME_SOFTNESS_MAX: f32 = 2000.0;
 /// Bounds shared by the [`SpectralAtmosphere::contours`] control and sanitizer.
 pub const CONTOURS_MIN: f32 = 2.0;
 /// See [`CONTOURS_MIN`].
-pub const CONTOURS_MAX: f32 = 64.0;
+pub const CONTOURS_MAX: f32 = 20.0;
 
 /// Bounds shared by the [`SpectralAtmosphere::contour_softness`] control and sanitizer.
 pub const CONTOUR_SOFTNESS_MIN: f32 = 0.01;
@@ -108,6 +108,11 @@ pub const CONTOUR_SOFTNESS_MAX: f32 = 0.5;
 pub const CLOUD_SPEED_MIN: f32 = 0.0;
 /// See [`CLOUD_SPEED_MIN`].
 pub const CLOUD_SPEED_MAX: f32 = 20.0;
+
+/// Bounds shared by the [`SpectralAtmosphere::cloud_direction`] control and sanitizer.
+pub const CLOUD_DIRECTION_MIN: f32 = 0.0;
+/// See [`CLOUD_DIRECTION_MIN`].
+pub const CLOUD_DIRECTION_MAX: f32 = 360.0;
 
 /// Bounds shared by the [`SpectralAtmosphere::scale_refract`] control and sanitizer.
 pub const SCALE_REFRACT_MIN: f32 = -1.0;
@@ -216,6 +221,9 @@ pub struct SpectralAtmosphere {
     /// `scale_size`/`wash_size` for the texture's size and of this one for its
     /// travel.
     pub cloud_speed: f32,
+    /// Constant visible texture drift direction in screen degrees: 0 points
+    /// right, 90 down, 180 left and 270 up.
+    pub cloud_direction: f32,
     /// Size of one scale, as a multiplier on that size: how many of them cross
     /// a cloud moves the other way, because the count is divided by this.
     /// Runs over [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`].
@@ -307,6 +315,8 @@ impl Default for SpectralAtmosphere {
             note_glow: 0.5,
             cloud_depth: 1.0,
             cloud_speed: 1.0,
+            // The visible direction of the former drift's steady component.
+            cloud_direction: 147.994_61,
             // 1.0x now draws what `cloud_scale` 0.5 against `scale_size` 2.2
             // drew, because `SCALE_CELLS` carries the retired dial's default.
             scale_size: 1.0,
@@ -364,6 +374,11 @@ impl SpectralAtmosphere {
         self.cloud_depth = clamp(self.cloud_depth, fresh.cloud_depth, 0.0, 1.0);
         self.cloud_speed =
             clamp(self.cloud_speed, fresh.cloud_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
+        self.cloud_direction = if self.cloud_direction.is_finite() {
+            self.cloud_direction.rem_euclid(CLOUD_DIRECTION_MAX)
+        } else {
+            fresh.cloud_direction
+        };
         self.scale_size = clamp(self.scale_size, fresh.scale_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
         self.scale_refract =

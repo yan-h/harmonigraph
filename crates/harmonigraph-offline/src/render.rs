@@ -859,7 +859,7 @@ mod tests {
     /// value is the other one, so the frame is held against the same take drawn
     /// with the scales — and the clock has to MOVE something, or this is the
     /// test above with one more uniform in it. The second is held against the
-    /// same run with `Cloud speed` alone at 0 and NOT against another frame of
+    /// same run with `Drift speed` alone at 0 and NOT against another frame of
     /// the run itself: over a fixture with light in it the spectrogram scrolls,
     /// so any two frames differ whatever the cloud clock does, and a
     /// frame-to-frame comparison would pass with the whole layer frozen.

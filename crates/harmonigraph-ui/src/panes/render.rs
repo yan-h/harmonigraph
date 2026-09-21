@@ -364,7 +364,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
 /// that starts a take.
 ///
 /// Each pane that owns an accumulation already clears its own — Labels' "Clear
-/// label history", the Analyzer's "Clear analyzer history" — and those stay, since
+/// label history", the Spectrogram's "Clear history" — and those stay, since
 /// clearing what one pane draws is a real thing to want while dialing that pane
 /// in. This is for the other moment, when all four are wanted together and
 /// there is only one reason: a take about to be recorded should start on an

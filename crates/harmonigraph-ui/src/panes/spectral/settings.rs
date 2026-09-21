@@ -2,9 +2,9 @@
 //! spectrogram appearance has another. Color tables live on [`super::super::color`].
 
 use harmonigraph_scene::{
-    CLOUD_SPEED_MAX, CLOUD_SPEED_MIN, CONTOURS_MAX, CONTOURS_MIN, CONTOUR_SOFTNESS_MAX,
-    CONTOUR_SOFTNESS_MIN, PITCH_SOFTNESS_MAX, PITCH_SOFTNESS_MIN, SCALE_REFRACT_MAX,
-    SCALE_REFRACT_MIN, TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
+    CLOUD_DIRECTION_MAX, CLOUD_DIRECTION_MIN, CLOUD_SPEED_MAX, CLOUD_SPEED_MIN, CONTOURS_MAX,
+    CONTOURS_MIN, CONTOUR_SOFTNESS_MAX, CONTOUR_SOFTNESS_MIN, PITCH_SOFTNESS_MAX,
+    PITCH_SOFTNESS_MIN, SCALE_REFRACT_MAX, SCALE_REFRACT_MIN, TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
 };
 
 use crate::config::BALLISTICS_MAX;
@@ -107,7 +107,6 @@ pub(crate) fn spectrum_settings_pane(
                  1× is the reference size; labels stay the same size when you zoom.",
         );
 
-    section(ui, "Live spectrum");
     ValueBar::new(&mut cfg.atmosphere.analyzer_softness, 0.0..=1.0, "Spectrum fill softness")
         .percent().show(ui).on_hover_text("Blend the live spectrum from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram effects and Spectrum outline.");
     ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Spectrum outline").percent().show(ui).on_hover_text(
@@ -115,97 +114,6 @@ pub(crate) fn spectrum_settings_pane(
     );
 
     analysis_settings(ui, cfg, params);
-
-    section(ui, "History");
-    ValueBar::new(&mut cfg.roll_seconds, crate::ROLL_SECONDS_MIN..=crate::ROLL_SECONDS_MAX, "History duration")
-        .eased(true)
-        .decimals(1)
-        .unit(1.0, " s").display(span_readout)
-        .show(ui)
-        .on_hover_text(
-            "Time shown by both MIDI ribbons and the spectrogram, up to 600 seconds. \
-                 Drag the picture along its time axis to zoom, or double-click this bar to type seconds.",
-        );
-    button_row(ui, |ui| {
-        if ui
-            .button("Clear analyzer history")
-            .on_hover_text(
-                "Clear MIDI ribbons and spectrogram history. A held note reappears in the roll only when played again.",
-            )
-            .clicked()
-        {
-            state.runtime.tracker.clear_roll();
-            state.runtime.spectrum.clear_history();
-        }
-    });
-    section(ui, "MIDI ribbons");
-    ui.checkbox(&mut cfg.show_roll, "Show MIDI ribbons").on_hover_text(
-        "Show played MIDI notes as ribbons over the shared time axis. \
-                 Their colors come from MIDI note colors on Colors.",
-    );
-
-    ui.add_enabled_ui(cfg.show_roll, |ui| {
-        ValueBar::new(&mut cfg.roll_thickness, crate::config::ROLL_THICKNESS_RANGE, "Ribbon width")
-            .unit(1.0, " st")
-            .show(ui)
-            .on_hover_text(
-                "Ribbon width in semitones (st), measured on the frequency axis. \
-                 1 st is the width of one semitone at any zoom.",
-            );
-        ValueBar::new(&mut cfg.roll_opacity, 0.0..=1.0, "Ribbon opacity")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "Opacity of MIDI ribbon colors over the spectrogram. \
-                 Their dark surrounds keep their full strength.",
-            );
-
-        ValueBar::new(&mut cfg.atmosphere.note_glow, 0.0..=1.0, "Ribbon glow")
-            .percent().show(ui).on_hover_text("Additional glow around note ribbons. Adjust their shadows under Display → Lighting → Shadows.");
-        edge_bar(
-            ui,
-            (&mut cfg.roll_lead, &mut cfg.roll_lead_fade),
-            crate::ROLL_LEAD_MAX,
-            "Held-note extension",
-            {
-                let fresh = crate::SpectrumConfig::default();
-                (fresh.roll_lead, fresh.roll_lead_fade)
-            },
-            |v| format!("{:.1}%", v * 100.0),
-        )
-        .on_hover_text(
-            "Distance held notes extend into the spectrum, as a percentage of its depth. \
-                 Solid to the inner handle, faded out by the outer. \
-                 0% stops notes at the history boundary.",
-        );
-        ValueBar::new(
-            &mut cfg.roll_lead_release,
-            0.0..=crate::ROLL_LEAD_RELEASE_MAX,
-            "Extension release",
-        )
-        .unit(1000.0, " ms")
-        .decimals(0)
-        .show(ui)
-        .on_hover_text(
-            "Time for the held-note extension to fade after release. 0 ms removes it immediately.",
-        );
-        ui.checkbox(&mut cfg.note_names, "Show note names").on_hover_text(
-        "Label MIDI ribbons using the lattice tuning and spelling. Crowded labels wait for space.",
-    );
-        ui.add_enabled_ui(cfg.note_names && cfg.show_roll, |ui| {
-            ui.checkbox(&mut cfg.note_names_travel, "Labels follow note onset").on_hover_text(
-                "Place labels at the start of each note so they travel with its onset. \
-                 Turn off to keep labels at the newest edge.",
-            );
-            ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Label scale")
-                .unit(1.0, "×")
-                .show(ui)
-                .on_hover_text(
-                    "Text size relative to each MIDI ribbon. \
-                 1× is the reference size; labels also grow when you zoom in on frequency.",
-                );
-        });
-    });
 }
 
 /// Measurement controls shared by every audio view, within the Analyzer page.
@@ -331,7 +239,7 @@ fn analysis_settings(
         );
 }
 
-/// Heatmap appearance, independent of the live spectrum and MIDI ribbons.
+/// Spectrogram history, its MIDI overlay, and heatmap appearance.
 pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureState) {
     ui.heading("Spectrogram");
     let cfg = &mut state.appearance.spectrum;
@@ -339,9 +247,102 @@ pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureSt
         "Show audio levels as a frequency-versus-time heatmap. \
                  Uses the shared History duration and the Audio level colors on Colors.",
     );
-    ui.weak(
-        "History duration and frequency range are on Analyzer; the audio palette is on Colors.",
+    ui.weak("Frequency range is on Analyzer; the audio palette is on Colors.");
+    section(ui, "History");
+    ValueBar::new(
+        &mut cfg.roll_seconds,
+        crate::ROLL_SECONDS_MIN..=crate::ROLL_SECONDS_MAX,
+        "History duration",
+    )
+    .eased(true)
+    .decimals(1)
+    .unit(1.0, " s")
+    .display(span_readout)
+    .show(ui)
+    .on_hover_text(
+        "Time shown by both MIDI ribbons and the spectrogram, up to 600 seconds. \
+         Drag the picture along its time axis to zoom, or double-click this bar to type seconds.",
     );
+    button_row(ui, |ui| {
+        if ui
+            .button("Clear history")
+            .on_hover_text(
+                "Clear MIDI ribbons and spectrogram history. A held note reappears in the roll only when played again.",
+            )
+            .clicked()
+        {
+            state.runtime.tracker.clear_roll();
+            state.runtime.spectrum.clear_history();
+        }
+    });
+    section(ui, "MIDI ribbons");
+    ui.checkbox(&mut cfg.show_roll, "Show MIDI ribbons").on_hover_text(
+        "Show played MIDI notes as ribbons over the shared time axis. \
+         Their colors come from MIDI note colors on Colors.",
+    );
+    ui.add_enabled_ui(cfg.show_roll, |ui| {
+        ValueBar::new(&mut cfg.roll_thickness, crate::config::ROLL_THICKNESS_RANGE, "Ribbon width")
+            .unit(1.0, " st")
+            .show(ui)
+            .on_hover_text(
+                "Ribbon width in semitones (st), measured on the frequency axis. \
+                 1 st is the width of one semitone at any zoom.",
+            );
+        ValueBar::new(&mut cfg.roll_opacity, 0.0..=1.0, "Ribbon opacity")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "Opacity of MIDI ribbon colors over the spectrogram. \
+                 Their dark surrounds keep their full strength.",
+            );
+        ValueBar::new(&mut cfg.atmosphere.note_glow, 0.0..=1.0, "Ribbon glow")
+            .percent()
+            .show(ui)
+            .on_hover_text("Additional glow around note ribbons. Adjust their shadows under Display → Lighting → Shadows.");
+        edge_bar(
+            ui,
+            (&mut cfg.roll_lead, &mut cfg.roll_lead_fade),
+            crate::ROLL_LEAD_MAX,
+            "Held-note extension",
+            {
+                let fresh = crate::SpectrumConfig::default();
+                (fresh.roll_lead, fresh.roll_lead_fade)
+            },
+            |v| format!("{:.1}%", v * 100.0),
+        )
+        .on_hover_text(
+            "Distance held notes extend into the spectrum, as a percentage of its depth. \
+             Solid to the inner handle, faded out by the outer. \
+             0% stops notes at the history boundary.",
+        );
+        ValueBar::new(
+            &mut cfg.roll_lead_release,
+            0.0..=crate::ROLL_LEAD_RELEASE_MAX,
+            "Extension release",
+        )
+        .unit(1000.0, " ms")
+        .decimals(0)
+        .show(ui)
+        .on_hover_text(
+            "Time for a released extension to fade where it detached from the history boundary. 0 ms removes it immediately.",
+        );
+        ui.checkbox(&mut cfg.note_names, "Show note names").on_hover_text(
+            "Label MIDI ribbons using the lattice tuning and spelling. Crowded labels wait for space.",
+        );
+        ui.add_enabled_ui(cfg.note_names && cfg.show_roll, |ui| {
+            ui.checkbox(&mut cfg.note_names_travel, "Labels follow note onset").on_hover_text(
+                "Place labels at the start of each note so they travel with its onset. \
+                 Turn off to keep labels at the newest edge.",
+            );
+            ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Label scale")
+                .unit(1.0, "×")
+                .show(ui)
+                .on_hover_text(
+                    "Text size relative to each MIDI ribbon. \
+                     1× is the reference size; labels also grow when you zoom in on frequency.",
+                );
+        });
+    });
     section(ui, "Softness");
     let atmosphere = &mut cfg.atmosphere;
     // No style selector. Plain, Blur and Lava were three presets over three
@@ -395,7 +396,7 @@ pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureSt
         .show(ui)
         .on_hover_text("Blend across adjacent level bands. 0% makes sharp boundaries; higher values soften the transitions.");
     });
-    section(ui, "Cloud texture");
+    section(ui, "Texture");
     ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
         .percent()
         .show(ui)
@@ -433,13 +434,24 @@ pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureSt
         ValueBar::new(
             &mut atmosphere.cloud_speed,
             CLOUD_SPEED_MIN..=CLOUD_SPEED_MAX,
-            "Cloud speed",
+            "Drift speed",
         )
         .unit(1.0, "\u{d7}")
         .show(ui)
         .on_hover_text(
             "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds \
                  it still.",
+        );
+        ValueBar::new(
+            &mut atmosphere.cloud_direction,
+            CLOUD_DIRECTION_MIN..=CLOUD_DIRECTION_MAX,
+            "Drift direction",
+        )
+        .integer()
+        .unit(1.0, "°")
+        .show(ui)
+        .on_hover_text(
+            "Constant direction of texture travel: 0° right, 90° down, 180° left and 270° up.",
         );
         // Two constructions, so two sets of dials: nothing a wash carries means
         // anything to a refracting scale, and a page listing both would be mostly

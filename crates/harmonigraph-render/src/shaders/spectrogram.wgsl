@@ -497,7 +497,7 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 // named one number between them, and the picture could not tell which of them
 // had set it. What `Cloud size` did own was the drift, since `drift` is measured
 // in cloud units and a larger unit carries the texture further per second; but
-// that is `Cloud speed` again, one multiplication later. Three dials, two
+// that is `Drift speed` again, one multiplication later. Three dials, two
 // observables. Pinning the frame here leaves each texture one size dial that
 // means its own size, and leaves the drift to the dial named after it.
 //

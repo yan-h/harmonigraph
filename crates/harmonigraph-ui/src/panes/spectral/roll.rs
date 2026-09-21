@@ -12,9 +12,9 @@
 //! Its share of the depth axis runs from `split` (now) to 1 (the
 //! oldest note still on screen), so time flows *away* from the spectrum
 //! and a note crossing the split meets the peak it is making. A SOUNDING note
-//! carries a little way past that line and fades out there, which is the one
-//! thing the roll draws outside its own share — see [`lead`], and
-//! [`lead_alpha`] for what becomes of it at the release.
+//! carries a little way past that line. On release the extension detaches there
+//! and fades in place while the note continues into history — see [`lead`] and
+//! [`lead_alpha`].
 
 use egui::Color32;
 use harmonigraph_core::RollNote;
@@ -237,7 +237,7 @@ pub(super) fn draw_roll(
     options: RollDrawOptions,
 ) {
     let ppp = painter.ctx().pixels_per_point().max(1.0);
-    let notes = note_instances_with_floor(
+    let (notes, detached) = roll_instances_with_floor(
         axes,
         scale,
         state,
@@ -252,8 +252,8 @@ pub(super) fn draw_roll(
             surface: options.surface,
             pitch_len: axes.pitch_len(),
             ribbon_floor_scale: options.ribbon_floor_scale,
-            note_count: notes.len(),
-            first_half_pitch: notes.first().map(|note| note.half_extent[0]),
+            note_count: notes.len() + detached.len(),
+            first_half_pitch: notes.first().or(detached.first()).map(|note| note.half_extent[0]),
         }));
     });
     if options.surface == crate::panes::DOCKED_SURFACE {
@@ -264,9 +264,9 @@ pub(super) fn draw_roll(
         state
             .instruments
             .roll_notes
-            .store(notes.len() as u32, std::sync::atomic::Ordering::Relaxed);
+            .store((notes.len() + detached.len()) as u32, std::sync::atomic::Ordering::Relaxed);
     }
-    if notes.is_empty() {
+    if notes.is_empty() && detached.is_empty() {
         return;
     }
     // The roll's own share of the pane, and the whole of what its ink may
@@ -290,26 +290,30 @@ pub(super) fn draw_roll(
     // this is the same edge in the same place.
     let (lead_px, _) = lead(&state.appearance.spectrum, axes, options.split);
     let near = (options.split - lead_px / axes.depth_len().max(1.0)).max(0.0);
-    let region = egui::Rect::from_two_pos(axes.at(0.0, near), axes.at(1.0, 1.0));
-    let painter = painter.with_clip_rect(painter.clip_rect().intersect(region));
+    let history_region = egui::Rect::from_two_pos(axes.at(0.0, near), axes.at(1.0, 1.0));
+    let detached_region = egui::Rect::from_two_pos(axes.at(0.0, near), axes.at(1.0, options.split));
     let dir = |v: egui::Vec2| [v.x, v.y];
-    painter.add(harmonigraph_render::roll_paint_callback(
-        region,
-        notes,
-        RollAxes { pitch_dir: dir(axes.dir_pitch()), depth_dir: dir(axes.dir_depth()) },
-        // Keep the shared bloom, with the prototype's extra ribbon light
-        // added after bright extraction, independently of the spectrogram
-        // and analyzer. Zero extra glow restores the original amount.
-        harmonigraph_render::bloom_strength(
-            state.appearance.view.bloom_strength + state.appearance.spectrum.atmosphere.note_glow,
-        ),
+    let axes = RollAxes { pitch_dir: dir(axes.dir_pitch()), depth_dir: dir(axes.dir_depth()) };
+    let bloom = harmonigraph_render::bloom_strength(
+        state.appearance.view.bloom_strength + state.appearance.spectrum.atmosphere.note_glow,
+    );
+    let pane = crate::panes::lattice::pane_id(options.surface);
+    let shadow_surface = crate::text::spectral_shadow_surface(options.surface);
+    let clipped_start = notes.len();
+    let mut instances = notes;
+    instances.extend(detached);
+    let painter = painter.with_clip_rect(painter.clip_rect().intersect(history_region));
+    painter.add(harmonigraph_render::roll_paint_callback_with_clipped_tail(
+        history_region,
+        instances,
+        clipped_start,
+        detached_region,
+        axes,
+        bloom,
         state.appearance.view.shadow.spectral_geometry,
         state.surfaces.target_format,
-        harmonigraph_render::PaneIds {
-            pane: crate::panes::lattice::pane_id(options.surface),
-            pass_nr: painter.ctx().cumulative_pass_nr(),
-        },
-        crate::text::spectral_shadow_surface(options.surface),
+        harmonigraph_render::PaneIds { pane, pass_nr: painter.ctx().cumulative_pass_nr() },
+        shadow_surface,
     ));
 }
 
@@ -334,7 +338,9 @@ pub(super) fn note_instances(
     // Physical pixels per point, which [`MIN_LENGTH_DEVICE_PX`] is quoted in.
     ppp: f32,
 ) -> Vec<RollInstance> {
-    note_instances_with_floor(axes, scale, state, split, now, ppp, 1.0)
+    let (mut notes, detached) = roll_instances_with_floor(axes, scale, state, split, now, ppp, 1.0);
+    notes.extend(detached);
+    notes
 }
 
 /// This is the geometry used by the test-only `note_instances` wrapper, with
@@ -342,7 +348,7 @@ pub(super) fn note_instances(
 /// width is in semitones and already follows the preview's pitch axis; only
 /// the fallback for hairline notes needs this extra scale to keep its relative
 /// size matched to the export.
-fn note_instances_with_floor(
+fn roll_instances_with_floor(
     axes: &Axes,
     scale: &PitchScale,
     state: &PictureState,
@@ -350,7 +356,7 @@ fn note_instances_with_floor(
     now: f64,
     ppp: f32,
     ribbon_floor_scale: f32,
-) -> Vec<RollInstance> {
+) -> (Vec<RollInstance>, Vec<RollInstance>) {
     let cfg = &state.appearance.spectrum;
     // Shared time<->depth mapping: a `now`-anchored scrolling window.
     let time = TimeAxis::new(state, split, now);
@@ -446,12 +452,16 @@ fn note_instances_with_floor(
     // What that costs is sorting the notes that are inside the WINDOW but off
     // the octave zoom — a comparison each. What it buys is a cull that is
     // exact instead of one that is wrong by however steep the picture is.
-    let mut notes: Vec<&RollNote> = roll.notes().filter(|note| note.stop(now) >= edge).collect();
+    let mut notes: Vec<&RollNote> = roll
+        .notes()
+        .filter(|note| note.stop(now) >= edge || lead_alpha(note, now, cfg.roll_lead_release) > 0.0)
+        .collect();
     notes.sort_unstable_by(|a, b| a.start.total_cmp(&b.start).then_with(|| a.key().cmp(&b.key())));
 
     // One segment per note is the common case (a note is bent rarely), so the
     // note count is the right first guess at how many instances this makes.
     let mut instances = Vec::with_capacity(notes.len());
+    let mut detached = Vec::new();
     for note in notes {
         // The length floor is the NOTE's, not each segment's.
         //
@@ -538,6 +548,30 @@ fn note_instances_with_floor(
         // Separate from `roll_opacity`: release fades the lead without changing
         // the retained note's color strength.
         let standing = lead_alpha(note, now, cfg.roll_lead_release);
+        if note.end.is_some() && standing > 0.0 && lead_px > 0.0 {
+            let pitch = note.end_pitch();
+            let t = scale.t_of(pitch);
+            let ink_pitch =
+                (half_pitch + outline_px + 0.5 * feather_px) / axes.pitch_len().max(1e-3);
+            if t + ink_pitch >= 0.0 && t - ink_pitch <= 1.0 {
+                let half = 0.5 * lead_px;
+                let center = axes.at(t, split) - axes.dir_depth() * half;
+                detached.push(RollInstance {
+                    center: [center.x, center.y],
+                    half_extent: [half_pitch, half],
+                    shear: 0.0,
+                    outline_reach: outline_px,
+                    // The whole box is lead, so its opacity and configured tip
+                    // fade apply from the now-line to its analyzer-side tip.
+                    lead: lead_px,
+                    lead_fade: lead_fade_px,
+                    lead_alpha: standing,
+                    cap_reach: 0.0,
+                    core: note_color(state, pitch, cfg.roll_opacity).to_array(),
+                    outline: outline_color.to_array(),
+                });
+            }
+        }
         // Peekable so the loop can tell which segment is the LAST, which is the
         // one the lead extends: a note's segments run oldest first, so its
         // leading end is the far end of the last of them. The rest end on the
@@ -764,14 +798,15 @@ fn note_instances_with_floor(
             // of its final bend), so the one segment a lead can reach has no
             // shear to correct for. Written out because the correction belongs
             // to the shift rather than to that fact about the segments.
-            let (center, half_depth, lead_px, lead_fade_px, standing, cap_px) = if leads {
+            let attached_alpha = if note.end.is_none() { standing } else { 0.0 };
+            let (center, half_depth, lead_px, lead_fade_px, attached_alpha, cap_px) = if leads {
                 let half = lead_px * 0.5;
                 (
                     center - axes.dir_depth() * half - axes.dir_pitch() * (slope * half),
                     half_depth + half,
                     lead_px,
                     lead_fade_px,
-                    standing,
+                    attached_alpha,
                     cap_px,
                 )
             } else {
@@ -784,14 +819,30 @@ fn note_instances_with_floor(
                 outline_reach: outline_px,
                 lead: lead_px,
                 lead_fade: lead_fade_px,
-                lead_alpha: standing,
+                lead_alpha: attached_alpha,
                 cap_reach: cap_px,
                 core: core.to_array(),
                 outline: outline_color.to_array(),
             });
         }
     }
-    instances
+    (instances, detached)
+}
+
+#[cfg(test)]
+fn note_instances_with_floor(
+    axes: &Axes,
+    scale: &PitchScale,
+    state: &PictureState,
+    split: f32,
+    now: f64,
+    ppp: f32,
+    ribbon_floor_scale: f32,
+) -> Vec<RollInstance> {
+    let (mut notes, detached) =
+        roll_instances_with_floor(axes, scale, state, split, now, ppp, ribbon_floor_scale);
+    notes.extend(detached);
+    notes
 }
 
 /// The color of a note at `pitch`: the lattice's own, off the same
@@ -832,14 +883,20 @@ mod tests {
     /// The roll's geometry for `state`, derived exactly the way
     /// [`spectral_pane`](super::super::spectral_pane) derives it
     /// before handing over — same axes, same pitch scale, same split.
-    fn instances(state: &PictureState, now: f64) -> Vec<RollInstance> {
+    fn instance_groups(state: &PictureState, now: f64) -> (Vec<RollInstance>, Vec<RollInstance>) {
         let cfg = &state.appearance.spectrum;
         let axes = Axes::new(PANE, cfg);
         let min_midi = cfg.low_midi;
         let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
         let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
         let split = super::super::axes::spectrum_share(cfg);
-        note_instances(&axes, &scale, state, split, now, PPP)
+        roll_instances_with_floor(&axes, &scale, state, split, now, PPP, 1.0)
+    }
+
+    fn instances(state: &PictureState, now: f64) -> Vec<RollInstance> {
+        let (mut notes, detached) = instance_groups(state, now);
+        notes.extend(detached);
+        notes
     }
 
     /// One held note, and the instances the roll would draw for it. `range`
@@ -1823,27 +1880,38 @@ mod tests {
         state.runtime.tracker.handle_event(NoteEvent::off(4.0, SourceId::DIRECT, 0, 60));
 
         let at = |state: &PictureState, now: f64| {
-            let notes = instances(state, now);
-            let note = *one(&notes);
-            (note.lead, note.lead_alpha)
+            let (history, detached) = instance_groups(state, now);
+            let extension = detached.first().copied();
+            (history, extension)
         };
-        let (full_lead, _) = at(&state, 4.0);
+        let (_, first) = at(&state, 4.0);
+        let first = first.expect("the released extension did not detach");
+        let full_lead = first.lead;
+        let fixed_center = first.center;
         assert!(full_lead > 0.0, "the note carries no lead at the moment of release");
         // Quarters of the way through the release, and the opacity is the
         // fraction of it left.
         for (elapsed, want) in [(0.0f64, 1.0f32), (0.1, 0.75), (0.2, 0.5), (0.3, 0.25)] {
-            let (lead, alpha) = at(&state, 4.0 + elapsed);
+            let (history, detached) = at(&state, 4.0 + elapsed);
+            let extension = detached.expect("the extension vanished before its release ended");
             assert!(
-                (alpha - want).abs() < 1e-3,
-                "{elapsed}s into a 0.4s release the lead stands at {alpha}, not {want}",
+                (extension.lead_alpha - want).abs() < 1e-3,
+                "{elapsed}s into a 0.4s release the lead stands at {}, not {want}",
+                extension.lead_alpha,
             );
             assert!(
-                (lead - full_lead).abs() < 1e-3,
-                "the lead retracted to {lead} from {full_lead} while fading",
+                (extension.lead - full_lead).abs() < 1e-3,
+                "the lead retracted to {} from {full_lead} while fading",
+                extension.lead,
+            );
+            assert_eq!(extension.center, fixed_center, "the detached extension followed history");
+            assert!(
+                history.iter().all(|note| note.lead_alpha == 0.0),
+                "the scrolling note kept a visible attached extension",
             );
         }
         // And it is spent at the end of it, geometry and all.
-        assert_eq!(at(&state, 4.4), (0.0, 0.0), "the lead outlived its own release");
+        assert!(at(&state, 4.4).1.is_none(), "the lead outlived its own release");
 
         // A release of 0 is the instant drop, which is what someone dialling
         // the bar to its bottom is asking for and what the setting exists to
@@ -1852,27 +1920,44 @@ mod tests {
         // which is what keeps its outline off the analyzer. See
         // [`a_note_that_is_not_leading_keeps_its_ink_behind_the_line`].
         state.appearance.spectrum.roll_lead_release = 0.0;
-        let (lead, alpha) = at(&state, 4.0);
-        assert_eq!(alpha, 0.0, "a release of 0 kept the lead standing past the note-off");
-        assert!(lead > 0.0, "the note is still on the line; its box must not snap back yet");
+        let (history, detached) = at(&state, 4.0);
+        assert!(detached.is_none(), "a release of 0 kept a detached extension");
+        let body = one(&history);
+        assert_eq!(body.lead_alpha, 0.0, "a release of 0 kept the lead standing past note-off");
+        assert!(body.lead > 0.0, "the note is still on the line; its box must not snap back yet");
     }
 
-    /// The cap at the note's own end is standing WHILE the lead fades, so the
-    /// tongue dissolves off a dark edge that was already there.
-    ///
-    /// It is the other half of
-    /// [`a_released_notes_lead_fades_out_over_its_release_time`], and the half
-    /// a released note is actually watched through. The shader draws that cap
-    /// under the lead (`harmonigraph_render::RollInstance`'s `cap_reach`), so
-    /// what the release does is UNCOVER ink rather than deliver it — but only
-    /// as far as this hands the cap room, and a cap with no room is no cap.
-    /// Hand it none for the whole release and the edge still arrives in one
-    /// frame at the end of it; the pop simply moves.
+    #[test]
+    fn a_detached_extension_outlives_a_shorter_history_window() {
+        let mut state = fresh();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.roll_seconds = 1.0;
+        state.appearance.spectrum.low_midi = 48.0;
+        state.appearance.spectrum.high_midi = 84.0;
+        state.appearance.spectrum.roll_lead = 0.05;
+        state.appearance.spectrum.roll_lead_release = 2.0;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 60));
+
+        let (history, detached) = instance_groups(&state, 1.6);
+        assert!(history.is_empty(), "the note body still occupied a one-second history window");
+        let extension = one(&detached);
+        assert!(
+            (extension.lead_alpha - 0.25).abs() < 1e-3,
+            "1.5 s into a 2 s release the detached extension stood at {}",
+            extension.lead_alpha,
+        );
+    }
+
+    /// While the detached extension fades in the analyzer, the note body grows
+    /// its own cap only as far as it has scrolled clear of the now-line. The
+    /// body carries an invisible guard lead for that purpose: it keeps the cap
+    /// interior to the box until the cap can be drawn wholly in history.
     ///
     /// So: none at the note-off, when the note's end is on the line and the
     /// space past it is the lead's; growing as the note scrolls its own end
-    /// clear; and the outline's full reach well before the lead is spent, which
-    /// is what makes the rest of the release a crossfade.
+    /// clear; and the outline's full reach well before the detached extension
+    /// is spent.
     #[test]
     fn a_released_notes_cap_stands_while_its_lead_is_still_fading() {
         let mut state = fresh();
@@ -1889,9 +1974,12 @@ mod tests {
         state.runtime.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
         state.runtime.tracker.handle_event(NoteEvent::off(4.0, SourceId::DIRECT, 0, 60));
 
-        let at = |now: f64| *one(&instances(&state, now));
+        let at = |now: f64| {
+            let (history, detached) = instance_groups(&state, now);
+            (*one(&history), detached.first().map_or(0.0, |lead| lead.lead_alpha))
+        };
         // On the line, where the space past it is the lead's alone.
-        let off = at(4.0);
+        let (off, _) = at(4.0);
         assert_eq!(off.cap_reach, 0.0, "a note's end on the line was given cap to spend there");
 
         // Growing with the room, and never shrinking — the cap comes out of the
@@ -1900,7 +1988,7 @@ mod tests {
         let mut full_at = None;
         let mut elapsed = 0.0f64;
         while elapsed <= 0.4 {
-            let note = at(4.0 + elapsed);
+            let (note, _) = at(4.0 + elapsed);
             // Past the handover the box ends at the note and that end's cap is
             // the box's own outline, so this field says nothing and is zeroed
             // with the rest of the lead's numbers. That the cap is WHOLE by
@@ -1927,13 +2015,13 @@ mod tests {
             elapsed += 0.01;
         }
 
-        // And it got there with most of the tongue left to dissolve off it.
+        // And it got there while most of the detached extension was still visible.
         let full_at = full_at.expect("the cap never reached the outline's own reach");
-        let standing = at(4.0 + full_at).lead_alpha;
+        let standing = at(4.0 + full_at).1;
         assert!(
             standing > 0.5,
-            "the cap was only whole with {standing} of the lead left ({full_at}s in) — the \
-             release is not a crossfade at that point, it is the pop moved",
+            "the cap was only whole with {standing} of the detached extension left \
+             ({full_at}s in)",
         );
     }
 

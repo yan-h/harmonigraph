@@ -538,13 +538,9 @@ fn roll_scrolling(state: &SharedState, now: f64) -> bool {
     let cfg = &state.picture.appearance.spectrum;
     cfg.show_roll
         && cfg.roll_fraction > 0.0
-        && state
-            .picture
-            .runtime
-            .tracker
-            .roll()
-            .latest_activity(now)
-            .is_some_and(|last| now - last <= cfg.roll_seconds as f64)
+        && state.picture.runtime.tracker.roll().latest_activity(now).is_some_and(|last| {
+            now - last <= f64::from(cfg.roll_seconds.max(cfg.roll_lead_release))
+        })
 }
 
 #[cfg(test)]
