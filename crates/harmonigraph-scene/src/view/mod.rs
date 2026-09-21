@@ -199,6 +199,10 @@ pub struct ViewConfig {
     /// [`NoteNames::All`] is the label layer's own answer and carries no
     /// memory at all.
     pub note_names: NoteNames,
+    /// Whether the editor draws the active lattice map's assignment rings and
+    /// MIDI note labels over the lattice. The map and its tuning remain active
+    /// when these annotations are hidden.
+    pub show_map_indicators: bool,
     // How a sounding node's middle is painted has no field here: what lights
     // it is the node glow, and nothing switches that glow's paint. The field
     // styles (Vortex, Checker and Spiral) are gone with the core disc they
@@ -1618,6 +1622,10 @@ impl Default for ViewConfig {
             // the fresh view opens naming it: every visited node keeps its
             // name, and none of the unvisited ones carry text yet.
             note_names: NoteNames::Past,
+            // The selected map reads directly from the lattice by default;
+            // the Tuning pane can hide this editor annotation without
+            // changing which map tunes new notes.
+            show_map_indicators: true,
             // Effectively the built-in size (1) — where the marks and the
             // cents line are proportioned against, so this bar sizes the
             // whole label together.

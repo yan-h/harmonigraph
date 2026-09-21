@@ -66,6 +66,7 @@ fn poisoned_view() -> ViewConfig {
         label_scale: nan,
         show_cents: true,
         note_names: NoteNames::Played,
+        show_map_indicators: base.show_map_indicators,
         pitch_gradient,
         band_width: nan,
         ring_inner: nan,

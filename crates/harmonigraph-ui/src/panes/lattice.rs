@@ -232,7 +232,10 @@ pub(crate) fn draw_lattice(
         let engine = maps
             .map_or(harmonigraph_core::lattice_map::TuningEngine::Adaptive, |m| m.playback.engine);
         let active_map = maps
-            .filter(|_| engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap)
+            .filter(|_| {
+                engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
+                    && state.appearance.view.show_map_indicators
+            })
             .and_then(|m| m.playback.map);
         for node in &scene.nodes {
             let assigned = active_map
@@ -689,7 +692,7 @@ pub(crate) fn draw_node_labels(
     }
 }
 
-/// Both assignment engines use this one editor annotation style.
+/// The Lattice Map's saved assignments use one editor annotation style.
 fn draw_assignment_outline(painter: &egui::Painter, center: egui::Pos2) {
     painter.circle_stroke(
         center,
@@ -755,8 +758,8 @@ mod tests {
             "hidden edit mode must be suspended"
         );
         state.runtime.lattice_maps.as_mut().unwrap().playback.engine = TuningEngine::LatticeMap;
-        let count = |state: &mut PictureState, interactive: bool| {
-            frame_full(&ctx, screen, |ui| {
+        let annotations = |state: &mut PictureState, interactive: bool| {
+            let output = frame_full(&ctx, screen, |ui| {
                 let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
                 draw_lattice(
                     ui,
@@ -768,19 +771,39 @@ mod tests {
                     interactive.then_some(&response),
                     None,
                 );
-            })
-            .shapes
-            .iter()
-            .filter(
-                |shape| matches!(&shape.shape, egui::Shape::Circle(circle) if circle.radius == 8.0),
-            )
-            .count()
+            });
+            let outlines = output
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(&shape.shape, egui::Shape::Circle(circle) if circle.radius == 8.0)
+                })
+                .count();
+            let labels = output
+                .shapes
+                .iter()
+                .filter(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => crate::lattice_maps::MIDI_LABELS
+                        .iter()
+                        .any(|label| text.galley.text() == *label),
+                    _ => false,
+                })
+                .count();
+            (outlines, labels)
         };
-        assert!(count(&mut state, true) > 0, "the fixture must actually draw map outlines");
+        let shown = annotations(&mut state, true);
+        assert!(shown.0 > 0, "the fixture must actually draw map outlines");
+        assert!(shown.1 > 0, "the fixture must actually draw map labels");
         assert_eq!(
-            count(&mut state, false),
-            0,
+            annotations(&mut state, false),
+            (0, 0),
             "preview/export must omit the persisted map annotation"
+        );
+        state.appearance.view.show_map_indicators = false;
+        assert_eq!(
+            annotations(&mut state, true),
+            (0, 0),
+            "hiding map indicators must remove assignment outlines and labels from the interactive lattice"
         );
     }
 
