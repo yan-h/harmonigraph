@@ -364,7 +364,6 @@ fn every_bar_has_its_declared_height() {
         SettingsPane::Page(DisplayPage::Lattice),
         SettingsPane::Page(DisplayPage::Analyzer),
         SettingsPane::Page(DisplayPage::Spectrogram),
-        SettingsPane::Page(DisplayPage::Analysis),
         SettingsPane::Page(DisplayPage::System),
         SettingsPane::Page(DisplayPage::Lighting),
     ] {

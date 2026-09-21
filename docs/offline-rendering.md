@@ -107,7 +107,7 @@ The status line under the toggle tells you where the file is going and how many 
 The plugin also writes a WAV beside the take —
 always, with nothing to tick —
 so the render gets its spectrum and its soundtrack with no separate bounce and nothing to point at.
-It records whichever **Audio input** is selected on Display → Analysis:
+It records whichever **Audio input** is selected on Display → Analyzer:
 Main, or the host-routed Sidechain.
 An unrouted Sidechain records silence and never falls back to Main.
 The catch is placement:
