@@ -49,7 +49,6 @@ pub(super) fn standalone_marker(
     nodes.push(harmonigraph_scene::NodeInstance {
         lattice_pos: harmonigraph_core::LatticePos::new(node as i32, 0, 0),
         world_pos: glam::vec3(0.0, 0.0, -0.001),
-        color: glam::Vec4::ZERO,
         activation: 0.0,
         departing: false,
         slice_progress: [1.0; 11],
@@ -102,7 +101,6 @@ pub(super) fn parity_scene() -> Scene {
             // Cluster tightly around the origin so discs overlap and
             // draw order shows in the output.
             world_pos: Vec3::new(f * 0.45 - 1.1, (f % 3.0) * 0.4 - 0.4, f * 0.3 - 0.75),
-            color: Vec4::new(0.25 + f * 0.12, 0.55 - f * 0.05, 0.95 - f * 0.1, 1.0),
             activation: if i % 3 == 0 { 1.0 } else { 0.3 + f * 0.1 },
             // Nothing the shader draws reads this — it is the label layer's,
             // and labels are the UI crate's text pass, not the lattice pass.
@@ -485,7 +483,6 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     scene.nodes = vec![harmonigraph_scene::NodeInstance {
         lattice_pos: LatticePos::ORIGIN,
         world_pos: Vec3::ZERO,
-        color: Vec4::new(0.35, 0.55, 0.85, 1.0),
         activation: 1.0,
         // Held at full, so neither end of the envelope is running.
         departing: false,

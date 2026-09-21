@@ -388,31 +388,6 @@ fn a_marker_takes_back_what_a_names_fade_gives_up() {
 }
 
 #[test]
-fn an_unlit_node_carries_the_idle_grey_and_draws_nothing() {
-    // An idle node has no mark of its own: the marker standing at its position
-    // is what says the position is there. `color` is what a node with no
-    // voice on it falls back to, and nothing draws while it holds that -- so
-    // this pins the neutral rather than a look, and pins that the trail never
-    // overwrites it (see the trail tests).
-    //
-    // The GROUND, which is the marker's own colour: a node arriving or leaving
-    // has to cross no seam against the marker under it.
-    let view = plus_view();
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
-    let idle = scene.nodes.iter().find(|n| n.activation == 0.0).expect("nothing is playing");
-    assert_eq!(idle.color, scene.lattice_ground);
-    assert_eq!(
-        idle.color,
-        crate::grey_of_lightness(view.lattice_ground_lightness()),
-        "the fallback is not the grey the Ground bar names",
-    );
-    assert!(
-        scene.nodes.iter().all(|n| n.activation == 0.0),
-        "nothing sounds, so every node is idle",
-    );
-}
-
-#[test]
 fn a_resting_marker_is_the_grey_its_own_bar_names() {
     // A marker at rest IS the grey the Marker ink bar names — not a grey near
     // it, and not a brightness of one. Held at three settings, because one
@@ -442,30 +417,19 @@ fn a_resting_marker_is_the_grey_its_own_bar_names() {
     }
 }
 
-/// The node's two at-rest surfaces measured against EACH OTHER, through one
-/// derive: the audio ring's silent end and what an unplayed node falls back to
-/// are one colour.
-///
-/// The one test that fails if either is re-pinned to a grey of its own — which
-/// is the shape the bug takes, each surface aimed at the other by hand and
-/// landing a hair off. The markers are deliberately NOT in it; see
-/// [`the_two_at_rest_bars_move_nothing_of_each_others`] for the claim that
-/// replaces their membership.
+/// The audio ring's silent end agrees with the lattice ground at every setting.
 #[test]
-fn the_ring_and_an_idle_node_are_one_grey() {
+fn the_silent_ring_and_lattice_ground_are_one_grey() {
     for ground in [8.0f32, 20.0, 45.0] {
         let view = ViewConfig { lattice_ground: ground, ..plus_view() };
         let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
-        let idle = scene.nodes.iter().find(|n| n.activation == 0.0).expect("nothing is playing");
         let ring = crate::SpectralPaint::new(&view, crate::Gradient::default()).lut[0];
-        for (what, got) in [("an idle node", idle.color), ("the audio ring", ring)] {
-            let step = (got.truncate() - scene.lattice_ground.truncate()).abs().max_element();
-            assert!(
-                step * 255.0 < 0.5,
-                "at Ground {ground} {what} draws {got:?} against the ground's {:?}",
-                scene.lattice_ground,
-            );
-        }
+        let step = (ring.truncate() - scene.lattice_ground.truncate()).abs().max_element();
+        assert!(
+            step * 255.0 < 0.5,
+            "at Ground {ground} the audio ring draws {ring:?} against the ground's {:?}",
+            scene.lattice_ground,
+        );
     }
 }
 

@@ -787,26 +787,11 @@ fn the_two_marks_on_one_node_carry_their_own_sectors_colors() {
 }
 
 #[test]
-fn a_folded_note_keeps_its_own_color_and_marks_the_lit_sector_on_the_ramp() {
-    // Every voice is colored by pitch, so which PITCH each shape reads is the
-    // whole of what separates the disc from the mark outside it: the disc is
-    // the note's own pitch, the mark the pitch of the sector it extends. A
-    // note past the end of the wheel folds onto the outermost slot, so the
-    // two come apart there — and a mark following the note instead would
-    // paint C7 around the C6 indicator it points at.
+fn a_folded_note_marks_the_lit_sector_on_the_ramp() {
+    // A note past the wheel's end folds onto its outermost slot. Its mark
+    // takes that sector's pitch, so it cannot paint C7 around a C6 indicator.
     let (node, frame) = lone_mark(96, 4, 48.0); // C7, above a wheel centered on C3
     let slot = node.melody_slots.trailing_zeros();
     assert_ne!(slot, 8, "C7's own slot is 8; a wheel this narrow has to fold it");
     assert_eq!(node.melody_color, sector_color(&node, slot, &frame));
-    assert_eq!(
-        node.color,
-        pitch_lut_color(
-            96.0,
-            frame.darkest_pitch,
-            frame.brightest_pitch,
-            ViewConfig::default().pitch_gradient,
-        ),
-        "the disc is the note's own pitch"
-    );
-    assert_ne!(node.color, node.melody_color, "the fold is what puts them on different pitches");
 }

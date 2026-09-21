@@ -455,7 +455,6 @@ fn paint_reach(in: VsOut, aa: f32) -> f32 {
 
 struct Instance {
     @location(0) world_pos: vec3<f32>,
-    @location(1) color: vec4<f32>,
     // x: activation 0..1. y/z: the melody and bass marks' own levels, which
     // follow the marked voice rather than this node's activation — each
     // ring eases in over the scene layer's attack when its note takes that
@@ -536,7 +535,6 @@ struct ShadowCell {
 struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) uv: vec2<f32>, // -1..1 across the quad
-    @location(1) color: vec4<f32>,
     @location(2) params: vec4<f32>,
     @location(3) @interpolate(flat) octaves: vec3<u32>,
     @location(9) @interpolate(flat) motion: vec4<u32>,
@@ -710,7 +708,6 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     var out: VsOut;
     out.clip_pos = u.camera.view_proj * vec4<f32>(world, 1.0);
     out.uv = corner * margin;
-    out.color = inst.color;
     out.params = inst.params;
     out.octaves = inst.octaves;
     out.motion = inst.motion;

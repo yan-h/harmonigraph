@@ -219,7 +219,6 @@ fn scene_floats(scene: &Scene) -> Floats {
         let NodeInstance {
             lattice_pos: _,
             world_pos,
-            color,
             activation,
             departing: _,
             slice_progress,
@@ -240,7 +239,6 @@ fn scene_floats(scene: &Scene) -> Floats {
             trail,
         } = node;
         f.vec3(&format!("nodes[{i}].world_pos"), *world_pos);
-        f.vec4(&format!("nodes[{i}].color"), *color);
         f.one(format!("nodes[{i}].activation"), *activation);
         f.many(&format!("nodes[{i}].slice_progress"), *slice_progress);
         f.many(&format!("nodes[{i}].octaves"), *octaves);

@@ -133,7 +133,6 @@ struct VsOut {
     metal::float4 clip_pos;
     metal::float2 uv;
     char _pad2[8];
-    metal::float4 color;
     metal::float4 params;
     metal::uint3 octaves;
     metal::uint4 motion;
@@ -145,7 +144,7 @@ struct VsOut {
     float rim;
     float ring;
     float ink_carry;
-    char _pad14[4];
+    char _pad13[4];
     metal::float4 shadow_box;
     metal::float4 shadow_at;
 };
@@ -1668,7 +1667,6 @@ SplitOut node_split(
 
 struct fs_main_splitInput {
     metal::float2 uv [[user(loc0), center_perspective]];
-    metal::float4 color [[user(loc1), center_perspective]];
     metal::float4 params [[user(loc2), center_perspective]];
     metal::uint3 octaves [[user(loc3), flat]];
     metal::uint4 motion [[user(loc9), flat]];
@@ -1698,7 +1696,7 @@ fragment fs_main_splitOutput fs_main_split(
 , constant Uniforms& u [[buffer(0)]]
 , constant _mslBufferSizes& _buffer_sizes [[buffer(2)]]
 ) {
-    const VsOut in = { clip_pos, varyings.uv, {}, varyings.color, varyings.params, varyings.octaves, varyings.motion, varyings.cents, varyings.strip_row, varyings.marks, varyings.melody_color, varyings.bass_color, varyings.rim, varyings.ring, varyings.ink_carry, {}, varyings.shadow_box, varyings.shadow_at };
+    const VsOut in = { clip_pos, varyings.uv, {}, varyings.params, varyings.octaves, varyings.motion, varyings.cents, varyings.strip_row, varyings.marks, varyings.melody_color, varyings.bass_color, varyings.rim, varyings.ring, varyings.ink_carry, {}, varyings.shadow_box, varyings.shadow_at };
     Painted _e1 = node_paint(in, glow_tex, glow_sampler, shadow_atlas, shadow_sampler, shadow_casters, u, _buffer_sizes);
     SplitOut _e3 = node_split(_e1, _e1.seen, u);
     const auto _tmp = _e3;

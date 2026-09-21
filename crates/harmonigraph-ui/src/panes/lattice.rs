@@ -1024,7 +1024,6 @@ mod tests {
         harmonigraph_scene::NodeInstance {
             lattice_pos: harmonigraph_core::LatticePos::new(0, 0, if on_home { 0 } else { 1 }),
             world_pos: glam::Vec3::ZERO,
-            color: glam::Vec4::ONE,
             activation,
             departing: true,
             slice_progress: [1.0; 11],

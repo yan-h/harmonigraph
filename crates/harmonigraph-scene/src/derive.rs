@@ -3,7 +3,7 @@
 //! animation is applied afterwards by [`crate::NodeMotion`].
 
 use crate::camera::Camera;
-use crate::color::{pitch_lut_color, pitch_ramp_lut};
+use crate::color::pitch_ramp_lut;
 use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{finite_or, size, DrawnWindow, FrameParams, ViewConfig};
@@ -19,10 +19,6 @@ use harmonigraph_core::{LatticePos, NoteTracker, Tuning};
 /// rather than on every node the voice matches.
 struct FrameVoice<'a> {
     voice: &'a harmonigraph_core::Voice,
-    /// The pitch color the DISC and its octave sector take. The melody/bass
-    /// marks do not reuse it — they belong to the octave layer, colored by
-    /// axis position in [`crate::NodeMotion`].
-    color: Vec4,
     /// The note's own envelope, attack times what is left of the release:
     /// what the disc, the glow, the gutter and the octave sector all draw at.
     activation: f32,
@@ -59,20 +55,12 @@ pub fn derive_scene(
     // recompute each node's pitch class to do it.
     let mut node_pcs = Vec::with_capacity(window.count());
     let center = view.center();
-    // The NODE at rest, resolved once for the frame: what both of a node's
-    // rings stand on where nothing is lit, and the neutral an unplayed node
-    // falls back to. One resolve rather than two, so the two cannot answer
-    // differently.
+    // The ground both of a node's rings stand on where nothing is lit.
     let ground = crate::grey_of_lightness(view.lattice_ground_lightness());
     // The MARKERS at rest, off a bar of their own — the resting field is not
     // part of a node, and what it is dialled against is the light behind the
     // nodes rather than the ring a gap away.
     let marker_ground = crate::grey_of_lightness(view.marker_ink_lightness());
-    // Read by nothing that draws while a node stays unplayed -- an idle node
-    // paints no pixel -- so this is a fallback rather than a look. The rings'
-    // ground rather than an arbitrary grey so that a node arriving or leaving
-    // crosses no seam against the ring it is fading into.
-    let node_idle = ground;
     let env = view.envelope(frame);
     // Sanitized once, outside the node loop. Capped at 1: this axis makes
     // off-sheet nodes SMALLER, never larger, so the home sheet stays the
@@ -94,24 +82,14 @@ pub fn derive_scene(
         view.octave_extra_blend,
     );
 
-    // Voice colors and envelopes depend on the frame rather than the node.
+    // Voice envelopes depend on the frame rather than the node.
     // Resolve them once before matching pitch classes in the node loop.
     let voices: Vec<FrameVoice> = tracker
         .voices()
         .map(|voice| {
-            // The voice's OWN pitch. Nothing here asks which channel carried
-            // it: a channel is a routing detail of the host's, and two notes
-            // of one pitch draw identically whichever lanes they arrived on.
-            let color = pitch_lut_color(
-                voice.pitch,
-                frame.darkest_pitch,
-                frame.brightest_pitch,
-                view.pitch_gradient,
-            );
             let release = voice.release_level(now, &env);
             FrameVoice {
                 voice,
-                color,
                 activation: voice.activation(now, &env),
                 // Below full is the departure under way, and only that: the
                 // release holds at 1 until the key comes up AND the arrival
@@ -131,11 +109,10 @@ pub fn derive_scene(
         let (low_slot, high_slot) = octave_layout.slots(node_cents);
         let mut activation = 0.0f32;
         // Follows the voice that WINS the activation, so the flag describes
-        // the same voice the node is lit and colored by rather than any other
+        // the same voice the node is lit by rather than any other
         // one that happens to match this pitch class.
         let mut departing = false;
         let mut octaves = [0f32; OCTAVE_SLOTS];
-        let mut color = node_idle;
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
@@ -145,7 +122,6 @@ pub fn derive_scene(
                 let envelope = lit.activation;
                 if envelope > activation {
                     activation = envelope;
-                    color = lit.color;
                     departing = lit.departing;
                 }
                 // The slot whose own pitch on THIS node is the one sounding —
@@ -207,7 +183,6 @@ pub fn derive_scene(
         nodes.push(NodeInstance {
             lattice_pos: pos,
             world_pos,
-            color,
             activation,
             departing,
             slice_progress: [1.0; OCTAVE_SLOTS],

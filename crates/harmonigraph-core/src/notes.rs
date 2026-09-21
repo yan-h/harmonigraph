@@ -62,8 +62,8 @@ pub enum NoteEventKind {
 /// A note's MIDI channel carries no meaning here. It is kept on [`Voice`] and
 /// [`NoteEvent`] because it is part of a note's IDENTITY — the host's key for
 /// matching an off to its on, and what lets two lanes hold the same note
-/// number at once — and for nothing else. Every channel is tracked, drawn as
-/// a filled disc, and colored by pitch height on the gradient, so two notes
+/// number at once — and for nothing else. Every channel is tracked and
+/// colored by pitch height on the gradient, so two notes
 /// of one pitch are indistinguishable whichever lanes they arrived on.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct NoteEvent {
@@ -368,8 +368,6 @@ pub struct Voice {
     /// tuning (PolyTuning/MPE). Equal to `note` until a tuning arrives.
     pub pitch: f32,
     pub pitch_class: PitchClass,
-    /// MIDI octave (C4 = middle C = note 60 → octave 4).
-    pub octave: i8,
     pub on_time: Time,
     /// Presentation timestamp before a shell's moving clock offset.
     original_onset: Time,
@@ -403,7 +401,6 @@ impl Voice {
             velocity,
             pitch: 0.0,
             pitch_class: PitchClass::from_cents(0.0),
-            octave: 0,
             on_time,
             original_onset: on_time,
             visible_at_release: true,
@@ -419,19 +416,10 @@ impl Voice {
         VoiceKey { source: self.source, channel: self.channel, note: self.note }
     }
 
-    /// `pitch_class` and `octave` are pure functions of `pitch`; every
-    /// write goes through here so the three fields can never disagree.
+    /// Keep the sounding pitch and its pitch class in agreement on every bend.
     fn set_pitch(&mut self, pitch: f32) {
         self.pitch = pitch;
         self.pitch_class = PitchClass::from_cents(pitch * 100.0);
-        self.octave = (pitch / 12.0).floor() as i8 - 1;
-    }
-
-    /// The octave number for display, in Bitwig's convention where middle
-    /// C (MIDI 60) is C3. (The internal `octave` field uses the C4 = middle
-    /// C convention inherited from note/12 arithmetic.)
-    pub fn display_octave(&self) -> i8 {
-        self.octave - 1
     }
 
     /// What is left of this voice's RELEASE, `[0, 1]`: 1 for the whole of a
@@ -497,8 +485,8 @@ impl Voice {
 
 /// The display octave containing MIDI note `midi`, in Bitwig's convention
 /// where middle C (MIDI 60) is C3. The inverse of [`octave_start_midi`].
-/// Matches [`Voice::display_octave`]; use these rather than rewriting the
-/// `/ 12 - 2` by hand, so the convention lives in one place.
+/// Use this rather than rewriting `/ 12 - 2` by hand, so the convention
+/// lives in one place.
 pub fn display_octave_of(midi: i32) -> i32 {
     midi.div_euclid(12) - 2
 }
@@ -514,13 +502,8 @@ pub fn octave_start_midi(octave: i32) -> i32 {
 /// every pitch that has finished fading and a [`NoteRoll`] of when each
 /// note sounded.
 ///
-/// Ordered, not hashed, and that is load-bearing rather than a taste in
-/// containers: `voices()` decides which of two voices lighting ONE node
-/// wins its color, and a `HashMap`'s iteration order is seeded per map — so
-/// off one, the same take rendered twice picks different winners and produces
-/// different pixels (#135). A `BTreeMap` keyed by `(source, channel, note)` makes
-/// that choice a property of the music. The map holds a chord, so the
-/// ordering costs nothing worth measuring.
+/// Held voices iterate in `(source, channel, note)` order. Batch releases
+/// preserve that order in the released tail and history as well.
 #[derive(Default)]
 pub struct NoteTracker {
     held: BTreeMap<VoiceKey, Voice>,
@@ -849,8 +832,7 @@ impl NoteTracker {
         self.released.push(voice);
     }
 
-    /// Release matching voices in key order, preserving the released tail
-    /// order used to choose colors when equally strong voices share a node.
+    /// Release matching voices in key order, preserving the released tail order.
     fn release_held(&mut self, at: Time, leaving: impl Fn(&VoiceKey, &Voice) -> bool) {
         for (key, voice) in std::mem::take(&mut self.held) {
             if leaving(&key, &voice) {
@@ -928,10 +910,8 @@ impl NoteTracker {
     /// `(source, channel, note)` order, then the released ones in the order they
     /// were let go.
     ///
-    /// The order is part of the contract. Consumers accumulate over this —
-    /// the lattice's node color goes to the first voice at the winning
-    /// envelope, and every held voice shares one — so an unspecified order
-    /// is an unspecified picture.
+    /// The order is part of the contract, including ties between equally
+    /// strong voices in the scene's preliminary envelope pass.
     ///
     /// The two halves ask visibility of different state, and that is the
     /// whole rule. A HELD voice is filtered on the CURRENT `hidden_sources`,
@@ -1069,13 +1049,7 @@ mod tests {
         keys
     }
 
-    /// The order `voices()` hands the held voices back in is part of the
-    /// picture rather than an implementation detail. Every held voice sits
-    /// at activation 1.0, and the lattice gives a node's color and outline to
-    /// the FIRST voice at the winning envelope — so which of two voices
-    /// lighting one node (an octave doubling, say) wins is settled by this
-    /// order alone. Off a hashed map it is settled per process instead, and
-    /// one take rendered twice comes out with different pixels in it (#135).
+    /// Held voices keep their documented key order regardless of arrival order.
     #[test]
     fn held_voices_come_back_in_channel_note_order() {
         let mut tracker = NoteTracker::new();
@@ -1168,7 +1142,7 @@ mod tests {
     }
 
     #[test]
-    fn tuning_bends_pitch_class_and_octave() {
+    fn tuning_bends_pitch_and_pitch_class() {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60)); // C4
 
@@ -1183,7 +1157,6 @@ mod tests {
         let voice = tracker.voices().next().unwrap();
         assert_eq!(voice.pitch, 62.0);
         assert_eq!(voice.pitch_class, PitchClass::from_midi_note(2));
-        assert_eq!(voice.octave, 4);
 
         // Bend down past the octave boundary: B3.
         tracker.handle_event(NoteEvent {
@@ -1194,7 +1167,8 @@ mod tests {
             kind: NoteEventKind::Tuning { semitones: -1.0 },
         });
         let voice = tracker.voices().next().unwrap();
-        assert_eq!(voice.octave, 3);
+        assert_eq!(voice.pitch, 59.0);
+        assert_eq!(voice.pitch_class, PitchClass::from_midi_note(11));
     }
 
     /// Every channel is held as a voice. Channel 15 is the one worth naming:
@@ -1211,21 +1185,10 @@ mod tests {
     }
 
     #[test]
-    fn octave_is_derived_from_note_number() {
-        let mut tracker = NoteTracker::new();
-        tracker.handle_event(on(0.0, 60)); // middle C
-        let voice = tracker.voices().next().unwrap();
-        assert_eq!(voice.octave, 4);
-        assert_eq!(voice.pitch_class, PitchClass::from_midi_note(0));
-    }
-
-    #[test]
     fn display_octave_uses_bitwig_c3_convention() {
-        let mut tracker = NoteTracker::new();
-        tracker.handle_event(on(0.0, 60)); // middle C
-        let voice = tracker.voices().next().unwrap();
-        assert_eq!(voice.octave, 4); // internal: C4 = middle C
-        assert_eq!(voice.display_octave(), 3); // shown one lower, as C3
+        assert_eq!(display_octave_of(60), 3);
+        assert_eq!(display_octave_of(59), 2);
+        assert_eq!(octave_start_midi(3), 60);
     }
 
     /// A fade of `secs` with no attack, on a straight line.

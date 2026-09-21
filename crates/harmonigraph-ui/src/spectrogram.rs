@@ -241,8 +241,6 @@ struct ShadeLut {
     /// for. Two gradients that fold together draw one picture, so one table
     /// serves both; the entries themselves come off the gradient as dialled.
     gradient: Gradient,
-    /// Bumped on every rebuild, which is what the GPU copy is keyed on.
-    generation: u64,
     lut: Arc<Vec<[u8; 4]>>,
 }
 
@@ -311,7 +309,6 @@ impl FoldedGrid {
     fn shades(&mut self, cfg: &SpectrumConfig) -> SpectrogramShades {
         let gradient = what_decides_a_texel(cfg.spectrogram_gradient.sanitized());
         if self.lut.as_ref().is_none_or(|held| held.gradient != gradient) {
-            let generation = self.lut.as_ref().map_or(0, |held| held.generation) + 1;
             let lut = (0..SHADES)
                 .map(|i| {
                     crate::panes::spectral::spectrogram::cell_color(
@@ -321,10 +318,10 @@ impl FoldedGrid {
                     .to_array()
                 })
                 .collect();
-            self.lut = Some(ShadeLut { gradient, generation, lut: Arc::new(lut) });
+            self.lut = Some(ShadeLut { gradient, lut: Arc::new(lut) });
         }
         let held = self.lut.as_ref().expect("built above when the fold moved");
-        SpectrogramShades { generation: held.generation, lut: held.lut.clone() }
+        SpectrogramShades { lut: held.lut.clone() }
     }
 
     /// Full uploads taken since this surface was opened — see the field.
@@ -2580,11 +2577,11 @@ mod tests {
             let mut fresh = FoldedGrid::default();
             fresh.shades(c).lut
         };
-        // Whether the table `c` is served is a NEW one: the generation moves
+        // Whether the table `c` is served is a NEW one: its allocation changes
         // only where the fold does, whatever order these are asked in.
         let mut rebuilds = |c: &SpectrumConfig| {
-            let before = gpu.shades(&cfg).generation;
-            gpu.shades(c).generation != before
+            let before = gpu.shades(&cfg).lut;
+            !Arc::ptr_eq(&gpu.shades(c).lut, &before)
         };
 
         // Every knob of the gradient recolours every texel without moving a
@@ -3056,7 +3053,6 @@ mod tests {
         /// gamut solve.
         fn probe_shades() -> SpectrogramShades {
             SpectrogramShades {
-                generation: 1,
                 lut: Arc::new((0..256).map(|i| [i as u8, i as u8, i as u8, 255]).collect()),
             }
         }
@@ -3767,7 +3763,7 @@ mod tests {
                         texel_quad(&read, W, size),
                         grid_of(bytes),
                         read.clone(),
-                        SpectrogramShades { generation: 1, lut: lut.clone() },
+                        SpectrogramShades { lut: lut.clone() },
                     );
                     for (j, spectrum) in spectra.iter().enumerate() {
                         let curve = footprint_mean_db(spectrum, x0, x1);

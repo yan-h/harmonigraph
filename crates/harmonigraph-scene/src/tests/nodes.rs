@@ -166,15 +166,9 @@ fn drawable(c: glam::Vec4) -> bool {
     c.to_array().iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
 }
 
-/// The greys a scene draws its resting picture in: the node's ground, every
-/// resting marker's colour, and what an unplayed node falls back to.
-///
-/// Two resolves, not three — the markers are off
-/// [`ViewConfig::marker_ink`](crate::ViewConfig::marker_ink) and the other two
-/// off [`Scene::lattice_ground`] — so the sweeps below poison one bar at a time
-/// and check each answer against its own while the other stays at a distinct
-/// drawable grey.
-fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>, Vec4) {
+/// The ring ground and resting marker colours, each resolved from its own bar.
+/// Sweep one bar at a time while the other stays at a distinct drawable grey.
+fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>) {
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0);
     let lines: Vec<Vec4> = scene.pluses.iter().map(|d| d.color).collect();
     assert!(
@@ -182,13 +176,7 @@ fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>, Vec4) {
         "the home sheet has to draw a resting marker field, or the colours below \
          test nothing",
     );
-    let idle = scene
-        .nodes
-        .iter()
-        .find(|n| n.activation == 0.0)
-        .expect("nothing is playing, so every node is idle")
-        .color;
-    (scene.lattice_ground, lines, idle)
+    (scene.lattice_ground, lines)
 }
 
 /// A ground that is not a number still draws the lattice a grey, all the way
@@ -206,8 +194,8 @@ fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>, Vec4) {
 ///
 /// Through the DERIVE and not through the accessor alone, because the accessor
 /// exists precisely because the drawing code is reached by more routes than the
-/// persist door: the scene's ground, every resting marker and an idle node's
-/// fallback are all resolved through one of the two, and so is the audio ring's
+/// persist door: the scene's ground and every resting marker are resolved
+/// through their own accessor, and so is the audio ring's
 /// table one crate over. A repair missing from any of them is the same bug.
 ///
 /// Both bars, one at a time, with the other parked at a grey well away from the
@@ -226,10 +214,9 @@ fn a_non_finite_ground_still_draws_the_lattice_a_grey() {
             fresh.lattice_ground,
             "a ground of {broken} resolves to an L* no colour can be solved for",
         );
-        let (ground, pluses, idle) = ground_of(&rings);
+        let (ground, pluses) = ground_of(&rings);
         assert!(drawable(ground), "a ground of {broken} put {ground:?} in the scene");
         assert_eq!(ground, fresh_ground, "a ground of {broken} is not repaired to the fresh grey",);
-        assert_eq!(idle, ground, "a ground of {broken} left an idle node at {idle:?}");
         for marker in pluses {
             assert_eq!(marker, parked, "a ground of {broken} drew a marker {marker:?}");
         }
@@ -251,9 +238,8 @@ fn a_non_finite_ground_still_draws_the_lattice_a_grey() {
             fresh.marker_ink,
             "a marker ink of {broken} resolves to an L* no colour can be solved for",
         );
-        let (ground, pluses, idle) = ground_of(&markers);
+        let (ground, pluses) = ground_of(&markers);
         assert_eq!(ground, parked, "a marker ink of {broken} moved the rings to {ground:?}");
-        assert_eq!(idle, ground, "a marker ink of {broken} left an idle node at {idle:?}");
         for marker in pluses {
             assert!(drawable(marker), "a marker ink of {broken} drew a marker {marker:?}");
             assert_eq!(
@@ -300,9 +286,8 @@ fn a_ground_past_either_end_of_the_bar_is_held_to_the_l_star_axis() {
             want,
             "a marker ink of {asked} resolves to an L* off the axis",
         );
-        let (ground, pluses, idle) = ground_of(&markers);
+        let (ground, pluses) = ground_of(&markers);
         assert_eq!(ground, parked, "a marker ink of {asked} moved the rings to {ground:?}");
-        assert_eq!(idle, ground, "a marker ink of {asked} left an idle node at {idle:?}");
         for marker in pluses {
             assert!(drawable(marker), "a marker ink of {asked} put {marker:?} in the scene");
             assert_eq!(
@@ -318,7 +303,7 @@ fn a_ground_past_either_end_of_the_bar_is_held_to_the_l_star_axis() {
             want,
             "a ground of {asked} resolves to an L* off the axis",
         );
-        let (ground, pluses, idle) = ground_of(&view);
+        let (ground, pluses) = ground_of(&view);
         assert!(drawable(ground), "a ground of {asked} put {ground:?} in the scene");
         assert_eq!(
             ground,
@@ -328,7 +313,6 @@ fn a_ground_past_either_end_of_the_bar_is_held_to_the_l_star_axis() {
         for marker in pluses {
             assert_eq!(marker, parked, "a ground of {asked} drew a marker {marker:?}");
         }
-        assert_eq!(idle, ground, "a ground of {asked} left an idle node at {idle:?}");
     }
 }
 
@@ -366,7 +350,7 @@ fn a_broken_ground_reads_back_as_the_grey_it_draws() {
             view.marker_ink, want_marker,
             "the blob's door left a marker ink of {broken} as it was",
         );
-        let (ground, pluses, ..) = ground_of(&view);
+        let (ground, pluses) = ground_of(&view);
         assert!(drawable(ground), "a repaired ground of {broken} still draws {ground:?}");
         assert_eq!(
             ground,
@@ -1258,7 +1242,6 @@ fn the_reading_leaves_the_midi_picture_alone() {
             let at = was.lattice_pos;
             assert_eq!(now.activation, was.activation, "{reading:?} changed {at:?}'s activation");
             assert_eq!(now.octaves, was.octaves, "{reading:?} changed {at:?}'s held octaves");
-            assert_eq!(now.color, was.color, "{reading:?} repainted {at:?}");
             assert_eq!(now.melody_slots, was.melody_slots, "{reading:?} moved {at:?}'s melody");
             assert_eq!(now.bass_slots, was.bass_slots, "{reading:?} moved {at:?}'s bass mark");
         }
@@ -1316,7 +1299,6 @@ fn the_gate_takes_the_ring_and_leaves_the_node() {
         let at = was.lattice_pos;
         assert_eq!(now.activation, was.activation, "the gate changed {at:?}'s activation");
         assert_eq!(now.octaves, was.octaves, "the gate changed {at:?}'s held octaves");
-        assert_eq!(now.color, was.color, "the gate repainted {at:?}");
         assert_eq!(now.melody_slots, was.melody_slots, "the gate moved {at:?}'s melody mark");
         // The partial is an F#, and the wheel gives every node its own octaves
         // of that class — so a node rings where its class is the partial's,

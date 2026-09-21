@@ -722,7 +722,7 @@ impl TextBatch {
                 std::mem::take(&mut self.drawn),
             )
         };
-        let marks = marks_if_changed(painter.ctx(), &state.instruments.font_atlas);
+        let marks = marks_snapshot(painter.ctx());
         let sdf = shadow.map(|_| crate::text_sdf::sheet().atlas.clone());
         painter.add(harmonigraph_render::text_paint_callback(
             rect,
@@ -751,8 +751,8 @@ impl TextBatch {
     ///
     /// The font atlas normally reaches both callbacks as egui's renderer
     /// texture. The `atlas` value below is the independently tracked fallback
-    /// for shells that cannot publish that texture; the mark sheet is also
-    /// tracked per renderer because each owns its own GPU copy.
+    /// for shells that cannot publish that texture. Every nonempty batch
+    /// carries the current mark sheet for the renderer to compare.
     pub(crate) fn lattice_labels(
         &mut self,
         painter: &egui::Painter,
@@ -785,7 +785,7 @@ impl TextBatch {
                     std::mem::take(&mut self.drawn),
                 )
             };
-            (atlas, marks_if_changed(painter.ctx(), &state.instruments.lattice_atlas))
+            (atlas, marks_snapshot(painter.ctx()))
         };
         let mut glyphs = std::mem::take(&mut self.glyphs);
         for glyph in &mut glyphs {
@@ -867,13 +867,6 @@ pub(crate) struct AtlasMirror {
     /// Bumped on every fallback refresh; the callback compares it against
     /// what it last uploaded.
     key: u64,
-    /// The version of the MARK sheet this renderer was last handed. Nothing
-    /// like the four guards above is needed for it: that sheet is ours, so it
-    /// carries a version of its own and this is simply which one has been
-    /// published here (see [`marks_if_changed`]). It rides along in this
-    /// struct because a mirror answers for one RENDERER's copies, and each
-    /// renderer holds both sheets.
-    marks_key: u64,
 }
 
 impl AtlasMirror {
@@ -887,18 +880,11 @@ impl AtlasMirror {
     /// `key` is deliberately kept: it counts publications rather than
     /// describing an atlas, and a renderer that survived the context still
     /// compares against the last one it uploaded, so it has to keep rising.
-    ///
-    /// `marks_key` goes, and for the opposite reason: the mark sheet lives in
-    /// the context's own data store, so a new context builds a new one, and
-    /// "already published" here would name a sheet that no longer exists.
-    /// Belt and braces — [`next_sheet_key`] is process-wide, so the new
-    /// sheet's versions are past this one's anyway.
     pub(crate) fn forget_context(&mut self) {
         self.seen.clear();
         self.size = [0, 0];
         self.ppp = 0;
         self.fill = 0.0;
-        self.marks_key = 0;
     }
 }
 
@@ -939,18 +925,10 @@ fn atlas_if_changed(
     Some(harmonigraph_render::FontAtlas { image, key: mirror.key })
 }
 
-/// The drawn marks' sheet, on the frames one renderer's mirror of it is
-/// stale, and `None` on the rest.
-///
-/// Simpler than [`atlas_if_changed`], and for one reason: this atlas is OURS.
-/// egui's has to be probed for staleness a glyph at a time because nothing
-/// says when it moved; here the only thing that moves it is a mark being
-/// packed, which happens right here, so the sheet carries a version and the
-/// comparison is that version against what this renderer was last handed.
-fn marks_if_changed(
-    ctx: &egui::Context,
-    mirror: &std::sync::Mutex<AtlasMirror>,
-) -> Option<harmonigraph_render::FontAtlas> {
+/// Current immutable marks for every nonempty batch. Only the renderer knows
+/// which snapshot reached `prepare`; a discarded callback must not suppress
+/// the next publication. Its uploaded-key check avoids redundant GPU writes.
+fn marks_snapshot(ctx: &egui::Context) -> Option<harmonigraph_render::FontAtlas> {
     let sheet = mark_sheet(ctx);
     let sheet = sheet.lock().expect("the mark sheet is never held across a panic");
     // Nothing has ever been packed — a shell that draws no note names, or a
@@ -958,11 +936,6 @@ fn marks_if_changed(
     if sheet.key == 0 {
         return None;
     }
-    let mut mirror = mirror.lock().expect("the label mirror is never held across a panic");
-    if mirror.marks_key == sheet.key {
-        return None;
-    }
-    mirror.marks_key = sheet.key;
     Some(harmonigraph_render::FontAtlas { image: sheet.image.clone(), key: sheet.key })
 }
 
@@ -1004,7 +977,7 @@ pub(crate) struct MarkPatch {
 pub(crate) struct MarkAtlas {
     /// Behind an `Arc` because publishing it is handing this very image to a
     /// renderer: a mutation while one is still held clones (`Arc::make_mut`),
-    /// and the ordinary case — nobody holding it — mutates in place.
+    /// and a mutation with no retained callbacks changes it in place.
     image: std::sync::Arc<egui::ColorImage>,
     at: std::collections::HashMap<crate::marks::MarkKey, MarkPatch>,
     /// The shelf being filled: the row it starts on, how tall it is, and how
@@ -1418,6 +1391,8 @@ mod tests {
         let mut sheet = MarkAtlas::default();
         let first = mark_at(MarkKind::Plus, 11.0);
         let early = sheet.patch(first, 0);
+        let published = sheet.image.clone();
+        let published_pixels = published.pixels.clone();
         for &key in a_zooms_worth() {
             sheet.patch(key, 0);
         }
@@ -1427,6 +1402,8 @@ mod tests {
             sheet.image.size,
         );
         assert_eq!(sheet.patch(first, 0), early, "a patch moved under the pass that was handed it");
+        assert_eq!(published.pixels, published_pixels, "growth mutated a published snapshot");
+        assert!(!std::sync::Arc::ptr_eq(&published, &sheet.image));
         assert_eq!(
             patched(&sheet, early).pixels,
             crate::marks::rasterize_mark(first).pixels,
@@ -1461,6 +1438,9 @@ mod tests {
         }
         let filled = sheet.image.height();
         assert!(filled as u32 > MARK_SHEET_SOFT_HEIGHT, "the walk has to fill the sheet: {filled}");
+        let published = sheet.image.clone();
+        let published_pixels = published.pixels.clone();
+        let published_key = sheet.key;
 
         // The camera stops: from here on the pass draws three marks at one
         // size, and asks for them again on every frame.
@@ -1477,6 +1457,9 @@ mod tests {
         );
 
         let patches: Vec<_> = live.iter().map(|&key| sheet.patch(key, 2)).collect();
+        assert_eq!(published.pixels, published_pixels, "repacking mutated a published snapshot");
+        assert!(!std::sync::Arc::ptr_eq(&published, &sheet.image));
+        assert_ne!(sheet.key, published_key);
         assert!(
             sheet.image.height() * 4 < filled,
             "the sheet stayed at {:?} a pass after the zoom stopped",
@@ -1542,41 +1525,58 @@ mod tests {
         }
     }
 
-    /// The sheet reaches a renderer when it moves, and not otherwise.
-    ///
-    /// One publication per change is the whole cost model: the sheet is a
-    /// `ColorImage` handed over to be written into a texture whole, so an
-    /// unconditional hand-over is a full re-upload per pane per frame. Nothing
-    /// downstream would look wrong, which is why this is a test rather than
-    /// something a picture catches.
+    /// Dropping a callback before prepare cannot consume the sheet publication.
     #[test]
-    fn the_mark_sheet_is_published_when_it_moves_and_not_otherwise() {
+    fn an_unchanged_nonempty_batch_keeps_publishing_the_mark_snapshot() {
         let ctx = egui::Context::default();
         let state = crate::tests::probe::fresh();
-        let mirror = &state.picture.instruments.font_atlas;
-
-        // Nothing packed: there is no sheet to publish, on any frame.
-        assert!(marks_if_changed(&ctx, mirror).is_none(), "an empty sheet publishes nothing");
-
-        let sheet = mark_sheet(&ctx);
-        sheet.lock().expect("fresh").patch(mark_at(MarkKind::Plus, 11.0), 0);
-        assert!(marks_if_changed(&ctx, mirror).is_some(), "a first mark has to reach the renderer");
-        assert!(marks_if_changed(&ctx, mirror).is_none(), "nothing has moved");
-
-        // A mark already packed is not a change...
-        sheet.lock().expect("held").patch(mark_at(MarkKind::Plus, 11.0), 0);
-        assert!(marks_if_changed(&ctx, mirror).is_none(), "the same mark again is the same sheet");
-        // ...and a new one is.
-        sheet.lock().expect("held").patch(mark_at(MarkKind::Sharp, 11.0), 0);
-        assert!(marks_if_changed(&ctx, mirror).is_some(), "a new mark has to reach the renderer");
-
-        // The lattice keeps a mirror of its own, and it holds none of this:
-        // each mirror answers for ONE renderer's texture, and a sheet
-        // published to the text callback is not in the lattice's copy.
-        assert!(
-            marks_if_changed(&ctx, &state.picture.instruments.lattice_atlas).is_some(),
-            "a second renderer must be shown the sheet too, not told it already has it",
-        );
+        assert!(marks_snapshot(&ctx).is_none(), "an empty sheet publishes nothing");
+        let mut first = None;
+        for _ in 0..3 {
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let mut batch = TextBatch::default();
+                batch.mark(
+                    &ctx,
+                    mark_at(MarkKind::Plus, 11.0),
+                    egui::pos2(20.0, 20.0),
+                    1.0,
+                    egui::Color32::WHITE,
+                    egui::Color32::BLACK,
+                );
+                let labels = batch.lattice_labels(
+                    ui.painter(),
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
+                    &state.picture,
+                );
+                assert_eq!(labels.glyphs.len(), 1, "a nonempty mark batch must reach publication");
+                let published =
+                    labels.marks.as_ref().expect("each batch supplies the current marks");
+                if let Some(held) = &first {
+                    let held: &harmonigraph_render::FontAtlas = held;
+                    assert_eq!(
+                        published.key, held.key,
+                        "the fixture must keep the sheet unchanged"
+                    );
+                    assert!(std::sync::Arc::ptr_eq(&published.image, &held.image));
+                } else {
+                    first = Some(published.clone());
+                }
+                // The callback is never prepared. The following identical batch
+                // must still carry what a renderer starting empty needs.
+                drop(harmonigraph_render::text_paint_callback(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
+                    labels.glyphs,
+                    Vec::new(),
+                    None,
+                    harmonigraph_render::SheetUploads { font: labels.atlas, marks: labels.marks },
+                    None,
+                    harmonigraph_render::SlideAxis::Both,
+                    state.picture.surfaces.target_format,
+                    harmonigraph_render::PaneIds { pane: 0, pass_nr: ctx.cumulative_pass_nr() },
+                    None,
+                ));
+            });
+        }
     }
 
     /// Lay `text` out at `ppp` and report exactly what a pane drawing it would
@@ -1943,6 +1943,7 @@ mod tests {
     fn a_lattice_that_drew_no_names_hands_over_no_atlas() {
         let ctx = egui::Context::default();
         let state = crate::tests::probe::fresh();
+        mark_sheet(&ctx).lock().expect("fresh sheet").patch(mark_at(MarkKind::Plus, 11.0), 0);
         let mut published = 0usize;
         // Several frames: the first publication is the one that would seed
         // `seen` and quiet the rest, and with nothing drawn there is none.
@@ -1954,7 +1955,8 @@ mod tests {
                     egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
                     &state.picture,
                 );
-                published += usize::from(labels.atlas.is_some());
+                published +=
+                    usize::from(labels.atlas.is_some()) + usize::from(labels.marks.is_some());
             });
         }
         assert_eq!(published, 0, "an empty batch publishes no atlas, on any frame");
