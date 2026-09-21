@@ -291,6 +291,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     }
 
     let workspace = &mut state.workspace;
+    workspace.interaction.analyzer_regions.begin_frame();
     // Before the dock lays out: a pane collapsed inside a horizontal split
     // folds sideways to a rail, which is a split fraction, which is layout's
     // input. egui_dock's own vertical folds need nothing from us.
@@ -349,18 +350,35 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // rectangles can place — and the separators those folds pinned, which
     // resize the panes a user sees them dividing (see `fold::shove_target`).
     fold::paint(ui, &mut workspace.dock, &dock_style, &workspace.dial);
+    if let Some(request) = workspace.interaction.analyzer_regions.request {
+        let regions = &mut workspace.interaction.analyzer_regions;
+        regions.window = regions.window.max(area);
+        if let Some(change) = workspace.dial.resize_tab(
+            &workspace.dock,
+            &dock_style,
+            panes::Tab::Spectral,
+            request.width_change,
+            regions.window,
+        ) {
+            workspace.window_width_change += change;
+            regions.land();
+        }
+    }
     // Apply the explicit request after the dock traversal has finished.
     if std::mem::take(&mut state.workspace.interaction.reset_layout) {
         // The default layout has every pane open, so the window gets back
         // whatever the folds being thrown away were holding — priced off the
         // dock they are in, so before it is replaced.
-        state.workspace.window_width_change += state.workspace.folds.clear(
+        let whole = state.workspace.folds.clear(
             &state.workspace.dock,
             &dock_style,
             &state.workspace.dial,
             area,
         );
+        state.workspace.window_width_change +=
+            whole.max(state.workspace.interaction.analyzer_regions.reset_width(area));
         state.workspace.dock = default_dock();
+        state.workspace.interaction.analyzer_regions = Default::default();
         // The flags describe the tree being thrown away (see [`fold::Dial::forget`]).
         state.workspace.dial.forget();
     }

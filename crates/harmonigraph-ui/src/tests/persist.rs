@@ -1052,6 +1052,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "version",
         "dock",
         "folds",
+        "analyzer_regions",
         "display_page",
         "appearance",
         "camera_presets",

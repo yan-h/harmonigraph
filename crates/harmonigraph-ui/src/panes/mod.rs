@@ -33,7 +33,6 @@ use console::console_pane;
 use display::display_pane;
 use lattice::lattice_pane;
 use render::render_pane;
-use spectral::spectral_pane;
 use spiral::spiral_pane;
 use tuning::tuning_pane;
 
@@ -278,15 +277,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
                 // `spectral_pane` too, and either holding its own size would be
                 // a second answer overwriting this one in the single fraction
                 // all three compose from.
-                spectral::hold_spectrum(self.state, ui.available_size());
-                spectral_pane(
-                    ui,
-                    self.state,
-                    self.now,
-                    DOCKED_SURFACE,
-                    1.0,
-                    spectral::Navigation::Docked,
-                )
+                self.interaction.analyzer_regions.draw(ui, self.state, self.now);
             }
             Tab::Spiral => spiral_pane(ui, self.state, self.now, DOCKED_SURFACE),
             Tab::Video => render_pane(ui, self.state, self.interaction, self.now),

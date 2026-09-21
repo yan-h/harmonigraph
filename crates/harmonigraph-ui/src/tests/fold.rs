@@ -4,6 +4,179 @@
 use super::harness::*;
 use crate::*;
 
+fn region_click(h: &mut DockHarness, state: &mut SharedState, index: usize) {
+    let id = egui::Id::new(("analyzer region fold", index));
+    let at = h.ctx.read_response(id).expect("region control is drawn").rect.center();
+    h.frame(state, vec![egui::Event::PointerMoved(at)]);
+    h.frame(state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+    h.frame(state, vec![press(at, false)]);
+}
+
+#[test]
+fn analyzer_regions_fold_independently_and_restore_the_original_geometry() {
+    for orientation in [SpectralOrientation::Left, SpectralOrientation::Right] {
+        for first in [0, 1] {
+            let mut state = fresh();
+            state.picture.appearance.spectrum.orientation = orientation;
+            let mut h = DockHarness::new();
+            h.settle(&mut state);
+            let before = [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning]
+                .map(|tab| pane_body(&state, &tab).unwrap().width());
+            let appearance = state.picture.appearance.serialize();
+            let window = h.screen.width();
+            for index in [first, 1 - first] {
+                region_click(&mut h, &mut state, index);
+                assert!(
+                    !state.workspace.interaction.analyzer_regions.collapsed[index],
+                    "click frame retains its old picture"
+                );
+                h.settle_folds(&mut state);
+                assert!(state.workspace.interaction.analyzer_regions.collapsed[index]);
+                assert!(h.screen.width() < window - 10.0);
+                for (tab, width) in
+                    [(panes::Tab::Lattice, before[0]), (panes::Tab::Tuning, before[2])]
+                {
+                    assert!(
+                        (pane_body(&state, &tab).unwrap().width() - width).abs() < 1.0,
+                        "{tab:?} resized during {orientation:?} region {index} fold"
+                    );
+                }
+            }
+            // Folding the container preserves both independently folded regions.
+            h.collapse_click(&mut state, panes::Tab::Spectral);
+            h.collapse_click(&mut state, panes::Tab::Spectral);
+            assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [true; 2]);
+            for index in [first, 1 - first] {
+                region_click(&mut h, &mut state, index);
+                h.settle_folds(&mut state);
+            }
+            assert!((h.screen.width() - window).abs() < 1.0);
+            for (tab, width) in [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning]
+                .into_iter()
+                .zip(before)
+            {
+                assert!(
+                    (pane_body(&state, &tab).unwrap().width() - width).abs() < 1.0,
+                    "{orientation:?}, first {first}: {tab:?} did not return to {width}: {:?}",
+                    pane_body(&state, &tab)
+                );
+            }
+            assert_eq!(
+                state.picture.appearance.serialize(),
+                appearance,
+                "folding never edits a video's appearance"
+            );
+        }
+    }
+}
+
+#[test]
+fn analyzer_region_restore_survives_a_saved_project() {
+    let mut state = fresh();
+    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let width = h.screen.width();
+    let lattice = pane_body(&state, &panes::Tab::Lattice).unwrap().width();
+    region_click(&mut h, &mut state, 1);
+    h.settle_folds(&mut state);
+    let saved = state.save_persist();
+    let mut reopened = fresh();
+    assert!(reopened.load_persist(&saved));
+    h.settle(&mut reopened);
+    assert!(
+        (pane_body(&reopened, &panes::Tab::Lattice).unwrap().width() - lattice).abs() < 1.0,
+        "saved layout retains neighboring widths"
+    );
+    assert_eq!(reopened.workspace.take_window_width_change(), None);
+    assert_eq!(reopened.workspace.interaction.analyzer_regions.collapsed, [false, true]);
+    region_click(&mut h, &mut reopened, 1);
+    h.settle_folds(&mut reopened);
+    assert!((h.screen.width() - width).abs() < 1.0, "saved internal fold lost its restore ceiling");
+}
+
+#[test]
+fn analyzer_region_restore_respects_a_split_edited_while_folded() {
+    let mut state = fresh();
+    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    region_click(&mut h, &mut state, 1);
+    h.settle_folds(&mut state);
+    // The Video preview edits this shared appearance dial while the editor's
+    // own divider is hidden. Its new value must invalidate the old hold.
+    state.picture.appearance.spectrum.roll_fraction = 0.35;
+    h.settle(&mut state);
+    region_click(&mut h, &mut state, 1);
+    h.settle_folds(&mut state);
+    let body = pane_body(&state, &panes::Tab::Spectral).unwrap();
+    let split =
+        h.ctx.read_response(egui::Id::new(("spectral-split", 0usize))).unwrap().rect.center().x;
+    assert!(((split - body.left()) / body.width() - 0.65).abs() < 0.01);
+}
+
+#[test]
+fn analyzer_region_folds_remain_usable_when_the_host_constrains_the_window() {
+    for floor in [0.0, 950.0] {
+        let mut state = fresh();
+        state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.workspace.min_window_width = floor;
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        for index in [0, 1, 0, 1] {
+            region_click(&mut h, &mut state, index);
+            if floor == 0.0 {
+                // A host that rejects the request entirely.
+                state.workspace.take_window_width_change();
+                h.settle(&mut state);
+            } else {
+                h.settle_folds(&mut state);
+            }
+            assert_eq!(
+                state.workspace.take_window_width_change(),
+                None,
+                "no repeated resize requests"
+            );
+        }
+        assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
+        assert!((h.screen.width() - 1000.0).abs() < 1.0);
+    }
+}
+
+#[test]
+fn analyzer_vertical_region_folds_stay_inside_the_shared_window_height() {
+    for orientation in [SpectralOrientation::Top, SpectralOrientation::Bottom] {
+        let mut state = fresh();
+        state.picture.appearance.spectrum.orientation = orientation;
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        let lattice = pane_body(&state, &panes::Tab::Lattice).unwrap();
+        for index in [0, 1, 0, 1] {
+            region_click(&mut h, &mut state, index);
+            h.settle_folds(&mut state);
+            assert_eq!(pane_body(&state, &panes::Tab::Lattice).unwrap(), lattice);
+            assert_eq!(h.screen.width(), 1000.0);
+        }
+        assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
+    }
+}
+
+#[test]
+fn resetting_the_dock_restores_space_held_by_analyzer_regions() {
+    let mut state = fresh();
+    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    region_click(&mut h, &mut state, 1);
+    h.settle_folds(&mut state);
+    assert!(h.screen.width() < 900.0);
+    state.workspace.reset_dock_layout();
+    h.frame(&mut state, vec![]);
+    h.settle_folds(&mut state);
+    assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
+    assert!((h.screen.width() - 1000.0).abs() < 1.0);
+}
+
 /// The layout opens with the Console folded to its tab bar, and with nothing
 /// else folded.
 ///

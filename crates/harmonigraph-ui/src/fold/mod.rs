@@ -200,6 +200,31 @@ use crate::panes::Tab;
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Folds(Vec<Fold>);
 
+/// Save the horizontal layout that was drawn. egui_dock clamps fractions for
+/// the NEXT separator drag after laying out; a two-rail Analyzer is narrower
+/// than that drag floor, so persisting the clamped fraction would move its
+/// neighbors on reload. Vertical fractions retain their open-pane proportions.
+pub(crate) fn saved_dock(dock: &DockState<Tab>) -> DockState<Tab> {
+    let mut saved = dock.clone();
+    let tree = saved.main_surface_mut();
+    for index in 0..tree.len() {
+        let node = NodeIndex(index);
+        if !tree[node].is_horizontal() || node.right().0 >= tree.len() {
+            continue;
+        }
+        let (Some(parent), Some(left), Some(right)) =
+            (tree[node].rect(), tree[node.left()].rect(), tree[node.right()].rect())
+        else {
+            continue;
+        };
+        if parent.is_positive() && left.is_finite() && right.is_finite() {
+            let midpoint = (left.right() + right.left()) * 0.5;
+            set_fraction(tree, node, ((midpoint - parent.left()) / parent.width()).clamp(0.0, 1.0));
+        }
+    }
+    saved
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Fold {
     /// Which split, as an index into the tree. Valid only while the tree keeps
@@ -797,6 +822,56 @@ fn restore(tree: &mut Tree<Tab>, flags: &[Flags]) {
 }
 
 impl Dial {
+    /// A region inside a pane changed its width. Use the same points and host
+    /// handshake as whole-pane folds, so the arriving window cannot be read
+    /// as a manual resize and shared among every pane. Called AFTER drawing:
+    /// the new fractions and internal visibility land on the next frame.
+    ///
+    /// Stacked panes share geometry with another visible picture. They fold
+    /// locally instead of changing a width another pane still needs.
+    pub(crate) fn resize_tab(
+        &mut self,
+        dock: &DockState<Tab>,
+        style: &egui_dock::Style,
+        tab: Tab,
+        delta: f32,
+        ceiling: f32,
+    ) -> Option<f32> {
+        if self.wait.is_some() {
+            return None;
+        }
+        let Some(path) = dock.find_tab(&tab) else { return Some(0.0) };
+        if path.surface != SurfaceIndex::main() || !delta.is_finite() || delta.abs() < 0.01 {
+            return Some(0.0);
+        }
+        let tree = dock.main_surface();
+        let Node::Leaf(leaf) = &tree[path.node] else { return Some(0.0) };
+        if leaf.collapsed || self.pass.points.at.len() != tree.len() {
+            return Some(0.0);
+        }
+        let mut ancestor = path.node;
+        while let Some(parent) = ancestor.parent() {
+            if tree[parent].is_vertical() {
+                return Some(0.0);
+            }
+            ancestor = parent;
+        }
+        let at = &mut self.pass.points.at[path.node.0];
+        *at = (*at + delta).max(style.tab_bar.height);
+        let want = wants(
+            tree,
+            &holds(tree),
+            &self.pass.points.at,
+            style.tab_bar.height,
+            style.separator.width,
+        )
+        .0[0];
+        self.widest = self.widest.max(self.pass.area).max(ceiling);
+        let asking = (want - self.pass.area).min((self.widest - self.pass.area).max(0.0));
+        self.asked |= asking.abs() > 0.01;
+        Some(asking)
+    }
+
     /// Drop everything that names the tree by index, for a dock being replaced
     /// wholesale — a reset, or a load that brings its own layout.
     ///
@@ -1361,7 +1436,11 @@ fn drags(
                 if moved.abs() < 1e-6 {
                     continue;
                 }
-                if (split.fraction - unmoved(wrote, drew, style.separator.extra)).abs() < 1e-6 {
+                // egui clamps against its pixel-rounded rectangle. Using the
+                // theoretical width here can mistake that entire clamp for a
+                // drag when an internal fold leaves a pane below the drag floor.
+                let range = tree[node].rect().map_or(drew, |rect| rect.width());
+                if (split.fraction - unmoved(wrote, range, style.separator.extra)).abs() < 1e-6 {
                     continue;
                 }
                 // The boundary has already travelled this frame's worth, so the

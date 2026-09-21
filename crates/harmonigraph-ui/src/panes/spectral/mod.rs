@@ -15,6 +15,7 @@
 
 mod atmosphere;
 pub(crate) mod axes;
+pub(crate) mod collapse;
 mod gestures;
 pub(crate) mod names;
 pub(crate) mod roll;
@@ -53,6 +54,8 @@ pub(crate) enum Navigation {
     None,
     /// The docked picture pane, whose body itself never scrolls.
     Docked,
+    /// A docked picture with editor-only regions clipped away.
+    Folded(RegionView),
     /// The live Video preview, nested inside the Video tab's ScrollArea.
     Preview,
 }
@@ -188,6 +191,11 @@ pub(crate) fn spectral_pane(
 ) {
     use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
+    let regions = match navigation {
+        Navigation::Folded(regions) => Some(regions),
+        _ => None,
+    };
+
     let cfg = state.appearance.spectrum;
     // Drag-sensing, so the pitch range can be panned and the Span or the Level
     // zoomed by grabbing the picture (see `drag_zoom`). Registered BEFORE the
@@ -215,8 +223,8 @@ pub(crate) fn spectral_pane(
     // pane's hold on the spectrum's size (see `spectrum_split`). Both gestures
     // take it rather than reading the config themselves, so the band a hand
     // grabs is the line the picture shows.
-    let at_split = spectrum_split(state, surface);
-    let divider = (cfg.show_roll || cfg.show_spectrogram)
+    let at_split = regions.map_or_else(|| spectrum_split(state, surface), |r| r.split);
+    let divider = (regions.is_none() && (cfg.show_roll || cfg.show_spectrogram))
         .then(|| drag_split(ui, &axes, state, surface, at_split));
     drag_zoom(ui, &axes, &response, state, surface, at_split, navigation);
     // Re-snapshot: the two drags above just wrote `roll_fraction`, the pitch
@@ -230,7 +238,8 @@ pub(crate) fn spectral_pane(
     // reads as the hold no longer describing this picture — so the divider
     // follows the pointer this frame, and the hold re-takes it on the next.
     let cfg = state.appearance.spectrum;
-    let split = spectrum_split(state, surface);
+    let split = regions.map_or_else(|| spectrum_split(state, surface), |r| r.split);
+    let [show_spectrum, show_history] = regions.map_or([true; 2], |r| r.shown);
 
     // The axis: absolute pitch, linear in MIDI note = logarithmic in
     // frequency, so every octave gets equal room and every note draws at
@@ -265,7 +274,8 @@ pub(crate) fn spectral_pane(
     // Labels ride the end of the spectrum its PEAKS reach, not the baseline
     // they stand on, and which screen edge that is flips with the mirroring
     // above — see `label_anchor` for both.
-    let (label_d, label_into) = label_anchor(split);
+    let (label_d, label_into) =
+        if show_spectrum { label_anchor(split) } else { (split, LABEL_INSET_PT) };
     // Where a level sits on the pane: the level axis runs 0 (the floor, the
     // baseline the curve stands on) to 1 (the ceiling its peaks reach) over the
     // spectrum's depth budget, mirrored by `sd` exactly as the curve is. One
@@ -282,7 +292,7 @@ pub(crate) fn spectral_pane(
     // color, so covered and un-covered silence match whatever the quad is tinted
     // with: `Color32` is premultiplied, so a black texel over this bed
     // composites to black at every alpha.
-    if cfg.show_spectrogram && split < 1.0 {
+    if show_history && cfg.show_spectrogram && split < 1.0 {
         let bed = egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
         painter.rect_filled(bed, 0.0, egui::Color32::BLACK);
     }
@@ -327,7 +337,7 @@ pub(crate) fn spectral_pane(
     // The guard is that same rule at its limit rather than a crash guard: a
     // `split` of 0 is a roll dragged shut over the curve, so there is nothing
     // to rule. Avoid generating invisible zero-length ruling segments.
-    if split > 0.0 {
+    if show_spectrum && split > 0.0 {
         for ruling in &grid {
             let fade = if ruling.decade { RULING_FADE.0 } else { RULING_FADE.1 } * 0.4;
             painter.line_segment(
@@ -372,14 +382,14 @@ pub(crate) fn spectral_pane(
     // paints can meet anything the roll paints is ON the line dividing them —
     // which is why the marks for `now` go after all three. Turning the ribbons
     // off (`show_roll`) with the spectrogram on leaves the heatmap alone.
-    if split < 1.0 && cfg.show_spectrogram {
+    if show_history && split < 1.0 && cfg.show_spectrogram {
         spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
     }
 
     // Audio spectrum: the FFT of the shell's audio source, every partial
     // at its actual pitch. Fundamentals line up under their voice bars;
     // the harmonic series marches up the axis from each note.
-    if split > 0.0 {
+    if show_spectrum && split > 0.0 {
         if let Some(levels) = state.runtime.spectrum.display(now) {
             // Only the buckets inside the pitch range.
             // One slab per pitch PIXEL, each reading the whole run of buckets
@@ -433,7 +443,7 @@ pub(crate) fn spectral_pane(
     // for it, instead of recoloring the note and costing you the one thing the
     // ribbon's color is for. Same match the Notes pane
     // uses, over the same window.
-    if split > 0.0 {
+    if show_spectrum && split > 0.0 {
         let shown = state.shown();
         let mut voices: Vec<&harmonigraph_core::Voice> = state
             .runtime
@@ -467,7 +477,7 @@ pub(crate) fn spectral_pane(
     // happens AT the line: a sounding note's ribbon reaches it and carries its
     // lead a little way past, into the spectrum peak it is making (see
     // `roll::lead`, and the divider below for what still draws over it).
-    if split < 1.0 && cfg.show_roll {
+    if show_history && split < 1.0 && cfg.show_roll {
         roll::draw_roll(
             &painter,
             &axes,
@@ -550,7 +560,7 @@ pub(crate) fn spectral_pane(
     let level_edge = axes.dir_pitch();
     let level_depth = axes.dir_depth();
     let into = level_label_into(joined);
-    for level in levels.iter().filter(|level| level.numbered) {
+    for level in levels.iter().filter(|level| show_spectrum && level.numbered) {
         let label = level_label(level.db);
         let (pos, align) = axes.text_anchor(1.0, level_d(level.level), -LABEL_INSET_PT, into);
         // Two corrections, on the two axes the anchor offsets along: the inset a
@@ -575,8 +585,10 @@ pub(crate) fn spectral_pane(
     // Each note's own name, over the ribbon it belongs to. In the same batch
     // as the axis labels, and so over the same pictures: a name that could be
     // buried by a loud slab — or by the ribbon it is naming — names nothing.
-    let note_names = names::plan(state, &axes, &scale, split, now, text.names);
-    names::draw(&painter, &note_names, text.names.label, &mut labels);
+    if show_history {
+        let note_names = names::plan(state, &axes, &scale, split, now, text.names);
+        names::draw(&painter, &note_names, text.names.label, &mut labels);
+    }
     // Flushed before the divider: a batch is drawn where it is flushed, and
     // the divider belongs over the plots, not under the names.
     labels.flush(
@@ -629,6 +641,14 @@ pub(crate) fn spectral_pane(
 /// this; the one answer serves both.
 fn names_slide(cfg: &crate::SpectrumConfig) -> harmonigraph_render::SlideAxis {
     harmonigraph_render::SlideAxis::vertical(cfg.orientation.is_time_vertical())
+}
+
+/// A folded editor region is clipped off a virtual full-size picture. Keeping
+/// its original axis preserves the surviving curve's direction and scale.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RegionView {
+    split: f32,
+    shown: [bool; 2],
 }
 
 #[cfg(test)]
