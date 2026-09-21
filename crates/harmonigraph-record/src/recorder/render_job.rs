@@ -132,6 +132,21 @@ struct InFlight {
     child: std::process::Child,
 }
 
+/// Stop the renderer and its encoder together. Killing only the renderer
+/// leaves ffmpeg holding stderr while it pads audio through the planned end,
+/// so `follow` and the next queued render would wait for all of that work.
+/// The unreaped child leads the private process group established at spawn.
+fn kill_render(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    if let Ok(pid) = libc::pid_t::try_from(child.id()) {
+        // SAFETY: a spawned child's PID is positive and cannot be reused
+        // before wait; its negative names only the group we created for it.
+        unsafe { libc::kill(-pid, libc::SIGKILL) };
+    }
+    // Also serves non-Unix targets and falls back if group signalling failed.
+    let _ = child.kill();
+}
+
 /// Hands a take's claim back when its run ends, by whichever of the render
 /// thread's several exits it takes — including the two that stand down before
 /// spawning anything. A claim left behind would make the next request for that
@@ -175,7 +190,7 @@ impl RenderControl {
     fn cancel_in_flight(&self, take: &std::path::Path) {
         if let Some(flight) = self.child.lock().as_mut() {
             if flight.take == take {
-                let _ = flight.child.kill();
+                kill_render(&mut flight.child);
             }
         }
     }
@@ -201,7 +216,7 @@ impl RenderControl {
         let mut in_flight = self.child.lock();
         let Some(flight) = in_flight.as_mut() else { return false };
         self.claims.lock().remove(&flight.take);
-        let _ = flight.child.kill();
+        kill_render(&mut flight.child);
         true
     }
 
@@ -394,6 +409,11 @@ pub(super) fn spawn_render(
         #[cfg(not(feature = "test-support"))]
         let program = request.program;
         let mut command = std::process::Command::new(&program);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
         command.arg(&take_path).arg("--out").arg(&partial);
         if let Some(file) = &appearance_file {
             command.arg("--appearance").arg(file);
@@ -432,7 +452,7 @@ pub(super) fn spawn_render(
         {
             let mut in_flight = control.child.lock();
             if control.superseded(&take_path, generation) {
-                let _ = child.kill();
+                kill_render(&mut child);
             }
             *in_flight = Some(InFlight { take: take_path.clone(), child });
         }
