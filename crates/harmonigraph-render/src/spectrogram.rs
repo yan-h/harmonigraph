@@ -104,8 +104,6 @@ pub struct SpectrogramRead {
 /// colour is otherwise a gamut bisection and a Newton solve, per fragment.
 #[derive(Clone)]
 pub struct SpectrogramShades {
-    /// Changes when the table does; the GPU copy is re-uploaded on a new value.
-    pub generation: u64,
     pub lut: Arc<Vec<[u8; 4]>>,
 }
 
@@ -278,7 +276,10 @@ struct LutTexture {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     levels: u32,
-    generation: u64,
+    /// The immutable table actually uploaded, independent of callback construction.
+    snapshot: Arc<Vec<[u8; 4]>>,
+    #[cfg(test)]
+    uploads: usize,
 }
 
 struct SpectrogramPane {
@@ -555,13 +556,20 @@ impl CallbackTrait for SpectrogramCallback {
                 view_formats: &[],
             });
             let view = texture.create_view(&Default::default());
-            pane.lut =
-                Some(LutTexture { texture, view, levels, generation: self.shades.generation });
+            pane.lut = Some(LutTexture {
+                texture,
+                view,
+                levels,
+                snapshot: self.shades.lut.clone(),
+                #[cfg(test)]
+                uploads: 0,
+            });
             remade = true;
         }
         let lut = pane.lut.as_mut().expect("created above when missing");
-        if fresh_lut || lut.generation != self.shades.generation {
-            lut.generation = self.shades.generation;
+        if fresh_lut
+            || (!Arc::ptr_eq(&lut.snapshot, &self.shades.lut) && lut.snapshot != self.shades.lut)
+        {
             queue.write_texture(
                 lut.texture.as_image_copy(),
                 bytemuck::cast_slice(self.shades.lut.as_slice()),
@@ -572,7 +580,13 @@ impl CallbackTrait for SpectrogramCallback {
                 },
                 wgpu::Extent3d { width: levels, height: 1, depth_or_array_layers: 1 },
             );
+            #[cfg(test)]
+            {
+                lut.uploads += 1;
+            }
         }
+        // An equal-content replacement becomes the identity fast path next frame.
+        lut.snapshot = self.shades.lut.clone();
 
         if remade || pane.bind_group.is_none() {
             let grid = pane.grid.as_ref().expect("a drawable frame holds a grid");
@@ -1029,7 +1043,7 @@ mod tests {
     }
 
     fn shades() -> SpectrogramShades {
-        SpectrogramShades { generation: 1, lut: ramp_lut() }
+        SpectrogramShades { lut: ramp_lut() }
     }
 
     /// The read's scalars for a visible range of `span` semitones from
@@ -2231,6 +2245,66 @@ mod tests {
     }
 
     #[test]
+    fn palette_uploads_follow_prepared_snapshots_and_resource_lifetimes() {
+        let Some((device, queue)) = headless_device() else { return };
+        let mut resources = CallbackResources::default();
+        let mut cb = cloud_fixture();
+        let uploaded = |resources: &CallbackResources| {
+            let lut = resources
+                .get::<SpectrogramResources>()
+                .unwrap()
+                .panes
+                .get(0)
+                .unwrap()
+                .lut
+                .as_ref()
+                .unwrap();
+            (lut.texture.clone(), lut.snapshot.clone(), lut.uploads)
+        };
+        let first = frame_with(&device, &queue, &mut resources, &cb);
+        let (texture, snapshot, _) = uploaded(&resources);
+        assert_eq!(first, frame_with(&device, &queue, &mut resources, &cb));
+        assert_eq!(uploaded(&resources).2, 1, "identical Arc must not upload twice");
+
+        cb.shades.lut = Arc::new((*snapshot).clone());
+        assert!(!Arc::ptr_eq(&snapshot, &cb.shades.lut));
+        assert_eq!(first, frame_with(&device, &queue, &mut resources, &cb));
+        let (held, retained, writes) = uploaded(&resources);
+        assert_eq!(held, texture);
+        assert_eq!(writes, 1, "equal bytes in a new Arc must not upload");
+        assert!(Arc::ptr_eq(&retained, &cb.shades.lut), "retain the new fast-path identity");
+
+        let changed =
+            Arc::new(cb.shades.lut.iter().map(|c| [c[2], c[1], 0, 255]).collect::<Vec<_>>());
+        let mut discarded = cloud_fixture();
+        discarded.shades.lut = changed.clone();
+        drop(discarded);
+        let (_, retained, writes) = uploaded(&resources);
+        assert!(Arc::ptr_eq(&retained, &cb.shades.lut));
+        assert_eq!(writes, 1, "constructing a callback cannot advance upload truth");
+
+        cb.shades.lut = changed;
+        let recolored = frame_with(&device, &queue, &mut resources, &cb);
+        assert_ne!(first, recolored, "the fixture must draw the changed palette");
+        assert_eq!(recolored, fresh_frame(&device, &queue, &cb));
+        assert_eq!(uploaded(&resources).0, texture, "same size reuses the texture");
+        assert_eq!(uploaded(&resources).2, 2, "changed bytes must upload");
+
+        cb.shades.lut = Arc::new(cb.shades.lut.iter().step_by(2).copied().collect());
+        let resized = frame_with(&device, &queue, &mut resources, &cb);
+        assert_eq!(resized, fresh_frame(&device, &queue, &cb));
+        let (grown, _, writes) = uploaded(&resources);
+        assert_ne!(grown, texture, "new dimensions require a new texture");
+        assert_eq!(writes, 1, "a new texture must receive the snapshot");
+
+        resources = CallbackResources::default();
+        assert_eq!(resized, frame_with(&device, &queue, &mut resources, &cb));
+        let (recreated, _, writes) = uploaded(&resources);
+        assert_ne!(recreated, grown);
+        assert_eq!(writes, 1, "fresh resources must upload even the same Arc");
+    }
+
+    #[test]
     fn spectral_cloud_targets_refresh_after_palette_resize_disable_and_empty_frames() {
         let Some((device, queue)) = headless_device() else {
             return;
@@ -2238,7 +2312,6 @@ mod tests {
         let mut resources = CallbackResources::default();
         let mut cb = cloud_fixture();
         let first = frame_with(&device, &queue, &mut resources, &cb);
-        cb.shades.generation += 1;
         cb.shades.lut = Arc::new(cb.shades.lut.iter().map(|c| [c[2], c[1], 0, 255]).collect());
         let recolored = frame_with(&device, &queue, &mut resources, &cb);
         assert_ne!(first, recolored, "palette change retained old cloud colors");
