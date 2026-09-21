@@ -1,11 +1,11 @@
 //! Drawing the rails a sideways fold leaves behind, and the handles that work
-//! them: the pane's own tab painted up the rail, the arrow that brings it back,
+//! them: the pane's own tab painted up the rail, the click that brings it back,
 //! and the separators the fold has pinned — which still resize what a user sees
 //! them dividing, by passing the drag out to the split that can move (see
 //! [`shove_target`]).
 //!
 //! The layout these draw is [`super`]'s; nothing here decides a width. What it
-//! reads back — an arrow clicked, a pinned separator dragged — goes to the next
+//! reads back — a rail clicked, a pinned separator dragged — goes to the next
 //! frame through the collapsed flags and the fractions in the tree, which is
 //! where a width becomes layout again.
 
@@ -66,11 +66,10 @@ const ARROW_BUTTON: f32 = 24.0;
 /// Runs AFTER the dock, so it works from this frame's rectangles and paints
 /// over the parts of the tab bar it is replacing.
 ///
-/// It takes the CLICK too, wherever egui_dock's own button for a pane is not
-/// where the pane's stretch of rail begins — down a folded column that is all
-/// of them but the first. Hence `&mut`: an arrow that opens nothing would be
-/// worse than one in the wrong place, so the button has to move for real
-/// rather than just in paint.
+/// It takes clicks across each pane's stretch of rail, including the title,
+/// and across ordinary collapsed tab bars that have not folded sideways.
+/// Hence `&mut`: a rail that opens the wrong pane would be worse than an arrow
+/// in the wrong place, so the hit regions follow the painted stretches.
 ///
 /// A rail is drawn as the pane's own TAB — the tab's fill, the tab title's type
 /// and color — because that is what it has become: a pane too narrow to hold
@@ -91,7 +90,7 @@ pub fn paint(ui: &egui::Ui, dock: &mut DockState<Tab>, style: &egui_dock::Style,
     // arrow that reappears on its rail. Frameless is a toggle over the same
     // layout, so nothing is stranded by that.
     let chrome = rail > 0.0;
-    // The pane an arrow of ours was clicked for, and the split a pinned
+    // The pane a rail of ours was clicked for, and the split a pinned
     // separator passed a drag out to: both applied once the tree is no longer
     // being read from.
     let mut opened = None;
@@ -99,6 +98,8 @@ pub fn paint(ui: &egui::Ui, dock: &mut DockState<Tab>, style: &egui_dock::Style,
     lit(ui, dock, style, dial);
     if let Some(tree) = dock.get_surface(SurfaceIndex::main()).and_then(Surface::node_tree) {
         let holds = holds(tree);
+        let mut click_regions = Vec::new();
+        let mut painted = vec![false; tree.len()];
         // A dock folded WHOLE names no folded child anywhere: the width a fold
         // gives up is its parent's to take, and the root has no parent (see
         // [`holds`](super::holds)). The loop below is keyed on that name, so
@@ -112,8 +113,10 @@ pub fn paint(ui: &egui::Ui, dock: &mut DockState<Tab>, style: &egui_dock::Style,
         if whole {
             if chrome {
                 for band in name_bands(tree, NodeIndex::root()) {
-                    if paint_band(ui, &band, Side::Left, style) {
-                        opened = Some(band.node);
+                    paint_band(ui, &band, Side::Left, style);
+                    if !painted[band.node.0] {
+                        painted[band.node.0] = true;
+                        click_regions.push((band.node, band.rect));
                     }
                 }
             }
@@ -155,8 +158,10 @@ pub fn paint(ui: &egui::Ui, dock: &mut DockState<Tab>, style: &egui_dock::Style,
             }
             if chrome {
                 for band in name_bands(tree, folded) {
-                    if paint_band(ui, &band, side, style) {
-                        opened = Some(band.node);
+                    paint_band(ui, &band, side, style);
+                    if !painted[band.node.0] {
+                        painted[band.node.0] = true;
+                        click_regions.push((band.node, band.rect));
                     }
                 }
             }
@@ -192,13 +197,61 @@ pub fn paint(ui: &egui::Ui, dock: &mut DockState<Tab>, style: &egui_dock::Style,
                 }
             }
         }
+        if chrome {
+            // A pane folded only in height still has its ordinary dock tab bar
+            // (the Console at startup is one). Give the whole bar the same
+            // restore gesture as a sideways rail, once it has settled to a bar.
+            for (index, was_painted) in painted.iter().enumerate() {
+                let node = NodeIndex(index);
+                if *was_painted || !tree[node].is_collapsed() {
+                    continue;
+                }
+                if let Node::Leaf(leaf) = &tree[node] {
+                    if leaf.rect.is_positive() && leaf.rect.height() <= rail + 2.0 {
+                        click_regions.push((node, leaf.rect));
+                    }
+                }
+            }
+            // Register these after suppressing the old, misplaced arrows in a
+            // folded column. That suppression must not leave a dead patch in
+            // the pane whose painted stretch contains one of those arrows.
+            for (node, rect) in click_regions {
+                // The dock's separator reaches into a rail by three points.
+                // Keep that edge available for dragging rather than opening.
+                let reach = style.separator.extra_interact_width * 0.5;
+                let hit = if rect.width() <= rail + 2.0 {
+                    rect.shrink2(egui::vec2(reach, 0.0))
+                } else {
+                    rect.shrink2(egui::vec2(0.0, reach))
+                };
+                if !hit.is_positive() {
+                    continue;
+                }
+                let response = ui
+                    .interact(hit, egui::Id::new(("fold rail", node.0)), egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if let Node::Leaf(leaf) = &tree[node] {
+                    if let Some(tab) = leaf.tabs.get(leaf.active.0) {
+                        let name = crate::panes::tab_title(tab);
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                true,
+                                format!("Expand {name}"),
+                            )
+                        });
+                    }
+                }
+                if response.clicked() {
+                    opened = Some(node);
+                }
+            }
+        }
     }
     // Opened here, and held shut again by [`Folds::apply`] on the next frame
     // until the window can hold the pane (see [`Wait`]). Nothing is handed
     // over: the hold watches the collapsed flags themselves, so it does not
-    // care which arrow moved them — and egui_dock's own collapse button, which
-    // it draws for a folded leaf too, moves them from inside `show` where
-    // nothing of ours can intercept it.
+    // care whether our rail or egui_dock's own collapse button moved them.
     let Some(tree) = dock.get_surface_mut(SurfaceIndex::main()).and_then(Surface::node_tree_mut)
     else {
         return;
@@ -287,7 +340,6 @@ fn shove(ui: &egui::Ui, band: egui::Rect, id: egui::Id, style: &egui_dock::Style
 }
 
 /// One pane's stretch of a rail: its own arrow at the top, its name under it.
-/// Answers whether that arrow was clicked.
 ///
 /// The arrow goes at the top of the pane's OWN stretch, which is not where
 /// egui_dock puts it. A collapsed leaf gets one tab bar at the top of its
@@ -295,12 +347,11 @@ fn shove(ui: &egui::Ui, band: egui::Rect, id: egui::Id, style: &egui_dock::Style
 /// another — so the whole column's arrows end up stacked in the first inches
 /// of the rail, identical and all pointing the same way, with nothing to say
 /// which pane each one opens. So this draws the arrow where it belongs and
-/// takes the click there, and egui_dock's own is painted over and lifted out
-/// of the frame's hit test: left live it would open a pane from a point the
-/// rail now gives to another pane's name.
-fn paint_band(ui: &egui::Ui, band: &Band, side: Side, style: &egui_dock::Style) -> bool {
+/// suppresses egui_dock's old button there. The new hit regions are registered
+/// after every misplaced button has been suppressed.
+fn paint_band(ui: &egui::Ui, band: &Band, side: Side, style: &egui_dock::Style) {
     if !band.rect.is_positive() {
-        return false;
+        return;
     }
     let rail = style.tab_bar.height;
     ui.painter().rect_filled(band.rect, egui::CornerRadius::ZERO, style.tab.active.bg_fill);
@@ -315,12 +366,10 @@ fn paint_band(ui: &egui::Ui, band: &Band, side: Side, style: &egui_dock::Style) 
     // the first pane of a column alike: its own arrow is under ours and needs
     // nothing from us.
     if (band.rect.top() - band.leaf.rect.top()).abs() < 0.5 {
-        return false;
+        return;
     }
     let id = egui::Id::new(("fold arrow", band.node.0));
-    let clicked = ui.interact(arrow, id, egui::Sense::click()).clicked();
     ui.interact(arrow_button(band.leaf.rect, style), id.with("stacked"), egui::Sense::click());
-    clicked
 }
 
 /// Each pane in a folded subtree with the stretch of rail that is ITS pane:

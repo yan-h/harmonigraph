@@ -7,9 +7,53 @@ use crate::*;
 fn region_click(h: &mut DockHarness, state: &mut SharedState, index: usize) {
     let id = egui::Id::new(("analyzer region fold", index));
     let at = h.ctx.read_response(id).expect("region control is drawn").rect.center();
+    click_at(h, state, at);
+}
+
+fn click_at(h: &mut DockHarness, state: &mut SharedState, at: egui::Pos2) {
     h.frame(state, vec![egui::Event::PointerMoved(at)]);
     h.frame(state, vec![egui::Event::PointerMoved(at), press(at, true)]);
     h.frame(state, vec![press(at, false)]);
+}
+
+#[test]
+fn collapsed_panes_open_from_the_middle_of_their_rails() {
+    for tab in [panes::Tab::Console, panes::Tab::Lattice, panes::Tab::Spectral] {
+        let mut state = fresh();
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        if tab != panes::Tab::Console {
+            h.collapse_click(&mut state, tab);
+        }
+        assert!(collapsed(&state, tab));
+        let rail = pane_rect(&state, tab);
+        assert!(
+            rail.width() < 40.0 || rail.height() < 40.0,
+            "{tab:?} did not settle to a rail: {rail:?}"
+        );
+        click_at(&mut h, &mut state, rail.center());
+        h.settle_folds(&mut state);
+        assert!(!collapsed(&state, tab), "{tab:?} did not open from its rail body");
+    }
+}
+
+#[test]
+fn a_folded_column_opens_only_the_pane_whose_rail_share_was_clicked() {
+    for (share, selected, other) in [
+        (0.25, panes::Tab::Tuning, panes::Tab::Console),
+        (0.75, panes::Tab::Console, panes::Tab::Tuning),
+    ] {
+        let mut state = fresh();
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        h.collapse_click(&mut state, panes::Tab::Tuning);
+        let rail = rail_rect(&state, &[panes::Tab::Tuning, panes::Tab::Console]);
+        let at = egui::pos2(rail.center().x, rail.top() + rail.height() * share);
+        click_at(&mut h, &mut state, at);
+        h.settle_folds(&mut state);
+        assert!(!collapsed(&state, selected), "{selected:?} did not open from its rail share");
+        assert!(collapsed(&state, other), "the click also opened {other:?}");
+    }
 }
 
 #[test]
@@ -1038,11 +1082,11 @@ fn a_folded_columns_lower_arrow_opens_its_own_pane() {
     );
 }
 
-/// The arrow egui_dock left stacked at the top of the rail no longer opens
-/// anything: it sits inside the share above it now, under another pane's name,
-/// and a click there would open a pane the rail says nothing about.
+/// The arrow egui_dock left stacked at the top of the rail belongs to the
+/// upper pane's painted share now, so a click there opens that pane, never the
+/// lower pane whose old arrow happened to land there.
 #[test]
-fn a_folded_columns_stacked_arrow_is_inert() {
+fn a_folded_columns_stacked_arrow_opens_the_pane_owning_that_share() {
     let mut state = fresh();
     state.workspace.min_window_width = 400.0;
     let mut h = DockHarness::new();
@@ -1068,6 +1112,7 @@ fn a_folded_columns_stacked_arrow_is_inert() {
         collapsed(&state, panes::Tab::Console),
         "the log pane should not open from a button that is no longer drawn",
     );
+    assert!(!collapsed(&state, panes::Tab::Tuning), "the upper rail owns that click");
 }
 
 /// A whole pointer gesture on a separator: press where it is drawn, travel `dx`
@@ -1185,4 +1230,17 @@ fn a_dock_folded_whole_is_a_strip_of_named_rails() {
         ["Analyzer", "Console", "Lattice", "Tuning"],
         "every rail in the strip should name the pane it opens",
     );
+
+    // The root has no parent fold from which to find a rail. Its own painted
+    // strip still gives each pane a full-height click target.
+    let lattice = rail_rect(&state, &[panes::Tab::Lattice]);
+    click_at(&mut h, &mut state, lattice.center());
+    h.settle_folds(&mut state);
+    assert!(!collapsed(&state, panes::Tab::Lattice));
+    assert!(collapsed(&state, panes::Tab::Spectral));
+
+    let spectral = rail_rect(&state, &[panes::Tab::Spectral]);
+    click_at(&mut h, &mut state, spectral.center());
+    h.settle_folds(&mut state);
+    assert!(!collapsed(&state, panes::Tab::Spectral));
 }

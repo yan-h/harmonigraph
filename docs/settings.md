@@ -19,6 +19,13 @@ Each page keeps a single owner for its controls;
 shared settings name their scope in the help text.
 The separate Spectrogram page keeps its texture controls out of the path to basic analysis and ribbon settings.
 
+## Collapsed panes
+
+Click anywhere on a collapsed pane's tab or labelled rail to reopen it.
+When several panes share one rail,
+each labelled stretch opens only its own pane.
+The separators beside the rails still resize the surrounding panes.
+
 ## Folding the Analyzer
 
 The two arrows beside the Analyzer's divider fold the spectrum and spectrogram independently.
