@@ -114,7 +114,6 @@ struct VsOut {
     metal::float4 clip_pos;
     metal::float2 uv;
     char _pad2[8];
-    metal::float4 color;
     metal::float4 params;
     metal::uint3 octaves;
     metal::uint4 motion;
@@ -126,7 +125,7 @@ struct VsOut {
     float rim;
     float ring;
     float ink_carry;
-    char _pad14[4];
+    char _pad13[4];
     metal::float4 shadow_box;
     metal::float4 shadow_at;
 };
@@ -1367,7 +1366,6 @@ NodeInk node_ink(
 
 struct fs_node_cellInput {
     metal::float2 uv [[user(loc0), center_perspective]];
-    metal::float4 color [[user(loc1), center_perspective]];
     metal::float4 params [[user(loc2), center_perspective]];
     metal::uint3 octaves [[user(loc3), flat]];
     metal::uint4 motion [[user(loc9), flat]];
@@ -1390,7 +1388,7 @@ fragment fs_node_cellOutput fs_node_cell(
 , metal::float4 clip_pos [[position]]
 , constant Uniforms& u [[buffer(0)]]
 ) {
-    const VsOut in = { clip_pos, varyings.uv, {}, varyings.color, varyings.params, varyings.octaves, varyings.motion, varyings.cents, varyings.strip_row, varyings.marks, varyings.melody_color, varyings.bass_color, varyings.rim, varyings.ring, varyings.ink_carry, {}, varyings.shadow_box, varyings.shadow_at };
+    const VsOut in = { clip_pos, varyings.uv, {}, varyings.params, varyings.octaves, varyings.motion, varyings.cents, varyings.strip_row, varyings.marks, varyings.melody_color, varyings.bass_color, varyings.rim, varyings.ring, varyings.ink_carry, {}, varyings.shadow_box, varyings.shadow_at };
     bool local = {};
     metal::float4 cell = in.shadow_box;
     metal::float2 at = in.clip_pos.xy;

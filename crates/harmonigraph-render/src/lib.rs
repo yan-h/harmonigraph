@@ -565,7 +565,6 @@ const _: () = assert!(SPECTRUM_WORDS == 240);
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuInstance {
     world_pos: [f32; 3],
-    color: [f32; 4],
     /// x: activation, y: melody mark level, z: bass mark level (see
     /// lattice.wgsl). The mark levels ride with the activation rather than in
     /// a vertex attribute of their own. w: reserved, always zero.
@@ -619,8 +618,8 @@ impl GpuInstance {
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GpuInstance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
-        // Locations 5 and 9 are absent, not renumbered — both are the second
-        // instance-step buffer's, which rides beside this one
+        // Location 1 was the unused node color. Locations 5 and 9 belong to
+        // the second instance-step buffer, which rides beside this one
         // (`shadow::ShadowBox::BESIDE_NODES`). The audio ring's own slot is
         // 11, and it carries how far the layer is on at this node rather than
         // a reading: WHAT the ring says is a window onto the shared spectrum
@@ -632,7 +631,7 @@ impl GpuInstance {
         // lattice.wgsl's `Instance` readable side by side.
         //
         attributes: &wgpu::vertex_attr_array![
-            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 15 => Uint32x4,
+            0 => Float32x3, 2 => Float32x4, 3 => Uint32x3, 15 => Uint32x4,
             4 => Float32, 6 => Uint32x2,
             7 => Float32x4, 8 => Float32x4, 10 => Float32, 11 => Float32,
             12 => Float32x4

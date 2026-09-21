@@ -409,8 +409,6 @@ impl GlowTiming {
 pub struct NodeInstance {
     pub lattice_pos: LatticePos,
     pub world_pos: Vec3,
-    /// RGBA base color (alpha unused for now).
-    pub color: Vec4,
     /// 0 = idle, 1 = fully lit. Held notes are 1; released notes decay.
     pub activation: f32,
     /// Whether the voice this node is lit by is on its way OUT — its key is

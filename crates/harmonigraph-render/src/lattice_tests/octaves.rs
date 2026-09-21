@@ -789,8 +789,7 @@ fn the_lights_colour_seams_run_at_one_width_from_its_edge_to_the_centre() {
 
     let mut scene = single_marked_node(0, 0);
     // Every octave the wheel draws for this pitch class. A single sounding
-    // voice takes the node's own color everywhere (octave_glow_color's solo
-    // fallback), which leaves no seam to measure at all.
+    // slice supplies one pitch color, which leaves no seam to measure at all.
     let layout = scene.octave_layout;
     let node = &mut scene.nodes[0];
     let (low, high) = layout.slots(node.cents);

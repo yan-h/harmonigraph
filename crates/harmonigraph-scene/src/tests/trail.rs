@@ -94,7 +94,6 @@ fn a_memory_touches_no_field_but_trail() {
     assert!(marked.nodes.iter().any(|n| n.trail > 0.0), "nothing was remembered at all");
 
     for (a, b) in bare.nodes.iter().zip(&marked.nodes) {
-        assert_eq!(a.color, b.color, "at {:?}", a.lattice_pos);
         assert_eq!(a.activation, b.activation, "at {:?}", a.lattice_pos);
         assert_eq!(a.octaves, b.octaves, "at {:?}", a.lattice_pos);
         assert_eq!(a.melody_slots, b.melody_slots);

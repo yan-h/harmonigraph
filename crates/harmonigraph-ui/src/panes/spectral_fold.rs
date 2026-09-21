@@ -1024,7 +1024,6 @@ mod tests {
                 let at = was.lattice_pos;
                 assert_eq!(now.activation, was.activation, "{reading:?}: {at:?} changed how lit");
                 assert_eq!(now.octaves, was.octaves, "{reading:?}: {at:?} lost its held octaves");
-                assert_eq!(now.color, was.color, "{reading:?}: {at:?} was repainted");
                 assert_eq!(now.melody_slots, was.melody_slots, "{reading:?}: {at:?} lost its mark");
             }
             assert!(both.spectral.ring_draws(), "{reading:?} left the ring's annulus empty");

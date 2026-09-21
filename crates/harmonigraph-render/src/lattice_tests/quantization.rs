@@ -41,7 +41,6 @@ fn shadows_below_one_percent_still_fade_over_glow() {
                 ));
             }
             let grey = glam::Vec4::new(0.8, 0.8, 0.8, 1.0);
-            scene.nodes[0].color = grey;
             scene.pitch_lut.fill(grey);
             scene.bloom_strength = 0.0;
             scene.glow_reach = 0.0;
@@ -205,7 +204,6 @@ fn the_final_dither_breaks_radial_quantization_rings_without_temporal_noise() {
         1.0,
     );
     let grey = glam::Vec4::new(0.72, 0.72, 0.72, 1.0);
-    scene.nodes[0].color = grey;
     scene.nodes[0].melody_color = grey;
     scene.nodes[0].bass_color = grey;
     scene.nodes[0].audio_ring = 0.0;
