@@ -771,8 +771,10 @@ fn map_controls(
     state: &mut PictureState,
     params: &dyn ParamBackend,
 ) -> harmonigraph_core::lattice_map::TuningEngine {
-    use crate::lattice_maps::{MapAxis, MapEdit, MIDI_LABELS};
-    use harmonigraph_core::lattice_map::{TuningEngine, COORDINATE_LIMIT};
+    use crate::lattice_maps::{
+        MapAxis, MapEdit, MapOffsetLane, EXTENSION_STEP, MIDI_LABELS, OFFSET_LIMIT,
+    };
+    use harmonigraph_core::lattice_map::TuningEngine;
     let Some(view) = params.lattice_maps() else {
         return TuningEngine::Adaptive;
     };
@@ -850,28 +852,50 @@ fn map_controls(
             params.edit_lattice_map(MapEdit::Return);
         }
     });
-    ui.weak("Automate the Map Fifth, Third and Seventh Offset parameters to move any shape in whole lattice steps.");
-    let mut pos = view.playback.offset;
-    ui.horizontal_wrapped(|ui| {
-        for (label, value, axis) in [
-            ("Fifths", &mut pos.threes, MapAxis::Fifths),
-            ("Thirds", &mut pos.fives, MapAxis::Thirds),
-            ("Harmonic sevenths", &mut pos.sevens, MapAxis::Sevenths),
+    ui.weak("Automate Fine for single steps and Coarse for steps of 10. Their ranges stay fixed; the two lanes add together.");
+    let mut fine = view.offsets.fine;
+    let mut extension = view.offsets.extension;
+    egui::Grid::new("map-offsets").show(ui, |ui| {
+        for heading in ["Axis", "Fine", "Coarse", "Total"] {
+            ui.weak(heading);
+        }
+        ui.end_row();
+        for (label, fine, extension, axis) in [
+            ("Fifths", &mut fine.threes, &mut extension.threes, MapAxis::Fifths),
+            ("Thirds", &mut fine.fives, &mut extension.fives, MapAxis::Thirds),
+            ("Harmonic sevenths", &mut fine.sevens, &mut extension.sevens, MapAxis::Sevenths),
         ] {
             ui.label(label);
-            let response = ui.add(
-                egui::DragValue::new(value).range(-COORDINATE_LIMIT..=COORDINATE_LIMIT).speed(0.1),
-            );
-            let one_shot = response.changed() && !response.dragged() && !response.drag_stopped();
-            if response.drag_started() || one_shot {
-                params.edit_lattice_map(MapEdit::BeginOffset(axis));
+            for (lane, value, scale) in [
+                (MapOffsetLane::Fine, &mut *fine, 1),
+                (MapOffsetLane::Extension, &mut *extension, EXTENSION_STEP),
+            ] {
+                let response = ui.add(
+                    egui::DragValue::new(value)
+                        .range(-OFFSET_LIMIT..=OFFSET_LIMIT)
+                        .speed(0.1)
+                        .custom_formatter(move |value, _| {
+                            format!("{:.0}", value * f64::from(scale))
+                        })
+                        .custom_parser(move |text| {
+                            let value: i32 = text.trim().parse().ok()?;
+                            (value % scale == 0).then_some(f64::from(value / scale))
+                        }),
+                );
+                let one_shot =
+                    response.changed() && !response.dragged() && !response.drag_stopped();
+                if response.drag_started() || one_shot {
+                    params.edit_lattice_map(MapEdit::BeginOffset(axis, lane));
+                }
+                if response.changed() {
+                    params.edit_lattice_map(MapEdit::Offset(axis, lane, *value));
+                }
+                if response.drag_stopped() || one_shot {
+                    params.edit_lattice_map(MapEdit::EndOffset(axis, lane));
+                }
             }
-            if response.changed() {
-                params.edit_lattice_map(MapEdit::Offset(axis, *value));
-            }
-            if response.drag_stopped() || one_shot {
-                params.edit_lattice_map(MapEdit::EndOffset(axis));
-            }
+            ui.label((*fine + EXTENSION_STEP * *extension).to_string());
+            ui.end_row();
         }
     });
     if view.working.is_some() {

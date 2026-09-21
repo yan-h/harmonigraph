@@ -255,10 +255,41 @@ impl Default for MapPlayback {
     }
 }
 
+/// Fixed host ranges: extension counts represent ten lattice steps each.
+pub const OFFSET_LIMIT: i32 = 9;
+pub const EXTENSION_STEP: i32 = 10;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapOffsets {
+    pub fine: LatticePos,
+    pub extension: LatticePos,
+}
+impl Default for MapOffsets {
+    fn default() -> Self {
+        Self { fine: LatticePos::ORIGIN, extension: LatticePos::ORIGIN }
+    }
+}
+impl MapOffsets {
+    pub fn total(self) -> LatticePos {
+        LatticePos::new(
+            self.fine.threes + EXTENSION_STEP * self.extension.threes,
+            self.fine.fives + EXTENSION_STEP * self.extension.fives,
+            self.fine.sevens + EXTENSION_STEP * self.extension.sevens,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum MapOffsetLane {
+    Fine,
+    Extension,
+}
+
 #[derive(Clone, Debug)]
 pub struct MapView {
     /// Current host/document intent; pending distinguishes it from audio adoption.
     pub playback: MapPlayback,
+    pub offsets: MapOffsets,
     pub pending: bool,
     /// Shared with the document's memo (see [`MapEditor::names`]), so cloning a
     /// view is refcounts rather than up to [`MAP_CAPACITY`] string copies.
@@ -290,9 +321,9 @@ pub enum MapEdit {
     Return,
     EditShape(bool),
     Replace(LatticePos),
-    BeginOffset(MapAxis),
-    Offset(MapAxis, i32),
-    EndOffset(MapAxis),
+    BeginOffset(MapAxis, MapOffsetLane),
+    Offset(MapAxis, MapOffsetLane, i32),
+    EndOffset(MapAxis, MapOffsetLane),
     Undo,
     Capture(String),
     Rename(usize, String),
