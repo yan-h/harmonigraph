@@ -1004,7 +1004,7 @@ mod tests {
             assert!((got[0] - want[0]).abs() < 1e-5, "x: {got:?} != {want:?}");
             assert!((got[1] - want[1]).abs() < 1e-5, "y: {got:?} != {want:?}");
         };
-        let step = 25.0 * 0.047_169_905_660_283_02;
+        let step = 25.0 * 0.047_169_905;
         // Sampling moves opposite the visible texture direction.
         close(travelled(0.0), [-step, 0.0]);
         close(travelled(90.0), [0.0, -step]);
