@@ -1593,10 +1593,14 @@ fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
 #[test]
 fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
-    use harmonigraph_ui::lattice_maps::MapDocument;
+    use harmonigraph_ui::lattice_maps::{MapDocument, MapEdit};
+    use std::sync::Arc;
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
+    let original_names = device
+        .wrapper()
+        .test_inspect_plugin(|plugin| crate::lattice_maps::view(&plugin.params).names);
     let mut map =
         LatticeMap { position: harmonigraph_core::LatticePos::new(50, 0, 0), ..Default::default() };
     map.replace(harmonigraph_core::LatticePos::new(54, 0, 0));
@@ -1622,6 +1626,9 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         let preview = crate::lattice_maps::view(&plugin.params);
         assert_eq!(preview.playback.engine, TuningEngine::LatticeMap);
         assert_eq!(preview.playback.map, Some(map));
+        assert_eq!(preview.playback.offset, preview.offsets.total());
+        assert!(!Arc::ptr_eq(&original_names, &preview.names));
+        assert_eq!(&preview.names[1], &(1, "Distant passage".into()));
         assert!(preview.pending, "restored intent must be visible before audio adoption");
     });
     let saved = device.save();
@@ -1653,14 +1660,39 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
             plugin.configuration.as_ref().unwrap().reducer.resolved().tuning.three,
             696_500_000
         );
-        plugin.params.map_editor.lock().working = Some(LatticeMap::default());
+    });
+    let (context, _) = device.wrapper().test_gui_context("lattice-map");
+    let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
+    device.wrapper().test_inspect_plugin(|plugin| {
+        let before = crate::lattice_maps::view(&plugin.params);
+        assert!(!before.pending);
+        let edit = |action| crate::lattice_maps::edit(&plugin.params, &setter, action);
+        edit(MapEdit::Audition);
+        edit(MapEdit::EditShape(true));
+        let destination = map.position + harmonigraph_core::LatticePos::new(-3, 0, 0);
+        let mut changed = map;
+        assert!(changed.replace(destination), "the edit must change the captured geometry");
+        edit(MapEdit::Replace(destination));
+        let preview = crate::lattice_maps::view(&plugin.params);
+        assert!(preview.playback.audition && preview.editing() && preview.can_undo);
+        assert!(preview.pending, "editing follows intent before audio adopts audition");
+        assert!(!plugin.params.map_playback.lock().audition);
+        assert_eq!(preview.playback.map, Some(changed));
+        assert!(Arc::ptr_eq(&before.names, &preview.names), "edits do not change saved names");
+        edit(MapEdit::Undo);
+        let undone = crate::lattice_maps::view(&plugin.params);
+        assert_eq!(undone.playback.map, Some(map));
+        assert!(!undone.can_undo);
+        edit(MapEdit::Replace(destination));
     });
     device.run(64, vec![], false);
     device.load(saved, false);
     device.wrapper().test_inspect_plugin(|plugin| {
         let preview = crate::lattice_maps::view(&plugin.params);
         assert!(!preview.playback.audition, "restore exits audition before audio resumes");
+        assert!(!preview.editing() && !preview.can_undo);
         assert_eq!(preview.playback.map, Some(map));
+        assert!(preview.pending, "audio still holds the edited audition until its next callback");
     });
     device.run(128, vec![], false);
     device.wrapper().test_inspect_plugin(|plugin| {
