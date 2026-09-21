@@ -1399,7 +1399,7 @@ float motion_ease(
 ) {
     float _e5 = u.node.pose.x;
     if (_e5 == 0.0) {
-        return (p * p) * (3.0 - (2.0 * p));
+        return p;
     }
     float t_1 = p - 1.0;
     return (1.0 + (((2.1 * t_1) * t_1) * t_1)) + ((1.1 * t_1) * t_1);
@@ -1431,8 +1431,8 @@ AnimatedInk animated_slice_ink(
         if (metal::all(loop_bound_4 == uint2(0u))) { break; }
         loop_bound_4 -= uint2(loop_bound_4.y == 0u, 1u);
         if (!loop_init_3) {
-            uint _e240 = i_5;
-            i_5 = _e240 + 1u;
+            uint _e248 = i_5;
+            i_5 = _e248 + 1u;
         }
         loop_init_3 = false;
         uint _e46 = i_5;
@@ -1455,81 +1455,82 @@ AnimatedInk animated_slice_ink(
             float intrinsic = ((_e62 * 0.045) * _e69) * metal::sin(_e54 * 3.1415927);
             float _e79 = u.node.pose.y;
             float scale = metal::mix(_e79, 1.0, _e57) + intrinsic;
-            float opacity_2 = (_e54 * _e54) * (3.0 - (2.0 * _e54));
+            float _e93 = u.node.pose.x;
+            float opacity_2 = (_e93 != 0.0) ? ((_e54 * _e54) * (3.0 - (2.0 * _e54))) : _e54;
             if (opacity_2 < INK_FLOOR) {
                 continue;
             }
             if (scale <= 0.001) {
                 continue;
             }
-            float _e93 = oct_mid(slot_4, oct_2, u);
-            metal::float2 anchor = anchor_radius * metal::float2(metal::cos(_e93), metal::sin(_e93));
-            float _e102 = u.node.pose.z;
-            metal::float2 start = anchor * (1.0 + (_e102 * (1.0 - _e57)));
+            float _e101 = oct_mid(slot_4, oct_2, u);
+            metal::float2 anchor = anchor_radius * metal::float2(metal::cos(_e101), metal::sin(_e101));
+            float _e110 = u.node.pose.z;
+            metal::float2 start = anchor * (1.0 + (_e110 * (1.0 - _e57)));
             metal::float2 uv_7 = anchor + ((in_8.uv - start) / metal::float2(scale));
             float d_6 = metal::length(uv_7);
             float soft = aa_7 / scale;
             if (band_out_1 > band_in_1) {
-                NodeLayer _e118 = glyph_band(d_6, band_in_1, band_out_1, 1.0, soft);
-                NodeLayer _e119 = outer_glyph(slot_4, oct_2, uv_7, _e118, band_in_1, band_out_1, soft, u);
-                metal::float4 _e120 = oct_slot_ink(in_8, slot_4, u);
+                NodeLayer _e126 = glyph_band(d_6, band_in_1, band_out_1, 1.0, soft);
+                NodeLayer _e127 = outer_glyph(slot_4, oct_2, uv_7, _e126, band_in_1, band_out_1, soft, u);
+                metal::float4 _e128 = oct_slot_ink(in_8, slot_4, u);
                 float taper = 1.0 - metal::smoothstep(1.0, GLYPH_FADE_LIMIT, d_6);
-                float coverage_3 = ((_e119.coverage * taper) * _e120.w) * opacity_2;
-                float _e132 = result.alpha;
-                if (coverage_3 > _e132) {
-                    result.rgb = _e120.xyz * coverage_3;
+                float coverage_3 = ((_e127.coverage * taper) * _e128.w) * opacity_2;
+                float _e140 = result.alpha;
+                if (coverage_3 > _e140) {
+                    result.rgb = _e128.xyz * coverage_3;
                     result.alpha = coverage_3;
-                    float _e140 = oct_slot_level(in_8.octaves, slot_4);
-                    result.lit = _e140 / metal::max(_e120.w, 0.0001);
+                    float _e148 = oct_slot_level(in_8.octaves, slot_4);
+                    result.lit = _e148 / metal::max(_e128.w, 0.0001);
                 }
-                float _e147 = result.mask;
-                float _e152 = mask_level(_e120.w * opacity_2);
-                result.mask = metal::max(_e147, (_e119.coverage * taper) * _e152);
-                float _e157 = result.sd;
-                float _e164 = layer_distance(_e157, NodeLayer {_e119.sd * scale, _e120.w * opacity_2, _e119.coverage}, in_8);
-                result.sd = _e164;
+                float _e155 = result.mask;
+                float _e160 = mask_level(_e128.w * opacity_2);
+                result.mask = metal::max(_e155, (_e127.coverage * taper) * _e160);
+                float _e165 = result.sd;
+                float _e172 = layer_distance(_e165, NodeLayer {_e127.sd * scale, _e128.w * opacity_2, _e127.coverage}, in_8);
+                result.sd = _e172;
             }
             if (slot_4 >= 0) {
                 local_28 = slot_4 < 11;
             } else {
                 local_28 = false;
             }
-            bool _e172 = local_28;
-            if (_e172) {
+            bool _e180 = local_28;
+            if (_e180) {
                 local_29 = mark_out_1 > mark_in_1;
             } else {
                 local_29 = false;
             }
-            bool _e177 = local_29;
-            if (_e177) {
+            bool _e185 = local_29;
+            if (_e185) {
                 uint bit = 1u << static_cast<uint>(slot_4);
                 float melody = ((in_8.marks.x & bit) != 0u) ? in_8.params.y : 0.0;
                 float bass = ((in_8.marks.y & bit) != 0u) ? in_8.params.z : 0.0;
                 float level_7 = metal::max(melody, bass) * opacity_2;
                 metal::float3 color = (melody > bass) ? in_8.melody_color.xyz : in_8.bass_color.xyz;
-                NodeLayer _e207 = glyph_band(d_6, mark_in_1, mark_out_1, level_7, soft);
-                NodeLayer _e208 = outer_glyph(slot_4, oct_2, uv_7, _e207, mark_in_1, mark_out_1, soft, u);
+                NodeLayer _e215 = glyph_band(d_6, mark_in_1, mark_out_1, level_7, soft);
+                NodeLayer _e216 = outer_glyph(slot_4, oct_2, uv_7, _e215, mark_in_1, mark_out_1, soft, u);
                 float taper_1 = 1.0 - metal::smoothstep(1.5600001, QUAD_MARGIN, d_6);
-                float _e214 = layer_coverage(_e208);
-                float coverage_4 = _e214 * taper_1;
-                float _e217 = marks.alpha;
-                if (coverage_4 > _e217) {
+                float _e222 = layer_coverage(_e216);
+                float coverage_4 = _e222 * taper_1;
+                float _e225 = marks.alpha;
+                if (coverage_4 > _e225) {
                     marks.rgb = color * coverage_4;
                     marks.alpha = coverage_4;
                     marks.lit = 1.0;
                 }
-                float _e226 = marks.mask;
-                float _e229 = mask_level(level_7);
-                marks.mask = metal::max(_e226, (_e208.coverage * taper_1) * _e229);
-                float _e234 = marks.sd;
-                float _e239 = layer_distance(_e234, NodeLayer {_e208.sd * scale, level_7, _e208.coverage}, in_8);
-                marks.sd = _e239;
+                float _e234 = marks.mask;
+                float _e237 = mask_level(level_7);
+                marks.mask = metal::max(_e234, (_e216.coverage * taper_1) * _e237);
+                float _e242 = marks.sd;
+                float _e247 = layer_distance(_e242, NodeLayer {_e216.sd * scale, level_7, _e216.coverage}, in_8);
+                marks.sd = _e247;
             }
         }
     }
-    NodeInk _e243 = result;
-    NodeInk _e244 = marks;
-    return AnimatedInk {_e243, _e244};
+    NodeInk _e251 = result;
+    NodeInk _e252 = marks;
+    return AnimatedInk {_e251, _e252};
 }
 
 NodeInk node_ink(
