@@ -4,6 +4,22 @@
 use super::harness::*;
 use crate::*;
 
+#[test]
+fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+
+    let mut state = fresh();
+    state.picture.appearance.spectrum.show_roll = true;
+    state.picture.appearance.spectrum.roll_fraction = 0.5;
+    state.picture.appearance.spectrum.roll_seconds = 1.0;
+    state.picture.appearance.spectrum.roll_lead_release = 2.0;
+    state.picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+    state.picture.runtime.tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 60));
+
+    assert!(crate::roll_scrolling(&state, 1.6));
+    assert!(!crate::roll_scrolling(&state, 2.2));
+}
+
 /// Every tab needs an id of its own, and the title is not allowed to be its
 /// source: egui_dock's default `id()` is the title text, and that id keys the
 /// tab BODY's `Ui` (surface + tab id, no node), so two tabs sharing a title

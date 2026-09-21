@@ -1506,7 +1506,7 @@ fn history_stays_editable_without_midi_ribbons() {
         let mut state = fresh();
         state.picture.appearance.spectrum.show_roll = show_roll;
         state.picture.appearance.spectrum.show_spectrogram = true;
-        let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
+        let tab = SettingsPane::Page(DisplayPage::Spectrogram).install(&mut state);
         let shapes = tab_body(&mut state, tab, 420.0, PANE_HEIGHT).shapes;
         ["History duration", "Ribbon width", "Ribbon opacity", "Extension release"]
             .map(|name| track_color(&shapes, one_text_y(&shapes, name)))

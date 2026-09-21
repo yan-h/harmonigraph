@@ -1791,6 +1791,7 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     state.picture.appearance.spectrum.atmosphere = SpectralAtmosphere {
         pitch_softness: f32::NAN,
         contours: 64.0,
+        cloud_direction: 725.0,
         analyzer_softness: 999.0,
         note_glow: 0.27,
         ..Default::default()
@@ -1801,7 +1802,8 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     assert!(editor.load_persist(&saved));
     let offline = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
     let expected = SpectralAtmosphere {
-        contours: 64.0,
+        contours: 20.0,
+        cloud_direction: 5.0,
         analyzer_softness: 1.0,
         note_glow: 0.27,
         ..Default::default()

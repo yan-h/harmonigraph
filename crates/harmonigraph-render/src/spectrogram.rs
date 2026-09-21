@@ -3902,7 +3902,8 @@ fn cs_rotation_probe() {
         }
         type Turn = fn(&mut harmonigraph_scene::SpectralAtmosphere);
         for (name, turn) in [
-            ("Cloud speed", (|s| s.cloud_speed = 20.0) as Turn),
+            ("Drift speed", (|s| s.cloud_speed = 20.0) as Turn),
+            ("Drift direction", |s| s.cloud_direction = 42.0),
             ("Cloud depth", |s| s.cloud_depth = 0.5),
             ("Refraction", |s| s.wash_refract = 0.2),
             ("Layers", |s| s.wash_layers = 0.0),

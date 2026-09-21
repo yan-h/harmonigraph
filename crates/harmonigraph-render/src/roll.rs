@@ -223,6 +223,41 @@ pub fn roll_paint_callback(
         RollCallback {
             rect,
             instances,
+            clipped_tail: None,
+            axes,
+            bloom,
+            shadow,
+            target_format,
+            pane_id: ids.pane,
+            shadow_surface_id,
+            pass_nr: ids.pass_nr,
+        },
+    )
+}
+
+/// As [`roll_paint_callback`], with the instances from `clipped_start` onward
+/// clipped to `tail_rect` while retaining one global outline-before-body paint
+/// order. This is for a roll whose leading extensions occupy a stricter region
+/// than its scrolling history.
+#[allow(clippy::too_many_arguments)]
+pub fn roll_paint_callback_with_clipped_tail(
+    rect: egui::Rect,
+    instances: Vec<RollInstance>,
+    clipped_start: usize,
+    tail_rect: egui::Rect,
+    axes: RollAxes,
+    bloom: f32,
+    shadow: harmonigraph_scene::ShadowStyle,
+    target_format: wgpu::TextureFormat,
+    ids: crate::PaneIds,
+    shadow_surface_id: u64,
+) -> egui::PaintCallback {
+    egui_wgpu::Callback::new_paint_callback(
+        rect,
+        RollCallback {
+            rect,
+            instances,
+            clipped_tail: Some((clipped_start as u32, tail_rect)),
             axes,
             bloom,
             shadow,
@@ -241,6 +276,9 @@ struct RollCallback {
     /// chain, so it rides here too.
     rect: egui::Rect,
     instances: Vec<RollInstance>,
+    /// A trailing range whose sharp ink is clipped more tightly than `rect`.
+    /// Kept in the same callback so every outline still precedes every body.
+    clipped_tail: Option<(u32, egui::Rect)>,
     axes: RollAxes,
     bloom: f32,
     shadow: harmonigraph_scene::ShadowStyle,
@@ -1018,12 +1056,55 @@ impl CallbackTrait for RollCallback {
             render_pass.set_bind_group(3, shadow.casters, &[]);
         }
         render_pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+
+        let default_clip = info.clip_rect_in_pixels();
+        let set_clip = |pass: &mut wgpu::RenderPass<'static>, rect: egui::Rect| {
+            let clip = egui::epaint::ViewportInPixels::from_points(
+                &rect.intersect(info.clip_rect),
+                info.pixels_per_point,
+                info.screen_size_px,
+            );
+            if clip.width_px > 0 && clip.height_px > 0 {
+                pass.set_scissor_rect(
+                    clip.left_px as u32,
+                    clip.top_px as u32,
+                    clip.width_px as u32,
+                    clip.height_px as u32,
+                );
+                true
+            } else {
+                false
+            }
+        };
+        let clipped_tail = self.clipped_tail.map(|(start, rect)| (start.min(pane.count), rect));
+        let draw_layer = |pass: &mut wgpu::RenderPass<'static>, pipeline: &wgpu::RenderPipeline| {
+            pass.set_pipeline(pipeline);
+            if let Some((start, tail_rect)) = clipped_tail {
+                if start > 0 && set_clip(pass, info.clip_rect) {
+                    pass.draw(0..4, 0..start);
+                }
+                if start < pane.count && set_clip(pass, tail_rect) {
+                    pass.draw(0..4, start..pane.count);
+                }
+            } else {
+                pass.draw(0..4, 0..pane.count);
+            }
+        };
         if shadow.as_ref().is_some_and(|binding| binding.active) {
-            render_pass.set_pipeline(&resources.outline_pipeline);
-            render_pass.draw(0..4, 0..pane.count);
+            draw_layer(render_pass, &resources.outline_pipeline);
         }
-        render_pass.set_pipeline(&resources.core_pipeline);
-        render_pass.draw(0..4, 0..pane.count);
+        draw_layer(render_pass, &resources.core_pipeline);
+
+        // The callback owns the scissor while it paints. Put egui's clip back
+        // before the full-region bloom composite and before returning; egui's
+        // renderer caches its last clip and may not set it again for the next
+        // primitive.
+        render_pass.set_scissor_rect(
+            default_clip.left_px as u32,
+            default_clip.top_px as u32,
+            default_clip.width_px as u32,
+            default_clip.height_px as u32,
+        );
 
         // The halo over them, from the chain `prepare` ran — light only, and
         // last, so a note's own body is brightened by it the way a lattice
@@ -1142,6 +1223,7 @@ mod tests {
         let cb = RollCallback {
             rect,
             instances,
+            clipped_tail: None,
             axes,
             shadow: harmonigraph_scene::ShadowStyle {
                 width: 0.5,
@@ -1155,6 +1237,16 @@ mod tests {
             shadow_surface_id: 0,
             pass_nr: 0,
         };
+        draw_callback(device, queue, cb, clear)
+    }
+
+    fn draw_callback(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cb: RollCallback,
+        clear: wgpu::Color,
+    ) -> (Vec<u8>, CallbackResources) {
+        let rect = cb.rect;
         let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -1177,6 +1269,40 @@ mod tests {
         (readback(device, queue, &texture, SIZE), resources)
     }
 
+    fn draw_with_clipped_tail(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        instances: Vec<RollInstance>,
+        clipped_start: u32,
+        clear: wgpu::Color,
+    ) -> Vec<u8> {
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        draw_callback(
+            device,
+            queue,
+            RollCallback {
+                rect,
+                instances,
+                clipped_tail: Some((clipped_start, rect)),
+                axes: TOP,
+                shadow: harmonigraph_scene::ShadowStyle {
+                    width: 0.5,
+                    depth: 1.0,
+                    kernel: harmonigraph_scene::ShadowKernel::Distance,
+                    ..Default::default()
+                },
+                bloom: 0.0,
+                target_format: FORMAT,
+                pane_id: 0,
+                shadow_surface_id: 0,
+                pass_nr: 0,
+            },
+            clear,
+        )
+        .0
+    }
+
     /// One roll frame with an explicitly selected shadow style. Kept separate
     /// from `draw_bloomed_resourced` so the ordinary shape tests retain their
     /// fixed Distance fixture while Gaussian atlas tests exercise that path.
@@ -1192,6 +1318,7 @@ mod tests {
         let cb = RollCallback {
             rect,
             instances,
+            clipped_tail: None,
             axes: TOP,
             shadow,
             bloom: 0.0,
@@ -1464,6 +1591,7 @@ mod tests {
             let cb = RollCallback {
                 rect,
                 instances: vec![centered_note()],
+                clipped_tail: None,
                 axes: TOP,
                 shadow,
                 bloom: 0.0,
@@ -1536,6 +1664,7 @@ mod tests {
                 let cb = RollCallback {
                     rect,
                     instances: vec![note],
+                    clipped_tail: None,
                     axes: TOP,
                     shadow,
                     bloom: 0.0,
@@ -2245,6 +2374,7 @@ mod tests {
         RollCallback {
             rect,
             instances: vec![centered_note()],
+            clipped_tail: None,
             axes: TOP,
             shadow: harmonigraph_scene::ShadowStyle { width: 0.0, ..Default::default() },
             bloom: 1.5,
@@ -2537,6 +2667,11 @@ mod tests {
         let early = butted(98.0, RED); // y 68..128
         let late = butted(158.0, GREEN); // y 128..188
         let frame = draw(&device, &queue, vec![early, late], bg_color());
+        let grouped = draw_with_clipped_tail(&device, &queue, vec![early, late], 1, bg_color());
+        assert_eq!(
+            grouped, frame,
+            "putting the later note in the clipped tail changed global layer ordering"
+        );
 
         // Two points inside the earlier note's tail, which is two points inside
         // the later note's outline. This is the pixel that went black.

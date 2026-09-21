@@ -83,7 +83,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // the blob keeps; this is what holds the bar and the clamp to one pair of
     // numbers.
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness, analyzer_softness, note_glow,
-        cloud_depth, cloud_speed, scale_size, scale_variety, scale_refract,
+        cloud_depth, cloud_speed, cloud_direction, scale_size, scale_variety, scale_refract,
         wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers);
     saved.workspace.interaction.ui_scale = v;
     // These owners have NO ValueBar/RangeBar today. Still pass through their
@@ -235,8 +235,8 @@ fn scenarios() -> Vec<Scenario> {
             SettingsPane::Tab(panes::Tab::Tuning) => 7,
             SettingsPane::Page(DisplayPage::Colors) => 2,
             SettingsPane::Page(DisplayPage::Lattice) => 23,
-            SettingsPane::Page(DisplayPage::Analyzer) => 14,
-            SettingsPane::Page(DisplayPage::Spectrogram) => 11,
+            SettingsPane::Page(DisplayPage::Analyzer) => 7,
+            SettingsPane::Page(DisplayPage::Spectrogram) => 19,
             SettingsPane::Page(DisplayPage::Lighting) => 26,
             SettingsPane::Page(DisplayPage::System) => 3,
             SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console) => 0,
@@ -255,7 +255,7 @@ fn scenarios() -> Vec<Scenario> {
     cases.push(Scenario {
         pane: SettingsPane::Page(DisplayPage::Spectrogram),
         wash: true,
-        visits: 13,
+        visits: 21,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
@@ -349,12 +349,12 @@ fn check(edge: Edge) {
         }
         for visit in visits {
             if visit.label == "Contour levels" {
-                assert_eq!(visit.range, 2.0..=64.0);
+                assert_eq!(visit.range, 2.0..=20.0);
                 assert_eq!(
                     visit.values,
                     vec![match edge {
                         Edge::Low => 2.0,
-                        Edge::High => 64.0,
+                        Edge::High => 20.0,
                         Edge::Fresh => SpectralAtmosphere::default().contours,
                     }]
                 );

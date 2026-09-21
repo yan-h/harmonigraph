@@ -59,6 +59,18 @@ pub struct SpectrogramAtmosphere {
     pub now: f64,
 }
 
+/// Cloud-space sampling offset for a texture travelling at a constant visible
+/// screen direction. The shader samples `screen + drift`, so the sampling
+/// offset moves opposite the texture itself.
+fn cloud_drift(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> [f32; 2] {
+    const UNITS_PER_SECOND: f64 = 0.047_169_905_660_283_02;
+    const INITIAL_PHASE: [f64; 2] = [0.0, 0.6];
+    let distance = now * f64::from(settings.cloud_speed) * UNITS_PER_SECOND;
+    let direction = f64::from(settings.cloud_direction).to_radians();
+    let (sin, cos) = direction.sin_cos();
+    [(INITIAL_PHASE[0] - distance * cos) as f32, (INITIAL_PHASE[1] - distance * sin) as f32]
+}
+
 /// Bound filter work by reducing each axis only as its musical radius grows,
 /// and — where `Blur time step` asks — the time axis by the DATA's own
 /// resolution as well. The scalar source averages its whole footprint before
@@ -882,17 +894,10 @@ impl Targets {
         let pitch = settings.pitch_softness * atmosphere.points_per_cent;
         let time = settings.time_softness * atmosphere.points_per_ms;
         let radius = if pitch_vertical { [time, pitch] } else { [pitch, time] };
-        // A steady crossing plus the lattice nebula's wander, in cloud units —
-        // ten across the pane's height, now that `CLOUD_UNITS` is fixed there.
-        // The rates are unchanged, so the drift is the one the shipped `Cloud
-        // size` of 0.5x already drew: about four minutes to carry the texture a
-        // pane-height at 1x, not the two the comment used to claim for a frame
-        // nothing shipped at.
-        let cloud_time = atmosphere.now * f64::from(settings.cloud_speed);
-        let drift = [
-            (cloud_time * 0.04 + (cloud_time * 0.071).sin() * 0.6) as f32,
-            (cloud_time * -0.025 + (cloud_time * 0.053).cos() * 0.6) as f32,
-        ];
+        // A constant crossing in the direction the setting names, in cloud
+        // units — ten across the pane's height, so 1x travels about one pane
+        // height every four minutes.
+        let drift = cloud_drift(settings, atmosphere.now);
         let uniforms = Uniforms {
             origin: rect.min.into(),
             size: rect.size().into(),
@@ -974,9 +979,50 @@ fn source_group(
 #[cfg(test)]
 mod tests {
     use super::{
-        retained_size, source_size, tile_key, tone_size, SpectrogramAtmosphere, CLOUD_UNITS,
-        SCALE_CELLS, TILE_MAX, TILE_STEP, WASH_CELLS,
+        cloud_drift, retained_size, source_size, tile_key, tone_size, SpectrogramAtmosphere,
+        CLOUD_UNITS, SCALE_CELLS, TILE_MAX, TILE_STEP, WASH_CELLS,
     };
+
+    #[test]
+    fn drift_follows_the_dial_at_a_constant_direction() {
+        let at = |direction, speed, now| {
+            cloud_drift(
+                harmonigraph_scene::SpectralAtmosphere {
+                    cloud_speed: speed,
+                    cloud_direction: direction,
+                    ..Default::default()
+                },
+                now,
+            )
+        };
+        let phase = at(0.0, 1.0, 0.0);
+        let travelled = |direction| {
+            let later = at(direction, 1.0, 25.0);
+            [later[0] - phase[0], later[1] - phase[1]]
+        };
+        let close = |got: [f32; 2], want: [f32; 2]| {
+            assert!((got[0] - want[0]).abs() < 1e-5, "x: {got:?} != {want:?}");
+            assert!((got[1] - want[1]).abs() < 1e-5, "y: {got:?} != {want:?}");
+        };
+        let step = 25.0 * 0.047_169_905;
+        // Sampling moves opposite the visible texture direction.
+        close(travelled(0.0), [-step, 0.0]);
+        close(travelled(90.0), [0.0, -step]);
+        close(travelled(180.0), [step, 0.0]);
+        close(travelled(270.0), [0.0, step]);
+        let first = travelled(37.0);
+        let second = {
+            let a = at(37.0, 1.0, 25.0);
+            let b = at(37.0, 1.0, 50.0);
+            [b[0] - a[0], b[1] - a[1]]
+        };
+        close(second, first);
+        close(at(220.0, 0.0, 10_000.0), phase);
+        close(
+            travelled(harmonigraph_scene::SpectralAtmosphere::default().cloud_direction),
+            [1.0, -0.625],
+        );
+    }
 
     /// The tile is as fine as the pane draws a cell, in whole [`TILE_STEP`]s —
     /// and the cell counts it divides by are the SHADER's own.
