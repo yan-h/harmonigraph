@@ -28,7 +28,7 @@ The separators beside the rails still resize the surrounding panes.
 
 ## Folding the Analyzer
 
-The two arrows beside the Analyzer's divider fold the spectrum and spectrogram independently.
+The arrows at the outer ends of the Analyzer's spectrum and history regions fold them independently.
 Click a labelled rail to restore its region at its remembered size.
 The spectrogram fold includes the piano roll and its note labels;
 the Analyzer's tab-bar arrow still folds the whole pane and remembers both region states.

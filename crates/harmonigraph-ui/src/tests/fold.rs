@@ -17,6 +17,35 @@ fn click_at(h: &mut DockHarness, state: &mut SharedState, at: egui::Pos2) {
 }
 
 #[test]
+fn analyzer_region_buttons_live_at_opposite_outer_ends() {
+    for (orientation, horizontal, first_at_low_end) in [
+        (SpectralOrientation::Left, true, true),
+        (SpectralOrientation::Right, true, false),
+        (SpectralOrientation::Top, false, true),
+        (SpectralOrientation::Bottom, false, false),
+    ] {
+        let mut state = fresh();
+        state.picture.appearance.spectrum.orientation = orientation;
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        let body = pane_body(&state, &panes::Tab::Spectral).unwrap();
+        let (low, high) =
+            if horizontal { (body.left(), body.right()) } else { (body.top(), body.bottom()) };
+        for index in 0..2 {
+            let id = egui::Id::new(("analyzer region fold", index));
+            let button = h.ctx.read_response(id).expect("region button is drawn").rect;
+            let at = if horizontal { button.center().x } else { button.center().y };
+            let edge = if (index == 0) == first_at_low_end { low } else { high };
+            assert!(
+                (at - edge).abs() < 25.0,
+                "{orientation:?} region {index} button is {at} from the wrong edge of {body:?}",
+            );
+            assert!(body.contains(button.center()));
+        }
+    }
+}
+
+#[test]
 fn collapsed_panes_open_from_the_middle_of_their_rails() {
     for tab in [panes::Tab::Console, panes::Tab::Lattice, panes::Tab::Spectral] {
         let mut state = fresh();

@@ -93,14 +93,13 @@ impl Regions {
         let rail_depths =
             [if folded[0] { rail } else { 0.0 }, if folded[1] && history { rail } else { 0.0 }];
         let available = (depth - rail_depths.iter().sum::<f32>()).max(0.0);
-        let split;
         if !folded[0] && !folded[1] {
             if std::mem::take(&mut self.restore) && self.dial == cfg.roll_fraction {
                 gestures::restore_spectrum(state, self.depths);
             }
             super::hold_spectrum(state, rect.size());
             super::spectral_pane(ui, state, now, DOCKED_SURFACE, 1.0, Navigation::Docked);
-            split = gestures::spectrum_split(state, DOCKED_SURFACE);
+            let split = gestures::spectrum_split(state, DOCKED_SURFACE);
             self.depths = [depth * split, depth * (1.0 - split)];
             self.dial = state.appearance.spectrum.roll_fraction;
         } else {
@@ -127,7 +126,7 @@ impl Regions {
                 extend(&mut virtual_rect, dir * self.depths[1]);
             }
             let total = Axes::new(virtual_rect, &cfg).depth_len();
-            split = (self.depths[0] / total.max(1.0)).clamp(0.0, 1.0);
+            let split = (self.depths[0] / total.max(1.0)).clamp(0.0, 1.0);
             if !folded[0] || !folded[1] {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(virtual_rect));
                 child.set_clip_rect(visible.intersect(ui.clip_rect()));
@@ -144,13 +143,6 @@ impl Regions {
         if rail <= 0.0 {
             return;
         }
-        let divider = if folded[0] {
-            rail / depth
-        } else if folded[1] {
-            1.0 - rail_depths[1] / depth
-        } else {
-            split
-        };
         for (index, name) in
             ["Spectrum", if cfg.show_spectrogram { "Spectrogram" } else { "Piano roll" }]
                 .into_iter()
@@ -165,7 +157,7 @@ impl Regions {
                     if index == 0 { (0.0, rail / depth) } else { (1.0 - rail / depth, 1.0) };
                 Rect::from_two_pos(axes.at(0.0, a), axes.at(1.0, b)).intersect(rect)
             } else {
-                control_rect(&axes, divider, index, theme::row_height(theme::ui_scale(ui.ctx())))
+                control_rect(&axes, index, theme::row_height(theme::ui_scale(ui.ctx())))
                     .intersect(rect)
             };
             if !band.is_positive() {
@@ -192,14 +184,14 @@ fn extend(rect: &mut Rect, delta: Vec2) {
     rect.max += delta.max(Vec2::ZERO);
 }
 
-/// The high-pitch end for vertical time, the top edge otherwise. Each button
-/// sits wholly on its own side of the divider, leaving its drag band clear.
-/// The button uses a control row's height, not a whole tab bar's: two full-size
-/// tabs over the picture obscure the very boundary they are meant to fold.
-fn control_rect(axes: &Axes, split: f32, index: usize, size: f32) -> Rect {
-    let offset = size * 0.5 + gestures::SPLIT_GRAB_HALF;
-    let pitch = 1.0 - (size * 0.5 + 4.0) / axes.pitch_len();
-    let d = split + if index == 0 { -offset } else { offset } / axes.depth_len();
+/// Put each button at the far end of the region it folds, away from the busy
+/// now-line and its drag band. `Axes` turns the same two depth endpoints into
+/// left/right or top/bottom for every orientation. The high-pitch inset keeps
+/// the controls in an outer corner, and the row-height footprint stays small.
+fn control_rect(axes: &Axes, index: usize, size: f32) -> Rect {
+    let inset = size * 0.5 + 4.0;
+    let pitch = 1.0 - inset / axes.pitch_len();
+    let d = if index == 0 { inset / axes.depth_len() } else { 1.0 - inset / axes.depth_len() };
     Rect::from_center_size(axes.at(pitch, d), Vec2::splat(size))
 }
 
