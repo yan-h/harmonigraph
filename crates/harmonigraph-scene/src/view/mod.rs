@@ -13,7 +13,7 @@ mod glow_curve;
 mod ring_stack;
 mod windowing;
 
-pub use animation::{AnimationOrder, NoteAnimation, NoteAnimationConfig};
+pub use animation::{AnimationOrder, NoteAnimationConfig};
 pub use drawn_window::DrawnWindow;
 pub use frame_params::FrameParams;
 pub use glow_curve::GlowCurve;

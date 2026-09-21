@@ -448,7 +448,7 @@ fn paint_reach(in: VsOut, aa: f32) -> f32 {
         reach = max(reach, QUAD_MARGIN);
     }
     if u.node.animation != 0.0 {
-        reach = max(reach, in.rim * u.node.pose.w + aa);
+        reach = max(reach, in.rim * u.node.pose.z + aa);
     }
     return max(reach, max(in.rim, spectral_radii().y) + aa);
 }
@@ -700,7 +700,7 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     // Gaussian off in a straight line. The cell draw writes the packer's
     // one-texel sampling guard too.
     let midi_rim = select(0.0, rim, u.node.band_outer > u.node.band_inner || ((inst.marks.x | inst.marks.y) != 0u && u.node.mark_thickness > 0.0));
-    let bounds = select(rim, max(rim, max(midi_rim * u.node.pose.w, spectral_radii().y)), u.node.animation != 0.0);
+    let bounds = select(rim, max(rim, max(midi_rim * u.node.pose.z, spectral_radii().y)), u.node.animation != 0.0);
     let margin = quad_margin(bounds, shadow_reach_uv(scale));
     let radius = u.node.radius * 0.90 * 2.0 * margin * scale;
 
@@ -2031,14 +2031,6 @@ fn base_node_ink(
 fn slice_progress(in: VsOut, i: u32) -> f32 {
     return f32((in.motion[i / 3u] >> ((i % 3u) * 10u)) & 1023u) / 1023.0;
 }
-fn motion_ease(p: f32) -> f32 {
-    // Smooth progress has already traversed the shared note Envelope on the
-    // CPU, including the correct direction when a note reverses mid-flight.
-    if u.node.pose.x == 0.0 { return p; }
-    let t = p - 1.0;
-    return 1.0 + 2.1*t*t*t + 1.1*t*t;
-}
-
 struct AnimatedInk { body: NodeInk, marks: NodeInk, }
 fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
     var result = NodeInk(vec3<f32>(0.0), 0.0, 0.0, 0.0, EMPTY_DISTANCE);
@@ -2052,15 +2044,15 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
         let slot = oct.base + i32(i);
         let p = slice_progress(in, i);
         if p <= 0.0 { continue; }
-        let ease = motion_ease(p);
-        let intrinsic = u.node.pose.x * 0.045 * u.node.pose.y * sin(p * 3.14159265);
-        let scale = mix(u.node.pose.y, 1.0, ease) + intrinsic;
-        let opacity = select(p, p*p*(3.0-2.0*p), u.node.pose.x != 0.0);
+        // Progress has already traversed the shared note Envelope on the CPU,
+        // including the correct direction when a note reverses mid-flight.
+        let scale = mix(u.node.pose.x, 1.0, p);
+        let opacity = p;
         if opacity < INK_FLOOR { continue; }
         if scale <= 0.001 { continue; }
         let angle = oct_mid(slot, oct);
         let anchor = anchor_radius * vec2<f32>(cos(angle), sin(angle));
-        let start = anchor * (1.0 + u.node.pose.z * (1.0 - ease));
+        let start = anchor * (1.0 + u.node.pose.y * (1.0 - p));
         let uv = anchor + (in.uv - start) / scale;
         let d = length(uv);
         let soft = aa / scale;

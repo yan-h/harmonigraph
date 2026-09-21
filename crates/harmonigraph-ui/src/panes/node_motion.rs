@@ -3,7 +3,7 @@
 use harmonigraph_core::{
     Envelope, LatticePos, NoteTracker, PitchClass, Tuning, VoiceKey, VoiceState,
 };
-use harmonigraph_scene::{NoteAnimation, NoteAnimationConfig, OctaveLayout, Scene, ViewConfig};
+use harmonigraph_scene::{NoteAnimationConfig, OctaveLayout, Scene, ViewConfig};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
@@ -126,24 +126,18 @@ fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
     }
 }
 impl Motion {
-    fn advance(&mut self, dt: f64, env: &Envelope, animation: NoteAnimation) {
+    fn advance(&mut self, dt: f64, env: &Envelope) {
         // The slice reveal runs the envelope's own length rather than a second
         // duration handed in beside it: `ViewConfig::envelope` puts one time on
         // both ends, so the two were always the same number and a parameter
         // for each is a pair that can be made to disagree.
-        let duration = env.fade_time;
         for i in 0..11 {
             let moving = (dt as f32 - self.delay[i]).max(0.0);
             self.delay[i] = (self.delay[i] - dt as f32).max(0.0);
             self.progress[i] = if self.audio_waiting {
                 1.0
-            } else if animation == NoteAnimation::Fade {
-                approach(self.progress[i], f32::from(self.gate), f64::from(moving), env)
-            } else if duration <= 0.0 {
-                f32::from(self.gate)
             } else {
-                (self.progress[i] + if self.gate { moving / duration } else { -moving / duration })
-                    .clamp(0.0, 1.0)
+                approach(self.progress[i], f32::from(self.gate), f64::from(moving), env)
             };
             // Undelayed, and over the WHOLE duration, on purpose. This is the
             // node's presence rather than any one slice's: it reaches the shader
@@ -292,9 +286,9 @@ impl NodeMotion {
             }
         }
     }
-    fn advance(&mut self, dt: f64, env: &Envelope, animation: NoteAnimation) {
+    fn advance(&mut self, dt: f64, env: &Envelope) {
         for motion in self.nodes.values_mut() {
-            motion.advance(dt.max(0.0), env, animation);
+            motion.advance(dt.max(0.0), env);
         }
     }
     fn step(
@@ -421,7 +415,7 @@ impl NodeMotion {
         }
         while index < edges.len() {
             let time = edges[index].at;
-            self.advance(time - at, env, view.note_animation.animation);
+            self.advance(time - at, env);
             // Equal-time off/on edges form one gate update, so a replacement
             // key cannot falsely end an otherwise continuous node presence.
             while index < edges.len() && edges[index].at == time {
@@ -439,7 +433,7 @@ impl NodeMotion {
             self.gates(scene, tuning, view, env, false);
             at = time;
         }
-        self.advance(now - at, env, view.note_animation.animation);
+        self.advance(now - at, env);
         // Current-state reconciliation handles retuning/baselines and gaps,
         // whose missing history must not be treated as fabricated note-offs.
         self.held.clear();
@@ -447,7 +441,7 @@ impl NodeMotion {
             self.held.insert((voice.key(), voice.on_time.to_bits()), Held { pitch: voice.pitch });
         }
         self.gates(scene, tuning, view, env, false);
-        self.advance(0.0, env, view.note_animation.animation);
+        self.advance(0.0, env);
         self.at = Some(now);
         let visible: HashSet<_> = scene.nodes.iter().map(|n| n.lattice_pos).collect();
         self.nodes.retain(|pos, _| visible.contains(pos));
@@ -912,11 +906,6 @@ mod tests {
             delays(&layout, 350.0, config, 42, 1.0)
         );
         assert_eq!(config.reach(1.0), 1.0);
-        assert!(
-            NoteAnimationConfig { animation: harmonigraph_scene::NoteAnimation::Pop, ..config }
-                .reach(1.0)
-                < 1.05
-        );
     }
     #[test]
     fn tuned_onsets_and_late_observation_use_the_factual_pitch_and_mark_clock() {

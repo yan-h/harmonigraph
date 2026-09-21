@@ -2144,23 +2144,19 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
 
 #[test]
 fn animation_controls_round_trip_and_retired_fields_do_not_discard_appearance() {
-    for animation in harmonigraph_scene::NoteAnimation::ALL {
-        for order in harmonigraph_scene::AnimationOrder::ALL {
-            let mut state = fresh();
-            state.picture.appearance.view.note_animation =
-                harmonigraph_scene::NoteAnimationConfig {
-                    animation,
-                    order,
-                    stagger_spread: 0.63,
-                    radial_start: -0.5,
-                };
-            let mut restored = fresh();
-            assert!(restored.load_persist(&state.save_persist()));
-            assert_eq!(
-                restored.picture.appearance.view.note_animation,
-                state.picture.appearance.view.note_animation
-            );
-        }
+    for order in harmonigraph_scene::AnimationOrder::ALL {
+        let mut state = fresh();
+        state.picture.appearance.view.note_animation = harmonigraph_scene::NoteAnimationConfig {
+            order,
+            stagger_spread: 0.63,
+            radial_start: -0.5,
+        };
+        let mut restored = fresh();
+        assert!(restored.load_persist(&state.save_persist()));
+        assert_eq!(
+            restored.picture.appearance.view.note_animation,
+            state.picture.appearance.view.note_animation
+        );
     }
     let mut state = fresh();
     state.picture.appearance.view.label_scale = 0.7;
@@ -2196,7 +2192,7 @@ fn animation_controls_round_trip_and_retired_fields_do_not_discard_appearance() 
             "view:(show_labels:false,sounding_ink:12.0,mark_melody:false,mark_bass:false,",
             1,
         )
-        .replacen("note_animation:(", "note_animation:(start_size:0.2,", 1);
+        .replacen("note_animation:(", "note_animation:(animation:Pop,start_size:0.2,", 1);
     assert_ne!(retired, current);
     assert!(state.load_persist(&retired));
     assert_eq!(state.save_persist(), current);

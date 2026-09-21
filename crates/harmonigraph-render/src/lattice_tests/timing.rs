@@ -184,8 +184,7 @@ fn atmosphere_costs_by_polyphony() {
 fn animation_costs_by_pose_and_density() {
     use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
     use harmonigraph_scene::{
-        AnimationOrder, Camera, FrameParams, NoteAnimation, NoteAnimationConfig, ShadowKernel,
-        ViewConfig,
+        AnimationOrder, Camera, FrameParams, NoteAnimationConfig, ShadowKernel, ViewConfig,
     };
     let mut tracker = NoteTracker::new();
     for note in 48..72 {
@@ -195,29 +194,17 @@ fn animation_costs_by_pose_and_density() {
     for dense in [false, true] {
         for kernel in [ShadowKernel::Gaussian, ShadowKernel::Distance] {
             for (name, config) in [
-                ("Fade", NoteAnimationConfig::default()),
-                (
-                    "Pop",
-                    NoteAnimationConfig { animation: NoteAnimation::Pop, ..Default::default() },
-                ),
+                ("At rest", NoteAnimationConfig::default()),
                 ("Grow", NoteAnimationConfig { radial_start: -1.0, ..Default::default() }),
                 (
                     "Circular",
                     NoteAnimationConfig {
-                        animation: NoteAnimation::Pop,
                         order: AnimationOrder::Circular,
                         radial_start: -1.0,
                         ..Default::default()
                     },
                 ),
-                (
-                    "Maximum",
-                    NoteAnimationConfig {
-                        animation: NoteAnimation::Pop,
-                        radial_start: 1.0,
-                        ..Default::default()
-                    },
-                ),
+                ("Maximum", NoteAnimationConfig { radial_start: 1.0, ..Default::default() }),
             ] {
                 let mut scene = harmonigraph_scene::derive_scene(
                     &tracker,

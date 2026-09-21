@@ -5,10 +5,10 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::AppearanceDocument;
 use harmonigraph_scene::{
-    AnimationOrder, NoteAnimation, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX,
-    MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX,
-    SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
-    SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    AnimationOrder, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE,
+    PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
+    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
+    SPECTRAL_WIDTH_MIN,
 };
 
 /// Layer geometry, shared octave layout, the two readings, then note motion.
@@ -142,11 +142,14 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// chosen: Tolerance is the fold's kernel and Zoom is the spectrum's window,
 /// and neither means anything to the other. Both are shown either way rather than
 /// swapped in and out, so the section keeps its height and the bars keep their
-/// place as the row is clicked along.
+/// place as the row is clicked along. The whole group is hidden when the
+/// layer has no width: the Layers bar is the only control that can switch it
+/// back on, and leaving a page of inert settings below that control spends most
+/// of the pane on a layer that is not in the picture.
 fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Audio ring");
     if !view.spectral_ring_draws() {
-        ui.weak("Use the Audio handle in Note layers above to give the ring a width.");
+        return;
     }
     // "Ring display" and not "Ring", though the ring is what it fills: what this row
     // picks is which of two measurements the ring carries, which is the word the
@@ -159,8 +162,6 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // layer keeps one, and the two would then have to be read together to know
     // whether there is a ring.
     //
-    // Grayed with the ring off rather than hidden, so the section keeps its
-    // height and its rows keep their place as the handle is dragged to nothing.
     ui.add_enabled_ui(view.spectral_ring_draws(), |ui| {
         choice_row(
             ui,
@@ -193,11 +194,6 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // the hover text for the same reason — a bar that looks inert on the node
     // you are watching is a bar that reads as broken.
     //
-    // Greyed with the ring off, like the Reading row above it: there is no ring
-    // for it to hold back, and it is not what would bring one back. The switch
-    // that would is the layer's own width, which is the Layers bar's second
-    // handle — never greyed, since a control that greyed itself out at 0 could
-    // not be dragged off it.
     ui.add_enabled_ui(view.spectral_ring_draws(), |ui| {
         ValueBar::new(&mut view.spectral_ring_gate, SPECTRAL_GATE_MIN..=SPECTRAL_GATE_MAX, "Ring threshold")
             // A percentage of the Level window, which is the axis the ring's
@@ -381,34 +377,12 @@ fn motion_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBa
                  0 ms marks immediately.",
             );
     });
-    // `choice_row`, which these two were the last enum settings in the panes
-    // not to be, and the HINTS are what the move buys: not one of the four
-    // orders was named anywhere in the UI, so what each does was findable only
-    // by picking it and watching. The cost is height — a `choice_row` wraps,
-    // so four order labels take about three lines where the popup took a label
-    // and one row — and it was taken deliberately. Animation is the other half
-    // of the trade, two rows becoming one.
-    //
-    // Both lists are built off `ALL` with an exhaustive match rather than
-    // written out, the way `SpectralOrientation`'s row is and for its reason: a
-    // fifth order cannot reach this pane without a name and a hint of its own.
-    let animations = NoteAnimation::ALL.map(|animation| {
-        let (label, hint) = match animation {
-            NoteAnimation::Fade => (
-                "Smooth",
-                "Slices ease in to their resting size and position and stop there.",
-            ),
-            NoteAnimation::Pop => (
-                "Overshoot",
-                "Slices swell a little past full size partway in, then settle back. A Starting offset away from rest is overshot before it settles.",
-            ),
-        };
-        (animation, label, hint)
-    });
-    choice_row(ui, "Motion easing", &mut view.note_animation.animation, &animations);
+    // Built off `ALL` with an exhaustive match rather than written out, the
+    // way `SpectralOrientation`'s row is and for its reason: a fifth order
+    // cannot reach this pane without a name and a hint of its own.
     // Every hint here is about WHEN a slice starts and nothing else: the orders
     // differ in the delay each slice waits, never in what it then does, which
-    // is the Animation row above.
+    // is always the same smooth arrival.
     let orders = AnimationOrder::ALL.map(|order| {
         let (label, hint) = match order {
             AnimationOrder::Simultaneous => (

@@ -187,7 +187,7 @@ fn shadow_group(
                  Thin strokes may cast lighter shadows.",
     );
     // The Gaussian has its own profile; only Contour uses this bend.
-    ui.add_enabled_ui(style.kernel.is_distance(), |ui| {
+    if style.kernel.is_distance() {
         ValueBar::new(
             &mut style.falloff,
             SHADOW_FALLOFF_MIN..=SHADOW_FALLOFF_MAX,
@@ -205,5 +205,5 @@ fn shadow_group(
              Every setting reaches zero at one Shadow width. \
              Contour shadows only.",
         );
-    });
+    }
 }
