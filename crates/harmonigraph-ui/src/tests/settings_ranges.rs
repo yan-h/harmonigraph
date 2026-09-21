@@ -47,7 +47,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     poison!(a.view; render_scale, bloom_strength, sevens_size, label_scale, sounding_ink,
         octave_center, octave_extra_size, octave_extra_blend, mark_delay, fade_shape,
         spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
-        spectral_width, spectral_ring_range, spectral_ring_width, ring_gap, octave_gap,
+        spectral_width, spectral_ring_range, spectral_ring_width, ring_gap,
         ring_inner, band_width, mark_thickness, lattice_ground, marker_ink,
         plus_arm, plus_taper, plus_width, glow_reach, glow_strength, glow_accumulation,
         glow_blend, glow_wash, glow_attack, glow_release);
@@ -234,7 +234,7 @@ fn scenarios() -> Vec<Scenario> {
         let visits = match pane {
             SettingsPane::Tab(panes::Tab::Tuning) => 7,
             SettingsPane::Page(DisplayPage::Colors) => 2,
-            SettingsPane::Page(DisplayPage::Lattice) => 26,
+            SettingsPane::Page(DisplayPage::Lattice) => 25,
             SettingsPane::Page(DisplayPage::Analyzer) => 14,
             SettingsPane::Page(DisplayPage::Spectrogram) => 11,
             SettingsPane::Page(DisplayPage::Lighting) => 26,
@@ -263,7 +263,7 @@ fn scenarios() -> Vec<Scenario> {
             pane: SettingsPane::Page(DisplayPage::Lattice),
             projection,
             enabled: true,
-            visits: 26,
+            visits: 25,
             ..base
         });
     }

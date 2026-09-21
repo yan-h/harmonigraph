@@ -544,9 +544,9 @@ pub(super) const PARTIAL_HALF_CENTS: f32 = 40.0;
 
 /// The padding `ringing_node` stands its layers off each other by — see there.
 /// Spent on BOTH of the node's axes in these fixtures, radially between the
-/// layers and angularly between the sectors, which is what the view's two gap
-/// bars are free to dial apart: a probe reading a radius wants the layers
-/// pixels apart, and one reading a sector wants the seams pixels wide.
+/// layers and angularly between the sectors, as the view's one gap setting is:
+/// a probe reading a radius wants the layers pixels apart, and one reading a
+/// sector wants the seams pixels wide.
 pub(super) const PROBE_GAP: f32 = 0.12;
 
 /// Where the probe stacks BEGIN, and it is the node's own centre: a radius read
@@ -565,13 +565,6 @@ pub(super) const PROBE_INNER: f32 = 0.0;
 /// it pushes off the quad edge, and a band the stack has refused draws nothing
 /// for a pixel reading to find.
 pub(super) const PROBE_BAND_WIDTH: f32 = 0.163_084_63;
-
-/// The angular padding the layered probes slice their wedges at, standing in
-/// for the fresh view's own (see
-/// [`ViewConfig::octave_gap`](harmonigraph_scene::ViewConfig)): a reading is
-/// taken across a wedge's own arc, and a slicing dialled wide enough eats the
-/// arc it is taken over.
-pub(super) const PROBE_OCTAVE_GAP: f32 = 0.05;
 
 /// The Range these fixtures read their partials against, standing in for the
 /// fresh view's own (see
@@ -597,7 +590,7 @@ pub(super) const PROBE_RANGE: f32 = 200.0;
 /// `harmonigraph_scene`'s
 /// `the_fresh_node_spends_its_stack_on_octaves_and_marks`.
 ///
-/// The PADDING is the probe's for a second reason: the Ring gap is what
+/// The PADDING is the probe's for a second reason: the shared gap is what
 /// separates every layer of a node, and a gap of the order the fresh view
 /// carries is under three pixels on the 52-px node this renders, where the two
 /// annuli's anti-aliased edges meet inside it. A wider gap measures the
@@ -750,7 +743,6 @@ pub(super) fn layered_rings() -> harmonigraph_scene::RingStack {
         ring_gap: PROBE_GAP,
         spectral_ring_width: PROBE_RING_WIDTH,
         band_width: PROBE_BAND_WIDTH,
-        octave_gap: PROBE_OCTAVE_GAP,
         ..fresh
     }
     .rings()

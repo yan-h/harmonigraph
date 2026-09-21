@@ -192,7 +192,7 @@ const INK_STRIP_N: u32 = 64u;
 // σ is half of the resolved width (`shadow::sigma_points`), where the derivation
 // of that half is stated.
 //
-// A share of the node's radius, like the two gaps it sits with in the view, and
+// A share of the node's radius, like the shared gap it sits with in the view, and
 // taken from the HOME node's radius alone: a caster on a smaller sheet casts
 // the same width in points, the Shadow being one length across the picture
 // rather than a share of each item.
@@ -970,10 +970,10 @@ fn oct_arc_coverage(edges: vec2<f32>, uv: vec2<f32>, aa: f32) -> f32 {
 // near the center every wedge falls inside the gap band, leaving a small
 // clear hub instead of an N-way mush point.
 //
-// The gap's full width is u.node.angular_gap (the view's Octave gap bar), in quad UV
+// The gap's full width is u.node.angular_gap (the view's shared Gap bar), in quad UV
 // units. The same value cuts the sides of a melody/bass mark, so one number is
-// every angular interruption on the node; how far the marks stand OFF the band
-// is the radial gap instead, and it reaches here only as a radius.
+// every angular interruption on the node; its radial use stands the marks off
+// the band and reaches here only as a radius.
 fn slice_gap_half() -> f32 {
     return max(u.node.angular_gap, 0.0) * 0.5;
 }

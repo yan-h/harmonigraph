@@ -523,12 +523,12 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
 /// own page draws: "Name size" would be the natural one for the Lattice page
 /// and is not, the Analyzer's piano-roll group having a bar of that name too,
 /// nor would a bare "Live release", which the Glow section and the analyzer both
-/// draw. "Sector gap" is the Lattice page's own.
+/// draw. "Gap" is the Lattice page's own.
 #[test]
 fn the_picker_draws_the_page_it_holds_and_only_that_page() {
     const CASES: [(DisplayPage, &str); 6] = [
         (DisplayPage::Colors, "Pitch color range"),
-        (DisplayPage::Lattice, "Sector gap"),
+        (DisplayPage::Lattice, "Gap"),
         (DisplayPage::Analyzer, "Spectrum level range"),
         (DisplayPage::Spectrogram, "Texture mix"),
         (DisplayPage::Lighting, "Bloom amount"),
