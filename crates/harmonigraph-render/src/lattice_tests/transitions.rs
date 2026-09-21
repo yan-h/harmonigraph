@@ -31,7 +31,6 @@ fn distance_shadows_fade_continuously_across_layers_and_settling() {
                 order,
                 stagger_spread: spread,
                 radial_start: if grow { -1.0 } else { 0.0 },
-                start_size: if grow { 0.0 } else { 1.0 },
             };
             scene.shadow = one_shadow(0.6, 0.8, kernel);
             if name == "marks" {
@@ -221,7 +220,6 @@ fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
             note_animation: NoteAnimationConfig {
                 animation: mode,
                 radial_start: 1.0,
-                start_size: 2.0,
                 ..Default::default()
             },
             ..Default::default()
@@ -307,16 +305,28 @@ fn fade_and_pop_grow_complete_pieces_and_settle() {
         scene.nodes[0].slice_progress = [1.0; 11];
         let reference = shooter.shot(&scene);
         for mode in NoteAnimation::ALL {
-            scene.note_animation = NoteAnimationConfig {
-                animation: mode,
-                radial_start: -1.0,
-                start_size: 0.0,
-                ..Default::default()
-            };
+            scene.note_animation =
+                NoteAnimationConfig { animation: mode, radial_start: -1.0, ..Default::default() };
             for (step, phase) in
                 [0.08f32, 0.2, 0.3, 0.5, 0.72, 0.99, 1.0, -0.7, -0.3].into_iter().enumerate()
             {
-                scene.nodes[0].slice_progress = [phase.abs(); 11];
+                // Smooth progress reaches the shader after traversing the
+                // shared note envelope on the CPU. Keep this direct-render
+                // fixture on that production boundary; handing the shader a
+                // linear 0.99 here measures the retired shader-side easing
+                // and invents a last-frame step the live path never draws.
+                let progress = if mode == NoteAnimation::Fade {
+                    let view = harmonigraph_scene::ViewConfig::default();
+                    harmonigraph_core::Envelope {
+                        attack_time: 1.0,
+                        fade_time: 1.0,
+                        shape: view.fade_shape,
+                    }
+                    .attack(f64::from(phase.abs()), 0.0)
+                } else {
+                    phase.abs()
+                };
+                scene.nodes[0].slice_progress = [progress; 11];
                 let shot = shooter.shot(&scene);
                 if phase == 1.0 {
                     let (mean, worst) = harmonigraph_golden::drift(&reference, &shot);
@@ -385,7 +395,6 @@ fn all_orders_draw_complete_rotated_pieces_at_their_shared_delays() {
                     animation,
                     order,
                     radial_start: -1.0,
-                    start_size: 0.0,
                     ..Default::default()
                 };
                 let delays = scene.note_animation.delays(&scene.octave_layout, 350.0, 42, 1.0);

@@ -63,11 +63,9 @@ fn poisoned_view() -> ViewConfig {
         center_sevens: 0,
         sevens_size: nan,
         sevens_label: base.sevens_label,
-        show_labels: true,
         label_scale: nan,
         show_cents: true,
         note_names: NoteNames::Played,
-        sounding_ink: nan,
         pitch_gradient,
         band_width: nan,
         ring_inner: nan,
@@ -93,10 +91,7 @@ fn poisoned_view() -> ViewConfig {
             order: base.note_animation.order,
             stagger_spread: nan,
             radial_start: nan,
-            start_size: nan,
         },
-        mark_melody: true,
-        mark_bass: true,
         mark_thickness: nan,
         mark_delay: nan,
         plus_arm: nan,
@@ -273,11 +268,10 @@ fn scene_floats(scene: &Scene) -> Floats {
 
     f.one("node_radius", *node_radius);
 
-    let NoteAnimationConfig { animation: _, order: _, stagger_spread, radial_start, start_size } =
+    let NoteAnimationConfig { animation: _, order: _, stagger_spread, radial_start } =
         note_animation;
     f.one("note_animation.stagger_spread", *stagger_spread);
     f.one("note_animation.radial_start", *radial_start);
-    f.one("note_animation.start_size", *start_size);
 
     f.one("outer_inner", *outer_inner);
     f.one("outer_outer", *outer_outer);
@@ -434,7 +428,7 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         ("shadow.lattice_geometry.depth", shadow.lattice_geometry.depth, 0.0),
         ("shadow.lattice_geometry.falloff", shadow.lattice_geometry.falloff, SHADOW_FALLOFF_MIN),
         ("shadow.spectral_text.falloff", shadow.spectral_text.falloff, SHADOW_FALLOFF_MIN),
-        ("note_animation.start_size", scene.note_animation.start_size, 1.0),
+        ("note_animation.starting_scale", scene.note_animation.starting_scale(), 1.0),
         ("note_animation.radial_start", scene.note_animation.radial_start, 0.0),
     ] {
         assert_eq!(got, want, "{site} came out {got}, not the fallback this pass chose");

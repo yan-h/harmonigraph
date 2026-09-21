@@ -402,8 +402,7 @@ pub enum SevensLabel {
     None,
 }
 
-/// WHICH nodes carry a note-name label, once labels are on at all
-/// ([`ViewConfig::show_labels`](crate::ViewConfig::show_labels)).
+/// WHICH nodes carry a note-name label.
 ///
 /// One axis, and it is how far a name reaches past the note that put it
 /// there. Nothing here changes what a label says or how big it draws — those

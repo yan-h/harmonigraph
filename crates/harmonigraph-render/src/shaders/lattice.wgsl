@@ -2032,7 +2032,9 @@ fn slice_progress(in: VsOut, i: u32) -> f32 {
     return f32((in.motion[i / 3u] >> ((i % 3u) * 10u)) & 1023u) / 1023.0;
 }
 fn motion_ease(p: f32) -> f32 {
-    if u.node.pose.x == 0.0 { return p * p * (3.0 - 2.0 * p); }
+    // Smooth progress has already traversed the shared note Envelope on the
+    // CPU, including the correct direction when a note reverses mid-flight.
+    if u.node.pose.x == 0.0 { return p; }
     let t = p - 1.0;
     return 1.0 + 2.1*t*t*t + 1.1*t*t;
 }
@@ -2053,7 +2055,7 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
         let ease = motion_ease(p);
         let intrinsic = u.node.pose.x * 0.045 * u.node.pose.y * sin(p * 3.14159265);
         let scale = mix(u.node.pose.y, 1.0, ease) + intrinsic;
-        let opacity = p*p*(3.0-2.0*p);
+        let opacity = select(p, p*p*(3.0-2.0*p), u.node.pose.x != 0.0);
         if opacity < INK_FLOOR { continue; }
         if scale <= 0.001 { continue; }
         let angle = oct_mid(slot, oct);

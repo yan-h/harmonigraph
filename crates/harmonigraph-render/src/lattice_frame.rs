@@ -484,7 +484,7 @@ impl LatticeCallback {
                             scene.note_animation.animation
                                 == harmonigraph_scene::NoteAnimation::Pop,
                         ),
-                        scene.note_animation.start_size,
+                        scene.note_animation.starting_scale(),
                         scene.note_animation.radial_start,
                         scene.note_animation.reach(1.0),
                     ]),

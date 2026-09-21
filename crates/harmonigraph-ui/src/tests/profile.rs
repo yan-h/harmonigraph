@@ -238,9 +238,6 @@ fn profile_frame() {
         s.picture.appearance.spectrum.show_spectrogram = false
     });
     profile("idle, no roll", 2.0, idle, |s| s.picture.appearance.spectrum.show_roll = false);
-    profile("idle, no lattice labels", 2.0, idle, |s| {
-        s.picture.appearance.view.show_labels = false
-    });
     profile("idle, hover lattice", 2.0, on_lattice, |_| {});
     profile("idle, hover spectral", 2.0, on_spectral, |_| {});
 
@@ -260,9 +257,6 @@ fn profile_frame() {
     profile("busy", 2.0, busy, |_| {});
     profile("busy, no note names", 2.0, busy, |s| s.picture.appearance.spectrum.note_names = false);
     profile("busy, no roll", 2.0, busy, |s| s.picture.appearance.spectrum.show_roll = false);
-    profile("busy, no lattice labels", 2.0, busy, |s| {
-        s.picture.appearance.view.show_labels = false
-    });
     profile("busy, 2 notes a frame", 2.0, Load { notes_per_frame: 2, ..idle }, |_| {});
     profile("busy, 12 notes a frame", 2.0, Load { notes_per_frame: 12, ..idle }, |_| {});
 }

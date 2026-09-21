@@ -8,7 +8,7 @@ use crate::*;
 use harmonigraph_core::{NoteEvent, NoteTracker, PitchClass, SourceId, Tuning};
 
 /// Play `notes` on channel 0 and derive a scene marking both extremes.
-fn marked_scene(notes: &[u8], mark_melody: bool, mark_bass: bool) -> Scene {
+fn marked_scene(notes: &[u8]) -> Scene {
     let mut tracker = NoteTracker::new();
     for &note in notes {
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
@@ -17,7 +17,7 @@ fn marked_scene(notes: &[u8], mark_melody: bool, mark_bass: bool) -> Scene {
     // Fade and mark Delay that instant is the one moment a note is guaranteed
     // not to be drawn yet, and a slot bit asserted over a node drawing nothing
     // says less than it reads as saying.
-    let view = ViewConfig { mark_melody, mark_bass, ..plain_view() };
+    let view = plain_view();
     scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0)
 }
 
@@ -46,13 +46,7 @@ const ATTACK: f64 = 0.2;
 /// the DELAY and not about the curve. The curve has its own tests, in
 /// `harmonigraph_core::notes`.
 fn delayed_view(mark_delay: f32) -> ViewConfig {
-    ViewConfig {
-        mark_melody: true,
-        mark_bass: true,
-        mark_delay,
-        fade_shape: 0.0,
-        ..ViewConfig::default()
-    }
+    ViewConfig { mark_delay, fade_shape: 0.0, ..ViewConfig::default() }
 }
 
 /// The frame that carries [`ATTACK`] as the envelope's duration — the other
@@ -79,7 +73,7 @@ fn marked_slots(scene: &Scene, melody: bool) -> (u32, usize) {
 fn melody_and_bass_mark_the_outer_held_notes() {
     // C4/E4/G4: the melody is G4, the bass C4 -- middle C's octave for
     // both (same MIDI octave, but different nodes/pitch classes).
-    let scene = marked_scene(&[60, 64, 67], true, true);
+    let scene = marked_scene(&[60, 64, 67]);
     let (melody_bits, melody_nodes) = marked_slots(&scene, true);
     let (bass_bits, bass_nodes) = marked_slots(&scene, false);
     assert_eq!(melody_bits, 1 << MIDDLE_C_SLOT, "G4 sounds in middle C's octave");
@@ -110,14 +104,6 @@ fn melody_and_bass_mark_the_outer_held_notes() {
             assert!(tuning.matches(PitchClass::from_midi_note(60), pc), "bass is C");
         }
     }
-
-    // Asking for one end leaves the other unmarked.
-    let melody_only = marked_scene(&[60, 64, 67], true, false);
-    assert_eq!(marked_slots(&melody_only, true).0, 1 << MIDDLE_C_SLOT);
-    assert_eq!(marked_slots(&melody_only, false).0, 0, "bass not asked for");
-    let off = marked_scene(&[60, 64, 67], false, false);
-    assert_eq!(marked_slots(&off, true).0, 0);
-    assert_eq!(marked_slots(&off, false).0, 0);
 }
 
 #[test]
@@ -126,7 +112,7 @@ fn a_lone_held_note_is_marked_as_both_ends() {
     // as both. The shader splits such a mark between the two colors (see
     // mark_paint) rather than blanking it -- blanking gives an outline that
     // vanishes exactly when two things are true at once.
-    let scene = marked_scene(&[60], true, true);
+    let scene = marked_scene(&[60]);
     let mut seen = false;
     for n in &scene.nodes {
         assert_eq!(
@@ -152,7 +138,7 @@ fn same_key_sources_mark_their_own_emitted_pitch() {
             kind: NoteEventKind::Tuning { semitones },
         });
     }
-    let view = ViewConfig { mark_melody: true, mark_bass: true, ..plain_view() };
+    let view = plain_view();
     let tuning = Tuning::default();
     let scene = scene_of(&tracker, &tuning, &view, &plain_frame(), 1.0);
     assert!(marked_slots(&scene, true).1 > 0 && marked_slots(&scene, false).1 > 0);
@@ -174,7 +160,7 @@ fn a_chord_inside_one_pitch_class_separates_on_the_octave_layer() {
     // C3 and C5: one pitch class, so both land on the SAME node and the
     // core can't say which is which -- but they sound in different
     // octave slots, which is what keeps them tellable apart.
-    let scene = marked_scene(&[48, 72], true, true);
+    let scene = marked_scene(&[48, 72]);
     let marked: Vec<_> =
         scene.nodes.iter().filter(|n| n.melody_slots != 0 || n.bass_slots != 0).collect();
     assert!(!marked.is_empty(), "C should be marked");
@@ -693,7 +679,7 @@ fn held_extremes_never_names_a_released_voice() {
     }
     // Release the top note; C is now both the highest and lowest held.
     tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 67));
-    let (melody, bass) = held_extremes(&tracker, true, true);
+    let (melody, bass) = held_extremes(&tracker);
     assert_eq!(
         melody.map(|e| e.key),
         Some(on(0.0, 60).key()),
@@ -707,7 +693,7 @@ fn held_extremes_never_names_a_released_voice() {
 
     // Nothing held at all: nothing to mark.
     tracker.handle_event(NoteEvent::off(0.2, SourceId::DIRECT, 0, 60));
-    assert_eq!(held_extremes(&tracker, true, true), (None, None));
+    assert_eq!(held_extremes(&tracker), (None, None));
 }
 
 /// `notes` held with both ends marked and the octave wheel set to `count`
@@ -717,13 +703,7 @@ fn marked(notes: &[u8], count: u32, center: f32) -> (Scene, FrameParams) {
     for &note in notes {
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
     }
-    let view = ViewConfig {
-        octave_count: count,
-        octave_center: center,
-        mark_melody: true,
-        mark_bass: true,
-        ..plain_view()
-    };
+    let view = ViewConfig { octave_count: count, octave_center: center, ..plain_view() };
     let frame = plain_frame();
     (scene_of(&tracker, &Tuning::default(), &view, &frame, 0.0), frame)
 }

@@ -525,7 +525,6 @@ fn a_natural_note_label_is_just_the_letter() {
 fn only_the_all_mode_names_a_node_nothing_has_happened_on() {
     let names_drawn = |names: harmonigraph_scene::NoteNames| -> Vec<String> {
         let mut state = fresh();
-        state.picture.appearance.view.show_labels = true;
         state.picture.appearance.view.note_names = names;
         let scene = harmonigraph_scene::derive_scene(
             &state.picture.runtime.tracker,
@@ -574,101 +573,90 @@ fn only_the_all_mode_names_a_node_nothing_has_happened_on() {
 /// — see `a_marker_takes_back_what_a_names_fade_gives_up`, which measures the
 /// same crossing from the scene side.
 ///
-/// Swept over all three Show modes and over the Note names switch, because
-/// each pair is a different balance of the two sets — All names everything and
-/// leaves no markers, Played names nothing at rest and leaves them all, and the
-/// switch off is the case where the mode says one thing and the picture
-/// another.
+/// Swept over all three visibility modes because each is a different balance
+/// of the two sets — All names everything and leaves no markers, while Played
+/// names nothing at rest and leaves those markers standing.
 #[test]
 fn a_name_and_the_marker_under_it_add_up_to_one_mark() {
-    for show in [true, false] {
-        for names in [
-            harmonigraph_scene::NoteNames::All,
-            harmonigraph_scene::NoteNames::Past,
-            harmonigraph_scene::NoteNames::Played,
+    for names in [
+        harmonigraph_scene::NoteNames::All,
+        harmonigraph_scene::NoteNames::Past,
+        harmonigraph_scene::NoteNames::Played,
+    ] {
+        let mut state = fresh();
+        state.picture.appearance.view.note_names = names;
+        // Something sounding and something remembered, so every route to a
+        // name is open at once: a live note, a memory under Past, and the
+        // whole field under All.
+        for (time, kind) in [
+            (0.0, harmonigraph_core::NoteEventKind::On { velocity: 1.0 }),
+            (1.0, harmonigraph_core::NoteEventKind::Off),
         ] {
-            let mut state = fresh();
-            state.picture.appearance.view.show_labels = show;
-            state.picture.appearance.view.note_names = names;
-            // Something sounding and something remembered, so every route to a
-            // name is open at once: a live note, a memory under Past, and the
-            // whole field under All.
-            for (time, kind) in [
-                (0.0, harmonigraph_core::NoteEventKind::On { velocity: 1.0 }),
-                (1.0, harmonigraph_core::NoteEventKind::Off),
-            ] {
-                let event = harmonigraph_core::NoteEvent {
-                    source: harmonigraph_core::SourceId::DIRECT,
-                    time,
-                    channel: 0,
-                    note: 60,
-                    kind,
-                };
-                state.picture.runtime.tracker.handle_event(event);
-            }
-            state.picture.runtime.tracker.prune(3.0, &harmonigraph_core::Envelope::default());
-            state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
-                3.5,
-                harmonigraph_core::SourceId::DIRECT,
-                0,
-                67,
-                1.0,
-            ));
-            let scene = harmonigraph_scene::derive_scene(
-                &state.picture.runtime.tracker,
-                &state.picture.runtime.tuning,
-                &state.picture.appearance.view,
-                &state.picture.appearance.view.reach(),
-                &state.picture.runtime.frame_params,
-                state.picture.appearance.camera,
-                None,
-                4.0,
-            );
-            // The label pass is gated on the switch by its CALLER, so mirror
-            // that here rather than asking it to gate itself.
-            let batch = if show {
-                pane_labels(&scene, &state.picture.appearance.view, 1.0)
-            } else {
-                crate::text::TextBatch::default()
+            let event = harmonigraph_core::NoteEvent {
+                source: harmonigraph_core::SourceId::DIRECT,
+                time,
+                channel: 0,
+                note: 60,
+                kind,
             };
-            let named: Vec<(glam::Vec3, f32)> = batch
-                .labels()
+            state.picture.runtime.tracker.handle_event(event);
+        }
+        state.picture.runtime.tracker.prune(3.0, &harmonigraph_core::Envelope::default());
+        state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+            3.5,
+            harmonigraph_core::SourceId::DIRECT,
+            0,
+            67,
+            1.0,
+        ));
+        let scene = harmonigraph_scene::derive_scene(
+            &state.picture.runtime.tracker,
+            &state.picture.runtime.tuning,
+            &state.picture.appearance.view,
+            &state.picture.appearance.view.reach(),
+            &state.picture.runtime.frame_params,
+            state.picture.appearance.camera,
+            None,
+            4.0,
+        );
+        let batch = pane_labels(&scene, &state.picture.appearance.view, 1.0);
+        let named: Vec<(glam::Vec3, f32)> = batch
+            .labels()
+            .iter()
+            .map(|label| {
+                let node = &scene.nodes[label.node as usize];
+                (node.world_pos, node.name_level(&state.picture.appearance.view))
+            })
+            .collect();
+        let ground = scene.lattice_ground.w;
+        for (pos, level) in &named {
+            let standing = scene
+                .pluses
                 .iter()
-                .map(|label| {
-                    let node = &scene.nodes[label.node as usize];
-                    (node.world_pos, node.name_level(&state.picture.appearance.view))
-                })
-                .collect();
-            let ground = scene.lattice_ground.w;
-            for (pos, level) in &named {
-                let standing = scene
-                    .pluses
-                    .iter()
-                    .find(|marker| marker.pos == *pos)
-                    .map_or(0.0, |marker| marker.strength);
-                let want = ground * (1.0 - level);
-                assert!(
-                    (standing - want).abs() < 1e-5,
-                    "{names:?} (names on: {show}) at {pos:?}: a name at {level} \
+                .find(|marker| marker.pos == *pos)
+                .map_or(0.0, |marker| marker.strength);
+            let want = ground * (1.0 - level);
+            assert!(
+                (standing - want).abs() < 1e-5,
+                "{names:?} at {pos:?}: a name at {level} \
                      over a marker at {standing}, which wanted {want}",
-                );
+            );
+        }
+        // The half of it a sum cannot say on its own: a name at full
+        // strength leaves NO instance, rather than one shipped at zero.
+        for (pos, _) in named.iter().filter(|(_, level)| *level >= 1.0) {
+            assert!(
+                !scene.pluses.iter().any(|marker| marker.pos == *pos),
+                "{names:?} shipped a marker under a whole name at {pos:?}",
+            );
+        }
+        // And the sweep has to actually reach both sets, or it is passing
+        // on an empty picture.
+        match names {
+            harmonigraph_scene::NoteNames::All => {
+                assert!(!named.is_empty() && scene.pluses.is_empty(), "All: {names:?}");
             }
-            // The half of it a sum cannot say on its own: a name at full
-            // strength leaves NO instance, rather than one shipped at zero.
-            for (pos, _) in named.iter().filter(|(_, level)| *level >= 1.0) {
-                assert!(
-                    !scene.pluses.iter().any(|marker| marker.pos == *pos),
-                    "{names:?} (names on: {show}) shipped a marker under a whole name at {pos:?}",
-                );
-            }
-            // And the sweep has to actually reach both sets, or it is passing
-            // on an empty picture.
-            match (show, names) {
-                (true, harmonigraph_scene::NoteNames::All) => {
-                    assert!(!named.is_empty() && scene.pluses.is_empty(), "All: {names:?}");
-                }
-                _ => assert!(!scene.pluses.is_empty(), "no pluses to contradict: {names:?}"),
-            }
+            _ => assert!(!scene.pluses.is_empty(), "no pluses to contradict: {names:?}"),
         }
     }
 }
@@ -677,7 +665,6 @@ fn a_name_and_the_marker_under_it_add_up_to_one_mark() {
 /// rasterized type size, and the ink it actually covers.
 fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egui::Rect)> {
     let mut state = fresh();
-    state.picture.appearance.view.show_labels = true;
     state.picture.appearance.view.label_scale = label_scale;
     state.picture.appearance.camera.distance = distance;
     // No arrival ramp: the scene below is derived at time 0, which under a
@@ -941,7 +928,6 @@ fn the_reach_a_label_reports_is_where_its_drawn_mark_ends() {
 #[test]
 fn the_cents_readout_sits_right_under_the_note_name() {
     let mut state = fresh();
-    state.picture.appearance.view.show_labels = true;
     state.picture.appearance.view.show_cents = true;
     // Derived at time 0, so the note has to be lit without waiting on the
     // Fade's arrival — this is about where the readout SITS.
@@ -1035,7 +1021,6 @@ fn the_cents_readout_sits_right_under_the_note_name() {
 #[test]
 fn every_label_names_its_own_node_in_the_panes_own_space() {
     let mut state = fresh();
-    state.picture.appearance.view.show_labels = true;
     // Derived at time 0, so the notes have to be lit without waiting on the
     // Fade's arrival — this is about which name lands on which node.
     state.picture.runtime.frame_params.fade_time = 0.0;
@@ -1147,7 +1132,6 @@ fn every_label_names_its_own_node_in_the_panes_own_space() {
 #[test]
 fn a_names_drawn_marks_go_into_its_own_nodes_run() {
     let mut state = fresh();
-    state.picture.appearance.view.show_labels = true;
     state.picture.runtime.frame_params.fade_time = 0.0;
     state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
         0.0,
@@ -1201,7 +1185,6 @@ fn a_names_drawn_marks_go_into_its_own_nodes_run() {
 #[test]
 fn lattice_names_reconstruct_both_axes_the_camera_moves() {
     let mut state = fresh();
-    state.picture.appearance.view.show_labels = true;
     state.picture.runtime.frame_params.fade_time = 0.0;
     state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
         0.0,

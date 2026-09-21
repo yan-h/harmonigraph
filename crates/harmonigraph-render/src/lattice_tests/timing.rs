@@ -200,21 +200,13 @@ fn animation_costs_by_pose_and_density() {
                     "Pop",
                     NoteAnimationConfig { animation: NoteAnimation::Pop, ..Default::default() },
                 ),
-                (
-                    "Grow",
-                    NoteAnimationConfig {
-                        radial_start: -1.0,
-                        start_size: 0.0,
-                        ..Default::default()
-                    },
-                ),
+                ("Grow", NoteAnimationConfig { radial_start: -1.0, ..Default::default() }),
                 (
                     "Circular",
                     NoteAnimationConfig {
                         animation: NoteAnimation::Pop,
                         order: AnimationOrder::Circular,
                         radial_start: -1.0,
-                        start_size: 0.0,
                         ..Default::default()
                     },
                 ),
@@ -223,7 +215,6 @@ fn animation_costs_by_pose_and_density() {
                     NoteAnimationConfig {
                         animation: NoteAnimation::Pop,
                         radial_start: 1.0,
-                        start_size: 2.0,
                         ..Default::default()
                     },
                 ),

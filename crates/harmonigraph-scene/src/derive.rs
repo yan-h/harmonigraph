@@ -98,15 +98,8 @@ struct FrameVoice<'a> {
 /// The two must not be conflated: a released voice allowed back in here would
 /// keep the end from the note that replaced it, and the incoming mark would
 /// have nothing to ease from.
-pub(crate) fn held_extremes(
-    tracker: &NoteTracker,
-    mark_melody: bool,
-    mark_bass: bool,
-) -> (Option<HeldEnd>, Option<HeldEnd>) {
-    (
-        mark_melody.then(|| tracker.highest_held()).flatten(),
-        mark_bass.then(|| tracker.lowest_held()).flatten(),
-    )
+pub(crate) fn held_extremes(tracker: &NoteTracker) -> (Option<HeldEnd>, Option<HeldEnd>) {
+    (tracker.highest_held(), tracker.lowest_held())
 }
 
 /// Which ends `voice` wears and WHEN it took each, as `(melody, bass)` —
@@ -119,37 +112,18 @@ pub(crate) fn held_extremes(
 /// leaves on, and the reason a handoff reads as one mark crossing to another
 /// rather than as one vanishing and a second appearing.
 ///
-/// The released stamps are gated on the same two flags here that
-/// [`held_extremes`] applies to the live ends, and on the flags as they are
-/// NOW. They have to be: a stamp is left whatever the view says, so a mark
-/// turned off mid-fade would otherwise go on drawing until the note it
-/// belongs to is pruned.
-///
-/// Turned back on mid-fade, the marks of notes released while it was off
-/// appear at the level their fade has reached. That is a toggle behaving like
-/// a toggle rather than a hole — switching the melody on over a held chord
-/// puts its mark up at full the same frame, the end having been taken long
-/// ago. The alternative is recording the flag at the release, which is a view
-/// setting baked into the tracker: the stamp is a fact about the music, and
-/// what is drawn from it is the view's to re-answer every frame (see
-/// [`Voice::wore_high`](harmonigraph_core::Voice::wore_high)).
 fn marks(
     voice: &harmonigraph_core::Voice,
     live: (Option<HeldEnd>, Option<HeldEnd>),
-    mark_melody: bool,
-    mark_bass: bool,
 ) -> (Option<Time>, Option<Time>) {
     match voice.state {
-        // `live` is already filtered by those same flags (see held_extremes).
         harmonigraph_core::VoiceState::Held => {
             let key = voice.key();
             let wears =
                 |end: Option<HeldEnd>| end.filter(|end| end.key == key).map(|end| end.since);
             (wears(live.0), wears(live.1))
         }
-        harmonigraph_core::VoiceState::Released { .. } => {
-            (voice.wore_high.filter(|_| mark_melody), voice.wore_low.filter(|_| mark_bass))
-        }
+        harmonigraph_core::VoiceState::Released { .. } => (voice.wore_high, voice.wore_low),
     }
 }
 
@@ -192,7 +166,7 @@ pub fn derive_scene(
     // ground rather than an arbitrary grey so that a node arriving or leaving
     // crosses no seam against the ring it is fading into.
     let node_idle = ground;
-    let live_extremes = held_extremes(tracker, view.mark_melody, view.mark_bass);
+    let live_extremes = held_extremes(tracker);
     // `finite_or` and not a bare clamp, which is no guard against a NaN. What
     // a non-finite delay costs is not a mark drawn wrong but every mark drawn
     // ARRIVED: `since + NaN` is NaN, and `Envelope::attack` answers a
@@ -278,8 +252,7 @@ pub fn derive_scene(
             );
             // Which ends this voice wears is per voice too — the live ends are
             // a frame-wide answer and the stamps are the voice's own.
-            let (melody_since, bass_since) =
-                marks(voice, live_extremes, view.mark_melody, view.mark_bass);
+            let (melody_since, bass_since) = marks(voice, live_extremes);
             // The RELEASE alone under the mark's own ease, not the node's full
             // activation: the attack is in that, and the mark already carries
             // one from the moment its note took the end. Multiplying both in

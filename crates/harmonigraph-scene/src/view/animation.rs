@@ -38,26 +38,19 @@ pub enum AnimationOrder {
     Circular,
     Bidirectional,
     RandomStagger,
-    OddEvenStagger,
 }
 impl AnimationOrder {
     /// Every order, for the settings picker and the sweeps that compare them.
     /// Guarded the way [`NoteAnimation::ALL`] above is, and for its reason.
-    pub const ALL: [Self; 5] = {
+    pub const ALL: [Self; 4] = {
         const fn covered(order: AnimationOrder) {
             use AnimationOrder::*;
             match order {
-                Simultaneous | Circular | Bidirectional | RandomStagger | OddEvenStagger => (),
+                Simultaneous | Circular | Bidirectional | RandomStagger => (),
             }
         }
         covered(AnimationOrder::Simultaneous);
-        [
-            Self::Simultaneous,
-            Self::Circular,
-            Self::Bidirectional,
-            Self::RandomStagger,
-            Self::OddEvenStagger,
-        ]
+        [Self::Simultaneous, Self::Circular, Self::Bidirectional, Self::RandomStagger]
     };
 }
 /// Starting pose of complete slices. Radial -1 places each anchor at the node centre.
@@ -68,7 +61,6 @@ pub struct NoteAnimationConfig {
     pub order: AnimationOrder,
     pub stagger_spread: f32,
     pub radial_start: f32,
-    pub start_size: f32,
 }
 impl Default for NoteAnimationConfig {
     fn default() -> Self {
@@ -77,7 +69,6 @@ impl Default for NoteAnimationConfig {
             order: AnimationOrder::Simultaneous,
             stagger_spread: 0.28,
             radial_start: 0.0,
-            start_size: 1.0,
         }
     }
 }
@@ -91,9 +82,9 @@ impl NoteAnimationConfig {
     ///
     /// The fallback is the FRESH value rather than each range's low bound,
     /// which is the departure the rest of the picture's repairs do not make
-    /// and is the same one [`GlowCurve::sanitized`] makes. These three are a
+    /// and is the same one [`GlowCurve::sanitized`] makes. These values are a
     /// POSE rather than a size: `radial_start`'s range is signed and
-    /// `start_size`'s neutral is 1, so a low bound here would be one extreme
+    /// `radial_start`'s neutral is 0, so a low bound here would be one extreme
     /// of an animation rather than the least of one. Fresh is also the answer
     /// [`ViewConfig::sanitize`] gives each of them, so the door and the
     /// picture cannot disagree about what a broken pose looks like.
@@ -101,7 +92,6 @@ impl NoteAnimationConfig {
         let fresh = NoteAnimationConfig::default();
         self.stagger_spread = finite_or(self.stagger_spread, fresh.stagger_spread).clamp(0.0, 0.9);
         self.radial_start = finite_or(self.radial_start, fresh.radial_start).clamp(-1.0, 1.0);
-        self.start_size = finite_or(self.start_size, fresh.start_size).clamp(0.0, 2.0);
         self
     }
     /// Fixed delays of complete displayed sectors; shared by live/export and
@@ -123,28 +113,30 @@ impl NoteAnimationConfig {
     ) -> [f32; 11] {
         let span = layout.span as usize;
         let ring = layout.ring(cents);
-        let start = (((layout.center - layout.slot_pitch(ring.base, cents)) / 12.0 + 0.5).floor()
-            as usize)
+        let random_start = (((layout.center - layout.slot_pitch(ring.base, cents)) / 12.0 + 0.5)
+            .floor() as usize)
             .min(span - 1);
         let mut ranks = [0.0f32; 11];
         for (i, rank) in ranks.iter_mut().enumerate().take(span) {
-            let clockwise = (i + span - start) % span;
             *rank = match self.order {
                 AnimationOrder::Simultaneous => 0.0,
-                AnimationOrder::Circular => clockwise as f32 / (span - 1).max(1) as f32,
+                // Slice zero is the lowest displayed pitch and `i` walks
+                // upward, so this starts at the low/high seam and sweeps low
+                // to high.
+                AnimationOrder::Circular => i as f32 / (span - 1).max(1) as f32,
                 AnimationOrder::Bidirectional => {
-                    let (a, b) = layout.sector(ring.base + i as i32, cents);
-                    let angle = (std::f32::consts::FRAC_PI_2 - (a + b) * 0.5)
-                        .rem_euclid(std::f32::consts::TAU);
-                    if i == start {
-                        0.0
-                    } else {
-                        angle.min(std::f32::consts::TAU - angle) / std::f32::consts::PI
-                    }
+                    // `bounds` is measured from the seam, not from a fixed
+                    // screen angle. Mirror the index before measuring so each
+                    // opposing pair has exactly one rank; independently
+                    // measuring both sides lets f32 roundoff turn a two-slice
+                    // tie into the whole normalized spread.
+                    let from_seam = i.min(span - 1 - i);
+                    (layout.bounds[from_seam] + layout.bounds[from_seam + 1]) * 0.5
+                        / std::f32::consts::PI
                 }
-                AnimationOrder::OddEvenStagger => (clockwise % 2) as f32,
                 AnimationOrder::RandomStagger => {
-                    let mut x = seed.wrapping_add((clockwise as u32 + 1).wrapping_mul(0x9e3779b9));
+                    let from_top = (i + span - random_start) % span;
+                    let mut x = seed.wrapping_add((from_top as u32 + 1).wrapping_mul(0x9e3779b9));
                     x ^= x >> 16;
                     x = x.wrapping_mul(0x7feb352d);
                     x ^= x >> 15;
@@ -164,7 +156,12 @@ impl NoteAnimationConfig {
         ranks
     }
     pub fn moves(self) -> bool {
-        self.animation == NoteAnimation::Pop || self.radial_start != 0.0 || self.start_size != 1.0
+        self.animation == NoteAnimation::Pop || self.radial_start != 0.0
+    }
+    /// Scale paired with the starting offset so a slice and the gaps around it
+    /// keep the same proportions throughout the radial move.
+    pub fn starting_scale(self) -> f32 {
+        1.0 + self.radial_start
     }
     /// Fixed across animation frames: only settings change allocation bounds.
     pub fn reach(self, rim: f32) -> f32 {
@@ -172,13 +169,57 @@ impl NoteAnimationConfig {
             return rim;
         }
         let extent = |ease: f32| {
-            let scale = self.start_size + (1.0 - self.start_size) * ease;
+            let starting_scale = self.starting_scale();
+            let scale = starting_scale + (1.0 - starting_scale) * ease;
             scale.abs() + (1.0 + self.radial_start * (1.0 - ease) - scale).abs()
         };
         let pop = self.animation == NoteAnimation::Pop;
         // Coupled anchor/scale bounds keep Grow (-1,0) at the ordinary
         // radius, plus only the Pop curve's small actual overshoot.
         rim * extent(0.0).max(extent(if pop { 1.046 } else { 1.0 }))
-            + if pop { rim * 0.09 * self.start_size } else { 0.0 }
+            + if pop { rim * 0.09 * self.starting_scale() } else { 0.0 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn starting_scale_tracks_offset_and_preserves_the_pose_proportion() {
+        for offset in [-1.0, -0.5, 0.0, 0.5, 1.0] {
+            let config = NoteAnimationConfig { radial_start: offset, ..Default::default() };
+            assert_eq!(config.starting_scale(), 1.0 + offset);
+            assert_eq!(config.reach(1.0), (1.0 + offset).max(1.0));
+        }
+    }
+
+    #[test]
+    fn circular_and_bidirectional_orders_begin_at_the_low_high_seam() {
+        for (count, extras) in [(2, 0), (7, 0), (4, 1), (5, 2)] {
+            let layout = crate::octave_layout(count, 64.5, extras, 0.3, 0.7);
+            let span = layout.span as usize;
+            let config = NoteAnimationConfig { stagger_spread: 0.8, ..Default::default() };
+
+            let circular = NoteAnimationConfig { order: AnimationOrder::Circular, ..config }
+                .delays(&layout, 350.0, 42, 2.0);
+            assert_eq!(circular[0], 0.0);
+            assert!((circular[span - 1] - 1.6).abs() < 1e-6);
+            assert!(circular[..span].windows(2).all(|pair| pair[0] < pair[1]));
+
+            let both = NoteAnimationConfig { order: AnimationOrder::Bidirectional, ..config }
+                .delays(&layout, 350.0, 42, 2.0);
+            assert!(both[0].abs() < 1e-6);
+            assert!(both[span - 1].abs() < 1e-6);
+            for i in 0..span / 2 {
+                assert!(
+                    (both[i] - both[span - 1 - i]).abs() < 1e-5,
+                    "asymmetric seam walk for {count}+2×{extras}: {both:?}",
+                );
+                if i + 1 < span / 2 {
+                    assert!(both[i] < both[i + 1]);
+                }
+            }
+        }
     }
 }

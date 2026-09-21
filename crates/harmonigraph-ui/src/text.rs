@@ -771,8 +771,8 @@ impl TextBatch {
         // mirror holding nothing". Until the first lattice name is drawn its
         // `seen` is empty, which is the arm that reports a resize, so an
         // empty `drawn` would hand back the whole atlas and a new key on
-        // every frame — and the lattice pane draws no names at all whenever
-        // `show_labels` is off, or before the first note or hover.
+        // every frame — and the lattice pane draws no names before the first
+        // note or hover under the sounding-only visibility mode.
         let (atlas, marks) = if self.glyphs.is_empty() {
             (None, None)
         } else {
@@ -1934,10 +1934,9 @@ mod tests {
     /// rebuilt glyph bind group. Once per frame, per lattice pane, for as
     /// long as it lasts.
     ///
-    /// It lasts. `show_labels` gates `draw_node_labels` and not this call, so
-    /// switching "Note names" off runs it for as long as the editor is open;
-    /// with names on it is the resting state from the editor opening until
-    /// the first note or hover, and it comes back whenever the mirror is
+    /// It lasts in the resting state from the editor opening until the first
+    /// note or hover under the sounding-only visibility mode, and it comes
+    /// back whenever the mirror is
     /// cleared with the lattice idle — a drag between the Retina display and
     /// an external monitor, or the window closing and reopening.
     #[test]
