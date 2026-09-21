@@ -779,7 +779,7 @@ fn map_controls(
         return TuningEngine::Adaptive;
     };
     // Stored first and read back by reference: this pane and the rest of the
-    // editor want the same view, and cloning it copies the name list again.
+    // editor want the same view.
     state.runtime.lattice_maps = Some(view);
     let view = state.runtime.lattice_maps.as_ref().expect("just stored");
     section(ui, "Note retuning");
@@ -832,7 +832,7 @@ fn map_controls(
     egui::ComboBox::from_id_salt("saved-lattice-map")
         .selected_text(format!("{} · {name}", selected + 1))
         .show_ui(ui, |ui| {
-            for (id, name) in &view.names {
+            for (id, name) in view.names.iter() {
                 if ui.selectable_label(selected == *id, format!("{} · {name}", id + 1)).clicked() {
                     params.edit_lattice_map(MapEdit::Select(*id));
                 }
@@ -846,7 +846,7 @@ fn map_controls(
             params.edit_lattice_map(MapEdit::Audition);
         }
         if ui
-            .add_enabled(view.working.is_some(), egui::Button::new("Return to arrangement"))
+            .add_enabled(view.playback.audition, egui::Button::new("Return to arrangement"))
             .clicked()
         {
             params.edit_lattice_map(MapEdit::Return);
@@ -898,7 +898,7 @@ fn map_controls(
             ui.end_row();
         }
     });
-    if view.working.is_some() {
+    if view.playback.audition {
         ui.colored_label(
             theme::armed(),
             "Audition shape · Map selection paused; offset automation remains live",
