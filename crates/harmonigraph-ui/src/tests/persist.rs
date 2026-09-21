@@ -1138,6 +1138,23 @@ fn workspace_edits_do_not_change_recorded_appearance() {
     assert_eq!(AppearanceDocument::parse(&appearance).unwrap().serialize(), appearance);
 }
 
+/// Retiring the hidden executable override costs only that key, including in
+/// a whole recorded appearance rather than just a standalone RenderConfig.
+#[test]
+fn an_old_renderer_path_preserves_the_rest_of_the_appearance() {
+    let mut appearance = AppearanceDocument::default();
+    appearance.camera.yaw = 1.23;
+    appearance.view.max_sevens = 3;
+    appearance.render.short_edge = 2160;
+    appearance.render.frame.split = 0.37;
+    let saved = appearance.serialize();
+    let old = saved.replacen("render:(", "render:(renderer_path:\"/old/renderer\",", 1);
+    assert_ne!(old, saved, "fixture must contain the retired key");
+    let restored = AppearanceDocument::parse(&old).unwrap();
+    assert_eq!(restored.serialize(), saved);
+    assert!(!restored.serialize().contains("renderer_path"));
+}
+
 /// Missing groups use their own defaults without costing the other groups.
 #[test]
 fn an_appearance_missing_any_one_group_keeps_the_rest() {

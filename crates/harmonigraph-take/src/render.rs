@@ -187,9 +187,6 @@ pub struct RenderConfig {
     /// Fractional, because the field it is edited in is one number and half a
     /// bar is a legitimate place to cut; nothing rounds it.
     pub stop_bar: f64,
-    /// Path to the `harmonigraph-offline` binary. Empty means the
-    /// conventional install location, which `update-plugin.sh` writes to.
-    pub renderer_path: String,
     /// Which spectrogram the render bakes; see [`SpectrogramRender`]. Read by
     /// the offline renderer from the take.
     pub spectrogram: SpectrogramRender,
@@ -217,7 +214,6 @@ impl Default for RenderConfig {
             // can never be crossed from below, so the take would simply never
             // end and the trigger would look broken on first use.
             stop_bar: 65.0,
-            renderer_path: String::new(),
             spectrogram: SpectrogramRender::WholeVideo,
             frame: RenderFrame::default(),
             // 1440 on the short edge — 2560x1440 at the default 16:9 frame,
@@ -506,12 +502,13 @@ mod tests {
                 renderer_path:"/renderer",short_edge:2160,trigger:AtBar,stop_bar:17.0)"#,
         )
         .unwrap();
-        assert_eq!(config.renderer_path, "/renderer");
         assert_eq!(config.short_edge, 2160);
         assert_eq!(config.trigger, RenderTrigger::AtBar);
         assert_eq!(config.stop_bar, 17.0);
         let saved = ron::to_string(&config).unwrap();
-        for removed in ["record_audio", "auto_render", "audio_path", "audio_offset"] {
+        for removed in
+            ["record_audio", "auto_render", "audio_path", "audio_offset", "renderer_path"]
+        {
             assert!(!saved.contains(removed), "retired field saved again: {removed}");
         }
     }

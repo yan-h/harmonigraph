@@ -246,8 +246,10 @@ mod tests {
         );
         shared.ui.picture.appearance.render.trigger =
             harmonigraph_ui::RenderTrigger::OnTransportStop;
-        shared.ui.picture.appearance.render.renderer_path =
-            directory.join("absent-renderer").to_string_lossy().into_owned();
+        harmonigraph_record::testing::set_renderer_program(
+            &shared.take,
+            directory.join("absent-renderer"),
+        );
         shared.ui.workspace.interaction.take.recording = true;
         shared.sync_take(48_000.0);
         assert!(shared.take.is_recording());
@@ -303,7 +305,6 @@ mod tests {
         shared.ui.picture.appearance.spectrum.low_midi = 40.5;
         shared.ui.picture.appearance.spiral.zoom = 2.75;
         shared.ui.picture.appearance.render.short_edge = 2160;
-        shared.ui.picture.appearance.render.renderer_path = "a renderer (with, punctuation)".into();
         shared.ui.workspace.interaction.ui_scale = 1.25;
         let expected = shared.ui.picture.appearance.serialize();
         shared.ui.workspace.interaction.take.recording = true;

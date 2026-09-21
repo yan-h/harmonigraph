@@ -37,10 +37,7 @@ use std::time::{Duration, Instant};
 /// the two is the part of a render that is ffmpeg rather than this crate.
 #[derive(Clone, Copy, Default)]
 pub struct Stages {
-    /// Frames DRAWN, which is what the stage costs are per. Short of
-    /// `frame_count()` when the encoder stopped early, and one more than the
-    /// video holds in that case: the frame that found the pipe shut was drawn
-    /// and paid for like any other.
+    /// Frames drawn, which is what the stage costs are measured per.
     pub frames: u64,
     pub wall: Duration,
     pub ui: Duration,
@@ -158,16 +155,13 @@ pub(crate) fn frame_input(screen: egui::Rect, now: f64, max_texture_side: usize)
 /// allocator doing 880 MB a second of video for nothing.
 ///
 /// `emit` returning an error stops the render — that is how a dead encoder
-/// gets reported rather than swallowed for another thousand frames. `emit`
-/// returning `Ok(None)` also stops it, but cleanly: the encoder wants no more
-/// frames (ffmpeg under `-shortest`, its soundtrack shorter than the visuals),
-/// and the caller reads the true verdict from the encoder's exit status.
+/// gets reported rather than swallowed for another thousand frames.
 pub fn render(
     replay: &mut Replay,
     mut audio: Option<&mut Audio>,
     settings: &Settings,
     appearance: AppearanceDocument,
-    mut emit: impl FnMut(Vec<u8>) -> Result<Option<Vec<u8>>, String>,
+    mut emit: impl FnMut(Vec<u8>) -> Result<Vec<u8>, String>,
 ) -> Result<Stages, String> {
     let mut renderer = Renderer::new(settings.size)
         .ok_or("no usable GPU adapter (this needs a real GPU, not a container)")?;
@@ -274,17 +268,7 @@ pub fn render(
         stages.emit += handing_over.elapsed();
         stages.frames = frame + 1;
         stages.wall = loop_began.elapsed();
-        let Some(next) = returned else {
-            // The encoder wants no more frames (e.g. ffmpeg under -shortest,
-            // the soundtrack ending before the visuals). Stop here; the caller
-            // reads whether that was a clean finish from the exit status.
-            //
-            // This frame was drawn and handed over and the sink dropped it, so
-            // it counts toward the stage costs but not toward the frames the
-            // file holds — which is the encoder's own count, printed separately.
-            return Ok(stages);
-        };
-        buffer = next;
+        buffer = returned;
     }
     Ok(stages)
 }
@@ -586,7 +570,7 @@ mod tests {
                 appearance_for(&take, None),
                 |bytes| {
                     frames.push(bytes);
-                    Ok(Some(Vec::new()))
+                    Ok(Vec::new())
                 },
             );
             match result {
@@ -628,7 +612,7 @@ mod tests {
                 appearance,
                 |bytes| {
                     frames.push(bytes);
-                    Ok(Some(Vec::new()))
+                    Ok(Vec::new())
                 },
             );
             match result {
@@ -763,7 +747,7 @@ mod tests {
         let appearance = appearance_for(replay.take(), None);
         match render(&mut replay, None, settings, appearance, |bytes| {
             frames.push(bytes);
-            Ok(Some(Vec::new()))
+            Ok(Vec::new())
         }) {
             Ok(_) => Some(frames),
             // Optional local GPU tests may skip. The shared device setup
@@ -887,7 +871,7 @@ mod tests {
                 appearance_for(take, None),
                 |bytes| {
                     frames.push(bytes);
-                    Ok(Some(Vec::new()))
+                    Ok(Vec::new())
                 },
             );
             match result {

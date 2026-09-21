@@ -1,5 +1,11 @@
 use super::*;
 
+/// Override only this recorder's subprocess launch, leaving production requests
+/// and recorded appearance intact. Set before a fixture starts its export.
+pub fn set_renderer_program(control: &Control, program: std::path::PathBuf) {
+    *control.render.test_program.lock() = Some(program);
+}
+
 /// Only fence/status observation. This deliberately retains neither a
 /// Control nor a command sender, so teardown fixtures cannot pin the writer.
 pub struct WorkerProbe {

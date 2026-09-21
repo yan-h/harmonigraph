@@ -49,23 +49,20 @@ impl RenderRequest {
         Self::build(config, Some(appearance))
     }
 
-    /// A blank renderer path means "use the default" rather than an empty
-    /// argument the renderer would reject.
     fn build(
         config: &harmonigraph_take::RenderConfig,
         appearance: Option<String>,
     ) -> RenderRequest {
-        let program = if config.renderer_path.trim().is_empty() {
-            default_renderer_path()
-        } else {
-            std::path::PathBuf::from(config.renderer_path.trim())
-        };
-        RenderRequest { program, appearance, size: config.frame.pixels(config.short_edge) }
+        RenderRequest {
+            program: default_renderer_path(),
+            appearance,
+            size: config.frame.pixels(config.short_edge),
+        }
     }
 }
 
 /// Where `update-plugin.sh` installs the renderer, and where the plugin
-/// looks when the path setting is left empty. A fixed location beats
+/// finds its paired renderer. A fixed location beats
 /// guessing at the host's working directory or the bundle's own path.
 pub fn default_renderer_path() -> std::path::PathBuf {
     home_dir().join("Library/Application Support/Harmonigraph/harmonigraph-offline")
@@ -95,6 +92,9 @@ pub(super) struct Progress {
 /// with a setting changed since.
 #[derive(Default)]
 pub(super) struct RenderControl {
+    /// Instance-owned launch override for fixtures that exercise automatic stop.
+    #[cfg(feature = "test-support")]
+    pub(super) test_program: Mutex<Option<std::path::PathBuf>>,
     /// Bumped by every request, so no two runs share a number — which is what
     /// keeps each run's partial output under a name of its own.
     generation: AtomicU64,
@@ -130,6 +130,21 @@ pub(super) struct RenderControl {
 struct InFlight {
     take: std::path::PathBuf,
     child: std::process::Child,
+}
+
+/// Stop the renderer and its encoder together. Killing only the renderer
+/// leaves ffmpeg holding stderr while it pads audio through the planned end,
+/// so `follow` and the next queued render would wait for all of that work.
+/// The unreaped child leads the private process group established at spawn.
+fn kill_render(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    if let Ok(pid) = libc::pid_t::try_from(child.id()) {
+        // SAFETY: a spawned child's PID is positive and cannot be reused
+        // before wait; its negative names only the group we created for it.
+        unsafe { libc::kill(-pid, libc::SIGKILL) };
+    }
+    // Also serves non-Unix targets and falls back if group signalling failed.
+    let _ = child.kill();
 }
 
 /// Hands a take's claim back when its run ends, by whichever of the render
@@ -175,7 +190,7 @@ impl RenderControl {
     fn cancel_in_flight(&self, take: &std::path::Path) {
         if let Some(flight) = self.child.lock().as_mut() {
             if flight.take == take {
-                let _ = flight.child.kill();
+                kill_render(&mut flight.child);
             }
         }
     }
@@ -201,7 +216,7 @@ impl RenderControl {
         let mut in_flight = self.child.lock();
         let Some(flight) = in_flight.as_mut() else { return false };
         self.claims.lock().remove(&flight.take);
-        let _ = flight.child.kill();
+        kill_render(&mut flight.child);
         true
     }
 
@@ -373,12 +388,10 @@ pub(super) fn spawn_render(
         // Written under a name of this run's own, and moved onto `out`
         // only once it has succeeded.
         //
-        // Killing the renderer does not kill the ffmpeg it is piping to —
-        // that is a grandchild, and it outlives the kill by however long
-        // finalizing takes. Sharing one output path with it is how a
-        // cancelled render corrupts the video that replaces it. A path per
-        // run means the straggler writes somewhere nobody is reading, and
-        // the file at `out` is only ever produced whole, by rename.
+        // A failed or cancelled run never replaces a finished video. Each
+        // run also owns its partial path: on platforms without process-group
+        // cancellation, an encoder descendant may still be finalizing while
+        // its replacement starts. Only a successful run publishes by rename.
         let partial = take_path.with_extension(format!("rendering-{generation}.mp4"));
         // A "Re-render take" carries the current look as a appearance document; write
         // it beside the take and pass --appearance so post-record settings
@@ -389,7 +402,16 @@ pub(super) fn spawn_render(
             std::fs::write(&path, blob).ok().map(|()| path)
         });
 
-        let mut command = std::process::Command::new(&request.program);
+        #[cfg(feature = "test-support")]
+        let program = control.test_program.lock().clone().unwrap_or(request.program);
+        #[cfg(not(feature = "test-support"))]
+        let program = request.program;
+        let mut command = std::process::Command::new(&program);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
         command.arg(&take_path).arg("--out").arg(&partial);
         if let Some(file) = &appearance_file {
             command.arg("--appearance").arg(file);
@@ -412,8 +434,8 @@ pub(super) fn spawn_render(
             Err(err) => {
                 cleanup();
                 *status.lock() = format!(
-                    "could not run {}: {err} — check the Renderer path",
-                    request.program.display()
+                    "could not run {}: {err} — reinstall the paired Harmonigraph renderer",
+                    program.display()
                 );
                 return;
             }
@@ -428,7 +450,7 @@ pub(super) fn spawn_render(
         {
             let mut in_flight = control.child.lock();
             if control.superseded(&take_path, generation) {
-                let _ = child.kill();
+                kill_render(&mut child);
             }
             *in_flight = Some(InFlight { take: take_path.clone(), child });
         }

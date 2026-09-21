@@ -578,6 +578,10 @@ mod tests {
             std::env::temp_dir().join(format!("background-take-end-{}", std::process::id()));
         {
             let mut shared = h.shared.lock();
+            harmonigraph_record::testing::set_renderer_program(
+                &shared.take,
+                directory.join("absent-renderer"),
+            );
             let _probe = harmonigraph_record::testing::worker_probe(&shared.take, directory);
             shared.ui.picture.appearance.render.trigger =
                 harmonigraph_ui::RenderTrigger::OnTransportStop;
