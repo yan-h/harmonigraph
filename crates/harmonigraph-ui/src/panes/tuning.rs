@@ -815,6 +815,11 @@ fn map_controls(
     if state.runtime.learn_active {
         ui.colored_label(theme::armed(), "Learn is suspended in Lattice Map.");
     }
+    ui.checkbox(&mut state.appearance.view.show_map_indicators, "Show map indicators")
+        .on_hover_text(
+            "Show the selected map's assignment rings and MIDI note labels on the lattice. This \
+             does not change the map or its tuning.",
+        );
     let selected = view.playback.selected;
     let name = view
         .names

@@ -1583,6 +1583,28 @@ fn a_view_missing_any_one_key_reloads_at_the_fresh_value() {
 }
 
 #[test]
+fn lattice_map_indicator_visibility_round_trips_and_defaults_on() {
+    let mut state = fresh();
+    state.picture.appearance.view.show_map_indicators = false;
+    let saved = state.save_persist();
+
+    let mut restored = fresh();
+    restored.load_persist(&saved);
+    assert!(
+        !restored.picture.appearance.view.show_map_indicators,
+        "a project that hid map indicators must keep them hidden"
+    );
+
+    let old = saved.replacen("show_map_indicators:false,", "", 1);
+    assert_ne!(old, saved, "the visibility-key cut must land");
+    restored.load_persist(&old);
+    assert!(
+        restored.picture.appearance.view.show_map_indicators,
+        "a project from before the visibility setting existed must keep showing map indicators"
+    );
+}
+
+#[test]
 fn a_shadow_endpoint_missing_any_one_group_keeps_the_other_three() {
     let mut endpoint = harmonigraph_scene::ShadowSettings::default();
     for (index, group) in endpoint.groups_mut().into_iter().enumerate() {
