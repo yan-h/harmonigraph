@@ -2423,6 +2423,12 @@ pub(crate) mod tests {
     /// bound to the old texture can reach.
     #[test]
     fn a_prepared_pane_survives_a_later_pane_growing_the_atlas() {
+        for sheet in [GlyphInstance::TYPE, GlyphInstance::MARK] {
+            prepared_pane_survives_atlas_growth(sheet);
+        }
+    }
+
+    fn prepared_pane_survives_atlas_growth(sheet: u32) {
         let Some((device, queue)) = headless_device() else {
             return;
         };
@@ -2446,11 +2452,17 @@ pub(crate) mod tests {
             }
             FontAtlas { image: std::sync::Arc::new(image), key }
         };
+        // The standalone harness requires a font sheet even for mark-only batches.
+        let fallback_font = atlas();
         let at = |x: f32, pane_id: u64, atlas: Option<FontAtlas>| TextCallback {
             layer_ends: Vec::new(),
-            glyphs: vec![GlyphInstance { rect: [x, 24.0, 8.0, 8.0], ..glyph() }],
+            glyphs: vec![GlyphInstance { rect: [x, 24.0, 8.0, 8.0], atlas: sheet, ..glyph() }],
             shadow: None,
-            sheets: SheetUploads { font: atlas, marks: None },
+            sheets: if sheet == GlyphInstance::TYPE {
+                SheetUploads { font: atlas, marks: None }
+            } else {
+                SheetUploads { font: Some(fallback_font.clone()), marks: atlas }
+            },
             sdf: None,
             slide: SlideAxis::default(),
             target_format: FORMAT,
@@ -2520,6 +2532,7 @@ pub(crate) mod tests {
         // takes `bind_sheets`'s early return, so nothing is handed to the
         // leading pane on this frame either.
         let reaching = GlyphInstance {
+            atlas: sheet,
             rect: [8.0, 24.0, 8.0, 8.0],
             uv: [8.0, GROWN_PATCH_TOP as f32, 16.0, GROWN_PATCH_TOP as f32 + 8.0],
             ..glyph()
