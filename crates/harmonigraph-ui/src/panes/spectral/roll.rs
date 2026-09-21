@@ -74,7 +74,7 @@ const MIN_RIBBON_PX: f32 = 1.5;
 /// A BENT segment pays a second time, in its shear: the box it is drawn in is
 /// longer than the drift it carries, so the drift spreads over the floored
 /// length and reads as a shallower bend. That is deliberate, and the
-/// alternative is much worse — see the shear in [`note_instances_with_floor`], where the
+/// alternative is much worse — see the shear in [`roll_instances_with_floor`], where the
 /// two are one product and holding the rate instead puts ink at pitches
 /// nothing sounded.
 const MIN_LENGTH_DEVICE_PX: f32 = 2.0;
