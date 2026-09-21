@@ -180,7 +180,7 @@ impl WindowHandler for Host {
                     state: &mut shared,
                     params: &Defaults,
                     now: probe.opened.elapsed().as_secs_f64(),
-                    window_width: 1000.0,
+                    window_size: egui::vec2(1000.0, 700.0),
                 }
                 .draw();
                 assert!(requested.is_none(), "startup fixture unexpectedly resized");

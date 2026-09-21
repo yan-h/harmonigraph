@@ -25,7 +25,7 @@ pub(crate) struct Regions {
 pub(crate) struct Request {
     pub collapsed: [bool; 2],
     pub region: usize,
-    /// `Some` closes a region, removing this width if the dock permits it;
+    /// `Some` closes a region, removing this width in the Right arrangement;
     /// `None` reopens it using the fold controller's recorded deduction.
     pub width: Option<f32>,
 }
@@ -222,7 +222,6 @@ fn control(
     });
     let painter = ui.painter_at(rect);
     let scale = theme::ui_scale(ui.ctx());
-    let style = theme::dock_style(ui.style(), scale);
     let size = theme::tab_bar_height(scale);
     let center = if rail {
         rect.left_top()
@@ -234,11 +233,11 @@ fn control(
     } else {
         rect.center()
     };
-    // A restore rail is tab chrome; only its arrow cell takes the dock's
+    // A restore rail is tab chrome; only its arrow cell takes the section's
     // button fill. Over the picture, the small open controls use the ordinary
     // widget fill so they remain visible against black without a new accent.
     if rail {
-        painter.rect_filled(rect, egui::CornerRadius::ZERO, style.tab.active.bg_fill);
+        painter.rect_filled(rect, egui::CornerRadius::ZERO, theme::panel());
     }
     let button = if rail { Rect::from_center_size(center, Vec2::splat(size)) } else { rect };
     let hovered = response.hovered() || response.has_focus();
@@ -246,9 +245,9 @@ fn control(
         button,
         egui::CornerRadius::ZERO,
         if hovered {
-            style.buttons.collapse_tabs_bg_fill
+            theme::surface_faint()
         } else if rail {
-            style.tab_bar.bg_fill
+            theme::well()
         } else {
             theme::widget()
         },
@@ -260,18 +259,14 @@ fn control(
             center + direction * 4.0,
             center - direction * 4.0 - cross * 4.0,
         ],
-        if hovered {
-            style.buttons.collapse_tabs_active_color
-        } else {
-            style.buttons.collapse_tabs_color
-        },
+        if hovered { theme::text() } else { theme::text_dim() },
         egui::Stroke::NONE,
     ));
     if rail {
         let galley = painter.layout_no_wrap(
             name.to_owned(),
             egui::TextStyle::Button.resolve(ui.style()),
-            style.tab.active.text_color,
+            theme::text(),
         );
         let available = if vertical { rect.width() } else { rect.height() };
         if galley.size().x + size + 12.0 <= available {
@@ -286,10 +281,8 @@ fn control(
                     -std::f32::consts::FRAC_PI_2,
                 )
             };
-            painter.add(
-                egui::epaint::TextShape::new(anchor, galley, style.tab.active.text_color)
-                    .with_angle(angle),
-            );
+            painter
+                .add(egui::epaint::TextShape::new(anchor, galley, theme::text()).with_angle(angle));
         }
     }
     response.on_hover_text(format!("{} {name}", if rail { "Expand" } else { "Collapse" })).clicked()

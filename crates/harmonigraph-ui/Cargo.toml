@@ -12,8 +12,7 @@ harmonigraph-scene = { workspace = true }
 harmonigraph-render = { workspace = true }
 harmonigraph-perf = { workspace = true }
 harmonigraph-take = { workspace = true }
-egui = { workspace = true }
-egui_dock = { workspace = true }
+egui = { workspace = true, features = ["serde"] }
 glam = { workspace = true }
 serde = { workspace = true }
 ron = { workspace = true }

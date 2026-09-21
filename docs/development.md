@@ -180,12 +180,37 @@ See [offline rendering](offline-rendering.md) for the recorded-data path and [ad
   layout and camera behavior.
 - `cargo run -p harmonigraph-standalone` exercises the production render path without a DAW.
 
+## Editor layout
+
+The workspace has three independently foldable sections:
+Lattice,
+Analyzer (or Spiral),
+and Settings.
+Settings contains Tuning,
+Display,
+Video and Console destinations.
+Its Layout menu places Analyzer to the right of Lattice or below it;
+each arrangement remembers its own sizes.
+Dividers resize adjacent visible sections without allowing rearrangement.
+
+Folding requests a smaller outer window while retaining the other picture's dimensions.
+In the stacked arrangement this changes height,
+and Settings follows the remaining picture's height.
+Folding both stacked pictures leaves vertical reopen rails beside Settings.
+If the host refuses a resize or the editor reaches its minimum size,
+the visible sections fit the available window without overwriting their remembered sizes.
+
+The layout lives in `harmonigraph-ui/src/workspace.rs`,
+separate from picture rendering and appearance.
+Old saved dock arrangements reset to the fixed default;
+camera and appearance settings still load.
+
 ## Dependency coupling
 
 `egui-baseview 0.3` pins egui 0.35,
 egui-wgpu 0.35,
 wgpu 29 and baseview 0.1.
-`eframe` and `egui_dock` must use the same egui version.
+`eframe` and `egui-baseview` must use the same egui version.
 The workspace [`Cargo.toml`](../Cargo.toml) centralizes these versions;
 bump the cluster together.
 

@@ -30,7 +30,6 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
 /// because the display and its knobs are one feature.
 #[test]
 fn every_tab_has_its_own_id_whatever_its_title_says() {
-    use egui_dock::TabViewer;
     let mut state = fresh();
     let params = RecordingBackend::default();
     let tabs = [
@@ -42,7 +41,7 @@ fn every_tab_has_its_own_id_whatever_its_title_says() {
         panes::Tab::Spiral,
         panes::Tab::Video,
     ];
-    let mut viewer = panes::Viewer {
+    let viewer = panes::Viewer {
         state: &mut state.picture,
         interaction: &mut state.workspace.interaction,
         params: &params,
@@ -57,13 +56,7 @@ fn every_tab_has_its_own_id_whatever_its_title_says() {
          meant to share the Analyzer name",
     );
 
-    let ids: Vec<egui::Id> = tabs
-        .iter()
-        .map(|&tab| {
-            let mut tab = tab;
-            viewer.id(&mut tab)
-        })
-        .collect();
+    let ids: Vec<egui::Id> = tabs.iter().map(|&tab| viewer.id(&tab)).collect();
     for (i, a) in ids.iter().enumerate() {
         for (j, b) in ids.iter().enumerate().skip(i + 1) {
             assert_ne!(a, b, "{:?} and {:?} share a tab id", tabs[i], tabs[j]);
@@ -75,7 +68,6 @@ fn every_tab_has_its_own_id_whatever_its_title_says() {
 /// only shift a picture that is meant to sit still.
 #[test]
 fn the_picture_panes_do_not_scroll() {
-    use egui_dock::TabViewer;
     let mut state = fresh();
     let params = RecordingBackend::default();
     let viewer = panes::Viewer {
@@ -131,13 +123,13 @@ fn a_separator_reads_against_both_grounds_a_pane_can_paint() {
     }
 
     const FLOOR: f32 = 1.25;
-    let style = theme::dock_style(&egui::Style::default(), 1.0);
+
     // Every state a separator is drawn in, not the idle one alone: a hover or a
     // drag that stopped reading would be the same bug on the frame it matters.
     for (state, color) in [
-        ("idle", style.separator.color_idle),
-        ("hovered", style.separator.color_hovered),
-        ("dragged", style.separator.color_dragged),
+        ("idle", theme::hairline()),
+        ("hovered", theme::accent_edge()),
+        ("dragged", theme::accent()),
     ] {
         for (ground, fill) in [
             ("the picture panes' ground", theme::picture()),
@@ -153,34 +145,8 @@ fn a_separator_reads_against_both_grounds_a_pane_can_paint() {
     }
 }
 
-/// Every tab in the settings column fits on its tab bar, unclipped, at the
-/// editor's default window as well as the window this UI is dialled against.
-///
-/// The tab bar ALONE, not the column: a settings pane scrolling is a normal
-/// thing, so a guard over tab bar and pane content together fires on panes that
-/// are meant to scroll and has to come out — which is why this asks the
-/// narrower question that stays true (see [`crate::state::SETTINGS_SPLIT`]).
-///
-/// What overflow actually costs is worth stating exactly, because it is not
-/// unreachability: egui_dock SCROLLS a bar that does not fit (`tab_bar_scroll`,
-/// and `leaf.scroll`), so every tab stays clickable. The cost is
-/// discoverability — a tab you have to drag the bar sideways to find is one a
-/// new user never learns is there — which is the whole thing this arrangement
-/// is for, so a clipped bar undoes the naming and merging it was made by.
-///
-/// Measured, not derived, and measured in the REAL type. egui_dock lays the bar
-/// out itself and would answer a re-derivation of its own sums with whatever it
-/// was given; what a user can SEE is whether the glyphs survived the clip rect
-/// they were painted under. So this asks the real dock for a real frame — and
-/// [`DockHarness`] installs the theme, without which every title here is laid
-/// out in egui's 12.5pt fallback rather than the editor's 13.5pt face, and the
-/// numbers below come out flattering by about 18pt of window.
-///
-/// The default-window row is what the Display merge bought, and the margin it
-/// bought is worth knowing when adding a tab: a tab per settings pane wants
-/// 1428pt of window at seven tabs where this bar's three have about 270pt of
-/// column to share at 1000pt — so the room for a NEW tab is real but shallow,
-/// and a new settings surface should be a Display page first (#287).
+/// Every settings destination is visible without horizontal scrolling.
+/// Header rows may wrap, but each title must remain wholly inside its clip.
 #[test]
 fn every_settings_tab_fits_on_its_tab_bar() {
     // Two windows: the one this UI is dialled against (and the one the column
@@ -203,9 +169,7 @@ fn every_settings_tab_fits_on_its_tab_bar() {
         // the same name, that pane is a leaf of its own with one tab and room to
         // spare, and an unscoped search would find ITS unclipped copy and pass no
         // matter what the settings column did.
-        let path = state.workspace.dock.find_tab(&panes::Tab::Tuning).expect("Tuning is docked");
-        let leaf =
-            state.workspace.dock[path.surface][path.node].rect().expect("the leaf is laid out");
+        let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
         for tab in column {
             let title = panes::tab_title(&tab);
             // The bar paints the title of every tab in the leaf, not just the

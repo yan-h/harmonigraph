@@ -17,7 +17,7 @@ mod text_sdf;
 pub mod theme;
 pub mod widgets;
 
-mod fold;
+mod workspace;
 
 /// What the UI persists of the analyzer's display settings, and the serde
 /// defaults behind them. The render settings persist too but live in
@@ -75,7 +75,6 @@ pub use harmonigraph_take::{
     STOP_BAR_RANGE,
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory};
-pub(crate) use state::default_dock;
 pub use state::{
     CameraPreset, Console, Interaction, PictureState, SharedState, SurfaceState, TakeState,
 };
@@ -87,8 +86,6 @@ pub use text::use_renderer_font_texture;
 // along is what made the UI look like its owner.
 use harmonigraph_perf::{FrameCosts, Workload};
 use params::ParamBackend;
-
-use egui_dock::DockArea;
 
 /// End a drag whose release is never coming, because it is holding every
 /// scroll area in the editor hostage.
@@ -192,7 +189,7 @@ fn end_stranded_drag(ctx: &egui::Context) -> Option<String> {
 /// A host that takes focus mid-drag is handed the release, so what is left here
 /// is a button egui believes is held forever — and anything of ours that follows
 /// the pointer for as long as it is held would follow it around the screen (see
-/// `fold::Grip`). Losing focus is the one unambiguous end of a gesture: a
+/// `workspace::Runtime`). Losing focus is the one unambiguous end of a gesture: a
 /// pointer that has merely left the window is still dragging, and still ours.
 ///
 /// Focus is read from the EVENT as well as the flag. `InputState::focused` comes
@@ -257,7 +254,6 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     }
     // Read back rather than reused: `set_ui_scale` clamps, and the dock has to
     // be built at the scale that actually took.
-    let ui_scale = theme::ui_scale(ui.ctx());
 
     // Cleared before the panes run, so a frame with the roll hidden (or the
     // Spectral pane not on screen at all) reports zero notes rather than
@@ -285,100 +281,24 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         state.picture.appearance.view.frameless = !state.picture.appearance.view.frameless;
         ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
-    let mut dock_style = theme::dock_style(ui.style(), ui_scale);
-    if state.picture.appearance.view.frameless {
-        dock_style.tab_bar.height = 0.0;
-    }
-
-    let workspace = &mut state.workspace;
-    workspace.interaction.analyzer_regions.begin_frame();
-    // Before the dock lays out: a pane collapsed inside a horizontal split
-    // folds sideways to a rail, which is a split fraction, which is layout's
-    // input. egui_dock's own vertical folds need nothing from us.
-    //
-    // What the fold takes comes off the window rather than off the pane beside
-    // it, and the window is the shell's to resize — so the points are banked
-    // here and spent after this frame (see `take_window_width_change`). The
-    // flags a fold or an unfold moves wait for that window before they land
-    // (see `fold::Wait`), so the frame that asks draws what the frame before it
-    // drew and no boundary moves until the window is there to hold it.
-    //
-    // What the pointer is doing, before the fold reads the fractions last frame
-    // left behind: a fraction that moved with no gesture behind it is egui_dock's
-    // own per-frame clamp, not a drag the layout should follow — and where the
-    // pointer IS is what a drag on a separator asks for, once one has hold of a
-    // boundary (see `fold::drags`).
-    // A gesture the window has lost is not one to go on following: the pointer
-    // leaving is a drag that is still ours, but the focus leaving is not (see
-    // `kept_focus`).
-    let (gesturing, at) = ui.input(|i| {
-        (i.pointer.any_down() || i.pointer.any_released(), i.pointer.latest_pos().map(|at| at.x))
-    });
-    workspace.dial.watch_pointer(gesturing && kept_focus(ui.ctx()), at);
-    let area = fold::area_width(ui, &dock_style);
-    workspace.window_width_change += workspace.folds.apply(
-        &mut workspace.dock,
-        &dock_style,
-        area,
-        workspace.min_window_width,
-        &mut workspace.dial,
-    );
-    // Time the whole dock build — every pane's layout and the scene
-    // derivation — as the GUI thread's own per-frame CPU cost. The wgpu draw
-    // is submitted inside and finishes off-thread, so this is CPU, not GPU.
     let cpu_start = std::time::Instant::now();
-    DockArea::new(&mut workspace.dock)
-        // Cloned because the rails are painted from the same style afterwards.
-        .style(dock_style.clone())
-        // The pane set is fixed, so closing chrome stays off — but the
-        // collapse arrow earns its pixels: the Lattice and Spectral panes
-        // fold down to their tab bar when screen space is tight.
-        .show_close_buttons(false)
-        .show_leaf_close_all_buttons(false)
-        .show_leaf_collapse_buttons(true)
-        .show_inside(
-            ui,
-            &mut panes::Viewer {
-                state: &mut state.picture,
-                interaction: &mut workspace.interaction,
-                params,
-                now,
-            },
-        );
+    let workspace = &mut state.workspace;
+    let frameless = state.picture.appearance.view.frameless;
+    if let Some(change) = workspace::show(
+        ui,
+        &mut workspace.layout,
+        &mut workspace.layout_runtime,
+        &mut panes::Viewer {
+            state: &mut state.picture,
+            interaction: &mut workspace.interaction,
+            params,
+            now,
+        },
+        frameless,
+    ) {
+        workspace.window_size_change = change;
+    }
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
-    // After it: the rails the folds left behind, which only this frame's
-    // rectangles can place — and the separators those folds pinned, which
-    // resize the panes a user sees them dividing (see `fold::shove_target`).
-    fold::paint(ui, &mut workspace.dock, &dock_style, &workspace.dial);
-    if let Some(request) = workspace.interaction.analyzer_regions.request {
-        let regions = &mut workspace.interaction.analyzer_regions;
-        if let Some(change) = workspace.folds.resize_region(
-            &workspace.dock,
-            &dock_style,
-            &mut workspace.dial,
-            request.region,
-            request.width,
-        ) {
-            workspace.window_width_change += change;
-            regions.land();
-        }
-    }
-    // Apply the explicit request after the dock traversal has finished.
-    if std::mem::take(&mut state.workspace.interaction.reset_layout) {
-        // The default layout has every pane open, so the window gets back
-        // whatever the folds being thrown away were holding — priced off the
-        // dock they are in, so before it is replaced.
-        state.workspace.window_width_change += state.workspace.folds.clear(
-            &state.workspace.dock,
-            &dock_style,
-            &state.workspace.dial,
-            area,
-        );
-        state.workspace.dock = default_dock();
-        state.workspace.interaction.analyzer_regions = Default::default();
-        // The flags describe the tree being thrown away (see [`fold::Dial::forget`]).
-        state.workspace.dial.forget();
-    }
 
     // Render continuously only while something is animating (sounding or
     // decaying voices); otherwise poll so newly arriving MIDI still shows

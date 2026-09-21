@@ -121,15 +121,9 @@ fn the_ui_scale_leaves_the_picture_alone() {
 /// A tab bar tracks the scale the whole way down, and still leaves room for the
 /// arrow that unfolds a pane.
 ///
-/// The bar carries egui_dock's collapse button, and the tempting reading of
-/// that button's `TAB_COLLAPSE_BUTTON_SIZE` — 24 points — is a floor the bar
-/// must not go under. It is not one: 24 is the button's WIDTH, its rect is as
-/// tall as the bar it sits in, and what has to fit vertically is the 10-point
-/// arrow centred in it. Flooring the bar at 24 instead left every tab bar in
-/// the editor full size below about 0.9, which is what the scale is for.
 #[test]
 fn a_tab_bar_tracks_the_scale_and_still_fits_the_collapse_arrow() {
-    /// egui_dock's `TAB_COLLAPSE_ARROW_SIZE`: the glyph, not the button.
+    /// Minimum useful arrow height.
     const ARROW_GLYPH: f32 = 10.0;
 
     let mut previous = 0.0;

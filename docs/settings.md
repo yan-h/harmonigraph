@@ -19,12 +19,26 @@ Each page keeps a single owner for its controls;
 shared settings name their scope in the help text.
 The separate Spectrogram page keeps its texture controls out of the path to basic analysis and ribbon settings.
 
-## Collapsed panes
+## Layout and folding
 
-Click anywhere on a collapsed pane's tab or labelled rail to reopen it.
-When several panes share one rail,
-each labelled stretch opens only its own pane.
-The separators beside the rails still resize the surrounding panes.
+The editor has three sections: Lattice, Analyzer, and Settings.
+Analyzer and Spiral are alternative tabs in the same section.
+The Settings header's **Layout** menu places the Analyzer **Right** of or **Below** the Lattice;
+each arrangement remembers its own divider sizes.
+Settings stays to the right of the pictures.
+
+Each section folds independently using its header arrow.
+Click anywhere on its labelled rail to reopen it.
+Folding a side-by-side section narrows the window;
+folding a stacked picture shortens it while preserving the other picture's height.
+Settings follows the available height.
+When both stacked pictures are folded,
+their rails move beside Settings for a compact settings-only layout.
+Host minimum sizes or refused resize requests can make the open panes share the available space.
+
+Drag the separators to resize visible sections.
+Tabs and sections cannot be dragged into arbitrary arrangements.
+**Display → System → Reset layout** restores the default arrangement and unfolds everything.
 
 ## Folding the Analyzer
 
@@ -36,7 +50,7 @@ the Analyzer's tab-bar arrow still folds the whole pane and remembers both regio
 With the spectrum on the left or right,
 folding shrinks the editor window while keeping the other panes and the surviving region at their current sizes.
 Host size limits can force the open panes to share the remaining space.
-Top/bottom orientations and an Analyzer stacked above or below another pane fold within the existing pane size.
+Top/bottom orientations and an Analyzer placed below the Lattice fold within the existing pane size.
 Restoring both regions brings back their previous split at the original spectrum position.
 Changing the spectrum position while folded does not lose the width owed to the editor window.
 Reset layout returns the space held by pane and region folds together.

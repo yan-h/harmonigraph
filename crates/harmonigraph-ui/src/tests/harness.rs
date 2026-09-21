@@ -19,12 +19,7 @@ pub(super) use super::probe::{fresh, press};
 /// collapsed, which is why the flag is checked rather than the rect: a folded
 /// leaf keeps the viewport it had when it was open.
 pub(super) fn pane_body(state: &SharedState, tab: &panes::Tab) -> Option<egui::Rect> {
-    let path = state.workspace.dock.find_tab(tab)?;
-    let egui_dock::Node::Leaf(leaf) = &state.workspace.dock[path.surface][path.node] else {
-        return None;
-    };
-    (!leaf.collapsed && leaf.active == path.tab && leaf.viewport.is_positive())
-        .then_some(leaf.viewport)
+    state.workspace.layout_runtime.body(*tab)
 }
 
 #[derive(Default)]
@@ -41,7 +36,7 @@ impl ParamBackend for RecordingBackend {
     }
 }
 
-/// A harness that runs the REAL dock — `root_ui`, egui_dock, tab bodies and
+/// A harness that runs the REAL dock — `root_ui`, the workspace, tab bodies and
 /// all — one frame per call, so a pane's pointer handling is tested through
 /// every layer that sits between it and the mouse.
 pub(super) struct DockHarness {
@@ -154,9 +149,9 @@ impl DockHarness {
     /// the harness is a host that refuses every resize, which is a state the
     /// fold layout has its own handling for.
     pub(super) fn resize(&mut self, state: &mut SharedState) {
-        if let Some(change) = state.workspace.take_window_width_change() {
-            let width = (self.screen.width() + change).max(state.workspace.min_window_width);
-            self.screen.max.x = self.screen.min.x + width;
+        if let Some(change) = state.workspace.take_window_size_change() {
+            self.screen.max = self.screen.min
+                + (self.screen.size() + change).max(state.workspace.min_window_size);
         }
     }
 
@@ -174,17 +169,13 @@ impl DockHarness {
 
     /// A click on the collapse arrow of the leaf holding `tab`, settled.
     ///
-    /// The ARROW, not the tab name: egui_dock reaches `set_collapsed` from its
-    /// own square at the left end of the tab bar, and clicking the title only
-    /// selects a tab.
+    /// Tab labels select a destination; the leading button folds its section.
     pub(super) fn collapse_click(
         &mut self,
         state: &mut SharedState,
         tab: panes::Tab,
     ) -> egui::FullOutput {
-        let path = state.workspace.dock.find_tab(&tab).expect("tab is in the dock");
-        let leaf = &state.workspace.dock[path.surface][path.node];
-        let rect = leaf.rect().expect("the leaf is laid out");
+        let rect = state.workspace.layout_runtime.rects[workspace::Section::of(tab) as usize];
         let at = rect.left_top() + egui::vec2(12.0, crate::theme::TAB_BAR_HEIGHT * 0.5);
         self.frame(state, vec![egui::Event::PointerMoved(at)]);
         self.frame(state, vec![egui::Event::PointerMoved(at), press(at, true)]);
@@ -284,7 +275,7 @@ pub(super) const SETTINGS_PANES: [SettingsPane; 9] = [
 /// page selected, so its body is measured under the real picker row.
 ///
 /// The dock's nesting IS reproduced, though, because the one thing it does that
-/// a bare `Ui` does not is the thing these tests are about: egui_dock clips the
+/// a bare `Ui` does not is the thing these tests are about: the workspace clips the
 /// tab body to the whole body rect and only THEN insets it by
 /// `tab_body.inner_margin` via a `Frame`, which does not clip. So a pane's clip
 /// rect sits a margin's width OUTSIDE its content box, and a harness without
@@ -361,7 +352,7 @@ pub(super) fn tab_body_on(
                 params: &backend,
                 now,
             };
-            egui_dock::TabViewer::ui(&mut viewer, &mut body_ui, &mut tab);
+            viewer.ui(&mut body_ui, &mut tab);
         },
     )
 }
@@ -386,6 +377,5 @@ pub(super) const FIXTURE_RENDER: RenderProgress = RenderProgress { done: 120, to
 
 /// Whether the leaf holding `tab` is folded away.
 pub(super) fn collapsed(state: &SharedState, tab: panes::Tab) -> bool {
-    let path = state.workspace.dock.find_tab(&tab).expect("tab is in the dock");
-    state.workspace.dock[path.surface][path.node].is_collapsed()
+    !state.workspace.layout.visible(tab)
 }

@@ -13,8 +13,7 @@ fn opening_analyzer_settings_does_not_change_loaded_values() {
     assert_eq!(state.picture.appearance.spectrum.tilt, -1.5);
     let before = ron::to_string(&state.picture.appearance.spectrum).unwrap();
     let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
-    let path = state.workspace.dock.find_tab(&tab).unwrap();
-    state.workspace.dock.set_active_tab(path).unwrap();
+    state.workspace.layout.select(tab);
     let mut harness = DockHarness::at(egui::vec2(1000.0, 1600.0));
     let output = harness.frame(&mut state, vec![]);
     assert!(
@@ -26,22 +25,7 @@ fn opening_analyzer_settings_does_not_change_loaded_values() {
     assert_eq!(ron::to_string(&state.picture.appearance.spectrum).unwrap(), before);
 }
 
-/// Put the Console leaf back on screen, which is what the two wheel
-/// harnesses below are written against: they read the settings leaf as the box
-/// from the tab bar down to the 0.55 split, and the default layout opens that
-/// leaf folded (see `the_default_layout_opens_with_the_console_folded`, in
-/// `tests/fold.rs`) so the
-/// settings column runs the whole height instead.
-///
-/// Unfolded rather than measured where it now is, because a taller pane is the
-/// wrong pane to ask these questions of: both tests need content that
-/// OVERFLOWS, and the short window they pick is short relative to this box.
-fn unfold_the_console_pane(state: &mut SharedState) {
-    let path = state.workspace.dock.find_tab(&panes::Tab::Console).expect("Console is docked");
-    state.workspace.dock[path.surface][path.node].set_collapsed(false);
-}
-
-/// Drive the REAL dock (root_ui, egui_dock, the tab body's ScrollArea and
+/// Drive the REAL dock (root_ui, the workspace, the tab body's ScrollArea and
 /// all) with a wheel over `tab`'s body, and answer how far its content moved.
 /// Negative = the content moved up, i.e. the pane scrolled down.
 ///
@@ -51,19 +35,14 @@ fn unfold_the_console_pane(state: &mut SharedState) {
 /// movement that is). The y of a string drawn in both frames cannot lie.
 fn wheel_over_settings_pane(pane: SettingsPane, screen_h: f32) -> f32 {
     let mut state = fresh();
-    unfold_the_console_pane(&mut state);
     // The settings leaf opens on Tuning; every other settings pane is a tab
     // behind it (a Page is the Display tab with that page selected).
     let tab = pane.install(&mut state);
-    let path = state.workspace.dock.find_tab(&tab).expect("{tab:?} is not in the default dock");
-    state.workspace.dock.set_active_tab(path).expect("selecting the tab");
+    state.workspace.layout.select(tab);
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
     // The top-right leaf (right of the 0.72 split, above the 0.55 one), from
     // under its tab bar down. Only shapes clipped to this are the pane's.
-    let body = egui::Rect::from_min_max(
-        egui::pos2(700.0, 20.0),
-        egui::pos2(1000.0, screen_h * 0.55 + 2.0),
-    );
+    let body = egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h));
     let texts = |out: &egui::FullOutput| {
         let mut map = std::collections::HashMap::new();
         for cs in &out.shapes {
@@ -107,7 +86,7 @@ fn wheel_over_settings_pane(pane: SettingsPane, screen_h: f32) -> f32 {
 }
 
 /// Every settings pane scrolls to the wheel once its content is taller than
-/// the pane. All of them reach the wheel through the `ScrollArea` egui_dock
+/// the pane. All of them reach the wheel through the `ScrollArea` the workspace
 /// wraps each tab body in, which is what leaves the bar the pane's right margin
 /// to stand in (see [`nothing_is_drawn_under_a_settings_pane_scroll_bar`]).
 /// Display is swept once per page, each selected in turn: a page's content plus
@@ -256,8 +235,8 @@ fn the_glow_curve_bar_draws_the_curve_the_scene_receives() {
 /// The Video pane drawn through the REAL dock, soloed, for a shell that can or
 /// cannot record takes — the one thing that changes which section leads it.
 ///
-/// Through `root_ui` and `DockArea` rather than calling `TabViewer::ui` on a
-/// hand-built child, because the wrapping is the part under test: egui_dock
+/// Through `root_ui` and the workspace rather than calling `Viewer::ui` on a
+/// hand-built child, because the wrapping is the part under test: the workspace
 /// puts every body inside a `ScrollArea`, and that ui arrives with a
 /// full-height `min_rect` where a hand-built one arrives empty. A fixture that
 /// skips it cannot see the difference — see `section`.
@@ -266,7 +245,7 @@ fn video_pane_shapes(supported: bool) -> (Vec<egui::epaint::ClippedShape>, egui:
     state.workspace.interaction.take.supported = supported;
     // Soloed so the Video pane's body is the only settings body on screen and
     // the first heading found is unambiguously its own.
-    state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Video]);
+    state.workspace.layout = workspace::Layout::solo(panes::Tab::Video);
     // Tall and narrow: one soloed pane, with room for its whole column.
     let mut h = DockHarness::at(egui::vec2(420.0, 1200.0));
     let out = h.frame(&mut state, vec![]);
@@ -380,7 +359,7 @@ fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
 fn the_scrolling_spectrogram_choice_names_its_span() {
     let mut state = fresh();
     state.picture.appearance.spectrum.roll_seconds = 42.0;
-    state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Video]);
+    state.workspace.layout = workspace::Layout::solo(panes::Tab::Video);
     let shapes = DockHarness::at(egui::vec2(420.0, 1200.0)).frame(&mut state, vec![]).shapes;
     assert!(text_y(&shapes, "Scrolling (42.0 s)").is_some(), "Scrolling did not name its span");
 }
@@ -692,7 +671,7 @@ fn the_cancel_stands_with_the_render_bar_and_asks_for_the_stop() {
     state.workspace.interaction.take.last_ready = true;
     // Soloed and tall, like `video_pane_shapes`: the whole control column on
     // screen, so a button that is missing is missing rather than scrolled off.
-    state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Video]);
+    state.workspace.layout = workspace::Layout::solo(panes::Tab::Video);
     let mut h = DockHarness::at(egui::vec2(420.0, 1200.0));
     let find = |shapes: &[egui::epaint::ClippedShape]| {
         shapes.iter().find_map(|cs| match &cs.shape {
@@ -886,20 +865,15 @@ enum Grab {
 /// told along the way.
 fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>) {
     let mut state = fresh();
-    unfold_the_console_pane(&mut state);
     // The Analyzer settings, on the Display tab's Analyzer page.
     let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
-    let path = state.workspace.dock.find_tab(&tab).expect("the Display tab");
-    state.workspace.dock.set_active_tab(path).expect("selecting the tab");
+    state.workspace.layout.select(tab);
     // Tall enough that the Analyzer's first bars are inside the settings leaf:
     // the page opens under the picker row, and a bar this fixture presses on
     // outside the leaf is a press on the pane below.
-    let screen_h = 640.0;
+    let screen_h = 360.0;
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
-    let body = egui::Rect::from_min_max(
-        egui::pos2(700.0, 20.0),
-        egui::pos2(1000.0, screen_h * 0.55 + 2.0),
-    );
+    let body = egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h));
     // Named texts inside the settings body, as `wheel_over_settings_pane` does:
     // the position of a string drawn in both frames is the one metric a clip
     // rect and a culled shape cannot lie about. The whole position rather than
@@ -999,21 +973,16 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
 #[test]
 fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     let mut state = fresh();
-    unfold_the_console_pane(&mut state);
     // The Analyzer settings on the Display tab.
     let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
-    let path = state.workspace.dock.find_tab(&tab).expect("the Display tab");
-    state.workspace.dock.set_active_tab(path).expect("selecting the tab");
+    state.workspace.layout.select(tab);
     // Tall enough that Release is actually on screen below the picker,
     // analysis and level-mapping controls; a clipped bar cannot start this drag.
     let screen_h = 1800.0;
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
     // The settings leaf, whose bars run the width of the column at x ~700..1000:
     // from under its tab bar down to the 0.55 split.
-    let body = egui::Rect::from_min_max(
-        egui::pos2(700.0, 20.0),
-        egui::pos2(1000.0, screen_h * 0.55 + 2.0),
-    );
+    let body = egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h));
     // Where a named bar was drawn, so the gesture takes hold of a bar this test
     // can name rather than of whatever a fixed coordinate lands on. A bar draws
     // its name inside its own rectangle, at the left end.
@@ -1078,7 +1047,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
 /// preview shrank towards a sliver instead of the controls staying reachable.
 #[test]
 fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
-    let moved = wheel_over_settings_pane(SettingsPane::Tab(panes::Tab::Video), 600.0);
+    let moved = wheel_over_settings_pane(SettingsPane::Tab(panes::Tab::Video), 330.0);
     assert!(moved < -8.0, "the Video pane did not scroll to the wheel (content moved {moved})");
 }
 
@@ -1169,8 +1138,8 @@ const SCALES: [f32; 5] = [0.7, 0.9, 1.0, 1.1, 1.5];
 /// shapes it drew.
 ///
 /// The dock and not [`settings_pane_at_width`], because where a scroll bar goes
-/// is a question about the wrapping: egui_dock puts each body in a `ScrollArea`
-/// of its own, and a fixture that calls `TabViewer::ui` on a hand-built child
+/// is a question about the wrapping: the workspace puts each body in a `ScrollArea`
+/// of its own, and a fixture that calls `Viewer::ui` on a hand-built child
 /// draws the panes that rely on it with no bar at all.
 ///
 /// The pointer rests inside the pane because a bar nobody is pointing at is
@@ -1182,10 +1151,13 @@ const SCALES: [f32; 5] = [0.7, 0.9, 1.0, 1.1, 1.5];
 ///
 /// Both readout panes list what has come in, and an empty one has nothing to
 /// scroll, so the fixture gives the Console lines and the Notes pane voices.
-fn scrolling_settings_pane(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::ClippedShape> {
+fn scrolling_settings_pane(
+    pane: SettingsPane,
+    scale: f32,
+) -> (Vec<egui::epaint::ClippedShape>, egui::Rect) {
     let mut state = fresh();
     let tab = pane.install(&mut state);
-    state.workspace.dock = egui_dock::DockState::new(vec![tab]);
+    state.workspace.layout = workspace::Layout::solo(tab);
     // The same shell [`settings_pane_at_width`] draws for, so the Video pane
     // brings its record row and its progress bar — the two controls
     // `widgets::bar_width` calls out as having nowhere to wrap to, and so the
@@ -1223,7 +1195,7 @@ fn scrolling_settings_pane(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::
     for _ in 0..20 {
         out = frame(&mut state, vec![]);
     }
-    out.shapes
+    (out.shapes, pane_body(&state, &tab).expect("settings body is visible"))
 }
 
 /// The theme's widest scroll bar at a given chrome scale, read back off a
@@ -1260,12 +1232,8 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
             bar <= margin + 0.01,
             "at {scale} a {bar}pt bar does not fit the {margin}pt gutter"
         );
-        let body = egui::Rect::from_min_max(
-            egui::pos2(0.0, crate::theme::tab_bar_height(scale)),
-            (SCROLLING_PANE * scale).to_pos2(),
-        );
         for pane in SETTINGS_PANES {
-            let shapes = scrolling_settings_pane(pane, scale);
+            let (shapes, body) = scrolling_settings_pane(pane, scale);
             // The pane's own shapes are the ones clipped to the tab BODY. The dock's
             // chrome — the leaf fill, the body border, the tab bar and its rule — is
             // clipped to the leaf, which starts a tab bar higher up.
@@ -1368,11 +1336,13 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
 #[test]
 fn the_comma_tables_sideways_bar_runs_under_its_cells() {
     let mut state = fresh();
-    state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Tuning]);
+    state.workspace.layout = workspace::Layout::solo(panes::Tab::Tuning);
     // Narrower than the two columns need, and tall enough that the pane does
     // not also scroll — one bar in the picture is one bar to find.
-    let mut h = DockHarness::at(egui::vec2(120.0, 900.0));
-    let screen = h.screen;
+    let rails = 2.0 * (crate::theme::tab_bar_height(1.0) + 3.0);
+    let mut h = DockHarness::at(egui::vec2(120.0 + rails, 900.0));
+    h.settle(&mut state);
+    let screen = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
     let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
     let heading_rect = |out: &egui::FullOutput| {
         out.shapes.iter().find_map(|cs| match &cs.shape {

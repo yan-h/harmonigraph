@@ -3,13 +3,12 @@
 
 use std::collections::VecDeque;
 
-use egui_dock::{DockState, NodeIndex};
 use harmonigraph_core::{Comma, LatticePos};
 use harmonigraph_perf::{PerfStats, ShellTimings};
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_scene::{Camera, DrawnWindow};
 
-use crate::{fold, panes, text};
+use crate::{panes, text, workspace};
 use crate::{RenderProgress, VisualRuntime};
 
 /// Scrollback for the debug console pane. Shells and panes log via
@@ -258,91 +257,38 @@ pub struct Interaction {
     pub(crate) reset_layout: bool,
 }
 
-/// Editor docking and interaction. The dock borrows its own tree while the
-/// Viewer borrows only `interaction` and the independent picture. Shell actions
-/// are consumed after traversal; saving explicitly selects persisted fields.
+/// Fixed section layout and editor interaction, separate from the picture.
+/// Shell actions are consumed after drawing; saving selects persisted fields.
 pub struct Workspace {
     pub interaction: Interaction,
-    /// The arrangement itself: which panes are where, which tab of a leaf is
-    /// selected, and which leaves are collapsed. egui_dock owns everything in
-    /// it — the collapsed flags a fold reads are its own (see [`fold`]) — and
-    /// it is the one member here with no default to fall back on, which is why
-    /// a blob missing it costs the whole document rather than this field alone
-    /// (see [`UiPersist`]).
-    pub(crate) dock: DockState<panes::Tab>,
-    /// What each sideways fold is holding — the width the window owes a folded
-    /// pane when it opens again, which is the one part of the layout that
-    /// cannot be read back off the dock (see [`fold`]).
-    pub(crate) folds: fold::Folds,
-    /// The pane layout itself: a width per pane in points, and what the window
-    /// is doing to it (see [`fold::Dial`]). Runtime-only — a layout loaded into
-    /// a window it was not saved at is seeded from the fractions it finds in
-    /// the dock.
-    pub(crate) dial: fold::Dial,
-    /// Points the window has to gain (or lose, if negative) before the next
-    /// frame, because a pane folded sideways or came back and every other pane
-    /// is keeping its width.
-    ///
-    /// The UI cannot resize the window itself — the plugin has to ask its
-    /// host, the standalone harness its windowing system — so it says how many
-    /// points and the shell spends them. Logical points, which is what both
-    /// shells size their windows in.
-    ///
-    /// Runtime-only, and TAKEN rather than read (see
-    /// [`take_window_width_change`](Self::take_window_width_change)), so a
-    /// shell that never asks — the offline renderer, which never reaches
-    /// `root_ui` at all — simply never resizes.
-    pub(crate) window_width_change: f32,
-    /// The narrowest the shell will let its window become, in the same points
-    /// [`take_window_width_change`](Self::take_window_width_change) is answered
-    /// in. At the floor a window has stopped answering, and the pane layout
-    /// stops following it (see [`fold`]) — otherwise a fold the window will not
-    /// shrink far enough for would re-dial the layout to the window it got
-    /// rather than the one it asked for, and hand the difference back on the
-    /// way out.
-    ///
-    /// Set by the shell. Zero — the default, and what a shell that never
-    /// resizes leaves it at — means no floor.
-    pub min_window_width: f32,
+    pub(crate) layout: workspace::Layout,
+    pub(crate) layout_runtime: workspace::Runtime,
+    /// One-shot change to the outer window, consumed by its shell.
+    pub(crate) window_size_change: egui::Vec2,
+    pub min_window_size: egui::Vec2,
 }
 
 impl Default for Workspace {
     fn default() -> Self {
-        Workspace {
-            dock: default_dock(),
-            folds: fold::Folds::default(),
-            dial: fold::Dial::default(),
-            window_width_change: 0.0,
-            min_window_width: 0.0,
+        Self {
             interaction: Interaction::default(),
+            layout: workspace::Layout::default(),
+            layout_runtime: workspace::Runtime::default(),
+            window_size_change: egui::Vec2::ZERO,
+            min_window_size: egui::Vec2::ZERO,
         }
     }
 }
 
 impl Workspace {
-    /// How much wider (or, negative, narrower) the window has to be for the
-    /// sideways folds the last frame settled — `None` when it can stay as it
-    /// is, which is nearly every frame.
-    ///
-    /// Shells call this once per frame, AFTER [`root_ui`](crate::root_ui), and
-    /// resize by the points they are given. Taking it rather than reading it
-    /// is what keeps one fold to one resize: a shell whose host refuses the
-    /// new size is not asked again on the next frame, since asking forever
-    /// would fight the host over every frame for as long as the pane stays
-    /// folded.
-    ///
-    /// Changes under half a point are dropped rather than passed on, which is
-    /// where rounding to whole pixels stops moving a window at all: below it a
-    /// shell would ask for the size it already has, and never be satisfied.
-    pub fn take_window_width_change(&mut self) -> Option<f32> {
-        let change = std::mem::take(&mut self.window_width_change);
-        (change.abs() >= 0.5).then_some(change)
+    /// Take each request once, including when a host refuses it.
+    pub fn take_window_size_change(&mut self) -> Option<egui::Vec2> {
+        let change = std::mem::take(&mut self.window_size_change);
+        (change.abs().max_elem() >= 0.5).then_some(change)
     }
 
-    /// Discard the (persisted) dock arrangement and return to the default
-    /// layout. Camera, view settings, and presets are untouched. Takes
-    /// effect at the end of the frame (see the `reset_layout` field).
-    pub fn reset_dock_layout(&mut self) {
+    /// Return to the default arrangement after this frame's panes finish.
+    pub fn reset_layout(&mut self) {
         self.interaction.reset_layout = true;
     }
 }
@@ -490,98 +436,6 @@ impl CameraPreset {
     }
 }
 
-/// Where the pictures end and the settings column begins, as a fraction of
-/// the window's width. The settings column gets what is left.
-///
-/// It is a named constant because the layout is not the only thing that
-/// depends on it. What the column has to clear is the widest thing in it,
-/// which is its own TAB BAR — this fraction and the window width together
-/// decide whether egui_dock scrolls the tab bar over the settings. Three tabs
-/// is what makes the bar fit at the editor's own `DEFAULT_SIZE` (#287): a tab
-/// per settings pane wants a window of about 1428pt at this fraction,
-/// measured, which is why those panes are pages of the Display tab rather than
-/// tabs of their own.
-///
-/// Widening the column is what scrolling the TAB BAR would cost, and the price
-/// is charged to the picture: a smaller fraction buys the bar a narrower window
-/// to survive, and takes that width straight off the Spectral pane, which is
-/// the narrowest picture the default layout has. So the column is not widened
-/// on account of the bar.
-///
-/// `every_settings_tab_fits_on_its_tab_bar` (in `tests::shell`, so not linkable
-/// from here) is what checks it — at `DEFAULT_SIZE` and at the window the UI
-/// is dialled against — by the CLIP rather than by re-deriving egui_dock's
-/// sums.
-/// It holds the tab bar alone, and has to: a pane scrolling is a normal thing,
-/// so a guard over tab bar and pane content together fires on the panes that
-/// are meant to scroll.
-pub(crate) const SETTINGS_SPLIT: f32 = 0.72;
-
-/// The default pane arrangement: big lattice with the Spectral pane
-/// beside it on the right (sharing the pitch intuition: what sounds is
-/// what lights up), the tuning column further right, the console
-/// folded to a tab bar below that. Users can re-dock at runtime; the result
-/// persists via UiPersist, and the System page's "Reset layout" button
-/// returns here.
-pub(crate) fn default_dock() -> DockState<panes::Tab> {
-    let mut dock = DockState::new(vec![panes::Tab::Lattice]);
-    let surface = dock.main_surface_mut();
-    let [lattice, right] = surface.split_right(
-        NodeIndex::root(),
-        SETTINGS_SPLIT,
-        vec![
-            // Reading outward from the picture: what the lattice is, then how
-            // everything is drawn (the Display pages run the same way one level
-            // down, out to the machine around the pictures), and video export
-            // last.
-            panes::Tab::Tuning,
-            panes::Tab::Display,
-            panes::Tab::Video,
-        ],
-    );
-    // Its own leaf below the settings column rather than a tab among them,
-    // because it folds on its own (below) and the settings do not. Notes shared
-    // this leaf until #975 retired it.
-    let [_, log] = surface.split_below(right, 0.55, vec![panes::Tab::Console]);
-    // Folded to its tab bar, because the console is a diagnostic and is not
-    // looked at while playing. Open it takes 45% of the settings column's
-    // height, which is the half of it the settings themselves want -- see the
-    // scroll every settings pane carries.
-    //
-    // The COLLAPSE ARROW is what brings it back, not the tab name: egui_dock
-    // reaches `set_collapsed` from the arrow's own square alone, and clicking
-    // "Console" on a folded bar only selects a tab whose body stays hidden. The
-    // split fraction survives the fold, so the pane comes back the size it
-    // went away.
-    //
-    // A vertical fold, so egui_dock does the whole of it; `Folds` only exists
-    // for the horizontal ones (see `fold`).
-    //
-    // This is the DEFAULT, which is to say it reaches a fresh instance and
-    // "Reset layout" and nothing else. A project that has saved a layout keeps
-    // the one it saved, and throwing that away to deliver a default is the
-    // worse trade. A RETIRED tab is the one case where it does not keep it --
-    // but that is the parse refusing a variant it has never heard of, not the
-    // `UI_PERSIST_VERSION` floor, which cannot reach a value that never parsed
-    // (see `panes::Tab` and `load_persist`).
-    surface[log].set_collapsed(true);
-    // Spectral as a column just right of the lattice: what sounds is directly
-    // beside what lights up. Paired with the "Right" default orientation
-    // (SpectrumConfig::default), captured with the rest of the DAW look. Drag it
-    // wherever from here — egui_dock docks it
-    // freely, and the orientation stays where it was set rather than following
-    // the shape the pane lands in.
-    //
-    // Spiral shares that leaf rather than taking room of its own, and is the
-    // second tab there so the Analyzer is still what opens (egui_dock makes tab
-    // index 0 active). The two are one analyzer drawn two ways off one
-    // `SpectrumConfig`, so they are alternatives to switch between rather than
-    // pictures to watch at once — and a disc wants a square, which is the one
-    // shape a tall column beside the lattice is not.
-    surface.split_right(lattice, 0.72, vec![panes::Tab::Spectral, panes::Tab::Spiral]);
-    dock
-}
-
 impl SharedState {
     pub fn new(target_format: TextureFormat) -> Self {
         Self { picture: PictureState::new(target_format), workspace: Workspace::default() }
@@ -592,19 +446,17 @@ impl SharedState {
     }
 
     /// Serialize the parts of the UI worth restoring across sessions
-    /// (dock layout, camera, view settings). Parameters are NOT included —
+    /// (section layout, camera, view settings). Parameters are NOT included —
     /// they live in the host's plugin state.
     ///
     /// `LatticeEditorHandle::Drop` writes this enclosing editor document into
     /// `params.ui_state` when the window closes. Recording instead serializes
     /// the live appearance directly, so capture never depends on that last save.
     pub fn save_persist(&self) -> String {
-        // RON rather than JSON: dock layout rects can be NaN (before first
-        // layout), which JSON cannot round-trip.
+        // Keep the editor document in the same RON format as appearance.
         ron::to_string(&UiPersist {
             version: UI_PERSIST_VERSION,
-            dock: fold::saved_dock(&self.workspace.dock),
-            layout_folds: self.workspace.folds.clone(),
+            layout: self.workspace.layout.clone(),
             analyzer_regions: self.workspace.interaction.analyzer_regions.clone(),
             display_page: self.workspace.interaction.display_page,
             appearance: self.picture.appearance.clone(),
@@ -654,17 +506,12 @@ impl SharedState {
                 return self.refuse_persist(err);
             }
         };
-        // The dock being installed is not the one the dial's points were
-        // measured against, and its node count cannot say so (see
-        // [`fold::Dial::forget`]) — so the load has to. What the incoming
-        // layout is dialled to is the fractions in the blob's own dock,
-        // plus the widths its folds carry.
-        self.workspace.dial.forget();
-        self.workspace.folds = persist.layout_folds;
-        self.workspace.folds.sanitize();
-        self.workspace.dock = persist.dock;
         self.workspace.interaction.analyzer_regions = persist.analyzer_regions;
         self.workspace.interaction.analyzer_regions.sanitize();
+        self.workspace.layout = persist.layout;
+        self.workspace.layout.sanitize();
+        self.workspace.layout_runtime = workspace::Runtime::default();
+        self.workspace.window_size_change = egui::Vec2::ZERO;
         self.workspace.interaction.display_page = persist.display_page;
         self.picture.install_appearance(appearance);
         self.workspace.interaction.camera_presets = persist.camera_presets;
@@ -692,11 +539,8 @@ impl SharedState {
     /// that explains why the editor opened on fresh state.
     fn refuse_persist(&mut self, reason: String) -> bool {
         self.log(format!("persist ignored — {reason}"));
-        if let Some(path) = self.workspace.dock.find_tab(&panes::Tab::Console) {
-            let (surface, node) = (path.surface, path.node);
-            let _ = self.workspace.dock.set_active_tab(path);
-            fold::uncollapse(&mut self.workspace.dock[surface], node);
-        }
+        self.workspace.layout.select(panes::Tab::Console);
+        self.workspace.layout.folded[workspace::Section::Settings as usize] = false;
         false
     }
 }
@@ -779,39 +623,39 @@ pub(crate) const UI_PERSIST_VERSION: u32 = 7;
 /// failed deserialize reports refusal and leaves the current content intact,
 /// apart from revealing the Console that carries the report.
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub(crate) struct UiPersist {
     /// serde(default) reads a pre-versioning blob as version 0, which is below
     /// the floor — [`SharedState::load_persist`] refuses it entirely.
-    #[serde(default)]
     pub(crate) version: u32,
-    pub(crate) dock: DockState<panes::Tab>,
-    // Workspace sections default independently. The dock is required because
-    // it has no Default; appearance has its own container-level defaults.
-    #[serde(default)]
-    pub(crate) layout_folds: fold::Folds,
-    #[serde(default)]
+    pub(crate) layout: workspace::Layout,
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
-    #[serde(default)]
     pub(crate) display_page: panes::display::DisplayPage,
-    #[serde(default)]
     pub(crate) appearance: crate::AppearanceDocument,
-    #[serde(default)]
     pub(crate) camera_presets: Vec<CameraPreset>,
     /// A missing cap reads as uncapped.
-    #[serde(default)]
     pub(crate) fps_cap: Option<f32>,
-    /// A blob without one loads at the design size — see [`default_ui_scale`],
-    /// and note that this is the BLOB's one field-level `default = "..."`,
-    /// because an `f32`'s own default of 0.0 is a scale of nothing. The
-    /// offline renderer's `Layout::background` is the tree's only other, and
-    /// answers to a different rule: a hand-written `.ron` rather than saved
-    /// state, so it defaults its fields one at a time and requires `panes`.
-    #[serde(default = "default_ui_scale")]
+    /// Chrome defaults to the design size, shared with Interaction.
     pub(crate) ui_scale: f32,
     /// Where the performance overlay was dragged to; a blob without one opens
     /// it where an undragged HUD opens. See [`Interaction::perf_pos`].
-    #[serde(default)]
     pub(crate) perf_pos: Option<egui::Pos2>,
+}
+
+impl Default for UiPersist {
+    fn default() -> Self {
+        Self {
+            version: 0,
+            layout: workspace::Layout::default(),
+            analyzer_regions: Default::default(),
+            display_page: panes::display::DisplayPage::default(),
+            appearance: crate::AppearanceDocument::default(),
+            camera_presets: Vec::new(),
+            fps_cap: None,
+            ui_scale: default_ui_scale(),
+            perf_pos: None,
+        }
+    }
 }
 
 impl PictureState {

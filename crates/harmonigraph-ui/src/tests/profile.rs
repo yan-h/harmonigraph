@@ -485,8 +485,7 @@ fn profile_visual_runtime() {
         state.picture.appearance.view.spectral_ring_width = 0.15;
         state.picture.appearance.view.spectral_reading = harmonigraph_scene::SpectralReading::Fold;
         if preview {
-            let path = state.workspace.dock.find_tab(&panes::Tab::Video).unwrap();
-            state.workspace.dock.set_active_tab(path).unwrap();
+            state.workspace.layout.select(panes::Tab::Video);
         }
         let mut h = DockHarness::at(WINDOW);
         h.ctx.set_pixels_per_point(2.0);

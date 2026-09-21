@@ -9,28 +9,8 @@ use crate::*;
 use harmonigraph_scene::{Camera, NoteNames};
 
 fn set_console_collapsed(state: &mut SharedState, collapsed: bool) {
-    let path = state.workspace.dock.find_tab(&panes::Tab::Console).expect("Console is docked");
-    state.workspace.dock[path.surface][path.node].set_collapsed(collapsed);
-}
-
-#[test]
-fn retired_fold_bookkeeping_does_not_discard_layout_or_appearance() {
-    let mut state = fresh();
-    state.picture.appearance.camera.yaw = 1.23;
-    let saved = state.save_persist();
-    let old = saved.replace(
-        "layout_folds:(panes:[],region_widths:(0.0,0.0),window:0.0)",
-        "folds:([(node:0,width:320.0,window:1000.0)])",
-    );
-    assert_ne!(old, saved, "the fixture must replace the named fold section");
-    let mut restored = fresh();
-    assert!(restored.load_persist(&old));
-    assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
-    assert_eq!(
-        ron::to_string(&restored.workspace.dock).unwrap(),
-        ron::to_string(&state.workspace.dock).unwrap()
-    );
-    assert!(restored.workspace.folds.is_empty());
+    state.workspace.layout.select(if collapsed { panes::Tab::Tuning } else { panes::Tab::Console });
+    state.workspace.layout.folded[workspace::Section::Settings as usize] = false;
 }
 
 #[test]
@@ -1070,8 +1050,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
     // UiPersist's fields, in declaration order.
     const KEYS: &[&str] = &[
         "version",
-        "dock",
-        "layout_folds",
+        "layout",
         "analyzer_regions",
         "display_page",
         "appearance",
@@ -1109,7 +1088,7 @@ fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
     let saved = state.save_persist();
 
     for (key, _) in top_level_pairs(&saved) {
-        if key == "version" || key == "dock" || key == "appearance" {
+        if key == "version" || key == "appearance" {
             continue;
         }
         let kept: Vec<String> = top_level_pairs(&saved)
@@ -1142,8 +1121,8 @@ fn workspace_edits_do_not_change_recorded_appearance() {
     state.picture.appearance.render.short_edge = 2160;
     let appearance = state.picture.appearance.serialize();
     let editor = state.save_persist();
-    state.workspace.dock = egui_dock::DockState::new(vec![crate::panes::Tab::Console]);
-    state.workspace.folds = ron::from_str("(panes:[(node:0,width:320.0)],window:1000.0)").unwrap();
+    state.workspace.layout = workspace::Layout::solo(crate::panes::Tab::Console);
+    state.workspace.layout.right.lattice = 320.0;
     state.workspace.interaction.display_page = crate::panes::display::DisplayPage::System;
     state.workspace.interaction.ui_scale = 1.25;
     state.workspace.interaction.fps_cap = Some(30.0);
@@ -1881,11 +1860,10 @@ fn the_display_page_in_the_picker_survives_an_editor_reopen() {
     };
 
     let mut state = fresh();
-    let path = state.workspace.dock.find_tab(&panes::Tab::Display).expect("Display is docked");
-    state.workspace.dock.set_active_tab(path).expect("selecting the tab");
+    state.workspace.layout.select(panes::Tab::Display);
     let mut window = DockHarness::new();
     window.settle(&mut state);
-    let leaf = state.workspace.dock[path.surface][path.node].rect().expect("the leaf is laid out");
+    let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
     let out = window.frame(&mut state, vec![]);
     assert!(!drawn(&out, leaf, "Show spectrogram"), "the tab opens on Lattice, not Spectrogram");
 
@@ -1923,10 +1901,7 @@ fn the_display_page_in_the_picker_survives_an_editor_reopen() {
     let mut fresh_window = DockHarness::new();
     fresh_window.settle(&mut reopened);
     let out = fresh_window.frame(&mut reopened, vec![]);
-    let path =
-        reopened.workspace.dock.find_tab(&panes::Tab::Display).expect("Display survives the blob");
-    let leaf =
-        reopened.workspace.dock[path.surface][path.node].rect().expect("the leaf is laid out");
+    let leaf = reopened.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
     assert!(
         drawn(&out, leaf, "Show spectrogram"),
         "the page reverted across the reopen — is its state in egui memory?",
@@ -2296,38 +2271,21 @@ fn a_saved_picker_naming_the_retired_analysis_page_is_refused_whole() {
     );
 }
 
-/// A saved dock naming the retired `Notes` tab is refused WHOLE, and says so.
-///
-/// Its own test beside the retired-variant ones above because the fixture is
-/// the one every previous build wrote: `Notes` shipped in `default_dock`, so a
-/// project that never re-docked anything has it, and the refusal therefore
-/// reaches nearly every blob in existence rather than the corner an
-/// orientation or a spectrogram mode reaches. What it costs is the rest of the
-/// document — `dock` is the one `UiPersist` field with no `serde(default)` to
-/// fall back on, so the camera goes with it — and the floor is no help at any
-/// value, because the version is read out of a value that never parsed.
+/// Retired dock fields are ignored rather than taking appearance with them.
 #[test]
-fn a_saved_dock_naming_the_retired_notes_tab_is_refused_whole() {
+fn an_old_dock_is_replaced_without_losing_appearance() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
     let saved = state.save_persist();
-    // The log leaf as every build before #975 wrote it, Notes first.
-    let dropped = saved.replace("tabs:[Console]", "tabs:[Notes,Console]");
-    assert_ne!(dropped, saved, "the splice must land for this to test anything");
-
+    let kept: Vec<_> = top_level_pairs(&saved)
+        .into_iter()
+        .filter(|(key, _)| key != "layout")
+        .map(|(_, text)| text)
+        .collect();
+    let old = format!("({},dock:(tabs:[Notes,Console]),folds:[])", kept.join(","));
     let mut restored = fresh();
-    let before = restored.save_persist();
-    assert!(!restored.load_persist(&dropped), "a dock naming Notes is not applied");
-    assert!(!collapsed(&restored, panes::Tab::Console), "the refusal opens its report");
-    set_console_collapsed(&mut restored, true);
-    assert_eq!(
-        restored.save_persist(),
-        before,
-        "the camera and the layout go with it apart from the visible report",
-    );
-    assert!(
-        restored.picture.runtime.console.lines().any(|line| line.contains("did not parse")),
-        "the refusal was silent; console holds {:?}",
-        restored.picture.runtime.console.lines().collect::<Vec<_>>(),
-    );
+    assert!(restored.load_persist(&old));
+    assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
+    assert_eq!(restored.workspace.layout.position, workspace::Position::Right);
+    assert_eq!(restored.workspace.layout.folded, [false; 3]);
 }
