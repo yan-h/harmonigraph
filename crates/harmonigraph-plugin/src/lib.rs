@@ -271,7 +271,7 @@ impl Default for HarmonigraphParams {
             map_thirds: IntParam::new("Map Thirds", 0, IntRange::Linear { min: -9, max: 9 }),
             map_sevenths: IntParam::new("Map Sevenths", 0, IntRange::Linear { min: -9, max: 9 }),
             map_fifths_extension: IntParam::new(
-                "Map Fifths Coarse",
+                "Map Fifths x10",
                 0,
                 IntRange::Linear { min: -9, max: 9 },
             )
@@ -281,7 +281,7 @@ impl Default for HarmonigraphParams {
                 (steps % 10 == 0).then_some(steps / 10)
             })),
             map_thirds_extension: IntParam::new(
-                "Map Thirds Coarse",
+                "Map Thirds x10",
                 0,
                 IntRange::Linear { min: -9, max: 9 },
             )
@@ -291,7 +291,7 @@ impl Default for HarmonigraphParams {
                 (steps % 10 == 0).then_some(steps / 10)
             })),
             map_sevenths_extension: IntParam::new(
-                "Map Sevenths Coarse",
+                "Map Sevenths x10",
                 0,
                 IntRange::Linear { min: -9, max: 9 },
             )

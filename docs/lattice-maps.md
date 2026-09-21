@@ -25,8 +25,8 @@ Saved maps define shape only.
 Use the independent Map Fifths,
 Map Thirds and Map Sevenths automation lanes to move any shape in integer generator steps.
 Each axis also has a Coarse lane that adds multiples of 10 without changing existing fine automation.
-The coarse parameters are named Map Fifths Coarse,
-Map Thirds Coarse and Map Sevenths Coarse;
+The coarse parameters are named Map Fifths x10,
+Map Thirds x10 and Map Sevenths x10;
 the editor labels the two columns Fine and Coarse.
 The same controls are always available in Lattice Map mode without entering audition or capturing a map.
 Positive values move along the corresponding generator;
