@@ -478,11 +478,26 @@ fn switching_the_detect_on_asks_it_about_the_tuning_already_there() {
     }
     assert!(!state.picture.appearance.view.meantone, "the detect is off; nothing should engage");
 
-    // The Auto switch, in full: the flag and the cleared verdict.
-    state.picture.appearance.view.meantone_auto = true;
-    state.picture.runtime.temper_judged[harmonigraph_core::Comma::Syntonic.index()] = None;
+    state.picture.runtime.edit_tuning(
+        &mut state.picture.appearance,
+        &params,
+        harmonigraph_core::configuration::ConfigEdit {
+            auto: [Some(true), None],
+            ..Default::default()
+        },
+    );
+    // A policy edit before observation must not spend the pending recheck
+    // against the previous modes. Learning can produce this sequence too.
+    let mut policy = state.picture.runtime.adaptive_policy;
+    policy.keyboard[0] += 1;
+    state.picture.runtime.edit_tuning(
+        &mut state.picture.appearance,
+        &params,
+        harmonigraph_core::configuration::ConfigEdit { policy: Some(policy), ..Default::default() },
+    );
     begin_frame(&mut state.picture, &params, 3.0);
     assert!(state.picture.appearance.view.meantone, "switching the detect on left 12-TET unjudged");
+    assert_eq!(state.picture.runtime.resolved_configuration().policy, policy.sanitize());
 }
 
 /// A tuning write the host has not reported back must not be judged on the

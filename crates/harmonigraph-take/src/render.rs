@@ -14,7 +14,7 @@
 //! and through the `appearance` a take carries.
 //!
 //! [`RenderProgress`] is the one member that is NEITHER — no serde, and it
-//! never enters a take. It is counted off the renderer subprocess's stdout and
+//! never enters a take. It is counted off the renderer subprocess's stderr and
 //! lives only as long as that process. It sits beside the settings because
 //! `harmonigraph-record` drives that subprocess and reports it back, and must
 //! not link the editor to do so: settings in, progress out is the whole of
@@ -441,6 +441,23 @@ pub struct RenderProgress {
 }
 
 impl RenderProgress {
+    /// Reserved stderr prefix for the renderer's progress records.
+    pub const PREFIX: &str = "progress: ";
+
+    /// Read one complete record. Human diagnostics, including frame counts,
+    /// are not part of this protocol. The percentage is presentation only.
+    pub fn parse_record(record: &str) -> Option<Self> {
+        let (counts, percent) = record.strip_prefix(Self::PREFIX)?.split_once(" frames (")?;
+        let percent = percent.strip_suffix("%)")?;
+        let (done, total) = counts.split_once('/')?;
+        let number = |value: &str| {
+            (!value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| value.parse::<u64>().ok())
+                .flatten()
+        };
+        (number(percent)? <= 100).then_some(Self { done: number(done)?, total: number(total)? })
+    }
+
     /// The share done, in `0..=1`, or `None` while the total is unknown —
     /// which is not the same as zero, and must not draw as it.
     pub fn fraction(self) -> Option<f32> {
@@ -448,9 +465,39 @@ impl RenderProgress {
     }
 }
 
+impl std::fmt::Display for RenderProgress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let percent = if self.total == 0 {
+            0
+        } else {
+            (u128::from(self.done) * 100 / u128::from(self.total)).min(100)
+        };
+        write!(f, "{}{}/{} frames ({percent}%)", Self::PREFIX, self.done, self.total)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_records_round_trip_and_require_the_whole_record() {
+        for (done, total) in [(0, 0), (0, 300), (120, 300), (u64::MAX, u64::MAX)] {
+            let progress = RenderProgress { done, total };
+            assert_eq!(RenderProgress::parse_record(&progress.to_string()), Some(progress));
+        }
+        for text in [
+            "warning: only 30 frames remain",
+            "30/300 frames (10%)",
+            "progress: 30/300 frames (10%) trailing",
+            "progress: 30/300 frames",
+            "progress: +30/300 frames (10%)",
+            "progress: 30/300 frames (101%)",
+            "progress: 18446744073709551616/300 frames (10%)",
+        ] {
+            assert_eq!(RenderProgress::parse_record(text), None, "{text}");
+        }
+    }
 
     #[test]
     fn retired_export_fields_are_ignored_and_not_saved_again() {

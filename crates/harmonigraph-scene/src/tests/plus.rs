@@ -98,12 +98,11 @@ fn a_marker_stands_at_every_home_position_and_nowhere_else() {
     assert!(!home.is_empty() && home.len() < scene.nodes.len(), "want both kinds in the window");
     assert_eq!(scene.pluses.len(), home.len(), "one marker per home position, and no others");
     let expected: Vec<_> =
-        scene.nodes.iter().enumerate().filter(|(_, n)| n.on_home).map(|(i, _)| Some(i)).collect();
+        scene.nodes.iter().enumerate().filter(|(_, n)| n.on_home).map(|(i, _)| i).collect();
     assert_eq!(scene.pluses.iter().map(|p| p.node).collect::<Vec<_>>(), expected);
     for marker in &scene.pluses {
-        let node = &scene.nodes[marker.node.expect("derived markers name their nodes")];
+        let node = &scene.nodes[marker.node];
         assert!(node.on_home);
-        assert_eq!(marker.lattice_pos, node.lattice_pos);
         assert_eq!(marker.pos, node.world_pos);
     }
     for node in &home {
@@ -127,9 +126,8 @@ fn a_marker_stands_at_every_home_position_and_nowhere_else() {
     let panned = ViewConfig { center_threes: 3, ..view };
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &panned, &plain_frame(), 0.0);
     for marker in &scene.pluses {
-        let node = &scene.nodes[marker.node.expect("panned markers name their nodes")];
+        let node = &scene.nodes[marker.node];
         assert!(node.on_home);
-        assert_eq!(marker.lattice_pos, node.lattice_pos);
         assert_eq!(marker.pos, node.world_pos);
         assert!(
             scene.nodes.iter().any(|n| n.world_pos == marker.pos),
@@ -743,7 +741,10 @@ fn a_node_lit_by_no_key_keeps_its_cross_whole() {
     let shining = crate::derive::derive_pluses(&view, &scene.nodes, ink);
 
     let at = |field: &[PlusInstance], pos: LatticePos| {
-        *field.iter().find(|p| p.lattice_pos == pos).expect("every home position keeps one")
+        *field
+            .iter()
+            .find(|p| scene.nodes[p.node].lattice_pos == pos)
+            .expect("every home position keeps one")
     };
     assert_eq!(
         unlit.len(),
@@ -809,7 +810,7 @@ fn a_markers_shadow_fades_in_with_its_cross() {
         let held = scene
             .pluses
             .iter()
-            .find(|p| p.lattice_pos == LatticePos::ORIGIN)
+            .find(|p| scene.nodes[p.node].lattice_pos == LatticePos::ORIGIN)
             .map_or(0.0, |p| p.strength);
         assert!(
             (held - want).abs() < 1e-5,

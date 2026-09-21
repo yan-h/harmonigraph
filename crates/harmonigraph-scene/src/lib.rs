@@ -7,7 +7,8 @@
 //! - `lib.rs` (this file) — the render-facing types: [`Scene`],
 //!   [`NodeInstance`], [`PlusInstance`], and the constants they share.
 //! - [`derive`](mod@derive) — the per-frame derivation ([`derive_scene`]): note tracker
-//!   + tuning -> node/marker lists. Envelope and animation policy.
+//!   + tuning -> node/marker lists and initial voice envelopes.
+//! - [`motion`] — carried lattice animation and melody/bass marks ([`NodeMotion`]).
 //! - [`view`] — [`ViewConfig`] (persisted visual settings and their serde
 //!   defaults) and [`FrameParams`].
 //! - [`style`] — the visual-style enums and their shader indices, and the
@@ -29,6 +30,7 @@ pub mod atmosphere;
 pub mod camera;
 pub mod color;
 pub mod derive;
+pub mod motion;
 pub mod octaves;
 pub mod skin;
 pub mod spectral;
@@ -49,6 +51,7 @@ pub use color::{
     gradient_color, grey_of_lightness, hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N,
 };
 pub use derive::derive_scene;
+pub use motion::NodeMotion;
 pub use octaves::{
     clamp_center, clamp_wheel, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_COUNT,
     DEFAULT_EXTRA_BLEND, DEFAULT_EXTRA_SIZE, MAX_EXTRAS, MAX_SPAN, MIDDLE_C_SLOT, MIN_COUNT,
@@ -473,8 +476,8 @@ pub struct NodeInstance {
     /// under the tuning tolerance, and the mark follows the same rule.
     ///
     /// One bit at a time: the node carries one melody mark at one level, so
-    /// the mask names the one sector that mark extends (see
-    /// `derive::Mark`). A MASK rather than a slot index because 0 then says
+    /// the mask names the strongest carried slot ([`NodeMotion`]).
+    /// A MASK rather than a slot index because 0 then says
     /// "unmarked" on its own, which a `0` index could not — and because it is
     /// what the shader tests a slot against.
     pub melody_slots: u32,
@@ -493,14 +496,9 @@ pub struct NodeInstance {
     /// node it sits on has been fully lit for a while — the mark has to
     /// follow its own note, not the disc's.
     ///
-    /// Both directions: the ease in above, times what is left of the note's
-    /// own release, so a mark leaves with its note rather than snapping off
-    /// at the key (see [`derive`](mod@derive)). [`ViewConfig::mark_delay`] is
-    /// answered as a threshold AT the key-up — a mark that had not earned its
-    /// way past the wait must not climb into one while the note is already
-    /// fading — and the ramp itself then runs on at the current frame, like
-    /// the sector's, so the two halves of one arrival never disagree about
-    /// how fast it happened.
+    /// On target loss the carried level reverses immediately, and any pending
+    /// wait is canceled. Short notes therefore leave from their current level;
+    /// a delayed mark that never arrived has nothing to fade out.
     ///
     /// Per node rather than per slot because one node carries at most one
     /// mark of each kind; the slots above say which sector it extends.
@@ -509,7 +507,7 @@ pub struct NodeInstance {
     /// Each mark's color: the color of the SECTOR it extends — the pitch
     /// of that slot on this node, through [`color::pitch_lut_color`] — so a
     /// mark reads as that indicator continued rather than as a fixed livery.
-    /// Taken from the strongest marking voice (they can differ
+    /// Taken from the strongest carried slot (it can change
     /// mid-crossfade). No lift on top of the ramp: the disc, the roll and the
     /// glyphs all wear it as the table hands it over, whatever the gradient's
     /// brightness is dialled to, so a mark that lightened its own copy would
@@ -695,18 +693,10 @@ impl NodeInstance {
 /// nodes, and the whole of what an unplayed lattice draws.
 #[derive(Clone, Copy, Debug)]
 pub struct PlusInstance {
-    /// Index into this frame's [`Scene::nodes`], supplied by scene derivation.
-    /// The renderer accepts it only when it names a home node at `lattice_pos`.
-    /// `None`, an out-of-range index, or a stale association uses the positional
-    /// lookup instead: the last home node at that position, or loose placement
-    /// at the home-sheet seam if none exists. This preserves hand-built scenes.
-    /// A valid index names that exact node, even if a hand-built scene contains
-    /// duplicate home positions. Reordering nodes must update these indices or
-    /// clear them; they are frame-local hints, never persisted identities.
-    pub node: Option<usize>,
-    /// Which lattice position this marker stands at. Never uploaded —
-    /// [`pos`](Self::pos) is what the GPU is given.
-    pub lattice_pos: LatticePos,
+    /// Index of the home node this marker stands under in [`Scene::nodes`].
+    /// Each node has at most one marker. Reordering nodes must update these
+    /// frame-local indices; hand-built scenes must supply the same association.
+    pub node: usize,
     /// The position's own world center.
     pub pos: Vec3,
     /// How far the marker reaches, in WORLD units: the length of one arm,

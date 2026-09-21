@@ -540,29 +540,40 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
             mark_thickness: if marks { base.mark_thickness } else { 0.0 },
             ..base.clone()
         };
-        derive_scene(
+        let frame = FrameParams { fade_time: 0.0, ..FrameParams::default() };
+        let tuning = Tuning::default();
+        let mut scene = derive_scene(
             &tracker,
-            &Tuning::default(),
+            &tuning,
             &view,
             &base.reach(),
             // No envelope: every layer of a node eases in from its note-on
             // over the Fade, so under a real one t=0 is the instant nothing
             // is drawn yet and any later sample is a fraction. What is
             // compared below is a lit node against a lit node.
-            &FrameParams { fade_time: 0.0, ..FrameParams::default() },
+            &frame,
             Camera::default(),
             None,
             0.5,
-        )
+        );
+        harmonigraph_scene::NodeMotion::default().step(
+            &mut scene,
+            &tracker,
+            &tuning,
+            &view,
+            &view.envelope(&frame),
+            0.5,
+        );
+        scene
     };
 
-    // The masks must survive derive_scene in the first place.
+    // The composed derivation and motion passes must supply the masks.
     let marked = scene_for(true);
     let melody_nodes = marked.nodes.iter().filter(|n| n.melody_slots != 0).count();
     let bass_nodes = marked.nodes.iter().filter(|n| n.bass_slots != 0).count();
     assert!(
         melody_nodes > 0 && bass_nodes > 0,
-        "derive_scene marked nothing: {melody_nodes} melody, {bass_nodes} bass nodes"
+        "the composed scene marked nothing: {melody_nodes} melody, {bass_nodes} bass nodes"
     );
 
     let off = gpu.shot(&scene_for(false));
@@ -587,7 +598,8 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
 fn lone_marker_scene(half_width: f32, taper_start: f32) -> Scene {
     let mut scene = idle_scene();
     scene.nodes.clear();
-    scene.pluses = vec![one_marker(
+    scene.pluses = vec![standalone_marker(
+        &mut scene.nodes,
         glam::Vec3::ZERO,
         // Big enough that the screen-constant soft band is a thin rim on it
         // rather than a share of the area — the band is the error term in

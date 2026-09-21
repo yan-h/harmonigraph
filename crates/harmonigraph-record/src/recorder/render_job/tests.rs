@@ -302,49 +302,12 @@ fn a_render_of_another_take_waits_rather_than_replacing_this_one() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Verbatim shapes from `harmonigraph-offline`'s stderr — the opening line
-/// that announces the frame count, and the counter it rewrites as it goes.
-#[test]
-fn the_renderers_own_output_is_what_puts_numbers_on_the_bar() {
-    let header = "/music/Harmonigraph Takes/take-1.take: 16.5s of events \
-                      -> 990 frames at 60 fps, 1920x1080 @ 1.50x -> take-1.mp4";
-    assert!(matches!(parse_report(header), Some(Report::Total(990))));
-    assert!(matches!(
-        parse_report("  120/990 frames (12%)"),
-        Some(Report::Frames { done: 120, total: 990 })
-    ));
-
-    // Everything else is a diagnostic, and belongs in the status line
-    // instead of quietly moving the bar. A path with a slash in it is the
-    // one that could be mistaken for a done/total pair.
-    assert!(parse_report("harmonigraph-offline: no take file given").is_none());
-    assert!(
-        parse_report("warning: take names \"take-1.wav\" but it is not beside the take").is_none()
-    );
-    assert!(parse_report("/music/odd frames/take.take: could not be read").is_none());
-    assert!(parse_report("").is_none());
-}
-
-/// A whole run of a real render's stderr, captured verbatim from
-/// `harmonigraph-offline` (the paths shortened, nothing else): the opening
-/// line, the counter rewritten in place four times, the closing line, and
-/// the two segments #903 added after it.
-///
-/// The `\r`s are the point. They mean the counter is one terminal line
-/// being overwritten, so splitting on newlines alone delivers the whole run
-/// of it as a single line, once, at the end — a progress bar that fills
-/// only when the render is already over.
-///
-/// The tail matters for a second reason. `Stages::summary`'s doc calls
-/// avoiding the substring `" frames"` a CONTRACT rather than a style choice,
-/// because the timing line prints AFTER `done: N frames` and would otherwise
-/// be the last word on the subject and retarget the bar. That contract was
-/// asserted only on the renderer's side, against a remembered rule; this is
-/// the parser that the rule is about, and it never saw the line.
-const REAL_RENDER_STDERR: &str = "probe.take: 1.6s of events -> 108 frames at 30 fps, \
+/// A renderer stream with CR-delimited progress, followed by diagnostics.
+const RENDER_STDERR: &str = "probe.take: 1.6s of events -> 108 frames at 30 fps, \
          320x180 @ 1.00x -> probe.rgba\n\
-         \r  30/108 frames (28%)\r  60/108 frames (56%)\r  90/108 frames (83%)\
-         \r  108/108 frames (100%)\n\
+         progress: 0/108 frames (0%)\n\
+         \rprogress: 30/108 frames (27%)\rprogress: 60/108 frames (55%)\rprogress: 90/108 frames (83%)\
+         \rprogress: 108/108 frames (100%)\n\
          done: 108 frames -> probe.rgba\n\
          timing: a 108-frame export in 3.2 s, 2.8 s of it drawing at 38.6 fps — \
          ui+tess 5.20 ms/frame (20%), submit 3.10 ms/frame (12%), \
@@ -352,13 +315,38 @@ const REAL_RENDER_STDERR: &str = "probe.take: 1.6s of events -> 108 frames at 30
            encode with: ffmpeg -f rawvideo -pix_fmt rgba -s 320x180 -r 30 -i probe.rgba out.mp4\n";
 
 #[test]
+fn diagnostics_and_malformed_records_do_not_retarget_progress() {
+    let progress = Progress::default();
+    progress.begin();
+    let warning = "warning: only 30 frames fit the soundtrack";
+    let tail = follow(
+        format!("progress: 0/300 frames (0%)\n{warning}\nprogress: broken\n").as_bytes(),
+        &progress,
+    );
+    assert_eq!(progress.read(), Some(RenderProgress { done: 0, total: 300 }));
+    assert_eq!(tail.warning.as_deref(), Some(warning));
+    assert_eq!(tail.last, warning);
+    follow(
+        b"progress: 120/120 frames (100%)\ndone: 120 frames\ntiming: 300 frames drawn".as_slice(),
+        &progress,
+    );
+    assert_eq!(progress.read(), Some(RenderProgress { done: 120, total: 120 }));
+}
+
+#[test]
+fn a_renderer_without_progress_records_still_reports_diagnostics() {
+    let progress = Progress::default();
+    progress.begin();
+    let tail = follow(b"done: 120 frames".as_slice(), &progress);
+    assert_eq!(progress.read().unwrap().fraction(), None);
+    assert_eq!(tail.last, "done: 120 frames");
+}
+
+#[test]
 fn the_rewritten_counter_reaches_the_bar_as_the_render_goes() {
     let progress = Progress::default();
     progress.begin();
-    follow(REAL_RENDER_STDERR.as_bytes(), &progress);
-    // 108, not 30: the closing `done: 108 frames` line names a total and
-    // says nothing about frames written, so it must not reset the count
-    // the render finished on either.
+    follow(RENDER_STDERR.as_bytes(), &progress);
     assert_eq!(progress.read(), Some(harmonigraph_take::RenderProgress { done: 108, total: 108 }));
 
     progress.end();
@@ -372,7 +360,7 @@ fn the_rewritten_counter_reaches_the_bar_as_the_render_goes() {
 fn a_failed_renders_last_word_is_kept_over_the_counters() {
     let stream = "take.take: 5.0s of events -> 300 frames at 60 fps, 640x360 @ 1.00x \
                       -> take.mp4\n\
-                      \r  30/300 frames (10%)\r  60/300 frames (20%)\n\
+                      \rprogress: 30/300 frames (10%)\rprogress: 60/300 frames (20%)\n\
                       harmonigraph-offline: ffmpeg exited with status 1\n";
     let progress = Progress::default();
     progress.begin();
@@ -406,7 +394,7 @@ fn a_render_that_warned_carries_it_onto_the_status_line_it_succeeded_on() {
              -> take-1.mp4\n\
              {warning}\n\
              {later}\n\
-             \r  60/120 frames (50%)\r  120/120 frames (100%)\n\
+             \rprogress: 60/120 frames (50%)\rprogress: 120/120 frames (100%)\n\
              done: 120 frames -> take-1.mp4\n\
              {muxed}\n"
     );
@@ -438,7 +426,10 @@ fn a_render_that_warned_carries_it_onto_the_status_line_it_succeeded_on() {
 fn an_unterminated_last_counter_still_counts() {
     let progress = Progress::default();
     progress.begin();
-    follow("x.take: -> 300 frames at 60 fps\n\r  240/300 frames (80%)".as_bytes(), &progress);
+    follow(
+        "x.take: -> 300 frames at 60 fps\n\rprogress: 240/300 frames (80%)".as_bytes(),
+        &progress,
+    );
     assert_eq!(progress.read(), Some(harmonigraph_take::RenderProgress { done: 240, total: 300 }));
 }
 
@@ -517,7 +508,7 @@ fn a_signal_mid_read_is_not_the_end_of_the_render() {
         steps: vec![
             Ok(&b"x.take: -> 300 frames at 60 fps\n"[..]),
             Err(std::io::ErrorKind::Interrupted),
-            Ok(&b"\r  240/300 frames (80%)\nharmonigraph-offline: ffmpeg died\n"[..]),
+            Ok(&b"\rprogress: 240/300 frames (80%)\nharmonigraph-offline: ffmpeg died\n"[..]),
         ]
         .into_iter(),
     };

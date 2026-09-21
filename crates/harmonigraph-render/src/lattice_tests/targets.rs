@@ -420,7 +420,13 @@ fn glow_off_discards_history_when_target_maintenance_runs() {
     scene.nodes = nodes;
     // Inkless nodes at reach zero are culled, so restoring them alone would
     // still leave this empty. A visible marker really reaches maintenance.
-    scene.pluses.push(one_marker(glam::Vec3::ZERO, 0.1, glam::Vec4::ONE, 1.0));
+    scene.pluses.push(standalone_marker(
+        &mut scene.nodes,
+        glam::Vec3::ZERO,
+        0.1,
+        glam::Vec4::ONE,
+        1.0,
+    ));
     shooter.shot_again(&scene);
     assert_eq!(
         shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane].plus_count,

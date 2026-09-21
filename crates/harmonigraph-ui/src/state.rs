@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 
-use harmonigraph_core::{Comma, LatticePos};
+use harmonigraph_core::LatticePos;
 use harmonigraph_perf::{PerfStats, ShellTimings};
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_scene::{Camera, DrawnWindow};
@@ -179,7 +179,7 @@ pub struct SurfaceState {
     /// own texture.
     pub(crate) glow_fade: std::collections::HashMap<usize, crate::panes::glow_fade::GlowFade>,
     /// One entrance per visible node, independent of optional Glow. Runtime only.
-    pub(crate) node_motion: std::collections::HashMap<usize, crate::panes::node_motion::NodeMotion>,
+    pub(crate) node_motion: std::collections::HashMap<usize, harmonigraph_scene::NodeMotion>,
     /// Where the analyzer's divider stands on the DOCKED pane as that pane is
     /// resized — the spectrum keeps its size and the spectrogram takes the
     /// difference. See [`panes::spectral::SpectrumHold`].
@@ -727,7 +727,7 @@ impl PictureState {
         self.appearance = appearance;
         // A restored project must judge its comma modes again even at the
         // tuning the previous project already showed.
-        self.runtime.temper_judged = [None; Comma::COUNT];
+        self.runtime.config_reducer.recheck_all();
     }
     /// Drop everything that belongs to a particular egui context. Shells MUST
     /// call this whenever they build one.
