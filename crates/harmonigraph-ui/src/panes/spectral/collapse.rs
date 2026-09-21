@@ -186,10 +186,11 @@ fn extend(rect: &mut Rect, delta: Vec2) {
 
 /// Put each button at the far end of the region it folds, away from the busy
 /// now-line and its drag band. `Axes` turns the same two depth endpoints into
-/// left/right or top/bottom for every orientation. The high-pitch inset keeps
-/// the controls in an outer corner, and the row-height footprint stays small.
+/// left/right or top/bottom for every orientation. Flush with the high-pitch
+/// edge and the region's outer end, each square reads as pane chrome rather
+/// than a floating widget over the picture.
 fn control_rect(axes: &Axes, index: usize, size: f32) -> Rect {
-    let inset = size * 0.5 + 4.0;
+    let inset = size * 0.5;
     let pitch = 1.0 - inset / axes.pitch_len();
     let d = if index == 0 { inset / axes.depth_len() } else { 1.0 - inset / axes.depth_len() };
     Rect::from_center_size(axes.at(pitch, d), Vec2::splat(size))
@@ -237,11 +238,7 @@ fn control(
     let hovered = response.hovered() || response.has_focus();
     painter.rect_filled(
         button,
-        if rail {
-            egui::CornerRadius::ZERO
-        } else {
-            egui::CornerRadius::same(theme::control_radius(scale))
-        },
+        egui::CornerRadius::ZERO,
         if hovered {
             style.buttons.collapse_tabs_bg_fill
         } else if rail {

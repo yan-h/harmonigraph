@@ -17,7 +17,7 @@ fn click_at(h: &mut DockHarness, state: &mut SharedState, at: egui::Pos2) {
 }
 
 #[test]
-fn analyzer_region_buttons_live_at_opposite_outer_ends() {
+fn analyzer_region_buttons_sit_flush_in_opposite_outer_corners() {
     for (orientation, horizontal, first_at_low_end) in [
         (SpectralOrientation::Left, true, true),
         (SpectralOrientation::Right, true, false),
@@ -34,13 +34,25 @@ fn analyzer_region_buttons_live_at_opposite_outer_ends() {
         for index in 0..2 {
             let id = egui::Id::new(("analyzer region fold", index));
             let button = h.ctx.read_response(id).expect("region button is drawn").rect;
-            let at = if horizontal { button.center().x } else { button.center().y };
-            let edge = if (index == 0) == first_at_low_end { low } else { high };
+            let at_low_end = (index == 0) == first_at_low_end;
+            let (button_edge, pane_edge) = if at_low_end {
+                (if horizontal { button.left() } else { button.top() }, low)
+            } else {
+                (if horizontal { button.right() } else { button.bottom() }, high)
+            };
             assert!(
-                (at - edge).abs() < 25.0,
-                "{orientation:?} region {index} button is {at} from the wrong edge of {body:?}",
+                (button_edge - pane_edge).abs() < 1.0,
+                "{orientation:?} region {index} button is not flush with the outer edge of {body:?}",
             );
-            assert!(body.contains(button.center()));
+            let (button_pitch_edge, pane_pitch_edge) = if horizontal {
+                (button.top(), body.top())
+            } else {
+                (button.right(), body.right())
+            };
+            assert!(
+                (button_pitch_edge - pane_pitch_edge).abs() < 1.0,
+                "{orientation:?} region {index} button is not flush with the pitch edge",
+            );
         }
     }
 }
