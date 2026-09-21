@@ -262,8 +262,8 @@ impl Default for HarmonigraphParams {
             map: IntParam::new("Lattice Map", 0, IntRange::Linear { min: 0, max: 127 })
                 .with_value_to_string(Arc::new(move |id| {
                     let doc = names.read();
-                    match doc.slots.get(id as usize).filter(|m| !m.deleted) {
-                        Some(map) => format!("{} · {}", id + 1, map.name),
+                    match doc.name(id as usize) {
+                        Some(name) => format!("{} · {name}", id + 1),
                         None => format!("{} · unavailable", id + 1),
                     }
                 })),

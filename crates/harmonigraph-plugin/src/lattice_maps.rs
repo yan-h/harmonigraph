@@ -50,7 +50,8 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     }
     let adopted = *params.map_playback.lock();
     let selected = params.map.value().clamp(0, 127) as usize;
-    let offset = offset(params);
+    let offsets = offsets(params);
+    let offset = offsets.total();
     let playback = MapPlayback {
         engine: engine(params.tuning_engine.value()),
         selected,
@@ -63,13 +64,12 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     };
     MapView {
         playback,
-        offsets: offsets(params),
+        offsets,
         pending: playback != adopted,
         names: editor.names(&document),
-        working: editor.working,
         edit_shape: editor.edit_shape,
         can_undo: !editor.undo.is_empty(),
-        full: document.slots.len() >= MAP_CAPACITY,
+        full: document.is_full(),
     }
 }
 
@@ -405,38 +405,45 @@ mod tests {
         assert_eq!(maps.changes(4000, 4001).count(), 0);
     }
 
-    /// A slot written behind the revision's back is the instrument: a bank that
-    /// was rebuilt shows it and a bank that was reused cannot, which no timing
-    /// or counter claim could say as directly. The fixture needs two occupied
-    /// slots holding three distinct shapes, so that "unchanged" and "changed"
-    /// are told apart by geometry rather than by a slot's mere existence.
+    /// Use document mutations to reach the bank, including a capture after the
+    /// initial adoption and a delete that must leave the other shape intact.
     #[test]
-    fn the_bank_is_rebuilt_only_when_the_documents_revision_moves() {
+    fn document_mutations_reach_the_audio_bank_without_changing_slot_identity() {
         let params = crate::HarmonigraphParams::default();
         let config = ConfigReducer::default().resolved();
         let mut second = LatticeMap::default();
         assert!(second.replace(LatticePos::new(4, 0, 0)), "slot 1 must differ from the default");
-        let mut third = LatticeMap::default();
-        assert!(third.replace(LatticePos::new(-3, 0, 0)), "the poked shape must differ from both");
-        assert_eq!(params.maps.write().capture(second, "Passage".into()), Some(1));
-
         let mut maps = AudioMaps::new(&params);
         maps.adopt(config);
         assert_eq!(maps.bank[0], Some(LatticeMap::default()));
-        assert_eq!(maps.bank[1], Some(second), "the fixture never reached a second slot");
+        assert_eq!(maps.bank[1], None);
 
-        // A write that skips every `MapDocument` method, so the revision stays
-        // where it was. Only a rebuild could see it.
-        params.maps.write().slots[1].geometry = third.into();
+        assert_eq!(params.maps.write().capture(second, "Passage".into()), Some(1));
         maps.adopt(config);
-        assert_eq!(maps.bank[1], Some(second), "an unchanged revision must not rebuild the bank");
+        assert_eq!(maps.bank[1], Some(second), "the fixture never reached a second slot");
+        assert_eq!(maps.bank_revision, Some(params.maps.read().revision()));
 
-        // A real mutation moves the revision, and the rebuild it forces is
-        // wholesale: it picks up the poke as well as the deletion.
+        let revision = maps.bank_revision;
+        maps.adopt(config);
+        assert_eq!(maps.bank_revision, revision);
+        assert_eq!(maps.bank[1], Some(second));
+
+        params.maps.write().rename(1, "Renamed".into());
+        maps.adopt(config);
+        assert_ne!(maps.bank_revision, revision);
+        assert_eq!(maps.bank_revision, Some(params.maps.read().revision()));
+        let revision = maps.bank_revision;
+        params.maps.write().move_earlier(1);
+        maps.adopt(config);
+        assert_ne!(maps.bank_revision, revision);
+        assert_eq!(maps.bank_revision, Some(params.maps.read().revision()));
+        assert_eq!(maps.bank[0], Some(LatticeMap::default()));
+        assert_eq!(maps.bank[1], Some(second));
+
         params.maps.write().delete(0);
         maps.adopt(config);
         assert_eq!(maps.bank[0], None, "a delete must reach the audio thread's bank");
-        assert_eq!(maps.bank[1], Some(third), "the rebuild must re-read every slot");
+        assert_eq!(maps.bank[1], Some(second));
     }
 
     #[test]

@@ -54,11 +54,10 @@ impl Default for NamedMap {
 /// The visible slots in display order, with their names — see
 /// [`MapDocument::names`].
 ///
-/// `Arc<str>` rather than `String`: the editor rebuilds a [`MapView`] every
-/// frame it draws the Lattice or Tuning pane, and the names are the only part
-/// of it that owns heap. Sharing them makes that rebuild a `Vec` and up to
-/// [`MAP_CAPACITY`] refcount bumps instead of that many string copies.
-pub type MapNames = Vec<(usize, Arc<str>)>;
+/// The editor rebuilds a [`MapView`] every frame it draws the Lattice or Tuning
+/// pane. Sharing the immutable list makes each view a single refcount bump;
+/// names are copied only when the document revision changes.
+pub type MapNames = Arc<[(usize, String)]>;
 
 /// A process-unique ticket for one state of a [`MapDocument`], minted at
 /// construction, at deserialization and at every mutation.
@@ -82,14 +81,13 @@ impl Default for Revision {
 pub struct MapDocument {
     /// Slot index is the host identity. Slots are never removed or recycled.
     ///
-    /// Public for READING — the plugin's `lattice-map` parameter formats a slot
-    /// name through it. Every mutation goes through a method below, because two
+    /// Every mutation goes through a method below, because two
     /// derived values are keyed on [`revision`](Self::revision) and a write that
     /// skips the bump is invisible to both: [`names`](Self::names) serves a
     /// stale name in the UI forever, and the audio thread's map bank serves a
     /// stale shape — a capture or a delete that never reaches playback at all.
-    pub slots: Vec<NamedMap>,
-    pub order: Vec<usize>,
+    slots: Vec<NamedMap>,
+    order: Vec<usize>,
     /// Skipped rather than persisted: a loaded document is a new state, and
     /// `Default` mints it a ticket nothing has seen.
     #[serde(skip)]
@@ -121,8 +119,15 @@ impl MapDocument {
     pub fn map(&self, id: usize) -> Option<LatticeMap> {
         self.slots.get(id).filter(|m| !m.deleted)?.geometry.resolve()
     }
+    pub fn name(&self, id: usize) -> Option<&str> {
+        self.slots.get(id).filter(|m| !m.deleted).map(|m| m.name.as_str())
+    }
+    /// Deleted slots still consume their stable host identities.
+    pub fn is_full(&self) -> bool {
+        self.slots.len() >= MAP_CAPACITY
+    }
     pub fn capture(&mut self, map: LatticeMap, name: String) -> Option<usize> {
-        if self.slots.len() >= MAP_CAPACITY || !map.valid() {
+        if self.is_full() || !map.valid() {
             return None;
         }
         let id = self.slots.len();
@@ -147,7 +152,7 @@ impl MapDocument {
     /// from the visible sequence so a hand-edited file's stray entries do not
     /// survive the swap.
     pub fn move_earlier(&mut self, id: usize) {
-        let mut order: Vec<_> = self.names().into_iter().map(|(id, _)| id).collect();
+        let mut order: Vec<_> = self.names().iter().map(|(id, _)| *id).collect();
         if let Some(index) = order.iter().position(|&item| item == id) {
             if index > 0 {
                 order.swap(index, index - 1);
@@ -174,7 +179,7 @@ impl MapDocument {
                 if std::mem::replace(&mut seen[id], true) || self.slots[id].deleted {
                     None
                 } else {
-                    Some((id, Arc::from(self.slots[id].name.as_str())))
+                    Some((id, self.slots[id].name.clone()))
                 }
             })
             .collect()
@@ -291,10 +296,8 @@ pub struct MapView {
     pub playback: MapPlayback,
     pub offsets: MapOffsets,
     pub pending: bool,
-    /// Shared with the document's memo (see [`MapEditor::names`]), so cloning a
-    /// view is refcounts rather than up to [`MAP_CAPACITY`] string copies.
+    /// Shared with the editor's memo (see [`MapEditor::names`]).
     pub names: MapNames,
-    pub working: Option<LatticeMap>,
     pub edit_shape: bool,
     pub can_undo: bool,
     pub full: bool,
@@ -303,7 +306,7 @@ impl MapView {
     pub fn editing(&self) -> bool {
         self.playback.engine == TuningEngine::LatticeMap
             && self.edit_shape
-            && self.working.is_some()
+            && self.playback.audition
     }
 }
 #[derive(Clone, Copy, Debug)]
@@ -340,19 +343,31 @@ mod tests {
         let mut map = LatticeMap { position: LatticePos::new(50, 0, 0), ..Default::default() };
         map.replace(LatticePos::new(54, 0, 0));
         assert_eq!(doc.capture(map, "Passage".into()), Some(1));
-        doc.slots[0].deleted = true;
-        doc.slots[1].name = "Renamed".into();
-        doc.order.reverse();
-        let recalled: MapDocument = ron::from_str(&ron::to_string(&doc).unwrap()).unwrap();
+        doc.delete(0);
+        doc.rename(1, "Renamed".into());
+        doc.move_earlier(1);
+        let saved = ron::to_string(&doc).unwrap();
+        assert!(saved.starts_with("(slots:"));
+        assert!(saved.contains("order:[1]"));
+        let recalled: MapDocument = ron::from_str(&saved).unwrap();
         map.position = LatticePos::ORIGIN;
         assert_eq!(recalled.map(1), Some(map));
         assert_eq!(recalled.map(0), None);
         assert_eq!(doc.capture(LatticeMap::default(), "New".into()), Some(2));
-        assert_eq!(recalled.names(), vec![(1, "Renamed".into())]);
+        assert_eq!(&*recalled.names(), &[(1, "Renamed".into())]);
+        assert_eq!(recalled.name(0), None);
+        assert_eq!(recalled.name(1), Some("Renamed"));
+        assert_eq!(recalled.name(2), None);
+        assert!(!recalled.is_full());
+        for id in 3..MAP_CAPACITY {
+            assert_eq!(doc.capture(LatticeMap::default(), "More".into()), Some(id));
+        }
+        assert!(doc.is_full());
+        assert_eq!(doc.capture(LatticeMap::default(), "Full".into()), None);
     }
 
     /// `Arc::ptr_eq` is the instrument: a memo hit hands back the very
-    /// allocations the last call did, and a rebuild cannot.
+    /// list the last call did, and a rebuild cannot.
     #[test]
     fn names_are_memoized_and_every_document_mutation_invalidates_them() {
         let mut doc = MapDocument::default();
@@ -361,11 +376,9 @@ mod tests {
         let first = editor.names(&doc);
         assert_eq!(first.len(), 2, "the fixture needs a name that survives each mutation");
         let held = editor.names(&doc);
-        assert!(Arc::ptr_eq(&held[0].1, &first[0].1), "an unchanged document must not rebuild");
+        assert!(Arc::ptr_eq(&held, &first), "an unchanged document must not rebuild");
 
-        // Each of the four mutations the editor can make, in turn. Slot 0 is
-        // never the one edited, so its Arc is what says the LIST was rebuilt
-        // rather than merely that the edited entry changed.
+        // Each of the four mutations the editor can make, in turn.
         let mut previous = first;
         // What was done, how, and the names it must leave visible.
         type Mutation<'a> = (&'a str, &'a dyn Fn(&mut MapDocument), &'a [&'a str]);
@@ -385,12 +398,14 @@ mod tests {
             mutate(&mut doc);
             let next = editor.names(&doc);
             assert!(
-                !Arc::ptr_eq(&next[0].1, &previous[0].1),
+                !Arc::ptr_eq(&next, &previous),
                 "a {what} must move the revision the memo is keyed on"
             );
             assert_eq!(next.iter().map(|(_, name)| &**name).collect::<Vec<_>>(), visible, "{what}");
+            assert!(Arc::ptr_eq(&next, &editor.names(&doc)), "{what} must memoize its snapshot");
             previous = next;
         }
+        assert_eq!(&*held, &[(0, "C · 3×4".into()), (1, "Passage".into())]);
     }
 
     /// The case a per-document counter gets wrong: a loaded document restarts
@@ -400,10 +415,14 @@ mod tests {
     fn a_loaded_document_never_answers_from_another_documents_memo() {
         let mut editor = MapEditor::default();
         // A memo taken from a FRESH document — revision zero under a counter.
-        assert_eq!(&*editor.names(&MapDocument::default())[0].1, "C · 3×4");
+        let first = editor.names(&MapDocument::default());
+        assert_eq!(&first[0].1, "C · 3×4");
         let mut other = MapDocument::default();
         other.rename(0, "Other".into());
         let loaded: MapDocument = ron::from_str(&ron::to_string(&other).unwrap()).unwrap();
-        assert_eq!(&*editor.names(&loaded)[0].1, "Other");
+        let next = editor.names(&loaded);
+        assert!(!Arc::ptr_eq(&first, &next));
+        assert_eq!(&next[0].1, "Other");
+        assert!(Arc::ptr_eq(&next, &editor.names(&loaded)));
     }
 }
