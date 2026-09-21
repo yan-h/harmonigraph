@@ -1,0 +1,296 @@
+//! Editor-only folds inside the Analyzer. Hidden regions keep their depth in
+//! points; a virtual full picture keeps the surviving region's calibration.
+
+use egui::{Pos2, Rect, Sense, Vec2};
+
+use super::{axes::Axes, gestures, Navigation, RegionView};
+use crate::{panes::DOCKED_SURFACE, theme, PictureState};
+
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct Regions {
+    pub collapsed: [bool; 2],
+    /// Last fully open composition. Temporary expansion into a folded region
+    /// never changes this snapshot or the appearance dial.
+    geometry: Option<Geometry>,
+    #[serde(skip)]
+    pub request: Option<Request>,
+    #[serde(skip)]
+    landing: Option<[bool; 2]>,
+    #[serde(skip)]
+    restore: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Request {
+    pub collapsed: [bool; 2],
+    pub region: usize,
+    /// `Some` closes a region, removing this width if the dock permits it;
+    /// `None` reopens it using the fold controller's recorded deduction.
+    pub width: Option<f32>,
+}
+
+#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct Geometry {
+    depths: [f32; 2],
+    dial: f32,
+    vertical: bool,
+}
+
+impl Geometry {
+    fn matches(&self, cfg: &crate::SpectrumConfig) -> bool {
+        self.dial == cfg.roll_fraction && self.vertical == cfg.orientation.is_time_vertical()
+    }
+}
+
+impl Regions {
+    pub fn sanitize(&mut self) {
+        self.geometry = self.geometry.filter(|geometry| {
+            geometry.depths.iter().all(|d| d.is_finite() && (0.0..=16_384.0).contains(d))
+                && geometry.depths.iter().sum::<f32>() > 0.0
+                && geometry.dial.is_finite()
+                && (0.0..=1.0).contains(&geometry.dial)
+        });
+        self.restore = true;
+    }
+
+    /// Visibility lands with the resize, never on the click's old geometry.
+    pub fn begin_frame(&mut self) {
+        if let Some(collapsed) = self.landing.take() {
+            self.collapsed = collapsed;
+            self.restore = !collapsed.iter().any(|&c| c);
+        }
+    }
+
+    pub fn land(&mut self) {
+        if let Some(request) = self.request.take() {
+            self.landing = Some(request.collapsed);
+        }
+    }
+
+    pub fn draw(&mut self, ui: &mut egui::Ui, state: &mut PictureState, now: f64) {
+        let rect = ui.available_rect_before_wrap();
+        let cfg = state.appearance.spectrum;
+        let axes = Axes::new(rect, &cfg);
+        let depth = axes.depth_len();
+        if !rect.is_positive() || !depth.is_finite() {
+            return;
+        }
+        let history = cfg.show_roll || cfg.show_spectrogram;
+        // Turning off the history layers hides that region and its control;
+        // it does not discard the user's independent layout folds.
+        let folded = [self.collapsed[0], self.collapsed[1] || !history];
+        let rail = if state.appearance.view.frameless {
+            0.0
+        } else {
+            theme::tab_bar_height(theme::ui_scale(ui.ctx())).min(
+                depth / (usize::from(folded[0]) + usize::from(folded[1] && history)).max(1) as f32,
+            )
+        };
+        let vertical = cfg.orientation.is_time_vertical();
+        let share = super::axes::spectrum_share(&cfg);
+        let geometry = self.geometry.filter(|geometry| geometry.matches(&cfg));
+        let mut drawn_depths =
+            geometry.map_or([depth * share, depth * (1.0 - share)], |g| g.depths);
+        let rail_depths =
+            [if folded[0] { rail } else { 0.0 }, if folded[1] && history { rail } else { 0.0 }];
+        let available = (depth - rail_depths.iter().sum::<f32>()).max(0.0);
+        if !folded[0] && !folded[1] {
+            if std::mem::take(&mut self.restore) {
+                if let Some(geometry) = geometry {
+                    gestures::restore_spectrum(state, geometry.depths);
+                }
+            }
+            super::hold_spectrum(state, rect.size());
+            super::spectral_pane(ui, state, now, DOCKED_SURFACE, 1.0, Navigation::Docked);
+            let split = gestures::spectrum_split(state, DOCKED_SURFACE);
+            drawn_depths = [depth * split, depth * (1.0 - split)];
+            self.geometry = Some(Geometry {
+                depths: drawn_depths,
+                dial: state.appearance.spectrum.roll_fraction,
+                vertical,
+            });
+        } else {
+            ui.allocate_rect(rect, Sense::hover());
+            if !folded[0] {
+                drawn_depths[0] = available;
+            }
+            if !folded[1] {
+                drawn_depths[1] = available;
+            }
+            // The picture extends behind the collapsed region. Only the open
+            // region gets a paint clip, so peaks neither flip nor rescale and
+            // note trails keep their alignment with the shared now-line.
+            let visible = Rect::from_two_pos(
+                axes.at(0.0, rail_depths[0] / depth),
+                axes.at(1.0, 1.0 - rail_depths[1] / depth),
+            );
+            let mut virtual_rect = visible;
+            let dir = axes.dir_depth();
+            if folded[0] {
+                extend(&mut virtual_rect, -dir * drawn_depths[0]);
+            }
+            if folded[1] && history {
+                extend(&mut virtual_rect, dir * drawn_depths[1]);
+            }
+            let total = Axes::new(virtual_rect, &cfg).depth_len();
+            let split = (drawn_depths[0] / total.max(1.0)).clamp(0.0, 1.0);
+            if !folded[0] || !folded[1] {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(virtual_rect));
+                child.set_clip_rect(visible.intersect(ui.clip_rect()));
+                super::spectral_pane(
+                    &mut child,
+                    state,
+                    now,
+                    DOCKED_SURFACE,
+                    1.0,
+                    Navigation::Folded(RegionView { split, shown: [!folded[0], !folded[1]] }),
+                );
+            }
+        }
+        if rail <= 0.0 {
+            return;
+        }
+        for (index, name) in
+            ["Spectrum", if cfg.show_spectrogram { "Spectrogram" } else { "Piano roll" }]
+                .into_iter()
+                .enumerate()
+        {
+            if index == 1 && !history {
+                continue;
+            }
+            let closed = self.collapsed[index];
+            let band = if closed {
+                let (a, b) =
+                    if index == 0 { (0.0, rail / depth) } else { (1.0 - rail / depth, 1.0) };
+                Rect::from_two_pos(axes.at(0.0, a), axes.at(1.0, b)).intersect(rect)
+            } else {
+                control_rect(&axes, index, theme::row_height(theme::ui_scale(ui.ctx())))
+                    .intersect(rect)
+            };
+            if !band.is_positive() {
+                continue;
+            }
+            let direction = axes.dir_depth() * if (index == 0) == closed { 1.0 } else { -1.0 };
+            if control(ui, band, direction, closed, vertical, name, index) && self.request.is_none()
+            {
+                let mut collapsed = self.collapsed;
+                collapsed[index] = !closed;
+                let width = if vertical { 0.0 } else { (drawn_depths[index] - rail).max(0.0) };
+                self.request =
+                    Some(Request { collapsed, region: index, width: (!closed).then_some(width) });
+            }
+        }
+    }
+}
+
+fn extend(rect: &mut Rect, delta: Vec2) {
+    rect.min += delta.min(Vec2::ZERO);
+    rect.max += delta.max(Vec2::ZERO);
+}
+
+/// Put each button at the far end of the region it folds, away from the busy
+/// now-line and its drag band. `Axes` turns the same two depth endpoints into
+/// left/right or top/bottom for every orientation. Flush with the high-pitch
+/// edge and the region's outer end, each square reads as pane chrome rather
+/// than a floating widget over the picture.
+fn control_rect(axes: &Axes, index: usize, size: f32) -> Rect {
+    let inset = size * 0.5;
+    let pitch = 1.0 - inset / axes.pitch_len();
+    let d = if index == 0 { inset / axes.depth_len() } else { 1.0 - inset / axes.depth_len() };
+    Rect::from_center_size(axes.at(pitch, d), Vec2::splat(size))
+}
+
+fn control(
+    ui: &egui::Ui,
+    rect: Rect,
+    direction: Vec2,
+    rail: bool,
+    vertical: bool,
+    name: &str,
+    index: usize,
+) -> bool {
+    let response =
+        ui.interact(rect, egui::Id::new(("analyzer region fold", index)), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            true,
+            format!("{} {name}", if rail { "Expand" } else { "Collapse" }),
+        )
+    });
+    let painter = ui.painter_at(rect);
+    let scale = theme::ui_scale(ui.ctx());
+    let style = theme::dock_style(ui.style(), scale);
+    let size = theme::tab_bar_height(scale);
+    let center = if rail {
+        rect.left_top()
+            + if vertical {
+                egui::vec2(size * 0.5, rect.height() * 0.5)
+            } else {
+                egui::vec2(rect.width() * 0.5, size * 0.5)
+            }
+    } else {
+        rect.center()
+    };
+    // A restore rail is tab chrome; only its arrow cell takes the dock's
+    // button fill. Over the picture, the small open controls use the ordinary
+    // widget fill so they remain visible against black without a new accent.
+    if rail {
+        painter.rect_filled(rect, egui::CornerRadius::ZERO, style.tab.active.bg_fill);
+    }
+    let button = if rail { Rect::from_center_size(center, Vec2::splat(size)) } else { rect };
+    let hovered = response.hovered() || response.has_focus();
+    painter.rect_filled(
+        button,
+        egui::CornerRadius::ZERO,
+        if hovered {
+            style.buttons.collapse_tabs_bg_fill
+        } else if rail {
+            style.tab_bar.bg_fill
+        } else {
+            theme::widget()
+        },
+    );
+    let cross = egui::vec2(-direction.y, direction.x);
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            center - direction * 4.0 + cross * 4.0,
+            center + direction * 4.0,
+            center - direction * 4.0 - cross * 4.0,
+        ],
+        if hovered {
+            style.buttons.collapse_tabs_active_color
+        } else {
+            style.buttons.collapse_tabs_color
+        },
+        egui::Stroke::NONE,
+    ));
+    if rail {
+        let galley = painter.layout_no_wrap(
+            name.to_owned(),
+            egui::TextStyle::Button.resolve(ui.style()),
+            style.tab.active.text_color,
+        );
+        let available = if vertical { rect.width() } else { rect.height() };
+        if galley.size().x + size + 12.0 <= available {
+            let (anchor, angle) = if vertical {
+                (Pos2::new(rect.left() + size + 6.0, rect.center().y - galley.size().y * 0.5), 0.0)
+            } else {
+                (
+                    Pos2::new(
+                        rect.center().x - galley.size().y * 0.5,
+                        rect.top() + size + 6.0 + galley.size().x,
+                    ),
+                    -std::f32::consts::FRAC_PI_2,
+                )
+            };
+            painter.add(
+                egui::epaint::TextShape::new(anchor, galley, style.tab.active.text_color)
+                    .with_angle(angle),
+            );
+        }
+    }
+    response.on_hover_text(format!("{} {name}", if rail { "Expand" } else { "Collapse" })).clicked()
+}

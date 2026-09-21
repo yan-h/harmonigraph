@@ -195,6 +195,7 @@ pub struct SurfaceState {
 /// Editor interaction and shell actions. Panes borrow this separately from
 /// the layout being traversed, so a reset request cannot replace a live dock.
 pub struct Interaction {
+    pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     /// User-saved camera angles, applied like the built-in Flat/Isometric
     /// presets (persisted; see the Lattice page's Camera section).
     pub camera_presets: Vec<CameraPreset>,
@@ -602,8 +603,9 @@ impl SharedState {
         // layout), which JSON cannot round-trip.
         ron::to_string(&UiPersist {
             version: UI_PERSIST_VERSION,
-            dock: self.workspace.dock.clone(),
-            folds: self.workspace.folds.clone(),
+            dock: fold::saved_dock(&self.workspace.dock),
+            layout_folds: self.workspace.folds.clone(),
+            analyzer_regions: self.workspace.interaction.analyzer_regions.clone(),
             display_page: self.workspace.interaction.display_page,
             appearance: self.picture.appearance.clone(),
             camera_presets: self.workspace.interaction.camera_presets.clone(),
@@ -658,8 +660,11 @@ impl SharedState {
         // layout is dialled to is the fractions in the blob's own dock,
         // plus the widths its folds carry.
         self.workspace.dial.forget();
-        self.workspace.folds = persist.folds;
+        self.workspace.folds = persist.layout_folds;
+        self.workspace.folds.sanitize();
         self.workspace.dock = persist.dock;
+        self.workspace.interaction.analyzer_regions = persist.analyzer_regions;
+        self.workspace.interaction.analyzer_regions.sanitize();
         self.workspace.interaction.display_page = persist.display_page;
         self.picture.install_appearance(appearance);
         self.workspace.interaction.camera_presets = persist.camera_presets;
@@ -783,7 +788,9 @@ pub(crate) struct UiPersist {
     // Workspace sections default independently. The dock is required because
     // it has no Default; appearance has its own container-level defaults.
     #[serde(default)]
-    pub(crate) folds: fold::Folds,
+    pub(crate) layout_folds: fold::Folds,
+    #[serde(default)]
+    pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     #[serde(default)]
     pub(crate) display_page: panes::display::DisplayPage,
     #[serde(default)]
@@ -837,6 +844,7 @@ impl SurfaceState {
 impl Default for Interaction {
     fn default() -> Self {
         Self {
+            analyzer_regions: Default::default(),
             camera_presets: Vec::new(),
             preset_name: String::new(),
             take: TakeState::default(),

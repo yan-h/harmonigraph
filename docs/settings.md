@@ -19,6 +19,31 @@ Each page keeps a single owner for its controls;
 shared settings name their scope in the help text.
 The separate Spectrogram page keeps its texture controls out of the path to basic analysis and ribbon settings.
 
+## Collapsed panes
+
+Click anywhere on a collapsed pane's tab or labelled rail to reopen it.
+When several panes share one rail,
+each labelled stretch opens only its own pane.
+The separators beside the rails still resize the surrounding panes.
+
+## Folding the Analyzer
+
+The arrows at the outer ends of the Analyzer's spectrum and history regions fold them independently.
+Click a labelled rail to restore its region at its remembered size.
+The spectrogram fold includes the piano roll and its note labels;
+the Analyzer's tab-bar arrow still folds the whole pane and remembers both region states.
+
+With the spectrum on the left or right,
+folding shrinks the editor window while keeping the other panes and the surviving region at their current sizes.
+Host size limits can force the open panes to share the remaining space.
+Top/bottom orientations and an Analyzer stacked above or below another pane fold within the existing pane size.
+Restoring both regions brings back their previous split at the original spectrum position.
+Changing the spectrum position while folded does not lose the width owed to the editor window.
+Reset layout returns the space held by pane and region folds together.
+These folds are saved with the editor layout and do not change the Video preview or exported composition.
+Frameless mode hides their controls;
+press Tab to show them again.
+
 ## Shared settings and dependencies
 
 | Setting | Scope |

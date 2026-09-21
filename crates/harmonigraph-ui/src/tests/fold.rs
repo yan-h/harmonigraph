@@ -4,6 +4,345 @@
 use super::harness::*;
 use crate::*;
 
+fn region_click(h: &mut DockHarness, state: &mut SharedState, index: usize) {
+    let id = egui::Id::new(("analyzer region fold", index));
+    let at = h.ctx.read_response(id).expect("region control is drawn").rect.center();
+    click_at(h, state, at);
+}
+
+fn click_at(h: &mut DockHarness, state: &mut SharedState, at: egui::Pos2) {
+    h.frame(state, vec![egui::Event::PointerMoved(at)]);
+    h.frame(state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+    h.frame(state, vec![press(at, false)]);
+}
+
+#[test]
+fn analyzer_region_buttons_sit_flush_in_opposite_outer_corners() {
+    for (orientation, horizontal, first_at_low_end) in [
+        (SpectralOrientation::Left, true, true),
+        (SpectralOrientation::Right, true, false),
+        (SpectralOrientation::Top, false, true),
+        (SpectralOrientation::Bottom, false, false),
+    ] {
+        let mut state = fresh();
+        state.picture.appearance.spectrum.orientation = orientation;
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        let body = pane_body(&state, &panes::Tab::Spectral).unwrap();
+        let (low, high) =
+            if horizontal { (body.left(), body.right()) } else { (body.top(), body.bottom()) };
+        for index in 0..2 {
+            let id = egui::Id::new(("analyzer region fold", index));
+            let button = h.ctx.read_response(id).expect("region button is drawn").rect;
+            let at_low_end = (index == 0) == first_at_low_end;
+            let (button_edge, pane_edge) = if at_low_end {
+                (if horizontal { button.left() } else { button.top() }, low)
+            } else {
+                (if horizontal { button.right() } else { button.bottom() }, high)
+            };
+            assert!(
+                (button_edge - pane_edge).abs() < 1.0,
+                "{orientation:?} region {index} button is not flush with the outer edge of {body:?}",
+            );
+            let (button_pitch_edge, pane_pitch_edge) = if horizontal {
+                (button.top(), body.top())
+            } else {
+                (button.right(), body.right())
+            };
+            assert!(
+                (button_pitch_edge - pane_pitch_edge).abs() < 1.0,
+                "{orientation:?} region {index} button is not flush with the pitch edge",
+            );
+        }
+    }
+}
+
+#[test]
+fn collapsed_panes_open_from_the_middle_of_their_rails() {
+    for tab in [panes::Tab::Console, panes::Tab::Lattice, panes::Tab::Spectral] {
+        let mut state = fresh();
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        if tab != panes::Tab::Console {
+            h.collapse_click(&mut state, tab);
+        }
+        assert!(collapsed(&state, tab));
+        let rail = pane_rect(&state, tab);
+        assert!(
+            rail.width() < 40.0 || rail.height() < 40.0,
+            "{tab:?} did not settle to a rail: {rail:?}"
+        );
+        click_at(&mut h, &mut state, rail.center());
+        h.settle_folds(&mut state);
+        assert!(!collapsed(&state, tab), "{tab:?} did not open from its rail body");
+    }
+}
+
+#[test]
+fn a_folded_column_opens_only_the_pane_whose_rail_share_was_clicked() {
+    for (share, selected, other) in [
+        (0.25, panes::Tab::Tuning, panes::Tab::Console),
+        (0.75, panes::Tab::Console, panes::Tab::Tuning),
+    ] {
+        let mut state = fresh();
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        h.collapse_click(&mut state, panes::Tab::Tuning);
+        let rail = rail_rect(&state, &[panes::Tab::Tuning, panes::Tab::Console]);
+        let at = egui::pos2(rail.center().x, rail.top() + rail.height() * share);
+        click_at(&mut h, &mut state, at);
+        h.settle_folds(&mut state);
+        assert!(!collapsed(&state, selected), "{selected:?} did not open from its rail share");
+        assert!(collapsed(&state, other), "the click also opened {other:?}");
+    }
+}
+
+#[test]
+fn analyzer_regions_fold_independently_and_restore_the_original_geometry() {
+    for orientation in [SpectralOrientation::Left, SpectralOrientation::Right] {
+        for first in [0, 1] {
+            let mut state = fresh();
+            state.picture.appearance.spectrum.orientation = orientation;
+            let mut h = DockHarness::new();
+            h.settle(&mut state);
+            let before = [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning]
+                .map(|tab| pane_body(&state, &tab).unwrap().width());
+            let appearance = state.picture.appearance.serialize();
+            let window = h.screen.width();
+            for index in [first, 1 - first] {
+                region_click(&mut h, &mut state, index);
+                assert!(
+                    !state.workspace.interaction.analyzer_regions.collapsed[index],
+                    "click frame retains its old picture"
+                );
+                h.settle_folds(&mut state);
+                assert!(state.workspace.interaction.analyzer_regions.collapsed[index]);
+                assert!(h.screen.width() < window - 10.0);
+                for (tab, width) in
+                    [(panes::Tab::Lattice, before[0]), (panes::Tab::Tuning, before[2])]
+                {
+                    assert!(
+                        (pane_body(&state, &tab).unwrap().width() - width).abs() < 1.0,
+                        "{tab:?} resized during {orientation:?} region {index} fold"
+                    );
+                }
+            }
+            // Folding the container preserves both independently folded regions.
+            h.collapse_click(&mut state, panes::Tab::Spectral);
+            h.collapse_click(&mut state, panes::Tab::Spectral);
+            assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [true; 2]);
+            for index in [first, 1 - first] {
+                region_click(&mut h, &mut state, index);
+                h.settle_folds(&mut state);
+            }
+            assert!((h.screen.width() - window).abs() < 1.0);
+            for (tab, width) in [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning]
+                .into_iter()
+                .zip(before)
+            {
+                assert!(
+                    (pane_body(&state, &tab).unwrap().width() - width).abs() < 1.0,
+                    "{orientation:?}, first {first}: {tab:?} did not return to {width}: {:?}",
+                    pane_body(&state, &tab)
+                );
+            }
+            assert_eq!(
+                state.picture.appearance.serialize(),
+                appearance,
+                "folding never edits a video's appearance"
+            );
+        }
+    }
+}
+
+#[test]
+fn analyzer_region_restore_survives_a_saved_project() {
+    let mut state = fresh();
+    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let width = h.screen.width();
+    let lattice = pane_body(&state, &panes::Tab::Lattice).unwrap().width();
+    region_click(&mut h, &mut state, 1);
+    h.settle_folds(&mut state);
+    let saved = state.save_persist();
+    let mut reopened = fresh();
+    assert!(reopened.load_persist(&saved));
+    h.settle(&mut reopened);
+    assert!(
+        (pane_body(&reopened, &panes::Tab::Lattice).unwrap().width() - lattice).abs() < 1.0,
+        "saved layout retains neighboring widths"
+    );
+    assert_eq!(reopened.workspace.take_window_width_change(), None);
+    assert_eq!(reopened.workspace.interaction.analyzer_regions.collapsed, [false, true]);
+    region_click(&mut h, &mut reopened, 1);
+    h.settle_folds(&mut reopened);
+    assert!((h.screen.width() - width).abs() < 1.0, "saved internal fold lost its restore ceiling");
+}
+
+#[test]
+fn analyzer_region_restore_respects_a_split_edited_while_folded() {
+    let mut state = fresh();
+    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    region_click(&mut h, &mut state, 1);
+    h.settle_folds(&mut state);
+    // The Video preview edits this shared appearance dial while the editor's
+    // own divider is hidden. Its new value must invalidate the old hold.
+    state.picture.appearance.spectrum.roll_fraction = 0.35;
+    h.settle(&mut state);
+    region_click(&mut h, &mut state, 1);
+    h.settle_folds(&mut state);
+    let body = pane_body(&state, &panes::Tab::Spectral).unwrap();
+    let split =
+        h.ctx.read_response(egui::Id::new(("spectral-split", 0usize))).unwrap().rect.center().x;
+    assert!(((split - body.left()) / body.width() - 0.65).abs() < 0.01);
+}
+
+#[test]
+fn analyzer_region_folds_remain_usable_when_the_host_constrains_the_window() {
+    for floor in [0.0, 950.0] {
+        let mut state = fresh();
+        state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.workspace.min_window_width = floor;
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        for index in [0, 1, 0, 1] {
+            region_click(&mut h, &mut state, index);
+            if floor == 0.0 {
+                // A host that rejects the request entirely.
+                state.workspace.take_window_width_change();
+                h.settle(&mut state);
+            } else {
+                h.settle_folds(&mut state);
+            }
+            assert_eq!(
+                state.workspace.take_window_width_change(),
+                None,
+                "no repeated resize requests"
+            );
+        }
+        assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
+        assert!((h.screen.width() - 1000.0).abs() < 1.0);
+    }
+}
+
+#[test]
+fn analyzer_local_region_folds_restore_the_original_split() {
+    for orientation in [
+        SpectralOrientation::Top,
+        SpectralOrientation::Bottom,
+        SpectralOrientation::Left,
+        SpectralOrientation::Right,
+    ] {
+        for sequence in [&[0, 0][..], &[1, 1], &[0, 1, 0, 1], &[1, 0, 1, 0]] {
+            let mut state = fresh();
+            state.picture.appearance.spectrum.orientation = orientation;
+            if !orientation.is_time_vertical() {
+                // A stacked Analyzer also folds locally, without resizing the
+                // window. Exercise the same geometry in both depth axes.
+                state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Lattice]);
+                state.workspace.dock.main_surface_mut().split_below(
+                    egui_dock::NodeIndex::root(),
+                    0.5,
+                    vec![panes::Tab::Spectral],
+                );
+            }
+            let mut h = DockHarness::new();
+            h.settle(&mut state);
+            let lattice = pane_body(&state, &panes::Tab::Lattice).unwrap();
+            let id = egui::Id::new(("spectral-split", 0usize));
+            let before = h.ctx.read_response(id).unwrap().rect.center();
+            for &index in sequence {
+                region_click(&mut h, &mut state, index);
+                h.settle_folds(&mut state);
+                assert_eq!(pane_body(&state, &panes::Tab::Lattice).unwrap(), lattice);
+                assert_eq!(h.screen.width(), 1000.0);
+            }
+            assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
+            let after = h.ctx.read_response(id).unwrap().rect.center();
+            assert!(
+                before.distance(after) < 1.0,
+                "{orientation:?} {sequence:?}: {before:?} -> {after:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn analyzer_region_restore_repays_its_width_after_orientation_changes() {
+    for index in [0, 1] {
+        for roundtrip in [false, true] {
+            let mut state = fresh();
+            state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+            let mut h = DockHarness::new();
+            h.settle(&mut state);
+            let before = pane_body(&state, &panes::Tab::Spectral).unwrap();
+            let id = egui::Id::new(("spectral-split", 0usize));
+            let split = h.ctx.read_response(id).unwrap().rect.center();
+            region_click(&mut h, &mut state, index);
+            h.settle_folds(&mut state);
+            state.picture.appearance.spectrum.orientation = SpectralOrientation::Top;
+            h.settle(&mut state);
+            // Debt and restoration geometry must survive a save even while
+            // the picture is using a different axis from the original fold.
+            let saved = state.save_persist();
+            state = fresh();
+            assert!(state.load_persist(&saved));
+            h.settle(&mut state);
+            if roundtrip {
+                state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+                h.settle(&mut state);
+            }
+            region_click(&mut h, &mut state, index);
+            h.settle_folds(&mut state);
+            assert!((h.screen.width() - 1000.0).abs() < 1.0);
+            let after = pane_body(&state, &panes::Tab::Spectral).unwrap();
+            assert!(
+                (after.width() - before.width()).abs() <= 1.0,
+                "region {index}, roundtrip {roundtrip}: {before:?} -> {after:?}, window {}",
+                h.screen.width()
+            );
+            if roundtrip {
+                assert!(h.ctx.read_response(id).unwrap().rect.center().distance(split) < 1.0);
+            }
+        }
+    }
+}
+
+#[test]
+fn resetting_the_dock_restores_space_held_by_analyzer_regions() {
+    for fold_lattice_first in [None, Some(true), Some(false)] {
+        let mut state = fresh();
+        state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        if fold_lattice_first == Some(true) {
+            h.collapse_click(&mut state, panes::Tab::Lattice);
+        }
+        region_click(&mut h, &mut state, 1);
+        h.settle_folds(&mut state);
+        if fold_lattice_first == Some(false) {
+            h.collapse_click(&mut state, panes::Tab::Lattice);
+        }
+        assert!(h.screen.width() < 900.0);
+        let saved = state.save_persist();
+        state = fresh();
+        assert!(state.load_persist(&saved));
+        h.settle(&mut state);
+        state.workspace.reset_dock_layout();
+        h.frame(&mut state, vec![]);
+        h.settle_folds(&mut state);
+        assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
+        assert!(
+            (h.screen.width() - 1000.0).abs() < 1.0,
+            "order {fold_lattice_first:?}: {}",
+            h.screen.width()
+        );
+    }
+}
+
 /// The layout opens with the Console folded to its tab bar, and with nothing
 /// else folded.
 ///
@@ -865,11 +1204,11 @@ fn a_folded_columns_lower_arrow_opens_its_own_pane() {
     );
 }
 
-/// The arrow egui_dock left stacked at the top of the rail no longer opens
-/// anything: it sits inside the share above it now, under another pane's name,
-/// and a click there would open a pane the rail says nothing about.
+/// The arrow egui_dock left stacked at the top of the rail belongs to the
+/// upper pane's painted share now, so a click there opens that pane, never the
+/// lower pane whose old arrow happened to land there.
 #[test]
-fn a_folded_columns_stacked_arrow_is_inert() {
+fn a_folded_columns_stacked_arrow_opens_the_pane_owning_that_share() {
     let mut state = fresh();
     state.workspace.min_window_width = 400.0;
     let mut h = DockHarness::new();
@@ -895,6 +1234,7 @@ fn a_folded_columns_stacked_arrow_is_inert() {
         collapsed(&state, panes::Tab::Console),
         "the log pane should not open from a button that is no longer drawn",
     );
+    assert!(!collapsed(&state, panes::Tab::Tuning), "the upper rail owns that click");
 }
 
 /// A whole pointer gesture on a separator: press where it is drawn, travel `dx`
@@ -1012,4 +1352,17 @@ fn a_dock_folded_whole_is_a_strip_of_named_rails() {
         ["Analyzer", "Console", "Lattice", "Tuning"],
         "every rail in the strip should name the pane it opens",
     );
+
+    // The root has no parent fold from which to find a rail. Its own painted
+    // strip still gives each pane a full-height click target.
+    let lattice = rail_rect(&state, &[panes::Tab::Lattice]);
+    click_at(&mut h, &mut state, lattice.center());
+    h.settle_folds(&mut state);
+    assert!(!collapsed(&state, panes::Tab::Lattice));
+    assert!(collapsed(&state, panes::Tab::Spectral));
+
+    let spectral = rail_rect(&state, &[panes::Tab::Spectral]);
+    click_at(&mut h, &mut state, spectral.center());
+    h.settle_folds(&mut state);
+    assert!(!collapsed(&state, panes::Tab::Spectral));
 }

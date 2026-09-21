@@ -198,9 +198,43 @@ use crate::panes::Tab;
 /// from the fractions in the tree — where a folded pane's fraction is a rail's.
 /// This is what tells the seed how wide that pane was before it folded.
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct Folds(Vec<Fold>);
+#[serde(default)]
+pub struct Folds {
+    panes: Vec<Fold>,
+    /// Width removed from the Analyzer for each internal fold. Independent
+    /// of its current orientation and of the geometry used to draw it.
+    region_widths: [f32; 2],
+    /// One persisted ceiling for every kind of fold in this window.
+    window: f32,
+}
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+/// Save the horizontal layout that was drawn. egui_dock clamps fractions for
+/// the NEXT separator drag after laying out; a two-rail Analyzer is narrower
+/// than that drag floor, so persisting the clamped fraction would move its
+/// neighbors on reload. Vertical fractions retain their open-pane proportions.
+pub(crate) fn saved_dock(dock: &DockState<Tab>) -> DockState<Tab> {
+    let mut saved = dock.clone();
+    let tree = saved.main_surface_mut();
+    for index in 0..tree.len() {
+        let node = NodeIndex(index);
+        if !tree[node].is_horizontal() || node.right().0 >= tree.len() {
+            continue;
+        }
+        let (Some(parent), Some(left), Some(right)) =
+            (tree[node].rect(), tree[node.left()].rect(), tree[node.right()].rect())
+        else {
+            continue;
+        };
+        if parent.is_positive() && left.is_finite() && right.is_finite() {
+            let midpoint = (left.right() + right.left()) * 0.5;
+            set_fraction(tree, node, ((midpoint - parent.left()) / parent.width()).clamp(0.0, 1.0));
+        }
+    }
+    saved
+}
+
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 struct Fold {
     /// Which split, as an index into the tree. Valid only while the tree keeps
     /// its shape — the entry is dropped as soon as the node stops being folded,
@@ -209,7 +243,6 @@ struct Fold {
     /// Which child is the folded one. The collapsed flags say so while the fold
     /// stands; this is for the frame AFTER the arrow is clicked, where they no
     /// longer do and the window still has to be paid back.
-    #[serde(default)]
     side: Side,
     /// The points the folded subtree was drawn at when it folded, which is what
     /// folding took off the window and what unfolding gives back.
@@ -221,19 +254,7 @@ struct Fold {
     /// Zero in a blob written before it was recorded, which seeds nothing: the
     /// pane comes back at the rail width its fraction in the tree says, and one
     /// drag puts it where the user wants it.
-    #[serde(default)]
     width: f32,
-    /// The window this fold was taken at, which is the window unfolding it owes
-    /// back. [`Dial`] is runtime-only, so without this a project reopened with a
-    /// pane already folded has no record of how wide the window has been — and
-    /// the unfold's growth cap reads exactly that record, so an empty one holds
-    /// the window at the width the fold left it.
-    ///
-    /// Zero in a blob written before it was recorded. There is no history to
-    /// recover there, so the cap falls back to the window on screen, which is
-    /// what it did for every blob then.
-    #[serde(default)]
-    window: f32,
 }
 
 /// Which child of a split is the folded one.
@@ -308,6 +329,7 @@ impl Folds {
         if tree.is_empty() || !area.is_finite() || area <= 0.0 {
             return 0.0;
         }
+        self.window = self.window.max(area);
         let holds = holds(tree);
         let pass = &mut dial.pass;
         let points = &mut pass.points;
@@ -321,7 +343,7 @@ impl Folds {
             // The grip names a split by index, so a tree of another shape is
             // not the one the gesture took hold of.
             dial.grip = None;
-            for fold in &self.0 {
+            for fold in &self.panes {
                 if fold.node >= tree.len() {
                     continue;
                 }
@@ -349,27 +371,7 @@ impl Folds {
         // window the layout is going to need arrives.
         let (holds, holding, lands) =
             hold_flags(tree, &mut dial.wait, &pass.flags, holds, area, settled);
-        // The window a fold takes its width off is the one it was made in.
-        // For a fold held across its own resize that is the window the hold
-        // was armed at, not the narrower one it is landing in — the entry's
-        // `window` is the ceiling a later unfold reads back off a persist
-        // blob, and banking the post-fold width would lower it every time.
-        //
-        // A hold that OPENS a pane is the opposite case and must keep
-        // `area`. Its landing frame makes entries too — a pair folded whole
-        // holds no side, and opening one of its panes gives it one — but
-        // the window that entry stands for is the wide one the pane has
-        // just come back into, not the narrow one the unfold set off from.
-        // Priced from `from`, every unfold would ratchet the ceiling down.
-        let before =
-            holding.as_ref().filter(|wait| lands && wait.shuts).map_or(area, |wait| wait.from);
-        let moved = self.reconcile(tree, &holds, points, before);
-        // The widest this window has been, for a session that was not there
-        // to watch it get that wide: the folds came off the persist blob,
-        // and each one remembers the window it was taken at.
-        if dial.widest <= 0.0 {
-            dial.widest = self.0.iter().fold(0.0_f32, |widest, fold| widest.max(fold.window));
-        }
+        let moved = self.reconcile(tree, &holds, points);
         let (want, fixed) = wants(tree, &holds, &points.at, rail, separator);
         // The window moved without this pass asking it to — the user
         // dragged it, or the host resized us — so the layout follows, over
@@ -429,8 +431,7 @@ impl Folds {
             // Shrinking is never capped; only the growth is — and the ask
             // is not floored at zero either: fold one pane while another is
             // held and the net is a shrink, which flooring would swallow.
-            dial.widest = dial.widest.max(area);
-            asking = (want - area).min((dial.widest - area).max(0.0));
+            asking = (want - area).min((self.window - area).max(0.0));
         }
         if let Some(wait) = holding.filter(|_| !lands) {
             // The width the hold waits for. An UNFOLD never waits for a
@@ -497,48 +498,27 @@ impl Folds {
     /// points it had open the whole time it is drawn as a rail. The entry is
     /// what the WINDOW is owed, and what a reload needs to seed those points
     /// from.
-    fn reconcile(
-        &mut self,
-        tree: &Tree<Tab>,
-        holds: &[Hold],
-        points: &Points,
-        window: f32,
-    ) -> bool {
+    fn reconcile(&mut self, tree: &Tree<Tab>, holds: &[Hold], points: &Points) -> bool {
         let mut moved = false;
         // Unfolded, or re-docked out from under the entry.
-        self.0.retain(|fold| {
+        self.panes.retain(|fold| {
             let held = holds.get(fold.node).and_then(|hold| hold.side) == Some(fold.side);
             moved |= !held;
             held
         });
         for (index, hold) in holds.iter().enumerate() {
             let Some(side) = hold.side else { continue };
-            if self.0.iter().any(|fold| fold.node == index) {
+            if self.panes.iter().any(|fold| fold.node == index) {
                 continue;
             }
-            // First frame of this fold, priced against the window the pane
-            // was last open in — which is what `window` is handed, whether
-            // that is this frame's area or the one a hold was armed at a pass
-            // ago (see [`Wait::from`]). It is the width this fold takes off
-            // the window, and the ceiling a later unfold reads back.
-            self.0.push(Fold {
+            self.panes.push(Fold {
                 node: index,
                 side,
                 width: points.span(tree, &[], side.of(NodeIndex(index))),
-                window,
             });
             moved = true;
         }
         moved
-    }
-
-    /// Forget every fold without handing anything back, for a load that brings
-    /// its own window along with its layout. The entries name splits by index,
-    /// so a tree they were not measured against has to start with none.
-    ///
-    /// [`Dial::forget`] goes with it wherever the dock itself is replaced.
-    pub fn forget(&mut self) {
-        self.0.clear();
     }
 
     /// Forget every fold, for a dock that is being replaced wholesale (the
@@ -561,7 +541,6 @@ impl Folds {
         dial: &Dial,
         area: f32,
     ) -> f32 {
-        self.forget();
         // What the layout would want with every pane OPEN, which is what the
         // reset hands back.
         let open = dock
@@ -569,8 +548,15 @@ impl Folds {
             .and_then(Surface::node_tree)
             .filter(|tree| !tree.is_empty())
             .map_or(0.0, |tree| {
-                wants(tree, &[], &dial.pass.points.at, style.tab_bar.height, style.separator.width)
-                    .0[0]
+                let mut points = dial.pass.points.at.clone();
+                if let Some(path) = dock.find_tab(&Tab::Spectral) {
+                    if path.surface == SurfaceIndex::main() {
+                        if let Some(width) = points.get_mut(path.node.0) {
+                            *width += self.region_widths.iter().sum::<f32>();
+                        }
+                    }
+                }
+                wants(tree, &[], &points, style.tab_bar.height, style.separator.width).0[0]
             });
         // Held to the same ceiling as the rail's arrow (see the ask in
         // [`Folds::apply`]), because it undoes the same fold and therefore owes
@@ -578,8 +564,10 @@ impl Folds {
         // that refused, or a drag back out while folded — prices itself well
         // above anything the window has been, and a button that hands that
         // price to the host is how the editor ends up wider than the display.
-        let want = if open > area { open - area } else { 0.0 };
-        want.min((dial.widest - area).max(0.0))
+        let want = (open - area).max(0.0).min((self.window - area).max(0.0));
+        self.panes.clear();
+        self.region_widths = [0.0; 2];
+        want
     }
 
     /// Whether anything is being remembered. Nothing in the draw needs this —
@@ -587,7 +575,7 @@ impl Folds {
     /// its splits are gone too".
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.panes.is_empty() && self.region_widths == [0.0; 2]
     }
 }
 
@@ -607,9 +595,6 @@ pub struct Dial {
     /// moved by the next one, the ask was refused and the layout takes what it
     /// has.
     asked: bool,
-    /// The widest this window has actually been, which is as far as an unfold
-    /// may ask it to grow. See the ask in [`Folds::apply`].
-    widest: f32,
     /// Whether a pointer was down (or has just come up) when this frame's input
     /// was read. Only a gesture moves a fraction on purpose: egui_dock re-clamps
     /// every separator on every frame, dragged or not, so without this a window
@@ -676,9 +661,6 @@ struct Wait {
     /// differ wherever the growth cap bites: waiting on a width the ask never
     /// requested is waiting forever.
     at: Option<f32>,
-    /// The window the hold was armed at, which is the one the fold it may be
-    /// carrying takes its width off (see [`Folds::reconcile`]).
-    from: f32,
     /// Whether the held flags CLOSE a pane, which is what says the window has
     /// to get narrower before they may land — and so which way [`Wait::at`] is
     /// waited for.
@@ -725,7 +707,7 @@ fn hold_flags(
         // screen.
         let shuts = (0..tree.len()).any(|node| !was[node].0 && landed[node].0);
         restore(tree, was);
-        *wait = Some(Wait { landed, at: None, from: area, shuts });
+        *wait = Some(Wait { landed, at: None, shuts });
     }
     let holding = wait.clone();
     // The window is here, or it is never coming: either way there is nothing
@@ -796,6 +778,84 @@ fn restore(tree: &mut Tree<Tab>, flags: &[Flags]) {
     }
 }
 
+impl Folds {
+    pub(crate) fn sanitize(&mut self) {
+        for width in &mut self.region_widths {
+            *width = sane_width(*width);
+        }
+        self.window = sane_width(self.window);
+        for pane in &mut self.panes {
+            pane.width = sane_width(pane.width);
+        }
+    }
+
+    /// Close with the width to remove, or reopen with `None`. The recorded
+    /// deduction is the only source of an unfold's width, even after the
+    /// Analyzer changes orientation. A locally folded region records zero.
+    /// Called after drawing; geometry and visibility land on the next frame.
+    pub(crate) fn resize_region(
+        &mut self,
+        dock: &DockState<Tab>,
+        style: &egui_dock::Style,
+        dial: &mut Dial,
+        region: usize,
+        width: Option<f32>,
+    ) -> Option<f32> {
+        if dial.wait.is_some() {
+            return None;
+        }
+        let Some(path) = dock.find_tab(&Tab::Spectral) else { return Some(0.0) };
+        if path.surface != SurfaceIndex::main() {
+            return Some(0.0);
+        }
+        let tree = dock.main_surface();
+        let Node::Leaf(leaf) = &tree[path.node] else { return Some(0.0) };
+        if leaf.collapsed || dial.pass.points.at.len() != tree.len() {
+            return Some(0.0);
+        }
+        let delta = if let Some(width) = width {
+            // A stacked pane shares its width with another picture. Only
+            // horizontal, unshared folds can remove width from the window.
+            let mut ancestor = path.node;
+            while let Some(parent) = ancestor.parent() {
+                if tree[parent].is_vertical() {
+                    return Some(0.0);
+                }
+                ancestor = parent;
+            }
+            let at = &mut dial.pass.points.at[path.node.0];
+            let deduction = sane_width(width).min((*at - style.tab_bar.height).max(0.0));
+            self.region_widths[region] = deduction;
+            -deduction
+        } else {
+            std::mem::take(&mut self.region_widths[region])
+        };
+        if delta.abs() < 0.01 {
+            return Some(0.0);
+        }
+        dial.pass.points.at[path.node.0] += delta;
+        let want = wants(
+            tree,
+            &holds(tree),
+            &dial.pass.points.at,
+            style.tab_bar.height,
+            style.separator.width,
+        )
+        .0[0];
+        let asking = (want - dial.pass.area).min((self.window - dial.pass.area).max(0.0));
+        dial.asked |= asking.abs() > 0.01;
+        Some(asking)
+    }
+}
+
+fn sane_width(width: f32) -> f32 {
+    if width.is_finite() {
+        width.clamp(0.0, 32_768.0)
+    } else {
+        0.0
+    }
+}
+
 impl Dial {
     /// Drop everything that names the tree by index, for a dock being replaced
     /// wholesale — a reset, or a load that brings its own layout.
@@ -816,10 +876,8 @@ impl Dial {
     /// The grip goes with them: it names a split by index in a layout that is
     /// being thrown away.
     ///
-    /// What does NOT go is [`Dial::widest`], which is the widest this window has
-    /// been rather than anything about this layout. An unfold may not ask the
-    /// host for a window wider than one it has already granted, and a reset that
-    /// forgot that ceiling would have to learn it again from a resize.
+    /// The window ceiling belongs to [`Folds`], so forgetting runtime layout
+    /// measurements cannot discard the width a later unfold is allowed to use.
     pub fn forget(&mut self) {
         self.pass = Pass::default();
         self.grip = None;
@@ -1361,7 +1419,11 @@ fn drags(
                 if moved.abs() < 1e-6 {
                     continue;
                 }
-                if (split.fraction - unmoved(wrote, drew, style.separator.extra)).abs() < 1e-6 {
+                // egui clamps against its pixel-rounded rectangle. Using the
+                // theoretical width here can mistake that entire clamp for a
+                // drag when an internal fold leaves a pane below the drag floor.
+                let range = tree[node].rect().map_or(drew, |rect| rect.width());
+                if (split.fraction - unmoved(wrote, range, style.separator.extra)).abs() < 1e-6 {
                     continue;
                 }
                 // The boundary has already travelled this frame's worth, so the

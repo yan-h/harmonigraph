@@ -171,6 +171,19 @@ pub(super) fn drag_split(
 #[derive(Default)]
 pub(crate) struct SpectrumHold(Option<Held>);
 
+/// Reopening editor regions restores their measured split without writing the
+/// appearance dial that recorded takes and the Video preview share.
+pub(super) fn restore_spectrum(state: &mut PictureState, depths: [f32; 2]) {
+    let cfg = state.appearance.spectrum;
+    let depth = depths[0] + depths[1];
+    state.surfaces.spectrum_hold.0 = (depth > 0.0).then_some(Held {
+        dial: cfg.roll_fraction,
+        depth: depths[0] / super::axes::spectrum_share(&cfg).max(f32::EPSILON),
+        vertical: cfg.orientation.is_time_vertical(),
+        held: depths[0] / depth.max(1.0),
+    });
+}
+
 #[derive(Clone, Copy)]
 struct Held {
     /// The `roll_fraction` this was dialled from.
