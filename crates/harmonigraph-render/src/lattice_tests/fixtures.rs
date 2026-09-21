@@ -3,6 +3,32 @@
 use crate::gpu_harness::{headless_device, readback, render_to_texture};
 use crate::*;
 
+/// A completed MIDI snapshot through the production carried-motion path.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn animated_snapshot(
+    tracker: &harmonigraph_core::NoteTracker,
+    tuning: &harmonigraph_core::Tuning,
+    view: &harmonigraph_scene::ViewConfig,
+    window: &harmonigraph_scene::DrawnWindow,
+    frame: &harmonigraph_scene::FrameParams,
+    camera: harmonigraph_scene::Camera,
+    hovered: Option<harmonigraph_core::LatticePos>,
+    now: f64,
+) -> Scene {
+    let mut scene =
+        harmonigraph_scene::derive_scene(tracker, tuning, view, window, frame, camera, hovered);
+    harmonigraph_scene::NodeMotion::default().step(
+        &mut scene,
+        tracker,
+        tuning,
+        view,
+        &view.envelope(frame),
+        &harmonigraph_scene::RingFade::default(),
+        now,
+    );
+    scene
+}
+
 /// Every lattice group at one style, which is what a fixture that says nothing
 /// about the GROUPS means when it names "the Shadow".
 ///

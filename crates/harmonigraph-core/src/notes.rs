@@ -910,8 +910,7 @@ impl NoteTracker {
     /// `(source, channel, note)` order, then the released ones in the order they
     /// were let go.
     ///
-    /// The order is part of the contract, including ties between equally
-    /// strong voices in the scene's preliminary envelope pass.
+    /// The order is part of the contract for callers choosing between voices.
     ///
     /// The two halves ask visibility of different state, and that is the
     /// whole rule. A HELD voice is filtered on the CURRENT `hidden_sources`,

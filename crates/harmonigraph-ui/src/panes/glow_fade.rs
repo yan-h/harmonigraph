@@ -133,7 +133,7 @@ struct Lit {
 /// Carry every node's light toward what its layers say now, and hand each node
 /// the row its colour is kept in.
 ///
-/// Runs behind [`derive_scene`](harmonigraph_scene::derive_scene), which is
+/// Runs behind [`NodeMotion::step`](harmonigraph_scene::NodeMotion::step), which is
 /// what a filter needs: the level it steps toward is a field of the node, and
 /// there is nothing to step until the frame has written one. Its place in the
 /// order of the passes is that and no more — the fold ahead of it settles the
@@ -258,7 +258,7 @@ mod tests {
 
     /// The lattice the pane derives, at `now`.
     fn scene_at(state: &PictureState, now: f64) -> Scene {
-        harmonigraph_scene::derive_scene(
+        let mut scene = harmonigraph_scene::derive_scene(
             &state.runtime.tracker,
             &state.runtime.tuning,
             &state.appearance.view,
@@ -266,8 +266,17 @@ mod tests {
             &state.runtime.frame_params,
             state.appearance.camera,
             None,
+        );
+        harmonigraph_scene::NodeMotion::default().step(
+            &mut scene,
+            &state.runtime.tracker,
+            &state.runtime.tuning,
+            &state.appearance.view,
+            &state.appearance.view.envelope(&state.runtime.frame_params),
+            &harmonigraph_scene::RingFade::default(),
             now,
-        )
+        );
+        scene
     }
 
     /// One node of a scene, by the identity the filter keys on.

@@ -11,7 +11,18 @@ pub(super) fn scene_of(
     frame: &FrameParams,
     now: f64,
 ) -> Scene {
-    derive_scene(tracker, tuning, view, &view.reach(), frame, Camera::default(), None, now)
+    let mut scene =
+        derive_scene(tracker, tuning, view, &view.reach(), frame, Camera::default(), None);
+    NodeMotion::default().step(
+        &mut scene,
+        tracker,
+        tuning,
+        view,
+        &view.envelope(frame),
+        &RingFade::default(),
+        now,
+    );
+    scene
 }
 
 /// [`ViewConfig::default`] with the note envelope pinned flat: a straight-line

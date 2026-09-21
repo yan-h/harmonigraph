@@ -1,6 +1,6 @@
 //! Lattice-only event-time animation. Core envelopes and the other panes keep
 //! their own timing. A checkpoint survives voice pruning and roll retention.
-use crate::{NoteAnimationConfig, OctaveLayout, Scene, ViewConfig};
+use crate::{NoteAnimationConfig, OctaveLayout, RingFade, Scene, ViewConfig};
 use harmonigraph_core::{
     Envelope, LatticePos, NoteTracker, PitchClass, Tuning, VoiceKey, VoiceState,
 };
@@ -167,12 +167,16 @@ fn delays(
     config.delays(layout, cents, seed, duration)
 }
 impl NodeMotion {
+    #[allow(clippy::too_many_arguments)]
     fn gates(
         &mut self,
         scene: &Scene,
         tuning: &Tuning,
         view: &ViewConfig,
         env: &Envelope,
+        fade: &RingFade,
+        tracker: &NoteTracker,
+        now: f64,
         seed_settled: bool,
     ) {
         let duration = env.fade_time;
@@ -209,11 +213,24 @@ impl NodeMotion {
             motion.melody.target(melody, mark_delay(view));
             motion.bass.target(bass, mark_delay(view));
             let gate = motion.targets.iter().any(|&v| v > 0.0);
-            let audio = scene.spectral.ring_draws() && node.audio_ring > 0.0;
+            let audio =
+                scene.spectral.ring_draws() && fade.level(&scene.octave_layout, node.cents) > 0.0;
             if !audio {
                 motion.audio_waiting = false;
             }
-            if audio && !gate && node.activation == 0.0 && motion.levels.iter().all(|&v| v == 0.0) {
+            // A short release can still be tracked after carried ink reaches
+            // zero. Seeding an audio-only pose then would change the next MIDI
+            // entrance. Check visible lifetime membership only for candidates;
+            // no second voice envelope is needed. At exact onset a positive
+            // attack has not started, matching the existing audio-start boundary.
+            if audio
+                && !gate
+                && motion.levels.iter().all(|&v| v == 0.0)
+                && !tracker.voices().any(|voice| {
+                    (env.attack_time <= 0.0 || voice.on_time < now)
+                        && tuning.matches(voice.pitch_class, PitchClass::from_cents(node.cents))
+                })
+            {
                 motion.audio_waiting = true;
                 motion.progress = [1.0; 11];
             }
@@ -279,7 +296,10 @@ impl NodeMotion {
             motion.advance(dt.max(0.0), env);
         }
     }
-    /// Apply carried node and melody/bass motion after spectral rings are filled.
+    /// Apply carried motion, then marker/name complement and the MIDI ring floor.
+    /// `fade` contains measured audio presence only, independent of that floor.
+    /// The caller prunes `tracker` at `now` with this envelope before composition.
+    #[allow(clippy::too_many_arguments)]
     pub fn step(
         &mut self,
         scene: &mut Scene,
@@ -287,6 +307,7 @@ impl NodeMotion {
         tuning: &Tuning,
         view: &ViewConfig,
         env: &Envelope,
+        fade: &RingFade,
         now: f64,
     ) {
         if !now.is_finite() {
@@ -386,7 +407,7 @@ impl NodeMotion {
         // The checkpoint already has the previous frame's targets. Recompute
         // them only for initial seeding, an event, or current-state reconciliation.
         if initial {
-            self.gates(scene, tuning, view, env, true);
+            self.gates(scene, tuning, view, env, fade, tracker, now, true);
         }
         // Each ended lifetime finishes absent, including an equal-time bend.
         // A replacement has a different identity and remains in the held union.
@@ -419,7 +440,7 @@ impl NodeMotion {
                 }
                 index += 1;
             }
-            self.gates(scene, tuning, view, env, false);
+            self.gates(scene, tuning, view, env, fade, tracker, now, false);
             at = time;
         }
         self.advance(now - at, env);
@@ -429,7 +450,7 @@ impl NodeMotion {
         for voice in tracker.voices().filter(|v| matches!(v.state, VoiceState::Held)) {
             self.held.insert((voice.key(), voice.on_time.to_bits()), Held { pitch: voice.pitch });
         }
-        self.gates(scene, tuning, view, env, false);
+        self.gates(scene, tuning, view, env, fade, tracker, now, false);
         self.advance(0.0, env);
         self.at = Some(now);
         let visible: HashSet<_> = scene.nodes.iter().map(|n| n.lattice_pos).collect();
@@ -456,7 +477,18 @@ impl NodeMotion {
             };
             node.melody_color = color(melody_slot);
             node.bass_color = color(bass_slot);
+            if scene.spectral.ring_draws() {
+                node.audio_ring = fade.level(&scene.octave_layout, node.cents).max(node.activation);
+            }
+            // Stateless snapshots draw current light. The shell's glow pass
+            // replaces this with its independently carried level afterwards.
+            node.glow.level = node.activation;
         }
+        scene.pluses = crate::derive::derive_pluses(
+            view,
+            &scene.nodes,
+            crate::grey_of_lightness(view.marker_ink_lightness()),
+        );
     }
 }
 
@@ -494,16 +526,15 @@ mod tests {
             &frame,
             Camera::default(),
             None,
-            now,
         );
+        let mut fade = RingFade::default();
         if audio {
             scene.spectral.inner = 0.1;
             scene.spectral.outer = 0.4;
-            for n in &mut scene.nodes {
-                n.audio_ring = 1.0;
-            }
+            scene.spectral.gate = 0.0;
+            fade.advance(&crate::RingGate::new(&scene.spectral), &env, now);
         }
-        motion.step(&mut scene, tracker, &Tuning::default(), view, &env, now);
+        motion.step(&mut scene, tracker, &Tuning::default(), view, &env, &fade, now);
         scene
     }
     fn origin(scene: &Scene) -> &crate::NodeInstance {
@@ -653,7 +684,15 @@ mod tests {
         let mut scene = draw(&mut motion, &mut tracker, &view, 1.1, false);
         scene.nodes.retain(|node| node.lattice_pos != LatticePos::ORIGIN);
         let env = view.envelope(&FrameParams { fade_time: 1.0, ..Default::default() });
-        motion.step(&mut scene, &tracker, &Tuning::default(), &view, &env, 1.2);
+        motion.step(
+            &mut scene,
+            &tracker,
+            &Tuning::default(),
+            &view,
+            &env,
+            &RingFade::default(),
+            1.2,
+        );
         assert!(!motion.nodes.contains_key(&LatticePos::ORIGIN));
         let returned = draw(&mut motion, &mut tracker, &view, 1.3, false);
         assert_eq!(origin(&returned).slice_progress, [1.0; 11]);

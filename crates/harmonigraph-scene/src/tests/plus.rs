@@ -604,7 +604,7 @@ fn a_hovered_position_draws_no_marker() {
     // rather than to the Show row.
     let view = ViewConfig { note_names: NoteNames::Played, ..plus_view() };
     let at = LatticePos::ORIGIN;
-    let scene = crate::derive_scene(
+    let mut scene = crate::derive_scene(
         &NoteTracker::new(),
         &Tuning::default(),
         &view,
@@ -612,6 +612,14 @@ fn a_hovered_position_draws_no_marker() {
         &plain_frame(),
         crate::Camera::default(),
         Some(at),
+    );
+    NodeMotion::default().step(
+        &mut scene,
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &view,
+        &view.envelope(&plain_frame()),
+        &RingFade::default(),
         0.0,
     );
     let hovered = scene.nodes.iter().find(|n| n.hovered).expect("the pointer is on the origin");
