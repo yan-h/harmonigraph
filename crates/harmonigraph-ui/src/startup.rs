@@ -33,14 +33,8 @@ pub fn editor_loading_status(ctx: &egui::Context) -> Option<Status> {
 }
 
 fn needs_lattice(state: &SharedState) -> bool {
-    state.workspace.dock.iter_all_nodes().any(|(path, node)| {
-        let egui_dock::Node::Leaf(leaf) = node else { return false };
-        matches!(
-            leaf.tabs.get(leaf.active.0),
-            Some(crate::panes::Tab::Lattice | crate::panes::Tab::Video)
-        ) && !std::iter::successors(Some(path.node), |node| node.parent())
-            .any(|node| state.workspace.dock[path.surface][node].is_collapsed())
-    })
+    state.workspace.layout.visible(crate::panes::Tab::Lattice)
+        || state.workspace.layout.visible(crate::panes::Tab::Video)
 }
 
 pub(crate) fn draw(ui: &mut egui::Ui, state: &SharedState) -> bool {
@@ -107,7 +101,7 @@ pub(crate) fn draw(ui: &mut egui::Ui, state: &SharedState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panes::Tab;
+    use crate::{panes::Tab, workspace};
 
     struct Defaults;
     impl crate::params::ParamBackend for Defaults {
@@ -125,7 +119,7 @@ mod tests {
         }
         let ctx = egui::Context::default();
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-        state.workspace.dock = egui_dock::DockState::new(vec![Tab::Lattice]);
+        state.workspace.layout = workspace::Layout::solo(Tab::Lattice);
         use harmonigraph_core::{NoteEvent, SourceId};
         state.picture.runtime.tracker.handle_event(NoteEvent::on(
             0.0,
@@ -164,17 +158,13 @@ mod tests {
     #[test]
     fn hidden_lattice_tabs_do_not_trigger_graphics_preparation() {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-        state.workspace.dock = egui_dock::DockState::new(vec![Tab::Spectral, Tab::Lattice]);
-        assert!(!needs_lattice(&state), "an inactive tab must not trigger a compile");
-        let root = egui_dock::NodeIndex::root();
-        let egui_dock::Node::Leaf(leaf) = &mut state.workspace.dock.main_surface_mut()[root] else {
-            unreachable!()
-        };
-        leaf.active = egui_dock::TabIndex(1);
+        state.workspace.layout = workspace::Layout::solo(Tab::Spectral);
+        assert!(!needs_lattice(&state));
+        state.workspace.layout.folded[0] = false;
         assert!(needs_lattice(&state));
-        state.workspace.dock.main_surface_mut()[root].set_collapsed(true);
+        state.workspace.layout.folded[0] = true;
         assert!(!needs_lattice(&state), "a folded lattice must stay cheap to open");
-        state.workspace.dock = egui_dock::DockState::new(vec![Tab::Video]);
+        state.workspace.layout = workspace::Layout::solo(Tab::Video);
         assert!(needs_lattice(&state), "the video preview also draws the lattice");
     }
 
@@ -187,7 +177,7 @@ mod tests {
         for tab in [Tab::Lattice, Tab::Video] {
             let ctx = egui::Context::default();
             let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-            state.workspace.dock = egui_dock::DockState::new(vec![Tab::Spectral, tab]);
+            state.workspace.layout = workspace::Layout::solo(Tab::Spectral);
             begin_editor_loading(&ctx);
             let loading_text = |output: &egui::FullOutput| {
                 output.shapes.iter().any(|shape| {
@@ -201,8 +191,8 @@ mod tests {
                 assert!(!loading_text(&output), "hidden panes do not request preparation");
             }
             assert!(editor_loading_status(&ctx).is_some(), "first-use opt-in survives");
-            let path = state.workspace.dock.find_tab(&tab).unwrap();
-            state.workspace.dock.set_active_tab(path).unwrap();
+            state.workspace.layout.select(tab);
+            state.workspace.layout.folded[workspace::Section::of(tab) as usize] = false;
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 crate::root_ui(ui, &mut state, &Defaults, 0.0);
             });

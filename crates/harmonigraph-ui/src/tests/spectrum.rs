@@ -666,8 +666,7 @@ fn fold_is_shared_by_real_dock_preview_and_discarded_passes() {
     let mut state = fresh();
     state.picture.appearance.view.spectral_ring_width = 0.15;
     state.picture.appearance.view.spectral_reading = harmonigraph_scene::SpectralReading::Fold;
-    let path = state.workspace.dock.find_tab(&panes::Tab::Video).unwrap();
-    state.workspace.dock.set_active_tab(path).unwrap();
+    state.workspace.layout.select(panes::Tab::Video);
     let cfg = state.picture.appearance.spectrum;
     let samples: Vec<_> = (0..cfg.window.samples() * 2)
         .map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin() * 0.5)

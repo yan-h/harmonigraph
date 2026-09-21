@@ -98,21 +98,8 @@ pub(super) fn pitch_readout(midi: f32) -> String {
     format!("{name}{}", harmonigraph_core::notes::display_octave_of(n))
 }
 
-/// The variant names are a persistence contract: a saved layout names its
-/// tabs by these spellings, so renaming one orphans the dock in every project
-/// that has it open. Retiring a tab is the same problem from the other side —
-/// an unknown variant fails the whole `UiPersist` parse and takes the
-/// dialed-in camera, view and analyzer settings down with it, not just the
-/// arrangement.
-///
-/// A `UI_PERSIST_VERSION` bump is no cover for either, and reading it as one is
-/// the mistake to avoid: the version is read out of a value that never parsed,
-/// so the floor never runs, and raising it only spreads the same loss to the
-/// blobs that WOULD have loaded. What makes the break acceptable instead is
-/// that the refusal is AUDIBLE — [`load_persist`](crate::SharedState::load_persist)
-/// logs the parse error to the Console pane and returns false. So retiring a
-/// tab is allowed, and saying so in the PR body with the count of saved docks
-/// it costs is the price. #975 retired `Notes` on those terms.
+/// Fixed workspace destinations. The selected analyzer and settings tabs are
+/// persisted; retiring a variant still requires an audible parse refusal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Lattice,
@@ -163,7 +150,7 @@ pub struct Viewer<'a> {
 /// obvious answer survives contact with the dock. `max_rect` is no good by the
 /// time a bar asks: egui's `Region::expand_to_include_rect` unions it when a
 /// control overruns, so it may already have grown past the pane. Nor is the
-/// clip rect, which is the tab BODY — egui_dock clips to the whole body and
+/// clip rect, which is the tab BODY — the workspace clips to the whole body and
 /// only then insets it by [`crate::theme::pane_inner_margin`] via a `Frame`,
 /// which does not clip — so a bar clamped to it comes out a margin longer than
 /// its neighbours and sits flush on the pane border.
@@ -177,7 +164,7 @@ pub(crate) fn pane_content_right() -> egui::Id {
 }
 
 /// What a tab is called, wherever its name is drawn: its own tab, and the rail
-/// a folded pane leaves behind (see [`crate::fold`]).
+/// a folded pane leaves behind (see [`crate::workspace`]).
 pub fn tab_title(tab: &Tab) -> &'static str {
     match tab {
         Tab::Lattice => "Lattice",
@@ -194,65 +181,16 @@ pub fn tab_title(tab: &Tab) -> &'static str {
     }
 }
 
-impl egui_dock::TabViewer for Viewer<'_> {
-    type Tab = Tab;
-
-    fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
-        tab_title(tab).into()
+impl Viewer<'_> {
+    pub(crate) fn id(&self, tab: &Tab) -> egui::Id {
+        egui::Id::new(("pane-body", *tab))
     }
 
-    /// No pane leaves the editor for a window of its own.
-    ///
-    /// egui_dock offers it as "Eject" in a tab's right-click menu, and taking it
-    /// away is what lets the fold pass be one tree rather than a loop over
-    /// surfaces (see [`crate::fold`]). A dock window is laid out in a window
-    /// whose size is not the editor's to know or to ask for, so everything the
-    /// fold does with the plugin window — price a resize, hold a flag until it
-    /// arrives, tell a refusal from a floor — has no answer out there, and the
-    /// pass carried a second set of them for a surface that could only re-fit to
-    /// whatever it found itself in.
-    ///
-    /// A layout saved with a window in it still opens: the dock draws it as it
-    /// always did, and folding sideways there is simply the no-op it always
-    /// effectively was. Dragging the tab back into the editor is unaffected.
-    fn allowed_in_windows(&self, _tab: &mut Tab) -> bool {
-        false
-    }
-
-    /// Identify a tab by its VARIANT, never by its title.
-    ///
-    /// egui_dock's default is `Id::new(title)`, and the id keys the tab
-    /// BODY's `Ui` (`tab_body_id` mixes in the surface but not the node) — so
-    /// under the default, two tabs given one title share their body state:
-    /// egui_dock wraps every body in a `ScrollArea`, and scrolling one pane
-    /// scrolls the other. Keying on the variant is what leaves titles free to
-    /// repeat a name, which the dock still trades on — the Spectral pane
-    /// wears "Analyzer", the same word as the Display section holding its
-    /// settings.
-    fn id(&mut self, tab: &mut Tab) -> egui::Id {
-        egui::Id::new(("lattice-pane", *tab))
-    }
-
-    /// The picture panes never scroll. Each fills its body exactly — the
-    /// lattice with a wgpu callback, the analyzer and the spiral with a
-    /// painter over the whole rect — so there is nothing under the edge to
-    /// reach, and a scroll area around them can only shift a picture that is
-    /// meant to sit still.
-    /// Settings panes keep the VERTICAL bar only: they are lists, and a short
-    /// dock column has to be able to reach the end of one.
-    ///
-    /// Horizontal scrolling is off everywhere. egui_dock wraps the body in
-    /// `ScrollArea::new(self.scroll_bars(tab))`, and a both-axes area offers
-    /// its content an unbounded width; the settings panes that size to the
-    /// space they're given (`available_size`) then fill it and never report
-    /// vertical overflow, so the wheel had nothing to grab and they wouldn't
-    /// scroll at all. Vertical-only matches the panes that build their own
-    /// `ScrollArea::vertical()` — the ones that always scrolled fine.
-    fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
+    pub(crate) fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
         [false, !tab.is_picture()]
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
+    pub(crate) fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         // Before the body draws anything — see [`pane_content_right`].
         let right = ui.max_rect().right();
         ui.data_mut(|d| d.insert_temp(pane_content_right(), right));
@@ -282,26 +220,6 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Spiral => spiral_pane(ui, self.state, self.now, DOCKED_SURFACE),
             Tab::Video => render_pane(ui, self.state, self.interaction, self.now),
         }
-    }
-
-    /// The picture panes paint their own surface edge to edge — the Spectral
-    /// display its plot well, the Lattice its 3D view, the Spiral its disc — so
-    /// the default 8px body margin reads as a pointless border around a picture
-    /// rather than as breathing room between controls. Drop it and let them
-    /// fill the whole tab.
-    ///
-    /// Settings panes keep the margin: there the padding is what stops the
-    /// bars and labels from running into the pane edge.
-    fn tab_style_override(
-        &self,
-        tab: &Tab,
-        global_style: &egui_dock::TabStyle,
-    ) -> Option<egui_dock::TabStyle> {
-        tab.is_picture().then(|| {
-            let mut style = global_style.clone();
-            style.tab_body.inner_margin = egui::Margin::ZERO;
-            style
-        })
     }
 }
 
@@ -541,7 +459,7 @@ pub(super) fn edge_bar(
 /// the pane's first.
 ///
 /// `min_rect` is the tempting reading of "has anything been drawn" and it
-/// is the wrong one here: egui_dock wraps every pane body in a `ScrollArea`
+/// is the wrong one here: the workspace wraps settings bodies in a `ScrollArea`
 /// whose ui arrives with `min_rect` already equal to `max_rect`, so it is a
 /// full-height rect before the pane draws a thing. A fixture that builds
 /// the pane ui directly sees an empty `min_rect` instead and cannot tell

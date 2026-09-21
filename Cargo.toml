@@ -41,7 +41,7 @@ harmonigraph-record = { path = "crates/harmonigraph-record" }
 
 # GUI stack. These versions are coupled:
 #   egui-baseview 0.3 -> egui 0.35 / egui-wgpu 0.35 / wgpu 29 / baseview 0.1
-#   eframe must match egui, egui_dock 0.20 -> egui 0.35
+#   eframe must match egui
 # When bumping egui, bump all of these together.
 egui = "0.35"
 egui-wgpu = "0.35"
@@ -52,7 +52,6 @@ eframe = { version = "0.35", default-features = false, features = [
     "x11",
     "persistence",
 ] }
-egui_dock = { version = "0.20", features = ["serde"] }
 egui-baseview = { version = "0.3", default-features = false, features = [
     "wgpu",
     # Required when default features are off: the crate's log macros come
@@ -78,8 +77,7 @@ rtrb = "0.3"
 crossbeam = "0.8"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
-# Persist format: RON round-trips NaN/inf floats (fresh egui_dock layout
-# rects are NaN; JSON turns them into null and fails to restore).
+# Persist format shared by appearance and editor workspace settings.
 ron = "0.12"
 # Hardware MIDI input for the standalone dev harness.
 midir = "0.11"

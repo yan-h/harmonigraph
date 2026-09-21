@@ -97,7 +97,7 @@ pub(super) fn frame(
         state: &mut shared.ui,
         params: &backend,
         now,
-        window_width: window_width as f32,
+        window_size: egui::vec2(window_width as f32, window_height as f32),
     }
     .draw();
 
@@ -106,8 +106,8 @@ pub(super) fn frame(
     // `request_resize` is the host's round trip, and the window's size source
     // — which runs at the top of the next tick, before the frame it will be
     // laid out in — is where this window takes it (see `LatticeEditor::spawn`).
-    if let Some(width) = ask {
-        egui_state.requested_size.store(Some((width.round() as u32, window_height)));
+    if let Some(size) = ask {
+        egui_state.requested_size.store(Some((size.x.round() as u32, size.y.round() as u32)));
         ui.ctx().request_repaint();
     }
 

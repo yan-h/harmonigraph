@@ -605,7 +605,7 @@ impl eframe::App for App {
             state: &mut self.state,
             params: &self.params,
             now,
-            window_width: window.x,
+            window_size: window,
         }
         .draw();
         if let Some(recorder) = &mut self.recorder {
@@ -615,9 +615,8 @@ impl eframe::App for App {
         // A pane folded sideways (or came back) leaves every other pane its
         // width and asks the window for the difference. The plugin has to
         // negotiate this with its host; here it is one command.
-        if let Some(width) = ask {
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(width, window.y)));
+        if let Some(size) = ask {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
         }
 
         if let Some(shot) = &mut self.self_shot {

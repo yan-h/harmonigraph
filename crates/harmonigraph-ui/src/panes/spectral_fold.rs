@@ -20,8 +20,7 @@
 //! Not a pane, though it lives beside them: it is a post-pass the Lattice pane
 //! runs, and it is made of the two panes it sits between — the analyzer's
 //! spectrum and the lattice's own wheel. Named `spectral_fold` and not `fold`
-//! because [`crate::fold`] is the dock's pane folding, which has nothing to do
-//! with any of this.
+//! to distinguish it from the section folding in [`crate::workspace`].
 //!
 //! ## Two readings, and only one of them folds
 //!

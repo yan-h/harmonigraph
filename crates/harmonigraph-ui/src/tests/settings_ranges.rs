@@ -332,7 +332,7 @@ fn check(edge: Edge) {
                         params: &backend,
                         now: 0.0,
                     };
-                    egui_dock::TabViewer::ui(&mut viewer, ui, &mut tab);
+                    viewer.ui(ui, &mut tab);
                 },
             );
         });

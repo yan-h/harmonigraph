@@ -106,7 +106,7 @@ const WIDGET_RADIUS: CornerRadius = CornerRadius::same(CONTROL_RADIUS);
 /// Padding between a settings pane's controls and the edge of its tab body —
 /// what stops the bars and labels running into the pane edge.
 ///
-/// Named because the geometry around it is easy to get wrong: egui_dock clips
+/// Named because the geometry around it is easy to get wrong: the workspace clips
 /// the tab body to the WHOLE body rect and only then insets it by this margin
 /// (a `Frame`, which does not clip), so inside a pane the clip rect sits this
 /// far OUTSIDE the content box. Anything asking "where does the pane end"
@@ -139,7 +139,7 @@ pub(crate) const PANE_INNER_MARGIN: f32 = 8.0;
 pub(crate) const ROW_HEIGHT: f32 = 20.0;
 
 /// Height of a leaf's tab bar, which is also the thickness a folded pane is
-/// squeezed to (see [`crate::fold`]) and the depth of dock chrome along the
+/// squeezed to (see [`crate::workspace`]) and the depth of dock chrome along the
 /// top of the window: tab titles and the collapse arrow at the left of every
 /// bar. Anything drawn OVER the dock keeps clear of it.
 ///
@@ -241,14 +241,7 @@ pub(crate) fn pane_inner_margin(scale: f32) -> f32 {
     PANE_INNER_MARGIN * scale
 }
 
-/// The same margin as the WHOLE POINTS a pane actually gets.
-///
-/// egui stores a `Margin` as `i8`, so the inset [`dock_style`] gives a tab body
-/// is the scaled margin truncated, and at any scale that leaves it fractional
-/// the gutter is up to a point narrower than [`pane_inner_margin`] says.
-/// Anything that has to line up with the content box — the scroll bar, which
-/// floats in the gutter rather than beside it (see [`style_at`]) — has to line
-/// up with the truncation and not with the float, so both read this.
+/// Whole-point pane inset, shared with the floating scroll bar gutter.
 pub(crate) fn dock_pane_margin(scale: f32) -> i8 {
     pane_inner_margin(scale) as i8
 }
@@ -258,20 +251,7 @@ pub(crate) fn row_height(scale: f32) -> f32 {
     ROW_HEIGHT * scale
 }
 
-/// [`TAB_BAR_HEIGHT`] at this scale.
-///
-/// No floor, and the collapse button is the reason to say so: egui_dock's
-/// `TAB_COLLAPSE_BUTTON_SIZE` of 24 points is its WIDTH alone. The button's
-/// rect runs `tabbar_outer_rect.left_top()` to `left_bottom() + (24, 0)`, so it
-/// is as tall as whatever bar it sits in and only ever 24 wide, and the arrow
-/// centred in it is a 10-point glyph. A bar shorter than 24 therefore clips
-/// nothing — it takes the button's height down with it, which is the point.
-///
-/// What that leaves unscaled is the button's 24-point WIDTH and its 10-point
-/// arrow, both private consts reachable only by forking egui_dock. So the
-/// button grows squatter as the scale comes down rather than shrinking with
-/// everything else. `fold`'s [`ARROW_BUTTON`](crate::fold) mirrors the same 24
-/// deliberately, and has to keep mirroring it.
+/// [`TAB_BAR_HEIGHT`] at this scale, including the fold button.
 pub(crate) fn tab_bar_height(scale: f32) -> f32 {
     TAB_BAR_HEIGHT * scale
 }
@@ -644,102 +624,4 @@ fn scale_i8(value: i8, scale: f32) -> i8 {
         v if v > 0 => scaled.max(1.0) as i8,
         _ => scaled.min(-1.0) as i8,
     }
-}
-
-/// The dock chrome, derived from the egui style plus our own tweaks.
-///
-/// The goal is ONE surface, with no outlined boxes around bodies or tabs: the
-/// only thing standing between two panes is the ruled line of a separator, and
-/// a pane is otherwise its own contents to its own edge. Buttons that add noise
-/// (per-tab close, collapse arrows) are disabled on the DockArea itself in
-/// `root_ui`.
-///
-/// `scale` is the [chrome scale](ui_scale) the caller is drawing at. It has to
-/// be passed rather than read off `egui_style`, which carries sizes already
-/// multiplied by it but no record of the factor itself.
-pub fn dock_style(egui_style: &egui::Style, scale: f32) -> egui_dock::Style {
-    let mut style = egui_dock::Style::from_egui(egui_style);
-
-    // No gap between the dock and the window edge, and no outer border.
-    style.dock_area_padding = None;
-    style.main_surface_border_stroke = Stroke::NONE;
-
-    // Separators: slim bands in the hairline grey, accent when grabbed.
-    style.separator.width = 3.0 * scale;
-    // Not scaled: how near a separator the pointer has to come to take hold of
-    // it is a reach, not a drawn thing, and a narrower band is if anything the
-    // case for keeping the reach where it was.
-    style.separator.extra_interact_width = 6.0;
-    // The narrowest a pane may be dragged: four tab bars, which is where a pane
-    // still has room to be one (see `min_pane`). NOT the width a fold leaves
-    // behind — that is one tab bar, and folding is the way to get a pane out of
-    // the way entirely.
-    //
-    // egui_dock's own default is 175pt, and it applies this as a clamp on EVERY
-    // separator's fraction on EVERY frame, dragged or not — so in a window
-    // narrow enough for 175 to bite (the plugin's floor is 400) it does not
-    // merely refuse a drag, it walks the layout toward 50/50 by itself, and it
-    // mangles any fraction dialled for a window that has not arrived yet: the
-    // fractions a fold hands back on the way out are exactly that. Four tab bars
-    // is well under 175 and so leaves that walk no room in any window the plugin
-    // opens at — but it does NOT clear a folded split's own fraction, a rail
-    // being one tab bar wide: those are clamped every frame, which is the
-    // condition `fold::drags` reads a gesture against rather than a fraction.
-    style.separator.extra = min_pane(scale);
-    // A rung ABOVE everything it divides, rather than the recess below it that a
-    // divider in the well or the panel would be. The two sides of a boundary are
-    // not one surface and never both the same one: a picture pane paints the well
-    // edge to edge (`tab_style_override` takes its body margin to zero), a
-    // settings pane shows the panel through, and the well is what a tab bar is
-    // filled with — so any grey borrowed from a pane is a band that vanishes at
-    // whichever boundaries happen to be drawn in it, and two picture panes side by
-    // side have no edge between them at all. The hairline is the chrome's own
-    // divider grey, `L*` 28.5 against the well's 4.7 and the panel's 8.8, so one
-    // colour reads at every boundary the dock can make.
-    //
-    // It is the line's whole width because egui_dock fills the band and has no
-    // stroke of its own; 3pt of it is the widest this grey is drawn anywhere, and
-    // the reason the band is slim.
-    style.separator.color_idle = hairline();
-    style.separator.color_hovered = accent_edge();
-    style.separator.color_dragged = accent();
-
-    // Tab bar: a quiet strip of the same surface, divided from the body by
-    // a hairline; the active tab fills seamlessly into the body below it.
-    style.tab_bar.bg_fill = well();
-    style.tab_bar.height = tab_bar_height(scale);
-    style.tab_bar.hline_color = well();
-    style.tab_bar.corner_radius = CornerRadius::ZERO;
-
-    // Tabs: no outlines anywhere; active = body color, inactive = recessed.
-    let tab = &mut style.tab;
-    for t in [
-        &mut tab.active,
-        &mut tab.focused,
-        &mut tab.active_with_kb_focus,
-        &mut tab.focused_with_kb_focus,
-    ] {
-        t.outline_color = Color32::TRANSPARENT;
-        t.corner_radius = CornerRadius::ZERO;
-        t.bg_fill = panel();
-        t.text_color = text();
-    }
-    for t in [&mut tab.inactive, &mut tab.hovered, &mut tab.inactive_with_kb_focus] {
-        t.outline_color = Color32::TRANSPARENT;
-        t.corner_radius = CornerRadius::ZERO;
-        t.bg_fill = well();
-        t.text_color = text_dim();
-    }
-    tab.hovered.bg_fill = surface_faint();
-    tab.hovered.text_color = text();
-    tab.hline_below_active_tab_name = false;
-
-    // Tab bodies: the boxes-within-boxes look came from here — a stroke
-    // rectangle around every pane. Kill it; bodies are just the surface.
-    tab.tab_body.stroke = Stroke::NONE;
-    tab.tab_body.corner_radius = CornerRadius::ZERO;
-    tab.tab_body.bg_fill = panel();
-    tab.tab_body.inner_margin = egui::Margin::same(dock_pane_margin(scale));
-
-    style
 }

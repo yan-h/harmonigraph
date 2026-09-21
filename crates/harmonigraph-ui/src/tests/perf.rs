@@ -193,11 +193,7 @@ fn folding_a_pane_does_not_move_the_perf_overlay() {
     // Both picture panes off screen in turn — the two folds that used to hand
     // the overlay from one pane to the next, and then to the window.
     for tab in [panes::Tab::Spectral, panes::Tab::Lattice] {
-        let path = state.workspace.dock.find_tab(&tab).expect("the tab is docked");
-        let egui_dock::Node::Leaf(leaf) = &mut state.workspace.dock[path.surface][path.node] else {
-            panic!("{tab:?} should live in a leaf");
-        };
-        leaf.collapsed = true;
+        state.workspace.layout.folded[workspace::Section::of(tab) as usize] = true;
         h.settle_folds(&mut state);
         // Its POSITION, which is what a fold used to change. The plate's width
         // still follows the numbers inside it — a folded lattice draws no

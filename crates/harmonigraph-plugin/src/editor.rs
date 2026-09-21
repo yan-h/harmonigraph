@@ -28,15 +28,11 @@ pub(crate) const ASSUMED_SURFACE_FORMAT: harmonigraph_render::wgpu::TextureForma
 
 /// Editor size on first open, in logical pixels.
 pub(crate) const DEFAULT_SIZE: (u32, u32) = (1000, 700);
-/// Smallest size accepted from a host resize.
-///
-/// The width is not this editor's own number: it is the floor the pane layout
-/// dials to as well, so it comes from `harmonigraph_ui::shell` rather than
-/// being restated here — see
-/// [`MIN_WINDOW_WIDTH`](harmonigraph_ui::shell::MIN_WINDOW_WIDTH) for what a
-/// window and a layout holding two different floors would cost. The height is
-/// nobody else's business.
-const MIN_SIZE: (u32, u32) = (harmonigraph_ui::shell::MIN_WINDOW_WIDTH as u32, 300);
+/// Both shells and the pane layout use the same minimum window size.
+const MIN_SIZE: (u32, u32) = (
+    harmonigraph_ui::shell::MIN_WINDOW_SIZE.x as u32,
+    harmonigraph_ui::shell::MIN_WINDOW_SIZE.y as u32,
+);
 
 #[cfg(test)]
 mod tests {
@@ -47,9 +43,12 @@ mod tests {
     /// stop being one: a floor with a fraction in it would leave the window
     /// stopping a fraction below what the layout believes, and the layout
     /// banking a difference the window will never give back (see
-    /// `harmonigraph_ui::shell::MIN_WINDOW_WIDTH`).
+    /// `harmonigraph_ui::shell::MIN_WINDOW_SIZE`).
     #[test]
     fn the_window_floor_is_exactly_the_floor_the_layout_dials_to() {
-        assert_eq!(MIN_SIZE.0 as f32, harmonigraph_ui::shell::MIN_WINDOW_WIDTH);
+        assert_eq!(
+            egui::vec2(MIN_SIZE.0 as f32, MIN_SIZE.1 as f32),
+            harmonigraph_ui::shell::MIN_WINDOW_SIZE
+        );
     }
 }

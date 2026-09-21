@@ -28,14 +28,17 @@ To see which structs currently carry it:
 grep -rn --include='*.rs' -A4 '#\[serde(default)\]' crates/ | grep 'pub struct'
 ```
 
-### The field-level exception
+### Editor workspace defaults
 
-`UiPersist::ui_scale` is the blob's one field-level `default = "..."`, and only because an `f32`'s own default of 0.0 is a scale of nothing.
-Don't add others to it.
+`UiPersist` now has container-level defaults too.
+Its `Default` uses the same design-scale helper as `Interaction`, since an `f32` default of 0.0 is a scale of nothing.
+A missing editor version still defaults to 0 and is refused by the version floor.
 
 The offline renderer's `Layout` and `Placement` are runtime composition types, not serialized state.
 Custom layout RON input and its dump interface were retired under #974, so their former field-level exception is gone.
-`panes::Tab` is the editor dock's persisted enum — `UiPersist::dock` is a `DockState<panes::Tab>`, so `Tab`'s variants are the contract a saved dock depends on, and its own doc comment carries the reasoning and the #975 precedent for retiring one.
+`panes::Tab` names the selected analyzer and settings destinations in `UiPersist::layout`.
+The fixed layout defaults independently of appearance; obsolete dock and fold fields are ignored like any other retired keys.
+A removed selected-tab variant still fails parsing, so its own doc comment carries that contract.
 `Pane` is the standalone view picker and is not the dock's;
 it still derives serde, but nothing in the tree serializes it.
 `RenderFrame` still carries the captured placement and proportion.
