@@ -267,23 +267,11 @@ impl Default for HarmonigraphParams {
                         None => format!("{} · unavailable", id + 1),
                     }
                 })),
-            map_fifths: IntParam::new(
-                "Map Fifth Offset (steps)",
-                0,
-                IntRange::Linear { min: -9, max: 9 },
-            ),
-            map_thirds: IntParam::new(
-                "Map Third Offset (steps)",
-                0,
-                IntRange::Linear { min: -9, max: 9 },
-            ),
-            map_sevenths: IntParam::new(
-                "Map Seventh Offset (steps)",
-                0,
-                IntRange::Linear { min: -9, max: 9 },
-            ),
+            map_fifths: IntParam::new("Map Fifths", 0, IntRange::Linear { min: -9, max: 9 }),
+            map_thirds: IntParam::new("Map Thirds", 0, IntRange::Linear { min: -9, max: 9 }),
+            map_sevenths: IntParam::new("Map Sevenths", 0, IntRange::Linear { min: -9, max: 9 }),
             map_fifths_extension: IntParam::new(
-                "Map Fifth Extension (steps)",
+                "Map Fifths Coarse",
                 0,
                 IntRange::Linear { min: -9, max: 9 },
             )
@@ -293,7 +281,7 @@ impl Default for HarmonigraphParams {
                 (steps % 10 == 0).then_some(steps / 10)
             })),
             map_thirds_extension: IntParam::new(
-                "Map Third Extension (steps)",
+                "Map Thirds Coarse",
                 0,
                 IntRange::Linear { min: -9, max: 9 },
             )
@@ -303,7 +291,7 @@ impl Default for HarmonigraphParams {
                 (steps % 10 == 0).then_some(steps / 10)
             })),
             map_sevenths_extension: IntParam::new(
-                "Map Seventh Extension (steps)",
+                "Map Sevenths Coarse",
                 0,
                 IntRange::Linear { min: -9, max: 9 },
             )

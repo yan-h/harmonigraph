@@ -16,15 +16,18 @@ Mode is saved but is not automatable in this prototype.
 Choose Lattice Map in Tuning.
 Audition working copy makes a separate copy of the currently selected saved map.
 Its shape edits remain active through loops and Map selection automation until Return to arrangement.
-All six Offset and Extension automation lanes remain live during audition.
+All six fine and coarse automation lanes remain live during audition.
 Closing the editor does not end audition;
 loading project state does.
 Audition and its bounded 64-edit undo history are transient and are not saved.
 
 Saved maps define shape only.
-Use the independent Map Fifth Offset (steps),
-Map Third Offset (steps) and Map Seventh Offset (steps) automation lanes to move any shape in integer generator steps.
-Each axis also has an Extension lane that adds multiples of 10 without changing existing Offset automation.
+Use the independent Map Fifths,
+Map Thirds and Map Sevenths automation lanes to move any shape in integer generator steps.
+Each axis also has a Coarse lane that adds multiples of 10 without changing existing fine automation.
+The coarse parameters are named Map Fifths Coarse,
+Map Thirds Coarse and Map Sevenths Coarse;
+the editor labels the two columns Fine and Coarse.
 The same controls are always available in Lattice Map mode without entering audition or capturing a map.
 Positive values move along the corresponding generator;
 negative values move back.
@@ -84,7 +87,7 @@ Names are exposed through the Map parameter's value text;
 document edits request a host state-dirty notification and value/text rescan.
 
 Each map holds twelve coordinates relative to C.
-Each axis’s Offset and Extension parameters add to its absolute region position.
+Each axis’s fine and coarse parameters add to its absolute region position.
 The starting rectangle has fifth coordinates −1 through 2,
 third coordinates 0 through 2,
 and seventh coordinate 0:
@@ -107,19 +110,19 @@ Exact geometric copies survive temperament changes and project recall.
 Offset IDs are `map-fifths`,
 `map-thirds` and `map-sevenths`;
 each ranges from −9 to +9 in single steps and defaults to zero.
-Each axis also has an independent Extension lane from −90 to +90 in steps of 10,
+Each axis also has an independent Coarse lane from −90 to +90 in steps of 10,
 with IDs `map-fifths-extension`,
 `map-thirds-extension` and `map-sevenths-extension`.
 The offset and extension add together,
 so every integer total from −99 to +99 is reachable.
 For example,
-Offset +4 and Extension +20 give a total of +24.
-Use Extension when a passage outgrows the fine lane;
+Fine +4 and Coarse +20 give a total of +24.
+Use Coarse when a passage outgrows the fine lane;
 existing automation stays intact because neither lane's range changes.
 The editor shows both controls and the total separately for each axis.
 
 All six plain saved parameters range from −9 to +9 and default to zero;
-extension counts are multiplied by 10 only when displayed or added to the total.
+coarse counts are multiplied by 10 only when displayed or added to the total.
 CLAP exposes stepped indices 0–18 with neutral index 9.
 The former ±4096 offset lanes are narrowed in this release:
 old host automation is reinterpreted,

@@ -847,11 +847,11 @@ fn map_controls(
             params.edit_lattice_map(MapEdit::Return);
         }
     });
-    ui.weak("Automate Offset for single steps and Extension for steps of 10. Their ranges stay fixed; the two lanes add together.");
+    ui.weak("Automate Fine for single steps and Coarse for steps of 10. Their ranges stay fixed; the two lanes add together.");
     let mut fine = view.offsets.fine;
     let mut extension = view.offsets.extension;
     egui::Grid::new("map-offsets").show(ui, |ui| {
-        for heading in ["Axis", "Offset", "Extension", "Total"] {
+        for heading in ["Axis", "Fine", "Coarse", "Total"] {
             ui.weak(heading);
         }
         ui.end_row();
