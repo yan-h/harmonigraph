@@ -1,5 +1,9 @@
 # Lattice animation controls
 
+This is the record of the original transition prototype and its measurements,
+not the current settings inventory.
+Overshoot/Pop, Odd/even stagger and independent Starting size were retired as the controls were simplified.
+
 Display tab → Lattice page → Note layers has independent Animation and Order controls.
 Animation is Fade or Pop;
 Order is Simultaneous,
@@ -19,7 +23,7 @@ Starting size ranges from zero to 200% of the settled size.
 Both controls work with either animation.
 Grow from centre sets Starting position to -100% and Starting size to zero;
 it does not change Animation or Order.
-Pop adds a small overshoot to the existing geometry.
+The retired Pop prototype added a small overshoot to the existing geometry.
 No extra particles or render passes are added.
 
 Circular starts with the complete slice containing twelve o'clock and proceeds clockwise.

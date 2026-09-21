@@ -31,7 +31,7 @@ The separate Spectrogram page keeps its texture controls out of the path to basi
 | History duration | MIDI ribbons and spectrogram; also Video history → Scrolling. Whole video expands both histories to the render length, up to 10 minutes. |
 | Octave layout | MIDI ring, audio ring and melody/bass marks. The layer stack controls their widths and visibility. |
 | Note fade | MIDI slices, marks and labels, plus audio-ring visibility. Glow has its own response. |
-| Motion easing and starting pose | MIDI slices and marks. Smooth eases to rest; Overshoot adds a small swell and overshoots displaced starting poses. |
+| Motion and starting pose | MIDI slices and marks ease smoothly from the selected starting offset and scale. |
 | Audio level colors | Shared palette; lattice rings substitute gray at Idle ring brightness for its quiet endpoint. |
 | Glow texture and breathing | Requires nonzero lattice Glow reach and Glow gain. Its bypass preserves the effect settings. |
 | Lattice resolution, Spectrogram time step | Rendering quality/cost in the editor, preview and exports. Video output dimensions are separate. |

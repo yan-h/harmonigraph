@@ -65,8 +65,8 @@ pub use style::{
     REACH_SIGMAS, SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN, SHADOW_STOP,
 };
 pub use view::{
-    AnimationOrder, DrawnWindow, FrameParams, GlowCurve, NoteAnimation, NoteAnimationConfig,
-    RingStack, ViewConfig, SCALE_BAR_RANGE, SEVENS_LAYER_LIMIT,
+    AnimationOrder, DrawnWindow, FrameParams, GlowCurve, NoteAnimationConfig, RingStack,
+    ViewConfig, SCALE_BAR_RANGE, SEVENS_LAYER_LIMIT,
 };
 
 use glam::{Vec3, Vec4};

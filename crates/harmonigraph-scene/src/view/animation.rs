@@ -1,36 +1,7 @@
-//! [`NoteAnimationConfig`] and the two enums it is built out of — how a
-//! complete slice of the lattice arrives and in what order.
+//! [`NoteAnimationConfig`] and its order — how complete lattice slices arrive.
 
 use super::*;
 
-/// Easing of the existing lattice pieces, independent of their ordering.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum NoteAnimation {
-    #[default]
-    Fade,
-    Pop,
-}
-impl NoteAnimation {
-    /// Every easing, for the settings picker and the sweeps that compare them.
-    ///
-    /// Built through an exhaustive `match` rather than written out as a bare
-    /// literal, so the list cannot fall behind the enum — the same guard every
-    /// other `ALL` here uses ([`AnimationOrder::ALL`] below,
-    /// `SpectralOrientation::ALL`, `DisplayPage::ALL`), and the reason a test
-    /// that sweeps this list is a claim about the enum rather than about the
-    /// names someone typed.
-    pub const ALL: [Self; 2] = {
-        // Exhaustive, and the compiler checks it. The arm is `()` because what
-        // is wanted is the coverage error, not the value.
-        const fn covered(animation: NoteAnimation) {
-            match animation {
-                NoteAnimation::Fade | NoteAnimation::Pop => (),
-            }
-        }
-        covered(NoteAnimation::Fade);
-        [Self::Fade, Self::Pop]
-    };
-}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AnimationOrder {
     #[default]
@@ -41,7 +12,7 @@ pub enum AnimationOrder {
 }
 impl AnimationOrder {
     /// Every order, for the settings picker and the sweeps that compare them.
-    /// Guarded the way [`NoteAnimation::ALL`] above is, and for its reason.
+    /// Guarded exhaustively so the settings picker cannot miss a new variant.
     pub const ALL: [Self; 4] = {
         const fn covered(order: AnimationOrder) {
             use AnimationOrder::*;
@@ -57,19 +28,13 @@ impl AnimationOrder {
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct NoteAnimationConfig {
-    pub animation: NoteAnimation,
     pub order: AnimationOrder,
     pub stagger_spread: f32,
     pub radial_start: f32,
 }
 impl Default for NoteAnimationConfig {
     fn default() -> Self {
-        Self {
-            animation: NoteAnimation::Fade,
-            order: AnimationOrder::Simultaneous,
-            stagger_spread: 0.28,
-            radial_start: 0.0,
-        }
+        Self { order: AnimationOrder::Simultaneous, stagger_spread: 0.28, radial_start: 0.0 }
     }
 }
 impl NoteAnimationConfig {
@@ -156,7 +121,7 @@ impl NoteAnimationConfig {
         ranks
     }
     pub fn moves(self) -> bool {
-        self.animation == NoteAnimation::Pop || self.radial_start != 0.0
+        self.radial_start != 0.0
     }
     /// Scale paired with the starting offset so a slice and the gaps around it
     /// keep the same proportions throughout the radial move.
@@ -168,16 +133,7 @@ impl NoteAnimationConfig {
         if !self.moves() {
             return rim;
         }
-        let extent = |ease: f32| {
-            let starting_scale = self.starting_scale();
-            let scale = starting_scale + (1.0 - starting_scale) * ease;
-            scale.abs() + (1.0 + self.radial_start * (1.0 - ease) - scale).abs()
-        };
-        let pop = self.animation == NoteAnimation::Pop;
-        // Coupled anchor/scale bounds keep Grow (-1,0) at the ordinary
-        // radius, plus only the Pop curve's small actual overshoot.
-        rim * extent(0.0).max(extent(if pop { 1.046 } else { 1.0 }))
-            + if pop { rim * 0.09 * self.starting_scale() } else { 0.0 }
+        rim * self.starting_scale().max(1.0)
     }
 }
 

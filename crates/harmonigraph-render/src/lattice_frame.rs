@@ -480,13 +480,10 @@ impl LatticeCallback {
                         0.0
                     },
                     pose: Float4([
-                        f32::from(
-                            scene.note_animation.animation
-                                == harmonigraph_scene::NoteAnimation::Pop,
-                        ),
                         scene.note_animation.starting_scale(),
                         scene.note_animation.radial_start,
                         scene.note_animation.reach(1.0),
+                        0.0,
                     ]),
                 },
                 marker: MarkerParams {

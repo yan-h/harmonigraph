@@ -6,6 +6,7 @@ using metal::uint;
 
 struct _mslBufferSizes {
     uint buffer_size15;
+    uint buffer_size14;
 };
 
 struct CompositeParams {
@@ -150,6 +151,12 @@ struct Instance {
     char _pad11[8];
     metal::float4 glow;
 };
+struct ShadowCell {
+    metal::float4 rect;
+    metal::float4 cell;
+    metal::float4 cell_map;
+    metal::float4 who;
+};
 struct type_14 {
     metal::float2 inner[4];
 };
@@ -222,6 +229,16 @@ float shadow_reach_uv(
     return ((0.5 * _e1) * _e4) / (1.8 * metal::max(scale, 0.05));
 }
 
+metal::float2 pane_points(
+    metal::float4 clip,
+    constant Uniforms& u
+) {
+    metal::float2 ndc = clip.xy / metal::float2(clip.w);
+    float _e14 = u.shadow_target.pane_points.x;
+    float _e25 = u.shadow_target.pane_points.y;
+    return metal::float2(((ndc.x * 0.5) + 0.5) * _e14, (0.5 - (ndc.y * 0.5)) * _e25);
+}
+
 float node_rim(
     bool marked,
     constant Uniforms& u
@@ -290,7 +307,7 @@ VsOut node_vertex(
     }
     bool _e59 = local_1;
     float midi_rim = _e59 ? _e28 : 0.0;
-    float _e66 = u.node.pose.w;
+    float _e66 = u.node.pose.z;
     metal::float2 _e68 = spectral_radii(u);
     float _e75 = u.node.animation;
     float bounds = (_e75 != 0.0) ? metal::max(_e28, metal::max(midi_rim * _e66, _e68.y)) : _e28;
@@ -322,7 +339,7 @@ VsOut node_vertex(
     return _e154;
 }
 
-struct vs_ink_stripOutput {
+struct vs_mainOutput {
     metal::float4 clip_pos [[position]];
     metal::float2 uv [[user(loc0), center_perspective]];
     metal::float4 color [[user(loc1), center_perspective]];
@@ -341,12 +358,14 @@ struct vs_ink_stripOutput {
     metal::float4 shadow_at [[user(loc12), center_no_perspective]];
 };
 struct vb_15_type { metal::uchar data[140]; };
-vertex vs_ink_stripOutput vs_ink_strip(
+struct vb_14_type { metal::uchar data[64]; };
+vertex vs_mainOutput vs_main(
   uint vertex_index [[vertex_id]]
 , constant Uniforms& u [[buffer(0)]]
 , uint i_id [[instance_id]]
 , const device vb_15_type* vb_15_in [[buffer(15)]]
-, constant _mslBufferSizes& _buffer_sizes [[buffer(1)]]
+, const device vb_14_type* vb_14_in [[buffer(14)]]
+, constant _mslBufferSizes& _buffer_sizes [[buffer(2)]]
 ) {
     metal::float3 world_pos = {};
     metal::float4 color = {};
@@ -375,21 +394,27 @@ vertex vs_ink_stripOutput vs_ink_strip(
         ring = unpackFloat32_(vb_15_elem.data[120], vb_15_elem.data[121], vb_15_elem.data[122], vb_15_elem.data[123]);
         glow = unpackFloat32x4_(vb_15_elem.data[124], vb_15_elem.data[125], vb_15_elem.data[126], vb_15_elem.data[127], vb_15_elem.data[128], vb_15_elem.data[129], vb_15_elem.data[130], vb_15_elem.data[131], vb_15_elem.data[132], vb_15_elem.data[133], vb_15_elem.data[134], vb_15_elem.data[135], vb_15_elem.data[136], vb_15_elem.data[137], vb_15_elem.data[138], vb_15_elem.data[139]);
     }
-    const Instance inst = { world_pos, color, params, octaves, motion, cents, {}, marks, melody_color, bass_color, scale_2, ring, {}, glow };
-    VsOut out = {};
-    VsOut _e2 = node_vertex(vertex_index, inst, u);
-    out = _e2;
-    metal::float2 corner_1 = metal::float2(static_cast<float>(vertex_index & 1u), static_cast<float>(vertex_index >> 1u));
-    float _e14 = u.glow.row_capacity;
-    float rows = metal::max(_e14, 1.0);
-    float _e18 = out.strip_row;
-    float v = (_e18 + corner_1.y) / rows;
-    out.clip_pos = metal::float4((corner_1.x * 2.0) - 1.0, 1.0 - (2.0 * v), 0.0, 1.0);
-    out.uv = metal::float2(corner_1.x, 0.0);
-    if (inst.glow.x <= 0.0) {
-        out.clip_pos = metal::float4(0.0, 0.0, 0.0, 1.0);
+    metal::float4 rect = {};
+    metal::float4 cell = {};
+    metal::float4 cell_map = {};
+    metal::float4 who = {};
+    if (i_id < (_buffer_sizes.buffer_size14 / 64)) {
+        const vb_14_type vb_14_elem = vb_14_in[i_id];
+        rect = unpackFloat32x4_(vb_14_elem.data[0], vb_14_elem.data[1], vb_14_elem.data[2], vb_14_elem.data[3], vb_14_elem.data[4], vb_14_elem.data[5], vb_14_elem.data[6], vb_14_elem.data[7], vb_14_elem.data[8], vb_14_elem.data[9], vb_14_elem.data[10], vb_14_elem.data[11], vb_14_elem.data[12], vb_14_elem.data[13], vb_14_elem.data[14], vb_14_elem.data[15]);
+        cell = unpackFloat32x4_(vb_14_elem.data[16], vb_14_elem.data[17], vb_14_elem.data[18], vb_14_elem.data[19], vb_14_elem.data[20], vb_14_elem.data[21], vb_14_elem.data[22], vb_14_elem.data[23], vb_14_elem.data[24], vb_14_elem.data[25], vb_14_elem.data[26], vb_14_elem.data[27], vb_14_elem.data[28], vb_14_elem.data[29], vb_14_elem.data[30], vb_14_elem.data[31]);
+        cell_map = unpackFloat32x4_(vb_14_elem.data[32], vb_14_elem.data[33], vb_14_elem.data[34], vb_14_elem.data[35], vb_14_elem.data[36], vb_14_elem.data[37], vb_14_elem.data[38], vb_14_elem.data[39], vb_14_elem.data[40], vb_14_elem.data[41], vb_14_elem.data[42], vb_14_elem.data[43], vb_14_elem.data[44], vb_14_elem.data[45], vb_14_elem.data[46], vb_14_elem.data[47]);
+        who = unpackFloat32x4_(vb_14_elem.data[48], vb_14_elem.data[49], vb_14_elem.data[50], vb_14_elem.data[51], vb_14_elem.data[52], vb_14_elem.data[53], vb_14_elem.data[54], vb_14_elem.data[55], vb_14_elem.data[56], vb_14_elem.data[57], vb_14_elem.data[58], vb_14_elem.data[59], vb_14_elem.data[60], vb_14_elem.data[61], vb_14_elem.data[62], vb_14_elem.data[63]);
     }
-    VsOut _e49 = out;
-    const auto _tmp = _e49;
-    return vs_ink_stripOutput { _tmp.clip_pos, _tmp.uv, _tmp.color, _tmp.params, _tmp.octaves, _tmp.motion, _tmp.cents, _tmp.strip_row, _tmp.marks, _tmp.melody_color, _tmp.bass_color, _tmp.rim, _tmp.ring, _tmp.ink_carry, _tmp.shadow_box, _tmp.shadow_at };
+    const Instance inst = { world_pos, color, params, octaves, motion, cents, {}, marks, melody_color, bass_color, scale_2, ring, {}, glow };
+    const ShadowCell box = { rect, cell, cell_map, who };
+    VsOut out = {};
+    VsOut _e3 = node_vertex(vertex_index, inst, u);
+    out = _e3;
+    out.shadow_box = metal::float4(box.who.x, 0.0, 0.0, 0.0);
+    metal::float4 _e14 = out.clip_pos;
+    metal::float2 _e15 = pane_points(_e14, u);
+    out.shadow_at = metal::float4(_e15, box.cell_map.z, 1.0);
+    VsOut _e20 = out;
+    const auto _tmp = _e20;
+    return vs_mainOutput { _tmp.clip_pos, _tmp.uv, _tmp.color, _tmp.params, _tmp.octaves, _tmp.motion, _tmp.cents, _tmp.strip_row, _tmp.marks, _tmp.melody_color, _tmp.bass_color, _tmp.rim, _tmp.ring, _tmp.ink_carry, _tmp.shadow_box, _tmp.shadow_at };
 }
