@@ -316,7 +316,7 @@ fn check_take(name: &str, shot: Shot, take: Take) {
     match render(&mut replay, Some(&mut audio), &settings, appearance, |bytes| {
         // The gate wants the LAST frame: keep this one and hand the previous
         // one back to be drawn into again.
-        Ok(Some(std::mem::replace(&mut last, bytes)))
+        Ok(std::mem::replace(&mut last, bytes))
     }) {
         Ok(_) => {}
         Err(e) if e.contains("no usable GPU adapter") => {
@@ -520,7 +520,7 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
     match render(&mut replay, Some(&mut audio), &settings, appearance, |frame| {
         seen += 1;
         if seen <= WARMUP {
-            return Ok(Some(frame));
+            return Ok(frame);
         }
         let now = std::time::Instant::now();
         if first.is_none() {
@@ -529,7 +529,7 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
             frames += 1;
         }
         last = Some(now);
-        Ok(Some(frame))
+        Ok(frame)
     }) {
         Ok(_) => {}
         Err(e) if e.contains("no usable GPU adapter") => return None,
@@ -607,7 +607,7 @@ fn spectral_shadow_frame_ms(
     match render(&mut replay, Some(&mut audio), &settings, appearance, |frame| {
         seen += 1;
         if seen <= WARMUP {
-            return Ok(Some(frame));
+            return Ok(frame);
         }
         let now = std::time::Instant::now();
         if first.is_none() {
@@ -616,7 +616,7 @@ fn spectral_shadow_frame_ms(
             frames += 1;
         }
         last = Some(now);
-        Ok(Some(frame))
+        Ok(frame)
     }) {
         Ok(_) => {}
         Err(e) if e.contains("no usable GPU adapter") => return None,

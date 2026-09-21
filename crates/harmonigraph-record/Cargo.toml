@@ -26,5 +26,9 @@ harmonigraph-take = { workspace = true }
 rtrb = { workspace = true }
 parking_lot = { workspace = true }
 
+# A render owns its ffmpeg descendants as well as the renderer process.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 nice-assert-no-alloc = "1.0"

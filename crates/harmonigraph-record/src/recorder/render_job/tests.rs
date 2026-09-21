@@ -10,22 +10,11 @@ fn a_finished_take_always_renders() {
     assert!(RenderRequest::from_config(&config).is_some());
 }
 
-/// A blank renderer path must fall back to the default rather than becoming
-/// an empty argument the renderer would reject.
-#[test]
-fn blank_settings_fall_back_rather_than_passing_empty_arguments() {
-    let config = RenderConfig { renderer_path: "  ".into(), ..Default::default() };
-    let request = RenderRequest::from_config(&config).unwrap();
-    assert_eq!(request.program, default_renderer_path());
-    assert_eq!(request.size, config.frame.pixels(config.short_edge));
-}
-
-/// Automatic and manual requests retain the active renderer and sizing
+/// Automatic and manual requests use the paired renderer and active sizing
 /// settings; only a manual request replaces the recorded appearance.
 #[test]
 fn automatic_and_manual_requests_keep_the_active_settings() {
     let config = RenderConfig {
-        renderer_path: " /custom/harmonigraph-offline ".into(),
         frame: harmonigraph_take::RenderFrame { aspect_w: 9, aspect_h: 16, ..Default::default() },
         short_edge: 2160,
         ..Default::default()
@@ -33,7 +22,7 @@ fn automatic_and_manual_requests_keep_the_active_settings() {
     let automatic = RenderRequest::from_config(&config).unwrap();
     let manual = RenderRequest::render_now(&config, "current appearance".into());
     for request in [&automatic, &manual] {
-        assert_eq!(request.program, std::path::Path::new("/custom/harmonigraph-offline"));
+        assert_eq!(request.program, default_renderer_path());
         assert_eq!(request.size, [2160, 3840]);
     }
     assert_eq!(automatic.appearance, None);
@@ -187,11 +176,12 @@ fn cancelling_a_render_kills_it_and_deletes_what_it_had_written() {
 
     let dir = std::env::temp_dir().join(format!("harmonigraph-cancelled-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
-    // Stands in for the renderer: writes at `--out` — argument 3, which is
-    // where `spawn_render` puts it — and then never finishes, which is the
-    // state the button exists for.
+    // The encoder descendant inherits stderr, just as ffmpeg does. Killing
+    // only the renderer leaves that pipe open until the child finishes its
+    // planned audio. Start the child before publishing the partial output so
+    // the fixture cannot cancel before reaching the process-tree boundary.
     let fake = dir.join("slow-renderer");
-    std::fs::write(&fake, "#!/bin/sh\necho half a video > \"$3\"\nexec sleep 300\n")
+    std::fs::write(&fake, "#!/bin/sh\nsleep 5 &\necho half a video > \"$3\"\nwait\n")
         .expect("write fake renderer");
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
 
@@ -220,10 +210,15 @@ fn cancelling_a_render_kills_it_and_deletes_what_it_had_written() {
     wait_until("the render to start", || control.child.lock().is_some());
     wait_until("the renderer to write some of the video", || strays() == 2);
 
+    let cancelled_at = std::time::Instant::now();
     assert!(control.cancel(), "there was a render in flight to stop");
     wait_until("the part-written video to go", || strays() == 0);
     wait_until("the cancelled render to be reaped", || control.child.lock().is_none());
     assert!(progress.read().is_none(), "the bar outlived the render it was measuring");
+    assert!(
+        cancelled_at.elapsed() < std::time::Duration::from_secs(2),
+        "cancellation waited for the encoder descendant to finish"
+    );
     // A cancellation is not a failure: the run ended because it was asked
     // to, and the line belongs to whoever asked.
     assert!(

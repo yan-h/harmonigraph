@@ -1251,7 +1251,10 @@ fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
             let probe = harmonigraph_record::testing::worker_probe(&shared.take, dir.clone());
             let render = &mut shared.ui.picture.appearance.render;
             render.trigger = harmonigraph_ui::RenderTrigger::OnTransportStop;
-            render.renderer_path = dir.join("absent-renderer").to_string_lossy().into_owned();
+            harmonigraph_record::testing::set_renderer_program(
+                &shared.take,
+                dir.join("absent-renderer"),
+            );
             let appearance = shared.ui.picture.appearance.serialize();
             shared.take.start(48_000.0, appearance, true);
             shared.poll_take_end();
@@ -1353,7 +1356,10 @@ fn a_note_through_the_configuration_owner_lets_a_stopped_transport_end_the_take(
             let probe = harmonigraph_record::testing::worker_probe(&shared.take, dir.clone());
             let render = &mut shared.ui.picture.appearance.render;
             render.trigger = harmonigraph_ui::RenderTrigger::OnTransportStop;
-            render.renderer_path = dir.join("absent-renderer").to_string_lossy().into_owned();
+            harmonigraph_record::testing::set_renderer_program(
+                &shared.take,
+                dir.join("absent-renderer"),
+            );
             let appearance = shared.ui.picture.appearance.serialize();
             shared.take.start(48_000.0, appearance, true);
             assert!(shared.take.is_recording(), "armed");

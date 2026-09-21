@@ -418,7 +418,7 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
 /// never reached.
 ///
 /// The real worker, a real 4,096-cell overflow, and the real Stop the Video
-/// pane sends. `renderer_path` points at nothing, so the launch is observable
+/// pane sends. `program` points at nothing, so the launch is observable
 /// (and instant) through the status line it leaves rather than by running a
 /// GPU render: the message only exists if `spawn_render` was reached at all,
 /// which is the assertion the old behaviour failed. That the resulting file
@@ -472,11 +472,11 @@ fn an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with() {
     }
     assert!(!fence.failed.load(Ordering::Acquire), "the overflow alone must not fail the take");
 
-    let config = harmonigraph_take::RenderConfig {
-        renderer_path: directory.join("no-such-renderer").display().to_string(),
-        ..Default::default()
-    };
-    control.stop(RenderRequest::from_config(&config));
+    control.stop(Some(RenderRequest {
+        program: directory.join("no-such-renderer"),
+        appearance: None,
+        size: [16, 16],
+    }));
     assert!(!recorder.is_armed());
     recorder.configuration_pass_complete(address);
     recorder.configuration_epoch_complete(1);
@@ -982,11 +982,11 @@ fn a_marker_flush_failure_refuses_stop_and_render() {
         recorder.publish_note(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(), route).take,
         Err(publication::PublishError::Lost),
     );
-    let config = harmonigraph_take::RenderConfig {
-        renderer_path: directory.join("no-such-renderer").display().to_string(),
-        ..Default::default()
-    };
-    control.stop(RenderRequest::from_config(&config));
+    control.stop(Some(RenderRequest {
+        program: directory.join("no-such-renderer"),
+        appearance: None,
+        size: [16, 16],
+    }));
     assert!(!recorder.is_armed());
     fence.worker_after_empty.enabled.store(false, Ordering::Release);
     wait_for(&fence.worker_stop_processed);
