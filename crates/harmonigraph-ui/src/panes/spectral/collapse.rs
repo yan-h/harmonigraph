@@ -236,7 +236,8 @@ fn control(
         rect.center()
     };
     // A restore rail is tab chrome; only its arrow cell takes the dock's
-    // button fill. Open controls use the same arrow colors and a smaller cell.
+    // button fill. Over the picture, the small open controls use the ordinary
+    // widget fill so they remain visible against black without a new accent.
     if rail {
         painter.rect_filled(rect, egui::CornerRadius::ZERO, style.tab.active.bg_fill);
     }
@@ -244,8 +245,18 @@ fn control(
     let hovered = response.hovered() || response.has_focus();
     painter.rect_filled(
         button,
-        egui::CornerRadius::ZERO,
-        if hovered { style.buttons.collapse_tabs_bg_fill } else { style.tab_bar.bg_fill },
+        if rail {
+            egui::CornerRadius::ZERO
+        } else {
+            egui::CornerRadius::same(theme::control_radius(scale))
+        },
+        if hovered {
+            style.buttons.collapse_tabs_bg_fill
+        } else if rail {
+            style.tab_bar.bg_fill
+        } else {
+            theme::widget()
+        },
     );
     let cross = egui::vec2(-direction.y, direction.x);
     painter.add(egui::Shape::convex_polygon(
