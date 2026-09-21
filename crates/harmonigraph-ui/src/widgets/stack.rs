@@ -370,7 +370,7 @@ const NAMES: [&str; 4] = ["Inner", "Audio", "MIDI", "Marks"];
 /// The four sizes of a node's layer stack in one bar, drawn as the node's own
 /// cross-section: the empty middle out from the center, the audio ring, the
 /// octave band and the melody/bass strip, each a cell as long as it is thick and
-/// carrying its own name, with the Ring gap standing between them as bare track.
+/// carrying its own name, with the gap standing between them as bare track.
 ///
 /// **One control rather than four, because the four are not independent
 /// numbers.** Each layer's inner edge is a sum over every layer inside it, so a
@@ -520,7 +520,7 @@ impl<'a> StackBar<'a> {
         // The gaps between the cells are the track itself, which is what the
         // empty run past the outermost layer is too. One ground for both, since
         // both are the same thing — node the picture does not draw on — and a
-        // shade laid over the padding would make the Ring gap a fifth thing on
+        // shade laid over the padding would make the gap a fifth thing on
         // the bar rather than the spacing between four.
         //
         // The middle is drawn in that same plain fill for the same reason and
@@ -842,7 +842,7 @@ mod tests {
     ///
     /// Reachable from the bars alone, which is what makes it worth a fixture:
     /// the middle at its own maximum, an audio ring that just reaches the quad
-    /// edge from there, and the Ring gap at its own maximum puts the band's slot
+    /// edge from there, and the gap at its own maximum puts the band's slot
     /// at 1.2. The band is OFF there rather than refused, so the guard above
     /// does not stand in front of this one.
     #[test]

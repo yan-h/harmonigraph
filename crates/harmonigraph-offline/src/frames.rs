@@ -535,7 +535,7 @@ mod tests {
     /// ```
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
-    fn the_shadow_against_the_octave_gap() {
+    fn the_shadow_against_the_shared_gap() {
         const SIZE: [u32; 2] = [1200, 1000];
         const PPP: f32 = 2.0;
         const NOW: f64 = 1.0;
@@ -567,7 +567,7 @@ mod tests {
         for gap in [0.05f32, 0.1, 0.2] {
             state.appearance.camera = home;
             state.appearance.camera.zoom_by(3.5);
-            state.appearance.view.octave_gap = gap;
+            state.appearance.view.ring_gap = gap;
             sheet.shoot(&mut state, NOW, &format!("gap{:.0}-{tag}", gap * 100.0));
         }
     }

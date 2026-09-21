@@ -67,10 +67,9 @@ pub struct RingStack {
     /// thing about the marks still left to the renderer, which eases the strip
     /// off its own billboard edge.
     pub mark_thickness: f32,
-    /// The padding between two drawn layers (see [`ViewConfig::ring_gap`]) —
-    /// the RADIAL one alone, this being the stack. What separates one octave
-    /// sector from the next is [`ViewConfig::octave_gap`], which no radius on
-    /// this struct depends on.
+    /// The radial use of the shared padding between two drawn layers (see
+    /// [`ViewConfig::ring_gap`]). The same setting cuts sectors angularly, but
+    /// no radius on this struct depends on that use.
     pub gap: f32,
 }
 

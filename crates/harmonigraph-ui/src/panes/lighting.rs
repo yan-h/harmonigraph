@@ -26,7 +26,7 @@ pub(super) fn lighting_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocume
 
 fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Lattice glow");
-    // A share of the node's radius, the unit the two gaps and the Clearance in
+    // A share of the node's radius, the unit the shared gap and the Clearance in
     // Note read in, and measured from the same place: the reach is a distance
     // out from the node's edge exactly as the Clearance is. Eased, because the
     // bar spans two pictures rather than one range of one: the accent — a halo

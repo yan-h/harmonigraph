@@ -35,7 +35,7 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // the analyzer's spectrum on the inner one, the played notes on this one.
     // This heading names the pitch axis drawn on it instead, that being what
     // the rows below set. How wide the cut between two indicators is belongs to
-    // neither: it is the Octave gap, up in Note with the other padding.
+    // neither: it is the shared Gap, up in Note layers.
     //
     // COUNTS and a CENTER rather than a pitch range: a slice is always exactly
     // one octave, so an indicator can never stand for less pitch than it
@@ -104,11 +104,9 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             );
     });
     // The padding between one indicator and the next is NOT here: it is the
-    // Octave gap, up in Note beside the Ring gap. The two paddings are one
-    // question asked on a node's two axes — how far apart do its pieces read —
-    // and a person dialling one is looking at the other, which a heading
-    // between them costs. What this section keeps is the axis alone: how the
-    // turn is shared out, rather than how wide the cut between two shares is.
+    // shared Gap up in Note layers. What this section keeps is the axis alone:
+    // how the turn is shared out, rather than how wide the cut between two
+    // shares is.
     //
     // No size bar under these, and no on/off either: both are the Layers bar's,
     // where 0 is this layer's off position as it is on every other. The band is
@@ -147,9 +145,9 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .on_hover_text("Extend the lowest held note's octave slice past the band");
     });
     // A mark is the marked octave's own slice continued outward: it stands off
-    // the band by the Ring gap, as every layer of the stack stands off the one
-    // inside it, and its SIDES are cut by the Octave gap -- the same padding
-    // one sector stands off the next, so it reads as that indicator's own piece
+    // the band by the shared gap, as every layer of the stack stands off the one
+    // inside it, and its SIDES are cut by that same gap -- the padding one
+    // sector stands off the next, so it reads as that indicator's own piece
     // rather than as a ring around everything.
     // The Delay is about a mark that is DRAWN — when it arrives — so it is
     // gated on there being one: an end has to be marked AND the strip's depth
@@ -180,7 +178,7 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// the analyzer's spectrum, or none.
 ///
 /// First of the layers, which is where it sits in the stack: reaching the
-/// node's own centre, a Ring gap in from the octave Band below. It is the one
+/// node's own centre, a gap in from the octave Band below. It is the one
 /// section here that says what a layer MEASURES where the rest only size and
 /// colour what is already there, and the name carries the "ring" so the heading
 /// says which layer that is.
@@ -352,50 +350,31 @@ fn layers_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // the four numbers could be read without the other three, since a layer's
     // inner edge is a sum over everything inside it.
     //
-    // Directly above the Ring gap, because the two are one idea: the sizes are
+    // Directly above the Gap, because the two are one idea: the sizes are
     // the layers and that gap is the padding standing between them, the bar
-    // draws both, and dragging it is visibly the stack opening up. The Octave
-    // gap under it is not on this bar's axis at all, and is here anyway — see
-    // there.
+    // draws both, and dragging it is visibly the stack opening up.
     StackBar::new(view).show(ui).on_hover_text(
         "Node layers from the center out: empty center, audio ring, MIDI octave ring, then melody and bass marks. \
                  Drag a handle to resize its layer; zero width hides it. \
                  Double-click resets.",
     );
-    // A node's two paddings, together and directly under the bar that draws one
-    // of them. They are the same question asked on the node's two axes — how
-    // far apart do its pieces read — so a person dialling one is looking at the
-    // other, and they are compared by their numbers, which a heading between
-    // them costs. Both are whole-note settings rather than any one layer's,
-    // which is what puts them in Note at all.
-    //
-    // Two bars rather than one because the two axes answer differently: the
-    // RADIAL one is measured on the Layers bar's own axis, every unit it takes
-    // being a unit the three widths cannot have, and the ANGULAR one costs the
-    // stack nothing — it cuts slices out of a ring already placed. What a node
-    // could not say with one number is a ring standing well off its neighbour
-    // while the slices stay tight, or the reverse.
+    // One node-wide padding directly under the bar that draws its radial use.
+    // The same value spaces the concentric layers and cuts the sectors, so the
+    // two axes carry one rhythm of empty space. It is a whole-note setting
+    // rather than any one layer's, which is what puts it in Note at all.
     //
     // Read out as a PERCENTAGE of the node's radius, which is what quad uv 1.0
     // is (`scene.node_radius`, a quarter of the lattice spacing, and the edge
     // no ring may cross). That makes the whole stack a budget of
     // 100%, which is the picture the Layers bar draws, and it is the same unit
     // the Clearance below reads in. A tenth of a percent is exactly the
-    // resolution three decimals of the stored number gives, so the readout
-    // trades no precision for the point: the fresh 5.2% and the 4.8% beside it
-    // are one number at a coarser one, which is where the bar would go quiet
-    // exactly as it is being dialled in. Numeric entry uses the displayed
-    // percentage too; the widget converts it back to the stored fraction.
-    ValueBar::new(&mut view.ring_gap, 0.0..=GAP_MAX, "Layer gap").percent().show(ui).on_hover_text(
-        "Space between concentric layers, as a percentage of the node radius. 0% joins the layers.",
+    // resolution three decimals of the stored number gives. Numeric entry uses
+    // the displayed percentage too; the widget converts it back to the stored
+    // fraction.
+    ValueBar::new(&mut view.ring_gap, 0.0..=GAP_MAX, "Gap").percent().show(ui).on_hover_text(
+        "Space between concentric layers and between octave sectors, as a percentage of the node radius. \
+                 0% joins both layers and sectors.",
     );
-    ValueBar::new(&mut view.octave_gap, 0.0..=GAP_MAX, "Sector gap")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "Space between octave slices in the audio ring, MIDI ring and marks, as a percentage of the node radius. \
-                 0% joins the slices.",
-        );
 }
 
 /// Shared visibility timing followed by the MIDI slices' motion and ordering.

@@ -191,17 +191,15 @@ pub const MARK_THICKNESS_MAX: f32 = 0.3;
 /// rings are being refused one at a time rather than one with nowhere at all to
 /// put them.
 pub const RING_INNER_MAX: f32 = 0.9;
-/// See [`RING_WIDTH_MAX`]. The ceiling on BOTH of a node's paddings, which are
-/// a padding rather than a layer and so share one.
+/// See [`RING_WIDTH_MAX`]. The ceiling on a node's shared radial and angular
+/// padding ([`ViewConfig::ring_gap`]).
 ///
-/// It is the RADIAL one ([`ViewConfig::ring_gap`]) the number is sized for,
-/// that being the one spent out of the quad, and spent twice over on one node
+/// It is the radial use the number is sized for, that being the one spent out
+/// of the quad, and spent twice over on one node
 /// (between the audio ring and the band, and between the band and the marks):
-/// at the top of the bar the gaps alone are two fifths of it. The ANGULAR one
-/// ([`ViewConfig::octave_gap`]) costs the stack
-/// nothing and wants a ceiling for a different reason — a gap of a whole
-/// sector's arc is every indicator erased — and lands near enough the same
-/// place that a second constant would be two numbers saying one thing.
+/// at the top of the bar the gaps alone are two fifths of it. The angular use
+/// costs the stack nothing, but a gap of a whole sector's arc would erase every
+/// indicator, so the same ceiling is useful on both axes.
 pub const GAP_MAX: f32 = 0.2;
 
 /// How far a resting marker may be asked to reach on EITHER of its two axes —
@@ -764,9 +762,10 @@ pub struct Scene {
     /// because that sum is only right while some ring is there to owe the
     /// padding to.
     pub mark_inner: f32,
-    /// The ANGULAR padding on a node (see [`ViewConfig::octave_gap`]): between
-    /// one octave sector and the next, on the band, on the audio ring's wedges
-    /// and down a mark's own sides. Already clamped.
+    /// The angular use of a node's shared padding (see
+    /// [`ViewConfig::ring_gap`]): between one octave sector and the next, on the
+    /// band, on the audio ring's wedges and down a mark's own sides. Already
+    /// clamped.
     ///
     /// The node's other padding, the RADIAL one, reaches the picture as the
     /// radii themselves — every stand-off it buys is already spent in

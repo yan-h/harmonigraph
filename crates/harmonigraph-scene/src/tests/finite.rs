@@ -72,7 +72,6 @@ fn poisoned_view() -> ViewConfig {
         band_width: nan,
         ring_inner: nan,
         ring_gap: nan,
-        octave_gap: nan,
         lattice_ground: nan,
         marker_ink: nan,
         octave_count: base.octave_count,

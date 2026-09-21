@@ -58,6 +58,33 @@ fn retired_spacing_preserves_appearance_and_workspace() {
 }
 
 #[test]
+fn retired_octave_gap_preserves_the_shared_gap_and_the_rest_of_the_document() {
+    let mut state = fresh();
+    state.picture.appearance.view.ring_gap = 0.02;
+    state.picture.appearance.camera.distance = 18.0;
+    state.workspace.interaction.ui_scale = 1.25;
+    let saved = state.save_persist();
+    let appearance = state.picture.appearance.serialize();
+    assert!(!saved.contains("octave_gap:"));
+
+    // Old documents carried an independent angular value. The radial value is
+    // now the shared setting, so the retired key is ignored and disappears on
+    // the next save through both persistence doors.
+    let old = saved.replacen("ring_gap:", "octave_gap:0.17,ring_gap:", 1);
+    assert_ne!(old, saved, "the fixture must insert the retired key");
+    let mut restored = fresh();
+    assert!(restored.load_persist(&old));
+    assert_eq!(restored.picture.appearance.view.ring_gap, 0.02);
+    assert_eq!(restored.picture.appearance.camera.distance, 18.0);
+    assert_eq!(restored.workspace.interaction.ui_scale, 1.25);
+    assert_eq!(restored.save_persist(), saved);
+
+    let old = appearance.replacen("ring_gap:", "octave_gap:0.17,ring_gap:", 1);
+    assert_ne!(old, appearance);
+    assert_eq!(AppearanceDocument::parse(&old).unwrap().serialize(), appearance);
+}
+
+#[test]
 fn persist_round_trips_camera_and_view() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
