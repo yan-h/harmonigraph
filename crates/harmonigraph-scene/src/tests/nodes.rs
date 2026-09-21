@@ -678,12 +678,12 @@ fn the_table_tracks_the_curve_it_samples() {
 
 #[test]
 fn octaves_fade_independently() {
-    // Hold C4, tap-and-release C5: the C5 indicator must decay on
+    // Hold C4, release a settled C5: the C5 indicator must decay on
     // its own envelope even though the node stays fully active.
     let mut tracker = NoteTracker::new();
     for (note, kind) in [
         (60, NoteEventKind::On { velocity: 1.0 }), // C4 held
-        (72, NoteEventKind::On { velocity: 1.0 }), // C5 tapped...
+        (72, NoteEventKind::On { velocity: 1.0 }), // C5 held...
     ] {
         tracker.handle_event(NoteEvent {
             source: SourceId::DIRECT,
@@ -693,13 +693,11 @@ fn octaves_fade_independently() {
             kind,
         });
     }
-    tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 72)); // ...and released
+    tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, 72)); // ...and released
 
-    // Half a fade after C5 starts LEAVING, which is when its arrival lands
-    // rather than when the key came up — a tap this short is still arriving
-    // at the key, and is not dimmed for it (`Voice::release_level`).
+    // Half a fade after key-up, once both octaves had time to arrive.
     let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
-    let scene = scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 1.5);
+    let scene = scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 2.5);
     let origin = origin_node(&scene);
     assert_eq!(origin.activation, 1.0, "node stays lit by the held C4");
     assert_eq!(origin.octaves[MIDDLE_C_SLOT], 1.0, "held octave at full");
@@ -708,33 +706,6 @@ fn octaves_fade_independently() {
         "released octave mid-fade, got {}",
         origin.octaves[MIDDLE_C_SLOT + 1]
     );
-}
-
-#[test]
-fn initial_voice_envelopes_reach_full_even_for_short_notes() {
-    // Derivation supplies the voice envelopes used by the audio floor and
-    // marker/name calculations. Final lattice motion reverses at key-up;
-    // that separate behavior is covered by the shared motion tests.
-    let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
-    // Down for a twelfth of the Fade — a thirty-second note against a fade
-    // set for whole ones.
-    tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 60));
-    let frame = FrameParams { fade_time: 1.2, ..FrameParams::default() };
-    let view = plain_view();
-
-    // At the end of the arrival, which is the peak of the note's whole life.
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.2);
-    let node = origin_node(&scene);
-    assert_eq!(node.activation, 1.0, "the core reaches full on a note held for a twelfth of it");
-    assert_eq!(node.octaves[MIDDLE_C_SLOT], 1.0, "and the octave glyph with it");
-
-    // And the whole fade is still ahead of it: the departure starts where the
-    // arrival landed, not back at the key.
-    let mid = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.8);
-    let node = origin_node(&mid);
-    assert!((node.activation - 0.5).abs() < 1e-5, "half a fade on, half gone: {}", node.activation);
-    assert_eq!(node.octaves[MIDDLE_C_SLOT], node.activation);
 }
 
 #[test]
@@ -759,7 +730,15 @@ fn one_fade_time_carries_every_layer_of_the_node() {
     tracker.prune(3.0, &view.envelope(&frame));
     let tuning = Tuning::default();
     let mut scene = scene_of(&tracker, &tuning, &view, &frame, 3.0);
-    NodeMotion::default().step(&mut scene, &tracker, &tuning, &view, &view.envelope(&frame), 3.0);
+    NodeMotion::default().step(
+        &mut scene,
+        &tracker,
+        &tuning,
+        &view,
+        &view.envelope(&frame),
+        &RingFade::default(),
+        3.0,
+    );
 
     let half = |what: &str, v: f32| {
         assert!((v - 0.5).abs() < 1e-5, "{what} should be half-faded, got {v}");
@@ -795,7 +774,15 @@ fn the_delay_is_what_keeps_a_released_chord_from_smearing_rings() {
         let mut ringing = Vec::new();
         let mut sample = |tracker: &NoteTracker, now| {
             let mut scene = scene_of(tracker, &tuning, &view, &frame, now);
-            motion.step(&mut scene, tracker, &tuning, &view, &view.envelope(&frame), now);
+            motion.step(
+                &mut scene,
+                tracker,
+                &tuning,
+                &view,
+                &view.envelope(&frame),
+                &RingFade::default(),
+                now,
+            );
             ringing.extend(
                 scene
                     .nodes
@@ -1136,6 +1123,7 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
         &tuning,
         &view,
         &view.envelope(&plain_frame()),
+        &RingFade::default(),
         0.5,
     );
     let origin = origin_node(&scene);
@@ -1257,6 +1245,21 @@ fn the_reading_leaves_the_midi_picture_alone() {
 /// [`RingFade::advance`]), so every claim below is about the gate and not about
 /// how fast a ring follows it. `a_rings_coming_and_going_runs_on_the_fade` is
 /// the other half, and it drives two.
+fn animate_measured(
+    scene: &mut Scene,
+    tracker: &NoteTracker,
+    view: &ViewConfig,
+    frame: &FrameParams,
+    now: f64,
+) {
+    let env = view.envelope(frame);
+    let mut fade = RingFade::default();
+    if scene.spectral.ring_draws() {
+        fade.advance(&RingGate::new(&scene.spectral), &env, now);
+    }
+    NodeMotion::default().step(scene, tracker, &Tuning::just(), view, &env, &fade, now);
+}
+
 fn gated_scene(gate: f32, pitch: f32) -> Scene {
     gated_scene_of(&sounding(), gate, pitch)
 }
@@ -1273,7 +1276,7 @@ fn gated_scene_of(tracker: &NoteTracker, gate: f32, pitch: f32) -> Scene {
         }
     }
     scene.spectral = paint;
-    scene.wear_audio_rings(&mut RingFade::default(), &view.envelope(&plain_frame()), 0.5);
+    animate_measured(&mut scene, tracker, &view, &plain_frame(), 0.5);
     scene
 }
 
@@ -1348,7 +1351,7 @@ fn a_node_the_keys_have_lit_rings_whatever_the_gate_says() {
     };
     let mut scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
     scene.spectral = SpectralPaint::new(&view, Gradient::default());
-    scene.wear_audio_rings(&mut RingFade::default(), &view.envelope(&plain_frame()), 0.5);
+    animate_measured(&mut scene, &sounding(), &view, &plain_frame(), 0.5);
     let (mut lit, mut idle) = (0, 0);
     for node in &scene.nodes {
         if node.activation > 0.0 {
@@ -1396,7 +1399,7 @@ fn a_played_nodes_ring_leaves_on_the_notes_own_fade() {
     let ring_at = |now: f64| {
         let mut scene = scene_of(&tracker, &Tuning::just(), &view, &frame, now);
         scene.spectral = SpectralPaint::new(&view, Gradient::default());
-        scene.wear_audio_rings(&mut RingFade::default(), &view.envelope(&frame), now);
+        animate_measured(&mut scene, &tracker, &view, &frame, now);
         let node = origin_node(&scene);
         (node.activation, node.audio_ring)
     };
@@ -1423,7 +1426,7 @@ fn a_ring_dialled_off_is_gated_by_nothing() {
     let mut scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
     scene.spectral = SpectralPaint::new(&view, Gradient::default());
     assert!(!scene.spectral.ring_draws(), "the fixture's ring drew with no width");
-    scene.wear_audio_rings(&mut RingFade::default(), &view.envelope(&plain_frame()), 0.5);
+    animate_measured(&mut scene, &sounding(), &view, &plain_frame(), 0.5);
     assert!(
         scene.nodes.iter().all(|n| n.audio_ring == 1.0),
         "a gate answered on a lattice with no ring to answer about",

@@ -15,6 +15,7 @@ pub(super) fn apply(scene: &mut Scene, state: &mut crate::PictureState, surface:
         &state.runtime.tuning,
         &state.appearance.view,
         &env,
+        &state.runtime.ring_fade,
         now,
     );
 }

@@ -84,6 +84,43 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
     draw_lattice(ui, rect, state, now, surface, background, Some(&response), stats);
 }
 
+/// The scene composition shared by the live pane, preview, offline draw and fixtures.
+pub(crate) fn compose_scene(
+    state: &mut PictureState,
+    window: &harmonigraph_scene::DrawnWindow,
+    hovered: Option<harmonigraph_core::LatticePos>,
+    surface: usize,
+    now: f64,
+) -> harmonigraph_scene::Scene {
+    let mut scene = derive_scene(
+        &state.runtime.tracker,
+        &state.runtime.tuning,
+        &state.appearance.view,
+        window,
+        &state.runtime.frame_params,
+        state.appearance.camera,
+        hovered,
+    );
+    // What the AUDIO says, over a scene derived exactly as above: a ring of
+    // measured octaves inside the octave band, carrying whichever of two
+    // readings the selector asks for. Whether there IS a ring is the WIDTH's
+    // to say, not the selector's, and with no ring the pass does not so much
+    // as look at the spectrum (`spectral_ring_draws`). A
+    // post-pass and not a branch inside the derivation, because the picture
+    // around the ring — the geometry, the wheel, the markers, the camera, and the
+    // whole of what the keys light — is the same answer either way, and a
+    // reading that reached into `derive_scene` would be a second path through
+    // all of it.
+    super::spectral_fold::apply(&mut scene, state, now);
+    super::node_motion::apply(&mut scene, state, surface, now);
+    // And the node glow's own clock, last: a filter can only step a level the
+    // derivation has already written, and the light is stepped against what a
+    // node's MIDI layers say. Per surface, because what this hands out is rows
+    // of that surface's own ink strip.
+    super::glow_fade::apply(&mut scene, state, surface, now);
+    scene
+}
+
 /// The lattice's shared draw sequence: derive the scene, pick when this is
 /// the interactive copy, lay out and draw the node labels, and hand the
 /// frame to its paint callback. Both [`lattice_pane`] and the Render
@@ -125,37 +162,9 @@ pub(crate) fn draw_lattice(
     if response.is_some() {
         state.surfaces.drawn_this_frame = Some(window);
     }
-    let mut scene = derive_scene(
-        &state.runtime.tracker,
-        &state.runtime.tuning,
-        &state.appearance.view,
-        &window,
-        &state.runtime.frame_params,
-        state.appearance.camera,
-        // Only the interactive copy has a hover to show: the preview's
-        // camera is framed in the Lattice tab, not here, and a hover picked
-        // up while working there is that view's business, not a picture of
-        // the render's.
-        response.and(state.surfaces.hovered),
-        now,
-    );
-    // What the AUDIO says, over a scene derived exactly as above: a ring of
-    // measured octaves inside the octave band, carrying whichever of two
-    // readings the selector asks for. Whether there IS a ring is the WIDTH's
-    // to say, not the selector's, and with no ring the pass does not so much
-    // as look at the spectrum (`spectral_ring_draws`). A
-    // post-pass and not a branch inside the derivation, because the picture
-    // around the ring — the geometry, the wheel, the markers, the camera, and the
-    // whole of what the keys light — is the same answer either way, and a
-    // reading that reached into `derive_scene` would be a second path through
-    // all of it.
-    super::spectral_fold::apply(&mut scene, state, now);
-    super::node_motion::apply(&mut scene, state, surface, now);
-    // And the node glow's own clock, last: a filter can only step a level the
-    // derivation has already written, and the light is stepped against what a
-    // node's MIDI layers say. Per surface, because what this hands out is rows
-    // of that surface's own ink strip.
-    super::glow_fade::apply(&mut scene, state, surface, now);
+    // Only the interactive copy carries the hover picked in this view.
+    let hovered = response.and(state.surfaces.hovered);
+    let mut scene = compose_scene(state, &window, hovered, surface, now);
     // The ground this pass is composited over. Only the shell knows it -- the
     // fill the docked pane just painted here, the render layout's own
     // background offline -- so it is carried in by the caller rather than
@@ -832,16 +841,10 @@ mod tests {
         for note in [55u8, 60, 62, 64, 67, 69, 71] {
             state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
         }
-        let scene = derive_scene(
-            &state.runtime.tracker,
-            &state.runtime.tuning,
-            &state.appearance.view,
-            &state.appearance.view.reach(),
-            &state.runtime.frame_params,
-            state.appearance.camera,
-            None,
-            0.05,
-        );
+        let scene = {
+            let window = state.appearance.view.reach();
+            compose_scene(&mut state, &window, None, 0, 0.05)
+        };
         let mut batch = crate::text::TextBatch::default();
         let _ = painted_into(egui::vec2(1200.0, 900.0), rect, |ui| {
             draw_node_labels(ui, rect, &scene, &state.appearance.view, &mut batch);
@@ -1132,16 +1135,10 @@ mod tests {
         // to sample rather than a frame of it.
         state.runtime.frame_params.fade_time = 1.0;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
-        let scene = derive_scene(
-            &state.runtime.tracker,
-            &state.runtime.tuning,
-            &state.appearance.view,
-            &state.appearance.view.reach(),
-            &state.runtime.frame_params,
-            state.appearance.camera,
-            None,
-            0.05,
-        );
+        let scene = {
+            let window = state.appearance.view.reach();
+            compose_scene(&mut state, &window, None, 0, 0.05)
+        };
         let names = state.appearance.view.note_names;
         assert_eq!(
             names,
@@ -1167,16 +1164,10 @@ mod tests {
         // this half, a fix that simply never reserved would pass the half
         // above.
         state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
-        let scene = derive_scene(
-            &state.runtime.tracker,
-            &state.runtime.tuning,
-            &state.appearance.view,
-            &state.appearance.view.reach(),
-            &state.runtime.frame_params,
-            state.appearance.camera,
-            None,
-            1.9,
-        );
+        let scene = {
+            let window = state.appearance.view.reach();
+            compose_scene(&mut state, &window, None, 0, 1.9)
+        };
         let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note still lights");
         assert!(node.departing, "the key is up and the arrival landed, so this is a departure");
         assert!(
@@ -1210,16 +1201,10 @@ mod tests {
         state.runtime.frame_params.fade_time = 1.0;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
-        let scene = derive_scene(
-            &state.runtime.tracker,
-            &state.runtime.tuning,
-            &state.appearance.view,
-            &state.appearance.view.reach(),
-            &state.runtime.frame_params,
-            state.appearance.camera,
-            None,
-            1.9,
-        );
+        let scene = {
+            let window = state.appearance.view.reach();
+            compose_scene(&mut state, &window, None, 0, 1.9)
+        };
         let names = state.appearance.view.note_names;
         assert_eq!(names, NoteNames::Past, "the reserve is Past's alone");
         let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note still lights");
@@ -1479,16 +1464,10 @@ mod tests {
             .runtime
             .tracker
             .prune(secs, &state.appearance.view.envelope(&state.runtime.frame_params));
-        let scene = derive_scene(
-            &state.runtime.tracker,
-            &state.runtime.tuning,
-            &state.appearance.view,
-            &state.appearance.view.reach(),
-            &state.runtime.frame_params,
-            state.appearance.camera,
-            None,
-            secs,
-        );
+        let scene = {
+            let window = state.appearance.view.reach();
+            compose_scene(state, &window, None, 0, secs)
+        };
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 450.0));
         let mut batch = crate::text::TextBatch::default();
         let _ = painted_into(egui::vec2(1200.0, 900.0), rect, |ui| {
@@ -1506,3 +1485,7 @@ mod tests {
         (ink, pieces.into_iter().map(|piece| piece.text).collect())
     }
 }
+
+#[cfg(test)]
+#[path = "lattice_motion_tests.rs"]
+mod motion_tests;

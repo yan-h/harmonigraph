@@ -72,8 +72,7 @@
 //! exception to any of that. What everything above MEASURES is a weight to the
 //! last byte, and the gate reads those values without changing one of them;
 //! what it decides is whether a node's ring is on the screen at all
-//! ([`Scene::wear_audio_rings`](harmonigraph_scene::Scene), run at the end of
-//! [`apply`]). A wedge still dims rather than switching off — it is the whole
+//! ([`NodeMotion::step`](harmonigraph_scene::NodeMotion::step), after [`apply`]). A wedge still dims rather than switching off — it is the whole
 //! RING that comes and goes, at a level the view names, because the ring costs
 //! its annulus at every node in the window whatever it reads. It comes and goes
 //! on the note Fade, and a node the keys are holding keeps its ring whatever
@@ -373,8 +372,8 @@ impl Fold {
 /// the Spiral pane would paint it, opening on the grey a node's own rings rest
 /// in rather than on the analyzer's black.
 ///
-/// Nothing here touches a NODE. The MIDI picture is `derive_scene`'s answer
-/// untouched — the bodies, the octave band, the marks, the trail, the camera —
+/// This pass writes the shared spectral reading and measured presence fade.
+/// The MIDI picture comes from the following carried-motion pass,
 /// and the measurement is a ring of its own inside the band, so one node
 /// carries both readings and neither can be mistaken for the other.
 ///
@@ -407,9 +406,9 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, now: f64) {
     state.runtime.ring_levels.fill(&mut paint, &cfg, grid, &state.appearance.view, now);
     scene.spectral = paint;
     // Which nodes the ring is worth drawing on, now that there is something to
-    // ask it of. Last, and off the scene rather than off the paint above,
-    // because the answer is measured against the levels a wedge will actually
-    // paint — see `Scene::wear_audio_rings`. With no audio flowing the grid is
+    // ask it of. The following motion pass reads this measured presence for
+    // audio-only poses, then adds its final MIDI activation as a draw floor.
+    // With no audio flowing the grid is
     // zeros and every node is held back at any gate above its floor, which is
     // the point: an analyzer with nothing to say draws no rings rather than a
     // lattice of them at the ramp's floor.
@@ -419,7 +418,7 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, now: f64) {
     // on a duration of its own. Assembled through `ViewConfig::envelope`, which
     // is the one place the Fade param and the Fade curve are put back together.
     let env = state.appearance.view.envelope(&state.runtime.frame_params);
-    scene.wear_audio_rings(&mut state.runtime.ring_fade, &env, now);
+    state.runtime.ring_fade.advance(&harmonigraph_scene::RingGate::new(&scene.spectral), &env, now);
 }
 
 /// What the ring's wedges READ, carried across frames on the ring's own attack
@@ -528,9 +527,7 @@ mod tests {
     use super::*;
     use crate::tests::probe::fresh_picture as fresh;
     use harmonigraph_core::{spectrum::midi_to_hz, LatticePos, NoteEvent, SourceId, Tuning};
-    use harmonigraph_scene::{
-        derive_scene, octave_layout, OctaveLayout, ViewConfig, MAX_SPAN, OCTAVE_SLOTS,
-    };
+    use harmonigraph_scene::{octave_layout, OctaveLayout, ViewConfig, MAX_SPAN, OCTAVE_SLOTS};
 
     const SR: f32 = 48_000.0;
 
@@ -962,23 +959,13 @@ mod tests {
     /// and goes rather than about what it reads. A state carried across two of
     /// these has a fade running through it, exactly as a shell does.
     fn scene_of_at(state: &mut PictureState, now: f64) -> Scene {
-        let mut scene = derive_scene(
-            &state.runtime.tracker,
-            &state.runtime.tuning,
-            &state.appearance.view,
-            &state.appearance.view.reach(),
-            &state.runtime.frame_params,
-            state.appearance.camera,
-            None,
-            now,
-        );
-        apply(&mut scene, state, now);
-        scene
+        let window = state.appearance.view.reach();
+        crate::panes::lattice::compose_scene(state, &window, None, 0, now)
     }
 
     /// EITHER reading adds. The ring fills a channel of its own — one reading
     /// of the spectrum the whole lattice shares — and leaves every MIDI answer
-    /// exactly as `derive_scene` wrote it, so one node carries both pictures at
+    /// exactly as the carried motion wrote it, so one node carries both pictures at
     /// once and neither has to be given up to see the other.
     ///
     /// A per-node sweep because a pass that reached into the nodes AT ALL is

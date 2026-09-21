@@ -59,7 +59,7 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
         ..ViewConfig::default()
     };
     for projection in [Projection::Cabinet, Projection::Perspective, Projection::Orthographic] {
-        let mut scene = harmonigraph_scene::derive_scene(
+        let mut scene = animated_snapshot(
             &harmonigraph_core::NoteTracker::new(),
             &harmonigraph_core::Tuning::default(),
             &view,
