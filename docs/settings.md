@@ -21,7 +21,7 @@ The separate Spectrogram page keeps its texture controls out of the path to basi
 
 ## Folding the Analyzer
 
-The two chevrons beside the Analyzer's divider fold the spectrum and spectrogram independently.
+The two arrows beside the Analyzer's divider fold the spectrum and spectrogram independently.
 Click a labelled rail to restore its region at its remembered size.
 The spectrogram fold includes the piano roll and its note labels;
 the Analyzer's tab-bar arrow still folds the whole pane and remembers both region states.
