@@ -8,9 +8,8 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | Display page | What you will find |
 | --- | --- |
 | Lattice | Camera and seventh layers; note-layer sizes; shared octave layout; melody/bass marks; audio ring; note animation; labels and idle crosses. |
-| Analyzer | Orientation and shared frequency range; live spectrum fill/outline; shared history duration and clear; MIDI ribbons, glow, extensions and labels. |
+| Analyzer | Orientation and shared frequency range; live spectrum fill/outline; audio input, frequency resolution and averaging; level mapping, tilt and live response; shared history; MIDI ribbons. |
 | Spectrogram | Heatmap visibility; pitch/time softness and wide blur mix; level contours; Mosaic or Watercolor texture. |
-| Analysis | Audio input and frequency resolution; spectrum averaging; level mapping and tilt; shared live attack/release. |
 | Colors | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. |
 | Lighting | Shared MIDI bloom; lattice glow, texture and breathing; shadows for lattice shapes, lattice text, Analyzer/Spiral notes, and Analyzer/Spiral labels. |
 | System | Lattice resolution and spectrogram time sampling; editor frame limit and performance overlay; interface scale, tab-bar visibility and layout reset. |
@@ -18,7 +17,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 Display opens on Lattice in a fresh workspace.
 Each page keeps a single owner for its controls;
 shared settings name their scope in the help text.
-The two extra pages add navigation choices but remove the texture controls from the path to basic analysis and ribbon settings.
+The separate Spectrogram page keeps its texture controls out of the path to basic analysis and ribbon settings.
 
 ## Shared settings and dependencies
 

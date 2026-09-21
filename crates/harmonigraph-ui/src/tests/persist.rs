@@ -2172,6 +2172,36 @@ fn retired_playhead_refuses_the_entire_editor_and_appearance_document() {
     assert!(AppearanceDocument::parse(&dropped).is_err());
 }
 
+/// A workspace last closed on the retired Analysis page is refused whole and
+/// reports why. `DisplayPage` is persisted beside the dock, so removing a page
+/// is the same enum-variant break as removing a dock tab: serde cannot build a
+/// partial `UiPersist`, and the version floor is not reached.
+#[test]
+fn a_saved_picker_naming_the_retired_analysis_page_is_refused_whole() {
+    let mut state = fresh();
+    state.picture.appearance.camera.yaw = 1.23;
+    state.workspace.interaction.display_page = crate::panes::display::DisplayPage::Analyzer;
+    let saved = state.save_persist();
+    let dropped = saved.replace("display_page:Analyzer", "display_page:Analysis");
+    assert_ne!(dropped, saved, "the splice must land for this to test anything");
+
+    let mut restored = fresh();
+    let before = restored.save_persist();
+    assert!(!restored.load_persist(&dropped), "a picker naming Analysis is not applied");
+    assert!(!collapsed(&restored, panes::Tab::Console), "the refusal opens its report");
+    set_console_collapsed(&mut restored, true);
+    assert_eq!(
+        restored.save_persist(),
+        before,
+        "the camera and workspace go with it apart from the visible report",
+    );
+    assert!(
+        restored.picture.runtime.console.lines().any(|line| line.contains("did not parse")),
+        "the refusal was silent; console holds {:?}",
+        restored.picture.runtime.console.lines().collect::<Vec<_>>(),
+    );
+}
+
 /// A saved dock naming the retired `Notes` tab is refused WHOLE, and says so.
 ///
 /// Its own test beside the retired-variant ones above because the fixture is

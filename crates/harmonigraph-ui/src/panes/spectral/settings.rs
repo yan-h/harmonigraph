@@ -1,5 +1,5 @@
-//! Analyzer layout, spectrogram appearance, and shared audio analysis each
-//! have a Display page. Color tables live on [`super::super::color`].
+//! Analyzer layout and shared audio analysis have one Display page;
+//! spectrogram appearance has another. Color tables live on [`super::super::color`].
 
 use harmonigraph_scene::{
     CLOUD_SPEED_MAX, CLOUD_SPEED_MIN, CONTOURS_MAX, CONTOURS_MIN, CONTOUR_SOFTNESS_MAX,
@@ -39,8 +39,12 @@ pub(crate) fn span_readout(seconds: f32) -> String {
     format!("{:.1} s", seconds.max(0.0))
 }
 
-/// The Analyzer picture: arrangement, live spectrum, history and MIDI ribbons.
-pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut PictureState) {
+/// The Analyzer picture and the audio measurement shared by every audio view.
+pub(crate) fn spectrum_settings_pane(
+    ui: &mut egui::Ui,
+    state: &mut PictureState,
+    params: &dyn ParamBackend,
+) {
     use crate::SpectralOrientation;
 
     ui.heading("View");
@@ -109,6 +113,8 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut PictureState
     ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Spectrum outline").percent().show(ui).on_hover_text(
         "Opacity of the white spectrum outline. Independent of Spectrum fill softness; 0% hides it.",
     );
+
+    analysis_settings(ui, cfg, params);
 
     section(ui, "History");
     ValueBar::new(&mut cfg.roll_seconds, crate::ROLL_SECONDS_MIN..=crate::ROLL_SECONDS_MAX, "History duration")
@@ -202,19 +208,18 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut PictureState
     });
 }
 
-/// Measurement controls shared by every audio view.
-pub(crate) fn analysis_settings_pane(
+/// Measurement controls shared by every audio view, within the Analyzer page.
+fn analysis_settings(
     ui: &mut egui::Ui,
-    state: &mut PictureState,
+    cfg: &mut crate::SpectrumConfig,
     params: &dyn ParamBackend,
 ) {
     use crate::{SpectrumTapers, SpectrumWindow};
 
+    section(ui, "Audio analysis");
     ui.weak(
-        "Audio measurement and display mapping. These settings do not change pass-through audio.",
+        "Shared by the Analyzer, Spiral, spectrogram and lattice audio rings. These settings do not change pass-through audio.",
     );
-    ui.heading("Audio analysis");
-    let cfg = &mut state.appearance.spectrum;
     if let Some(mut input) = params.analysis_input() {
         let before = input;
         choice_row(
@@ -572,7 +577,7 @@ mod tests {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 1600.0));
         ctx.run_ui(
             egui::RawInput { screen_rect: Some(screen), events, ..Default::default() },
-            |ui| analysis_settings_pane(ui, state, backend),
+            |ui| spectrum_settings_pane(ui, state, backend),
         )
     }
 

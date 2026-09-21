@@ -2743,6 +2743,14 @@ fn the_hz_readout_carries_its_unit() {
 /// Painted at both the widest and the narrowest range it allows.
 #[test]
 fn the_settings_pane_paints_at_either_extreme_of_the_pitch_range() {
+    struct Defaults;
+    impl crate::params::ParamBackend for Defaults {
+        fn get(&self, key: crate::params::ParamKey) -> f32 {
+            key.default_value()
+        }
+        fn set(&self, _: crate::params::ParamKey, _: f32) {}
+    }
+
     let axis = (
         harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI,
         harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
@@ -2754,7 +2762,7 @@ fn the_settings_pane_paints_at_either_extreme_of_the_pitch_range() {
         // A settings column rather than a picture: narrow and tall, and the
         // pane takes the whole of it.
         let column = egui::vec2(320.0, 700.0);
-        let output = painted_full(column, |ui| spectrum_settings_pane(ui, &mut state));
+        let output = painted_full(column, |ui| spectrum_settings_pane(ui, &mut state, &Defaults));
         assert!(!output.shapes.is_empty(), "{low}..{high} drew nothing");
     }
 }

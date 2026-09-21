@@ -261,7 +261,7 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .percent()
             .show(ui)
             .on_hover_text(
-                "Minimum audio level needed to show a ring, as a percentage of the Spectrum level range on Analysis. \
+                "Minimum audio level needed to show a ring, as a percentage of the Spectrum level range on Analyzer. \
                  MIDI notes always show their rings. \
                  0% also shows silent rings.",
             );
@@ -283,7 +283,7 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .unit(1000.0, " ms").decimals(0)
             .show(ui)
             .on_hover_text(
-                "Additional response time when audio-ring levels rise, after Live attack/release on Analysis. \
+                "Additional response time when audio-ring levels rise, after Live attack/release on Analyzer. \
                  0 ms responds immediately.",
             );
         ValueBar::new(
@@ -294,7 +294,7 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         .unit(1000.0, " ms").decimals(0)
         .show(ui)
         .on_hover_text(
-            "Additional response time when audio-ring levels fall, after Live attack/release on Analysis. \
+            "Additional response time when audio-ring levels fall, after Live attack/release on Analyzer. \
                  Increase to steady fluctuating harmonics. \
                  0 ms responds immediately.",
         );
