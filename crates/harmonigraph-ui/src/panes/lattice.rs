@@ -721,6 +721,7 @@ mod tests {
                 selected: 0,
                 offset: harmonigraph_core::LatticePos::ORIGIN,
             },
+            offsets: Default::default(),
             pending: false,
             names: vec![],
             working: Some(map),

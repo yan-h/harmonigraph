@@ -39,7 +39,7 @@ fn lattice_map_automation_precedes_coincident_attacks_in_both_callback_orders() 
             hub.activate_format(48000.0, frames);
             let (first, mut second) = install(&hub);
             // Rotation is zero, so MIDI E still reaches the substituted base E slot.
-            second.position = LatticePos::new(50, -3, 1);
+            second.position = LatticePos::new(48, -4, 4);
             let mut tune = Device::new(true);
             tune.activate_format(48000.0, frames);
             // 2x tolerates Hub-first callbacks without changing input timestamps.
@@ -49,12 +49,18 @@ fn lattice_map_automation_precedes_coincident_attacks_in_both_callback_orders() 
             let start = i64::from(frames);
             let boundary = frames / 2;
             let input = vec![note(1, 0, 64, boundary - 1, true), note(2, 0, 76, boundary, true)];
-            let automation = vec![
-                parameter("map-fifths", 4096.0 + 50.0, boundary),
+            let mut automation = vec![
+                parameter("map-fifths", 17.0, boundary),
+                parameter("map-thirds-extension", 8.0, boundary),
                 parameter("lattice-map", 1.0, boundary),
-                parameter("map-thirds", 4096.0 - 3.0, boundary),
-                parameter("map-sevenths", 4096.0 + 1.0, boundary),
+                parameter("map-sevenths", 3.0, boundary),
+                parameter("map-fifths-extension", 13.0, boundary),
+                parameter("map-thirds", 15.0, boundary),
+                parameter("map-sevenths-extension", 10.0, boundary),
             ];
+            if hub_first {
+                automation.reverse();
+            }
             if hub_first {
                 hub.run_format(start, automation, None, None, frames);
                 tune.run_format(start, input, None, None, frames);
@@ -93,6 +99,26 @@ fn lattice_map_automation_precedes_coincident_attacks_in_both_callback_orders() 
             // Following callbacks seed plain values without translating twice.
             hub.run_format(start * 4, vec![note(3, 0, 88, 0, true)], None, None, frames);
             assert_eq!(voice(&hub, crate::tuning::DIRECT, 88).attack_node, Some(second.node(88)));
+            // Updating only one lane retains the other lane's contribution,
+            // including when the retained component is negative.
+            hub.run_format(
+                start * 5,
+                vec![parameter("map-thirds", 4.0, 0), note(4, 0, 89, 0, true)],
+                None,
+                None,
+                frames,
+            );
+            second.position.fives = -15;
+            assert_eq!(voice(&hub, crate::tuning::DIRECT, 89).attack_node, Some(second.node(89)));
+            hub.run_format(
+                start * 6,
+                vec![parameter("map-thirds-extension", 11.0, 0), note(5, 0, 90, 0, true)],
+                None,
+                None,
+                frames,
+            );
+            second.position.fives = 15;
+            assert_eq!(voice(&hub, crate::tuning::DIRECT, 90).attack_node, Some(second.node(90)));
             assert_eq!(
                 voice(&hub, 0, 64).frozen_offset_microcents,
                 first.correction(64, Tuning::just())
@@ -202,9 +228,9 @@ fn lattice_map_shared_axes_and_audition_apply_to_new_attacks_only() {
         1024,
         vec![
             parameter("lattice-map", 0.0, 0),
-            parameter("map-fifths", 4092.0, 0),
-            parameter("map-thirds", 4099.0, 0),
-            parameter("map-sevenths", 4094.0, 0),
+            parameter("map-fifths", 5.0, 0),
+            parameter("map-thirds", 12.0, 0),
+            parameter("map-sevenths", 7.0, 0),
             note(3, 0, 64, 0, true),
         ],
         None,
@@ -229,7 +255,15 @@ fn lattice_map_shared_axes_and_audition_apply_to_new_attacks_only() {
     // Map is an automatable stepped state selector, never additive modulation.
     let params = hub.params();
     let count = unsafe { params.count.unwrap()(hub.plugin) };
-    let ids = ["lattice-map", "map-fifths", "map-thirds", "map-sevenths"];
+    let ids = [
+        "lattice-map",
+        "map-fifths",
+        "map-thirds",
+        "map-sevenths",
+        "map-fifths-extension",
+        "map-thirds-extension",
+        "map-sevenths-extension",
+    ];
     let mut found = 0;
     for index in 0..count {
         let mut info: clap_sys::ext::params::clap_param_info = unsafe { std::mem::zeroed() };
@@ -241,8 +275,36 @@ fn lattice_map_shared_axes_and_audition_apply_to_new_attacks_only() {
             assert_eq!(info.flags & CLAP_PARAM_IS_MODULATABLE, 0);
             if *id != "lattice-map" {
                 assert_eq!(info.min_value, 0.0);
-                assert_eq!(info.max_value, 8192.0);
-                assert_eq!(info.default_value, 4096.0);
+                assert_eq!(info.max_value, 18.0);
+                assert_eq!(info.default_value, 9.0);
+            }
+            if id.ends_with("-extension") {
+                for (index, text) in [(0.0, "-90"), (9.0, "0"), (18.0, "90")] {
+                    let mut buffer = [0i8; 32];
+                    assert!(unsafe {
+                        params.value_to_text.unwrap()(
+                            hub.plugin,
+                            info.id,
+                            index,
+                            buffer.as_mut_ptr(),
+                            32,
+                        )
+                    });
+                    assert_eq!(
+                        unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) }.to_str().unwrap(),
+                        text
+                    );
+                    let mut parsed = -1.0;
+                    assert!(unsafe {
+                        params.text_to_value.unwrap()(
+                            hub.plugin,
+                            info.id,
+                            buffer.as_ptr(),
+                            &mut parsed,
+                        )
+                    });
+                    assert_eq!(parsed, index);
+                }
             }
             found += 1;
         }

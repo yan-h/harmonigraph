@@ -16,7 +16,7 @@ Mode is saved but is not automatable in this prototype.
 Choose Lattice Map in Tuning.
 Audition working copy makes a separate copy of the currently selected saved map.
 Its shape edits remain active through loops and Map selection automation until Return to arrangement.
-The three offset automation lanes remain live during audition.
+All six Offset and Extension automation lanes remain live during audition.
 Closing the editor does not end audition;
 loading project state does.
 Audition and its bounded 64-edit undo history are transient and are not saved.
@@ -24,10 +24,11 @@ Audition and its bounded 64-edit undo history are transient and are not saved.
 Saved maps define shape only.
 Use the independent Map Fifth Offset (steps),
 Map Third Offset (steps) and Map Seventh Offset (steps) automation lanes to move any shape in integer generator steps.
+Each axis also has an Extension lane that adds multiples of 10 without changing existing Offset automation.
 The same controls are always available in Lattice Map mode without entering audition or capturing a map.
 Positive values move along the corresponding generator;
 negative values move back.
-Zero on all three places the shape at its origin.
+Zero on all six lanes places the shape at its origin.
 Recalling a map changes shape and leaves these offsets unchanged.
 Edit shape enables one destination click on the lattice:
 the destination's fixed-generator MIDI class determines which assignment moves.
@@ -46,7 +47,7 @@ or draw discrete held values for Map in Bitwig.
 Use held segments:
 a host ramp that explicitly sends intervening IDs selects those IDs.
 There is no smoothing or interpolation in the plugin.
-Map and the three offsets do not advertise additive modulation.
+Map and all six offset lanes do not advertise CLAP additive modulation.
 
 Assignments and sounding intervals shows all twelve full corrections and exact coordinates,
 plus actual held-note intervals above the lowest sounding voice.
@@ -83,7 +84,7 @@ Names are exposed through the Map parameter's value text;
 document edits request a host state-dirty notification and value/text rescan.
 
 Each map holds twelve coordinates relative to C.
-The three offset parameters supply absolute region position independently.
+Each axis’s Offset and Extension parameters add to its absolute region position.
 The starting rectangle has fifth coordinates −1 through 2,
 third coordinates 0 through 2,
 and seventh coordinate 0:
@@ -105,9 +106,27 @@ even after drift exceeds an octave.
 Exact geometric copies survive temperament changes and project recall.
 Offset IDs are `map-fifths`,
 `map-thirds` and `map-sevenths`;
-plain saved values range from −4096 to 4096 and default to zero.
-CLAP exposes stepped indices 0–8192 with neutral index 4096;
-parameter text displays the signed musical steps.
+each ranges from −9 to +9 in single steps and defaults to zero.
+Each axis also has an independent Extension lane from −90 to +90 in steps of 10,
+with IDs `map-fifths-extension`,
+`map-thirds-extension` and `map-sevenths-extension`.
+The offset and extension add together,
+so every integer total from −99 to +99 is reachable.
+For example,
+Offset +4 and Extension +20 give a total of +24.
+Use Extension when a passage outgrows the fine lane;
+existing automation stays intact because neither lane's range changes.
+The editor shows both controls and the total separately for each axis.
+
+All six plain saved parameters range from −9 to +9 and default to zero;
+extension counts are multiplied by 10 only when displayed or added to the total.
+CLAP exposes stepped indices 0–18 with neutral index 9.
+The former ±4096 offset lanes are narrowed in this release:
+old host automation is reinterpreted,
+and saved offsets outside ±9 are clamped.
+Missing lanes restore to zero.
+There is no automatic migration of old envelopes.
+Dynamic range expansion was rejected after [the Bitwig probe](evidence/1051/README.md) doubled existing automation.
 The earlier prototype's per-map `position` field is removed:
 previously captured shapes remain,
 but their saved positions are ignored and must be set using the offset parameters.
@@ -166,7 +185,7 @@ so a later document edit cannot reinterpret an older attack.
 
 The CLAP wrapper already retains timestamped input and walks configuration before performance.
 At adoption the owner seeds Map,
-mode and all three offsets from host parameters,
+mode and all six offset components from host parameters,
 then observes every Map/offset event and resolved tuning edit at its absolute input sample.
 The last configuration at a coincident sample wins before all attacks at that sample,
 even if the host lists a note first.

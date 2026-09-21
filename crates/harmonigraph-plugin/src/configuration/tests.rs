@@ -1606,7 +1606,14 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     let mut state = restored(&device, 696.5);
     state.fields.insert("lattice-maps".into(), serde_json::to_string(&document).unwrap());
     state.params.insert("lattice-map".into(), nice_plug::plugin::ParamValue::I32(1));
-    for (id, value) in [("map-fifths", 50), ("map-thirds", -2), ("map-sevenths", 1)] {
+    for (id, value) in [
+        ("map-fifths", 0),
+        ("map-thirds", 8),
+        ("map-sevenths", -9),
+        ("map-fifths-extension", 5),
+        ("map-thirds-extension", -1),
+        ("map-sevenths-extension", 1),
+    ] {
         state.params.insert(id.into(), nice_plug::plugin::ParamValue::I32(value));
     }
     state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(2));
@@ -1623,7 +1630,14 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         recalled.map(1),
         Some(LatticeMap { position: harmonigraph_core::LatticePos::ORIGIN, ..map })
     );
-    for (id, value) in [("map-fifths", 50), ("map-thirds", -2), ("map-sevenths", 1)] {
+    for (id, value) in [
+        ("map-fifths", 0),
+        ("map-thirds", 8),
+        ("map-sevenths", -9),
+        ("map-fifths-extension", 5),
+        ("map-thirds-extension", -1),
+        ("map-sevenths-extension", 1),
+    ] {
         assert!(
             matches!(saved.params[id], nice_plug::plugin::ParamValue::I32(actual) if actual == value)
         );
@@ -1653,6 +1667,25 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert!(!plugin.params.map_playback.lock().audition, "restore exits transient audition");
         assert_eq!(plugin.params.map_playback.lock().map, Some(map));
     });
+    // Old or partial presets must not retain lanes from the current preset,
+    // and repaired plain values must agree with host and editor readback.
+    let mut partial = device.save();
+    partial.params.insert("map-fifths".into(), nice_plug::plugin::ParamValue::I32(50));
+    partial.params.insert("map-thirds".into(), nice_plug::plugin::ParamValue::I32(-50));
+    for id in ["map-fifths-extension", "map-thirds-extension", "map-sevenths-extension"] {
+        partial.params.remove(id);
+    }
+    device.load(partial, false);
+    device.run(192, vec![], false);
+    device.wrapper().test_inspect_plugin(|plugin| {
+        let preview = crate::lattice_maps::view(&plugin.params);
+        assert_eq!(preview.offsets.extension, harmonigraph_core::LatticePos::ORIGIN);
+        assert_eq!(preview.playback.offset, harmonigraph_core::LatticePos::new(9, -9, -9));
+        assert_eq!(plugin.params.map_playback.lock().offset, preview.playback.offset);
+    });
+    let repaired = device.save();
+    assert!(matches!(repaired.params["map-fifths"], nice_plug::plugin::ParamValue::I32(9)));
+    assert!(matches!(repaired.params["map-thirds"], nice_plug::plugin::ParamValue::I32(-9)));
 }
 
 #[test]

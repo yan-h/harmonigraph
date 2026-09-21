@@ -155,6 +155,12 @@ pub struct HarmonigraphParams {
     pub map_thirds: IntParam,
     #[id = "map-sevenths"]
     pub map_sevenths: IntParam,
+    #[id = "map-fifths-extension"]
+    pub map_fifths_extension: IntParam,
+    #[id = "map-thirds-extension"]
+    pub map_thirds_extension: IntParam,
+    #[id = "map-sevenths-extension"]
+    pub map_sevenths_extension: IntParam,
     #[id = "tuning-engine"]
     pub tuning_engine: IntParam,
     session: std::sync::OnceLock<Arc<tuning::setup::Shared>>,
@@ -264,18 +270,48 @@ impl Default for HarmonigraphParams {
             map_fifths: IntParam::new(
                 "Map Fifth Offset (steps)",
                 0,
-                IntRange::Linear { min: -4096, max: 4096 },
+                IntRange::Linear { min: -9, max: 9 },
             ),
             map_thirds: IntParam::new(
                 "Map Third Offset (steps)",
                 0,
-                IntRange::Linear { min: -4096, max: 4096 },
+                IntRange::Linear { min: -9, max: 9 },
             ),
             map_sevenths: IntParam::new(
                 "Map Seventh Offset (steps)",
                 0,
-                IntRange::Linear { min: -4096, max: 4096 },
+                IntRange::Linear { min: -9, max: 9 },
             ),
+            map_fifths_extension: IntParam::new(
+                "Map Fifth Extension (steps)",
+                0,
+                IntRange::Linear { min: -9, max: 9 },
+            )
+            .with_value_to_string(Arc::new(|value| (value * 10).to_string()))
+            .with_string_to_value(Arc::new(|text| {
+                let steps: i32 = text.trim().parse().ok()?;
+                (steps % 10 == 0).then_some(steps / 10)
+            })),
+            map_thirds_extension: IntParam::new(
+                "Map Third Extension (steps)",
+                0,
+                IntRange::Linear { min: -9, max: 9 },
+            )
+            .with_value_to_string(Arc::new(|value| (value * 10).to_string()))
+            .with_string_to_value(Arc::new(|text| {
+                let steps: i32 = text.trim().parse().ok()?;
+                (steps % 10 == 0).then_some(steps / 10)
+            })),
+            map_sevenths_extension: IntParam::new(
+                "Map Seventh Extension (steps)",
+                0,
+                IntRange::Linear { min: -9, max: 9 },
+            )
+            .with_value_to_string(Arc::new(|value| (value * 10).to_string()))
+            .with_string_to_value(Arc::new(|text| {
+                let steps: i32 = text.trim().parse().ok()?;
+                (steps % 10 == 0).then_some(steps / 10)
+            })),
             tuning_engine: IntParam::new("Note Retuning", 1, IntRange::Linear { min: 0, max: 2 })
                 .with_value_to_string(Arc::new(|value| {
                     ["Pass through", "Adaptive", "Lattice Map"][value.clamp(0, 2) as usize].into()
@@ -633,6 +669,25 @@ impl Default for Harmonigraph {
 }
 
 impl Plugin for Harmonigraph {
+    fn filter_state(state: &mut nice_plug::plugin::PluginState) {
+        // Plain restore bypasses IntParam's range normalization. Repair all six
+        // lanes and default absent lanes so a previous preset cannot leak in.
+        for id in [
+            "map-fifths",
+            "map-thirds",
+            "map-sevenths",
+            "map-fifths-extension",
+            "map-thirds-extension",
+            "map-sevenths-extension",
+        ] {
+            let value = match state.params.get(id) {
+                Some(nice_plug::plugin::ParamValue::I32(value)) => (*value).clamp(-9, 9),
+                _ => 0,
+            };
+            state.params.insert(id.into(), nice_plug::plugin::ParamValue::I32(value));
+        }
+    }
+
     const NAME: &'static str = "Harmonigraph";
     const VENDOR: &'static str = "Yan Han";
     const URL: &'static str = env!("CARGO_PKG_HOMEPAGE");
@@ -958,8 +1013,15 @@ impl ClapPlugin for Harmonigraph {
         }
     }
     const CLAP_CONFIGURATION: bool = true;
-    const CLAP_NON_MODULATABLE_PARAMS: &'static [&'static str] =
-        &["lattice-map", "map-fifths", "map-thirds", "map-sevenths"];
+    const CLAP_NON_MODULATABLE_PARAMS: &'static [&'static str] = &[
+        "lattice-map",
+        "map-fifths",
+        "map-thirds",
+        "map-sevenths",
+        "map-fifths-extension",
+        "map-thirds-extension",
+        "map-sevenths-extension",
+    ];
     const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] =
         &["tuning-c-offset", "tuning-three", "tuning-five", "tuning-seven", "tuning-tolerance"];
     const CLAP_CONFIGURATION_FIELDS: &'static [&'static str] = &[configuration::MUSICAL_SETTINGS];
@@ -1005,7 +1067,7 @@ impl ClapPlugin for Harmonigraph {
         owner.maps.seed(
             self.params.tuning_engine.value(),
             self.params.map.unmodulated_plain_value(),
-            lattice_maps::offset(&self.params),
+            lattice_maps::offsets(&self.params),
             self.params.configuration.get().unwrap().accepted_restore.load(Ordering::Acquire),
         );
         owner.begin(boundary, &self.take, self.presentation_seconds);
@@ -1368,6 +1430,9 @@ mod tests {
             "map-fifths",
             "map-thirds",
             "map-sevenths",
+            "map-fifths-extension",
+            "map-thirds-extension",
+            "map-sevenths-extension",
         ];
         for id in operational {
             assert!(host_ids.iter().any(|host| host == id), "missing operational parameter {id}");
