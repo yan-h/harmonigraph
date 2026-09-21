@@ -31,7 +31,6 @@ fn distance_shadows_fade_continuously_across_layers_and_settling() {
                 order,
                 stagger_spread: spread,
                 radial_start: if grow { -1.0 } else { 0.0 },
-                start_size: if grow { 0.0 } else { 1.0 },
             };
             scene.shadow = one_shadow(0.6, 0.8, kernel);
             if name == "marks" {
@@ -221,7 +220,6 @@ fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
             note_animation: NoteAnimationConfig {
                 animation: mode,
                 radial_start: 1.0,
-                start_size: 2.0,
                 ..Default::default()
             },
             ..Default::default()
@@ -307,12 +305,8 @@ fn fade_and_pop_grow_complete_pieces_and_settle() {
         scene.nodes[0].slice_progress = [1.0; 11];
         let reference = shooter.shot(&scene);
         for mode in NoteAnimation::ALL {
-            scene.note_animation = NoteAnimationConfig {
-                animation: mode,
-                radial_start: -1.0,
-                start_size: 0.0,
-                ..Default::default()
-            };
+            scene.note_animation =
+                NoteAnimationConfig { animation: mode, radial_start: -1.0, ..Default::default() };
             for (step, phase) in
                 [0.08f32, 0.2, 0.3, 0.5, 0.72, 0.99, 1.0, -0.7, -0.3].into_iter().enumerate()
             {
@@ -385,7 +379,6 @@ fn all_orders_draw_complete_rotated_pieces_at_their_shared_delays() {
                     animation,
                     order,
                     radial_start: -1.0,
-                    start_size: 0.0,
                     ..Default::default()
                 };
                 let delays = scene.note_animation.delays(&scene.octave_layout, 350.0, 42, 1.0);

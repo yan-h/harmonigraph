@@ -511,12 +511,6 @@ impl<'a> StackBar<'a> {
         painter.rect_filled(rect, radius, theme::well());
 
         let fill = track_fill(&response);
-        // The strip drawn in the plain widget fill when neither end is marked:
-        // its depth is still this bar's to set, and the node still keeps the
-        // room, but nothing is wearing it. The alternative is greying the whole
-        // bar on a checkbox two sections down, which would take the other three
-        // layers with it.
-        //
         // The gaps between the cells are the track itself, which is what the
         // empty run past the outermost layer is too. One ground for both, since
         // both are the same thing — node the picture does not draw on — and a
@@ -529,11 +523,10 @@ impl<'a> StackBar<'a> {
         // layer. A cell rather than bare track, because the track means the
         // padding BETWEEN two layers — a spacing nothing sets directly — and
         // this is a size with a handle on it.
-        let marked = self.view.mark_melody || self.view.mark_bass;
         for (i, cell) in cells.into_iter().enumerate() {
             let (lo, hi) = spans[i];
             if hi > lo {
-                let empty = i == 0 || (i == 3 && !marked);
+                let empty = i == 0;
                 painter.rect_filled(cell, radius, if empty { theme::widget() } else { fill });
             }
         }
@@ -638,7 +631,7 @@ impl<'a> StackBar<'a> {
             }
             // After this layer's own name is placed: a name is never held off
             // the cell it names, only off the cells INSIDE it.
-            if !(i == 0 || (i == 3 && !marked)) {
+            if i != 0 {
                 inked = cells[i].right();
             }
         }
@@ -933,28 +926,6 @@ mod tests {
         );
         let taken: Vec<Layer> = thumbs.iter().map(|&x| aimed(x, thumbs, HANDLE_W * 0.5)).collect();
         assert_eq!(taken, LAYERS.to_vec(), "a press on each thumb did not take each layer");
-    }
-
-    /// The strip's cell draws in the plain widget fill when neither end is
-    /// ticked: sized, with the node keeping the room, but nothing wearing it.
-    /// Greying the bar instead would take the other three layers with it, on a
-    /// pair of checkboxes two sections down that say nothing about them.
-    #[test]
-    fn an_unmarked_strip_draws_in_the_plain_widget_fill() {
-        let mut view = pinned();
-        view.mark_melody = false;
-        view.mark_bass = false;
-        let rings = view.rings();
-        assert!(rings.mark_thickness > 0.0, "the strip is still sized with neither end marked");
-        let shapes = shapes(W, |ui| {
-            StackBar::new(&mut view).show(ui);
-        });
-        let (_, x_of) = axis_on(&shapes);
-        let (_, fill) = filled_rects(&shapes)
-            .into_iter()
-            .find(|(r, _)| (r.left() - x_of(rings.mark_inner)).abs() < 0.5)
-            .expect("no cell was drawn for the strip");
-        assert_eq!(fill, theme::widget(), "the strip took the accent with nothing wearing it");
     }
 
     /// A press inside a layer's own stretch of bar takes that layer, not the

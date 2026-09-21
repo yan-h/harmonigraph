@@ -102,35 +102,6 @@ fn a_memory_touches_no_field_but_trail() {
         assert_eq!(a.melody_level, b.melody_level);
         assert_eq!(a.bass_level, b.bass_level);
     }
-    // The resting MARKERS are the one thing a memory does reach, and only ever
-    // through the name it draws: a named position draws no marker, and under Past
-    // a remembered one is named. So the trail does not touch the marker field —
-    // the LABEL layer does, on the trail's say-so — and the way to state that
-    // as a claim rather than a distinction is to take the names away.
-    //
-    // With the switch off there is no name anywhere, and a memory is once
-    // again invisible in every drawn thing: same positions, same paint,
-    // however much history has piled up. That is the original claim intact,
-    // and it is what says the marker is not a second channel the trail writes to.
-    let unnamed = |names| {
-        scene_of(
-            &tracker,
-            &tuning,
-            &ViewConfig { show_labels: false, note_names: names, ..view.clone() },
-            &frame,
-            10.0,
-        )
-    };
-    let (bare, marked) = (unnamed(NoteNames::Played), unnamed(NoteNames::Past));
-    assert!(marked.nodes.iter().any(|n| n.trail > 0.0), "nothing was remembered at all");
-    let why = "a memory moved the marker field on its own";
-    assert_eq!(bare.pluses.len(), marked.pluses.len(), "{why}");
-    for (a, b) in bare.pluses.iter().zip(&marked.pluses) {
-        assert_eq!(a.pos, b.pos);
-        assert_eq!(a.strength, b.strength);
-        assert_eq!(a.color, b.color);
-        assert_eq!(a.radius, b.radius);
-    }
 }
 
 /// The one drawn thing a memory reaches, and the route it takes: under Past a

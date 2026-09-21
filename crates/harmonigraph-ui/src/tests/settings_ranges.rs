@@ -44,7 +44,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     };
     let a = &mut saved.picture.appearance;
     macro_rules! poison { ($owner:expr; $($field:ident),+ $(,)?) => { $( $owner.$field = v; )+ }; }
-    poison!(a.view; render_scale, bloom_strength, sevens_size, label_scale, sounding_ink,
+    poison!(a.view; render_scale, bloom_strength, sevens_size, label_scale,
         octave_center, octave_extra_size, octave_extra_blend, mark_delay, fade_shape,
         spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
         spectral_width, spectral_ring_range, spectral_ring_width, ring_gap,
@@ -52,7 +52,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         plus_arm, plus_taper, plus_width, glow_reach, glow_strength, glow_accumulation,
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
-    poison!(a.view.note_animation; radial_start, start_size, stagger_spread);
+    poison!(a.view.note_animation; radial_start, stagger_spread);
     poison!(a.view.atmosphere; nebula_depth, nebula_scale, nebula_speed,
         breath_amount, breath_speed);
     a.view.min_sevens = n;
@@ -234,7 +234,7 @@ fn scenarios() -> Vec<Scenario> {
         let visits = match pane {
             SettingsPane::Tab(panes::Tab::Tuning) => 7,
             SettingsPane::Page(DisplayPage::Colors) => 2,
-            SettingsPane::Page(DisplayPage::Lattice) => 25,
+            SettingsPane::Page(DisplayPage::Lattice) => 23,
             SettingsPane::Page(DisplayPage::Analyzer) => 14,
             SettingsPane::Page(DisplayPage::Spectrogram) => 11,
             SettingsPane::Page(DisplayPage::Lighting) => 26,
@@ -263,7 +263,7 @@ fn scenarios() -> Vec<Scenario> {
             pane: SettingsPane::Page(DisplayPage::Lattice),
             projection,
             enabled: true,
-            visits: 25,
+            visits: 23,
             ..base
         });
     }
@@ -285,9 +285,6 @@ fn check(edge: Edge) {
         assert_eq!(state.picture.appearance.view.marvel, scenario.marvel);
         let a = &mut state.picture.appearance;
         a.camera.projection = scenario.projection;
-        a.view.show_labels = scenario.enabled;
-        a.view.mark_melody = scenario.enabled;
-        a.view.mark_bass = scenario.enabled;
         a.view.spectral_reading =
             if scenario.enabled { SpectralReading::Spectrum } else { SpectralReading::Fold };
         a.spectrum.show_roll = scenario.enabled;

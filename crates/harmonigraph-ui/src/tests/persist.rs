@@ -98,11 +98,6 @@ fn persist_round_trips_camera_and_view() {
     state.picture.appearance.view.band_width = 0.5;
     state.picture.appearance.view.spectral_ring_width = 0.1;
     state.picture.appearance.view.ring_gap = 0.02;
-    // Melody alone: both marks on is the default, and this test's whole
-    // point is that the fields prove they round-trip rather than
-    // matching the defaults by luck.
-    state.picture.appearance.view.mark_melody = true;
-    state.picture.appearance.view.mark_bass = false;
     // A wheel that is neither the default count nor a center on a C, so the
     // pair proves it round-trips rather than landing back on something the
     // layout would have produced anyway. The center carries a fraction of a
@@ -162,8 +157,6 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.picture.appearance.view.band_width, 0.5);
     assert_eq!(restored.picture.appearance.view.spectral_ring_width, 0.1);
     assert_eq!(restored.picture.appearance.view.ring_gap, 0.02);
-    assert!(restored.picture.appearance.view.mark_melody);
-    assert!(!restored.picture.appearance.view.mark_bass, "bass off round-trips");
     assert_eq!(
         (
             restored.picture.appearance.view.octave_count,
@@ -2126,7 +2119,7 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
 }
 
 #[test]
-fn animation_controls_round_trip_and_retired_choice_does_not_discard_appearance() {
+fn animation_controls_round_trip_and_retired_fields_do_not_discard_appearance() {
     for animation in harmonigraph_scene::NoteAnimation::ALL {
         for order in harmonigraph_scene::AnimationOrder::ALL {
             let mut state = fresh();
@@ -2136,7 +2129,6 @@ fn animation_controls_round_trip_and_retired_choice_does_not_discard_appearance(
                     order,
                     stagger_spread: 0.63,
                     radial_start: -0.5,
-                    start_size: 0.2,
                 };
             let mut restored = fresh();
             assert!(restored.load_persist(&state.save_persist()));
@@ -2172,6 +2164,40 @@ fn animation_controls_round_trip_and_retired_choice_does_not_discard_appearance(
     assert!(state.load_persist(&saved));
     assert_eq!(state.picture.appearance.view.note_animation, Default::default());
     assert_eq!(state.picture.appearance.view.label_scale, 0.7);
+
+    let current = state.save_persist();
+    let retired = current
+        .replacen(
+            "view:(",
+            "view:(show_labels:false,sounding_ink:12.0,mark_melody:false,mark_bass:false,",
+            1,
+        )
+        .replacen("note_animation:(", "note_animation:(start_size:0.2,", 1);
+    assert_ne!(retired, current);
+    assert!(state.load_persist(&retired));
+    assert_eq!(state.save_persist(), current);
+}
+
+#[test]
+fn retired_odd_even_order_refuses_the_entire_editor_and_appearance_document() {
+    let mut state = fresh();
+    state.picture.appearance.view.note_animation.order =
+        harmonigraph_scene::AnimationOrder::Circular;
+    let saved = state.save_persist();
+    let dropped = saved.replace("order:Circular", "order:OddEvenStagger");
+    assert_ne!(saved, dropped, "fixture must carry the retired variant");
+    let mut restored = fresh();
+    let before = restored.save_persist();
+    assert!(!restored.load_persist(&dropped));
+    assert!(!collapsed(&restored, panes::Tab::Console), "the refusal opens its report");
+    set_console_collapsed(&mut restored, true);
+    assert_eq!(restored.save_persist(), before);
+    assert!(restored.picture.runtime.console.lines().any(|line| line.contains("did not parse")));
+
+    let appearance = state.picture.appearance.serialize();
+    let dropped = appearance.replace("order:Circular", "order:OddEvenStagger");
+    assert_ne!(appearance, dropped);
+    assert!(AppearanceDocument::parse(&dropped).is_err());
 }
 
 #[test]

@@ -643,7 +643,6 @@ mod tests {
         ];
         for (size, width, taper, chord, names) in shots {
             let mut state = PictureState::new(FORMAT);
-            state.appearance.view.show_labels = true;
             state.appearance.view.note_names = names;
             // The DAW's own lattice ground rather than the fixture's near-black:
             // the markers are a step above the panel and nothing else here says
@@ -716,7 +715,6 @@ mod tests {
         let fresh = harmonigraph_scene::ShadowStyle::default();
         for shadow in [0.0f32, fresh.width, 0.45, harmonigraph_scene::GLOW_SHADOW_MAX] {
             let mut state = PictureState::new(FORMAT);
-            state.appearance.view.show_labels = true;
             state.appearance.view.note_names = harmonigraph_scene::NoteNames::Played;
             state.set_background((24, 25, 29));
             state.runtime.frame_params.fade_time = 0.0;
@@ -779,10 +777,12 @@ mod tests {
             let mut state = PictureState::new(FORMAT);
             state.set_background((24, 25, 29));
             state.runtime.frame_params.fade_time = 0.0;
-            // Settled: the light's own clock would otherwise leave a one-frame
-            // shot part way up its attack, which is a reading of the ramp.
+            // Settle the light in one frame, then release it onto a long tail
+            // for the measured frame. The note names are consequently gone
+            // while the light remains, so the centre pixel isolates the glow
+            // instead of reading a forced-white glyph and its shadow.
             state.appearance.view.glow_attack = 0.0;
-            state.appearance.view.glow_release = 0.0;
+            state.appearance.view.glow_release = harmonigraph_scene::GLOW_BALLISTICS_MAX;
             state.appearance.view.min_sevens = -extent;
             state.appearance.view.max_sevens = extent;
             // The off-sheet nodes at the home sheet's own size, so what differs
@@ -793,11 +793,8 @@ mod tests {
             // A compact falloff keeps the ground below saturation, leaving the
             // missing light under the node measurable at this wide reach.
             state.appearance.view.glow_curve.shape = 2.75;
-            // No names: a played node's name stands on its middle and casts
-            // its own shadow there (`fs_shadow_box` in harmonigraph-render),
-            // which is a claim of its own and not the light under the body.
-            state.appearance.view.show_labels = false;
-            for note in [60u8, 64, 67, 70] {
+            const NOTES: [u8; 4] = [60, 64, 67, 70];
+            for note in NOTES {
                 state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
                     0.0,
                     harmonigraph_core::SourceId::DIRECT,
@@ -807,6 +804,15 @@ mod tests {
                 ));
             }
             state.appearance.camera.zoom_by(2.0);
+            let _ = sheet.frame(&mut state, 0.0);
+            for note in NOTES {
+                state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::off(
+                    0.0,
+                    harmonigraph_core::SourceId::DIRECT,
+                    0,
+                    note,
+                ));
+            }
             let bytes = sheet.frame(&mut state, NOW);
             (at(&bytes, 600, 500), at(&bytes, 600, 690))
         };
@@ -1137,7 +1143,6 @@ mod tests {
             ("yaw", 0.3, 1.42),
         ] {
             let mut state = PictureState::new(FORMAT);
-            state.appearance.view.show_labels = false;
             state.set_background((24, 25, 29));
             state.runtime.frame_params.fade_time = 0.0;
             for note in [55u8, 60, 64, 67, 71] {

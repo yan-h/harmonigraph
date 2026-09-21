@@ -1,7 +1,6 @@
 //! The Labels section of the Display tab's Lattice page: the text on the
 //! lattice as one subject — what a node's label says (its name, its cents),
-//! how big it draws, how bright it is while its note sounds, and which nodes
-//! carry one at all.
+//! how big it draws, and which nodes carry one at all.
 //!
 //! Per-node text, and what keeps it out of [`super::nodes`] is that a label
 //! rides a hovered node, a sounding one and a remembered one alike: the
@@ -9,11 +8,9 @@
 //! the same reason — it IS labels persisting, which is why it is one option of
 //! the Show row rather than a heading of its own.
 //!
-//! Sounding ink is not the exception to that it looks like. What it sets is
-//! how a NAME is drawn; the note under it only chooses which of the label's
-//! two ends is in force, and the other end is the marker field's own ink, over
-//! in [`super::plus`] — a resting name and the crosses standing around it are
-//! one grey (`label_ink` in [`super::lattice`]).
+//! Active labels are fixed at white. Resting names use the marker field's ink,
+//! over in [`super::plus`], so a resting name and the crosses standing around
+//! it are one grey (`label_ink` in [`super::lattice`]).
 
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
@@ -21,45 +18,19 @@ use crate::PictureState;
 use harmonigraph_core::NoteTracker;
 use harmonigraph_scene::{NoteNames, ViewConfig};
 
-/// What a label says, which nodes carry one, how big it draws and how bright
-/// it is while its note sounds.
+/// What a label says, which nodes carry one and how big it draws.
 pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut PictureState) {
     section(ui, "Note labels");
-    ui.checkbox(&mut state.appearance.view.show_labels, "Show note names")
-        .on_hover_text("Show note names on lattice nodes.");
-    ui.add_enabled_ui(state.appearance.view.show_labels, |ui| {
-        names_row(ui, &mut state.appearance.view);
-        // Cents ride on the labels, so the toggle grays out with them.
-        ui.checkbox(&mut state.appearance.view.show_cents, "Show pitch in cents")
-            .on_hover_text("Each node's pitch class in cents, under its name.");
-        ValueBar::new(&mut state.appearance.view.label_scale, crate::SCALE_BAR_RANGE, "Label scale")
+    names_row(ui, &mut state.appearance.view);
+    ui.checkbox(&mut state.appearance.view.show_cents, "Show pitch in cents")
+        .on_hover_text("Each node's pitch class in cents, under its name.");
+    ValueBar::new(&mut state.appearance.view.label_scale, crate::SCALE_BAR_RANGE, "Label scale")
         .unit(1.0, "×")
-            .show(ui)
-            .on_hover_text(
-                "Text size relative to the node. 1× is the reference size; labels also follow lattice zoom.",
-            );
-        // Last of the bars, because it is the only one here whose other end is
-        // somewhere else: what it sets is one end of a pair, and the pair reads
-        // as a pair only once the size and the cents under the name are
-        // settled.
-        //
-        // No off position and none to want. Equal to the Marker ink under the
-        // At rest heading IS the off position — every label in the resting
-        // field's one grey, and the type answering to the music by nothing.
-        ValueBar::new(&mut state.appearance.view.sounding_ink, 0.0..=100.0, "Active brightness")
-        .unit(1.0, "%")
-            // Whole points on the L* axis the Ground and Marker ink bars are
-            // counted in, which is the point of the units here: this number is
-            // only readable against the resting end's, and the two sit in
-            // different sections of the page.
-            .integer()
-            .show(ui)
-            .on_hover_text(
-                "Brightness of note labels while sounding: 0% is black, 100% is white. \
-                 Released labels return to Idle label/cross brightness over the Note fade time.",
-            );
-        clear_button(ui, &state.appearance.view, &mut state.runtime.tracker);
-    });
+        .show(ui)
+        .on_hover_text(
+            "Text size relative to the node. 1× is the reference size; labels also follow lattice zoom.",
+        );
+    clear_button(ui, &state.appearance.view, &mut state.runtime.tracker);
 }
 
 /// Which nodes are named: the whole lattice, everywhere the music has been,

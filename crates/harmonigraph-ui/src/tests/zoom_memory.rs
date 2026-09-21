@@ -68,7 +68,6 @@ fn zoom_distances() -> Vec<f32> {
 
 fn played() -> SharedState {
     let mut state = fresh();
-    state.picture.appearance.view.show_labels = true;
     for key in 48..72 {
         state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
             0.0,

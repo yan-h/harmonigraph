@@ -389,59 +389,6 @@ fn a_marker_takes_back_what_a_names_fade_gives_up() {
     );
 }
 
-/// The cross disappears if and only if a NAME is standing over it — so with the
-/// Note names switched off, a sounding note leaves every marker where it is.
-///
-/// A note reaches the marker through the name rather than beside it, and it
-/// does so under every Show mode: `name_level` is `activation.max(resting)`, so
-/// a sounding note is named at its own activation even under `Played`, where
-/// nothing rests. That is what makes the rule one term — asking the note a
-/// second time in `derive_pluses` would change this case alone, the one where
-/// there is no name to be present, and would read the rule backwards.
-///
-/// What the note's light does to the SHADOW under that standing cross is a
-/// separate term and a separate claim
-/// ([`a_markers_shadow_is_closed_by_the_light_over_it_not_by_its_notes_fade`]):
-/// the cross stands here, and it does not bite the halo it stands in.
-#[test]
-fn a_sounding_note_leaves_its_marker_standing_with_the_names_off() {
-    let view = ViewConfig { show_labels: false, ..plus_view() };
-    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
-    let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
-    tracker.handle_event(NoteEvent {
-        source: SourceId::DIRECT,
-        time: 4.0,
-        channel: 0,
-        note: 60,
-        kind: harmonigraph_core::NoteEventKind::Off,
-    });
-
-    // Held, mid-release and long past it: the note moves through its whole
-    // range while the marker does not move at all.
-    let resting = pluses_of(&view)[0].strength;
-    assert!(resting > 0.0, "the fixture must draw markers at all");
-    for now in [4.0f64, 5.0, 5.8, 5.999, 6.0, 6.5] {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
-        let node = origin_node(&scene);
-        let standing =
-            scene.pluses.iter().find(|p| p.pos == node.world_pos).map_or(0.0, |p| p.strength);
-        assert!(
-            (standing - resting).abs() < 1e-5,
-            "at {now}s the note stands at {} and moved the marker to {standing} from {resting}",
-            node.activation,
-        );
-    }
-
-    // And it took none of the field either, which is the same rule counted
-    // rather than measured.
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 4.0);
-    let home = scene.nodes.iter().filter(|n| n.on_home).count();
-    let lit = scene.nodes.iter().filter(|n| n.on_home && n.activation > 0.0).count();
-    assert!(lit > 0, "the fixture must light some of the field, or it proves nothing");
-    assert_eq!(scene.pluses.len(), home, "a sounding note took a marker with no name to take it");
-}
-
 #[test]
 fn an_unlit_node_carries_the_idle_grey_and_draws_nothing() {
     // An idle node has no mark of its own: the marker standing at its position
@@ -714,25 +661,6 @@ fn a_hovered_position_draws_no_marker() {
 }
 
 #[test]
-fn names_switched_off_leave_every_marker_standing() {
-    // The rule is "a name is over it", not "a name would be over it if names
-    // were on". With the Note names switch off there is no name anywhere, so
-    // the field is whole under every Show mode — including All, which is the
-    // one that would otherwise erase it.
-    for names in [NoteNames::All, NoteNames::Past, NoteNames::Played] {
-        let view = ViewConfig { show_labels: false, note_names: names, ..plus_view() };
-        let tracker = played_and_forgotten();
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 4.0);
-        let home = scene.nodes.iter().filter(|n| n.on_home).count();
-        assert_eq!(
-            scene.pluses.len(),
-            home,
-            "{names:?} with the names switched off still took a marker away",
-        );
-    }
-}
-
-#[test]
 fn an_off_sheet_note_leaves_the_marker_field_alone() {
     // A 7-limit note sounding off the home sheet hangs from nothing: the
     // sheet it left is marked and the one it is on is not, and the SIZE it
@@ -785,7 +713,7 @@ fn an_off_sheet_note_leaves_the_marker_field_alone() {
 /// node and a dark one and requiring the same field back.
 #[test]
 fn a_node_lit_by_no_key_keeps_its_cross_whole() {
-    let view = ViewConfig { show_labels: false, ..plus_view() };
+    let view = plus_view();
     let mut scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
     let lit = origin_node(&scene).lattice_pos;
     let dark = scene
@@ -853,7 +781,6 @@ fn a_node_lit_by_no_key_keeps_its_cross_whole() {
 #[test]
 fn a_markers_shadow_fades_in_with_its_cross() {
     let view = plus_view();
-    assert!(view.show_labels, "the fixture needs names, which are what claim a cross");
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));

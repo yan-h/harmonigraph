@@ -399,55 +399,6 @@ fn a_broken_ground_reads_back_as_the_grey_it_draws() {
     }
 }
 
-/// The labels' LIT end is repaired at both of the doors the at-rest pair is,
-/// and it is the one bar on this axis with no surface in this crate: nothing a
-/// derived scene carries reads it, so a missing line in
-/// [`ViewConfig::sanitize`] or a missing accessor is invisible to every other
-/// test here.
-///
-/// What being wrong costs is not one label. The number is one END of a mix
-/// (`label_ink` in `harmonigraph-ui`), and a mix carries a NaN at every level
-/// whatever the other end holds — so it reaches the grey of every name on the
-/// pane, the ones on nodes nothing is sounding under included.
-///
-/// Both doors, for the pair above's reason: the accessor keeps the picture
-/// drawable whatever the field holds, which is exactly why it cannot also be
-/// the check on whether the blob's door repaired anything. With the repair
-/// only in the accessor a hand-edited blob draws the fresh white while the bar
-/// sits on NaN and the file keeps it.
-#[test]
-fn a_broken_sounding_ink_reads_back_as_the_l_star_it_draws() {
-    let fresh = ViewConfig::default().sounding_ink;
-    for (broken, want) in [
-        (f32::NAN, fresh),
-        (f32::INFINITY, fresh),
-        (f32::NEG_INFINITY, fresh),
-        (-50.0, 0.0),
-        (500.0, 100.0),
-    ] {
-        let mut view = ViewConfig { sounding_ink: broken, ..plain_view() };
-        assert_eq!(
-            view.sounding_ink_lightness(),
-            want,
-            "a sounding ink of {broken} resolves to an L* off the axis",
-        );
-        let lit = crate::grey_of_lightness(view.sounding_ink_lightness());
-        assert!(drawable(lit), "a sounding ink of {broken} solves to {lit:?}");
-        view.sanitize();
-        assert_eq!(
-            view.sounding_ink, want,
-            "the blob's door left a sounding ink of {broken} as it was",
-        );
-        // Nothing left for the drawing side to repair, so the bar's number and
-        // the grey a lit label draws cannot come apart later.
-        assert_eq!(
-            view.sounding_ink_lightness(),
-            view.sounding_ink,
-            "a sanitized sounding ink is still being moved on the way to the picture",
-        );
-    }
-}
-
 /// A chroma ramp spends COLOR on pitch, the way a brightness ramp spends
 /// brightness: the vivid end of it is the one its sign names, and at 0 every
 /// note asks for the same fraction as every other.
@@ -791,7 +742,7 @@ fn a_note_shorter_than_the_fade_still_lights_every_layer_fully() {
     // set for whole ones.
     tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 60));
     let frame = FrameParams { fade_time: 1.2, ..FrameParams::default() };
-    let view = ViewConfig { mark_melody: true, mark_bass: true, ..plain_view() };
+    let view = plain_view();
 
     // At the end of the arrival, which is the peak of the note's whole life.
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.2);
@@ -827,7 +778,7 @@ fn one_fade_time_carries_every_layer_of_the_node() {
         tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, note));
     }
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
-    let view = ViewConfig { mark_melody: true, mark_bass: true, ..plain_view() };
+    let view = plain_view();
     tracker.prune(3.0, &view.envelope(&frame));
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 3.0);
 
@@ -888,7 +839,7 @@ fn the_delay_is_what_keeps_a_released_chord_from_smearing_rings() {
         // Mid-fade, well within one fade time — and past the arrival the same
         // second bought, so the discs below are on their way out.
         let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
-        let view = ViewConfig { mark_melody: true, mark_bass: true, mark_delay, ..plain_view() };
+        let view = ViewConfig { mark_delay, ..plain_view() };
         let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.5);
         assert!(scene.nodes.iter().any(|n| n.activation > 0.0), "discs still fading");
         // Distinct PITCH CLASSES wearing a ring, not nodes: one class lights
@@ -1187,7 +1138,7 @@ fn an_inverted_color_range_still_derives_a_scene() {
     // must not panic there.
     let frame =
         FrameParams { darkest_pitch: 110.0, brightest_pitch: 108.0, ..FrameParams::default() };
-    let view = ViewConfig { mark_melody: true, mark_bass: true, ..ViewConfig::default() };
+    let view = ViewConfig::default();
     let scene = scene_of(&held(60), &Tuning::default(), &view, &frame, 0.0);
     let origin = origin_node(&scene);
     assert!(origin.melody_color.is_finite(), "a mark color must be a color");

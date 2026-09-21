@@ -536,10 +536,14 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         ..ViewConfig::default()
     };
     let scene_for = |marks: bool| {
+        let view = ViewConfig {
+            mark_thickness: if marks { base.mark_thickness } else { 0.0 },
+            ..base.clone()
+        };
         derive_scene(
             &tracker,
             &Tuning::default(),
-            &ViewConfig { mark_melody: marks, mark_bass: marks, ..base.clone() },
+            &view,
             &base.reach(),
             // No envelope: every layer of a node eases in from its note-on
             // over the Fade, so under a real one t=0 is the instant nothing

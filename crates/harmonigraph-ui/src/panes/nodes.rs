@@ -2,7 +2,7 @@
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
+use crate::widgets::{choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::AppearanceDocument;
 use harmonigraph_scene::{
     AnimationOrder, NoteAnimation, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX,
@@ -19,7 +19,6 @@ pub(super) fn nodes_pane(
 ) {
     layers_section(ui, &mut appearance.view);
     octaves_section(ui, &mut appearance.view);
-    melody_bass_section(ui, &mut appearance.view);
     audio_section(ui, &mut appearance.view);
     motion_section(ui, &mut appearance.view, params);
 }
@@ -121,57 +120,6 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // octave still reads as a whole note. How BRIGHT it stands is the At rest
     // section's Ground bar at the foot of the page, which is not this layer's
     // to own: the audio ring reads its own silence in that same grey.
-}
-
-/// Melody / bass: mark the outer held notes so a chord's top and bottom line
-/// read at a glance.
-fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    section(ui, "Melody and bass marks");
-    // Two boxes, not a four-way row: the marks are independent, they are
-    // told apart by which slice each one extends rather than by hue, and a
-    // note that is at once the highest and the lowest -- a lone held note, or
-    // a chord whose top and bottom share a pitch class -- is one slice
-    // extended once.
-    //
-    // Side by side, because they are that pair: two ends of one idea, both
-    // named in the heading above them, and short enough that a column of two
-    // spends a row on saying nothing. A `button_row` rather than a bare
-    // `horizontal` so a narrow pane wraps them instead of running Bass off
-    // the edge.
-    button_row(ui, |ui| {
-        ui.checkbox(&mut view.mark_melody, "Mark highest note")
-            .on_hover_text("Extend the highest held note's octave slice past the band");
-        ui.checkbox(&mut view.mark_bass, "Mark lowest note")
-            .on_hover_text("Extend the lowest held note's octave slice past the band");
-    });
-    // A mark is the marked octave's own slice continued outward: it stands off
-    // the band by the shared gap, as every layer of the stack stands off the one
-    // inside it, and its SIDES are cut by that same gap -- the padding one
-    // sector stands off the next, so it reads as that indicator's own piece
-    // rather than as a ring around everything.
-    // The Delay is about a mark that is DRAWN — when it arrives — so it is
-    // gated on there being one: an end has to be marked AND the strip's depth
-    // (the Layers bar's outermost handle) has to leave it something to draw
-    // with, where `mark_extension` returns no coverage at 0 — `marks_draw`.
-    ui.add_enabled_ui(view.marks_draw(), |ui| {
-        // How long an end has to be HELD before its mark answers. Here
-        // rather than in with the note-wide settings at the head of the
-        // pane, because it is about these two marks alone: the octave
-        // sectors they continue answer immediately whatever this says.
-        //
-        // A linear bar gives practical delays (a sixteenth note at 120 bpm
-        // lasts 125 ms) enough room without easing. Display whole milliseconds;
-        // the stored value and range stay in seconds.
-        ValueBar::new(&mut view.mark_delay, 0.0..=MARK_DELAY_MAX, "Mark delay")
-            .unit(1000.0, " ms")
-            .decimals(0)
-            .show(ui)
-            .on_hover_text(
-                "Time the highest or lowest note must stay in place before its mark appears. \
-                 Increase to avoid flicker during fast passages. \
-                 0 ms marks immediately.",
-            );
-    });
 }
 
 /// Audio ring: what the ring inside the octave band measures — one reading of
@@ -422,17 +370,28 @@ fn motion_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBa
                  0% is linear; higher values change quickly at first and settle slowly. \
                  The line previews the fade-in.",
         );
+    ui.add_enabled_ui(view.marks_draw(), |ui| {
+        ValueBar::new(&mut view.mark_delay, 0.0..=MARK_DELAY_MAX, "Mark delay")
+            .unit(1000.0, " ms")
+            .decimals(0)
+            .show(ui)
+            .on_hover_text(
+                "Time the highest or lowest note must stay in place before its mark appears. \
+                 Increase to avoid flicker during fast passages. \
+                 0 ms marks immediately.",
+            );
+    });
     // `choice_row`, which these two were the last enum settings in the panes
-    // not to be, and the HINTS are what the move buys: not one of the five
+    // not to be, and the HINTS are what the move buys: not one of the four
     // orders was named anywhere in the UI, so what each does was findable only
     // by picking it and watching. The cost is height — a `choice_row` wraps,
-    // so five order labels take about three lines where the popup took a label
+    // so four order labels take about three lines where the popup took a label
     // and one row — and it was taken deliberately. Animation is the other half
     // of the trade, two rows becoming one.
     //
     // Both lists are built off `ALL` with an exhaustive match rather than
     // written out, the way `SpectralOrientation`'s row is and for its reason: a
-    // sixth order cannot reach this pane without a name and a hint of its own.
+    // fifth order cannot reach this pane without a name and a hint of its own.
     let animations = NoteAnimation::ALL.map(|animation| {
         let (label, hint) = match animation {
             NoteAnimation::Fade => (
@@ -441,7 +400,7 @@ fn motion_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBa
             ),
             NoteAnimation::Pop => (
                 "Overshoot",
-                "Slices swell a little past full size partway in, then settle back. A Starting scale or offset away from rest is overshot before it settles.",
+                "Slices swell a little past full size partway in, then settle back. A Starting offset away from rest is overshot before it settles.",
             ),
         };
         (animation, label, hint)
@@ -458,19 +417,15 @@ fn motion_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBa
             ),
             AnimationOrder::Circular => (
                 "Circular",
-                "Slices start one after another, sweeping once round the ring from the top slice — the one at the Center pitch — in the direction of rising pitch.",
+                "Slices start one after another at the seam where the highest and lowest meet, sweeping from low to high pitch.",
             ),
             AnimationOrder::Bidirectional => (
                 "Bidirectional",
-                "Both halves of the ring sweep away from the top slice at once and meet at the bottom.",
+                "Both ends start at the seam where the highest and lowest meet, then sweep toward each other across the ring.",
             ),
             AnimationOrder::RandomStagger => (
                 "Random stagger",
                 "Each slice takes a delay of its own, in an order scrambled per node and per press. The note's release reuses the same order.",
-            ),
-            AnimationOrder::OddEvenStagger => (
-                "Odd/even stagger",
-                "Alternate slices start together and the ones between them follow as a second group, counting round from the top slice.",
             ),
         };
         (order, label, hint)
@@ -484,13 +439,5 @@ fn motion_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBa
     });
     ValueBar::new(&mut view.note_animation.radial_start, -1.0..=1.0, "Starting offset")
         .unit(100.0, "%").show(ui)
-        .on_hover_text("Starting offset of each MIDI slice and mark. -100% starts at the node center; 0% starts at its resting position; +100% starts twice as far from the center.");
-    ValueBar::new(&mut view.note_animation.start_size, 0.0..=2.0, "Starting scale")
-        .unit(100.0, "%")
-        .show(ui)
-        .on_hover_text("Starting scale of each MIDI slice and mark relative to its final size. 0% grows from a point; 100% starts at its final size; above 100% shrinks into place.");
-    if ui.button("Grow from center").on_hover_text("Set Starting offset to -100% and Starting scale to 0%. Keeps the selected timing and easing.").clicked() {
-        view.note_animation.radial_start = -1.0;
-        view.note_animation.start_size = 0.0;
-    }
+        .on_hover_text("Starting offset and scale of each MIDI slice and mark. -100% grows from a point at the node center; 0% starts at rest; +100% starts twice as far out and at twice its final size. Scale follows offset so slice and gap proportions stay consistent.");
 }

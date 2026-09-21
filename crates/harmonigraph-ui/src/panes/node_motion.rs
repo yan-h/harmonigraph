@@ -3,7 +3,7 @@
 use harmonigraph_core::{
     Envelope, LatticePos, NoteTracker, PitchClass, Tuning, VoiceKey, VoiceState,
 };
-use harmonigraph_scene::{NoteAnimationConfig, OctaveLayout, Scene, ViewConfig};
+use harmonigraph_scene::{NoteAnimation, NoteAnimationConfig, OctaveLayout, Scene, ViewConfig};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
@@ -126,7 +126,7 @@ fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
     }
 }
 impl Motion {
-    fn advance(&mut self, dt: f64, env: &Envelope) {
+    fn advance(&mut self, dt: f64, env: &Envelope, animation: NoteAnimation) {
         // The slice reveal runs the envelope's own length rather than a second
         // duration handed in beside it: `ViewConfig::envelope` puts one time on
         // both ends, so the two were always the same number and a parameter
@@ -137,6 +137,8 @@ impl Motion {
             self.delay[i] = (self.delay[i] - dt as f32).max(0.0);
             self.progress[i] = if self.audio_waiting {
                 1.0
+            } else if animation == NoteAnimation::Fade {
+                approach(self.progress[i], f32::from(self.gate), f64::from(moving), env)
             } else if duration <= 0.0 {
                 f32::from(self.gate)
             } else {
@@ -215,10 +217,10 @@ impl NodeMotion {
                     .clamp(0, 10) as usize;
                 // Existing lattice activation measures occupancy, not velocity.
                 motion.targets[slot] = 1.0;
-                if view.mark_melody && Some(held.pitch) == high {
+                if Some(held.pitch) == high {
                     melody = Some(slot);
                 }
-                if view.mark_bass && Some(held.pitch) == low {
+                if Some(held.pitch) == low {
                     bass = Some(slot);
                 }
             }
@@ -290,9 +292,9 @@ impl NodeMotion {
             }
         }
     }
-    fn advance(&mut self, dt: f64, env: &Envelope) {
+    fn advance(&mut self, dt: f64, env: &Envelope, animation: NoteAnimation) {
         for motion in self.nodes.values_mut() {
-            motion.advance(dt.max(0.0), env);
+            motion.advance(dt.max(0.0), env, animation);
         }
     }
     fn step(
@@ -419,7 +421,7 @@ impl NodeMotion {
         }
         while index < edges.len() {
             let time = edges[index].at;
-            self.advance(time - at, env);
+            self.advance(time - at, env, view.note_animation.animation);
             // Equal-time off/on edges form one gate update, so a replacement
             // key cannot falsely end an otherwise continuous node presence.
             while index < edges.len() && edges[index].at == time {
@@ -437,7 +439,7 @@ impl NodeMotion {
             self.gates(scene, tuning, view, env, false);
             at = time;
         }
-        self.advance(now - at, env);
+        self.advance(now - at, env, view.note_animation.animation);
         // Current-state reconciliation handles retuning/baselines and gaps,
         // whose missing history must not be treated as fabricated note-offs.
         self.held.clear();
@@ -445,7 +447,7 @@ impl NodeMotion {
             self.held.insert((voice.key(), voice.on_time.to_bits()), Held { pitch: voice.pitch });
         }
         self.gates(scene, tuning, view, env, false);
-        self.advance(0.0, env);
+        self.advance(0.0, env, view.note_animation.animation);
         self.at = Some(now);
         let visible: HashSet<_> = scene.nodes.iter().map(|n| n.lattice_pos).collect();
         self.nodes.retain(|pos, _| visible.contains(pos));
@@ -479,7 +481,7 @@ impl NodeMotion {
 mod tests {
     use super::*;
     use harmonigraph_core::{NoteEvent, SourceId};
-    use harmonigraph_scene::{derive_scene, AnimationOrder, Camera, FrameParams};
+    use harmonigraph_scene::{derive_scene, AnimationOrder, Camera, FrameParams, MIDDLE_C_SLOT};
 
     fn draw(
         motion: &mut NodeMotion,
@@ -530,6 +532,33 @@ mod tests {
     fn off(t: f64, note: u8) -> NoteEvent {
         NoteEvent::off(t, SourceId::DIRECT, 0, note)
     }
+
+    #[test]
+    fn smooth_slice_motion_uses_the_note_fade_curve_in_both_directions() {
+        let sample = |shape: f32| {
+            let view = ViewConfig { fade_shape: shape, ..Default::default() };
+            let mut tracker = NoteTracker::new();
+            let mut motion = NodeMotion::default();
+            tracker.handle_event(on(0.0, 60));
+            draw(&mut motion, &mut tracker, &view, 0.0, false);
+            let arriving = origin(&draw(&mut motion, &mut tracker, &view, 0.25, false))
+                .slice_progress[MIDDLE_C_SLOT];
+            draw(&mut motion, &mut tracker, &view, 1.0, false);
+            tracker.handle_event(off(1.0, 60));
+            draw(&mut motion, &mut tracker, &view, 1.0, false);
+            let departing = origin(&draw(&mut motion, &mut tracker, &view, 1.25, false))
+                .slice_progress[MIDDLE_C_SLOT];
+            (arriving, departing)
+        };
+
+        let linear = sample(0.0);
+        assert!((linear.0 - 0.25).abs() < 1e-5);
+        assert!((linear.1 - 0.75).abs() < 1e-5);
+        let curved = sample(1.0);
+        assert!((curved.0 - 0.683_593_75).abs() < 1e-5);
+        assert!((curved.1 - 0.316_406_25).abs() < 1e-5);
+    }
+
     /// A slice's reveal used to end exactly when its node's ink did, because
     /// the spread COMPRESSED each piece into `1 - stagger_spread` of a fade.
     /// Once the spread became a start offset instead -- right for the arrival,
@@ -876,7 +905,6 @@ mod tests {
         let config = NoteAnimationConfig {
             order: AnimationOrder::RandomStagger,
             radial_start: -1.0,
-            start_size: 0.0,
             ..Default::default()
         };
         assert_eq!(

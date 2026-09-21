@@ -482,7 +482,7 @@ pub struct NodeInstance {
     /// note, or the two ends of a chord voiced inside one octave). The two
     /// marks are then one slice extended once, in the one colour they both
     /// carry — the mark says that slice is an end of the chord, and it is
-    /// both. See [`ViewConfig::mark_melody`].
+    /// both.
     pub bass_slots: u32,
     /// How far each mark has eased in, 0..1: a mark grows on over the Fade
     /// duration ([`FrameParams::fade_time`]) from the moment its note TOOK
@@ -641,7 +641,7 @@ impl NodeInstance {
     /// not the scene's. It costs nothing: a name off the pane is a name over a
     /// marker that is off the pane too, and neither is drawn.
     pub fn name_level(&self, view: &ViewConfig) -> f32 {
-        if !view.show_labels || !self.is_visible() {
+        if !self.is_visible() {
             return 0.0;
         }
         if self.hovered {

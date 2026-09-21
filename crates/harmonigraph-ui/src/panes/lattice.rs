@@ -195,9 +195,7 @@ pub(crate) fn draw_lattice(
     // so anything meant to sit ON TOP of the names has to be a second batch
     // rather than a later call into this one.
     let mut batch = crate::text::TextBatch::default();
-    if state.appearance.view.show_labels {
-        draw_node_labels(ui, rect, &scene, &state.appearance.view, &mut batch);
-    }
+    draw_node_labels(ui, rect, &scene, &state.appearance.view, &mut batch);
     // The badge is laid out here, before the names are handed over, though it
     // is DRAWN after them. Laying text out is what rasterizes glyphs into
     // egui's font atlas, and an atlas that changes size between the two
@@ -402,10 +400,9 @@ fn learn_badge(ui: &egui::Ui, rect: egui::Rect, now: f64) -> crate::text::TextBa
 /// the fainter — where they are one label naming one node.
 ///
 /// A grey off `lit`, the level the node under it is sounding at, between the
-/// two `L*` bars the label pair is: the RESTING FIELD's own
-/// ([`ViewConfig::marker_ink`](harmonigraph_scene::ViewConfig)) at 0 and
-/// [`sounding_ink`](harmonigraph_scene::ViewConfig::sounding_ink) at 1, each
-/// through the repair its own bar carries.
+/// RESTING FIELD's own `L*`
+/// ([`ViewConfig::marker_ink`](harmonigraph_scene::ViewConfig)) at 0 and white
+/// at 1.
 ///
 /// Silent is the markers' grey EXACTLY, and that is the end that has to be: a
 /// name and a cross are one claim on one position, handed between them by
@@ -432,7 +429,7 @@ fn label_ink(view: &harmonigraph_scene::ViewConfig, lit: f32) -> egui::Color32 {
     // on — the mix carries it whatever the two ends hold.
     let lit = if lit.is_finite() { lit.clamp(0.0, 1.0) } else { 0.0 };
     let resting = view.marker_ink_lightness();
-    let l_star = resting + (view.sounding_ink_lightness() - resting) * lit;
+    let l_star = resting + (view.active_label_lightness() - resting) * lit;
     super::scene_color(harmonigraph_scene::grey_of_lightness(l_star), 1.0)
 }
 
@@ -1235,7 +1232,6 @@ mod tests {
     fn only_the_interactive_copy_draws_the_learn_badge() {
         let mut state = fresh();
         state.runtime.learn_active = true;
-        state.appearance.view.show_labels = false;
         let ctx = themed();
         let screen = egui::vec2(400.0, 400.0);
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 300.0));
@@ -1323,29 +1319,20 @@ mod tests {
         );
     }
 
-    /// A label's ink is the two `L*` bars and nothing between them that they do
-    /// not name: the markers' own grey where nothing sounds, the Sounding ink
-    /// bar's where a note is fully on, and a mix taken on the AXIS in between.
+    /// A label's ink runs from the marker grey to white on the `L*` axis.
     ///
-    /// The axis is the claim. Both bars are counted in `L*` so a person sets
-    /// them by comparing two numbers, and a crossing that mixed the two solved
-    /// GREYS instead runs through brightnesses neither number names — close
-    /// enough to look right, and a third answer no bar gives.
+    /// The axis is the claim. The resting bar and fixed-white active end are
+    /// both `L*`, while a crossing that mixed the two solved GREYS instead runs
+    /// through brightnesses neither endpoint names — close enough to look
+    /// right, and a third answer the setting does not give.
     ///
     /// The level arrives as a node's activation, which is a float out of a
     /// derive, so the ends of the range and a value off it are held here too: a
     /// NaN in a mix is every label on the pane rather than the one node it came
     /// from.
     #[test]
-    fn a_labels_ink_is_a_mix_of_the_two_bars_on_their_own_axis() {
-        // Two greys well apart and both off the fresh pair, so a resolve
-        // reading the wrong bar — or either bar's fresh value — draws a visibly
-        // wrong colour rather than the right one by coincidence.
-        let view = harmonigraph_scene::ViewConfig {
-            marker_ink: 24.0,
-            sounding_ink: 88.0,
-            ..Default::default()
-        };
+    fn a_labels_ink_runs_from_the_marker_grey_to_white_on_the_l_star_axis() {
+        let view = harmonigraph_scene::ViewConfig { marker_ink: 24.0, ..Default::default() };
         let grey =
             |l: f32| super::super::scene_color(harmonigraph_scene::grey_of_lightness(l), 1.0);
         assert_eq!(
@@ -1353,20 +1340,15 @@ mod tests {
             grey(view.marker_ink),
             "a label on a node nothing is sounding under left the markers' grey",
         );
-        assert_eq!(
-            label_ink(&view, 1.0),
-            grey(view.sounding_ink),
-            "a label on a fully lit node is not the grey its own bar names",
-        );
+        assert_eq!(label_ink(&view, 1.0), grey(100.0), "a label on a fully lit node is not white",);
         assert_eq!(
             label_ink(&view, 0.25),
-            grey(24.0 + (88.0 - 24.0) * 0.25),
-            "the crossing is not taken on the L* axis the two bars are counted in",
+            grey(24.0 + (100.0 - 24.0) * 0.25),
+            "the crossing is not taken on the L* axis",
         );
         // Off the range and off the number line: a level a derive can hand over
         // must not reach the solve as something no colour comes back from.
-        for (level, want) in
-            [(-1.0f32, view.marker_ink), (2.0, view.sounding_ink), (f32::NAN, view.marker_ink)]
+        for (level, want) in [(-1.0f32, view.marker_ink), (2.0, 100.0), (f32::NAN, view.marker_ink)]
         {
             assert_eq!(
                 label_ink(&view, level),
@@ -1399,10 +1381,9 @@ mod tests {
     /// the type is not fading out at all and everything moving on it is this
     /// mix.
     #[test]
-    fn a_labels_lines_cross_between_the_bars_on_the_note_fade() {
+    fn a_labels_lines_cross_from_white_to_the_marker_grey_on_the_note_fade() {
         let mut state = fresh();
         state.appearance.view.marker_ink = 24.0;
-        state.appearance.view.sounding_ink = 88.0;
         // A long fade, so the release is a stretch to sample in rather than a
         // frame of it, and the arrival has landed well before the first sample.
         state.runtime.frame_params.fade_time = 1.0;
@@ -1424,11 +1405,7 @@ mod tests {
         let kept = drawn_label(&mut state, 5.0);
         let grey =
             |l: f32| super::super::scene_color(harmonigraph_scene::grey_of_lightness(l), 1.0);
-        assert_eq!(
-            held.0,
-            grey(state.appearance.view.sounding_ink),
-            "a sounding label is not drawn in the grey its own bar names",
-        );
+        assert_eq!(held.0, grey(100.0), "a sounding label is not drawn white",);
         assert_eq!(
             kept.0,
             grey(state.appearance.view.marker_ink),
