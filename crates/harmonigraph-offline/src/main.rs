@@ -67,7 +67,8 @@ OPTIONS:
                            [default: 0]
         --end <SEC>        Stop here.  [default: the take plus its tail]
         --tail <SEC>       Extra time after the last event, for fades and
-                           the roll to clear.  [default: 4]
+                           the roll to clear; short audio pads with silence.
+                           [default: 4]
         --crf <N>          x264 quality, lower is better and bigger. The
                            default meets YouTube's recommended bitrate at
                            720p; at 4K, lower it to get there.  [default: 10]
@@ -219,60 +220,6 @@ fn parse_align(text: &str) -> Result<Option<f64>, String> {
 /// The header says where recording started; `--align` overrides that stamp.
 fn start_of_audio(align: Option<f64>, recorded_start: Option<f64>) -> f64 {
     align.unwrap_or(recorded_start.unwrap_or(0.0))
-}
-
-/// Whether the recording still has samples where the render opens.
-///
-/// It does not when the render's window sits entirely after the recording —
-/// a take whose MIDI outlives its WAV rendered from a later `--start`, or an
-/// `--align` that moves the soundtrack out from under the render. ffmpeg is
-/// asked to seek past the end of the file, reads nothing, and `-shortest`
-/// then ends the mp4 on the priming pad: a soundtrack and one frame of
-/// picture, written by a run that drew every frame and exited 0 (#1023).
-///
-/// The comparison is against [`sink::soundtrack_seek`] rather than the raw
-/// offset so there is one definition of where the audio input is opened; the
-/// priming pulls the seek 21 ms further in, which is the difference between
-/// reading the recording's last samples and reading none of it.
-///
-/// Reaching it is not the same as covering it, and only this end is answered
-/// here: a seek that lands INSIDE the recording but leaves less of it than the
-/// render asks for still cuts the file short under `-shortest`, silently and
-/// by the same continuum (0.5 s of a 5 s recording left, 31 frames of 600).
-/// That case shares its shape with the fade tail `Sink::push` documents as
-/// normal, so telling the two apart is its own question (#1033).
-fn soundtrack_reaches_the_render(audio_offset: f64, seconds: f64) -> bool {
-    sink::soundtrack_seek(audio_offset) < seconds
-}
-
-/// Where a soundtrack shorter than the render cuts the file, and how many of
-/// the planned frames survive the cut — `None` when nothing worth saying is
-/// lost.
-///
-/// `-shortest` ends the file where the audio does, which is what a one-loop
-/// take wants and what [`Sink::push`](sink::Sink::push) documents. The cost is
-/// that it cuts every other short soundtrack's picture too, silently: the
-/// frames are drawn, handed over, and never reach the file (#1033).
-///
-/// `promised` is what keeps this from firing on the ordinary render. With no
-/// `--end` the fade tail is a default the soundtrack is allowed to eat — a
-/// bounce that stops on the last note takes `--tail` with it, and always has
-/// — so what was promised is the performance itself. An explicit `--end` is a
-/// number that was typed, and a file that stops before it is worth a line
-/// whether or not any event was playing there.
-fn soundtrack_cut(settings: &Settings, seconds: f64, promised: f64) -> Option<(f64, u64)> {
-    let ends_at = settings.audio_start + seconds;
-    if ends_at >= promised {
-        return None;
-    }
-    // The same rounding `frame_count` plans with, so "about n of m" compares
-    // two numbers built the same way. ABOUT, in both directions: `-shortest`
-    // stops FEEDING when the audio ends and what the encoder already holds is
-    // still flushed, so a long render overshoots by the lookahead — measured
-    // 675 written against 642 here (0.55 s at `-preset slow`), and 57 against
-    // 58 on a cut short enough to have no backlog to flush.
-    let lands = ((ends_at - settings.start).max(0.0) * settings.fps).round() as u64;
-    (lands < settings.frame_count()).then_some((ends_at, lands))
 }
 
 fn parse_size(text: &str) -> Result<[u32; 2], String> {
@@ -509,32 +456,14 @@ fn export(args: Args) -> Result<(), String> {
     });
     let out = std::path::PathBuf::from(out);
     let audio_offset = start - audio_start;
-    // An unreachable soundtrack is muxed as no soundtrack at all, loudly: the
-    // seek past its end reads nothing and takes the picture down with it
-    // (see `soundtrack_reaches_the_render`). Dropped rather than refused —
-    // the render has a picture to draw, there is no flag for rendering a take
-    // without its recording, and a silent video beats no video.
-    //
-    // The warning and the drop are one expression so they cannot part company.
-    let audio_seconds = audio.as_ref().map(crate::wav::Audio::seconds);
-    let soundtrack = match audio_seconds {
-        Some(seconds) if !soundtrack_reaches_the_render(audio_offset, seconds) => {
-            eprintln!(
-                "warning: the render opens {audio_offset:.2}s into a {seconds:.2}s recording — \
-                 past its end, so no soundtrack is muxed and the analyzer draws silence. \
-                 Render from earlier (--start), or place the recording under the render \
-                 (--align).",
-            );
-            None
-        }
-        _ => audio_path.as_deref(),
-    };
+    let total = settings.frame_count();
     let mut sink = Sink::create(
         &out,
         &VideoOptions {
             size,
             fps: args.fps,
-            audio: soundtrack,
+            audio: audio_path.as_deref(),
+            frames: total,
             crf: args.crf,
             ffmpeg: args.ffmpeg.as_deref(),
             audio_offset,
@@ -542,7 +471,6 @@ fn export(args: Args) -> Result<(), String> {
     )?;
 
     let [w, h] = size;
-    let total = settings.frame_count();
     eprintln!(
         "{take_path}: {:.1}s of events -> {total} frames at {} fps, {w}x{h} @ {scale:.2}x -> {}",
         take.duration(),
@@ -550,28 +478,6 @@ fn export(args: Args) -> Result<(), String> {
         out.display(),
     );
     eprintln!("{}", RenderProgress { done: 0, total });
-    // Said BEFORE the render rather than after it. The frames past the cut
-    // cost the same minutes to draw as the ones that land, and `done:` reports
-    // what was written without ever saying what was lost — so after the fact
-    // the notice arrives too late to act on and reads as a smaller number than
-    // expected, which is what made this silent (#1033).
-    //
-    // Deliberately says nothing on the ordinary render: what `promised` is
-    // covers why.
-    if sink.ends_with_the_soundtrack() {
-        let promised = args.end.unwrap_or_else(|| take.duration());
-        if let Some((ends_at, lands)) =
-            audio_seconds.and_then(|seconds| soundtrack_cut(&settings, seconds, promised))
-        {
-            eprintln!(
-                "warning: the soundtrack ends at {ends_at:.2}s, {:.2}s before the render does — \
-                 the file ends with it, so about {lands} of the {total} frames land in it. \
-                 Render to there (--end {ends_at:.2}) to draw only what lands.",
-                end - ends_at
-            );
-        }
-    }
-
     // Progress on one rewritten line; renders are long enough that silence
     // reads as a hang.
     //
@@ -589,46 +495,30 @@ fn export(args: Args) -> Result<(), String> {
     };
     let mut replay = Replay::new(take);
     let mut pushed = 0u64;
-    let mut encoder_stopped = false;
-    let stages = render::render(&mut replay, audio.as_mut(), &settings, appearance, |frame| {
-        let Some(next) = sink.push(frame)? else {
-            // ffmpeg closed the pipe (e.g. -shortest, the soundtrack ending
-            // before the visuals). Stop feeding; finish() below reads whether
-            // that was a clean finish or a crash from ffmpeg's exit status.
-            encoder_stopped = true;
-            return Ok(None);
-        };
+    let rendered = render::render(&mut replay, audio.as_mut(), &settings, appearance, |frame| {
+        let next = sink.push(frame)?;
         pushed += 1;
         report(sink.encoded().unwrap_or(pushed));
-        Ok(Some(next))
-    })?;
-    // Still reporting: the encoder is working through its backlog.
-    sink.finish(&mut report)?;
+        Ok(next)
+    });
+    // Always close stdin, drain progress and reap ffmpeg, even if drawing or
+    // writing failed. Its exit status is usually more useful than a pipe error.
+    let finished = sink.finish(&mut report);
     eprintln!();
+    let stages = match (rendered, finished) {
+        (Ok(stages), Ok(())) => stages,
+        (Err(render), Err(finish)) => return Err(format!("{finish}; rendering failed: {render}")),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => return Err(error),
+    };
 
-    // Cutting a take short is a legitimate thing to ask for, and also
-    // exactly what a mistyped --end looks like. Say which happened — and do
-    // not name --end when the ENCODER is what stopped, since the soundtrack
-    // ends the file wherever `--end` is put and raising it only draws more
-    // frames into the same cut (#1033).
     if !replay.is_spent() {
-        if encoder_stopped {
-            eprintln!(
-                "note: the file ended where the soundtrack did, with events still to come — \
-                 raising --end does not reach them"
-            );
-        } else {
-            eprintln!(
-                "note: stopped at {end:.2}s with events still to come — \
-                 raise --end (or drop it to render the whole take)"
-            );
-        }
+        eprintln!(
+            "note: stopped at {end:.2}s with events still to come — \
+             raise --end (or drop it to render the whole take)"
+        );
     }
-    // The frames the file holds: the encoder's last count, not the frames
-    // drawn. Under `-shortest` it stops at the soundtrack's end, short of the
-    // `total` planned. Always publish the final counts, even inside the
-    // reporting period, so the bar finishes against what was written.
-    eprintln!("{}", RenderProgress { done: written, total: written });
+    // Always publish the encoder's final count, even inside the reporting period.
+    eprintln!("{}", RenderProgress { done: written, total });
     eprintln!("done: {written} frames -> {}", out.display());
     // Where the time went. Printed for every export rather than behind a flag:
     // a number nobody asked for is what makes the next question askable, and
@@ -910,69 +800,6 @@ mod tests {
         assert_eq!(start_of_audio(Some(2.5), Some(5.48)), 2.5);
         assert_eq!(start_of_audio(Some(0.0), Some(5.48)), 0.0);
         assert_eq!(start_of_audio(Some(-1.25), Some(5.48)), -1.25);
-    }
-
-    /// A soundtrack the render opens after is dropped, not seeked past.
-    ///
-    /// The seek is what ffmpeg acts on, so the boundary is the seek's and not
-    /// the offset's: the last 21 ms of a recording are already unreachable,
-    /// because the priming shift opens the input that much further in (#1023).
-    #[test]
-    fn a_soundtrack_the_render_opens_after_is_not_muxed() {
-        // Inside the recording, from both directions: seeked, or delayed.
-        assert!(soundtrack_reaches_the_render(0.0, 30.0));
-        assert!(soundtrack_reaches_the_render(29.0, 30.0));
-        assert!(soundtrack_reaches_the_render(-60.0, 30.0));
-        // At its end and past it — `--start` beyond a take's own recording,
-        // and the `--align -60` that puts a 30 s bounce a minute early.
-        assert!(!soundtrack_reaches_the_render(30.0, 30.0));
-        assert!(!soundtrack_reaches_the_render(60.0, 30.0));
-        // The priming band: an offset still inside the file whose seek is not.
-        assert!(!soundtrack_reaches_the_render(29.99, 30.0));
-        // A take naming a WAV that decoded to nothing has none of it to reach.
-        assert!(!soundtrack_reaches_the_render(0.0, 0.0));
-    }
-
-    /// A soundtrack that stops mid-performance is announced; one that only
-    /// eats the fade tail is not.
-    ///
-    /// Both are the same `-shortest` cut, so the line between them is what was
-    /// ASKED for: the tail is a default a short bounce has always taken with
-    /// it, and warning there would print on the ordinary render and teach the
-    /// operator to skip the line that matters (#1033).
-    #[test]
-    fn a_soundtrack_cut_is_announced_only_where_it_eats_what_was_asked_for() {
-        // A 60 s render of a take whose events end at 50 s, from song zero.
-        let settings = |end: f64| Settings {
-            layout: Layout::preset(PRESETS[0]).expect("a preset"),
-            size: [320, 180],
-            pixels_per_point: 1.0,
-            fps: 60.0,
-            start: 0.0,
-            end,
-            audio_start: 0.0,
-        };
-        let events_end = 50.0;
-
-        // The bounce stops on the last note and the default end is its fade:
-        // 4 s of tail lost, and nothing said.
-        assert_eq!(soundtrack_cut(&settings(54.0), 50.0, events_end), None);
-        // The same cut with `--end 54` typed: a number was named and the file
-        // does not reach it.
-        assert_eq!(soundtrack_cut(&settings(54.0), 50.0, 54.0), Some((50.0, 3000)));
-        // A bounce that stops while the performance is still playing, which is
-        // what a seek into a short recording produces.
-        assert_eq!(soundtrack_cut(&settings(54.0), 20.0, events_end), Some((20.0, 1200)));
-        // A soundtrack outliving the render cuts nothing.
-        assert_eq!(soundtrack_cut(&settings(54.0), 90.0, events_end), None);
-        // Nor does one that runs out less than a frame early: the plan rounds
-        // to the same count, so there is nothing to report.
-        assert_eq!(soundtrack_cut(&settings(50.0), 49.999, events_end), None);
-
-        // The recording's own placement moves the cut with it — a bounce
-        // starting 10 s in ends 10 s later than its length alone says.
-        let placed = Settings { audio_start: 10.0, ..settings(54.0) };
-        assert_eq!(soundtrack_cut(&placed, 20.0, events_end), Some((30.0, 1800)));
     }
 
     #[test]

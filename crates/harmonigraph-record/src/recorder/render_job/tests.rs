@@ -10,22 +10,11 @@ fn a_finished_take_always_renders() {
     assert!(RenderRequest::from_config(&config).is_some());
 }
 
-/// A blank renderer path must fall back to the default rather than becoming
-/// an empty argument the renderer would reject.
-#[test]
-fn blank_settings_fall_back_rather_than_passing_empty_arguments() {
-    let config = RenderConfig { renderer_path: "  ".into(), ..Default::default() };
-    let request = RenderRequest::from_config(&config).unwrap();
-    assert_eq!(request.program, default_renderer_path());
-    assert_eq!(request.size, config.frame.pixels(config.short_edge));
-}
-
-/// Automatic and manual requests retain the active renderer and sizing
+/// Automatic and manual requests use the paired renderer and active sizing
 /// settings; only a manual request replaces the recorded appearance.
 #[test]
 fn automatic_and_manual_requests_keep_the_active_settings() {
     let config = RenderConfig {
-        renderer_path: " /custom/harmonigraph-offline ".into(),
         frame: harmonigraph_take::RenderFrame { aspect_w: 9, aspect_h: 16, ..Default::default() },
         short_edge: 2160,
         ..Default::default()
@@ -33,7 +22,7 @@ fn automatic_and_manual_requests_keep_the_active_settings() {
     let automatic = RenderRequest::from_config(&config).unwrap();
     let manual = RenderRequest::render_now(&config, "current appearance".into());
     for request in [&automatic, &manual] {
-        assert_eq!(request.program, std::path::Path::new("/custom/harmonigraph-offline"));
+        assert_eq!(request.program, default_renderer_path());
         assert_eq!(request.size, [2160, 3840]);
     }
     assert_eq!(automatic.appearance, None);

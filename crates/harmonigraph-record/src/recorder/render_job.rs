@@ -49,23 +49,20 @@ impl RenderRequest {
         Self::build(config, Some(appearance))
     }
 
-    /// A blank renderer path means "use the default" rather than an empty
-    /// argument the renderer would reject.
     fn build(
         config: &harmonigraph_take::RenderConfig,
         appearance: Option<String>,
     ) -> RenderRequest {
-        let program = if config.renderer_path.trim().is_empty() {
-            default_renderer_path()
-        } else {
-            std::path::PathBuf::from(config.renderer_path.trim())
-        };
-        RenderRequest { program, appearance, size: config.frame.pixels(config.short_edge) }
+        RenderRequest {
+            program: default_renderer_path(),
+            appearance,
+            size: config.frame.pixels(config.short_edge),
+        }
     }
 }
 
 /// Where `update-plugin.sh` installs the renderer, and where the plugin
-/// looks when the path setting is left empty. A fixed location beats
+/// finds its paired renderer. A fixed location beats
 /// guessing at the host's working directory or the bundle's own path.
 pub fn default_renderer_path() -> std::path::PathBuf {
     home_dir().join("Library/Application Support/Harmonigraph/harmonigraph-offline")
@@ -95,6 +92,9 @@ pub(super) struct Progress {
 /// with a setting changed since.
 #[derive(Default)]
 pub(super) struct RenderControl {
+    /// Instance-owned launch override for fixtures that exercise automatic stop.
+    #[cfg(feature = "test-support")]
+    pub(super) test_program: Mutex<Option<std::path::PathBuf>>,
     /// Bumped by every request, so no two runs share a number — which is what
     /// keeps each run's partial output under a name of its own.
     generation: AtomicU64,
@@ -389,7 +389,11 @@ pub(super) fn spawn_render(
             std::fs::write(&path, blob).ok().map(|()| path)
         });
 
-        let mut command = std::process::Command::new(&request.program);
+        #[cfg(feature = "test-support")]
+        let program = control.test_program.lock().clone().unwrap_or(request.program);
+        #[cfg(not(feature = "test-support"))]
+        let program = request.program;
+        let mut command = std::process::Command::new(&program);
         command.arg(&take_path).arg("--out").arg(&partial);
         if let Some(file) = &appearance_file {
             command.arg("--appearance").arg(file);
@@ -412,8 +416,8 @@ pub(super) fn spawn_render(
             Err(err) => {
                 cleanup();
                 *status.lock() = format!(
-                    "could not run {}: {err} — check the Renderer path",
-                    request.program.display()
+                    "could not run {}: {err} — reinstall the paired Harmonigraph renderer",
+                    program.display()
                 );
                 return;
             }

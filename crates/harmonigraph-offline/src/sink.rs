@@ -15,7 +15,7 @@ use std::io::Write;
 use std::process::{Child, Command, Stdio};
 
 pub enum Sink {
-    Video { child: Child, writer: Writer, encoded: Encoded, soundtrack: bool },
+    Video { child: Child, writer: Writer, encoded: Encoded, frames: u64 },
     Pngs { dir: std::path::PathBuf, stem: String, index: u32, size: [u32; 2] },
     Raw { file: std::fs::File },
 }
@@ -61,17 +61,12 @@ const QUEUE_DEPTH: usize = 2;
 /// frame, which is the difference between moving the cost off the render
 /// thread and moving it into the allocator.
 pub struct Writer {
-    /// Frames on their way to the encoder. `None` once the writer has stopped
-    /// and been collected, which is what makes a second `push` after an early
-    /// stop a no-op rather than a panic on a dead channel.
+    /// Frames on their way to the encoder; dropped to close the queue.
     frames: Option<std::sync::mpsc::SyncSender<Vec<u8>>>,
     /// Written buffers coming back to be refilled. Unbounded, and it cannot
     /// grow past the buffers in circulation: nothing but `push` creates one.
     spare: std::sync::mpsc::Receiver<Vec<u8>>,
-    /// `Ok(true)` — everything handed over was written; `Ok(false)` — the
-    /// encoder closed the pipe and wants no more (see [`Sink::push`]);
-    /// `Err` — the write itself failed.
-    thread: Option<std::thread::JoinHandle<Result<bool, String>>>,
+    thread: Option<std::thread::JoinHandle<Result<(), String>>>,
 }
 
 impl Writer {
@@ -89,23 +84,15 @@ impl Writer {
                     Ok(()) => {
                         let _ = used.send(frame);
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => return Ok(false),
                     Err(e) => return Err(format!("writing a frame to ffmpeg failed: {e}")),
                 }
             }
-            Ok(true)
+            Ok(())
         });
         Writer { frames: Some(frames), spare, thread: Some(thread) }
     }
 
-    /// Hand one frame over and take a buffer back, with [`Sink::push`]'s
-    /// answer.
-    ///
-    /// The answer is about the frames BEFORE this one: an early stop is
-    /// something the writer discovers a frame or three later, so the renderer
-    /// draws that many past the point ffmpeg stopped listening and they are
-    /// dropped. Which costs a few frames of a render that is ending anyway,
-    /// and is what buys the overlap the rest of the time.
+    /// Hand one frame over and take a buffer back.
     ///
     /// The frame is MOVED into the queue and a written one comes back in its
     /// place, so the same handful of buffers go round for a whole render and
@@ -114,24 +101,21 @@ impl Writer {
     /// for the encoder, which is what [`QUEUE_DEPTH`] exists not to do. Its
     /// empty answer mints one more buffer, which is how the circulation
     /// reaches its steady size over the first few frames.
-    fn push(&mut self, frame: Vec<u8>) -> Result<Option<Vec<u8>>, String> {
-        let Some(frames) = self.frames.as_ref() else {
-            return Ok(None);
-        };
+    fn push(&mut self, frame: Vec<u8>) -> Result<Vec<u8>, String> {
+        let frames = self.frames.as_ref().ok_or("the frame writer has stopped")?;
         match frames.send(frame) {
-            Ok(()) => Ok(Some(self.spare.try_recv().unwrap_or_default())),
-            // The channel is closed only because the writer returned, and it
-            // returns only on an early stop or a failure. Which one is its
-            // verdict. The frame it refused comes back in the error, so a
-            // render that carries on after a full verdict keeps its buffer.
-            Err(std::sync::mpsc::SendError(frame)) => Ok(self.collect()?.then_some(frame)),
+            Ok(()) => Ok(self.spare.try_recv().unwrap_or_default()),
+            Err(_) => {
+                self.collect()?;
+                Err("the frame writer stopped before accepting all frames".into())
+            }
         }
     }
 
     /// Stop the writer and take its verdict, closing ffmpeg's stdin with it —
     /// the thread owns the pipe, so this is also what lets ffmpeg reach EOF
     /// and exit.
-    fn collect(&mut self) -> Result<bool, String> {
+    fn collect(&mut self) -> Result<(), String> {
         self.frames = None;
         match self.thread.take() {
             Some(thread) => {
@@ -139,7 +123,7 @@ impl Writer {
             }
             // Already collected, by an earlier `push` that found the channel
             // shut: the verdict was returned then.
-            None => Ok(false),
+            None => Ok(()),
         }
     }
 }
@@ -158,14 +142,7 @@ const AAC_PRIMING_SECONDS: f64 = 1024.0 / 48_000.0;
 /// How far into the soundtrack the video's first frame falls: the `-ss`
 /// [`video_args`] seeks the audio input by, priming included. Negative means
 /// the soundtrack starts after the picture and is delayed instead of seeked.
-///
-/// Public because the caller has to answer a question this file cannot see:
-/// whether that seek lands inside the recording at all. Past its end ffmpeg
-/// reads NO samples, `-shortest` ends the file on the priming pad, and the
-/// mp4 comes out with a soundtrack and one frame of picture from a run that
-/// drew every frame and exited 0 (#1023). The seek is the number to compare,
-/// not `audio_offset` — the priming is part of what reaches past the end.
-pub fn soundtrack_seek(audio_offset: f64) -> f64 {
+fn soundtrack_seek(audio_offset: f64) -> f64 {
     audio_offset + AAC_PRIMING_SECONDS
 }
 
@@ -213,6 +190,8 @@ impl Encoded {
 pub struct VideoOptions<'a> {
     pub size: [u32; 2],
     pub fps: f64,
+    /// Authoritative number of video frames, including the visual tail.
+    pub frames: u64,
     /// The bounced audio to mux in, if any.
     pub audio: Option<&'a std::path::Path>,
     /// x264 constant-rate-factor: lower is better and bigger.
@@ -222,6 +201,13 @@ pub struct VideoOptions<'a> {
     /// Where in the audio file the video's first frame falls, in
     /// seconds. Positive seeks into the audio; negative delays it.
     pub audio_offset: f64,
+}
+
+impl VideoOptions<'_> {
+    /// Samples available after reserving AAC priming within the video duration.
+    fn audio_samples(&self) -> u64 {
+        ((self.frames as f64 / self.fps * 48_000.0).floor() as u64).saturating_sub(1024)
+    }
 }
 
 impl Sink {
@@ -253,6 +239,11 @@ impl Sink {
         if !w.is_multiple_of(2) || !h.is_multiple_of(2) {
             return Err(format!("video output needs even dimensions for yuv420p; {w}x{h} is odd"));
         }
+        if options.audio.is_some() && options.audio_samples() == 0 {
+            eprintln!(
+                "note: video duration is at or below AAC priming (21.333 ms); exporting video only"
+            );
+        }
         let ffmpeg = find_ffmpeg(options.ffmpeg)?;
         let mut command = Command::new(&ffmpeg);
         command.args(video_args(options, path)).stdin(Stdio::piped()).stdout(Stdio::piped());
@@ -269,20 +260,8 @@ impl Sink {
             child,
             writer: Writer::spawn(stdin),
             encoded: Encoded::spawn(stdout),
-            soundtrack: options.audio.is_some(),
+            frames: options.frames,
         })
-    }
-
-    /// Whether the file will end where the soundtrack does.
-    ///
-    /// `-shortest` rides with the soundtrack in [`video_args`], so a video
-    /// sink given one stops the PICTURE wherever the audio runs out first —
-    /// the documented behaviour for a one-loop take, and the reason a render
-    /// can quietly hold fewer frames than it drew (#1033). The other two
-    /// sinks write every frame they are pushed, and a video with nothing to
-    /// mux has nothing to be cut by.
-    pub fn ends_with_the_soundtrack(&self) -> bool {
-        matches!(self, Sink::Video { soundtrack: true, .. })
     }
 
     /// Frames the encoder has finished, for the sink that has one. `None` for
@@ -295,16 +274,8 @@ impl Sink {
         }
     }
 
-    /// Feed one frame and take a buffer back for the next one. `Ok(None)`
-    /// means the encoder has closed the pipe and wants no more frames — a
-    /// clean early stop, NOT a failure. ffmpeg does exactly this under
-    /// `-shortest` when the soundtrack ends before the visuals (a one-loop
-    /// take: audio is the loop, the picture keeps fading out past it). Whether
-    /// that early stop was success or a crash is ffmpeg's call, read from its
-    /// exit status in [`Self::finish`]; the caller just stops feeding.
-    ///
-    /// The video sink answers about the frames before this one — see
-    /// [`Writer::push`].
+    /// Feed one frame and take a buffer back for the next one.
+    /// Every write failure, including a broken pipe, fails the export.
     ///
     /// `frame` is TAKEN rather than borrowed, and the buffer that comes back
     /// is the one to draw into next. The renderer would otherwise allocate a
@@ -313,17 +284,15 @@ impl Sink {
     /// already a copy out of the mapped readback. The two sinks with no thread
     /// behind them hand the same buffer straight back, having finished with it
     /// by the time they return.
-    pub fn push(&mut self, frame: Vec<u8>) -> Result<Option<Vec<u8>>, String> {
+    pub fn push(&mut self, frame: Vec<u8>) -> Result<Vec<u8>, String> {
         match self {
             Sink::Video { writer, .. } => writer.push(frame),
-            Sink::Raw { file } => {
-                file.write_all(&frame).map(|()| Some(frame)).map_err(|e| e.to_string())
-            }
+            Sink::Raw { file } => file.write_all(&frame).map(|()| frame).map_err(|e| e.to_string()),
             Sink::Pngs { dir, stem, index, size } => {
                 let path = dir.join(format!("{stem}-{index:05}.png"));
                 *index += 1;
                 image::save_buffer(&path, &frame, size[0], size[1], image::ExtendedColorType::Rgba8)
-                    .map(|()| Some(frame))
+                    .map(|()| frame)
                     .map_err(|e| format!("{}: {e}", path.display()))
             }
         }
@@ -333,15 +302,18 @@ impl Sink {
     /// of encoded frames on the way — the encoder's backlog is the part of a
     /// render that goes on after the last frame is drawn. Consumes self so a
     /// half-written video can't be mistaken for a finished one.
-    pub fn finish(self, progress: impl FnMut(u64)) -> Result<(), String> {
+    pub fn finish(self, mut progress: impl FnMut(u64)) -> Result<(), String> {
         match self {
-            Sink::Video { mut child, mut writer, encoded, .. } => {
+            Sink::Video { mut child, mut writer, mut encoded, frames } => {
                 // Close the queue without waiting on it: the writer drains
                 // what is queued — part of the video — and then drops the pipe,
                 // which is ffmpeg's EOF. ffmpeg closing its stdout on exit is
                 // what ends the reports.
                 writer.frames = None;
-                encoded.counts.iter().for_each(progress);
+                for count in encoded.counts.iter() {
+                    encoded.latest = count;
+                    progress(count);
+                }
                 let written = writer.collect();
                 let status = child.wait().map_err(|e| format!("waiting for ffmpeg: {e}"))?;
                 // The exit status first, when it says something went wrong.
@@ -349,11 +321,21 @@ impl Sink {
                 // from both ends, and ffmpeg's end is the one that says what
                 // happened — a broken pipe here only says the far end is gone.
                 if !status.success() {
-                    return Err(format!("ffmpeg exited with {status}"));
+                    return Err(match written {
+                        Err(error) => format!("ffmpeg exited with {status}; {error}"),
+                        Ok(()) => format!("ffmpeg exited with {status}"),
+                    });
                 }
                 // Whereas a write that failed against an encoder that exited
                 // CLEANLY is its own thing, and silently truncates the video.
-                written.map(|_| ())
+                written?;
+                if encoded.latest != frames {
+                    return Err(format!(
+                        "ffmpeg encoded {} frames; expected {frames}",
+                        encoded.latest
+                    ));
+                }
+                Ok(())
             }
             Sink::Raw { mut file } => file.flush().map_err(|e| e.to_string()),
             Sink::Pngs { .. } => Ok(()),
@@ -389,7 +371,8 @@ fn video_args(options: &VideoOptions, path: &std::path::Path) -> Vec<String> {
     // `-itsoffset` delays by an edit list too — ignored, it put a render
     // that opens before the bounce 510 ms out of sync.
     let shift = soundtrack_seek(options.audio_offset);
-    if let Some(audio) = options.audio {
+    let audio = options.audio.filter(|_| options.audio_samples() > 0);
+    if let Some(audio) = audio {
         if shift > 0.0 {
             args.extend(["-ss".to_string(), format!("{shift:.6}")]);
         }
@@ -428,23 +411,23 @@ fn video_args(options: &VideoOptions, path: &std::path::Path) -> Vec<String> {
     // -vsync/-fps_mode: there is nothing to reconcile, and the two
     // spellings of that flag disagree across ffmpeg versions.
     args.extend(["-r".to_string(), format!("{}", options.fps)]);
-    if options.audio.is_some() {
+    if audio.is_some() {
         let mut filters = Vec::new();
         if shift < 0.0 {
             filters.push(format!("adelay={:.3}:all=1", -shift * 1000.0));
         }
-        // The priming shift above takes its 21 ms off the soundtrack's END as
-        // well as its front — a seek drops the last 21 ms, a reduced delay
-        // never reaches them — and `-shortest` then ends the FILE there, one
-        // video frame short of the picture that was drawn (#985). Hand
-        // exactly that much silence back. Bounded by `pad_dur`: a bare `apad`
-        // pads until the longest stream ends, which makes the soundtrack
-        // never the shortest one and so defeats `-shortest` outright.
-        filters.push(format!("apad=pad_dur={AAC_PRIMING_SECONDS:.6}"));
+        // With no edit list, AAC priming remains part of the output duration.
+        // Reserve its 1024 samples, then pad/trim the resampled input to the
+        // remaining video span. Full-duration input would make the container
+        // 21.3 ms longer than the picture; `-shortest` would discard its tail.
+        let samples = options.audio_samples();
+        filters.extend([
+            "aresample=48000".to_string(),
+            "apad".to_string(),
+            format!("atrim=end_sample={samples}"),
+        ]);
         args.extend(["-af".to_string(), filters.join(",")]);
-        // The visual tail usually outlives the bounce (or the other
-        // way round); end on whichever runs out first.
-        args.extend(["-c:a", "aac", "-b:a", "384k", "-ar", "48000", "-shortest"].map(String::from));
+        args.extend(["-c:a", "aac", "-b:a", "384k", "-ar", "48000"].map(String::from));
     }
     // YouTube asks for the index up front and no edit lists. Signed
     // composition offsets are what let the B-frames' reorder delay go
@@ -547,6 +530,7 @@ mod tests {
                 // Even, or `video` rejects the size before spawning anything.
                 size: [4, 2],
                 fps: 30.0,
+                frames: 64,
                 audio: None,
                 crf: 20,
                 ffmpeg: Some(dir.join("ffmpeg.sh").to_str().expect("utf-8 path")),
@@ -554,51 +538,6 @@ mod tests {
             },
         )
         .expect("the fake encoder should start")
-    }
-
-    /// The soundtrack is never left ending before the picture does.
-    ///
-    /// The priming shift pulls the audio earlier, which takes the same 21 ms
-    /// off its END as well as its front; `-shortest` then ends the file
-    /// there, one video frame short of what was drawn (#985). Every branch of
-    /// the shift is here — the seek, the reduced delay, and the offset that
-    /// takes neither — and each must hand that 21 ms back as a pad.
-    #[test]
-    fn the_priming_shift_is_handed_back_at_the_soundtracks_tail() {
-        let value = |args: &[String], flag: &str| {
-            args.iter().position(|a| a == flag).map(|at| args[at + 1].clone())
-        };
-        for offset in [-1.0, -0.25, -AAC_PRIMING_SECONDS, 0.0, 0.25, 3.5] {
-            for fps in [20.0, 24.0, 60.0] {
-                let options = VideoOptions {
-                    size: [4, 2],
-                    fps,
-                    audio: Some(std::path::Path::new("bounce.wav")),
-                    crf: 20,
-                    ffmpeg: None,
-                    audio_offset: offset,
-                };
-                let args = video_args(&options, std::path::Path::new("out.mp4"));
-                let chain = value(&args, "-af").expect("an audio filter chain");
-                let seconds = |name: &str| {
-                    chain.split(',').find_map(|f| f.strip_prefix(name)).map(|argument| {
-                        let number = argument.split(':').next().unwrap_or_default();
-                        number.parse::<f64>().expect("a filter argument in seconds or ms")
-                    })
-                };
-                let seek = value(&args, "-ss").map_or(0.0, |s| s.parse::<f64>().expect("seconds"));
-                let pad = seconds("apad=pad_dur=").expect("the priming pad");
-                let delay = seconds("adelay=").unwrap_or(0.0) / 1000.0;
-                // Where the soundtrack now ends, measured against where it
-                // would end unshifted: the picture needs that no earlier than
-                // `-offset`, which is the render's own span into the audio. A
-                // microsecond of slack, the grain the arguments are printed at.
-                assert!(
-                    delay + pad - seek >= -offset - 1e-6,
-                    "offset {offset} at {fps} fps ends the audio early: -ss {seek}, -af {chain}",
-                );
-            }
-        }
     }
 
     /// Every frame reaches the encoder, whole and in order.
@@ -611,7 +550,10 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn every_frame_handed_over_reaches_the_encoder_in_order() {
-        let dir = fake_ffmpeg("in-order", "cat > \"$(dirname \"$0\")/frames.rgba\"");
+        let dir = fake_ffmpeg(
+            "in-order",
+            "cat > \"$(dirname \"$0\")/frames.rgba\"\nprintf 'frame=64\\n'",
+        );
         let mut sink = video_to(&dir);
         // Distinguishable per frame, so the check is about ORDER and not just
         // about the byte count.
@@ -625,10 +567,7 @@ mod tests {
         for frame in &frames {
             buffer.clear();
             buffer.extend_from_slice(frame);
-            buffer = sink
-                .push(buffer)
-                .expect("an early stop is not an error")
-                .expect("the fake encoder is reading");
+            buffer = sink.push(buffer).expect("the fake encoder is reading");
         }
         sink.finish(|_| {}).expect("a clean finish");
 
@@ -642,35 +581,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// An encoder that stops listening is a clean early stop, not a failure —
-    /// `-shortest` with the soundtrack ending before the picture does exactly
-    /// this — and it still reads as one through a queue, where the news
-    /// arrives some frames after the event.
+    /// A closed pipe is a failure even when ffmpeg exits zero; the payload
+    /// must exceed the kernel pipe capacity to actually reach the write error.
     #[test]
     #[cfg(unix)]
-    fn an_encoder_that_closes_the_pipe_early_stops_the_render_without_failing_it() {
-        // Exits at once, having read nothing: every write after that is a
-        // broken pipe.
-        let dir = fake_ffmpeg("early-stop", "exit 0");
-        let mut sink = video_to(&dir);
-        let mut buffer = Vec::new();
-        let mut fed = 0;
-        loop {
-            // Well past the 64 KB a pipe will hold without a reader, so this
-            // cannot end by running out of frames instead. Refilled each time
-            // rather than sent as-is: a buffer minted to stand in for one still
-            // in flight comes back empty, and an empty write never breaks a
-            // pipe, so a loop that fed it would spin instead of stopping.
-            buffer.clear();
-            buffer.resize(64 * 1024, 0);
-            let Some(spare) = sink.push(buffer).expect("an early stop is not an error") else {
-                break;
-            };
-            buffer = spare;
-            fed += 1;
-            assert!(fed < 4096, "the encoder is gone and the sink went on accepting frames");
+    fn an_encoder_that_closes_the_pipe_early_fails_and_is_reaped() {
+        for exit in [0, 7] {
+            let dir = fake_ffmpeg(&format!("early-stop-{exit}"), &format!("exit {exit}"));
+            let mut sink = video_to(&dir);
+            let mut failure = None;
+            for _ in 0..64 {
+                if let Err(error) = sink.push(vec![0; 1024 * 1024]) {
+                    failure = Some(error);
+                    break;
+                }
+            }
+            assert!(failure.unwrap().contains("writing a frame to ffmpeg failed"));
+            let error = sink.finish(|_| {}).unwrap_err();
+            if exit == 0 {
+                assert!(error.contains("expected 64"), "{error}");
+            } else {
+                assert!(error.contains("ffmpeg exited"), "{error}");
+            }
+            let _ = std::fs::remove_dir_all(&dir);
         }
-        sink.finish(|_| {}).expect("an encoder that exited cleanly is a clean finish");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_write_failure_while_draining_is_reported() {
+        let dir = fake_ffmpeg("drain-failure", "exit 0");
+        let mut sink = video_to(&dir);
+        sink.push(vec![0; 1024 * 1024]).expect("the first frame fits the queue");
+        let error = sink.finish(|_| {}).unwrap_err();
+        assert!(error.contains("writing a frame to ffmpeg failed"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_successful_exit_with_too_few_encoded_frames_fails() {
+        let dir = fake_ffmpeg("short-count", "cat > /dev/null\nprintf 'frame=63\\n'");
+        let mut sink = video_to(&dir);
+        for _ in 0..64 {
+            sink.push(vec![0; 32]).unwrap();
+        }
+        let error = sink.finish(|_| {}).unwrap_err();
+        assert!(error.contains("encoded 63 frames; expected 64"), "{error}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -694,15 +651,205 @@ mod tests {
         for _ in 0..64 {
             buffer.clear();
             buffer.resize(4 * 2 * 4, 0);
-            buffer = sink
-                .push(buffer)
-                .expect("an early stop is not an error")
-                .expect("the fake encoder is reading");
+            buffer = sink.push(buffer).expect("the fake encoder is reading");
         }
         let mut reported = Vec::new();
         sink.finish(|frames| reported.push(frames)).expect("a clean finish");
         assert_eq!(reported, [40, 64]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Use the actual encoder and muxer: inspecting arguments cannot prove
+    /// that AAC priming, empty inputs and the container obey the frame plan.
+    fn real_ffmpeg() -> Option<std::path::PathBuf> {
+        let ffmpeg = find_ffmpeg(None).ok()?;
+        if Command::new(ffmpeg.with_file_name("ffprobe")).arg("-version").output().is_err() {
+            eprintln!("skipping real encoder tests: ffprobe unavailable");
+            return None;
+        }
+        Some(ffmpeg)
+    }
+
+    fn probe(ffmpeg: &std::path::Path, path: &std::path::Path) -> String {
+        let output = Command::new(ffmpeg.with_file_name("ffprobe"))
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type,nb_frames,duration:format=duration",
+                "-of",
+                "flat",
+            ])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    fn write_wav(path: &std::path::Path, rate: u32, seconds: f64, click: Option<f64>) {
+        let mut samples = vec![0.0; (seconds * f64::from(rate)) as usize];
+        if let Some(click) = click {
+            samples[(click * f64::from(rate)).round() as usize] = 0.8;
+        }
+        let mut writer = harmonigraph_take::WavWriter::create(path, rate as f32, 1).unwrap();
+        writer.write(&samples).unwrap();
+        writer.finish().unwrap();
+    }
+
+    fn encode(options: &VideoOptions, path: &std::path::Path, flash: Option<u64>) {
+        let mut sink = Sink::create(path, options).unwrap();
+        let mut buffer = Vec::new();
+        for frame in 0..options.frames {
+            buffer.resize((options.size[0] * options.size[1] * 4) as usize, 0);
+            buffer.fill(if Some(frame) == flash { 255 } else { 0 });
+            buffer = sink.push(buffer).unwrap();
+        }
+        sink.finish(|_| {}).unwrap();
+    }
+
+    #[test]
+    fn real_encoder_preserves_the_plan_for_every_soundtrack_extent() {
+        let Some(ffmpeg) = real_ffmpeg() else { return };
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-real-duration-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // N/fps = 9.05 rather than a whole second. The priming-band seek is
+        // still inside the WAV before compensation, but beyond EOF after it.
+        for (name, seconds, offset, frames, fps) in [
+            ("none", None, 0.0, 181, 20.0),
+            ("short", Some(0.25), 0.0, 181, 20.0),
+            ("long", Some(12.0), 0.0, 181, 20.0),
+            ("empty", Some(0.0), 0.0, 181, 20.0),
+            ("exhausted", Some(0.25), 3.0, 181, 20.0),
+            ("priming-band", Some(0.25), 0.24, 181, 20.0),
+            ("delay", Some(0.25), -0.5, 181, 20.0),
+            ("seek", Some(1.0), 0.25, 181, 20.0),
+            ("fractional-sample", Some(2.0), 0.0, 61, 59.94),
+        ] {
+            let wav = dir.join(format!("{name}.wav"));
+            if let Some(seconds) = seconds {
+                write_wav(&wav, 44_100, seconds, None);
+            }
+            let out = dir.join(format!("{name}.mp4"));
+            let options = VideoOptions {
+                size: [16, 16],
+                fps,
+                frames,
+                audio: seconds.map(|_| wav.as_path()),
+                crf: 20,
+                ffmpeg: ffmpeg.to_str(),
+                audio_offset: offset,
+            };
+            encode(&options, &out, None);
+            let info = probe(&ffmpeg, &out);
+            assert!(
+                info.contains(&format!("streams.stream.0.nb_frames=\"{frames}\"")),
+                "{name}: {info}"
+            );
+            assert_eq!(info.contains("codec_type=\"audio\""), seconds.is_some(), "{name}: {info}");
+            let planned = frames as f64 / fps;
+            for line in info.lines().filter(|line| line.contains(".duration=")) {
+                let duration: f64 =
+                    line.split('=').nth(1).unwrap().trim_matches('"').parse().unwrap();
+                assert!(
+                    (planned - 1.0 / 48_000.0 - 1e-6..=planned + 1e-6).contains(&duration),
+                    "{name}: {info}"
+                );
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn real_encoder_omits_audio_only_when_the_clip_cannot_hold_aac_priming() {
+        let Some(ffmpeg) = real_ffmpeg() else { return };
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-real-tiny-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("audio.wav");
+        write_wav(&wav, 48_000, 1.0, None);
+        for fps in [24.0, 30.0, 46.875, 60.0] {
+            let out = dir.join(format!("{fps}.mp4"));
+            let options = VideoOptions {
+                size: [16, 16],
+                fps,
+                frames: 1,
+                audio: Some(&wav),
+                crf: 20,
+                ffmpeg: ffmpeg.to_str(),
+                audio_offset: 0.0,
+            };
+            encode(&options, &out, None);
+            let info = probe(&ffmpeg, &out);
+            assert!(info.contains("streams.stream.0.nb_frames=\"1\""), "{fps}: {info}");
+            assert_eq!(info.contains("codec_type=\"audio\""), fps < 46.875, "{fps}: {info}");
+            for line in info.lines().filter(|line| line.contains(".duration=")) {
+                let duration: f64 =
+                    line.split('=').nth(1).unwrap().trim_matches('"').parse().unwrap();
+                assert!((duration - 1.0 / fps).abs() <= 1.0 / 48_000.0 + 1e-6, "{fps}: {info}");
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn real_encoder_keeps_the_click_on_the_flash_after_seek_and_delay() {
+        let Some(ffmpeg) = real_ffmpeg() else { return };
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-real-sync-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for rate in [44_100, 48_000] {
+            for fps in [24u32, 30, 60] {
+                for offset in [-0.25, 0.0, 0.25] {
+                    let wav = dir.join("click.wav");
+                    write_wav(&wav, rate, 1.25, Some(0.5 + offset));
+                    let out = dir.join("click.mp4");
+                    let options = VideoOptions {
+                        size: [16, 16],
+                        fps: f64::from(fps),
+                        frames: u64::from(fps),
+                        audio: Some(&wav),
+                        crf: 20,
+                        ffmpeg: ffmpeg.to_str(),
+                        audio_offset: offset,
+                    };
+                    encode(&options, &out, Some(u64::from(fps / 2)));
+                    let decoded = Command::new(&ffmpeg)
+                        .args(["-v", "error", "-i"])
+                        .arg(&out)
+                        .args(["-map", "0:a:0", "-f", "f32le", "-ac", "1", "-"])
+                        .output()
+                        .unwrap();
+                    assert!(decoded.status.success());
+                    let peak = decoded
+                        .stdout
+                        .chunks_exact(4)
+                        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()).abs())
+                        .enumerate()
+                        .max_by(|a, b| a.1.total_cmp(&b.1))
+                        .unwrap()
+                        .0;
+                    assert_eq!(peak, 24_000, "{rate} Hz / {fps} fps / offset {offset}");
+                    let decoded = Command::new(&ffmpeg)
+                        .args(["-v", "error", "-i"])
+                        .arg(&out)
+                        .args(["-map", "0:v:0", "-f", "rawvideo", "-pix_fmt", "gray", "-"])
+                        .output()
+                        .unwrap();
+                    assert!(decoded.status.success());
+                    let flash = decoded
+                        .stdout
+                        .chunks_exact(16 * 16)
+                        .enumerate()
+                        .max_by_key(|(_, frame)| frame.iter().map(|p| u32::from(*p)).sum::<u32>())
+                        .unwrap()
+                        .0;
+                    assert_eq!(flash, fps as usize / 2);
+                }
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
