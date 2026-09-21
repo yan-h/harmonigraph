@@ -645,37 +645,16 @@ pub struct ViewConfig {
     /// rather than a fraction of the band's width, which would move the marks
     /// every time the band is resized.
     pub mark_thickness: f32,
-    /// How long a note must HOLD an end before its mark begins to ease in,
-    /// in seconds. The wait sits in front of the ease rather than stretching
-    /// it: the mark is at 0 for this long and then arrives on the same Fade
-    /// ramp ([`envelope`](Self::envelope)) every other layer arrives on.
+    /// Seconds a new melody/bass target waits before its carried mark eases in.
+    /// [`crate::NodeMotion`] starts this wait when an end changes hands, including
+    /// inheritance after another note is released. A target lost during the
+    /// wait cancels its arrival; an already visible mark fades from its current
+    /// level instead of restarting at full brightness.
     ///
-    /// The wait is also a THRESHOLD: an end that changes hands again before
-    /// the delay is up never draws a mark at all. That is what the setting is
-    /// for. Playing fast, the top and bottom of what is down change every few
-    /// notes, and a mark easing in on each of them reads as flicker around the
-    /// octave band rather than as the line it is tracing — so the delay is
-    /// how long a note has to be the melody before it counts as the melody.
-    ///
-    /// A mark outlives its key (it fades out on the note's release), so the
-    /// threshold is answered AT the key-up — `derive_scene`'s `ease` — and
-    /// only the ramp runs on from there. Left to the ramp alone, an end
-    /// dropped mid-delay would climb past the threshold while the note was
-    /// already fading and mark a note that never was the melody, which is the
-    /// very flicker this setting buys off.
-    ///
-    /// Not derived from the note Fade, which is the other end of the same
-    /// note and reads as the natural pair: a fade is how long a note takes to
-    /// LEAVE, and tying the two would mean a long release could not be paired
-    /// with a mark that answers immediately. The delay is measured from the
-    /// handoff the tracker stamps ([`HeldEnd`](harmonigraph_core::HeldEnd)),
-    /// which is exactly why that stamp cannot come off the released voice:
-    /// any delay past the Fade would outlive the note that handed the end
-    /// over.
-    ///
-    /// 0 is the mark arriving with its note, and is deliberately not what a
-    /// fresh view opens on — see `impl Default`, where the wait that stops
-    /// the chord-release smear is written out.
+    /// Independent of the note Fade: the delay filters brief handoffs, while
+    /// [`envelope`](Self::envelope) controls the subsequent arrival and release.
+    /// Zero begins the arrival immediately. Motion retains the handoff state
+    /// even after the tracker prunes the voice that gave up the end.
     pub mark_delay: f32,
     // ---- Home markers ----------------------------------------------------
     // The cross standing at each home-sheet node position (see

@@ -18,7 +18,7 @@
 //! height sets how finely the image is sampled and not how bright it is. The
 //! vertex rule feeding the two slab taps is `heatmap_mesh`'s.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
@@ -57,38 +57,13 @@ pub(crate) const SPECTROGRAM_ENTRY_POINTS: &[&str] = &[
 /// it.
 #[derive(Clone)]
 pub struct SpectrogramGrid {
-    /// A new value forces the GPU copy to be rebuilt from [`run`](Self::run);
-    /// the copy is keyed on `(generation, capacity, bins)` per `pane_id`.
-    ///
-    /// Bump it whenever a slab that is NOT named in
-    /// [`dirty`](Self::dirty) stops matching what the slot holds — a refold, a
-    /// gap, a backward jump — and whenever the caller has lost track of what
-    /// the GPU holds. A stale slot is a wrong column and nothing on the CPU
-    /// can see it.
-    pub generation: u64,
-    /// This handover's own number, echoed into [`uploaded`](Self::uploaded)
-    /// once the writes below have been queued. Distinct per handover, where
-    /// [`generation`](Self::generation) is deliberately not.
-    pub serial: u64,
-    /// The last [`serial`](Self::serial) a `prepare` finished, shared with the
-    /// caller.
-    ///
-    /// A callback is not certain to run — egui drops one whose clip rect is
-    /// empty — so this is the only evidence the caller has that the slots it
-    /// believes are written really were. A caller computing its next delta
-    /// against a run this never named is computing it against a buffer that
-    /// never received it.
-    pub uploaded: Arc<AtomicU64>,
     pub capacity: u32,
     pub bins: u32,
-    /// The visible run: keys `first_key .. first_key + run.len() / bins`,
-    /// contiguous, slab-major, bytes exactly as the aggregator holds them.
+    /// Keys `first_key .. first_key + run.len() / bins`, contiguous and slab-major.
     pub first_key: i64,
     pub run: Arc<Vec<u8>>,
-    /// Keys inside the run whose slot is written this frame — the steady
-    /// state's delta, a slab or two. Ignored on the frame the copy is rebuilt,
-    /// which writes every slab of the run.
-    pub dirty: Vec<i64>,
+    /// Actual full uploads, for the performance overlay. Never a cache input.
+    pub full_uploads: Arc<AtomicU32>,
 }
 
 /// The row read's scalars: the row geometry, the two arms and the level
@@ -264,19 +239,35 @@ struct SpectrogramResources {
     panes: PassAged<SpectrogramPane>,
 }
 
-/// The grid's GPU copy and what it was built from. A new key rebuilds it from
-/// the whole run; the same key patches only the dirty slabs.
+/// The resource owner remembers only the snapshot it actually uploaded.
+/// Dropped callbacks never change this state; a new context starts without it.
 struct GridBuffer {
     buffer: wgpu::Buffer,
-    key: (u64, u32, u32),
+    snapshot: SpectrogramGrid,
 }
 
 impl GridBuffer {
-    /// Whether this buffer is the right SHAPE for a grid of `capacity` slots
-    /// of `bins` bytes — which is all its allocation depends on, the
-    /// generation deciding only what is written into it.
-    fn fits(&self, capacity: u32, bins: u32) -> bool {
-        (self.key.1, self.key.2) == (capacity, bins)
+    fn fits(&self, grid: &SpectrogramGrid) -> bool {
+        (self.snapshot.capacity, self.snapshot.bins) == (grid.capacity, grid.bins)
+    }
+
+    /// Indices needing writes, matched by absolute slab key rather than ring slot.
+    /// A newly entering key must be written even if another key had equal bytes.
+    fn changed_slabs(&self, grid: &SpectrogramGrid) -> Vec<usize> {
+        let previous = &self.snapshot;
+        if previous.first_key == grid.first_key && Arc::ptr_eq(&previous.run, &grid.run) {
+            return Vec::new();
+        }
+        let bins = grid.bins as usize;
+        let held = previous.run.len() / bins;
+        (0..grid.run.len() / bins)
+            .filter(|&j| {
+                let at = grid.first_key + j as i64 - previous.first_key;
+                !(0..held as i64).contains(&at)
+                    || previous.run[at as usize * bins..(at as usize + 1) * bins]
+                        != grid.run[j * bins..(j + 1) * bins]
+            })
+            .collect()
     }
 }
 
@@ -503,17 +494,14 @@ impl CallbackTrait for SpectrogramCallback {
             self.grid.capacity
         );
 
-        let key = (self.grid.generation, self.grid.capacity, self.grid.bins);
-        let mut remade = false;
-        if pane.grid.as_ref().is_none_or(|g| g.key != key) {
+        let previous = pane.grid.as_ref().filter(|g| g.fits(&self.grid));
+        let changed = previous.map(|g| g.changed_slabs(&self.grid));
+        let full = changed.as_ref().is_none_or(|slabs| slabs.len() * 2 > run_slabs);
+        let mut remade = previous.is_none();
+        if full {
             let size = u64::from(self.grid.capacity) * u64::from(stride);
-            // Kept when the shape is unchanged, so a rebuild of the same grid
-            // is one write rather than a fresh 15.7 MB allocation. It is not
-            // the rare path the reallocation would be sized for: a Span parked
-            // on a ladder rung refolds on every frame, and each refold moves
-            // enough of the run to be uploaded whole.
-            let kept = pane.grid.take().filter(|g| g.fits(self.grid.capacity, self.grid.bins));
-            remade = kept.is_none();
+            // A content replacement can reuse the allocation and bind group.
+            let kept = pane.grid.take().filter(|g| g.fits(&self.grid));
             let buffer = match kept {
                 Some(held) => held.buffer,
                 None => device.create_buffer(&wgpu::BufferDescriptor {
@@ -523,10 +511,8 @@ impl CallbackTrait for SpectrogramCallback {
                     mapped_at_creation: false,
                 }),
             };
-            // The whole ring in one write, so the slots the run does not cover
-            // are zero rather than whatever the buffer held before — which is
-            // what lets one be kept above. This runs only on a refold or a
-            // lost buffer.
+            // Zero unoccupied ring slots too, so reusing a buffer is equivalent
+            // to a fresh allocation. Bulk replacement avoids many scattered writes.
             let mut staging = vec![0u8; size as usize];
             for j in 0..run_slabs {
                 let at = slot_of(self.grid.first_key + j as i64, self.grid.capacity) as usize
@@ -534,23 +520,13 @@ impl CallbackTrait for SpectrogramCallback {
                 staging[at..at + bins].copy_from_slice(&self.grid.run[j * bins..(j + 1) * bins]);
             }
             queue.write_buffer(&buffer, 0, &staging);
-            pane.grid = Some(GridBuffer { buffer, key });
-        } else if !self.grid.dirty.is_empty() {
-            let buffer = &pane.grid.as_ref().expect("the branch above holds a buffer").buffer;
-            // Production slabs are already aligned. Only generic bin counts
-            // need padding; an unchanged run needs no staging at all.
+            self.grid.full_uploads.fetch_add(1, Ordering::Relaxed);
+            pane.grid = Some(GridBuffer { buffer, snapshot: self.grid.clone() });
+        } else {
+            let held = pane.grid.as_mut().expect("a partial upload has an existing buffer");
+            // Production slabs are aligned already; generic test grids may need padding.
             let mut padded = (bins != stride as usize).then(|| vec![0u8; stride as usize]);
-            for &dirty in &self.grid.dirty {
-                let j = dirty - self.grid.first_key;
-                debug_assert!(
-                    j >= 0 && (j as usize) < run_slabs,
-                    "dirty slab {dirty} is outside the run at {}",
-                    self.grid.first_key
-                );
-                if j < 0 || j as usize >= run_slabs {
-                    continue;
-                }
-                let j = j as usize;
+            for j in changed.expect("an existing buffer was compared") {
                 let slab = &self.grid.run[j * bins..(j + 1) * bins];
                 let bytes = match padded.as_mut() {
                     Some(padded) => {
@@ -559,9 +535,11 @@ impl CallbackTrait for SpectrogramCallback {
                     }
                     None => slab,
                 };
-                let slot = slot_of(dirty, self.grid.capacity);
-                queue.write_buffer(buffer, u64::from(slot) * u64::from(stride), bytes);
+                let slot = slot_of(self.grid.first_key + j as i64, self.grid.capacity);
+                queue.write_buffer(&held.buffer, u64::from(slot) * u64::from(stride), bytes);
             }
+            // Even a zero-write comparison can change the retained run extent.
+            held.snapshot = self.grid.clone();
         }
 
         let fresh_lut = pane.lut.as_ref().is_none_or(|l| l.levels != levels);
@@ -861,13 +839,6 @@ impl CallbackTrait for SpectrogramCallback {
             }
         }
 
-        // Last, and only on the path that wrote: the caller reads this to
-        // decide whether its next delta may be computed against this run, so
-        // it has to name a run whose slabs are in their slots. Every early
-        // return above leaves it standing at the previous handover, which is
-        // what makes an undrawn frame legible rather than silent.
-        self.grid.uploaded.store(self.grid.serial, Ordering::Relaxed);
-
         Vec::new()
     }
 
@@ -929,8 +900,8 @@ impl CallbackTrait for SpectrogramCallback {
 /// and one set of `CallbackResources`, held across frames.
 ///
 /// Held, because a single-shot frame can only ever take the full-upload path —
-/// fresh resources hold no grid to patch. A test of the DELTA (which slabs the
-/// caller says have moved) has to hand the same resources one frame after
+/// fresh resources hold no grid to patch. A test of incremental uploads
+/// has to hand the same resources one frame after
 /// another, exactly as a pane does.
 ///
 /// `None` without an adapter only when GPU tests are optional; CI requires one.
@@ -952,6 +923,11 @@ impl SpectrogramHeadless {
         })
     }
 
+    /// Simulate closing the renderer while preserving its callers' CPU snapshots.
+    pub fn reset_resources(&mut self) {
+        self.resources = CallbackResources::default();
+    }
+
     /// One frame: the same `prepare`/`paint` a pane takes, into a fresh
     /// `Rgba8Unorm` texture cleared to opaque black, read back as tightly
     /// packed RGBA8 rows.
@@ -961,7 +937,7 @@ impl SpectrogramHeadless {
     ///
     /// `size[0]` must be a multiple of 64, so the readback's rows stay
     /// 256-byte aligned. `pane_id` picks which grid copy this frame patches,
-    /// so a test wanting a full upload beside a delta asks on a second id.
+    /// so a full-upload reference needs a fresh id or cleared resources.
     pub fn frame(
         &mut self,
         pane_id: u64,
@@ -1098,16 +1074,7 @@ mod tests {
     }
 
     fn grid_of(run: Arc<Vec<u8>>, bins: u32, capacity: u32, first_key: i64) -> SpectrogramGrid {
-        SpectrogramGrid {
-            generation: 1,
-            serial: 1,
-            uploaded: Arc::default(),
-            capacity,
-            bins,
-            first_key,
-            run,
-            dirty: Vec::new(),
-        }
+        SpectrogramGrid { full_uploads: Arc::default(), capacity, bins, first_key, run }
     }
 
     /// A quad over the whole surface: `slab` running 0..n left to right, `t`
@@ -1466,7 +1433,6 @@ mod tests {
                 for value in [0, 1, 64, 150, 255] {
                     cb.grid.run = Arc::new(vec![value; cb.grid.run.len()]);
                     // The GPU cache must re-upload when the supplied samples change.
-                    cb.grid.generation += 1;
                     let bent = frame_with(&device, &queue, &mut resources, &cb);
                     cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
                     let bare = frame_with(&device, &queue, &mut resources, &cb);
@@ -2308,7 +2274,6 @@ mod tests {
         // Mode or viewport changes can replace the grid while diffusion is
         // disabled. Re-enabling at the same pane size must use that new grid.
         cb.grid.capacity *= 2;
-        cb.grid.generation += 1;
         cb.grid.run = Arc::new(vec![64; cb.grid.run.len()]);
         let disabled = frame_with(&device, &queue, &mut resources, &cb);
         cb.atmosphere = None;
@@ -2556,62 +2521,49 @@ mod tests {
             .collect()
     }
 
-    /// One frame of the sequence
-    /// [`a_delta_upload_draws_what_a_full_upload_draws`] plays: what the
-    /// window is, what changed under it, and what the caller declares changed.
+    /// Complete snapshots exercise the actual uploader against fresh resources.
     struct Step {
         label: &'static str,
-        generation: u64,
         capacity: u32,
         first_key: i64,
-        /// Keys whose content is rewritten before this frame.
         mutate: &'static [i64],
-        /// Keys whose slot does not hold their content — what the UI side
-        /// owes, and the only thing standing between the delta and a stale
-        /// column.
-        dirty: &'static [i64],
+        slabs: usize,
+        changed: usize,
+        full: bool,
     }
 
     impl Step {
         const fn new(
             label: &'static str,
-            generation: u64,
             capacity: u32,
             first_key: i64,
             mutate: &'static [i64],
-            dirty: &'static [i64],
-        ) -> Step {
-            Step { label, generation, capacity, first_key, mutate, dirty }
+            changed: usize,
+            full: bool,
+        ) -> Self {
+            Self { label, capacity, first_key, mutate, slabs: 6, changed, full }
         }
     }
 
-    /// Slabs in the window every [`Step`] draws.
-    const SLABS: usize = 6;
-
-    /// A frame built from the delta path equals one built from a full upload,
-    /// through a sequence that moves every part of the cache key: the newest
-    /// slab and an interior one rewritten in place, a window that advances
-    /// into slots another key held, keys before zero, a run that wraps past
-    /// `capacity`, a generation bump, and a capacity change.
-    ///
-    /// This is the new cache key and the only thing checking it: a stale slot
-    /// is a wrong column, and nothing on the CPU can see one.
-    ///
-    /// Each frame's acknowledgement is checked alongside, because it is what
-    /// entitles the CALLER to send the next delta: a serial that arrives for a
-    /// frame that wrote nothing would license a delta against a buffer that
-    /// never received the run.
     #[test]
     fn a_delta_upload_draws_what_a_full_upload_draws() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         for bins in [256, harmonigraph_core::spectrum::SPECTRUM_BINS, 3827, 3829] {
-            check_delta_upload(&device, &queue, bins);
+            check_delta_upload(&device, &queue, bins, false);
         }
+        check_delta_upload(&device, &queue, harmonigraph_core::spectrum::SPECTRUM_BINS, true);
     }
 
-    fn check_delta_upload(device: &wgpu::Device, queue: &wgpu::Queue, bins: usize) {
+    fn check_delta_upload(device: &wgpu::Device, queue: &wgpu::Queue, bins: usize, softened: bool) {
+        let callback = |vertices, grid: &SpectrogramGrid, read: &SpectrogramRead| {
+            let mut cb = callback(vertices, grid, read);
+            if softened {
+                cb.atmosphere = cloud_fixture().atmosphere;
+            }
+            cb
+        };
         let read = SpectrogramRead {
             level_per_midi: 0.0,
             ..read_of(SPECTRUM_MIN_MIDI, bins as f32 / BINS_PER_SEMITONE, 96)
@@ -2620,86 +2572,162 @@ mod tests {
         let mut resources = CallbackResources::default();
         let mut previous: Option<Vec<u8>> = None;
         let mut moved = 0;
-        let uploaded: Arc<AtomicU64> = Arc::default();
-
-        let steps = &[
-            Step::new("the first upload", 1, 8, 0, &[], &[]),
-            Step::new("an unchanged warm run", 1, 8, 0, &[], &[]),
-            Step::new("the newest slab rewritten", 1, 8, 0, &[5], &[5]),
-            Step::new("an interior slab rewritten", 1, 8, 0, &[2], &[2]),
-            Step::new("the window advanced by one", 1, 8, 1, &[], &[6]),
-            Step::new("advanced again", 1, 8, 2, &[], &[7]),
-            Step::new("advanced past capacity", 1, 8, 4, &[], &[8, 9]),
-            Step::new("a wrapped slab rewritten", 1, 8, 4, &[9], &[9]),
-            Step::new("three wrapped slabs rewritten", 1, 8, 4, &[7, 8, 9], &[7, 8, 9]),
-            Step::new("a generation bump onto keys before zero", 2, 8, -3, &[], &[]),
-            Step::new("a negative key rewritten", 2, 8, -3, &[-1], &[-1]),
-            Step::new("advanced across zero", 2, 8, -2, &[], &[3]),
-            Step::new("a capacity change", 2, 12, -2, &[], &[]),
+        let uploads: Arc<AtomicU32> = Arc::default();
+        let mut expected_uploads = 0;
+        let steps = [
+            Step::new("first", 8, 0, &[], 6, true),
+            Step::new("equal bytes in a new Arc", 8, 0, &[], 0, false),
+            Step::new("newest rewritten", 8, 0, &[5], 1, false),
+            Step::new("interior rewritten", 8, 0, &[2], 1, false),
+            Step::new("advanced", 8, 1, &[], 1, false),
+            Step::new("advanced again", 8, 2, &[], 1, false),
+            Step::new("wrapped", 8, 4, &[], 2, false),
+            Step::new("wrapped rewrite", 8, 4, &[9], 1, false),
+            Step::new("exactly half changed", 8, 4, &[7, 8, 9], 3, false),
+            Step::new("more than half changed", 8, 4, &[4, 5, 6, 7], 4, true),
+            Step::new("negative keys", 8, -3, &[], 6, true),
+            Step::new("negative rewrite", 8, -3, &[-1], 1, false),
+            Step::new("across zero", 8, -2, &[], 1, false),
+            Step::new("capacity changed", 12, -2, &[], 6, true),
+            Step { slabs: 3, ..Step::new("shrink extent", 12, -2, &[], 0, false) },
+            Step::new("expand extent", 12, -2, &[], 3, false),
+            Step { slabs: 5, ..Step::new("oldest slab leaves", 12, -1, &[], 0, false) },
+            Step::new("oldest slab returns", 12, -2, &[], 1, false),
         ];
-
+        let mut last = None;
         for step in steps {
             for &key in step.mutate {
                 *version.entry(key).or_insert(0) += 1;
             }
-            let mut run = Vec::with_capacity(SLABS * bins);
-            for j in 0..SLABS as i64 {
-                let key = step.first_key + j;
-                run.extend(versioned_slab(key, *version.entry(key).or_insert(0), bins));
-            }
-            let serial = uploaded.load(Ordering::Relaxed) + 1;
+            let run = (0..step.slabs as i64)
+                .flat_map(|j| {
+                    let key = step.first_key + j;
+                    versioned_slab(key, *version.entry(key).or_insert(0), bins)
+                })
+                .collect();
             let grid = SpectrogramGrid {
-                generation: step.generation,
-                serial,
-                uploaded: uploaded.clone(),
                 capacity: step.capacity,
                 bins: bins as u32,
                 first_key: step.first_key,
                 run: Arc::new(run),
-                dirty: step.dirty.to_vec(),
+                full_uploads: uploads.clone(),
             };
-            let cb = callback(full_quad(SLABS as u32), &grid, &read);
+            let changed = resources
+                .get::<SpectrogramResources>()
+                .and_then(|r| r.panes.get(0))
+                .and_then(|p| p.grid.as_ref())
+                .filter(|held| held.fits(&grid))
+                .map_or(step.slabs, |held| held.changed_slabs(&grid).len());
+            assert_eq!(changed, step.changed, "{}: changed slabs", step.label);
+            let cb = callback(full_quad(step.slabs as u32), &grid, &read);
             let incremental = frame_with(device, queue, &mut resources, &cb);
+            expected_uploads += u32::from(step.full);
             assert_eq!(
-                uploaded.load(Ordering::Relaxed),
-                serial,
-                "{} drew without acknowledging its run",
+                uploads.load(Ordering::Relaxed),
+                expected_uploads,
+                "{}: upload policy",
                 step.label
             );
-            let full = fresh_frame(device, queue, &cb);
+            let reference = SpectrogramCallback {
+                grid: SpectrogramGrid { full_uploads: Arc::default(), ..grid.clone() },
+                ..callback(cb.vertices.clone(), &cb.grid, &read)
+            };
             assert_eq!(
-                incremental, full,
-                "{} did not land where a full upload puts it",
+                incremental,
+                fresh_frame(device, queue, &reference),
+                "{}: pixels",
                 step.label
             );
-            if previous.replace(incremental.clone()).is_some_and(|p| p != incremental) {
-                moved += 1;
-            }
+            // Reusing this exact snapshot has no writes, including after extent changes.
+            let held = resources
+                .get::<SpectrogramResources>()
+                .unwrap()
+                .panes
+                .get(0)
+                .unwrap()
+                .grid
+                .as_ref()
+                .unwrap();
+            assert!(held.changed_slabs(&grid).is_empty());
+            assert_eq!(incremental, frame_with(device, queue, &mut resources, &cb));
+            assert_eq!(uploads.load(Ordering::Relaxed), expected_uploads);
+            moved += usize::from(previous.as_ref().is_some_and(|p| p != &incremental));
+            previous = Some(incremental);
+            last = Some(grid);
         }
-        // Every step but the two that only re-declare the same picture moves
-        // it, so the equality above is being asked of frames that differ.
-        assert!(moved >= 8, "only {moved} steps changed the picture");
+        assert!(moved >= 8, "the fixtures must change the picture");
+        let last = last.unwrap();
 
-        // A frame with nothing to draw writes no slab, so it must not claim
-        // one: the caller reads the acknowledgement as "the run I handed over
-        // is in its slots", which an early return has not made true.
-        let standing = uploaded.load(Ordering::Relaxed);
-        let empty = SpectrogramGrid {
-            generation: 9,
-            serial: standing + 1,
-            uploaded: uploaded.clone(),
-            capacity: 8,
-            bins: bins as u32,
-            first_key: 0,
-            run: Arc::new(Vec::new()),
-            dirty: Vec::new(),
+        // Undrawable and omitted callbacks cannot advance the resource owner's snapshot.
+        for j in 1..=3 {
+            let dropped = SpectrogramGrid {
+                full_uploads: uploads.clone(),
+                first_key: last.first_key + j,
+                run: Arc::new(vec![64; 6 * bins]),
+                ..last.clone()
+            };
+            let mut cb = callback(full_quad(6), &dropped, &read);
+            if j == 1 {
+                cb.vertices.clear();
+                prepare_once(device, queue, &mut resources, &cb);
+            } else if j == 2 {
+                cb.grid.run = Arc::new(Vec::new());
+                prepare_once(device, queue, &mut resources, &cb);
+            }
+            // The third callback is constructed and discarded without prepare.
+        }
+        assert_eq!(uploads.load(Ordering::Relaxed), expected_uploads);
+        let held = resources
+            .get::<SpectrogramResources>()
+            .unwrap()
+            .panes
+            .get(0)
+            .unwrap()
+            .grid
+            .as_ref()
+            .unwrap();
+        assert!(Arc::ptr_eq(&held.snapshot.run, &last.run));
+        let resumed = SpectrogramGrid {
+            full_uploads: uploads.clone(),
+            first_key: last.first_key + 2,
+            run: Arc::new(
+                (0..6)
+                    .flat_map(|j| {
+                        let key = last.first_key + 2 + j;
+                        versioned_slab(key, *version.entry(key).or_insert(0), bins)
+                    })
+                    .collect(),
+            ),
+            ..last.clone()
         };
-        prepare_once(device, queue, &mut resources, &callback(full_quad(1), &empty, &read));
+        let cb = callback(full_quad(6), &resumed, &read);
+        let actual = frame_with(device, queue, &mut resources, &cb);
+        let reference = SpectrogramCallback {
+            grid: SpectrogramGrid { full_uploads: Arc::default(), ..resumed.clone() },
+            ..callback(cb.vertices.clone(), &cb.grid, &read)
+        };
+        assert_eq!(actual, fresh_frame(device, queue, &reference));
         assert_eq!(
-            uploaded.load(Ordering::Relaxed),
-            standing,
-            "a frame that drew nothing acknowledged a run it never wrote",
+            uploads.load(Ordering::Relaxed),
+            expected_uploads,
+            "resume patches the last actual upload"
         );
+        resources = CallbackResources::default();
+        assert_eq!(actual, frame_with(device, queue, &mut resources, &cb));
+        expected_uploads += 1;
+        assert_eq!(
+            uploads.load(Ordering::Relaxed),
+            expected_uploads,
+            "same Arc in a fresh context uploads"
+        );
+        let resized = SpectrogramGrid {
+            full_uploads: uploads.clone(),
+            bins: bins as u32 + 4,
+            run: Arc::new(vec![100; 6 * (bins + 4)]),
+            ..resumed
+        };
+        frame_with(device, queue, &mut resources, &callback(full_quad(6), &resized, &read));
+        assert_eq!(uploads.load(Ordering::Relaxed), expected_uploads + 1, "bin shape changed");
     }
 
     /// Keys before zero and a run that wraps past the end of the ring land
@@ -2725,14 +2753,11 @@ mod tests {
 
         for (capacity, first_key) in [(128u32, -37i64), (160, -37)] {
             let grid = SpectrogramGrid {
-                generation: 1,
-                serial: 1,
-                uploaded: Arc::default(),
+                full_uploads: Arc::default(),
                 capacity,
                 bins: bins as u32,
                 first_key,
                 run: run.clone(),
-                dirty: Vec::new(),
             };
             // The run really does cross the ring's end.
             let first_slot = slot_of(first_key, capacity);

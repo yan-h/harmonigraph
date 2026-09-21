@@ -1461,7 +1461,7 @@ fn spectral_ring(
 //
 // The ordering is not an invariant, and the exception is worth knowing because
 // the strip is what gave up the other cue. A mark outlives its key, and a
-// RELEASED voice claims each end from its own stamp, so a lone note that wore
+// carried mark keeps its level while releasing, so a lone note that wore
 // both can hold the melody on a low slice while a live note takes the bass on a
 // higher one -- for the length of one release, the melody draws below the bass.
 // `a_released_end_can_mark_a_lower_slice_than_the_live_one` builds that state.

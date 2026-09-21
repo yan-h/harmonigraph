@@ -364,7 +364,7 @@ mod gap_tests {
         const SIZE: [u32; 2] = [256, 64];
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(256.0, 64.0));
         let ctx = egui::Context::default();
-        let mut fresh_generation = 0;
+        let mut fresh_pane = 0;
         for cold in [false, true] {
             let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
             state.appearance.spectrum.roll_seconds = 12.0;
@@ -440,18 +440,12 @@ mod gap_tests {
                     read.clone(),
                     shades.clone(),
                 );
-                fresh_generation += 1;
+                fresh_pane += 1;
                 let full = gpu.frame(
-                    1,
+                    fresh_pane,
                     SIZE,
                     vertices,
-                    SpectrogramGrid {
-                        generation: fresh_generation,
-                        serial: 1,
-                        uploaded: Arc::default(),
-                        dirty: Vec::new(),
-                        ..grid
-                    },
+                    SpectrogramGrid { full_uploads: Arc::default(), ..grid },
                     read,
                     shades,
                 );
@@ -467,6 +461,7 @@ mod gap_tests {
                 }
                 if step == 2 {
                     state.release_context_resources();
+                    gpu.reset_resources();
                 }
             }
         }

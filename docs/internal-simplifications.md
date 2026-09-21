@@ -238,3 +238,7 @@ Silent marker anchors retain the old painter placement in their fixtures;
 the initial one-byte golden difference during fixture migration was corrected without blessing a baseline.
 
 No performance benchmark or manual DAW acceptance is claimed.
+
+## Follow-through
+
+See [the follow-through decisions and deferred candidates](simplification-follow-through.md) for the next simplification batch.

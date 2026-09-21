@@ -732,20 +732,10 @@ impl PictureState {
     /// Drop everything that belongs to a particular egui context. Shells MUST
     /// call this whenever they build one.
     ///
-    /// The plugin's editor creates a brand new `Context` every time its window
-    /// opens, while this state lives on across them — so anything here that
-    /// describes what a context's renderer holds survives into the new window
-    /// looking perfectly valid. The spectrogram's GPU mirror is exactly that: it
-    /// states which slabs the grid buffer holds, and a frame writes only the
-    /// slabs that have moved against it, so carried into a window whose renderer
-    /// allocated nothing it would patch two slabs of a buffer that was never
-    /// written.
-    ///
     /// The label trackers carry the fallback atlas guards and the mark sheet's
     /// publication key, all of which describe one context. Carrying them into
     /// another context can suppress the first publication to its renderer.
     pub fn release_context_resources(&mut self) {
-        self.surfaces.spectrogram.release_gpu_grids();
         // Each callback owns its fallback and mark texture, so each publication
         // tracker describes the context that closed.
         for mirror in [&mut self.instruments.font_atlas, &mut self.instruments.lattice_atlas] {

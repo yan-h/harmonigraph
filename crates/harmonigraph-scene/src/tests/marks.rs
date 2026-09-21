@@ -689,35 +689,6 @@ fn a_non_finite_delay_draws_as_no_delay_at_all() {
     assert_eq!(level(&poisoned, ATTACK), 1.0, "the marks draw as they always did");
 }
 
-#[test]
-fn held_extremes_never_names_a_released_voice() {
-    // A departing mark carries its old level, while the released voice is
-    // out of the running for the LIVE ends: letting it stay "the
-    // melody" would steal that from the note that actually replaced it, and
-    // leave the incoming mark nothing to ease from.
-    let mut tracker = NoteTracker::new();
-    for note in [60u8, 67] {
-        tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
-    }
-    // Release the top note; C is now both the highest and lowest held.
-    tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 67));
-    let (melody, bass) = (tracker.highest_held(), tracker.lowest_held());
-    assert_eq!(
-        melody.map(|e| e.key),
-        Some(on(0.0, 60).key()),
-        "the released G must not stay the melody"
-    );
-    assert_eq!(bass.map(|e| e.key), Some(on(0.0, 60).key()));
-    // And C took the melody at the handoff, not at its own note-on: the mark
-    // grows from the moment it moved (see `an_inherited_end_eases_in_...`).
-    assert_eq!(melody.map(|e| e.since), Some(0.1));
-    assert_eq!(bass.map(|e| e.since), Some(0.0), "the end that never moved keeps its stamp");
-
-    // Nothing held at all: nothing to mark.
-    tracker.handle_event(NoteEvent::off(0.2, SourceId::DIRECT, 0, 60));
-    assert_eq!((tracker.highest_held(), tracker.lowest_held()), (None, None));
-}
-
 /// `notes` held with both ends marked and the octave wheel set to `count`
 /// octaves centered on `center`.
 fn marked(notes: &[u8], count: u32, center: f32) -> (Scene, FrameParams) {
