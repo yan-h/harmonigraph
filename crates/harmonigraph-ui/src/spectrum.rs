@@ -103,14 +103,10 @@ impl SpectrogramSurfaces {
     pub(crate) fn all(&self) -> impl Iterator<Item = &SpectrogramSurface> {
         self.0.iter()
     }
-
-    pub(crate) fn all_mut(&mut self) -> impl Iterator<Item = &mut SpectrogramSurface> {
-        self.0.iter_mut()
-    }
 }
 
-/// One drawing surface's heatmap: the slab grid it folds, and the statement of
-/// what the GPU holds of it.
+/// One drawing surface's heatmap: its incremental slab grid and immutable
+/// display snapshot. The renderer separately owns its uploaded copy.
 ///
 /// Runtime-only, never persisted, and each half rebuilds itself from
 /// [`AudioSpectrum::history`] when dropped, so a default is always a safe
@@ -121,10 +117,9 @@ pub(crate) struct SpectrogramSurface {
     /// rebuild folds only new columns instead of rescanning the whole window.
     /// See `spectrogram::SpectrogramAgg`.
     pub(crate) agg: Option<crate::spectrogram::SpectrogramAgg>,
-    /// What the GPU's copy of that grid holds, so a frame can send the slabs
-    /// that moved instead of the run. See
-    /// [`GpuGrid`](crate::spectrogram::GpuGrid).
-    pub(crate) gpu: crate::spectrogram::GpuGrid,
+    /// The folded snapshot and palette reused across frames. See
+    /// [`FoldedGrid`](crate::spectrogram::FoldedGrid).
+    pub(crate) folded: crate::spectrogram::FoldedGrid,
     /// The slab width the previous frame drew at, which is what gives
     /// [`live_slab`](crate::spectrogram::live_slab)'s ladder its hysteresis —
     /// see [`Plan::new`](crate::spectrogram::Plan::new). `None` before the first frame.
@@ -198,7 +193,7 @@ impl AudioSpectrum {
     /// [`push_samples`](Self::push_samples).
     ///
     /// A column costs the slab it lands in and nothing else (see
-    /// `spectrogram::GpuGrid`), so the rate buys smoothness at the newest edge
+    /// `spectrogram::FoldedGrid`), so the rate buys smoothness at the newest edge
     /// almost for free. It costs no REACH either: the store coarsens
     /// with age (see [`SpectrumHistory`]), so the rate sets the resolution of
     /// the recent stretch and barely touches how far back the heatmap goes.
@@ -537,18 +532,6 @@ impl AudioSpectrum {
 }
 
 impl SpectrogramSurfaces {
-    /// Forget what the GPU holds of the spectrogram grids, so the next draw
-    /// uploads them whole into whatever context is current. See
-    /// [`PictureState::release_context_resources`](crate::PictureState::release_context_resources).
-    ///
-    /// The aggregators survive: they are derived from the STORE rather than
-    /// from anything the GPU allocated, and are the one piece a new context does
-    /// not invalidate.
-    pub(crate) fn release_gpu_grids(&mut self) {
-        for surface in self.all_mut() {
-            surface.gpu.release();
-        }
-    }
     /// Fallbacks taken across every surface since the plugin was opened: full
     /// re-aggregations of the window, and full uploads of the grid.
     ///
@@ -558,7 +541,10 @@ impl SpectrogramSurfaces {
     /// overlay turns them into a rate, where "climbing" is the entire diagnosis.
     pub(crate) fn spectrogram_fallbacks(&self) -> (u32, u32) {
         self.all().fold((0, 0), |(rebuilds, uploads), s| {
-            (rebuilds + s.agg.as_ref().map_or(0, |a| a.rebuilds()), uploads + s.gpu.full_uploads())
+            (
+                rebuilds + s.agg.as_ref().map_or(0, |a| a.rebuilds()),
+                uploads + s.folded.full_uploads(),
+            )
         })
     }
 }

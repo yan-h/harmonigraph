@@ -615,7 +615,7 @@ fn two_placements_of_one_pane_fold_a_grid_each() {
         });
     };
     let slabs = |state: &mut SharedState, surface| {
-        state.picture.surfaces.spectrogram.at(surface).gpu.run_slabs()
+        state.picture.surfaces.spectrogram.at(surface).folded.run_slabs()
     };
 
     let mut alone = seeded();

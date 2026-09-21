@@ -461,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn matching_baseline_preserves_held_ends_and_bends_without_an_attack() {
+    fn matching_baseline_preserves_bends_without_an_attack() {
         let mut tracker = NoteTracker::new();
         let source = SourceId(1);
         tracker
@@ -482,11 +482,9 @@ mod tests {
                 2,
             )))
             .unwrap();
-        let high = tracker.highest_held();
         let before: Vec<_> = tracker.roll().notes().next().unwrap().segments(3.0).collect();
         let row = VoiceBaseline { pitch_microcents: 6_025_000_000, ..voice(60) };
         tracker.replace_source(&frame(&[row]).unwrap()).unwrap();
-        assert_eq!(tracker.highest_held(), high);
         let note = tracker.roll().notes().next().unwrap();
         assert_eq!(note.segments(3.0).collect::<Vec<_>>(), before);
         assert_eq!(note.settled_pitch(), 60.25);
@@ -497,7 +495,6 @@ mod tests {
         off.participating = false;
         tracker.replace_source(&off).unwrap();
         assert_eq!(tracker.held_count(), 0);
-        assert!(tracker.highest_held().is_none());
         let mut tuning = delta(
             NoteEvent {
                 time: 2.1,

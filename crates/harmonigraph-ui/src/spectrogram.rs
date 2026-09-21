@@ -4,9 +4,9 @@
 //! The grid travels as DATA rather than as a picture — `capacity` slots of one
 //! slab's stored dB bytes each — so a pitch zoom, a resize, a Level drag or a
 //! palette change normally moves only uniforms. A larger retention can also
-//! recover a clipped gap (see [`GpuGrid::hit`](crate::spectrogram::GpuGrid::hit)). What a frame owes the
-//! GPU is the run of slabs it draws and the few whose bytes have moved since
-//! the last one; the read that turns those bytes into pixels lives in
+//! recover a clipped gap (see [`FoldedGrid::hit`](crate::spectrogram::FoldedGrid::hit)). What a frame owes the
+//! GPU is an immutable snapshot of the slabs it draws. The renderer owns
+//! upload history; the read that turns those bytes into pixels lives in
 //! [`harmonigraph_render`]'s shader.
 //! [`panes::spectral::spectrogram`](crate::panes::spectral::spectrogram) is the
 //! pane above it: the geometry the run is drawn over, the draw call, and the
@@ -246,143 +246,40 @@ struct ShadeLut {
     lut: Arc<Vec<[u8; 4]>>,
 }
 
-/// The GPU's copy of the slab grid, as the CPU last described it, plus the
-/// gradient table beside it.
-///
-/// One per drawing surface. It holds no GPU object of its own — the buffers
-/// live in the render crate, keyed by pane — only the statement of what those
-/// buffers contain, which is what lets a frame send a delta instead of a grid.
+/// CPU memo of the folded data and palette. Upload history belongs to the renderer.
 #[derive(Default)]
-pub(crate) struct GpuGrid {
-    /// A new value makes the next frame's copy a full upload of the whole run.
-    /// Bumped whenever nothing can be said about what the GPU holds: a first
-    /// frame, a fresh context ([`GpuGrid::release`]), a capacity change.
-    generation: u64,
-    /// Handovers made on this surface; the next [`accept`](Self::accept) takes
-    /// the one after. It names a RUN, where
-    /// [`generation`](Self::generation) names a buffer.
-    serial: u64,
-    /// The serial the render crate last finished a `prepare` for — the
-    /// acknowledgement that the run it names really is in the buffer.
-    ///
-    /// A callback is not certain to run: egui drops one whose clip rect is
-    /// empty. One dropped frame is covered by re-sending
-    /// [`SentRun::dirty`](SentRun::dirty), but a run that ADVANCES while
-    /// callbacks are being dropped is not — each frame's delta would be
-    /// computed against a run the GPU never received, and a slab that entered
-    /// the run during that stretch keeps `key - capacity` in its slot forever,
-    /// since the byte comparison sees it as already held. An unacknowledged
-    /// run is therefore treated as no run at all.
-    ///
-    /// egui's multi-pass layout is not that case and must not be read as one:
-    /// `request_discard` runs the UI twice and throws the first pass's shapes
-    /// away, but the second pass is a key HIT, so nothing is accepted between
-    /// them and this still names the run being drawn.
-    uploaded: Arc<std::sync::atomic::AtomicU64>,
-    /// The run last handed to a callback, and which of its keys the GPU is being
-    /// asked to write.
-    ///
-    /// The invariant the delta rests on: **every key in this run has its bytes
-    /// in its slot on the GPU.** A full upload establishes it — the render crate
-    /// writes every slab of the run whenever [`generation`](Self::generation)
-    /// moves — and the dirty writes maintain it, so a refold, a rung crossing, a
-    /// gap and a backward jump all fall out of the byte comparison in
-    /// [`SentRun::moved`] rather than each needing a reason of its own.
-    /// `the_gpu_grid_equals_a_full_upload_after_any_sequence` is what holds it.
-    sent: Option<SentRun>,
+pub(crate) struct FoldedGrid {
+    run: Option<FoldedRun>,
     lut: Option<ShadeLut>,
-    /// Times this surface has handed the grid over to be rebuilt rather than
-    /// patched — a rate the performance overlay reads beside the aggregator's
-    /// refolds, for the reason the refolds are counted: a full upload is CORRECT
-    /// and costs megabytes, so a delta that has quietly stopped working draws
-    /// the right picture and says nothing.
-    full_uploads: u32,
+    full_uploads: Arc<std::sync::atomic::AtomicU32>,
 }
 
-/// One run of slabs as it was handed to the GPU.
-struct SentRun {
-    /// Which columns it was folded from — a match with enough retained
-    /// coverage ([`GpuGrid::hit`]) means nothing is folded at all.
+struct FoldedRun {
     key: RunKey,
-    /// This run's own handover number, which the GPU echoes back through
-    /// [`GpuGrid::uploaded`] once it has written it.
-    serial: u64,
-    /// The oldest visible slab's key; the run is contiguous from there.
     first_key: i64,
-    /// Slots the GPU buffer holds. The run must fit inside it, so a key's slot
-    /// (`key mod capacity`) names one slab at a time.
     capacity: usize,
-    /// Slab-major stored dB, [`SPECTRUM_BINS`] to a slab — the aggregator's own
-    /// bytes, shared with the callback rather than copied into it.
     run: Arc<Vec<u8>>,
-    /// Keys whose slot the GPU is being asked to write while this run stands.
-    ///
-    /// Re-sent until [`GpuGrid::uploaded`] names this run, rather than cleared
-    /// the moment it is handed over, because a frame's callback is not certain
-    /// to run: egui drops a callback whose clip rect is empty, and a write
-    /// dropped with it would leave a slot holding a slab this run says it does
-    /// not. Writing the same bytes again costs a slab a frame; a slot that
-    /// silently disagrees with the run is a wrong column that no later frame
-    /// repairs.
-    ///
-    /// The acknowledgement is what ENDS the repeat, and something has to: a
-    /// run holds for as long as the columns it was folded from do, which for a
-    /// stopped transport is unbounded, and this list is handed to every frame
-    /// drawn under it. Re-sending on evidence rather than forever costs the
-    /// dropped frame one more send and a still picture nothing at all.
-    dirty: Vec<i64>,
-    /// Where these slabs sit in absolute time, so a frame that folds nothing
-    /// still knows where to draw them.
     layout: TexLayout,
 }
 
-impl SentRun {
-    /// The keys of `run` whose bytes are not already in their slot: the ones
-    /// outside this run's key range, and the ones whose bytes have moved.
-    ///
-    /// A key ENTERING the run is outside the range and so named by construction
-    /// — its slot may still hold `key - capacity`, a whole lap back — which is
-    /// what makes a byte comparison a complete answer rather than a fast path
-    /// needing a list of exceptions beside it.
-    fn moved(&self, first_key: i64, run: &[u8]) -> Vec<i64> {
-        let held = self.run.len() / SPECTRUM_BINS;
-        fn slab(bytes: &[u8], j: usize) -> &[u8] {
-            &bytes[j * SPECTRUM_BINS..(j + 1) * SPECTRUM_BINS]
-        }
-        (0..run.len() / SPECTRUM_BINS)
-            .filter(|&j| {
-                let at = first_key + j as i64 - self.first_key;
-                !(0..held as i64).contains(&at) || slab(&self.run, at as usize) != slab(run, j)
-            })
-            .map(|j| first_key + j as i64)
-            .collect()
-    }
-}
-
-impl GpuGrid {
-    /// The layout already on the GPU, if these columns and the live retention
-    /// need no older slab. A capacity increase alone is not a miss: only a
-    /// prefix clipped by the previous budget can be missing. Without this
-    /// check a resize followed by Span growth under a held bucket draws the
-    /// old, shorter extent until another column arrives (#714).
+impl FoldedGrid {
+    /// Reuse the folded bytes only when their source and retained extent still fit.
     fn hit(&self, plan: &Plan, history: &crate::SpectrumHistory) -> Option<TexLayout> {
-        let sent = self.sent.as_ref().filter(|sent| sent.key == plan.key)?;
+        let held = self.run.as_ref().filter(|held| held.key == plan.key)?;
         if history.get(plan.first).zip(history.back()).is_some_and(|(first, newest)| {
             let target = (first.time / plan.bucket).floor() as i64;
             let min_key = ((newest.time / plan.bucket).floor() as i64)
                 .saturating_sub(plan.capacity.max(1) as i64 - 1);
             // The same admitted first slab as SpectrogramAgg::window.
-            // A smaller budget may reuse a longer run in its existing
-            // buffer; the next column's build applies the smaller bound.
-            target.max(min_key) < sent.first_key
+            // Sampling clamps to this edge, so reusing a longer run would
+            // change interpolation even if it contains every requested slab.
+            target.max(min_key) != held.first_key
         }) {
             return None;
         }
-        Some(sent.layout)
+        Some(held.layout)
     }
 
-    /// Take a freshly folded run as the one to draw, working out what the GPU
-    /// has to be told about it.
     fn accept(
         &mut self,
         key: RunKey,
@@ -391,73 +288,18 @@ impl GpuGrid {
         run: Vec<u8>,
         layout: TexLayout,
     ) {
-        debug_assert!(
-            run.len() / SPECTRUM_BINS <= capacity,
-            "a run of {} slabs puts two keys in one of {capacity} slots",
-            run.len() / SPECTRUM_BINS,
-        );
-        self.serial += 1;
-        let run_slabs = run.len() / SPECTRUM_BINS;
-        let patched = {
-            let acknowledged = |sent: &SentRun| {
-                self.uploaded.load(std::sync::atomic::Ordering::Relaxed) == sent.serial
-            };
-            self.sent
-                .as_ref()
-                // The buffer is the same one and the GPU has said so, so what
-                // it holds is known slab by slab and only the slabs that moved
-                // need writing. A different capacity is a different buffer —
-                // the slot a key lands in is `key mod capacity`, so the whole
-                // mapping moves — and a run the GPU never acknowledged is one
-                // nothing can be said about (see [`uploaded`](Self::uploaded)).
-                .filter(|sent| sent.capacity == capacity && acknowledged(sent))
-                .map(|sent| sent.moved(first_key, &run))
-                // Past half the run a delta is no longer the cheaper upload it
-                // exists to be: it writes what a rebuild writes, one scattered
-                // `write_buffer` per slab against the rebuild's single
-                // contiguous one, and it spends that as a PATCH — leaving the
-                // rebuild counter reading zero while a rebuild's traffic goes
-                // out. A refold that moves most of the run, which is a rung
-                // crossing under a Span drag or a backward transport jump,
-                // lands exactly here.
-                .filter(|moved| moved.len() * 2 <= run_slabs)
-        };
-        // No previous run at all is a context that has just been rebuilt; it
-        // and both filters above make the copy from the run rather than
-        // patching it.
-        let dirty = patched.unwrap_or_else(|| {
-            self.generation += 1;
-            self.full_uploads += 1;
-            Vec::new()
-        });
-        self.sent = Some(SentRun {
-            key,
-            serial: self.serial,
-            first_key,
-            capacity,
-            run: Arc::new(run),
-            dirty,
-            layout,
-        });
+        debug_assert!(run.len() / SPECTRUM_BINS <= capacity);
+        self.run = Some(FoldedRun { key, first_key, capacity, run: Arc::new(run), layout });
     }
 
-    /// The grid a frame hands to the callback, or `None` before anything has
-    /// been folded into it.
     fn grid(&self) -> Option<SpectrogramGrid> {
-        let sent = self.sent.as_ref()?;
-        // Once the GPU has named this run, its dirty slabs are in their slots
-        // and the frames that go on drawing the same run owe it nothing — see
-        // [`SentRun::dirty`] for why the send repeats until then.
-        let written = self.uploaded.load(std::sync::atomic::Ordering::Relaxed) == sent.serial;
+        let held = self.run.as_ref()?;
         Some(SpectrogramGrid {
-            generation: self.generation,
-            serial: sent.serial,
-            uploaded: self.uploaded.clone(),
-            capacity: sent.capacity as u32,
+            capacity: held.capacity as u32,
             bins: SPECTRUM_BINS as u32,
-            first_key: sent.first_key,
-            run: sent.run.clone(),
-            dirty: if written { Vec::new() } else { sent.dirty.clone() },
+            first_key: held.first_key,
+            run: held.run.clone(),
+            full_uploads: self.full_uploads.clone(),
         })
     }
 
@@ -487,24 +329,13 @@ impl GpuGrid {
 
     /// Full uploads taken since this surface was opened — see the field.
     pub(crate) fn full_uploads(&self) -> u32 {
-        self.full_uploads
+        self.full_uploads.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Slabs in the run the GPU holds, or 0 before anything has been folded.
+    /// Number of slabs in the currently memoized run, for test diagnostics.
     #[cfg(test)]
     pub(crate) fn run_slabs(&self) -> usize {
-        self.sent.as_ref().map_or(0, |sent| sent.run.len() / SPECTRUM_BINS)
-    }
-
-    /// Forget what the GPU holds, so the next frame uploads the whole run.
-    ///
-    /// The generation is what carries that to the callback: it keys the copy, so
-    /// a bump is the rebuild. The run goes with it because the delta is computed
-    /// against it, and a run kept across a context change would have the next
-    /// frame patch two slabs of a buffer that was never written.
-    pub(crate) fn release(&mut self) {
-        self.generation += 1;
-        self.sent = None;
+        self.run.as_ref().map_or(0, |run| run.run.len() / SPECTRUM_BINS)
     }
 }
 
@@ -545,32 +376,20 @@ pub(crate) struct Columns {
     pub(crate) newest: f64,
 }
 
-/// Which columns a run was folded from, and how. Equal keys plus the coverage
-/// check in [`GpuGrid::hit`] mean the GPU's run is still the one to draw.
-///
-/// A fresh column moves `newest_bits` (even in a saturated store, where the
-/// count holds), the oldest column scrolling out of the window moves `first`,
-/// and the Span crossing a ladder rung moves `bucket_bits`. Floats compare by
-/// bit pattern so equality is exact and free of NaN quirks.
-///
-/// What is deliberately NOT here is everything that decides how the run is READ
-/// — the rows, the pitch range, the dB window, the gradient. Those are uniforms
-/// now, so a zoom or a palette drag draws the same bytes a different way, and a
-/// key that watched them would re-fold the store on every frame of a gesture
-/// that cannot move a slab. The buffer's `capacity` also bounds live retention,
-/// but only invalidates a hit when it admits an older slab missing from the
-/// run. Keeping that check separate lets ordinary resizes reuse the run;
-/// [`GpuGrid::accept`] resizes the copy when a build is actually needed.
+/// Source columns and slab width used to fold a run. The admitted oldest slab
+/// is checked separately in [`FoldedGrid::hit`]: scrolling within one completed
+/// slab cannot change its bytes, but crossing its edge changes shader sampling.
+/// A fresh column changes `newest_bits`, even when the store's count is stable.
+/// Pitch, rows, level and palette only change how the same bytes are read.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RunKey {
-    first: usize,
     cols_len: usize,
     newest_bits: u64,
     bucket_bits: u64,
 }
 
 /// What this frame's heatmap needs folded, and the key that says whether the
-/// grid on the GPU already IS it.
+/// memoized snapshot already IS it.
 ///
 /// Pure, and deliberately so. Every cliff this pipeline has fallen off has been
 /// in this arithmetic — a slab against the analyzer's lag, a window against the
@@ -616,7 +435,6 @@ impl Plan {
         let target_cols = depth_px.clamp(2.0, LIVE_SLAB_CAP) as usize;
         let bucket = held_slab(view.window, target_cols, held);
         let key = RunKey {
-            first: columns.first,
             cols_len: columns.len,
             newest_bits: columns.newest.to_bits(),
             bucket_bits: bucket.to_bits(),
@@ -699,7 +517,7 @@ pub(crate) fn read_of(view: &PaneView, rows: usize) -> SpectrogramRead {
     }
 }
 
-/// Fold the run a [`Plan`] describes and hand it to the surface's GPU mirror.
+/// Fold the run a [`Plan`] describes into the surface's immutable snapshot.
 /// Returns where the visible slabs sit in time, or `None` if the fold came out
 /// too short to draw.
 pub(crate) fn build(
@@ -731,12 +549,12 @@ pub(crate) fn build(
     let first_key = (centers[0] / bucket).floor() as i64;
     let capacity = ring_capacity(plan.capacity, w);
     let layout = TexLayout { bucket, t_origin, tex_span };
-    surfaces.at(surface).gpu.accept(plan.key.clone(), first_key, capacity, power, layout);
+    surfaces.at(surface).folded.accept(plan.key.clone(), first_key, capacity, power, layout);
     Some(layout)
 }
 
 /// The run this frame draws, and where it sits in time: the one already on the
-/// GPU when the plan's key and retained coverage still fit, and a fresh fold
+/// surface when the source key and oldest slab still fit, and a fresh fold
 /// otherwise.
 pub(crate) fn run_for(
     history: &crate::SpectrumHistory,
@@ -746,7 +564,7 @@ pub(crate) fn run_for(
 ) -> Option<TexLayout> {
     // The next frame retains this slab width until it crosses a ladder rung.
     surfaces.at(surface).held_bucket = Some(plan.bucket);
-    match surfaces.at(surface).gpu.hit(plan, history) {
+    match surfaces.at(surface).folded.hit(plan, history) {
         Some(layout) => Some(layout),
         None => build(history, surfaces, surface, plan),
     }
@@ -761,7 +579,7 @@ pub(crate) fn frame_data(
     surface: usize,
     cfg: &SpectrumConfig,
 ) -> Option<(SpectrogramGrid, SpectrogramShades)> {
-    let gpu = &mut surfaces.at(surface).gpu;
+    let gpu = &mut surfaces.at(surface).folded;
     let grid = gpu.grid()?;
     Some((grid, gpu.shades(cfg)))
 }
@@ -783,7 +601,7 @@ fn aggregate_slabs<'a>(
     (grid.centers, grid.power)
 }
 
-/// The same accumulator serves live, offline and partial first-slab repair.
+/// The same accumulator serves incremental and batch aggregation.
 /// f64 summation avoids accumulating rounding error during a long live slab.
 /// History sums remain f32 (at most 64 samples per group), so regrouping can
 /// still differ by a final byte right at a quantization boundary.
@@ -831,14 +649,6 @@ struct SlabGrid {
     dirty: bool,
     centers: Vec<f64>,
     power: Vec<BucketDb>,
-    /// `held[i]` marks slab `i` as a COPY of slab `i - 1` — an empty slab the
-    /// jitter hold filled — rather than a slab of its own columns. It is what
-    /// lets [`SpectrogramAgg::view`] carry its pruning of the window's first
-    /// slab into the copies behind it; without it a held slab keeps energy from
-    /// columns that have since left the window. A held slab is never accumulated into
-    /// afterwards (columns arrive in time order, so it is already behind the
-    /// front when it is created), so the mark stays true for its whole life.
-    held: Vec<bool>,
     cur_key: Option<i64>,
 }
 
@@ -884,11 +694,9 @@ impl SlabGrid {
                     } else {
                         self.power.resize(self.power.len() + nb, 0);
                     }
-                    self.held.push(empty <= JITTER_SLABS);
                 }
                 self.centers.push((key as f64 + 0.5) * bucket);
                 self.power.resize(self.power.len() + nb, 0);
-                self.held.push(false);
                 self.cur_key = Some(key);
                 true
             }
@@ -899,7 +707,6 @@ impl SlabGrid {
                 self.cur_key = Some(key);
                 self.centers.push((key as f64 + 0.5) * bucket);
                 self.power.resize(self.power.len() + nb, 0);
-                self.held.push(false);
                 other.is_none()
             }
         };
@@ -929,7 +736,6 @@ impl SlabGrid {
             .min(self.centers.len().saturating_sub(1));
         self.centers.drain(..drop);
         self.power.drain(..drop * SPECTRUM_BINS);
-        self.held.drain(..drop);
     }
 
     /// Normal geometric growth is at most twice the admitted slabs plus a
@@ -942,9 +748,6 @@ impl SlabGrid {
         }
         if self.power.capacity() > bound * SPECTRUM_BINS {
             self.power.shrink_to_fit();
-        }
-        if self.held.capacity() > bound.max(8) {
-            self.held.shrink_to_fit();
         }
     }
 }
@@ -1106,92 +909,21 @@ impl SpectrogramAgg {
             }
         }
         self.grid.finish();
-        self.view(history, first, bucket, target)
+        self.view(bucket, target)
     }
 
-    /// The window as the display reads it, taken from the kept grid: every slab
-    /// from the window's first on, with that one — the only PARTIAL slab —
-    /// recomputed from the in-window columns alone, and any HELD copies of it
-    /// carrying that recompute forward.
-    ///
-    /// The recompute is what keeps this equal to batch at the far edge. Batch
-    /// folds only columns from `first` onward, so an earlier column sharing that
-    /// slab must not count, and the grid included one while it was still in
-    /// window. It is a handful of columns, so still O(1) per frame.
-    ///
-    /// The grid keeps what the GPU's COPY keeps — `keep` slabs, sized off the pane —
-    /// rather than only what the window currently shows, and everything before
-    /// the window's first slab is sliced off here rather than dropped. Two
-    /// things need that slack.
-    ///
-    /// A Span GROWING reaches back to slabs it did not want a frame ago. Trimmed
-    /// flush to the window, every frame of a widening drag would ask for a slab
-    /// just discarded and rebuild; holding what the GPU's copy can hold means
-    /// the whole rung is already folded.
-    ///
-    /// And the window's first column is not fixed in time: once it ages past the
-    /// finest tier it is replaced by a merged column standing at its pair's
-    /// MIDPOINT, which is EARLIER, so the window's first slab can step BACK. A
-    /// merge moves a time by at most half a slab at any Span the pane offers,
-    /// which the same slack covers.
-    ///
-    /// Slicing rather than dropping also keeps the pruning below off a slab that
-    /// is about to become an interior one — an interior slab must hold every
-    /// column that landed in it, in-window or not.
-    fn view(
-        &self,
-        history: &crate::SpectrumHistory,
-        first: usize,
-        bucket: f64,
-        target: Option<i64>,
-    ) -> (Vec<f64>, Vec<BucketDb>) {
-        let nb = SPECTRUM_BINS;
-        // One mark per slab, which the hold loop at the bottom relies on to
-        // index `held` by the same offset it indexes `centers` by. The three
-        // arrays are grown by `fold` and trimmed together by `retain_from`, and
-        // nothing downstream compares a mark against anything, so the two
-        // going out of step is silent: the marks simply start answering for
-        // slabs `drop` positions older than the ones being read.
-        debug_assert_eq!(
-            self.grid.held.len(),
-            self.grid.centers.len(),
-            "a held mark per kept slab",
-        );
+    /// Slice the complete slabs at the admitted oldest boundary. Completed
+    /// averages and jitter copies stay unchanged as individual source columns
+    /// scroll out. Keeping the preceding slabs internally lets a widening Span
+    /// or a history-tier merge reach back without refolding the retained grid.
+    fn view(&self, bucket: f64, target: Option<i64>) -> (Vec<f64>, Vec<BucketDb>) {
         let (Some(t), Some(&front_center)) = (target, self.grid.centers.first()) else {
             return (self.grid.centers.clone(), self.grid.power.clone());
         };
         let front = (front_center / bucket).floor() as i64;
-
         let kept = self.grid.centers.len().saturating_sub(1) as i64;
         let start = (t - front).clamp(0, kept) as usize;
-        let centers = self.grid.centers[start..].to_vec();
-        let mut power = self.grid.power[start * nb..].to_vec();
-        // A target excluded by retention names pre-gap audio, not the first
-        // retained (black) slab. Repair only the slab the target really names.
-        if t != (centers[0] / bucket).floor() as i64 {
-            return (centers, power);
-        }
-        let mut mean = PowerMean::default();
-        for c in history.iter_from(first) {
-            if (c.time / bucket).floor() as i64 != t {
-                break;
-            }
-            mean.add(c);
-        }
-        mean.write(&mut power[..nb]);
-        // A HELD slab is a copy of the one before it, so pruning the first slab
-        // has to reach the run of copies standing behind it — they were filled
-        // with what the grid held, columns now out of window included, and only
-        // this copy is pruned, not the grid. Batch, folding in-window columns
-        // alone, holds forward the pruned value; without this the empty slab
-        // right after the window's edge reads brighter than the audio was.
-        for j in 1..centers.len() {
-            if !self.grid.held[start + j] {
-                break;
-            }
-            power.copy_within((j - 1) * nb..j * nb, j * nb);
-        }
-        (centers, power)
+        (self.grid.centers[start..].to_vec(), self.grid.power[start * SPECTRUM_BINS..].to_vec())
     }
 }
 
@@ -1280,7 +1012,7 @@ const RING_HEADROOM: usize = 8;
 /// A ladder for the same reason [`live_slab`] is one, against the other drag.
 /// The slot a key lands in is `key mod capacity`, so every change of capacity
 /// moves the whole mapping — the buffer is reallocated and every slab in it
-/// re-sent ([`GpuGrid::accept`], and `SpectrogramCallback::prepare` behind it).
+/// re-sent ([`FoldedGrid::accept`], and `SpectrogramCallback::prepare` behind it).
 /// Taken straight off the pane, that is a fresh megabytes-sized buffer and a
 /// whole-ring upload on EVERY FRAME of a pane resize, since a horizontal drag
 /// moves the depth axis by a pixel or more per frame. On the ladder a drag
@@ -1382,17 +1114,6 @@ mod tests {
     /// The pitch range the scroll sweeps hold fixed while they move time.
     const SWEEP_SCALE: PitchScale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
 
-    /// The key a live frame mints for a window starting at column `first` of a
-    /// store holding `len`, whose newest column is stamped `newest`.
-    fn run_key(first: usize, len: usize, newest: f64, bucket: f64) -> RunKey {
-        RunKey {
-            first,
-            cols_len: len,
-            newest_bits: newest.to_bits(),
-            bucket_bits: bucket.to_bits(),
-        }
-    }
-
     /// A column at `time` with the given (bin, power) energy, rest silent.
     fn col(time: f64, energy: &[(usize, f32)]) -> crate::SpectrogramColumn {
         let mut power = [0.0f32; SPECTRUM_BINS];
@@ -1408,16 +1129,24 @@ mod tests {
         harmonigraph_core::spectrogram::quantize(power)
     }
 
+    fn complete_first_slab(
+        history: &crate::SpectrumHistory,
+        first: usize,
+        bucket: f64,
+    ) -> impl Iterator<Item = &crate::SpectrogramColumn> {
+        let key = (history.get(first).unwrap().time / bucket).floor() as i64;
+        let start = history.partition_point(|c| ((c.time / bucket).floor() as i64) < key);
+        history.iter_from(start)
+    }
+
     #[test]
     fn live_gap_folds_bound_work_and_capacity_before_serving_the_view() {
         let keep = ring_slots(1024);
         let bounded = |grid: &SlabGrid| {
             assert!(grid.centers.len() <= keep + 1, "at most retention plus one seed");
             assert_eq!(grid.power.len(), grid.centers.len() * SPECTRUM_BINS);
-            assert_eq!(grid.held.len(), grid.centers.len());
             assert!(grid.centers.capacity() <= 2 * (keep + 1));
             assert!(grid.power.capacity() <= 2 * (keep + 1) * SPECTRUM_BINS);
-            assert!(grid.held.capacity() <= 2 * (keep + 1));
         };
         for span in [12.0, 180.0, 600.0] {
             for gap in [1.0, 2.0, 60.0, 600.0, 620.0, 1_000_000.0] {
@@ -1466,7 +1195,8 @@ mod tests {
                         .unwrap();
                     assert_eq!(power[power.len() - SPECTRUM_BINS + 5], newest_max);
                     if gap <= 2.0 {
-                        let expected = aggregate_slabs(history.iter_from(first), bucket);
+                        let expected =
+                            aggregate_slabs(complete_first_slab(&history, first, bucket), bucket);
                         assert_eq!(
                             (centers.clone(), power.clone()),
                             expected,
@@ -1530,11 +1260,9 @@ mod tests {
 
         agg.grid.centers.reserve(10_000);
         agg.grid.power.reserve(10_000 * SPECTRUM_BINS);
-        agg.grid.held.reserve(10_000);
         agg.window(&history, 0, 1.0, 3);
         assert!(agg.grid.centers.capacity() <= 8);
         assert!(agg.grid.power.capacity() <= 8 * SPECTRUM_BINS);
-        assert!(agg.grid.held.capacity() <= 8);
         assert_eq!(agg.grid.centers.len(), 3);
     }
 
@@ -1842,7 +1570,7 @@ mod tests {
             let oldest = t - window_span;
             let first = history.partition_point(|c| c.time < oldest).saturating_sub(1);
             let inc = agg.window(&history, first, bucket, KEEP);
-            let bat = aggregate_slabs(history.iter_from(first), bucket);
+            let bat = aggregate_slabs(complete_first_slab(&history, first, bucket), bucket);
             assert_eq!(inc, bat, "incremental != batch at step {i} (t={t})");
         }
 
@@ -1850,107 +1578,36 @@ mod tests {
         let now = *times.last().unwrap();
         let first = history.partition_point(|c| c.time < now - window_span).saturating_sub(1);
         let inc = agg.window(&history, first, 0.4, KEEP);
-        let bat = aggregate_slabs(history.iter_from(first), 0.4);
+        let bat = aggregate_slabs(complete_first_slab(&history, first, 0.4), 0.4);
         assert_eq!(inc, bat, "incremental != batch after a bucket change");
     }
 
-    /// A HELD empty slab must scroll out of the window with the slab it copied,
-    /// not keep a peak the window no longer reaches.
-    ///
-    /// `fold` fills a one-slab gap by copying the previous slab as the GRID
-    /// holds it — every column that landed there, in-window or not — while
-    /// `view` prunes the window's first slab to its in-window columns. Prune
-    /// only the first and the copy behind it still reads the louder value: one
-    /// heatmap column brighter than the audio ever was.
-    ///
-    /// The step-for-step test above cannot reach this. Its one-slab-gap case
-    /// (`0.80 → 1.60`) is really a TWO-slab gap, which takes the zero branch,
-    /// and no step in its fixture has both two pre-window columns in slab `t`
-    /// and slab `t + 1` empty.
+    /// Unequal columns share the oldest slab, followed by a jitter copy. The
+    /// fixture exceeds retention, then advances within and past that slab.
     #[test]
-    fn a_held_empty_slab_leaves_the_window_with_the_slab_it_copied() {
+    fn completed_averages_and_jitter_holds_survive_oldest_column_changes() {
         let bucket = 0.25;
-        // Slab 0 holds three columns, slab 1 is EMPTY (a one-slab gap, so `fold`
-        // holds the previous), slab 2 holds one.
-        let times = [0.00, 0.05, 0.10, 0.60];
-        let energy = [1.0f32, 0.9, 0.2, 0.5];
         let mut history = crate::SpectrumHistory::default();
         let mut agg = SpectrogramAgg::new();
-        // Fold with the whole run IN window, so the held slab is filled while
-        // nothing has scrolled out of it yet.
-        for (&t, &e) in times.iter().zip(&energy) {
-            history.push(col(t, &[(4, e)]));
-            let _ = agg.window(&history, 0, bucket, KEEP);
+        for (t, energy) in
+            [(0.0, 1.0), (0.3, 0.8), (0.55, 0.7), (0.6, 0.6), (0.65, 0.1), (1.1, 0.5)]
+        {
+            history.push(col(t, &[(4, energy)]));
+            agg.window(&history, 0, bucket, 3);
         }
-        let rebuilds = agg.rebuilds();
-
-        // Now the window starts at the column at 0.10 — index 2 — so the two
-        // louder columns sharing its slab have fallen out of it.
-        let inc = agg.window(&history, 2, bucket, KEEP);
-        let bat = aggregate_slabs(history.iter_from(2), bucket);
-        assert_eq!(agg.rebuilds(), rebuilds, "a rebuild would explain it away");
-        assert_eq!(inc, bat, "slab 1 holds the out-of-window column at 0.00");
-
-        // The same numbers through the REBUILD path: a fresh aggregator whose
-        // first call already starts at index 2. Running only this one would let
-        // you conclude the fast path was to blame; it is the pair that settles
-        // that the bug is in the hold itself.
-        let mut fresh = SpectrogramAgg::new();
-        assert_eq!(fresh.window(&history, 2, bucket, KEEP), bat, "and after a rebuild");
-    }
-
-    /// A held slab's MARK has to scroll out of the grid with the slab it
-    /// describes.
-    ///
-    /// `view` trims three arrays in step — `centers`, `power`, and the `held`
-    /// marks beside them — and only the first two carry a value anything
-    /// compares. Leave `held` untrimmed and it grows while the other two are
-    /// cut, so `held[start + j]` answers for a slab `drop` positions older
-    /// than the one being read. Both directions are wrong and neither shows
-    /// up as a crash: a held slab whose mark now reads `false` keeps the value
-    /// the GRID folded instead of the pruned one — the empty column past the
-    /// window's edge reading brighter than the audio ever was — and an
-    /// interior slab whose mark now reads `true` is overwritten with its
-    /// neighbour's column.
-    ///
-    /// The test above cannot reach it. It passes [`KEEP`], so `drop` is always
-    /// zero and the trim never runs; the tests that DO pass a pane-sized
-    /// retention push columns with no gaps, so every mark is `false` and a
-    /// misaligned read still reads `false`. This one needs both at once: a
-    /// one-slab gap, and a retention the fixture outgrows.
-    #[test]
-    fn the_held_marks_are_trimmed_with_the_slabs_they_describe() {
-        let bucket = 0.25;
-        // Three slabs — a retention the run below outgrows on its last column,
-        // unlike [`KEEP`].
-        const KEPT: usize = 3;
-        // Slab 2 holds three columns, of which the window keeps only the last;
-        // slab 3 is EMPTY, so `fold` marks it held and copies slab 2 as the
-        // grid holds it, which is the loud one rather than the pruned one.
-        let times = [0.00, 0.30, 0.55, 0.60, 0.65, 1.10];
-        let energy = [1.0f32, 0.8, 0.7, 0.6, 0.1, 0.5];
-        let mut history = crate::SpectrumHistory::default();
-        let mut agg = SpectrogramAgg::new();
-        for (&t, &e) in times.iter().zip(&energy) {
-            history.push(col(t, &[(4, e)]));
-            let _ = agg.window(&history, 0, bucket, KEPT);
+        assert_eq!(agg.grid.centers.len(), 3, "retention must discard older slabs");
+        let expected = aggregate_slabs(history.iter_from(2), bucket);
+        assert_eq!(expected.1[4], q((0.7 + 0.6 + 0.1) / 3.0));
+        assert_eq!(expected.1[SPECTRUM_BINS + 4], expected.1[4], "one-slab jitter copy");
+        for first in 2..=4 {
+            assert_eq!(agg.window(&history, first, bucket, 3), expected);
+            let mut fresh = SpectrogramAgg::new();
+            assert_eq!(fresh.window(&history, first, bucket, 3), expected);
         }
-        // The last column opened slab 4 with slab 3 empty behind it, taking the
-        // grid to five slabs and forcing its first trim: two off the front, and
-        // with them two marks.
-        assert_eq!(agg.grid.centers.len(), KEPT, "the grid should have been trimmed");
-        assert_eq!(agg.grid.held.len(), KEPT, "and the marks trimmed with it");
-        // Not vacuous only if a held slab SURVIVED the trim — the whole point
-        // is a mark that is still being read after the array moved under it.
-        assert!(agg.grid.held.iter().any(|&h| h), "a held slab has to be left to read");
-        let rebuilds = agg.rebuilds();
-
-        // Read from the column at 0.65 — index 4 — so the two louder columns
-        // sharing its slab have fallen out of the window and are pruned.
-        let inc = agg.window(&history, 4, bucket, KEPT);
-        let bat = aggregate_slabs(history.iter_from(4), bucket);
-        assert_eq!(agg.rebuilds(), rebuilds, "a rebuild would explain it away");
-        assert_eq!(inc, bat, "the held slab carries the PRUNED value forward");
+        let advanced = agg.window(&history, 5, bucket, 3);
+        assert_eq!(advanced.0, [1.125]);
+        assert_eq!(advanced.1[4], q(0.5));
+        assert_eq!(agg.rebuilds(), 1);
     }
 
     /// Reaching back past a TIER MERGE — which the step-for-step test above
@@ -1967,9 +1624,7 @@ mod tests {
     ///
     /// What it must equal is batch over the columns AS THEY ARRIVED, which is
     /// both the finer answer and the one [`crate::WholeSong`] gives the offline
-    /// renderer from its raw, never-merged columns. The window's first slab is
-    /// the exception: it is pruned to the in-window columns, which by then are
-    /// the merged ones the store holds, so the comparison starts past it.
+    /// renderer from its raw, never-merged columns, including the oldest slab.
     #[test]
     fn incremental_aggregation_matches_the_raw_columns_across_a_tier_merge() {
         // Buckets 10 and 11 alternate between adjacent columns, so a merged
@@ -2009,11 +1664,7 @@ mod tests {
                 let in_window = raw.iter().filter(|c| (c.time / bucket).floor() as i64 >= t0);
                 let want = aggregate_slabs(in_window, bucket);
                 assert_eq!(inc.0, want.0, "slab centers diverged at column {i} (t={t})");
-                assert_eq!(
-                    inc.1[SPECTRUM_BINS..],
-                    want.1[SPECTRUM_BINS..],
-                    "incremental != the raw columns at column {i} (t={t})",
-                );
+                assert_eq!(inc.1, want.1, "incremental != the raw columns at column {i} (t={t})",);
             }
         }
         // And it did it WITHOUT falling back: the merging behind the window is
@@ -2102,7 +1753,7 @@ mod tests {
             let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
             let inc = agg.window(&history, first, bucket, KEEP);
             if i % 256 == 0 || i + 1 == columns {
-                let bat = aggregate_slabs(history.iter_from(first), bucket);
+                let bat = aggregate_slabs(complete_first_slab(&history, first, bucket), bucket);
                 assert_eq!(inc, bat, "incremental != batch at column {i} (t={t})");
             }
         }
@@ -2232,7 +1883,8 @@ mod tests {
     ///
     /// The run key above these two is deliberately not counted: it holds the
     /// newest column's time, so it is MEANT to miss once per column. It is the
-    /// two layers under it that must turn a miss into O(one slab).
+    /// aggregator and stable ring shape that keep those misses incremental.
+    /// Actual upload behavior is checked by the headless renderer tests.
     #[test]
     fn no_cache_layer_falls_back_as_the_window_scrolls() {
         // Every FFT window the pane offers, by the lag it gives a column: a
@@ -2248,8 +1900,8 @@ mod tests {
 
         // A thread per grid point, because there is nothing between them to
         // serialize: each case below builds its own [`SpectrogramAgg`],
-        // [`crate::SpectrumHistory`] and [`GpuGrid`], reads only the numbers it
-        // was handed, and asserts only on those three. Threading them keeps
+        // and [`crate::SpectrumHistory`], reads only the numbers it
+        // was handed, and checks folding and ring capacity. Threading them keeps
         // every point — the grid here is the same grid, run eighteen ways at
         // once instead of one after another. It is the run time that moves, and
         // it is most of this crate's test wall clock.
@@ -2307,8 +1959,7 @@ mod tests {
 
         let mut agg = SpectrogramAgg::new();
         let mut history = crate::SpectrumHistory::default();
-        let mut gpu = GpuGrid::default();
-        let (mut caps, mut widest) = (std::collections::BTreeSet::new(), 0usize);
+        let mut caps = std::collections::BTreeSet::new();
 
         // Long enough to fill the window and then scroll a while inside it,
         // which is where the run starts breathing.
@@ -2321,41 +1972,16 @@ mod tests {
 
             // Exactly what `draw_spectrogram` asks for each frame.
             let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
-            let (centers, power) = agg.window(&history, first, bucket, planned);
+            let (centers, _) = agg.window(&history, first, bucket, planned);
             let visible = centers.len();
-            let first_key = (centers[0] / bucket).floor() as i64;
             let capacity = ring_capacity(planned, visible);
             caps.insert(capacity);
-            let layout = TexLayout {
-                bucket,
-                t_origin: centers[0] - 0.5 * bucket,
-                tex_span: visible as f64 * bucket,
-            };
-            gpu.accept(
-                run_key(first, history.len(), t, bucket),
-                first_key,
-                capacity,
-                power,
-                layout,
-            );
-            // Every frame here draws, so the next one's delta is measured
-            // against a buffer that has the run — see [`GpuGrid::uploaded`].
-            acknowledge(&gpu);
-            // Past the frames that fill the window, where the run is still
-            // growing at both ends.
-            if t > span + 1.0 {
-                let dirty = gpu.sent.as_ref().expect("just accepted").dirty.len();
-                widest = widest.max(dirty);
-            }
         }
 
         // One of each to get started, and none after: from then on a frame folds
         // one column and writes a slab or two.
         assert_eq!(agg.rebuilds, 1, "the aggregator rescans the window: {at}");
-        assert_eq!(gpu.full_uploads(), 1, "the grid is uploaded whole ({caps:?} slabs): {at}");
-        // The window's first slab (repruned as columns leave it), the newest
-        // (still accumulating), and whichever one has just appeared.
-        assert!(widest <= 3, "a scrolling frame wrote {widest} slabs: {at}");
+        assert_eq!(caps.len(), 1, "the ring capacity changed while scrolling: {at}");
     }
 
     /// Dragging the Span must not re-lay the grid on every frame of the drag.
@@ -2386,7 +2012,6 @@ mod tests {
 
         let mut agg = SpectrogramAgg::new();
         let mut history = crate::SpectrumHistory::default();
-        let mut gpu = GpuGrid::default();
         let mut widths = std::collections::BTreeSet::new();
         let mut caps = std::collections::BTreeSet::new();
 
@@ -2416,23 +2041,9 @@ mod tests {
             let bucket = live_slab(span, cols);
             widths.insert((bucket * 1e6).round() as i64); // microseconds, to compare exactly
             let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
-            let (centers, power) = agg.window(&history, first, bucket, planned);
-            let first_key = (centers[0] / bucket).floor() as i64;
+            let (centers, _) = agg.window(&history, first, bucket, planned);
             let capacity = ring_capacity(planned, centers.len());
             caps.insert(capacity);
-            let layout = TexLayout {
-                bucket,
-                t_origin: centers[0] - 0.5 * bucket,
-                tex_span: centers.len() as f64 * bucket,
-            };
-            gpu.accept(
-                run_key(first, history.len(), t, bucket),
-                first_key,
-                capacity,
-                power,
-                layout,
-            );
-            acknowledge(&gpu);
         }
 
         assert!(dragged > 1000, "the sweep never ran: {dragged} frames");
@@ -2448,7 +2059,6 @@ mod tests {
         // The opening upload and nothing else: the capacity is the pane's, so a
         // Span that moves inside its rung moves no slab into a different slot.
         assert_eq!(caps.len(), 1, "the drag resized the buffer: {caps:?} slabs");
-        assert_eq!(gpu.full_uploads(), 1, "the drag re-uploaded the whole grid");
     }
 
     /// A Span drag CROSSING ladder rungs refolds once per rung, not once per
@@ -2730,23 +2340,13 @@ mod tests {
         assert_eq!(refolds, 2, "a still hand on a rung boundary refolded {refolds} times in 200");
     }
 
-    /// A frame that folds nothing re-sends the run it already holds, and a
-    /// frame that folds writes only the slabs whose bytes moved.
-    ///
-    /// This is the whole of what replaced the texture: the picture is a
-    /// statement about which slabs are in which slots, so the cheap frame is
-    /// the one that repeats it and the expensive one is the full upload. Both
-    /// halves are invisible from the picture — a frame that re-uploaded
-    /// everything, and a frame that patched nothing when it should have, draw
-    /// the same heatmap — so they are counted rather than looked at.
     #[test]
-    fn a_second_frame_on_the_same_columns_reuses_the_run_it_sent() {
+    fn unchanged_columns_reuse_the_folded_snapshot() {
         let mut spectrum = crate::AudioSpectrum::default();
         let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
-        let mut bins = [0.0f32; SPECTRUM_BINS];
-        bins[1000] = 0.8;
+        let bins = [0.5; SPECTRUM_BINS];
         for i in 0..200 {
-            spectrum.push_history(90.0 + f64::from(i) * 0.01, &bins);
+            spectrum.push_history(90.0 + i as f64 * 0.01, &bins);
         }
         let view = PaneView {
             ppp: 2.0,
@@ -2754,60 +2354,55 @@ mod tests {
             depth_len: 600.0,
             window: 1.5,
             scale: SWEEP_SCALE,
-            cfg: SpectrumConfig { roll_seconds: 1.5, ..SpectrumConfig::default() },
+            cfg: SpectrumConfig::default(),
         };
-        let columns = |len: usize, newest: f64| Columns { first: 0, len, newest };
-        let fold = |spectrum: &mut crate::AudioSpectrum,
-                    surfaces: &mut crate::spectrum::SpectrogramSurfaces,
-                    view: &PaneView,
-                    cols: &Columns| {
-            let plan = Plan::new(view, cols, None);
-            let layout = run_for(spectrum.history(), surfaces, 0, &plan).expect("a run to draw");
-            let sent = surfaces.at(0).gpu.sent.as_ref().expect("a run was accepted");
-            let held = (layout, sent.run.clone(), sent.dirty.clone());
-            // The frame drew, which is what entitles the next one to a delta.
-            acknowledge(&surfaces.at(0).gpu);
-            held
-        };
-
-        let cols = columns(200, 91.99);
-        let (cold, run, dirty) = fold(&mut spectrum, &mut surfaces, &view, &cols);
-        assert!(dirty.is_empty(), "the first fold patched a buffer that was never written");
-        assert_eq!(surfaces.at(0).gpu.full_uploads(), 1);
-
-        // Same columns: the key hits, so nothing is folded and the same
-        // allocation goes back to the GPU.
-        let (hit, again, _) = fold(&mut spectrum, &mut surfaces, &view, &cols);
-        assert_eq!(cold, hit, "the reused run drew at different geometry");
-        assert!(Arc::ptr_eq(&run, &again), "a hit refolded the store");
-
-        // A fresh column: the key misses, and what the GPU is told is the one
-        // slab that moved — the newest, still accumulating its max.
+        let cols = Columns { first: 0, len: 200, newest: 91.99 };
+        let plan = Plan::new(&view, &cols, None);
+        let layout = run_for(spectrum.history(), &mut surfaces, 0, &plan).unwrap();
+        let original = surfaces.at(0).folded.grid().unwrap();
+        assert_eq!(Some(layout), run_for(spectrum.history(), &mut surfaces, 0, &plan));
+        assert!(Arc::ptr_eq(&original.run, &surfaces.at(0).folded.grid().unwrap().run));
         spectrum.push_history(92.0, &bins);
-        let (_, _, dirty) = fold(&mut spectrum, &mut surfaces, &view, &columns(201, 92.0));
-        assert_eq!(dirty.len(), 1, "a column's arrival wrote {} slabs", dirty.len());
-        assert_eq!(surfaces.at(0).gpu.full_uploads(), 1, "a column forced a full upload");
+        let plan = Plan::new(&view, &Columns { first: 0, len: 201, newest: 92.0 }, None);
+        run_for(spectrum.history(), &mut surfaces, 0, &plan).unwrap();
+        assert!(!Arc::ptr_eq(&original.run, &surfaces.at(0).folded.grid().unwrap().run));
+        assert_eq!(surfaces.at(0).folded.full_uploads(), 0, "folding is not an upload");
+    }
 
-        // A pane a RUNG narrower sizes the GPU's copy differently, and the slot
-        // a key lands in is `key mod capacity` — so the whole mapping moves and
-        // the next fold goes over whole. A rung is what it takes: inside one
-        // the copy is the same size and the delta survives the resize, which is
-        // [`ring_slots`]' whole job. The resize alone folds nothing either way:
-        // these columns already fit, so retention cannot extend the run.
-        let narrow = PaneView { depth_len: 250.0, ..view };
-        let (_, _, dirty) = fold(&mut spectrum, &mut surfaces, &narrow, &columns(201, 92.0));
-        assert_eq!(dirty.len(), 1, "the resize alone refolded the store");
-        spectrum.push_history(92.01, &bins);
-        let (_, _, dirty) = fold(&mut spectrum, &mut surfaces, &narrow, &columns(202, 92.01));
-        assert!(dirty.is_empty(), "a new slot mapping was patched rather than uploaded");
-        assert_eq!(surfaces.at(0).gpu.full_uploads(), 2);
-
-        // And a released context is a full upload rather than a patch of a
-        // buffer nothing wrote.
-        surfaces.at(0).gpu.release();
-        let (_, _, dirty) = fold(&mut spectrum, &mut surfaces, &narrow, &columns(202, 92.01));
-        assert!(dirty.is_empty(), "a fresh context was sent a delta");
-        assert_eq!(surfaces.at(0).gpu.full_uploads(), 3);
+    #[test]
+    fn the_folded_snapshot_changes_only_at_oldest_slab_boundaries() {
+        let view = PaneView {
+            ppp: 1.0,
+            pitch_len: 64.0,
+            depth_len: 256.0,
+            window: 4.0,
+            scale: SWEEP_SCALE,
+            cfg: SpectrumConfig::default(),
+        };
+        let bucket = live_slab(view.window, 256);
+        let mut history = crate::SpectrumHistory::default();
+        for (t, p) in [(0.0, 1.0), (0.2, 0.1), (0.4, 0.01), (2.2, 0.5), (3.2, 0.2)] {
+            history.push(col(t * bucket, &[(1000, p)]));
+        }
+        let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
+        let columns =
+            Columns { first: 0, len: history.len(), newest: history.back().unwrap().time };
+        let initial = Plan::new(&view, &columns, None);
+        let layout = run_for(&history, &mut surfaces, 0, &initial).unwrap();
+        let snapshot = surfaces.at(0).folded.grid().unwrap();
+        for first in 1..=2 {
+            let plan = Plan::new(&view, &Columns { first, ..columns }, None);
+            assert_eq!(run_for(&history, &mut surfaces, 0, &plan), Some(layout));
+            assert!(Arc::ptr_eq(&snapshot.run, &surfaces.at(0).folded.grid().unwrap().run));
+        }
+        let next = Plan::new(&view, &Columns { first: 3, ..columns }, None);
+        let advanced = run_for(&history, &mut surfaces, 0, &next).unwrap();
+        let grid = surfaces.at(0).folded.grid().unwrap();
+        assert_eq!(grid.first_key, 2);
+        assert_eq!(advanced.t_origin, 2.0 * bucket);
+        assert_eq!(grid.run.as_ref(), &snapshot.run[2 * SPECTRUM_BINS..]);
+        assert!(!Arc::ptr_eq(&snapshot.run, &grid.run));
+        assert_eq!(surfaces.at(0).agg.as_ref().unwrap().rebuilds(), 1);
     }
 
     #[test]
@@ -2835,7 +2430,6 @@ mod tests {
             for surface in 0..2 {
                 let old = run_for(spectrum.history(), &mut surfaces, surface, &initial).unwrap();
                 assert!(old.t_origin <= newest - span && old.t_origin > newest - 2.0 * span);
-                acknowledge(&surfaces.at(surface).gpu);
             }
             for surface in 0..2 {
                 view.depth_len = 512.0;
@@ -2859,33 +2453,39 @@ mod tests {
                 if newest == 10.0 {
                     assert!((recovered.t_origin - 1.696).abs() < 1e-9);
                 }
-                let gpu = &surfaces.at(surface).gpu;
-                let run = gpu.sent.as_ref().unwrap().run.clone();
+                let gpu = &surfaces.at(surface).folded;
+                let run = gpu.run.as_ref().unwrap().run.clone();
                 assert_eq!(gpu.run_slabs(), resize.capacity);
-                acknowledge(gpu);
+
                 if surface == 0 {
-                    assert_eq!(surfaces.at(1).gpu.run_slabs(), initial.capacity);
+                    assert_eq!(surfaces.at(1).folded.run_slabs(), initial.capacity);
                 }
 
-                // Span growth after the resize is a hit, as are contraction
-                // and re-expansion: already retained coverage needs no refold.
-                for (depth, window) in [(512.0, 2.0 * span), (256.0, span), (512.0, 2.0 * span)] {
+                // Span growth reuses this boundary; shrinking retention clips
+                // it, and re-expansion must recover the discarded coverage.
+                for (depth, window, capacity, rebuilds) in [
+                    (512.0, 2.0 * span, 520, 2),
+                    (256.0, span, 264, 2),
+                    (512.0, 2.0 * span, 520, 3),
+                ] {
                     view.depth_len = depth;
                     view.window = window;
                     let held = surfaces.at(surface).held_bucket;
                     let plan = Plan::new(&view, &columns, held);
                     assert_eq!(plan.key, initial.key);
-                    assert_eq!(
-                        run_for(spectrum.history(), &mut surfaces, surface, &plan),
-                        Some(recovered)
-                    );
+                    let layout =
+                        run_for(spectrum.history(), &mut surfaces, surface, &plan).unwrap();
                     let state = surfaces.at(surface);
-                    assert!(Arc::ptr_eq(&run, &state.gpu.sent.as_ref().unwrap().run));
-                    assert!(state.gpu.grid().unwrap().dirty.is_empty());
-                    assert_eq!(
-                        (state.agg.as_ref().unwrap().rebuilds(), state.gpu.full_uploads()),
-                        (2, 2)
-                    );
+                    let mut fresh = SpectrogramAgg::new();
+                    let (centers, power) =
+                        fresh.window(spectrum.history(), 0, plan.bucket, capacity);
+                    assert_eq!(layout.t_origin, centers[0] - plan.bucket * 0.5);
+                    assert_eq!(*state.folded.run.as_ref().unwrap().run, power);
+                    assert_eq!(state.agg.as_ref().unwrap().rebuilds(), rebuilds);
+                    assert_eq!(state.folded.full_uploads(), 0, "CPU folds never report uploads");
+                    if depth == 512.0 && rebuilds == 2 {
+                        assert!(Arc::ptr_eq(&run, &state.folded.run.as_ref().unwrap().run));
+                    }
                 }
                 // Compare to an explicit fresh fold of this final plan, with
                 // the million-second gap still bounded to the pane's budget.
@@ -2920,8 +2520,8 @@ mod tests {
         let initial = Plan::new(&view, &columns, None);
         for surface in 0..2 {
             let layout = run_for(spectrum.history(), &mut surfaces, surface, &initial).unwrap();
-            let run = surfaces.at(surface).gpu.sent.as_ref().unwrap().run.clone();
-            acknowledge(&surfaces.at(surface).gpu);
+            let run = surfaces.at(surface).folded.run.as_ref().unwrap().run.clone();
+
             // Cross the capacity boundary in both directions while the bucket
             // stays held. Span, pitch, density and colour still only change
             // how the same complete run is read.
@@ -2941,197 +2541,11 @@ mod tests {
                     Some(layout)
                 );
                 let state = surfaces.at(surface);
-                assert!(Arc::ptr_eq(&run, &state.gpu.sent.as_ref().unwrap().run));
-                assert!(state.gpu.grid().unwrap().dirty.is_empty());
-                assert_eq!(
-                    (state.agg.as_ref().unwrap().rebuilds(), state.gpu.full_uploads()),
-                    (1, 1)
-                );
+                assert!(Arc::ptr_eq(&run, &state.folded.run.as_ref().unwrap().run));
+
+                assert_eq!(state.agg.as_ref().unwrap().rebuilds(), 1);
             }
         }
-    }
-
-    /// The acknowledgement the render crate's `prepare` makes at the end of a
-    /// frame that wrote — see [`GpuGrid::uploaded`], and
-    /// `a_delta_upload_draws_what_a_full_upload_draws` for the store itself.
-    /// Playing it by hand is what lets a CPU test run a frame that reached the
-    /// GPU beside one that did not.
-    fn acknowledge(gpu: &GpuGrid) {
-        let grid = gpu.grid().expect("a run to acknowledge");
-        grid.uploaded.store(grid.serial, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    /// A run the GPU never acknowledged is uploaded whole, not patched.
-    ///
-    /// [`GpuGrid::accept`] moves `sent` forward on every frame, and a frame's
-    /// callback is not certain to run — egui drops one whose clip rect is
-    /// empty. Re-sending [`SentRun::dirty`] covers ONE dropped frame; it does
-    /// not cover a run that ADVANCES across several, where each delta is
-    /// measured against a run the GPU never received. A slab that entered the
-    /// run during that stretch then keeps `key - capacity` in its slot for
-    /// good: the byte comparison sees it as already held, so no later frame
-    /// repairs it, and the column is a lap old with nothing on the CPU able to
-    /// see it.
-    #[test]
-    fn a_run_the_gpu_never_saw_is_uploaded_whole() {
-        let view = PaneView {
-            ppp: 2.0,
-            pitch_len: 300.0,
-            depth_len: 600.0,
-            window: 1.5,
-            scale: SWEEP_SCALE,
-            cfg: SpectrumConfig { roll_seconds: 1.5, ..SpectrumConfig::default() },
-        };
-        // A fresh surface, filled past the window, and the columns that carry
-        // it one slab further on. Replayed twice, so the two runs differ only
-        // in whether the first frame reached the GPU.
-        let sequence = |acknowledged: bool| {
-            let mut spectrum = crate::AudioSpectrum::default();
-            let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
-            let mut bins = [0.0f32; SPECTRUM_BINS];
-            bins[1000] = 0.8;
-            let mut time = 90.0;
-            for _ in 0..200 {
-                spectrum.push_history(time, &bins);
-                time += 0.01;
-            }
-            let fold = |spectrum: &mut crate::AudioSpectrum,
-                        surfaces: &mut crate::spectrum::SpectrogramSurfaces,
-                        newest: f64,
-                        len: usize| {
-                let plan = Plan::new(&view, &Columns { first: 0, len, newest }, None);
-                run_for(spectrum.history(), surfaces, 0, &plan).expect("a run to draw");
-                let sent = surfaces.at(0).gpu.sent.as_ref().expect("accepted");
-                (sent.first_key, sent.run.len() / SPECTRUM_BINS, sent.dirty.len())
-            };
-            let before = fold(&mut spectrum, &mut surfaces, time - 0.01, 200);
-            if acknowledged {
-                acknowledge(&surfaces.at(0).gpu);
-            }
-            // Four columns at 10 ms carry the window past a 16 ms slab
-            // boundary, so the second run holds a key the first did not.
-            for _ in 0..4 {
-                spectrum.push_history(time, &bins);
-                time += 0.01;
-            }
-            let after = fold(&mut spectrum, &mut surfaces, time - 0.01, 204);
-            (before, after, surfaces.at(0).gpu.full_uploads())
-        };
-
-        let (before, after, uploads) = sequence(false);
-        let entered = (after.0 + after.1 as i64) - (before.0 + before.1 as i64);
-        assert!(entered > 0, "the window never advanced, so no key entered the run to be missed",);
-        assert_eq!(after.2, 0, "a run the GPU never saw was patched with a delta");
-        assert_eq!(uploads, 2, "an unacknowledged run was treated as one the GPU holds");
-
-        // And the same frames with the acknowledgement in between: the delta
-        // path stands, and it has exactly the entering slab and the two the
-        // window is still accumulating to write.
-        let (_, after, uploads) = sequence(true);
-        assert_eq!(uploads, 1, "an acknowledged run was uploaded whole");
-        // The slabs that entered, the window's first (repruned as columns
-        // leave it) and the newest (still accumulating) — a delta, not a run.
-        assert!(
-            (1..=entered as usize + 2).contains(&after.2),
-            "an acknowledged run wrote {} slabs rather than a delta",
-            after.2,
-        );
-    }
-
-    /// One surface's grid, and a run of `slabs` slabs whose every byte moves
-    /// with `seed` — so two runs made with different seeds differ in every
-    /// slab, and [`SentRun::moved`] has to name them all.
-    fn slab_run(seed: u8, slabs: usize) -> Vec<u8> {
-        (0..slabs * SPECTRUM_BINS).map(|i| seed.wrapping_mul(97).wrapping_add(i as u8)).collect()
-    }
-
-    /// A delta the GPU has acknowledged is not handed over a second time, so a
-    /// picture that sits still costs no upload traffic at all.
-    ///
-    /// The claim is about the frames that fold NOTHING. A run stands for as
-    /// long as the columns it was folded from do — for a stopped transport,
-    /// unbounded — and every frame drawn under it is handed
-    /// [`SentRun::dirty`] afresh. Without an end to the repeat, a refold that
-    /// moved a large delta is re-issued as that many writes on every frame the
-    /// pane is on screen, which no counter here reports and no picture shows.
-    /// The frame BEFORE the acknowledgement must still re-send it, which is
-    /// the other half of what is measured: that is the dropped callback the
-    /// repeat exists for.
-    #[test]
-    fn an_acknowledged_delta_is_not_handed_over_twice() {
-        let bucket = 0.016;
-        let (capacity, slabs) = (64, 32);
-        let layout = TexLayout { bucket, t_origin: 0.0, tex_span: slabs as f64 * bucket };
-        let mut gpu = GpuGrid::default();
-
-        // The opening upload, acknowledged, so what follows is measured as a
-        // delta rather than as a context with nothing said about it.
-        gpu.accept(run_key(0, 100, 1.0, bucket), 0, capacity, slab_run(0, slabs), layout);
-        acknowledge(&gpu);
-
-        // One slab's bytes move: a delta of exactly one key, well under the
-        // share of the run that would be uploaded whole instead.
-        let mut moved = slab_run(0, slabs);
-        moved[0] ^= 0xff;
-        gpu.accept(run_key(0, 101, 1.01, bucket), 0, capacity, moved, layout);
-        assert_eq!(gpu.grid().expect("a run").dirty, vec![0], "the moved slab went unsent");
-        assert_eq!(
-            gpu.grid().expect("a run").dirty,
-            vec![0],
-            "an unacknowledged delta was dropped on the frame that had to repeat it",
-        );
-
-        acknowledge(&gpu);
-        assert!(
-            gpu.grid().expect("a run").dirty.is_empty(),
-            "a delta the GPU acknowledged was handed over again",
-        );
-        assert_eq!(gpu.full_uploads(), 1, "the still picture rebuilt the grid");
-    }
-
-    /// A delta naming most of the run is taken as the rebuild it already is.
-    ///
-    /// Both sides of the threshold are the claim. Above it the delta writes
-    /// what a rebuild writes — one scattered `write_buffer` per slab against
-    /// one contiguous write — while reporting as a patch, so the rebuild
-    /// counter reads zero through the traffic of a rebuild. Below it the delta
-    /// has to survive: a patch turned into a rebuild is a buffer's worth of
-    /// upload bought for a slab's worth of change.
-    #[test]
-    fn a_refold_that_moves_most_of_the_run_is_uploaded_whole() {
-        let bucket = 0.016;
-        let (capacity, slabs) = (64, 32);
-        let layout = TexLayout { bucket, t_origin: 0.0, tex_span: slabs as f64 * bucket };
-        let mut gpu = GpuGrid::default();
-
-        gpu.accept(run_key(0, 100, 1.0, bucket), 0, capacity, slab_run(0, slabs), layout);
-        acknowledge(&gpu);
-        assert_eq!(
-            gpu.full_uploads(),
-            1,
-            "the opening run was patched into a buffer with no bytes"
-        );
-
-        // A backward jump of the transport: the run lands on keys whose slots
-        // hold a different lap, so every slab of it has moved.
-        gpu.accept(run_key(0, 100, 2.0, bucket), 500, capacity, slab_run(1, slabs), layout);
-        assert_eq!(gpu.full_uploads(), 2, "a run that moved whole was patched slab by slab");
-        assert!(gpu.grid().expect("a run").dirty.is_empty(), "a rebuild sent a delta beside it");
-
-        // And half of it moving is still a patch, which is what stops the
-        // clause above from swallowing the steady state.
-        acknowledge(&gpu);
-        let mut half = slab_run(1, slabs);
-        for j in 0..slabs / 2 {
-            half[j * SPECTRUM_BINS] ^= 0xff;
-        }
-        gpu.accept(run_key(0, 101, 2.01, bucket), 500, capacity, half, layout);
-        assert_eq!(gpu.full_uploads(), 2, "half a run moving was uploaded whole");
-        assert_eq!(
-            gpu.grid().expect("a run").dirty.len(),
-            slabs / 2,
-            "the moved half was not sent as a delta",
-        );
     }
 
     /// The gradient table is keyed on what decides a texel of it, so two
@@ -3159,11 +2573,11 @@ mod tests {
             spectrogram_gradient: crate::SpectrogramPreset::Aurora.gradient(),
             ..SpectrumConfig::default()
         };
-        let mut gpu = GpuGrid::default();
+        let mut gpu = FoldedGrid::default();
         // A table built for `c` alone, so a folded pair can be compared as
         // pixels rather than as keys.
         let table = |c: &SpectrumConfig| {
-            let mut fresh = GpuGrid::default();
+            let mut fresh = FoldedGrid::default();
             fresh.shades(c).lut
         };
         // Whether the table `c` is served is a NEW one: the generation moves
@@ -3321,7 +2735,7 @@ mod tests {
     /// still be "within one level" of black.
     ///
     /// CPU, because both halves are pure functions of the config: `level_affine`
-    /// is what [`read_of`] uploads and [`GpuGrid::shades`] is the table beside
+    /// is what [`read_of`] uploads and [`FoldedGrid::shades`] is the table beside
     /// it. What the SHADER makes of the pair is
     /// `gpu::the_curve_and_the_heatmap_read_a_run_of_buckets_alike`'s.
     #[test]
@@ -3342,7 +2756,7 @@ mod tests {
                         tilt,
                         ..SpectrumConfig::default()
                     };
-                    let lut = GpuGrid::default().shades(&cfg).lut;
+                    let lut = FoldedGrid::default().shades(&cfg).lut;
                     // A row per octave across the spectrum's whole reach, so
                     // the tilt is sampled where it is largest as well as at the
                     // pivot.
@@ -3409,13 +2823,10 @@ mod tests {
         let base = key(&base_view, &columns);
         assert_eq!(base, key(&base_view, &columns), "the same fold must hit");
 
-        // Which columns are in the window, and where the newest one sits: each
-        // moves as the window scrolls, and the run moves with it.
-        for moved in [
-            Columns { first: 4, ..columns },
-            Columns { len: 201, ..columns },
-            Columns { newest: 6.0, ..columns },
-        ] {
+        // The oldest slab is checked against the snapshot separately: a raw
+        // column index does not decide completed averages.
+        assert_eq!(base, key(&base_view, &Columns { first: 4, ..columns }));
+        for moved in [Columns { len: 201, ..columns }, Columns { newest: 6.0, ..columns }] {
             assert_ne!(base, key(&base_view, &moved), "a scrolled window reuses the old run");
         }
         // The slab width, through the ladder, and the build path.
@@ -3596,24 +3007,14 @@ mod tests {
         /// size — so `key mod capacity` is the identity and a fixture about the
         /// READ says nothing about slots.
         ///
-        /// A generation of its own every time, which is what makes a SEQUENCE of
-        /// these frames legible: the copy is keyed on it, so without a fresh one a
-        /// second frame through the same resources patches the slabs the caller
-        /// declared dirty — none — and redraws the first frame's bytes. That path
-        /// is `the_gpu_grid_equals_a_full_upload_after_any_sequence`'s subject and
-        /// nothing else here wants it.
         fn grid_of(run: Vec<u8>) -> SpectrogramGrid {
-            static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
             let slabs = run.len() / SPECTRUM_BINS;
             SpectrogramGrid {
-                generation: GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                serial: 1,
-                uploaded: Arc::default(),
+                full_uploads: Arc::default(),
                 capacity: slabs as u32,
                 bins: SPECTRUM_BINS as u32,
                 first_key: 0,
                 run: Arc::new(run),
-                dirty: Vec::new(),
             }
         }
 
@@ -3759,7 +3160,7 @@ mod tests {
         /// contradict it, a frame built from the run alone.
         ///
         /// Every event that moves the run is scripted here and counted, because a
-        /// sequence that quietly never folded, never pruned or never wrapped would
+        /// sequence that quietly never folded, never advanced or never wrapped would
         /// pass this by drawing one picture twice.
         /// What the sequence below has to have reached for its equality to mean
         /// anything, counted as it plays.
@@ -3770,16 +3171,16 @@ mod tests {
             clock: f64,
             pushed: u32,
             folds: u32,
-            prunes: u32,
+            advances: u32,
             holds: u32,
             reveals: u32,
             crossings: u32,
             rebuilds: u32,
             backwards: u32,
             /// The previous frame's slab width and first key, which is what makes
-            /// a crossing, a reveal and a prune tellable apart.
+            /// a crossing, a reveal and a boundary advance tellable apart.
             last: Option<(f64, i64)>,
-            /// Generations minted for the full-upload side, so it never inherits
+            /// Fresh pane IDs for the full-upload side, so it never inherits
             /// its own previous frame.
             fresh: u64,
         }
@@ -3824,12 +3225,11 @@ mod tests {
                     newest: hist.back().map_or(t.clock, |c| c.time),
                 };
                 let plan = Plan::new(view, &columns, None);
-                let uploads = surfaces.at(0).gpu.full_uploads();
+                let uploads = surfaces.at(0).folded.full_uploads();
                 let refolds = surfaces.at(0).agg.as_ref().map_or(0, |a| a.rebuilds());
-                let hit = surfaces.at(0).gpu.hit(&plan, &spectrum.history).is_some();
+                let hit = surfaces.at(0).folded.hit(&plan, &spectrum.history).is_some();
                 run_for(spectrum.history(), surfaces, 0, &plan).expect("a run to draw");
                 t.folds += u32::from(!hit);
-                t.rebuilds += u32::from(surfaces.at(0).gpu.full_uploads() > uploads);
                 t.backwards += u32::from(
                     refolds > 0
                         && surfaces.at(0).agg.as_ref().map_or(0, |a| a.rebuilds()) > refolds,
@@ -3842,9 +3242,7 @@ mod tests {
                 if let Some((bucket, first_key)) = t.last {
                     t.crossings += u32::from(bucket != plan.bucket);
                     t.reveals += u32::from(grid.first_key < first_key && bucket == plan.bucket);
-                    t.prunes += u32::from(
-                        grid.first_key == first_key && grid.dirty.contains(&grid.first_key),
-                    );
+                    t.advances += u32::from(grid.first_key > first_key && bucket == plan.bucket);
                 }
                 t.last = Some((plan.bucket, grid.first_key));
                 // A HELD slab is a copy of the one before it, which is the only way
@@ -3862,18 +3260,11 @@ mod tests {
                     read.clone(),
                     shades.clone(),
                 );
-                // The same run with nothing said about what the GPU holds: a
-                // generation and a pane of its own, so it is built from the run and
-                // can inherit neither the delta pane's buffer nor its own.
+                t.rebuilds += u32::from(surfaces.at(0).folded.full_uploads() > uploads);
+                // An unused pane ID forces the reference to upload the whole run.
                 t.fresh += 1;
-                let whole = SpectrogramGrid {
-                    generation: t.fresh,
-                    serial: 1,
-                    uploaded: Arc::default(),
-                    dirty: Vec::new(),
-                    ..grid.clone()
-                };
-                let full = headless.frame(1, SIZE, vertices, whole, read.clone(), shades);
+                let whole = SpectrogramGrid { full_uploads: Arc::default(), ..grid.clone() };
+                let full = headless.frame(t.fresh, SIZE, vertices, whole, read.clone(), shades);
                 assert_eq!(delta, full, "a slot the delta wrote disagrees with the run it named");
                 (grid, read, delta)
             };
@@ -3888,7 +3279,7 @@ mod tests {
                 push(&mut tally, &mut spectrum, 4, 0.0);
             }
             // A window scrolling by less than a slab: its first slab keeps its key
-            // while columns leave it, so the aggregator reprunes it in place.
+            // while columns leave it; its complete average remains unchanged.
             for _ in 0..6 {
                 push(&mut tally, &mut spectrum, 1, 0.0);
                 frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid));
@@ -3912,14 +3303,14 @@ mod tests {
             frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid));
             // A context that went away: the copy is gone and nothing about it can
             // be assumed.
-            surfaces.at(0).gpu.release();
+            headless.reset_resources();
             frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid));
             push(&mut tally, &mut spectrum, 8, 0.0);
             frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid));
 
             for (count, what) in [
                 (tally.folds, "folds"),
-                (tally.prunes, "first-slab prunes"),
+                (tally.advances, "oldest slab advances"),
                 (tally.holds, "held slabs"),
                 (tally.reveals, "slabs revealed by a widening window"),
                 (tally.crossings, "ladder rungs crossed"),
@@ -3929,49 +3320,13 @@ mod tests {
                 assert!(count > 0, "the sequence never reached any {what}");
             }
 
-            // And the equality has teeth: one more fold, drawn with its list of
-            // moved slabs WITHHELD, leaves the buffer holding what the run before
-            // it put there — a different picture. Without this an equality that
-            // could never fail would read as coverage.
+            // Fixture sensitivity: advancing the history must change actual pixels.
+            let before =
+                frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid)).2;
             push(&mut tally, &mut spectrum, 8, 0.0);
-            let view = view(mid);
-            let hist = spectrum.history();
-            let columns = Columns {
-                first: hist
-                    .partition_point(|c| c.time < tally.clock - view.window)
-                    .saturating_sub(1),
-                len: hist.len(),
-                newest: hist.back().map_or(tally.clock, |c| c.time),
-            };
-            let plan = Plan::new(&view, &columns, None);
-            run_for(spectrum.history(), &mut surfaces, 0, &plan).expect("a run to draw");
-            let (moved, shades) = frame_data(&mut surfaces, 0, &cfg).expect("a grid to draw");
-            assert!(!moved.dirty.is_empty(), "nothing moved, so nothing could be withheld");
-            let read = read_of(&view, plan.rows);
-            let slabs = (moved.run.len() / SPECTRUM_BINS) as u32;
-            let withheld = headless.frame(
-                0,
-                SIZE,
-                run_quad(slabs, SIZE),
-                SpectrogramGrid { dirty: Vec::new(), ..moved.clone() },
-                read.clone(),
-                shades.clone(),
-            );
-            tally.fresh += 1;
-            let full = headless.frame(
-                1,
-                SIZE,
-                run_quad(slabs, SIZE),
-                SpectrogramGrid {
-                    generation: tally.fresh,
-                    uploaded: Arc::default(),
-                    dirty: Vec::new(),
-                    ..moved
-                },
-                read,
-                shades,
-            );
-            assert_ne!(withheld, full, "withholding the delta drew the same picture anyway");
+            let after =
+                frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid)).2;
+            assert_ne!(before, after, "the upload sequence never changed the picture");
         }
 
         /// Keys before zero and a run that wraps past the end of the ring place
@@ -4242,7 +3597,7 @@ mod tests {
                     texel_quad(&read, W, size),
                     grid_of(bytes.clone()),
                     read,
-                    GpuGrid::default().shades(&cfg),
+                    FoldedGrid::default().shades(&cfg),
                 );
                 let lightness = |px: u32| {
                     let c = pixel(&frame, size, px, 0);
@@ -4288,7 +3643,7 @@ mod tests {
                     texel_quad(&read, W, size),
                     grid_of(bytes.clone()),
                     read,
-                    GpuGrid::default().shades(&cfg),
+                    FoldedGrid::default().shades(&cfg),
                 );
                 pixel(&frame, size, 0, 0)
             };
@@ -4355,7 +3710,7 @@ mod tests {
                 volume_ceiling_db: 20.0,
                 ..SpectrumConfig::default()
             };
-            let lut = GpuGrid::default().shades(&cfg).lut;
+            let lut = FoldedGrid::default().shades(&cfg).lut;
             let step = harmonigraph_core::spectrogram::DB_STEP;
             let mut seed = 0x9E37_79B9_7F4A_7C15u64;
             let mut next = || {
@@ -4553,12 +3908,7 @@ mod tests {
         /// [`ring_slots`] is the ladder that bounds the re-sends by the RUNGS a
         /// drag crosses instead of by the frames it lasts.
         ///
-        /// Through the GPU rather than off [`GpuGrid::full_uploads`] alone,
-        /// because the delta path is only reachable once the callback has
-        /// acknowledged the run it is patching (see [`SentRun::dirty`]) — a
-        /// counter read without one says every frame rebuilt, whatever the
-        /// capacity did, and the reading would be of the missing
-        /// acknowledgement rather than of the ring.
+        /// Count actual renderer writes; preparing CPU data alone cannot report them.
         #[test]
         fn a_pane_resize_does_not_re_send_the_grid_every_frame() {
             let Some(mut headless) = SpectrogramHeadless::new() else {
@@ -4620,11 +3970,11 @@ mod tests {
             };
 
             // Settle, so the run the drag starts from is one the GPU has
-            // acknowledged rather than the first fold of all.
+            // uploaded rather than the first fold of all.
             for _ in 0..4 {
                 frame(&mut spectrum, &mut surfaces, &mut headless, &mut clock, &mut n, 100.0);
             }
-            let was = surfaces.at(0).gpu.full_uploads();
+            let was = surfaces.at(0).folded.full_uploads();
             // A point a frame, which is the rate a hand delivers a drag at, over
             // travel that takes the depth axis from a sliver to past the cap.
             const TRAVEL: u32 = 400;
@@ -4632,7 +3982,7 @@ mod tests {
                 let depth_len = 100.0 + step as f32;
                 frame(&mut spectrum, &mut surfaces, &mut headless, &mut clock, &mut n, depth_len);
             }
-            let sent = surfaces.at(0).gpu.full_uploads() - was;
+            let sent = surfaces.at(0).folded.full_uploads() - was;
             // Ten rungs reach from a two-slab ring to the cap and this travel
             // crosses three of them, `live_slab`'s own rungs a few more.
             assert!(sent <= 12, "a {TRAVEL}-frame drag re-sent the whole grid {sent} times");

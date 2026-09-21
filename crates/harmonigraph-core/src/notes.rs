@@ -274,7 +274,7 @@ impl Envelope {
     /// began, and the difference is what is being faded rather than a
     /// convenience. A note has a note-on to run from and keeps it for the whole
     /// of its life, so the level it has reached is always re-derivable from the
-    /// setting on screen — the rule [`Voice::wore_high`] states. The audio
+    /// setting on screen. The audio
     /// ring's gate has no such moment: it opens when the spectrum crosses a
     /// threshold and can cross back before the fade it started has landed, and
     /// a transition restarted from a stamp would jump the picture to whatever
@@ -392,26 +392,6 @@ pub struct Voice {
     pub lifetime: Option<u64>,
     pub assignment: Option<crate::canonical::AssignmentMetadata>,
     pub state: VoiceState,
-    /// The moment this voice took the highest end, stamped as it LEFT the
-    /// held set, and `None` if it was not wearing that end then (or is still
-    /// held). Same for [`wore_low`](Self::wore_low) and the lowest.
-    ///
-    /// Held apart from [`HeldEnd`], which stays strictly about what is down
-    /// now, because this is the opposite question: not "who is the melody"
-    /// but "who was, on their way out". A melody/bass mark fades with its
-    /// note rather than snapping off at the key, and this is what it fades
-    /// FROM — the stamp its ease was running against, so the ring leaves at
-    /// the level it had reached rather than jumping to full or to nothing.
-    ///
-    /// The MOMENT and not the level, deliberately. What the ease has reached
-    /// depends on the Fade duration and the mark Delay, either of which a drag
-    /// (or a host automation lane) can move mid-fade; baking one into the
-    /// tracker would leave every already-released ring answering to a setting
-    /// that is no longer on screen. The moment is a fact about the music, and
-    /// the view is free to re-read it every frame.
-    pub wore_high: Option<Time>,
-    /// The lowest end's stamp — see [`wore_high`](Self::wore_high).
-    pub wore_low: Option<Time>,
 }
 
 impl Voice {
@@ -430,8 +410,6 @@ impl Voice {
             lifetime: None,
             assignment: None,
             state: VoiceState::Held,
-            wore_high: None,
-            wore_low: None,
         };
         voice.set_pitch(f32::from(note));
         voice
@@ -510,64 +488,10 @@ impl Voice {
     /// function so a note cannot arrive at one rate and leave at another, nor
     /// have one layer disagree with the next about either.
     ///
-    /// The melody/bass marks are the deliberate exception and take
-    /// [`release_level`](Self::release_level) instead: a mark runs its own
-    /// ease from the moment its note TOOK the end (plus whatever wait
-    /// `mark_delay` asks), and multiplying the note's attack in on top would
-    /// square the two wherever those moments coincide — the usual case —
-    /// leaving a mark visibly slower than the sector it extends.
+    /// Lattice animation carries its own levels in the scene layer; this
+    /// envelope remains the voice-based reading used by the other consumers.
     pub fn activation(&self, now: Time, env: &Envelope) -> f32 {
         env.attack(now, self.on_time) * self.release_level(now, env)
-    }
-}
-
-/// One end of the chord that is DOWN — the highest or lowest held voice —
-/// and the moment that voice took it.
-///
-/// HELD is the load-bearing word, and it is this type's guarantee rather than
-/// its caller's: the scene rings these two ends LIVE, and a released voice
-/// rings from the stamp it left with instead ([`Voice::wore_high`], read in
-/// `derive::marks`). The two answer different questions — who is the melody,
-/// and who was on their way out — so a released voice allowed back in here
-/// would hold the end against the note that replaced it, and the incoming
-/// ring would have nothing to ease from. It must never appear here, which
-/// rests on the ends being read off `held` alone and restamped from every
-/// mutation of it.
-///
-/// The "when" is state rather than a per-frame derivation because the answer
-/// is not in the current voices: a voice that takes an end by INHERITING it,
-/// when the note outside it comes up, took it at that note's release, and
-/// that note is pruned a fade after its DEPARTURE begins — which is the later
-/// of its key-up and the end of its own arrival, so at most an arrival plus a
-/// fade after the key (see [`Voice::release_level`] and
-/// [`NoteTracker::prune`]). Read off the released tail instead, the handoff
-/// moment vanishes mid-ramp — so any ramp longer than the Fade param loses
-/// its own start and lands at full in one frame, which is precisely the pop
-/// a slow ease exists to avoid.
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct HeldEnd {
-    /// The voice holding this end, keyed as the tracker keys it:
-    /// `(source, channel, note)`.
-    pub key: VoiceKey,
-    /// When this voice took the end — its own note-on when it arrived as
-    /// the outer note of the chord, or the moment the voice outside it was
-    /// released, whichever made it the end.
-    pub since: Time,
-}
-
-/// The end `voice` now holds, carrying `prev`'s stamp forward when it is the
-/// same voice still holding it and stamping `now` when it is not.
-///
-/// "The same voice" is the key AND the note-on behind it: a retrigger with no
-/// off in between replaces the voice on a key it already had (see
-/// [`NoteTracker::handle_event`]), and that is a new note taking the end, not
-/// the old one keeping it.
-fn took(prev: Option<HeldEnd>, voice: Option<&Voice>, now: Time) -> Option<HeldEnd> {
-    let voice = voice?;
-    let key = voice.key();
-    match prev {
-        Some(end) if end.key == key && end.since >= voice.on_time => Some(end),
-        _ => Some(HeldEnd { key, since: now }),
     }
 }
 
@@ -603,10 +527,6 @@ pub struct NoteTracker {
     released: Vec<Voice>,
     history: NoteHistory,
     roll: NoteRoll,
-    /// The two ends of the held chord, restamped as the held set changes
-    /// (see [`HeldEnd`] for why they are remembered rather than derived).
-    high_end: Option<HeldEnd>,
-    low_end: Option<HeldEnd>,
     canonical: BTreeMap<SourceId, CanonicalCursor>,
     hidden_sources: BTreeSet<SourceId>,
     baselines: BTreeMap<SourceId, SourceBaseline>,
@@ -772,7 +692,6 @@ impl NoteTracker {
                         (delta.lifetime != 0).then_some(delta.lifetime),
                         original_onset,
                     );
-                    self.restamp_ends(delta.event.time);
                 }
             }
             CanonicalEvent::Baseline(frame) => return self.replace_source_mapped(frame, offset),
@@ -785,8 +704,7 @@ impl NoteTracker {
                 self.roll.gap(gap.source, gap.time);
                 // The same reach the roll's own gap has, and the same exit every
                 // other departure takes: what publication lost is no longer known
-                // to be held, so those voices LEAVE — with the stamps a mark eases
-                // out of and a fade the picture can follow — rather than being
+                // to be held, so those voices leave with a release fade rather than being
                 // dropped between two frames. A stream-wide gap is the one
                 // production emits, and it takes every source with it.
                 self.release_held(gap.time, |key, _| {
@@ -796,14 +714,13 @@ impl NoteTracker {
                 if self.gaps.len() > NoteRoll::MAX_NOTES {
                     self.gaps.remove(0);
                 }
-                self.restamp_ends(gap.time);
             }
         }
         Ok(true)
     }
 
     /// Validate the entire held set before mutation. Matching lifetimes keep
-    /// their onset, bend history and held-end identity. Missing observations
+    /// their onset and bend history. Missing observations
     /// are closed as history gaps, never fictional downstream releases.
     pub fn replace_source(&mut self, frame: &SourceBaseline) -> Result<bool, InvalidCanonical> {
         self.replace_source_mapped(frame, 0.0)
@@ -878,7 +795,7 @@ impl NoteTracker {
         cursor.state_cut = frame.output_cut;
         self.baselines.insert(frame.source, mapped);
         self.certainty.restore(frame.source);
-        self.restamp_ends(mapped.time);
+
         Ok(true)
     }
 
@@ -923,63 +840,17 @@ impl NoteTracker {
                 }
             }
         }
-        // Every arm reaching here can move the chord's ends: two change which
-        // voices are held, and a tuning can bend one past its neighbour. An
-        // arm that changes nothing (an off for a key that is not down)
-        // restamps to the same answer, `restamp_ends` being a re-read rather
-        // than a reset — which is also why the `SessionReset` arm having already
-        // restamped inside `session_notes_off` costs nothing. That call is for the
-        // shells that reach the transport reset directly, not through here.
-        self.restamp_ends(event.time);
     }
 
-    /// Copy onto `voice`, as it leaves the held set, the stamp of each end it
-    /// was wearing — see [`Voice::wore_high`]. Call BEFORE
-    /// [`restamp_ends`](Self::restamp_ends), which is what hands the ends to
-    /// whoever is left.
-    ///
-    /// The `since >= on_time` guard is the same identity test [`took`] makes,
-    /// and it matters for the same reason: a retrigger replaces the voice on a
-    /// key the tracker already had, so an end still keyed to that key may have
-    /// been stamped for the voice BEFORE this one. Matching on the key alone
-    /// would hand this voice a ring its predecessor earned.
-    fn stamp_ends_worn(&self, voice: &mut Voice) {
-        let key = voice.key();
-        let worn = |end: Option<HeldEnd>| {
-            end.filter(|e| e.key == key && e.since >= voice.on_time).map(|e| e.since)
-        };
-        voice.wore_high = worn(self.high_end);
-        voice.wore_low = worn(self.low_end);
-    }
-
-    /// The one way a voice leaves the held set: stamped with whatever ends it
-    /// was wearing, released at `at`, and handed to the tail that fades it out.
-    ///
-    /// One function because every exit owes the same three things, and a copy
-    /// per exit is how one of them comes to be missing from one of them: the
-    /// stamps a mark eases out of, a release the fade can run, and the
-    /// visibility this voice had at its FACTUAL release rather than at whatever
-    /// frame the draw or the prune lands on (see
-    /// [`Voice::visible_at_release`]).
-    ///
-    /// Leaves [`restamp_ends`](Self::restamp_ends) to the caller, which every
-    /// exit calls once when its whole batch has left rather than per voice.
+    /// Preserve the release time and the source visibility at that moment.
     fn release_voice(&mut self, mut voice: Voice, at: Time) {
-        self.stamp_ends_worn(&mut voice);
         voice.state = VoiceState::Released { at };
         voice.visible_at_release = !self.hidden_sources.contains(&voice.source);
         self.released.push(voice);
     }
 
-    /// Release every held voice `leaving` picks out, at `at`, and keep the rest
-    /// held.
-    ///
-    /// A `retain` cannot carry the sequence above, and that is why it was
-    /// written out at each exit: the closure wants `&self` for the ends and
-    /// `&mut self` for the tail while `held` is already borrowed. Taking the map
-    /// out and putting the survivors back costs a rebuild of a chord, and it
-    /// keeps the order a `retain` has — key order, which the released tail then
-    /// holds for the whole fade.
+    /// Release matching voices in key order, preserving the released tail
+    /// order used to choose colors when equally strong voices share a node.
     fn release_held(&mut self, at: Time, leaving: impl Fn(&VoiceKey, &Voice) -> bool) {
         for (key, voice) in std::mem::take(&mut self.held) {
             if leaving(&key, &voice) {
@@ -988,35 +859,6 @@ impl NoteTracker {
                 self.held.insert(key, voice);
             }
         }
-    }
-
-    /// Re-read the two ends, keeping a `since` for as long as the SAME voice
-    /// holds the end it stamped.
-    ///
-    /// Called from every mutation of the held set, and deliberately NOT from
-    /// [`prune`](Self::prune): a released voice finishing its fade is not a
-    /// change of ends, and it must not disturb a ramp that is still climbing.
-    fn restamp_ends(&mut self, now: Time) {
-        // Compared on `pitch` rather than the raw key, because MPE and
-        // per-note tuning can bend a voice past its neighbour — the same
-        // reason the notes pane sorts on pitch.
-        let by_pitch = |a: &&Voice, b: &&Voice| a.pitch.total_cmp(&b.pitch);
-        self.high_end = took(
-            self.high_end,
-            self.held
-                .values()
-                .filter(|v| !self.hidden_sources.contains(&v.source))
-                .max_by(by_pitch),
-            now,
-        );
-        self.low_end = took(
-            self.low_end,
-            self.held
-                .values()
-                .filter(|v| !self.hidden_sources.contains(&v.source))
-                .min_by(by_pitch),
-            now,
-        );
     }
 
     /// Drop released voices whose fade has fully completed, folding each
@@ -1122,32 +964,18 @@ impl NoteTracker {
         self.held.values().filter(|v| !self.hidden_sources.contains(&v.source)).count()
     }
 
-    /// The highest held voice and when it took that end — the chord's top
-    /// line, which the scene marks as the melody. `None` while nothing is
-    /// down. See [`HeldEnd`].
-    pub fn highest_held(&self) -> Option<HeldEnd> {
-        self.high_end
-    }
-
-    /// The lowest held voice, the same way: the bass end.
-    pub fn lowest_held(&self) -> Option<HeldEnd> {
-        self.low_end
-    }
-
     pub fn session_notes_off(&mut self, now: Time) {
         self.certainty = Certainty::default();
         self.roll.all_off(now);
         self.release_held(now, |_, _| true);
-        self.restamp_ends(now);
     }
 
     /// A source leaving/resetting cannot release another source's held set.
-    /// Keep the same release fade and held-end stamps as a session reset.
+    /// Keep the same release fade as a session reset.
     pub fn source_notes_off(&mut self, source: SourceId, now: Time) {
         self.certainty.restore(source);
         self.roll.source_off(source, now);
         self.release_held(now, |key, _| key.source == source);
-        self.restamp_ends(now);
     }
 }
 
@@ -1156,7 +984,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn same_key_sources_keep_independent_lifetimes_bends_and_ends() {
+    fn same_key_sources_keep_independent_lifetimes_and_bends() {
         let (a, b) = (SourceId(1), SourceId(2));
         let mut tracker = NoteTracker::new();
         let bend = |time, source, semitones| NoteEvent {
@@ -1171,22 +999,17 @@ mod tests {
         tracker.handle_event(bend(0.01, a, 0.25));
         tracker.handle_event(bend(0.02, b, -0.25));
         assert_eq!(tracker.held_count(), 2);
-        let bass = tracker.lowest_held().unwrap();
-        assert_eq!(bass.key.source, b);
-        assert_eq!(tracker.highest_held().unwrap().key.source, a);
 
         tracker.handle_event(NoteEvent::off(1.0, a, 0, 60));
         let released = tracker.voices().find(|v| v.source == a).unwrap();
-        assert_eq!(released.wore_high, Some(0.01));
-        assert_eq!(released.wore_low, None, "B owns the bass stamp despite the same channel/key");
-        assert_eq!(tracker.lowest_held(), Some(bass));
+        assert_eq!(released.state, VoiceState::Released { at: 1.0 });
+        assert_eq!(released.pitch, 60.25);
         tracker.handle_event(NoteEvent::on(2.0, a, 0, 60, 0.7));
         tracker.handle_event(NoteEvent::on(3.0, a, 0, 60, 0.9));
         assert_eq!(tracker.held_count(), 2, "same-source retrigger still replaces");
         assert_eq!(tracker.voices().find(|v| v.source == b).unwrap().pitch, 59.75);
         tracker.handle_event(NoteEvent::source_reset(4.0, a));
         assert_eq!(tracker.held_count(), 1);
-        assert_eq!(tracker.lowest_held(), Some(bass));
         tracker.handle_event(bend(4.5, b, -0.5));
         let roll_b = tracker.roll().notes().find(|n| n.source == b).unwrap();
         assert!(roll_b.is_live());
@@ -1209,8 +1032,6 @@ mod tests {
         tracker.handle_event(NoteEvent::session_reset(6.0));
         assert_eq!(tracker.held_count(), 0);
         assert!(tracker.roll().notes().all(|n| !n.is_live()));
-        assert_eq!(tracker.highest_held(), None);
-        assert_eq!(tracker.lowest_held(), None);
     }
 
     fn on(time: Time, note: u8) -> NoteEvent {
@@ -1344,118 +1165,6 @@ mod tests {
         assert_eq!(tracker.voices().count(), 0, "gone when the fade is over");
         let visits: Vec<_> = tracker.history().visits().map(|v| (v.pitch, v.last_off)).collect();
         assert_eq!(visits, [(60.0, 2.0)], "and the trail picks it up where the fade let go");
-    }
-
-    /// The chord's two ends, and the moment each one changed hands. The
-    /// scene rings them and eases each ring in from the stamp, so a stamp
-    /// that moves when nothing changed hands is a ring that restarts under a
-    /// note nobody touched.
-    #[test]
-    fn the_ends_are_stamped_when_they_change_hands_and_not_otherwise() {
-        let mut tracker = NoteTracker::new();
-        let ends = |t: &NoteTracker| (t.highest_held(), t.lowest_held());
-        assert_eq!(ends(&tracker), (None, None), "nothing down, no ends");
-
-        // A lone note is both ends, taken at its own note-on.
-        tracker.handle_event(on(1.0, 60));
-        assert_eq!(
-            tracker.highest_held(),
-            Some(HeldEnd {
-                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 60 },
-                since: 1.0
-            })
-        );
-        assert_eq!(
-            tracker.lowest_held(),
-            Some(HeldEnd {
-                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 60 },
-                since: 1.0
-            })
-        );
-
-        // A note inside the chord moves neither end, and must not restamp
-        // the ends it did not take.
-        tracker.handle_event(on(2.0, 55));
-        tracker.handle_event(on(3.0, 57));
-        assert_eq!(
-            tracker.highest_held(),
-            Some(HeldEnd {
-                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 60 },
-                since: 1.0
-            })
-        );
-        assert_eq!(
-            tracker.lowest_held(),
-            Some(HeldEnd {
-                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 55 },
-                since: 2.0
-            })
-        );
-
-        // Lifting the top hands the melody DOWN, at the moment of the lift
-        // rather than at the note-on of the voice that inherits it — which is
-        // older than the chord and would leave nothing to ease.
-        tracker.handle_event(off(4.0, 60));
-        assert_eq!(
-            tracker.highest_held(),
-            Some(HeldEnd {
-                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 57 },
-                since: 4.0
-            })
-        );
-
-        // Pruning the voice that handed it over is not a change of ends. This
-        // is the whole reason the stamp is kept here rather than read back off
-        // the released tail, which the prune empties.
-        tracker.prune(5.0, &Envelope { fade_time: 0.1, ..Envelope::default() });
-        assert_eq!(tracker.voices().count(), 2, "the released C4 is gone");
-        assert_eq!(
-            tracker.highest_held(),
-            Some(HeldEnd {
-                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 57 },
-                since: 4.0
-            })
-        );
-
-        // A retrigger with no off in between replaces the voice on a key it
-        // already had, and that is a new note taking the end, not the old one
-        // keeping it.
-        tracker.handle_event(on(6.0, 57));
-        assert_eq!(
-            tracker.highest_held(),
-            Some(HeldEnd {
-                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 57 },
-                since: 6.0
-            })
-        );
-
-        // A bend past a neighbour moves the end without any key changing:
-        // MPE and per-note tuning are why the ends are compared on pitch.
-        tracker.handle_event(NoteEvent {
-            source: crate::SourceId::DIRECT,
-            time: 7.0,
-            channel: 0,
-            note: 55,
-            kind: NoteEventKind::Tuning { semitones: 6.0 },
-        });
-        assert_eq!(
-            tracker.highest_held(),
-            Some(HeldEnd {
-                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 55 },
-                since: 7.0
-            })
-        );
-        assert_eq!(
-            tracker.lowest_held(),
-            Some(HeldEnd {
-                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 57 },
-                since: 7.0
-            })
-        );
-
-        // A transport reset takes every held voice, so it takes both ends.
-        tracker.session_notes_off(8.0);
-        assert_eq!(ends(&tracker), (None, None));
     }
 
     #[test]
@@ -1845,13 +1554,8 @@ mod tests {
         })
     }
 
-    /// A publication outage is not a note ending, but it IS a voice leaving the
-    /// held set — and a voice leaves it one way, carrying the ends it was
-    /// wearing and fading out behind them. The gap production reaches is the
-    /// stream-wide one (`publication::Publisher::lost`), so this is what a full
-    /// lane does to the whole picture: every held note used to vanish between
-    /// two frames, with no stamp to ease a mark out of and no trail mark left
-    /// where it had been sounding.
+    /// A publication outage removes uncertain held voices through the usual
+    /// release path, preserving their fade and eventual trail entry.
     #[test]
     fn a_publication_gap_releases_its_voices_rather_than_dropping_them() {
         let (a, b) = (SourceId(1), SourceId(2));
@@ -1863,7 +1567,6 @@ mod tests {
         assert_eq!(tracker.held_count(), 1, "a gap still clears the lost source's held state");
         let lost = *tracker.voices().find(|v| v.source == a).unwrap();
         assert_eq!(lost.state, VoiceState::Released { at: 1.0 }, "it fades rather than popping");
-        assert_eq!(lost.wore_high, Some(0.0), "and leaves wearing the end it held");
 
         // The whole-stream gap takes every source at once, through the same
         // sequence — it is the arm a full publication lane actually takes.
