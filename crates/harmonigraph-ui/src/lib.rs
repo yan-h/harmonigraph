@@ -352,13 +352,12 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     fold::paint(ui, &mut workspace.dock, &dock_style, &workspace.dial);
     if let Some(request) = workspace.interaction.analyzer_regions.request {
         let regions = &mut workspace.interaction.analyzer_regions;
-        regions.window = regions.window.max(area);
-        if let Some(change) = workspace.dial.resize_tab(
+        if let Some(change) = workspace.folds.resize_region(
             &workspace.dock,
             &dock_style,
-            panes::Tab::Spectral,
-            request.width_change,
-            regions.window,
+            &mut workspace.dial,
+            request.region,
+            request.width,
         ) {
             workspace.window_width_change += change;
             regions.land();
@@ -369,14 +368,12 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         // The default layout has every pane open, so the window gets back
         // whatever the folds being thrown away were holding — priced off the
         // dock they are in, so before it is replaced.
-        let whole = state.workspace.folds.clear(
+        state.workspace.window_width_change += state.workspace.folds.clear(
             &state.workspace.dock,
             &dock_style,
             &state.workspace.dial,
             area,
         );
-        state.workspace.window_width_change +=
-            whole.max(state.workspace.interaction.analyzer_regions.reset_width(area));
         state.workspace.dock = default_dock();
         state.workspace.interaction.analyzer_regions = Default::default();
         // The flags describe the tree being thrown away (see [`fold::Dial::forget`]).

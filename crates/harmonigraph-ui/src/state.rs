@@ -604,7 +604,7 @@ impl SharedState {
         ron::to_string(&UiPersist {
             version: UI_PERSIST_VERSION,
             dock: fold::saved_dock(&self.workspace.dock),
-            folds: self.workspace.folds.clone(),
+            layout_folds: self.workspace.folds.clone(),
             analyzer_regions: self.workspace.interaction.analyzer_regions.clone(),
             display_page: self.workspace.interaction.display_page,
             appearance: self.picture.appearance.clone(),
@@ -660,7 +660,8 @@ impl SharedState {
         // layout is dialled to is the fractions in the blob's own dock,
         // plus the widths its folds carry.
         self.workspace.dial.forget();
-        self.workspace.folds = persist.folds;
+        self.workspace.folds = persist.layout_folds;
+        self.workspace.folds.sanitize();
         self.workspace.dock = persist.dock;
         self.workspace.interaction.analyzer_regions = persist.analyzer_regions;
         self.workspace.interaction.analyzer_regions.sanitize();
@@ -787,7 +788,7 @@ pub(crate) struct UiPersist {
     // Workspace sections default independently. The dock is required because
     // it has no Default; appearance has its own container-level defaults.
     #[serde(default)]
-    pub(crate) folds: fold::Folds,
+    pub(crate) layout_folds: fold::Folds,
     #[serde(default)]
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     #[serde(default)]

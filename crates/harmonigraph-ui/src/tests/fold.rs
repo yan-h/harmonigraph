@@ -229,37 +229,118 @@ fn analyzer_region_folds_remain_usable_when_the_host_constrains_the_window() {
 }
 
 #[test]
-fn analyzer_vertical_region_folds_stay_inside_the_shared_window_height() {
-    for orientation in [SpectralOrientation::Top, SpectralOrientation::Bottom] {
-        let mut state = fresh();
-        state.picture.appearance.spectrum.orientation = orientation;
-        let mut h = DockHarness::new();
-        h.settle(&mut state);
-        let lattice = pane_body(&state, &panes::Tab::Lattice).unwrap();
-        for index in [0, 1, 0, 1] {
+fn analyzer_local_region_folds_restore_the_original_split() {
+    for orientation in [
+        SpectralOrientation::Top,
+        SpectralOrientation::Bottom,
+        SpectralOrientation::Left,
+        SpectralOrientation::Right,
+    ] {
+        for sequence in [&[0, 0][..], &[1, 1], &[0, 1, 0, 1], &[1, 0, 1, 0]] {
+            let mut state = fresh();
+            state.picture.appearance.spectrum.orientation = orientation;
+            if !orientation.is_time_vertical() {
+                // A stacked Analyzer also folds locally, without resizing the
+                // window. Exercise the same geometry in both depth axes.
+                state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Lattice]);
+                state.workspace.dock.main_surface_mut().split_below(
+                    egui_dock::NodeIndex::root(),
+                    0.5,
+                    vec![panes::Tab::Spectral],
+                );
+            }
+            let mut h = DockHarness::new();
+            h.settle(&mut state);
+            let lattice = pane_body(&state, &panes::Tab::Lattice).unwrap();
+            let id = egui::Id::new(("spectral-split", 0usize));
+            let before = h.ctx.read_response(id).unwrap().rect.center();
+            for &index in sequence {
+                region_click(&mut h, &mut state, index);
+                h.settle_folds(&mut state);
+                assert_eq!(pane_body(&state, &panes::Tab::Lattice).unwrap(), lattice);
+                assert_eq!(h.screen.width(), 1000.0);
+            }
+            assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
+            let after = h.ctx.read_response(id).unwrap().rect.center();
+            assert!(
+                before.distance(after) < 1.0,
+                "{orientation:?} {sequence:?}: {before:?} -> {after:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn analyzer_region_restore_repays_its_width_after_orientation_changes() {
+    for index in [0, 1] {
+        for roundtrip in [false, true] {
+            let mut state = fresh();
+            state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+            let mut h = DockHarness::new();
+            h.settle(&mut state);
+            let before = pane_body(&state, &panes::Tab::Spectral).unwrap();
+            let id = egui::Id::new(("spectral-split", 0usize));
+            let split = h.ctx.read_response(id).unwrap().rect.center();
             region_click(&mut h, &mut state, index);
             h.settle_folds(&mut state);
-            assert_eq!(pane_body(&state, &panes::Tab::Lattice).unwrap(), lattice);
-            assert_eq!(h.screen.width(), 1000.0);
+            state.picture.appearance.spectrum.orientation = SpectralOrientation::Top;
+            h.settle(&mut state);
+            // Debt and restoration geometry must survive a save even while
+            // the picture is using a different axis from the original fold.
+            let saved = state.save_persist();
+            state = fresh();
+            assert!(state.load_persist(&saved));
+            h.settle(&mut state);
+            if roundtrip {
+                state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+                h.settle(&mut state);
+            }
+            region_click(&mut h, &mut state, index);
+            h.settle_folds(&mut state);
+            assert!((h.screen.width() - 1000.0).abs() < 1.0);
+            let after = pane_body(&state, &panes::Tab::Spectral).unwrap();
+            assert!(
+                (after.width() - before.width()).abs() <= 1.0,
+                "region {index}, roundtrip {roundtrip}: {before:?} -> {after:?}, window {}",
+                h.screen.width()
+            );
+            if roundtrip {
+                assert!(h.ctx.read_response(id).unwrap().rect.center().distance(split) < 1.0);
+            }
         }
-        assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
     }
 }
 
 #[test]
 fn resetting_the_dock_restores_space_held_by_analyzer_regions() {
-    let mut state = fresh();
-    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
-    let mut h = DockHarness::new();
-    h.settle(&mut state);
-    region_click(&mut h, &mut state, 1);
-    h.settle_folds(&mut state);
-    assert!(h.screen.width() < 900.0);
-    state.workspace.reset_dock_layout();
-    h.frame(&mut state, vec![]);
-    h.settle_folds(&mut state);
-    assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
-    assert!((h.screen.width() - 1000.0).abs() < 1.0);
+    for fold_lattice_first in [None, Some(true), Some(false)] {
+        let mut state = fresh();
+        state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        if fold_lattice_first == Some(true) {
+            h.collapse_click(&mut state, panes::Tab::Lattice);
+        }
+        region_click(&mut h, &mut state, 1);
+        h.settle_folds(&mut state);
+        if fold_lattice_first == Some(false) {
+            h.collapse_click(&mut state, panes::Tab::Lattice);
+        }
+        assert!(h.screen.width() < 900.0);
+        let saved = state.save_persist();
+        state = fresh();
+        assert!(state.load_persist(&saved));
+        h.settle(&mut state);
+        state.workspace.reset_dock_layout();
+        h.frame(&mut state, vec![]);
+        h.settle_folds(&mut state);
+        assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
+        assert!(
+            (h.screen.width() - 1000.0).abs() < 1.0,
+            "order {fold_lattice_first:?}: {}",
+            h.screen.width()
+        );
+    }
 }
 
 /// The layout opens with the Console folded to its tab bar, and with nothing

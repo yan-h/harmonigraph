@@ -10,12 +10,9 @@ use crate::{panes::DOCKED_SURFACE, theme, PictureState};
 #[serde(default)]
 pub(crate) struct Regions {
     pub collapsed: [bool; 2],
-    depths: [f32; 2],
-    /// The appearance split these measured lengths belong to.
-    dial: f32,
-    vertical: bool,
-    /// Restore ceiling for a project saved with only an internal fold.
-    pub window: f32,
+    /// Last fully open composition. Temporary expansion into a folded region
+    /// never changes this snapshot or the appearance dial.
+    geometry: Option<Geometry>,
     #[serde(skip)]
     pub request: Option<Request>,
     #[serde(skip)]
@@ -27,15 +24,34 @@ pub(crate) struct Regions {
 #[derive(Clone, Copy)]
 pub(crate) struct Request {
     pub collapsed: [bool; 2],
-    pub width_change: f32,
+    pub region: usize,
+    /// `Some` closes a region, removing this width if the dock permits it;
+    /// `None` reopens it using the fold controller's recorded deduction.
+    pub width: Option<f32>,
+}
+
+#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct Geometry {
+    depths: [f32; 2],
+    dial: f32,
+    vertical: bool,
+}
+
+impl Geometry {
+    fn matches(&self, cfg: &crate::SpectrumConfig) -> bool {
+        self.dial == cfg.roll_fraction && self.vertical == cfg.orientation.is_time_vertical()
+    }
 }
 
 impl Regions {
     pub fn sanitize(&mut self) {
-        for depth in &mut self.depths {
-            *depth = if depth.is_finite() { depth.clamp(0.0, 16_384.0) } else { 0.0 };
-        }
-        self.window = if self.window.is_finite() { self.window.clamp(0.0, 32_768.0) } else { 0.0 };
+        self.geometry = self.geometry.filter(|geometry| {
+            geometry.depths.iter().all(|d| d.is_finite() && (0.0..=16_384.0).contains(d))
+                && geometry.depths.iter().sum::<f32>() > 0.0
+                && geometry.dial.is_finite()
+                && (0.0..=1.0).contains(&geometry.dial)
+        });
         self.restore = true;
     }
 
@@ -50,14 +66,6 @@ impl Regions {
     pub fn land(&mut self) {
         if let Some(request) = self.request.take() {
             self.landing = Some(request.collapsed);
-        }
-    }
-
-    pub fn reset_width(&self, area: f32) -> f32 {
-        if !self.vertical && self.collapsed.iter().any(|&closed| closed) {
-            (self.window - area).max(0.0)
-        } else {
-            0.0
         }
     }
 
@@ -80,35 +88,36 @@ impl Regions {
                 depth / (usize::from(folded[0]) + usize::from(folded[1] && history)).max(1) as f32,
             )
         };
-        if self.vertical != cfg.orientation.is_time_vertical()
-            || self.depths.iter().any(|d| !d.is_finite())
-            || self.depths.iter().sum::<f32>() <= 0.0
-        {
-            self.vertical = cfg.orientation.is_time_vertical();
-            self.dial = cfg.roll_fraction;
-            let share = super::axes::spectrum_share(&cfg);
-            self.depths = [depth * share, depth * (1.0 - share)];
-            self.restore = false;
-        }
+        let vertical = cfg.orientation.is_time_vertical();
+        let share = super::axes::spectrum_share(&cfg);
+        let geometry = self.geometry.filter(|geometry| geometry.matches(&cfg));
+        let mut drawn_depths =
+            geometry.map_or([depth * share, depth * (1.0 - share)], |g| g.depths);
         let rail_depths =
             [if folded[0] { rail } else { 0.0 }, if folded[1] && history { rail } else { 0.0 }];
         let available = (depth - rail_depths.iter().sum::<f32>()).max(0.0);
         if !folded[0] && !folded[1] {
-            if std::mem::take(&mut self.restore) && self.dial == cfg.roll_fraction {
-                gestures::restore_spectrum(state, self.depths);
+            if std::mem::take(&mut self.restore) {
+                if let Some(geometry) = geometry {
+                    gestures::restore_spectrum(state, geometry.depths);
+                }
             }
             super::hold_spectrum(state, rect.size());
             super::spectral_pane(ui, state, now, DOCKED_SURFACE, 1.0, Navigation::Docked);
             let split = gestures::spectrum_split(state, DOCKED_SURFACE);
-            self.depths = [depth * split, depth * (1.0 - split)];
-            self.dial = state.appearance.spectrum.roll_fraction;
+            drawn_depths = [depth * split, depth * (1.0 - split)];
+            self.geometry = Some(Geometry {
+                depths: drawn_depths,
+                dial: state.appearance.spectrum.roll_fraction,
+                vertical,
+            });
         } else {
             ui.allocate_rect(rect, Sense::hover());
             if !folded[0] {
-                self.depths[0] = available;
+                drawn_depths[0] = available;
             }
             if !folded[1] {
-                self.depths[1] = available;
+                drawn_depths[1] = available;
             }
             // The picture extends behind the collapsed region. Only the open
             // region gets a paint clip, so peaks neither flip nor rescale and
@@ -120,13 +129,13 @@ impl Regions {
             let mut virtual_rect = visible;
             let dir = axes.dir_depth();
             if folded[0] {
-                extend(&mut virtual_rect, -dir * self.depths[0]);
+                extend(&mut virtual_rect, -dir * drawn_depths[0]);
             }
             if folded[1] && history {
-                extend(&mut virtual_rect, dir * self.depths[1]);
+                extend(&mut virtual_rect, dir * drawn_depths[1]);
             }
             let total = Axes::new(virtual_rect, &cfg).depth_len();
-            let split = (self.depths[0] / total.max(1.0)).clamp(0.0, 1.0);
+            let split = (drawn_depths[0] / total.max(1.0)).clamp(0.0, 1.0);
             if !folded[0] || !folded[1] {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(virtual_rect));
                 child.set_clip_rect(visible.intersect(ui.clip_rect()));
@@ -164,16 +173,13 @@ impl Regions {
                 continue;
             }
             let direction = axes.dir_depth() * if (index == 0) == closed { 1.0 } else { -1.0 };
-            if control(ui, band, direction, closed, self.vertical, name, index)
-                && self.request.is_none()
+            if control(ui, band, direction, closed, vertical, name, index) && self.request.is_none()
             {
                 let mut collapsed = self.collapsed;
                 collapsed[index] = !closed;
-                let delta = (self.depths[index] - rail).max(0.0) * if closed { 1.0 } else { -1.0 };
-                self.request = Some(Request {
-                    collapsed,
-                    width_change: if self.vertical { 0.0 } else { delta },
-                });
+                let width = if vertical { 0.0 } else { (drawn_depths[index] - rail).max(0.0) };
+                self.request =
+                    Some(Request { collapsed, region: index, width: (!closed).then_some(width) });
             }
         }
     }
