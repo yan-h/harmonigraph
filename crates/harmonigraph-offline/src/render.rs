@@ -52,14 +52,6 @@ pub struct Stages {
 impl Stages {
     /// One line for the end of an export: the wall clock, the rate, and each
     /// stage as milliseconds per frame and a share of the loop.
-    ///
-    /// It must not contain the substring `" frames"`, and that is a CONTRACT
-    /// rather than a style choice. The plugin's Video pane drives its progress
-    /// bar off this same stderr, and `harmonigraph_record::parse_report` reads
-    /// a count out of any segment carrying that substring — so a summary line
-    /// spelling the word out would land in the bar as a frame count and
-    /// retarget it, after the render is over and nothing is left to correct
-    /// it. `the_timing_summary_avoids_the_progress_bars_substring` holds this.
     pub fn summary(&self, total: Duration) -> String {
         let Some(per) = (self.frames > 0).then_some(self.frames as f64) else {
             return format!("timing: nothing drawn, {:.1} s spent", total.as_secs_f64());
@@ -432,16 +424,9 @@ mod tests {
         }
     }
 
-    /// The timing line must not carry the substring the plugin's progress bar
-    /// is parsed by, and its shares must be of the loop it can account for.
-    ///
-    /// `harmonigraph_record::parse_report` pulls the token before `" frames"`
-    /// out of any segment of the renderer's stderr, which is how the Video
-    /// pane follows a render. This line is printed AFTER `done: N frames`, so
-    /// a `" frames"` in it would be the last word on the subject and would
-    /// leave the bar retargeted at whatever number happened to precede it.
+    /// Stage shares describe the measured render loop.
     #[test]
-    fn the_timing_summary_avoids_the_progress_bars_substring() {
+    fn the_timing_summary_accounts_for_the_render_loop() {
         // A plausible export rather than a blank one: every field is nonzero,
         // so every number in the line is actually formatted, and the total is
         // longer than the loop the way a real one is.
@@ -454,7 +439,6 @@ mod tests {
             emit: Duration::from_secs_f64(4.4),
         };
         let line = stages.summary(Duration::from_secs_f64(92.4));
-        assert!(!line.contains(" frames"), "{line}");
         assert!(line.contains("5320-frame"), "{line}");
         for stage in ["ui+tess", "submit", "readback", "emit"] {
             assert!(line.contains(stage), "{stage} is missing from {line}");

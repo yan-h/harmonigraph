@@ -23,27 +23,53 @@ pub(super) fn one_shadow(
     }
 }
 
-/// One marker for the fixtures below.
-///
-/// `strength` is the whole marker — its ink, its pool and the shadow its cross
-/// writes into the light are one number — so a fixture that names it has named
-/// all three. The GPU draws `pos`; without a node index, painter association
-/// uses `lattice_pos` (the origin here), falling back to loose placement when
-/// the scene has no home node there.
+/// A marker associated with an explicit node; `pos` is its GPU placement.
 pub(super) fn one_marker(
+    node: usize,
     pos: glam::Vec3,
     radius: f32,
     color: glam::Vec4,
     strength: f32,
 ) -> harmonigraph_scene::PlusInstance {
-    harmonigraph_scene::PlusInstance {
-        node: None,
-        lattice_pos: harmonigraph_core::LatticePos::ORIGIN,
-        pos,
-        radius,
-        color,
-        strength,
-    }
+    harmonigraph_scene::PlusInstance { node, pos, radius, color, strength }
+}
+
+/// A marker-only fixture needs a home node for painter order, even when that
+/// node draws nothing. These fixtures face the home sheet from +z; the
+/// anchor sits just behind it, ahead of the farther sheets, so markers retain
+/// their old place before home ink regardless of the billboard position.
+pub(super) fn standalone_marker(
+    nodes: &mut Vec<harmonigraph_scene::NodeInstance>,
+    pos: glam::Vec3,
+    radius: f32,
+    color: glam::Vec4,
+    strength: f32,
+) -> harmonigraph_scene::PlusInstance {
+    let node = nodes.len();
+    nodes.push(harmonigraph_scene::NodeInstance {
+        lattice_pos: harmonigraph_core::LatticePos::new(node as i32, 0, 0),
+        world_pos: glam::vec3(0.0, 0.0, -0.001),
+        color: glam::Vec4::ZERO,
+        activation: 0.0,
+        departing: false,
+        slice_progress: [1.0; 11],
+        octaves: [0.0; 11],
+        hovered: false,
+        on_home: true,
+        scale: 1.0,
+        comma: 0.0,
+        cents: 0.0,
+        melody_slots: 0,
+        bass_slots: 0,
+        melody_level: 0.0,
+        bass_level: 0.0,
+        melody_color: glam::Vec4::ZERO,
+        bass_color: glam::Vec4::ZERO,
+        audio_ring: 0.0,
+        glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 0.0, row: node as u32 },
+        trail: 0.0,
+    });
+    one_marker(node, pos, radius, color, strength)
 }
 
 /// A scene exercising every draw path: lit + idle + hovered nodes with
@@ -119,8 +145,20 @@ pub(super) fn parity_scene() -> Scene {
     // exercised both where the nodes composite over it and where it stands
     // alone. Different radii, because the size is per instance.
     let pluses = vec![
-        one_marker(Vec3::new(-1.8, -0.6, -0.3), 0.22, Vec4::new(0.16, 0.17, 0.20, 1.0), 0.55),
-        one_marker(Vec3::new(0.0, 0.0, 0.0), 0.13, Vec4::new(0.16, 0.17, 0.20, 1.0), 0.4),
+        standalone_marker(
+            &mut nodes,
+            Vec3::new(-1.8, -0.6, -0.3),
+            0.22,
+            Vec4::new(0.16, 0.17, 0.20, 1.0),
+            0.55,
+        ),
+        standalone_marker(
+            &mut nodes,
+            Vec3::new(0.0, 0.0, 0.0),
+            0.13,
+            Vec4::new(0.16, 0.17, 0.20, 1.0),
+            0.4,
+        ),
     ];
     let glow_rows = nodes.len() as u32;
     Scene {
@@ -824,7 +862,7 @@ pub(super) fn idle_scene() -> Scene {
         node.melody_level = 0.0;
         node.bass_level = 0.0;
         node.hovered = false;
-        node.on_home = i % 2 == 0;
+        node.on_home = i >= 6 || i % 2 == 0;
         node.trail = if i % 3 == 0 { 0.8 } else { 0.0 };
     }
     scene
@@ -861,7 +899,15 @@ pub(super) fn shadowed_markers(depth: f32, shadow: f32, taper_start: f32) -> Sce
     // multiplied in beside its own, and the darkness measured would be both.
     scene.pluses = [(2.6f32, 0.0f32), (-2.6, 0.0), (0.0, 2.6), (0.0, -2.6)]
         .into_iter()
-        .map(|(x, y)| one_marker(glam::Vec3::new(x, y, 0.0), 0.4, scene.lattice_ground, 1.0))
+        .map(|(x, y)| {
+            standalone_marker(
+                &mut scene.nodes,
+                glam::Vec3::new(x, y, 0.0),
+                0.4,
+                scene.lattice_ground,
+                1.0,
+            )
+        })
         .collect();
     scene
 }
@@ -886,8 +932,13 @@ pub(super) fn lone_shadowed_marker(arm: f32, shadow: f32, depth: f32) -> Scene {
 /// where an arm stops being solid, as a share of its length, 1 a square end.
 pub(super) fn lone_tapered_marker(arm: f32, shadow: f32, depth: f32, taper_start: f32) -> Scene {
     let mut scene = shadowed_markers(depth, shadow, taper_start);
-    scene.pluses =
-        vec![one_marker(glam::Vec3::new(LONE_OFFSET, 0.0, 0.0), arm, scene.lattice_ground, 1.0)];
+    scene.pluses = vec![standalone_marker(
+        &mut scene.nodes,
+        glam::Vec3::new(LONE_OFFSET, 0.0, 0.0),
+        arm,
+        scene.lattice_ground,
+        1.0,
+    )];
     scene
 }
 

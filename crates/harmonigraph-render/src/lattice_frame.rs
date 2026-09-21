@@ -22,67 +22,6 @@ fn push_plus(draws: &mut Vec<Draw>, at: u32) {
     }
 }
 
-/// The markers no node stands at, drawn where the whole field used to be:
-/// over the sheets behind the home one, under the home sheet itself.
-///
-/// See `from_scene` for what makes a marker loose and why it can only be one
-/// the caller built by hand.
-fn push_loose(draws: &mut Vec<Draw>, pluses: &mut Vec<GpuPlus>, loose: &[GpuPlus]) {
-    for &plus in loose {
-        push_plus(draws, pluses.len() as u32);
-        pluses.push(plus);
-    }
-}
-
-/// One marker per node, and which input markers that assignment claimed.
-/// This is rebuilt per frame; no association survives a node or marker edit.
-struct MarkerAssociation {
-    plus_of: Vec<Option<usize>>,
-    claimed: Vec<bool>,
-}
-
-impl MarkerAssociation {
-    fn new(scene: &Scene) -> Self {
-        let mut plus_of = vec![None; scene.nodes.len()];
-        // Normal derived scenes supply valid indices and never build this map.
-        // Hand-built or edited scenes retain the old position-based behavior:
-        // the last home node at a position owns its marker's depth.
-        let mut node_at = None;
-        for (p, plus) in scene.pluses.iter().enumerate() {
-            let node = plus
-                .node
-                .filter(|&i| {
-                    scene
-                        .nodes
-                        .get(i)
-                        .is_some_and(|n| n.on_home && n.lattice_pos == plus.lattice_pos)
-                })
-                .or_else(|| {
-                    let positions = node_at.get_or_insert_with(|| {
-                        scene
-                            .nodes
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, n)| n.on_home)
-                            .map(|(i, n)| (n.lattice_pos, i))
-                            .collect::<HashMap<_, _>>()
-                    });
-                    positions.get(&plus.lattice_pos).copied()
-                });
-            if let Some(i) = node {
-                plus_of[i] = Some(p);
-            }
-        }
-        // Last marker wins at one node. Read claims back from the final map:
-        // displaced duplicates must remain loose, in input order, not vanish.
-        let mut claimed = vec![false; scene.pluses.len()];
-        for &p in plus_of.iter().flatten() {
-            claimed[p] = true;
-        }
-        Self { plus_of, claimed }
-    }
-}
-
 impl LatticeCallback {
     pub(super) fn from_scene(
         scene: &Scene,
@@ -165,7 +104,6 @@ impl LatticeCallback {
             glow: [n.glow.level, n.glow.row as f32, 1.0, 1.0],
         };
 
-        let split = order.iter().position(|&(plane, _, _)| plane <= 0.0).unwrap_or(order.len());
         // A node that can paint nothing is not shipped at all. The shader
         // already discards it per fragment, but the billboard is deliberately
         // bigger than the node (QUAD_MARGIN and then some), so the discard is
@@ -212,19 +150,16 @@ impl LatticeCallback {
                 || g.params[2] > 0.0
                 || (g.octaves[0] | g.octaves[1] | g.octaves[2]) != 0
         };
-        let MarkerAssociation { plus_of, claimed } = MarkerAssociation::new(scene);
+        let mut plus_of = vec![None; scene.nodes.len()];
+        for (p, plus) in scene.pluses.iter().enumerate() {
+            debug_assert!(scene.nodes[plus.node].on_home, "markers belong to home nodes");
+            debug_assert!(plus_of[plus.node].is_none(), "one marker per node");
+            plus_of[plus.node] = Some(p);
+        }
         let to_plus = |d: &harmonigraph_scene::PlusInstance| GpuPlus {
             pos_radius: [d.pos.x, d.pos.y, d.pos.z, d.radius],
             color: [d.color.x, d.color.y, d.color.z, d.strength],
         };
-        let loose: Vec<GpuPlus> = scene
-            .pluses
-            .iter()
-            .enumerate()
-            .filter(|(p, _)| !claimed[*p])
-            .map(|(_, d)| to_plus(d))
-            .collect();
-
         // Where each name's glyphs sit in what the caller handed over, per
         // node, so the walk below can put a name at its own node's place in the
         // order rather than working that place out again afterwards. The cursor
@@ -384,18 +319,13 @@ impl LatticeCallback {
             });
         }
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
-        let mut loose_drawn = false;
         let breathes = scene.glow_timing.is_some()
             && scene.glow_reach > 0.0
             && scene.glow_strength > 0.0
             && atmosphere.enabled
             && atmosphere.breath_amount > 0.0
             && atmosphere.breath_speed > 0.0;
-        for (k, &(_, _, i)) in order.iter().enumerate() {
-            if k == split {
-                push_loose(&mut draws, &mut pluses, &loose);
-                loose_drawn = true;
-            }
+        for &(_, _, i) in &order {
             let mut instance = to_gpu(&scene.nodes[i]);
             let ships = paints(&instance);
             // The cross, whether or not the node it stands on draws anything:
@@ -432,12 +362,6 @@ impl LatticeCallback {
                 casters.push(shadow::caster_of(run, text_sigma, text.kernel, text.falloff));
             }
         }
-        // The home run can be empty and can run to the end of the order, in
-        // which case the walk never reached `split`.
-        if !loose_drawn {
-            push_loose(&mut draws, &mut pluses, &loose);
-        }
-
         LatticeCallback {
             pipeline_cache: None,
             instances,

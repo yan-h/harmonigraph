@@ -727,15 +727,10 @@ fn octaves_fade_independently() {
 }
 
 #[test]
-fn a_note_shorter_than_the_fade_still_lights_every_layer_fully() {
-    // The whole point of one duration driving both ends: a stab is not dimmer
-    // than a held note, on any layer. Its arrival lands whatever the key did
-    // and the fade runs from there (`Voice::release_level`) — so the cost of
-    // playing fast is time at full, never brightness.
-    //
-    // The layers are checked TOGETHER because the failure this pins is a
-    // product of two overlapping ramps, and each layer multiplies its own
-    // pair: the disc would peak below full, and the ring below that.
+fn initial_voice_envelopes_reach_full_even_for_short_notes() {
+    // Derivation supplies the voice envelopes used by the audio floor and
+    // marker/name calculations. Final lattice motion reverses at key-up;
+    // that separate behavior is covered by the shared motion tests.
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
     // Down for a twelfth of the Fade — a thirty-second note against a fade
@@ -749,15 +744,13 @@ fn a_note_shorter_than_the_fade_still_lights_every_layer_fully() {
     let node = origin_node(&scene);
     assert_eq!(node.activation, 1.0, "the core reaches full on a note held for a twelfth of it");
     assert_eq!(node.octaves[MIDDLE_C_SLOT], 1.0, "and the octave glyph with it");
-    assert_eq!(node.melody_level, 1.0, "and the melody mark");
-    assert_eq!(node.bass_level, 1.0, "and the bass mark — a lone note wears both ends");
 
     // And the whole fade is still ahead of it: the departure starts where the
     // arrival landed, not back at the key.
     let mid = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.8);
     let node = origin_node(&mid);
     assert!((node.activation - 0.5).abs() < 1e-5, "half a fade on, half gone: {}", node.activation);
-    assert_eq!(node.melody_level, node.activation, "every layer on the one clock");
+    assert_eq!(node.octaves[MIDDLE_C_SLOT], node.activation);
 }
 
 #[test]
@@ -780,7 +773,9 @@ fn one_fade_time_carries_every_layer_of_the_node() {
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
     let view = plain_view();
     tracker.prune(3.0, &view.envelope(&frame));
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 3.0);
+    let tuning = Tuning::default();
+    let mut scene = scene_of(&tracker, &tuning, &view, &frame, 3.0);
+    NodeMotion::default().step(&mut scene, &tracker, &tuning, &view, &view.envelope(&frame), 3.0);
 
     let half = |what: &str, v: f32| {
         assert!((v - 0.5).abs() < 1e-5, "{what} should be half-faded, got {v}");
@@ -796,11 +791,7 @@ fn one_fade_time_carries_every_layer_of_the_node() {
     half("the bass mark", origin.bass_level);
     assert_eq!(origin.bass_level, origin.octaves[MIDDLE_C_SLOT], "ring and sector leave as one");
     assert_eq!(origin.melody_slots, 0, "C4 was never the melody");
-    // And the melody mark is on G's node, on the same envelope. G also leaves
-    // wearing the BASS: C4's key came up first, which left G the lone note
-    // down and so both ends of a one-note chord for the instant before its
-    // own key followed. A momentary crowning, and what the Delay exists to
-    // filter — see `the_delay_is_what_keeps_a_released_chord_from_smearing_rings`.
+    // G's melody mark leaves on the same envelope.
     let melody = node_at(&scene, LatticePos::new(1, 0, 0));
     assert_eq!(melody.melody_slots, 1 << MIDDLE_C_SLOT, "G4 left wearing the melody end");
     half("the melody mark", melody.melody_level);
@@ -808,74 +799,43 @@ fn one_fade_time_carries_every_layer_of_the_node() {
 
 #[test]
 fn the_delay_is_what_keeps_a_released_chord_from_smearing_rings() {
-    // The bug this guards was a chord release smearing a melody/bass mark
-    // across most pitch classes: lifting the keys one at a time re-crowns a
-    // new momentary extreme on every lift, and each of those crownings rings.
-    //
-    // Rings are no longer held-only — they fade out with their note — so what
-    // stops the smear is no longer the release itself but the DELAY: a note
-    // that wore an end for a millisecond never cleared the threshold while it
-    // was down, and the threshold is answered there, so its ramp running on
-    // afterwards carries nothing. This pins both halves, because at a delay of
-    // 0 there is no threshold and every momentary crowning does ring.
-    let chord = [60u8, 62, 64, 65, 67]; // C D E F G
     let ring_count = |mark_delay: f32| {
         let mut tracker = NoteTracker::new();
-        for &note in &chord {
+        for note in [60, 62, 64, 65, 67] {
             tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
         }
-        // Held for a second — long enough that the chord's REAL ends clear
-        // any delay worth setting — and then lifted one key at a time,
-        // top-down, each a hair apart. Only the notes crowned by those lifts
-        // wore an end briefly.
-        for (i, &note) in [67u8, 65, 64, 62, 60].iter().enumerate() {
-            tracker.handle_event(NoteEvent::off(
-                1.0 + 0.001 * (i as f64 + 1.0),
-                SourceId::DIRECT,
-                0,
-                note,
-            ));
-        }
-        // Mid-fade, well within one fade time — and past the arrival the same
-        // second bought, so the discs below are on their way out.
         let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
         let view = ViewConfig { mark_delay, ..plain_view() };
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.5);
-        assert!(scene.nodes.iter().any(|n| n.activation > 0.0), "discs still fading");
-        // Distinct PITCH CLASSES wearing a ring, not nodes: one class lights
-        // every lattice position that spells it, so counting nodes counts the
-        // window's shape rather than how many notes are ringing.
-        let mut ringing: Vec<i32> = scene
-            .nodes
-            .iter()
-            .filter(|n| n.melody_level > 0.0 || n.bass_level > 0.0)
-            .map(|n| n.cents.round() as i32)
-            .collect();
+        let tuning = Tuning::default();
+        let mut motion = NodeMotion::default();
+        let mut ringing = Vec::new();
+        let mut sample = |tracker: &NoteTracker, now| {
+            let mut scene = scene_of(tracker, &tuning, &view, &frame, now);
+            motion.step(&mut scene, tracker, &tuning, &view, &view.envelope(&frame), now);
+            ringing.extend(
+                scene
+                    .nodes
+                    .iter()
+                    .filter(|n| n.melody_level > 0.0 || n.bass_level > 0.0)
+                    .map(|n| n.cents.round() as i32),
+            );
+        };
+        sample(&tracker, 2.0);
+        // Deliver and sample each key-up before the next one. A momentary
+        // end's carried mark reverses immediately, so measure it while it
+        // exists rather than expecting a long release tail afterwards.
+        for (i, note) in [67, 65, 64, 62, 60].into_iter().enumerate() {
+            let off = 2.0 + 0.001 * (i as f64 + 1.0);
+            tracker.handle_event(NoteEvent::off(off, SourceId::DIRECT, 0, note));
+            sample(&tracker, off + 0.0005);
+        }
         ringing.sort_unstable();
         ringing.dedup();
         ringing.len()
     };
-
-    // A delay longer than the key-lifts are apart: only the two notes that
-    // really wore an end — the top and the bottom of the chord as played —
-    // are left ringing their way out. The three that were the melody for a
-    // millisecond each never earned a ring and do not grow one while fading.
-    assert_eq!(ring_count(0.2), 2, "a delay leaves only the ends that were really worn");
-
-    // And with no delay there is no threshold to apply: every crowning rings,
-    // including the momentary ones, and each leaves on its own note's fade.
-    // Recorded rather than endorsed — this is what the Delay bar buys off.
-    assert_eq!(ring_count(0.0), 5, "at delay 0 every momentary extreme rings");
-
-    // Which is why 0 is not what either door opens on. The bar can be dragged
-    // there deliberately; what a fresh view and a blob with no key load is a
-    // wait that rejects these lifts, so the smear is off by default rather
-    // than one setting away from being on.
-    assert_eq!(
-        ring_count(ViewConfig::default().mark_delay),
-        2,
-        "the default wait is what keeps the smear off out of the box",
-    );
+    assert_eq!(ring_count(0.2), 2, "only the sustained ends clear the wait");
+    assert_eq!(ring_count(0.0), 5, "without delay every momentary extreme rings");
+    assert_eq!(ring_count(ViewConfig::default().mark_delay), 2, "the default rejects flicker");
 }
 
 #[test]
@@ -1165,7 +1125,8 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
     // 12-TET, the origin 0.4c flat, matched within the default 0.5c tolerance.
     let tuning = Tuning::from_cents(-0.4, 700.0, 400.0, 1000.0, 0.5);
     let view = ViewConfig::default();
-    let scene = scene_of(&held(60), &tuning, &view, &plain_frame(), 0.5);
+    let tracker = held(60);
+    let mut scene = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.5);
     let origin = origin_node(&scene);
 
     let node_cents = tuning.pitch_class(LatticePos::ORIGIN).to_cents();
@@ -1185,6 +1146,15 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
     // And the mark takes the colour of the sector it extends, so a slot an
     // octave out is also a mark a seventh of the ramp away from the disc it
     // sits on -- the mismatch the one colour table exists to have ruled out.
+    NodeMotion::default().step(
+        &mut scene,
+        &tracker,
+        &tuning,
+        &view,
+        &view.envelope(&plain_frame()),
+        0.5,
+    );
+    let origin = origin_node(&scene);
     let marked: Vec<usize> =
         (0..OCTAVE_SLOTS).filter(|&s| origin.melody_slots >> s & 1 == 1).collect();
     assert_eq!(marked, lit, "the melody mark names the octave that sounds");

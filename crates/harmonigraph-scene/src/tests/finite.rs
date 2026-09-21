@@ -302,7 +302,7 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.many("octave_layout.bounds", *bounds);
 
     for (i, plus) in pluses.iter().enumerate() {
-        let PlusInstance { node: _, lattice_pos: _, pos, radius, color, strength } = plus;
+        let PlusInstance { node: _, pos, radius, color, strength } = plus;
         f.vec3(&format!("pluses[{i}].pos"), *pos);
         f.one(format!("pluses[{i}].radius"), *radius);
         f.vec4(&format!("pluses[{i}].color"), *color);

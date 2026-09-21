@@ -203,24 +203,24 @@ impl ConfigReducer {
         self.judged
     }
 
-    /// Restore a legacy adapter's judgement cache without opening any verdict.
-    /// Audio callers never infer commands by comparing raw parameter snapshots.
-    pub fn set_judged(&mut self, judged: [Option<(i32, i32, i32)>; Comma::COUNT]) {
-        self.judged = judged;
+    /// Ask the next display observation to judge this comma again.
+    pub fn recheck(&mut self, comma: Comma) {
+        self.judged[comma.index()] = None;
+    }
+
+    /// A new display or restored appearance has no verdict about its tuning yet.
+    pub fn recheck_all(&mut self) {
+        self.judged = [None; Comma::COUNT];
     }
 
     /// Synchronous display adapter only. CLAP must submit explicit commands;
     /// polling these raw values there would lose automation and commit identity.
-    pub fn sync_display(
-        &mut self,
-        raw: Tuning,
-        modes: TuningModes,
-        judged: [Option<(i32, i32, i32)>; Comma::COUNT],
-    ) -> bool {
+    pub fn sync_display(&mut self, raw: Tuning, modes: TuningModes, policy: PolicyConfig) -> bool {
         self.raw = raw;
         self.modes = modes;
-        self.judged = judged;
-        self.apply(ConfigMutation::Edit(ConfigEdit::default()))
+        // Policy and modes arrive together: resolving a policy edit sooner
+        // would consume a pending Auto recheck against the old display modes.
+        self.apply(ConfigMutation::Edit(ConfigEdit { policy: Some(policy), ..Default::default() }))
     }
 
     /// Returns false only on revision exhaustion. The caller retains its command

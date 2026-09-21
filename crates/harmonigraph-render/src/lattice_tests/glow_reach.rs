@@ -312,14 +312,27 @@ fn the_glow_blend_says_how_separate_a_node_keeps_its_colours() {
 /// Byte-identical rather than nearly so, which is what a cleared target and a
 /// draw discarding every fragment are worth together.
 #[test]
-fn a_lattice_with_no_node_grows_no_glow() {
+fn a_lattice_with_only_marker_anchors_grows_no_glow() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
     let at = |reach: f32| -> Scene {
         let mut scene = parity_scene();
+        let markers = std::mem::take(&mut scene.pluses);
         scene.nodes.clear();
+        scene.pluses = markers
+            .into_iter()
+            .map(|marker| {
+                standalone_marker(
+                    &mut scene.nodes,
+                    marker.pos,
+                    marker.radius,
+                    marker.color,
+                    marker.strength,
+                )
+            })
+            .collect();
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
         scene

@@ -440,6 +440,7 @@ fn a_culled_home_nodes_name_draws_over_the_markers_behind_it() {
     // The hovered one is silent and first, so it is culled before anything at
     // all has shipped — the case where a count has nothing to distinguish.
     scene.nodes = vec![node(0.0), node(1.0)];
+    scene.pluses = vec![one_marker(0, glam::Vec3::ZERO, 0.2, scene.lattice_ground, 1.0)];
     let rect = [0.0, 0.0, 1.0, 1.0];
     let glyph = GlyphInstance { rect, sdf_rect: rect, ..crate::text::tests::glyph() };
     let call = LatticeCallback::from_scene(

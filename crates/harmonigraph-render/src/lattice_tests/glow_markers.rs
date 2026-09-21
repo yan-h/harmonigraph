@@ -122,8 +122,13 @@ fn a_crosss_shadow_is_worth_its_ink() {
     // node's, `shadowed_markers` putting no other light in the frame.
     let at = |strength: f32, depth: f32| -> Scene {
         let mut scene = shadowed_markers(depth, 0.8, 1.0);
-        scene.pluses =
-            vec![one_marker(glam::Vec3::new(2.6, 0.0, 0.0), 0.4, scene.lattice_ground, strength)];
+        scene.pluses = vec![standalone_marker(
+            &mut scene.nodes,
+            glam::Vec3::new(2.6, 0.0, 0.0),
+            0.4,
+            scene.lattice_ground,
+            strength,
+        )];
         scene
     };
     let bare = |shooter: &mut Shooter, depth: f32| {
@@ -341,7 +346,15 @@ fn a_markers_shadow_does_not_show_through_its_tapered_arm() {
         let scene = |depth: f32, taper: f32| {
             let mut scene =
                 with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, depth, taper), kernel);
+            let marker = scene.pluses[0];
             scene.nodes.clear();
+            scene.pluses = vec![standalone_marker(
+                &mut scene.nodes,
+                marker.pos,
+                marker.radius,
+                marker.color,
+                marker.strength,
+            )];
             scene.glow_reach = 0.0;
             scene
         };
@@ -587,8 +600,13 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
         if marker {
-            scene.pluses =
-                vec![one_marker(glam::Vec3::new(3.0, 0.0, 0.0), 0.8, scene.lattice_ground, 1.0)];
+            scene.pluses = vec![standalone_marker(
+                &mut scene.nodes,
+                glam::Vec3::new(3.0, 0.0, 0.0),
+                0.8,
+                scene.lattice_ground,
+                1.0,
+            )];
         }
         scene
     };

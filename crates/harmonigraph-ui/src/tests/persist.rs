@@ -1535,10 +1535,15 @@ fn loading_a_project_re_opens_the_comma_verdicts() {
     assert_ne!(saved, without_mode, "detect removal must have hit");
 
     // This session has already judged the tuning it is sitting at.
-    state.picture.runtime.temper_judged = [Some((0, 0, 0)); Comma::COUNT];
+    state.picture.runtime.config_reducer.sync_display(
+        harmonigraph_core::Tuning::default(),
+        Default::default(),
+        Default::default(),
+    );
+    assert!(state.picture.runtime.config_reducer.judged().iter().all(Option::is_some));
     state.load_persist(&saved);
     assert_eq!(
-        state.picture.runtime.temper_judged,
+        state.picture.runtime.config_reducer.judged(),
         [None; Comma::COUNT],
         "a loaded project must be judged on its own terms",
     );

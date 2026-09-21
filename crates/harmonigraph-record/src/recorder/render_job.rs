@@ -1,6 +1,7 @@
 //! Render requests, per-take cancellation, subprocess lifetime and progress.
 
 use super::home_dir;
+use harmonigraph_take::RenderProgress;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -233,38 +234,6 @@ impl Progress {
     }
 }
 
-/// What one segment of the renderer's stderr says about how far it has got.
-enum Report {
-    /// How many frames the render is composing, from the line it opens with.
-    Total(u64),
-    /// Frames written of frames planned, from the counter it rewrites as it
-    /// goes.
-    Frames { done: u64, total: u64 },
-}
-
-/// Read a progress report out of one line of `harmonigraph-offline`'s stderr,
-/// if that is what it is.
-///
-/// **This parses another binary's human-readable output**, which is a contract
-/// worth naming: the renderer opens with `... -> 5400 frames at 60 fps ...`
-/// and then rewrites `  120/5400 frames (2%)` in place. Both are matched here
-/// off the count that precedes ` frames`. The alternative — a `--progress`
-/// flag emitting something machine-shaped — fails far worse when the installed
-/// renderer is older than the plugin: it would reject the unknown flag and
-/// render nothing at all, where a format this no longer recognizes just leaves
-/// the bar empty and everything else working.
-fn parse_report(segment: &str) -> Option<Report> {
-    // The count is the last token before ` frames`, so a take path with a
-    // slash (or a space) in it has nothing to say here.
-    let token = segment.split_once(" frames")?.0.split_whitespace().next_back()?;
-    match token.split_once('/') {
-        Some((done, total)) => {
-            Some(Report::Frames { done: done.parse().ok()?, total: total.parse().ok()? })
-        }
-        None => Some(Report::Total(token.parse().ok()?)),
-    }
-}
-
 /// Longest stderr run with no separator in it that is worth keeping. Past this
 /// the segment is not a line the renderer meant to print, and buffering it
 /// only costs memory.
@@ -319,17 +288,16 @@ fn follow(mut stderr: impl std::io::Read, progress: &Progress) -> Tail {
     let take = |segment: &mut Vec<u8>, tail: &mut Tail| {
         let text = String::from_utf8_lossy(segment);
         let text = text.trim();
-        match parse_report(text) {
-            Some(Report::Frames { done, total }) => {
+        match RenderProgress::parse_record(text) {
+            Some(RenderProgress { done, total }) => {
                 progress.done.store(done, Ordering::Relaxed);
                 progress.total.store(total, Ordering::Relaxed);
             }
-            Some(Report::Total(total)) => progress.total.store(total, Ordering::Relaxed),
             // Diagnostics, warnings, the renderer's own error. The last of
             // them is the status line's if the render fails; the first
             // `warning:` among them is its own, because success discards the
             // last and a warned-about export still needs to say so.
-            None if !text.is_empty() => {
+            None if !text.is_empty() && !text.starts_with(RenderProgress::PREFIX) => {
                 if tail.warning.is_none() && text.starts_with("warning:") {
                     tail.warning = Some(text.to_owned());
                 }

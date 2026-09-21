@@ -3,12 +3,26 @@
 //! released.
 
 use super::harness::*;
-use crate::derive::held_extremes;
 use crate::*;
 use harmonigraph_core::{NoteEvent, NoteTracker, PitchClass, SourceId, Tuning};
 
+/// Compose the same shared motion pass as the UI, keeping state across samples.
+fn motion_scene(
+    motion: &mut NodeMotion,
+    tracker: &NoteTracker,
+    tuning: &Tuning,
+    view: &ViewConfig,
+    frame: &FrameParams,
+    now: f64,
+) -> Scene {
+    let mut scene = scene_of(tracker, tuning, view, frame, now);
+    motion.step(&mut scene, tracker, tuning, view, &view.envelope(frame), now);
+    scene
+}
+
 /// Play `notes` on channel 0 and derive a scene marking both extremes.
 fn marked_scene(notes: &[u8]) -> Scene {
+    let mut motion = NodeMotion::default();
     let mut tracker = NoteTracker::new();
     for &note in notes {
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
@@ -18,7 +32,7 @@ fn marked_scene(notes: &[u8]) -> Scene {
     // not to be drawn yet, and a slot bit asserted over a node drawing nothing
     // says less than it reads as saying.
     let view = plain_view();
-    scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0)
+    motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &plain_frame(), 0.0)
 }
 
 /// A note-on and a note-off on channel 0, for the timed sequences below.
@@ -126,6 +140,7 @@ fn a_lone_held_note_is_marked_as_both_ends() {
 
 #[test]
 fn same_key_sources_mark_their_own_emitted_pitch() {
+    let mut motion = NodeMotion::default();
     use harmonigraph_core::{NoteEventKind, SourceId};
     let mut tracker = NoteTracker::new();
     for (source, semitones) in [(SourceId(1), 0.0), (SourceId(2), 7.0)] {
@@ -140,7 +155,7 @@ fn same_key_sources_mark_their_own_emitted_pitch() {
     }
     let view = plain_view();
     let tuning = Tuning::default();
-    let scene = scene_of(&tracker, &tuning, &view, &plain_frame(), 1.0);
+    let scene = motion_scene(&mut motion, &tracker, &tuning, &view, &plain_frame(), 1.0);
     assert!(marked_slots(&scene, true).1 > 0 && marked_slots(&scene, false).1 > 0);
     for node in &scene.nodes {
         let pitch = tuning.pitch_class(node.lattice_pos);
@@ -177,10 +192,11 @@ fn a_chord_inside_one_pitch_class_separates_on_the_octave_layer() {
 
 #[test]
 fn a_handoff_inside_one_pitch_class_marks_whichever_end_is_stronger() {
+    let mut motion = NodeMotion::default();
     // C4 and C5 share a pitch class, so they light ONE node — and once C5 is
-    // released BOTH wear a melody: C4 the live end it inherited, C5 the stamp
-    // it left with. A node carries one mark at one level, so it takes the
-    // stronger voice entire, slot and level together (see `derive::Mark`).
+    // released BOTH wear a melody: C4 the end it inherited, C5 its carried
+    // level on the way out. A node carries one mark at one level, so it takes the
+    // stronger carried slot and its level together.
     //
     // Admitting both slots under the one level is the thing being ruled out:
     // it draws the loser's link at the winner's brightness, which says the
@@ -195,8 +211,8 @@ fn a_handoff_inside_one_pitch_class_marks_whichever_end_is_stronger() {
     // The key-up is a whole duration past the note-on, so the leaving mark is
     // leaving and nothing here is still arriving.
     let frame = attack_frame();
-    let at = |now: f64| {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+    let mut at = |now: f64| {
+        let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &frame, now);
         *origin_node(&scene)
     };
 
@@ -248,10 +264,10 @@ fn a_handoff_inside_one_pitch_class_marks_whichever_end_is_stronger() {
 /// Worth a test because it is the one case the mark's shape cannot speak for.
 /// Both ends draw in one strip, so which is which is read off which slice each
 /// extends — the higher one being the melody — and that ordering holds for LIVE
-/// ends by construction. A released voice claims each end from its own stamp
-/// (`wore_high`/`wore_low`), which is what puts a fading melody underneath.
+/// ends by construction. A departing mark carries its previous level,
+/// which is what puts a fading melody underneath.
 ///
-/// C3 held alone wears both ends, so its release stamps both. C5 and E5 then
+/// C3 held alone wears both ends, so its release carries both. C5 and E5 then
 /// come in under it: E5 is the live melody and a different pitch class, so it
 /// is a different node entirely; C5 is the live bass and shares C3's class, so
 /// the two land on ONE node. Once C5's ease passes C3's release the bass moves
@@ -265,6 +281,7 @@ fn a_handoff_inside_one_pitch_class_marks_whichever_end_is_stronger() {
 /// the DAW.
 #[test]
 fn a_released_end_can_mark_a_lower_slice_than_the_live_one() {
+    let mut motion = NodeMotion::default();
     let mut tracker = NoteTracker::new();
     tracker.handle_event(on(0.0, 48));
     tracker.handle_event(off(1.0, 48));
@@ -272,14 +289,13 @@ fn a_released_end_can_mark_a_lower_slice_than_the_live_one() {
     tracker.handle_event(on(1.0, 76));
     let view = delayed_view(0.0);
     let frame = attack_frame();
-    let at = |now: f64| {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+    let mut at = |now: f64| {
+        let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &frame, now);
         *origin_node(&scene)
     };
 
-    // Half way through, the two claimants are level and the bass is still C3's
-    // own slot — one slice wearing both ends, which is the ordinary picture.
-    let level = at(1.0 + ATTACK * 0.5);
+    // Before the crossover, C3 still carries both ends.
+    let level = at(1.0 + ATTACK * 0.25);
     assert_eq!(level.melody_slots, level.bass_slots, "both ends are still C3's");
 
     // Three quarters through, C5's ease has passed C3's release and the bass
@@ -309,6 +325,7 @@ fn a_released_end_can_mark_a_lower_slice_than_the_live_one() {
 /// the wait was there to reject — a mark on a note that never earned one.
 #[test]
 fn an_end_dropped_inside_the_delay_does_not_mark_the_octave_that_replaced_it() {
+    let mut motion = NodeMotion::default();
     const DELAY: f64 = 0.2;
     let mut tracker = NoteTracker::new();
     // C4 and C5 hold the node; C6 takes the melody for less than the wait.
@@ -317,16 +334,13 @@ fn an_end_dropped_inside_the_delay_does_not_mark_the_octave_that_replaced_it() {
     tracker.handle_event(on(0.5, 84));
     tracker.handle_event(off(0.55, 84));
     let view = delayed_view(DELAY as f32);
-    // Long enough that C6 is still fading at the sample below — the released
-    // tail is where this test's rejected voice has to be for the mask to be
-    // asked about it at all. One duration for both ends means that is a
-    // statement about how long C6 has been gone, not just about the fade.
+    // The motion pass retains the rejected handoff through its event history.
     const SPAN: f64 = 0.4;
     let frame = FrameParams { fade_time: SPAN as f32, ..FrameParams::default() };
     // C5 retook the melody at 0.55; one wait and one ease later its mark is
-    // whole, and the C6 that came and went inside the wait is still in the
-    // tracker's released tail.
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 0.55 + DELAY + SPAN);
+    // whole, with C6's rejected handoff in the replayed history.
+    let scene =
+        motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &frame, 0.55 + DELAY + SPAN);
     let origin = origin_node(&scene);
     // Sampled at the ramp's own endpoint, which the delay puts a sum of three
     // f64s away from a round number — so the claim is "up", not a bit pattern.
@@ -345,13 +359,14 @@ fn an_end_dropped_inside_the_delay_does_not_mark_the_octave_that_replaced_it() {
 /// would read as a second thing happening.
 #[test]
 fn a_lone_notes_mark_fades_out_with_it() {
+    let mut motion = NodeMotion::default();
     let mut tracker = NoteTracker::new();
     tracker.handle_event(on(0.0, 60));
     tracker.handle_event(off(1.0, 60));
     let view = delayed_view(0.0);
     let frame = attack_frame();
-    let at = |now: f64| {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+    let mut at = |now: f64| {
+        let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &frame, now);
         let n = origin_node(&scene);
         (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
     };
@@ -364,15 +379,11 @@ fn a_lone_notes_mark_fades_out_with_it() {
     assert_eq!(at(1.0 + ATTACK), (0.0, 0.0, 0.0), "gone at the end of the fade");
 }
 
-/// A note shorter than its arrival leaves its mark LEVEL with the sector it
-/// extends, the whole way through. The mark's ramp runs on past the key
-/// exactly as the disc's does; frozen where the key-up found it, a staccato
-/// note would mark at a fraction of the octave it names until it was gone
-/// — one layer disagreeing with the next about how fast the note arrived,
-/// which is what a shared curve is there to prevent. Both reach FULL on the
-/// way (`Voice::release_level`), so the level they agree on is the whole one.
+/// A short note reverses its carried level at key-up, with its marks and
+/// octave sector leaving together.
 #[test]
 fn a_note_shorter_than_its_arrival_still_marks_level_with_its_sector() {
+    let mut motion = NodeMotion::default();
     let mut tracker = NoteTracker::new();
     tracker.handle_event(on(0.0, 60));
     // Lifted a third of the way up the ramp, so a frozen reading and a running
@@ -380,22 +391,22 @@ fn a_note_shorter_than_its_arrival_still_marks_level_with_its_sector() {
     tracker.handle_event(off(ATTACK / 3.0, 60));
     let view = delayed_view(0.0);
     let frame = attack_frame();
-    let mark = |now: f64| {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+    let mut mark = |now: f64| {
+        let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &frame, now);
         let n = *origin_node(&scene);
         (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
     };
 
-    for step in 1..=6 {
+    let mut previous = mark(ATTACK / 3.0).0;
+    assert!(previous > 0.0);
+    for step in 2..=6 {
         let now = ATTACK * f64::from(step) / 3.0;
         let (melody, bass, octave) = mark(now);
         assert_eq!(melody, octave, "at {now}s the mark and the sector it extends disagree");
         assert_eq!(melody, bass, "and a lone note's two marks leave together");
+        assert!(melody <= previous, "the mark reverses at key-up");
+        previous = melody;
     }
-    // And it is a rising ramp being read rather than a flat one: the note goes
-    // on getting brighter after its own key-up, which is the whole reason the
-    // attack outlives the key.
-    assert!(mark(ATTACK).0 > mark(ATTACK / 3.0).0, "the mark still climbs past the key");
 }
 
 /// The Delay stays a THRESHOLD now that a mark outlives its key. An end
@@ -404,6 +415,7 @@ fn a_note_shorter_than_its_arrival_still_marks_level_with_its_sector() {
 /// there has nothing to carry.
 #[test]
 fn an_end_dropped_inside_the_delay_is_never_marked_on_its_way_out() {
+    let mut motion = NodeMotion::default();
     const DELAY: f64 = 0.5;
     let mut tracker = NoteTracker::new();
     tracker.handle_event(on(0.0, 60));
@@ -413,7 +425,7 @@ fn an_end_dropped_inside_the_delay_is_never_marked_on_its_way_out() {
     let view = delayed_view(DELAY as f32);
     let frame = FrameParams { fade_time: 4.0, ..FrameParams::default() };
     for now in [0.2, 0.5, 1.0, 2.0, 3.0] {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+        let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &frame, now);
         let n = origin_node(&scene);
         assert_eq!(n.melody_level, 0.0, "a mark appeared at {now}s on a note that never had one");
         assert_eq!(n.bass_level, 0.0, "and a bass mark at {now}s");
@@ -422,6 +434,7 @@ fn an_end_dropped_inside_the_delay_is_never_marked_on_its_way_out() {
 
 #[test]
 fn a_fresh_mark_eases_in_with_the_octave_it_links_to() {
+    let mut motion = NodeMotion::default();
     // A mark arriving at full the frame its note claims an end is the
     // jumpiest thing on the node, since the octave sector underneath it
     // eases in. Both ride the one ramp, so a note's outer layer arrives
@@ -432,8 +445,9 @@ fn a_fresh_mark_eases_in_with_the_octave_it_links_to() {
     // C4: the origin node, in middle C's octave slot.
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
     let view = delayed_view(0.0);
-    let at = |now: f64| {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &attack_frame(), now);
+    let mut at = |now: f64| {
+        let scene =
+            motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &attack_frame(), now);
         let n = origin_node(&scene);
         (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
     };
@@ -450,6 +464,7 @@ fn a_fresh_mark_eases_in_with_the_octave_it_links_to() {
 
 #[test]
 fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
+    let mut motion = NodeMotion::default();
     // Hold C4 and G4, then lift the top: the melody drops to C4, whose own
     // note-on is long past. Easing from THAT would be no ease at all — the
     // mark has to grow from the moment it moved. C4's bass mark never
@@ -466,43 +481,32 @@ fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
     tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 67));
     let view = delayed_view(0.0);
     let frame = attack_frame();
-    let at = |now: f64| {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+    let mut at = |now: f64| {
+        let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &frame, now);
         let n = origin_node(&scene);
-        (n.melody_level, n.bass_level)
+        // 12-TET: a fifth is one step along the threes axis.
+        (n.melody_level, n.bass_level, node_at(&scene, LatticePos::new(1, 0, 0)).melody_level)
     };
-    // 12-TET: a fifth is one step along the threes axis.
-    let leaving = |now: f64| {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
-        node_at(&scene, LatticePos::new(1, 0, 0)).melody_level
-    };
-
-    assert_eq!(at(1.0), (0.0, 1.0), "the melody has only just moved");
-    let (melody, bass) = at(1.0 + ATTACK * 0.5);
+    assert_eq!(at(1.0), (0.0, 1.0, 1.0), "the melody has only just moved");
+    let (melody, bass, leaving) = at(1.0 + ATTACK * 0.5);
     assert!((melody - 0.5).abs() < 1e-5, "half way in, got {melody}");
     assert_eq!(bass, 1.0, "the end that never moved does not re-attack");
-    assert_eq!(at(1.0 + ATTACK), (1.0, 1.0));
-
-    // The other half of the same handoff: G's mark leaves as C's arrives,
-    // on G's own release rather than on the incoming ramp.
-    assert_eq!(leaving(1.0), 1.0, "the outgoing mark is whole at the key-up");
-    assert!(
-        (leaving(1.0 + ATTACK * 0.5) - 0.5).abs() < 1e-5,
-        "and half gone half a fade later — exactly as the incoming one is half in",
-    );
-    assert_eq!(leaving(1.0 + ATTACK), 0.0, "and gone with the note");
+    assert!((leaving - 0.5).abs() < 1e-5, "the outgoing mark leaves as the incoming one arrives");
+    assert_eq!(at(1.0 + ATTACK), (1.0, 1.0, 0.0));
 }
 
 #[test]
 fn a_delay_holds_the_mark_off_until_its_note_has_worn_the_end_that_long() {
+    let mut motion = NodeMotion::default();
     // The wait sits in FRONT of the ease rather than stretching it: the mark
     // is at nothing for the whole delay and then arrives on the same ramp it
     // always did, so the two settings say when and how fast independently.
     const DELAY: f64 = 0.25;
     let tracker = held(60); // C4: the origin node, in middle C's octave slot
     let view = delayed_view(DELAY as f32);
-    let at = |now: f64| {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &attack_frame(), now);
+    let mut at = |now: f64| {
+        let scene =
+            motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &attack_frame(), now);
         let n = origin_node(&scene);
         (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
     };
@@ -528,6 +532,7 @@ fn a_delay_holds_the_mark_off_until_its_note_has_worn_the_end_that_long() {
 
 #[test]
 fn an_end_given_up_inside_the_delay_is_never_marked_at_all() {
+    let mut motion = NodeMotion::default();
     // The flicker the setting exists for. Playing fast, the top of what is
     // down changes every few notes, and a mark easing in on each of them
     // reads as flicker over the band rather than as the line being traced.
@@ -541,8 +546,8 @@ fn an_end_given_up_inside_the_delay_is_never_marked_at_all() {
     tracker.handle_event(off(0.15, 67)); // ...and hands it back inside the wait
     let view = delayed_view(DELAY as f32);
     let frame = attack_frame();
-    let mark = |now: f64| {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+    let mut mark = |now: f64| {
+        let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &frame, now);
         // The loudest melody mark ANYWHERE: G4 and C4 light different nodes,
         // and the claim is about the whole picture, not one node of it.
         scene.nodes.iter().fold(0.0f32, |peak, n| peak.max(n.melody_level))
@@ -558,19 +563,27 @@ fn an_end_given_up_inside_the_delay_is_never_marked_at_all() {
     assert_eq!(mark(0.15 + DELAY + ATTACK), 1.0, "and then C4's mark arrives");
     // The bass end never changed hands through any of it, so it is measured
     // from C4's note-on — one wait and one ease after that, and unmoved since.
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 0.15 + DELAY + ATTACK);
+    let scene = motion_scene(
+        &mut motion,
+        &tracker,
+        &Tuning::default(),
+        &view,
+        &frame,
+        0.15 + DELAY + ATTACK,
+    );
     assert_eq!(origin_node(&scene).bass_level, 1.0, "the end that never moved is unaffected");
 }
 
 #[test]
 fn a_delay_past_the_note_fade_still_measures_from_the_handoff() {
+    let mut motion = NodeMotion::default();
     // The handoff moment has to outlive the note that made it. Lift the top
     // of a held chord and the note below inherits the melody AT THAT MOMENT
     // — but the note that handed it over is pruned one Fade later, and the
     // Fade's whole range is shorter than most of this bar. Read the moment
     // off the released tail and any longer delay would lose it mid-wait and
     // land the mark at full in a single frame, which is the pop the wait was
-    // set to avoid. The tracker's own stamp is what survives the pruning.
+    // set to avoid. The motion pass reads retained event history after voice pruning.
     //
     // The Fade named here is shorter than the default, so the pruning happens
     // well inside the wait rather than at the edge of it.
@@ -586,8 +599,8 @@ fn a_delay_past_the_note_fade_still_measures_from_the_handoff() {
     tracker.prune(1.2, &view.envelope(&frame));
     assert_eq!(tracker.voices().count(), 1, "the C5 that handed the end over is gone");
 
-    let at = |now: f64| {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+    let mut at = |now: f64| {
+        let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &frame, now);
         origin_node(&scene).melody_level
     };
 
@@ -599,7 +612,7 @@ fn a_delay_past_the_note_fade_still_measures_from_the_handoff() {
     assert_eq!(at(1.0 + DELAY + ramp), 1.0);
 }
 
-/// The Delay's range is held in `derive_scene` and nowhere else — `sanitize`
+/// The Delay's range is held in `NodeMotion` and nowhere else — `sanitize`
 /// deliberately does range work for nothing, only finiteness — so a view out
 /// of range comes from a file and lands here. Both ends matter and they fail
 /// in opposite directions: a negative delay starts the ramp BEFORE the note
@@ -608,14 +621,16 @@ fn a_delay_past_the_note_fade_still_measures_from_the_handoff() {
 /// for as long as the take lasts, from a bar that cannot say so.
 ///
 /// Asserted on the LEVEL rather than on a scene field, because unlike every
-/// other clamp in `derive_scene` this one reaches the picture only through
+/// geometry clamp this one reaches the picture only through
 /// the mark's ease — there is no `Scene::mark_delay` to read back.
 #[test]
 fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
     let tracker = held(60);
     let level = |mark_delay: f32, now: f64| {
+        let mut motion = NodeMotion::default();
         let view = delayed_view(mark_delay);
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &attack_frame(), now);
+        let scene =
+            motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &attack_frame(), now);
         origin_node(&scene).melody_level
     };
 
@@ -644,8 +659,7 @@ fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
 ///
 /// BOTH doors, because the picture is reached through both. A blob crosses
 /// `sanitize`; the offline layout, take replay and the harness each build a
-/// view in code and never do, which is the shell class `derive_scene`'s own
-/// `finite_or` exists for.
+/// view in code and never do, so shared motion normalizes the delay too.
 #[test]
 fn a_non_finite_delay_draws_as_no_delay_at_all() {
     let tracker = held(60);
@@ -655,8 +669,16 @@ fn a_non_finite_delay_draws_as_no_delay_at_all() {
     assert_eq!(sane.mark_delay, 0.0, "the blob's door is where a NaN is repaired");
 
     let level = |view: &ViewConfig, now: f64| {
-        origin_node(&scene_of(&tracker, &Tuning::default(), view, &attack_frame(), now))
-            .melody_level
+        let mut motion = NodeMotion::default();
+        origin_node(&motion_scene(
+            &mut motion,
+            &tracker,
+            &Tuning::default(),
+            view,
+            &attack_frame(),
+            now,
+        ))
+        .melody_level
     };
     // Sampled at the ramp's START, which is the one instant that tells a
     // repaired delay from an unrepaired one: with no delay the mark has not
@@ -669,8 +691,8 @@ fn a_non_finite_delay_draws_as_no_delay_at_all() {
 
 #[test]
 fn held_extremes_never_names_a_released_voice() {
-    // A released voice is marked from its own stamp (above), and is for that very
-    // reason out of the running for the LIVE ends: letting it stay "the
+    // A departing mark carries its old level, while the released voice is
+    // out of the running for the LIVE ends: letting it stay "the
     // melody" would steal that from the note that actually replaced it, and
     // leave the incoming mark nothing to ease from.
     let mut tracker = NoteTracker::new();
@@ -679,7 +701,7 @@ fn held_extremes_never_names_a_released_voice() {
     }
     // Release the top note; C is now both the highest and lowest held.
     tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 67));
-    let (melody, bass) = held_extremes(&tracker);
+    let (melody, bass) = (tracker.highest_held(), tracker.lowest_held());
     assert_eq!(
         melody.map(|e| e.key),
         Some(on(0.0, 60).key()),
@@ -693,19 +715,20 @@ fn held_extremes_never_names_a_released_voice() {
 
     // Nothing held at all: nothing to mark.
     tracker.handle_event(NoteEvent::off(0.2, SourceId::DIRECT, 0, 60));
-    assert_eq!(held_extremes(&tracker), (None, None));
+    assert_eq!((tracker.highest_held(), tracker.lowest_held()), (None, None));
 }
 
 /// `notes` held with both ends marked and the octave wheel set to `count`
 /// octaves centered on `center`.
 fn marked(notes: &[u8], count: u32, center: f32) -> (Scene, FrameParams) {
+    let mut motion = NodeMotion::default();
     let mut tracker = NoteTracker::new();
     for &note in notes {
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
     }
     let view = ViewConfig { octave_count: count, octave_center: center, ..plain_view() };
     let frame = plain_frame();
-    (scene_of(&tracker, &Tuning::default(), &view, &frame, 0.0), frame)
+    (motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &frame, 0.0), frame)
 }
 
 /// A lone held note — its own melody and bass — and the origin node it

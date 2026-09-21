@@ -32,7 +32,8 @@ fn shadows_below_one_percent_still_fade_over_glow() {
             };
             scene.pluses.clear();
             if marker {
-                scene.pluses.push(one_marker(
+                scene.pluses.push(standalone_marker(
+                    &mut scene.nodes,
                     glam::Vec3::new(MARKER_X, 0.0, 0.0),
                     MARKER_RADIUS,
                     glam::Vec4::splat(1.0),
@@ -144,7 +145,8 @@ fn final_dither_keeps_byte_representable_flat_ink_flat() {
         scene.plus_half_width = 1.0;
         scene.plus_taper_start = 1.0;
         let channel = code as f32 / 255.0;
-        scene.pluses = vec![one_marker(
+        scene.pluses = vec![standalone_marker(
+            &mut scene.nodes,
             glam::Vec3::ZERO,
             1.2,
             glam::Vec4::new(channel, channel, channel, 1.0),

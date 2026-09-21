@@ -20,6 +20,7 @@ mod replay;
 mod sink;
 mod wav;
 
+use harmonigraph_take::RenderProgress;
 use harmonigraph_ui::layout::export_pixels_per_point as default_scale;
 use harmonigraph_ui::{Layout, PRESETS};
 use render::Settings;
@@ -548,6 +549,7 @@ fn export(args: Args) -> Result<(), String> {
         args.fps,
         out.display(),
     );
+    eprintln!("{}", RenderProgress { done: 0, total });
     // Said BEFORE the render rather than after it. The frames past the cut
     // cost the same minutes to draw as the ones that land, and `done:` reports
     // what was written without ever saying what was lost — so after the fact
@@ -561,12 +563,9 @@ fn export(args: Args) -> Result<(), String> {
         if let Some((ends_at, lands)) =
             audio_seconds.and_then(|seconds| soundtrack_cut(&settings, seconds, promised))
         {
-            // No ` frames` token: the Video pane reads the count before that
-            // word off ANY segment of this stderr (`parse_report`), so a
-            // warning carrying one would arrive as a progress report.
             eprintln!(
                 "warning: the soundtrack ends at {ends_at:.2}s, {:.2}s before the render does — \
-                 the file ends with it, so about {lands} of the {total} drawn land in it. \
+                 the file ends with it, so about {lands} of the {total} frames land in it. \
                  Render to there (--end {ends_at:.2}) to draw only what lands.",
                 end - ends_at
             );
@@ -576,12 +575,6 @@ fn export(args: Args) -> Result<(), String> {
     // Progress on one rewritten line; renders are long enough that silence
     // reads as a hang.
     //
-    // This line and the `-> {total} frames` one above it are also READ, by
-    // the plugin's Video pane, which follows this stderr to drive its
-    // progress bar (`harmonigraph_record::parse_report`): the count before ` frames` is
-    // the part it matches, so keep that shape. Reformatting the rest is
-    // free; losing the count leaves the bar empty.
-    //
     // `done` is frames FINISHED: encoded, for a video, where frames handed to
     // ffmpeg are not that (see `sink::Encoded`), and written for the sinks
     // with no encoder behind them. Those change every frame, hence the period.
@@ -590,7 +583,7 @@ fn export(args: Args) -> Result<(), String> {
     let mut report = |done: u64| {
         written = done;
         if done != shown.0 && (done == total || shown.1.elapsed() >= PROGRESS_PERIOD) {
-            eprint!("\r  {done}/{total} frames ({}%)", done * 100 / total);
+            eprint!("\r{progress}", progress = RenderProgress { done, total });
             shown = (done, std::time::Instant::now());
         }
     };
@@ -633,8 +626,9 @@ fn export(args: Args) -> Result<(), String> {
     }
     // The frames the file holds: the encoder's last count, not the frames
     // drawn. Under `-shortest` it stops at the soundtrack's end, short of the
-    // `total` planned, and the plugin reads this count as the render's total —
-    // so the bar ends full against what was written, not stalled at the cut.
+    // `total` planned. Always publish the final counts, even inside the
+    // reporting period, so the bar finishes against what was written.
+    eprintln!("{}", RenderProgress { done: written, total: written });
     eprintln!("done: {written} frames -> {}", out.display());
     // Where the time went. Printed for every export rather than behind a flag:
     // a number nobody asked for is what makes the next question askable, and

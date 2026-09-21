@@ -1,6 +1,6 @@
 //! Per-frame scene derivation: turns the note tracker + tuning into the
-//! node/edge instance lists the renderer draws. Animation and envelope
-//! *policy* lives here.
+//! node/edge instance lists and initial voice envelopes. Carried lattice
+//! animation is applied afterwards by [`crate::NodeMotion`].
 
 use crate::camera::Camera;
 use crate::color::{pitch_lut_color, pitch_ramp_lut};
@@ -8,56 +8,11 @@ use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{finite_or, size, DrawnWindow, FrameParams, ViewConfig};
 use crate::{
-    lattice_to_world, GlowStep, NodeInstance, PlusInstance, Scene, SpectralPaint, MARK_DELAY_MAX,
+    lattice_to_world, GlowStep, NodeInstance, PlusInstance, Scene, SpectralPaint,
     NODE_RADIUS_FACTOR, OCTAVE_SLOTS, PLUS_SIZE_MAX,
 };
 use glam::Vec4;
-use harmonigraph_core::{HeldEnd, LatticePos, NoteTracker, Time, Tuning, VoiceState};
-
-/// A melody or bass mark accumulator for one node: the octave slot it marks,
-/// plus the color and drawn level, all three read off the STRONGEST marking
-/// voice — the voice's envelope times how far its mark has eased in. The `>=`
-/// in [`Mark::add`] means ties favor the later voice, so a release
-/// crossfading two voices lands on the newer color.
-///
-/// One voice entire, rather than the union of every marking voice's slot
-/// under the strongest one's level, because the node carries ONE level: a
-/// weaker voice's slot admitted alongside it would be drawn at the winner's
-/// brightness. That is not a near-miss — it is a mark on an octave that is
-/// half gone (or has not started), at full. Two voices reach one node's mark
-/// only through a handoff inside a single pitch class, where the loser is by
-/// definition the dimmer of a crossfading pair, so what the union would buy
-/// is exactly the reading that cannot be drawn honestly.
-///
-/// The cost is that the mark JUMPS to the other sector at the crossover
-/// instead of both being lit through it, and the jump is the whole SHAPE
-/// moving one wedge round the node — a mark is its sector's slice continued
-/// outward, so it has no body that stays put while the sector changes under
-/// it. The level is continuous across the switch (the two curves are equal at
-/// the moment the argmax changes), so what moves is the position and not the
-/// brightness. Lighting both honestly wants a level per slot, which is
-/// `OCTAVE_SLOTS` more floats per node in the instance buffer and a shader
-/// that reads them; that is the price, and it buys one frame's worth of a
-/// second mark in one voicing.
-#[derive(Default)]
-struct Mark {
-    /// The slot as a MASK, so 0 is "unmarked" without an `Option` — which is
-    /// also how the shader reads it (see `NodeInstance::melody_slots`). One
-    /// bit at a time, per the argmax above.
-    slots: u32,
-    level: f32,
-    color: Vec4,
-}
-
-impl Mark {
-    fn add(&mut self, slot: usize, level: f32, color: Vec4) {
-        if level >= self.level {
-            self.slots = 1 << slot;
-            self.level = level;
-            self.color = color;
-        }
-    }
-}
+use harmonigraph_core::{LatticePos, NoteTracker, Tuning};
 
 /// One voice's per-frame envelope work: everything about how brightly it
 /// draws that depends on the voice, the frame and `now` alone, done once
@@ -66,7 +21,7 @@ struct FrameVoice<'a> {
     voice: &'a harmonigraph_core::Voice,
     /// The pitch color the DISC and its octave sector take. The melody/bass
     /// marks do not reuse it — they belong to the octave layer, colored by
-    /// axis position (see the mark color in [`derive_scene`]).
+    /// axis position in [`crate::NodeMotion`].
     color: Vec4,
     /// The note's own envelope, attack times what is left of the release:
     /// what the disc, the glow, the gutter and the octave sector all draw at.
@@ -74,59 +29,11 @@ struct FrameVoice<'a> {
     /// Whether this voice's departure has begun (see
     /// [`NodeInstance::departing`](crate::NodeInstance::departing)).
     departing: bool,
-    /// What this voice's melody mark draws at, or `None` where it wears no
-    /// melody end. The RELEASE alone under the mark's own ease — see the ease
-    /// in [`derive_scene`], and
-    /// [`Voice::activation`](harmonigraph_core::Voice::activation) for why the
-    /// note's attack is not multiplied in on top.
-    melody: Option<f32>,
-    /// The same for the bass end.
-    bass: Option<f32>,
 }
 
-/// The highest and lowest HELD voices with the moment each took its end, as
-/// the caller asked for them — either is `None` when that end isn't being
-/// marked or nothing is held.
+/// Build geometry and initial voice envelopes; [`crate::NodeMotion::step`]
+/// supplies carried animation and melody/bass marks after spectral rings.
 ///
-/// Held only, which is the tracker's own answer ([`HeldEnd`]): these are the
-/// LIVE ends, the notes actually down, and a released voice is never one of
-/// them however brightly its mark is still drawn. What a released voice wears
-/// is the stamp it left with
-/// ([`Voice::wore_high`](harmonigraph_core::Voice::wore_high)), read in
-/// [`marks`] — a mark on its way out, not a claim on the end.
-///
-/// The two must not be conflated: a released voice allowed back in here would
-/// keep the end from the note that replaced it, and the incoming mark would
-/// have nothing to ease from.
-pub(crate) fn held_extremes(tracker: &NoteTracker) -> (Option<HeldEnd>, Option<HeldEnd>) {
-    (tracker.highest_held(), tracker.lowest_held())
-}
-
-/// Which ends `voice` wears and WHEN it took each, as `(melody, bass)` —
-/// `None` where it wears that end not at all. Both can be set at once: a lone
-/// note is its own melody and bass.
-///
-/// A held voice wears the live end. A released one wears the stamp it left
-/// the held set with, so its mark fades out with the note instead of snapping
-/// off at the key — which is the same envelope every other layer of the node
-/// leaves on, and the reason a handoff reads as one mark crossing to another
-/// rather than as one vanishing and a second appearing.
-///
-fn marks(
-    voice: &harmonigraph_core::Voice,
-    live: (Option<HeldEnd>, Option<HeldEnd>),
-) -> (Option<Time>, Option<Time>) {
-    match voice.state {
-        harmonigraph_core::VoiceState::Held => {
-            let key = voice.key();
-            let wears =
-                |end: Option<HeldEnd>| end.filter(|end| end.key == key).map(|end| end.since);
-            (wears(live.0), wears(live.1))
-        }
-        harmonigraph_core::VoiceState::Released { .. } => (voice.wore_high, voice.wore_low),
-    }
-}
-
 /// Build the frame's scene. `hovered` comes from last frame's picking (the
 /// usual immediate-mode one-frame latency, invisible in practice).
 ///
@@ -166,47 +73,7 @@ pub fn derive_scene(
     // ground rather than an arbitrary grey so that a node arriving or leaving
     // crosses no seam against the ring it is fading into.
     let node_idle = ground;
-    let live_extremes = held_extremes(tracker);
-    // `finite_or` and not a bare clamp, which is no guard against a NaN. What
-    // a non-finite delay costs is not a mark drawn wrong but every mark drawn
-    // ARRIVED: `since + NaN` is NaN, and `Envelope::attack` answers a
-    // non-finite elapsed with 1.0 — so the whole point of the setting, the
-    // wait that keeps a momentary end from flickering a mark, is gone while
-    // the picture still looks like a picture. Finite-but-wrong is why the
-    // scene-wide finite sweep cannot see this one; 0 is the fallback
-    // `sanitize` lands on, and it is the setting's own off position.
-    let mark_delay = finite_or(view.mark_delay, 0.0).clamp(0.0, MARK_DELAY_MAX) as f64;
     let env = view.envelope(frame);
-    // How far a mark taken at `since` has eased in, for the voice `state`.
-    //
-    // The delay simply moves the ramp's start later, so an end held for less
-    // than it never draws a mark at all. That is what the setting is for: at
-    // speed the ends change hands every few frames, and a mark easing in on
-    // each of them reads as flicker rather than as the top line.
-    //
-    // A mark outlives its key, so for a RELEASED voice the wait is checked as
-    // a threshold at the key-up and the ramp then runs on at `now` like every
-    // other layer's. The two are separate rules and the threshold is the one
-    // the delay is: a note that gave the end back inside its wait never rang
-    // while it was down, and an ease left running would sail past the
-    // threshold during the release and put a mark on it afterwards — the very
-    // flicker the setting buys off.
-    //
-    // The RAMP is not that rule, and freezing it where the key happened to
-    // find it costs the other half: a note shorter than the attack would keep
-    // a mark dimmer than the sector it extends for its whole release, since
-    // the disc's own attack keeps climbing past the note-off (see
-    // `Envelope::attack`). One layer arriving slower than the next is exactly
-    // the disagreement one shared curve exists to prevent.
-    let ease = |since: Time, state: VoiceState| {
-        if let VoiceState::Released { at } = state {
-            if at < since + mark_delay {
-                // Never earned a mark, so there is none to fade out.
-                return 0.0;
-            }
-        }
-        env.attack(now, since + mark_delay)
-    };
     // Sanitized once, outside the node loop. Capped at 1: this axis makes
     // off-sheet nodes SMALLER, never larger, so the home sheet stays the
     // biggest thing on screen (see `ViewConfig::sevens_size`). The floor
@@ -227,17 +94,8 @@ pub fn derive_scene(
         view.octave_extra_blend,
     );
 
-    // Each voice's color and envelope, computed once here rather than re-run
-    // on every node the voice matches. All of it depends on the voice, the
-    // frame and `now` alone — never on the node — so this lifts the ramp walk
-    // and the envelope's four `powf`s (two ends, times the disc and the mark)
-    // out of the O(nodes × voices) loop below. One pitch class lights every
-    // node that spells it, so on a wide window that is tens of nodes per
-    // voice.
-    //
-    // What genuinely varies per node stays down there: which octave slot the
-    // voice sounds in on that node, and the mark color read off that slot's
-    // own pitch.
+    // Voice colors and envelopes depend on the frame rather than the node.
+    // Resolve them once before matching pitch classes in the node loop.
     let voices: Vec<FrameVoice> = tracker
         .voices()
         .map(|voice| {
@@ -250,35 +108,7 @@ pub fn derive_scene(
                 frame.brightest_pitch,
                 view.pitch_gradient,
             );
-            // Which ends this voice wears is per voice too — the live ends are
-            // a frame-wide answer and the stamps are the voice's own.
-            let (melody_since, bass_since) = marks(voice, live_extremes);
-            // The RELEASE alone under the mark's own ease, not the node's full
-            // activation: the attack is in that, and the mark already carries
-            // one from the moment its note took the end. Multiplying both in
-            // would square the ramp wherever those two moments coincide —
-            // which is the ordinary case, a note arriving as the new outer
-            // voice — and a mark rising as the square of the sector it
-            // extends is precisely the disagreement about how fast the note
-            // arrived that one shared rate exists to prevent.
-            //
-            // The release this rides waits out the NOTE's arrival
-            // (`Voice::release_level`), which is the rule that keeps a stab's
-            // DISC at full — and it covers the mark only where the mark's own
-            // ease starts with the note. Whatever moves that ease later moves
-            // it out from under the rule, and both things that can are
-            // deliberate: the mark Delay, and an end taken by inheritance
-            // part way through a note.
-            //
-            // So a mark comes in GRADED over the band between the Delay and
-            // the Delay plus the Fade. Fresh, both use the same short scale,
-            // so the band softens a brief handoff without holding a sustained
-            // end back. That band is the threshold softened rather than a
-            // second one: the Delay's own claim is that an end held briefly
-            // should not read as the line being traced, and a Delay of 0 puts
-            // the mark back exactly on the note's rule.
             let release = voice.release_level(now, &env);
-            let mark = |since: Option<Time>| since.map(|s| release * ease(s, voice.state));
             FrameVoice {
                 voice,
                 color,
@@ -287,8 +117,6 @@ pub fn derive_scene(
                 // release holds at 1 until the key comes up AND the arrival
                 // has landed, so this cannot be a note still easing in.
                 departing: release < 1.0,
-                melody: mark(melody_since),
-                bass: mark(bass_since),
             }
         })
         .collect();
@@ -308,8 +136,6 @@ pub fn derive_scene(
         let mut departing = false;
         let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = node_idle;
-        let mut melody = Mark::default();
-        let mut bass = Mark::default();
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
@@ -352,57 +178,6 @@ pub fn derive_scene(
                 // ([`Voice::activation`]), and the release still fades on the
                 // octave's own voice rather than on the node's.
                 octaves[slot] = octaves[slot].max(envelope);
-
-                // Mark the outer notes in the slot they sound in. Set on
-                // every node the voice matches, exactly as its activation
-                // is, so the mark can't disagree with the lighting.
-                //
-                // The mark is the strongest marking voice ON THIS NODE,
-                // entire (see [`Mark`]). It eases in while its end is held
-                // and fades out with the note when the key comes up, on the
-                // note's own release — so a handoff is one mark crossing to
-                // another rather than one vanishing as a second appears.
-                if lit.melody.is_some() || lit.bass.is_some() {
-                    // The mark takes the color of the SECTOR it links back to
-                    // — the pitch of that slot on this node, through the very
-                    // table the shader tints the lit glyph from — so the mark
-                    // is never a shade off the one indicator it is pointing
-                    // at. The voice's own color is the wrong one to reuse
-                    // here: a note past either end of the ring folds onto
-                    // the outermost slot, so its mark would carry a pitch
-                    // that is nowhere on the axis it is drawn around.
-                    //
-                    // Both pitches are on the one ramp, so which pitch is read
-                    // is the whole of the difference: the shader tints a lit
-                    // glyph by the pitch it is DRAWN at and asks nothing about
-                    // the voice, and a mark is part of that glyph's layer.
-                    // Only the lit glyph — the band's unsounding slices wear
-                    // the rings' own ground and a solo voice's glow keeps the
-                    // voice's color, both of them on purpose. No extra lift on top of
-                    // the ramp here: the sector's glyph wears it as it comes,
-                    // and a lightened mark would read a shade off the slice
-                    // it continues.
-                    //
-                    // The mark eases in on the SAME ramp as that sector, from
-                    // when the note took the end — which is not always its
-                    // note-on, and is the tracker's own answer rather than
-                    // anything derived here (`HeldEnd` while the note is
-                    // down, `Voice::wore_high` once it is not). That level is
-                    // the voice's own and is computed with it; the color is
-                    // what has to be read here, off this node's slot.
-                    let mark_color = pitch_lut_color(
-                        octave_layout.slot_pitch(slot as i32, node_cents),
-                        frame.darkest_pitch,
-                        frame.brightest_pitch,
-                        view.pitch_gradient,
-                    );
-                    if let Some(level) = lit.melody {
-                        melody.add(slot, level, mark_color);
-                    }
-                    if let Some(level) = lit.bass {
-                        bass.add(slot, level, mark_color);
-                    }
-                }
             }
         }
 
@@ -442,12 +217,12 @@ pub fn derive_scene(
             scale,
             comma,
             cents: node_cents,
-            melody_slots: melody.slots,
-            bass_slots: bass.slots,
-            melody_level: melody.level,
-            bass_level: bass.level,
-            melody_color: melody.color,
-            bass_color: bass.color,
+            melody_slots: 0,
+            bass_slots: 0,
+            melody_level: 0.0,
+            bass_level: 0.0,
+            melody_color: Vec4::ZERO,
+            bass_color: Vec4::ZERO,
             // Nothing has been measured yet, so nothing can be held back: the
             // audio channel arrives empty here and `Scene::wear_audio_rings` is
             // what answers this once the shell's fold has filled it.
@@ -458,11 +233,7 @@ pub fn derive_scene(
             // audio ring is a layer a node WEARS rather than one it shines
             // with (`panes::glow_fade` in harmonigraph-ui) — and the shell's
             // pass is what puts this on the Glow attack and release.
-            glow: GlowStep {
-                incarnation: 0,
-                level: activation.max(melody.level).max(bass.level),
-                row: nodes.len() as u32,
-            },
+            glow: GlowStep { incarnation: 0, level: activation, row: nodes.len() as u32 },
             trail: 0.0,
         });
         node_pcs.push(node_pc);
@@ -750,14 +521,7 @@ pub(crate) fn derive_pluses(
             let clear = 1.0 - n.name_level(view);
             (clear > 0.0).then(|| {
                 let strength = ink.w * clear;
-                PlusInstance {
-                    node: Some(node),
-                    lattice_pos: n.lattice_pos,
-                    pos: n.world_pos,
-                    radius,
-                    color: ink,
-                    strength,
-                }
+                PlusInstance { node, pos: n.world_pos, radius, color: ink, strength }
             })
         })
         .collect()

@@ -30,24 +30,6 @@ pub struct VisualRuntime {
     pub configuration_pending: bool,
     /// Held pitch classes the last learn ran against (change detection).
     pub(crate) last_learned_classes: Option<Vec<PitchClass>>,
-    /// Per comma (indexed by [`Comma::index`]): the tuning axes (microcents)
-    /// that comma's auto-detect last saw, so it judges each tuning exactly
-    /// once.
-    ///
-    /// This is what lets a comma switch be switched OFF: an unchanged tuning
-    /// gets no second verdict, so the mode stays where it was put until the
-    /// tuning itself moves. It also keeps the detect off the plugin's
-    /// in-flight parameter writes, which report the value being written away
-    /// from for a frame or more (see `begin_frame`).
-    ///
-    /// One entry per comma, and each holds only the axes ITS identity reads
-    /// (see `judged_axes`) — a seventh that moved must not re-open the
-    /// syntonic question, or dragging the seventh would re-engage a meantone
-    /// that was just switched off.
-    ///
-    /// Runtime-only. A saved project carries the modes themselves, and
-    /// reopening one is exactly when the detects should look afresh.
-    pub(crate) temper_judged: [Option<(i32, i32, i32)>; Comma::COUNT],
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
     pub spectrum: AudioSpectrum,
     /// How far open the audio ring's Gate stands at each bucket of the
@@ -66,6 +48,8 @@ pub struct VisualRuntime {
 }
 impl Default for VisualRuntime {
     fn default() -> Self {
+        let mut config_reducer = harmonigraph_core::configuration::ConfigReducer::default();
+        config_reducer.recheck_all();
         Self {
             lattice_maps: None,
             map_destination: None,
@@ -74,13 +58,12 @@ impl Default for VisualRuntime {
             tuning: Tuning::default(),
             frame_params: FrameParams::default(),
             learn_active: false,
-            config_reducer: Default::default(),
+            config_reducer,
             replayed_configuration: None,
             adaptive_policy: Default::default(),
             configuration_status: 0,
             configuration_pending: false,
             last_learned_classes: None,
-            temper_judged: [None; Comma::COUNT],
             spectrum: AudioSpectrum::default(),
             ring_fade: harmonigraph_scene::RingFade::default(),
             ring_levels: crate::panes::spectral_fold::RingLevels::default(),
@@ -144,9 +127,8 @@ impl VisualRuntime {
             self.config_reducer.sync_display(
                 params::tuning_from_params(params),
                 modes,
-                self.temper_judged,
+                self.adaptive_policy,
             );
-            self.temper_judged = self.config_reducer.judged();
             self.apply_resolved(appearance, self.config_reducer.resolved());
         }
     }
@@ -196,13 +178,9 @@ impl VisualRuntime {
             return;
         }
         if let Some(policy) = edit.policy {
-            self.config_reducer.apply(harmonigraph_core::configuration::ConfigMutation::Edit(
-                harmonigraph_core::configuration::ConfigEdit {
-                    policy: Some(policy),
-                    ..Default::default()
-                },
-            ));
-            self.adaptive_policy = policy;
+            // Adopt the policy with the next observed axes/modes, so this
+            // edit cannot consume an Auto recheck using a stale parameter view.
+            self.adaptive_policy = policy.sanitize();
         }
         for (key, value) in params::ParamKey::TUNING.into_iter().zip(edit.axes) {
             if let Some(value) = value {
@@ -217,7 +195,7 @@ impl VisualRuntime {
             if let Some(on) = edit.auto[i] {
                 *appearance.view.temper_auto_mut(comma) = on;
                 if on {
-                    self.temper_judged[i] = None;
+                    self.config_reducer.recheck(comma);
                 }
             }
         }

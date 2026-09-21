@@ -343,7 +343,15 @@ fn crosses_on_ground(arms: &[(f32, f32)], arm: f32, shadow: f32, depth: f32) -> 
     scene.glow_rows = 0;
     scene.pluses = arms
         .iter()
-        .map(|&(x, strength)| one_marker(glam::Vec3::new(x, 0.0, 0.0), arm, CROSS_INK, strength))
+        .map(|&(x, strength)| {
+            standalone_marker(
+                &mut scene.nodes,
+                glam::Vec3::new(x, 0.0, 0.0),
+                arm,
+                CROSS_INK,
+                strength,
+            )
+        })
         .collect();
     scene
 }
@@ -786,7 +794,13 @@ fn a_crosss_shadow_is_its_own_share_of_the_one_cell_the_field_casts_from() {
         scene.glow_strength = 1.5;
         scene.nodes[0].glow.level = level;
         if cross {
-            scene.pluses = vec![one_marker(glam::Vec3::new(3.2, 0.0, 0.0), ARM, CROSS_INK, 1.0)];
+            scene.pluses = vec![standalone_marker(
+                &mut scene.nodes,
+                glam::Vec3::new(3.2, 0.0, 0.0),
+                ARM,
+                CROSS_INK,
+                1.0,
+            )];
         }
         scene
     };
@@ -866,8 +880,20 @@ fn a_distance_markers_shadow_width_is_screen_constant_under_perspective() {
             style.kernel = harmonigraph_scene::ShadowKernel::Distance;
         }
         scene.pluses = vec![
-            one_marker(glam::Vec3::new(0.0, 1.5, 4.0), ARM, CROSS_INK, 1.0),
-            one_marker(glam::Vec3::new(0.0, -1.5, -8.0), ARM, CROSS_INK, 1.0),
+            standalone_marker(
+                &mut scene.nodes,
+                glam::Vec3::new(0.0, 1.5, 4.0),
+                ARM,
+                CROSS_INK,
+                1.0,
+            ),
+            standalone_marker(
+                &mut scene.nodes,
+                glam::Vec3::new(0.0, -1.5, -8.0),
+                ARM,
+                CROSS_INK,
+                1.0,
+            ),
         ];
         scene
     };
@@ -1110,7 +1136,13 @@ fn neither_shadow_bar_at_its_bottom_casts_or_allocates() {
     shooter.clear = over_ground();
     let scene_of = |shadow: f32, depth: f32| -> Scene {
         let mut scene = on_ground(shadow, depth);
-        scene.pluses = vec![one_marker(glam::Vec3::new(1.6, 0.0, 0.0), 0.3, CROSS_INK, 1.0)];
+        scene.pluses = vec![standalone_marker(
+            &mut scene.nodes,
+            glam::Vec3::new(1.6, 0.0, 0.0),
+            0.3,
+            CROSS_INK,
+            1.0,
+        )];
         scene
     };
     let mut shot = |shadow: f32, depth: f32| -> (Vec<u8>, Option<[u32; 2]>) {
@@ -1564,7 +1596,13 @@ fn a_resting_crosss_shadow_reaches_the_bloom_too() {
             style.kernel = kernel;
         }
         if cross {
-            scene.pluses = vec![one_marker(glam::Vec3::new(3.0, 0.0, 0.0), 0.8, CROSS_INK, 1.0)];
+            scene.pluses = vec![standalone_marker(
+                &mut scene.nodes,
+                glam::Vec3::new(3.0, 0.0, 0.0),
+                0.8,
+                CROSS_INK,
+                1.0,
+            )];
         }
         shooter.shot(&scene)
     };
@@ -2014,7 +2052,13 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
         for style in scene.shadow.groups_mut() {
             style.kernel = kernel;
         }
-        scene.pluses = vec![one_marker(glam::Vec3::new(1.6, 0.0, 0.0), 0.3, CROSS_INK, 1.0)];
+        scene.pluses = vec![standalone_marker(
+            &mut scene.nodes,
+            glam::Vec3::new(1.6, 0.0, 0.0),
+            0.3,
+            CROSS_INK,
+            1.0,
+        )];
         let named = name_at(&scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
         shooter.shot_with(&scene, named)
     };
@@ -2428,8 +2472,13 @@ fn rectangular_panes_and_atlases_preserve_shadow_coordinates() {
     shooter.clear = over_ground();
     let mut scene = on_ground(0.7, 0.85);
     scene.nodes[0].world_pos = glam::Vec3::new(-1.8, 0.8, 0.0);
-    scene.pluses =
-        vec![one_marker(glam::Vec3::new(2.0, -0.7, 0.0), 0.4, scene.lattice_ground, 1.0)];
+    scene.pluses = vec![standalone_marker(
+        &mut scene.nodes,
+        glam::Vec3::new(2.0, -0.7, 0.0),
+        0.4,
+        scene.lattice_ground,
+        1.0,
+    )];
     let mut shadows = Vec::new();
     for size in [NARROW, WIDE] {
         shooter.size = size;
