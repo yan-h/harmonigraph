@@ -2,10 +2,11 @@
 //!
 //! This matrix is MANUAL: new pages, conditional controls and state fields need
 //! a scenario/fixture and a visit expectation here. SETTINGS_PANES only checks
-//! our page inventory, not future conditional coverage. Disabled bars are still
-//! recorded. Gradients, StackBar, OctaveStrip, LayerStrip, choices, text
-//! fields, RangeBar ordering/minimum spans and gestures are outside this guard,
-//! as are renderer clamps and semantic unit mappings.
+//! our page inventory, not future conditional coverage. Disabled bars are
+//! recorded, while hidden bars need an enabled scenario that makes them draw.
+//! Gradients, StackBar, OctaveStrip, LayerStrip, choices, text fields, RangeBar
+//! ordering/minimum spans and gestures are outside this guard, as are renderer
+//! clamps and semantic unit mappings.
 
 use super::harness::{DisplayPage, SettingsPane, SETTINGS_PANES};
 use super::probe::{fresh, themed};
@@ -234,17 +235,22 @@ fn scenarios() -> Vec<Scenario> {
         let visits = match pane {
             SettingsPane::Tab(panes::Tab::Tuning) => 7,
             SettingsPane::Page(DisplayPage::Colors) => 2,
-            SettingsPane::Page(DisplayPage::Lattice) => 23,
+            SettingsPane::Page(DisplayPage::Lattice) => 17,
             SettingsPane::Page(DisplayPage::Analyzer) => 7,
             SettingsPane::Page(DisplayPage::Spectrogram) => 19,
-            SettingsPane::Page(DisplayPage::Lighting) => 26,
+            SettingsPane::Page(DisplayPage::Lighting) => 22,
             SettingsPane::Page(DisplayPage::System) => 3,
             SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console) => 0,
             _ => panic!("add the new settings page's range scenario"),
         };
         cases.push(Scenario { pane, visits, ..base });
-        // Enabled/disabled sections still draw their bars: labels, fringe,
-        // marks, audio reading, sevens, roll/note names, glow and shadow falloff.
+        // Exercise the conditional groups too: labels, fringe, marks, audio
+        // reading, sevens, roll/note names, glow and Contour shadow falloff.
+        let visits = match pane {
+            SettingsPane::Page(DisplayPage::Lattice) => visits + 6,
+            SettingsPane::Page(DisplayPage::Lighting) => visits + 4,
+            _ => visits,
+        };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
     // The wash's own inventory: it takes the three scale bars off the Spectrogram
@@ -287,6 +293,7 @@ fn check(edge: Edge) {
         a.camera.projection = scenario.projection;
         a.view.spectral_reading =
             if scenario.enabled { SpectralReading::Spectrum } else { SpectralReading::Fold };
+        a.view.spectral_ring_width = if scenario.enabled { 0.1 } else { 0.0 };
         a.spectrum.show_roll = scenario.enabled;
         a.spectrum.show_spectrogram = scenario.enabled;
         a.spectrum.note_names = scenario.enabled;

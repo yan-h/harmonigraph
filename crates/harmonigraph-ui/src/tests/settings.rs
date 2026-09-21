@@ -1520,8 +1520,8 @@ fn history_stays_editable_without_midi_ribbons() {
 }
 
 /// Each reading's own bar is the LIVE one — Tolerance under Fold, Zoom under
-/// Spectrum — and both go dead with the ring itself, which is sized on the
-/// Layers bar two sections up.
+/// Spectrum. The entire group is absent with the ring itself, which is sized on
+/// the Layers bar two sections up.
 ///
 /// Nothing else in the tree looks at these gates. They are two `add_enabled_ui`
 /// predicates twenty lines apart that each name the other's enum variant, which
@@ -1531,10 +1531,8 @@ fn history_stays_editable_without_midi_ribbons() {
 ///
 /// The ring dialled to nothing is the case worth naming, and it is why the
 /// section keeps no off switch of its own: the layer is switched off from its
-/// handle, both readings' bars go inert with it, and what turns it back on is a
-/// control this section does not hold — so a version that greyed the Reading row
-/// alone, or that gated a bar on the reading without the ring, still leaves the
-/// pane looking operable while nothing under it can be moved.
+/// handle, its settings disappear, and what turns it back on is a control this
+/// section does not hold.
 ///
 /// Gate is live under BOTH readings, which is the one bar here that is: it says
 /// which nodes wear the ring rather than how either reading is measured, so a
@@ -1582,12 +1580,6 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
     for (state, want_width, want_range, want_gate) in [
         ((SpectralReading::Fold, WIDE), live, dead, live),
         ((SpectralReading::Spectrum, WIDE), dead, live, live),
-        // The ring dialled off: both readings' bars have nothing to size and
-        // the gate has no ring to hold back. Every bar this section holds is
-        // dead there, which is the state the doc above argues about — what
-        // turns the ring back on is the Layers bar, two sections up.
-        ((SpectralReading::Fold, 0.0), dead, dead, dead),
-        ((SpectralReading::Spectrum, 0.0), dead, dead, dead),
     ] {
         assert_eq!(
             row(state, "Pitch tolerance"),
@@ -1597,4 +1589,77 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
         assert_eq!(row(state, "Pitch span"), want_range, "{state:?}: Zoom is the wrong way");
         assert_eq!(row(state, "Ring threshold"), want_gate, "{state:?}: Gate is the wrong way");
     }
+}
+
+/// With no audio layer in the picture, its heading remains as the signpost but
+/// its settings spend no vertical room. Giving the layer any drawable width
+/// reveals the complete group again.
+#[test]
+fn audio_ring_settings_hide_with_the_layer() {
+    use harmonigraph_scene::SpectralReading;
+
+    for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
+        let hidden = audio_section_shapes(reading, 0.0);
+        assert_eq!(text_ys(&hidden, "Audio ring").len(), 1, "the section lost its heading");
+        for setting in [
+            "Ring display",
+            "Ring threshold",
+            "Threshold hysteresis",
+            "Ring attack",
+            "Ring release",
+            "Pitch tolerance",
+            "Pitch span",
+        ] {
+            assert!(
+                text_ys(&hidden, setting).is_empty(),
+                "{setting:?} remained visible with {reading:?} dialled off",
+            );
+        }
+
+        let expanded = audio_section_shapes(reading, 0.3);
+        for setting in [
+            "Ring display",
+            "Ring threshold",
+            "Threshold hysteresis",
+            "Ring attack",
+            "Ring release",
+            "Pitch tolerance",
+            "Pitch span",
+        ] {
+            assert_eq!(
+                text_ys(&expanded, setting).len(),
+                1,
+                "{setting:?} did not return with {reading:?} enabled",
+            );
+        }
+    }
+}
+
+/// Falloff bends the distance field used by Contour shadows. Blur supplies its
+/// own Gaussian profile, so the four groups keep their common width and depth
+/// controls there without showing a falloff setting that cannot affect them.
+#[test]
+fn shadow_falloff_only_appears_for_contour_shadows() {
+    use harmonigraph_scene::ShadowKernel;
+
+    let shapes = |kernel| {
+        let mut state = fresh();
+        for style in state.picture.appearance.view.shadow.groups_mut() {
+            style.kernel = kernel;
+        }
+        let tab = SettingsPane::Page(DisplayPage::Lighting).install(&mut state);
+        tab_body(&mut state, tab, 420.0, PANE_HEIGHT).shapes
+    };
+
+    let blurred = shapes(ShadowKernel::Gaussian);
+    assert!(text_ys(&blurred, "Shadow falloff").is_empty());
+    assert_eq!(text_ys(&blurred, "Shadow width").len(), 4, "Blur lost common shadow controls");
+
+    let contour = shapes(ShadowKernel::Distance);
+    assert_eq!(
+        text_ys(&contour, "Shadow falloff").len(),
+        4,
+        "a Contour shadow group has no falloff control",
+    );
+    assert_eq!(text_ys(&contour, "Shadow width").len(), 4, "Contour lost common shadow controls",);
 }

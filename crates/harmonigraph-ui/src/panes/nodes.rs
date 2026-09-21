@@ -142,11 +142,14 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// chosen: Tolerance is the fold's kernel and Zoom is the spectrum's window,
 /// and neither means anything to the other. Both are shown either way rather than
 /// swapped in and out, so the section keeps its height and the bars keep their
-/// place as the row is clicked along.
+/// place as the row is clicked along. The whole group is hidden when the
+/// layer has no width: the Layers bar is the only control that can switch it
+/// back on, and leaving a page of inert settings below that control spends most
+/// of the pane on a layer that is not in the picture.
 fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Audio ring");
     if !view.spectral_ring_draws() {
-        ui.weak("Use the Audio handle in Note layers above to give the ring a width.");
+        return;
     }
     // "Ring display" and not "Ring", though the ring is what it fills: what this row
     // picks is which of two measurements the ring carries, which is the word the
@@ -159,8 +162,6 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // layer keeps one, and the two would then have to be read together to know
     // whether there is a ring.
     //
-    // Grayed with the ring off rather than hidden, so the section keeps its
-    // height and its rows keep their place as the handle is dragged to nothing.
     ui.add_enabled_ui(view.spectral_ring_draws(), |ui| {
         choice_row(
             ui,
@@ -193,11 +194,6 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // the hover text for the same reason — a bar that looks inert on the node
     // you are watching is a bar that reads as broken.
     //
-    // Greyed with the ring off, like the Reading row above it: there is no ring
-    // for it to hold back, and it is not what would bring one back. The switch
-    // that would is the layer's own width, which is the Layers bar's second
-    // handle — never greyed, since a control that greyed itself out at 0 could
-    // not be dragged off it.
     ui.add_enabled_ui(view.spectral_ring_draws(), |ui| {
         ValueBar::new(&mut view.spectral_ring_gate, SPECTRAL_GATE_MIN..=SPECTRAL_GATE_MAX, "Ring threshold")
             // A percentage of the Level window, which is the axis the ring's
