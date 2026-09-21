@@ -149,25 +149,7 @@ fn lattice(view: &harmonigraph_scene::ViewConfig, camera: Camera) -> Scene {
     const NOW: f64 = 1.0;
     let tuning = Tuning::default();
     let derive = |camera| {
-        let mut scene = harmonigraph_scene::derive_scene(
-            &tracker,
-            &tuning,
-            view,
-            &view.reach(),
-            &frame,
-            camera,
-            None,
-            NOW,
-        );
-        harmonigraph_scene::NodeMotion::default().step(
-            &mut scene,
-            &tracker,
-            &tuning,
-            view,
-            &view.envelope(&frame),
-            NOW,
-        );
-        scene
+        animated_snapshot(&tracker, &tuning, view, &view.reach(), &frame, camera, None, NOW)
     };
     // Aimed at a lit NODE, in a second pass. Where the lit set sits depends on
     // the chord and on the window's own centre, so a camera pointed at the

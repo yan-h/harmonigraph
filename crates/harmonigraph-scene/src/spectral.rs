@@ -52,7 +52,7 @@
 //! A ring comes and goes on the note Fade rather than at the instant the gate's
 //! answer changes ([`RingFade`]), and a node the KEYS have lit wears its ring
 //! for as long as they light it, whatever the gate says
-//! ([`Scene::wear_audio_rings`](crate::Scene)). Those are one rule read from
+//! ([`NodeMotion::step`](crate::NodeMotion::step)). Those are one rule read from
 //! two ends: the ring is a layer of a node, and every other layer of a node
 //! arrives and leaves on that one duration.
 //!

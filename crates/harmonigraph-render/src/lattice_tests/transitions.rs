@@ -183,7 +183,7 @@ fn zero_spread_orders_draw_the_same_smooth_arrival() {
 #[test]
 fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
     use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
-    use harmonigraph_scene::{derive_scene, Camera, FrameParams, ViewConfig};
+    use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
@@ -195,7 +195,7 @@ fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
     let frame = FrameParams { fade_time: 1.0, ..Default::default() };
     for now in [1.1, 1.5, 1.9, 2.1] {
         tracker.prune(now, &view.envelope(&frame));
-        let mut scene = derive_scene(
+        let mut scene = animated_snapshot(
             &tracker,
             &Tuning::default(),
             &view,

@@ -1,6 +1,6 @@
 //! Per-frame scene derivation: turns the note tracker + tuning into the
-//! node/edge instance lists and initial voice envelopes. Carried lattice
-//! animation is applied afterwards by [`crate::NodeMotion`].
+//! geometry and trail history. [`crate::NodeMotion`] supplies animation and
+//! final marker/ring visibility after the audio measurement.
 
 use crate::camera::Camera;
 use crate::color::pitch_ramp_lut;
@@ -14,21 +14,8 @@ use crate::{
 use glam::Vec4;
 use harmonigraph_core::{LatticePos, NoteTracker, Tuning};
 
-/// One voice's per-frame envelope work: everything about how brightly it
-/// draws that depends on the voice, the frame and `now` alone, done once
-/// rather than on every node the voice matches.
-struct FrameVoice<'a> {
-    voice: &'a harmonigraph_core::Voice,
-    /// The note's own envelope, attack times what is left of the release:
-    /// what the disc, the glow, the gutter and the octave sector all draw at.
-    activation: f32,
-    /// Whether this voice's departure has begun (see
-    /// [`NodeInstance::departing`](crate::NodeInstance::departing)).
-    departing: bool,
-}
-
-/// Build geometry and initial voice envelopes; [`crate::NodeMotion::step`]
-/// supplies carried animation and melody/bass marks after spectral rings.
+/// Build geometry and history; [`crate::NodeMotion::step`] supplies carried
+/// animation and secondary visibility after the spectral measurement.
 ///
 /// Build the frame's scene. `hovered` comes from last frame's picking (the
 /// usual immediate-mode one-frame latency, invisible in practice).
@@ -47,7 +34,6 @@ pub fn derive_scene(
     frame: &FrameParams,
     camera: Camera,
     hovered: Option<LatticePos>,
-    now: f64,
 ) -> Scene {
     let mut nodes = Vec::with_capacity(window.count());
     // Kept parallel to `nodes` for the trail, which matches remembered
@@ -57,11 +43,6 @@ pub fn derive_scene(
     let center = view.center();
     // The ground both of a node's rings stand on where nothing is lit.
     let ground = crate::grey_of_lightness(view.lattice_ground_lightness());
-    // The MARKERS at rest, off a bar of their own — the resting field is not
-    // part of a node, and what it is dialled against is the light behind the
-    // nodes rather than the ring a gap away.
-    let marker_ground = crate::grey_of_lightness(view.marker_ink_lightness());
-    let env = view.envelope(frame);
     // Sanitized once, outside the node loop. Capped at 1: this axis makes
     // off-sheet nodes SMALLER, never larger, so the home sheet stays the
     // biggest thing on screen (see `ViewConfig::sevens_size`). The floor
@@ -82,81 +63,9 @@ pub fn derive_scene(
         view.octave_extra_blend,
     );
 
-    // Voice envelopes depend on the frame rather than the node.
-    // Resolve them once before matching pitch classes in the node loop.
-    let voices: Vec<FrameVoice> = tracker
-        .voices()
-        .map(|voice| {
-            let release = voice.release_level(now, &env);
-            FrameVoice {
-                voice,
-                activation: voice.activation(now, &env),
-                // Below full is the departure under way, and only that: the
-                // release holds at 1 until the key comes up AND the arrival
-                // has landed, so this cannot be a note still easing in.
-                departing: release < 1.0,
-            }
-        })
-        .collect();
-
     for pos in window.positions() {
         let node_pc = tuning.pitch_class(pos);
         let node_cents = node_pc.to_cents();
-        // The octaves of THIS pitch class nearest the center pitch, which is
-        // what its indicators are. Per node rather than per frame: where a
-        // class falls against the center decides which octaves of it are the
-        // nearest ones, and the ring is turned to match.
-        let (low_slot, high_slot) = octave_layout.slots(node_cents);
-        let mut activation = 0.0f32;
-        // Follows the voice that WINS the activation, so the flag describes
-        // the same voice the node is lit by rather than any other
-        // one that happens to match this pitch class.
-        let mut departing = false;
-        let mut octaves = [0f32; OCTAVE_SLOTS];
-
-        // O(nodes × voices); fine at this scale. If extents grow large,
-        // index voices by quantized pitch class instead.
-        for lit in &voices {
-            let voice = lit.voice;
-            if tuning.matches(voice.pitch_class, node_pc) {
-                let envelope = lit.activation;
-                if envelope > activation {
-                    activation = envelope;
-                    departing = lit.departing;
-                }
-                // The slot whose own pitch on THIS node is the one sounding —
-                // `slot_pitch` solved for the slot, which is what keeps the
-                // indicator that lights the one the note is drawn at. Taking
-                // the voice's MIDI octave instead is the same number whenever
-                // the two pitch classes sit on the same side of the octave,
-                // and one out when they straddle it: `matches` wraps, so a
-                // node a shade under 1200¢ is lit by a played 0¢, and its
-                // pitches are an octave below what the voice's own octave
-                // names. Middle C on an untransposed lattice is slot 5 either
-                // way.
-                //
-                // Clamped into the octaves the ring draws: a note past either
-                // end lights the outermost indicator on its side rather than
-                // vanishing, which is what keeps a narrow span a way of
-                // READING the music rather than a filter over it.
-                //
-                // And then into the packing, which is the MIDI octaves and
-                // nothing else: a ring near the pitch limits draws octaves no
-                // note can reach (see `Ring::base`), and the outermost
-                // indicator a note can fold onto is the outermost one that has
-                // a slot at all. The two ranges always overlap — a ring is at
-                // least two octaves wide and its middle is a playable pitch —
-                // so this lands on a slice that is drawn.
-                let sounding = ((voice.pitch - node_cents / 100.0) / 12.0).round() as i32;
-                let slot =
-                    sounding.clamp(low_slot, high_slot).clamp(0, OCTAVE_SLOTS as i32 - 1) as usize;
-                // The voice's envelope entire — the attack is already in it
-                // ([`Voice::activation`]), and the release still fades on the
-                // octave's own voice rather than on the node's.
-                octaves[slot] = octaves[slot].max(envelope);
-            }
-        }
-
         // World positions are relative to the window center, keeping the
         // displayed region under the camera wherever the window pans.
         let centered = pos - center;
@@ -183,10 +92,10 @@ pub fn derive_scene(
         nodes.push(NodeInstance {
             lattice_pos: pos,
             world_pos,
-            activation,
-            departing,
+            activation: 0.0,
+            departing: false,
             slice_progress: [1.0; OCTAVE_SLOTS],
-            octaves,
+            octaves: [0.0; OCTAVE_SLOTS],
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,
             scale,
@@ -199,16 +108,12 @@ pub fn derive_scene(
             melody_color: Vec4::ZERO,
             bass_color: Vec4::ZERO,
             // Nothing has been measured yet, so nothing can be held back: the
-            // audio channel arrives empty here and `Scene::wear_audio_rings` is
+            // audio channel arrives empty here and `crate::NodeMotion::step` is
             // what answers this once the shell's fold has filled it.
             audio_ring: 1.0,
-            // The light UNCARRIED: what the layers that give light off say
-            // right now, on this node's own row of a strip one row per node
-            // tall, taken whole. That is the MIDI layers and only them — an
-            // audio ring is a layer a node WEARS rather than one it shines
-            // with (`panes::glow_fade` in harmonigraph-ui) — and the shell's
-            // pass is what puts this on the Glow attack and release.
-            glow: GlowStep { incarnation: 0, level: activation, row: nodes.len() as u32 },
+            // Stable snapshot row; motion supplies current ink, then the
+            // shell's glow pass carries its brightness and row ownership.
+            glow: GlowStep { incarnation: 0, level: 0.0, row: nodes.len() as u32 },
             trail: 0.0,
         });
         node_pcs.push(node_pc);
@@ -223,7 +128,6 @@ pub fn derive_scene(
     }
 
     let nodes_len = nodes.len() as u32;
-    let pluses = derive_pluses(view, &nodes, marker_ground);
 
     // Every radius on a node, off the one stack the size bars describe
     // (`ViewConfig::rings`, which is also where their clamps live): each ring
@@ -249,7 +153,7 @@ pub fn derive_scene(
         // channel arrives empty and the Lattice pane's fold is what fills it.
         spectral: SpectralPaint::silent(),
         octave_layout,
-        pluses,
+        pluses: Vec::new(),
         plus_half_width: derive_plus_half_width(view),
         plus_taper_start: derive_plus_taper_start(view),
         mark_thickness: rings.mark_thickness,

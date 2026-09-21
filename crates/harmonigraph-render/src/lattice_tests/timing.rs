@@ -149,7 +149,7 @@ fn atmosphere_costs_by_polyphony() {
             if std::env::var("PROBE_CASE").ok().is_some_and(|v| v != case) {
                 continue;
             }
-            let mut variant = harmonigraph_scene::derive_scene(
+            let mut variant = animated_snapshot(
                 &tracker,
                 &Tuning::default(),
                 &view,
@@ -206,7 +206,7 @@ fn animation_costs_by_pose_and_density() {
                 ),
                 ("Maximum", NoteAnimationConfig { radial_start: 1.0, ..Default::default() }),
             ] {
-                let mut scene = harmonigraph_scene::derive_scene(
+                let mut scene = animated_snapshot(
                     &tracker,
                     &Tuning::default(),
                     &view,

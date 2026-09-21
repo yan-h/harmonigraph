@@ -526,16 +526,10 @@ fn only_the_all_mode_names_a_node_nothing_has_happened_on() {
     let names_drawn = |names: harmonigraph_scene::NoteNames| -> Vec<String> {
         let mut state = fresh();
         state.picture.appearance.view.note_names = names;
-        let scene = harmonigraph_scene::derive_scene(
-            &state.picture.runtime.tracker,
-            &state.picture.runtime.tuning,
-            &state.picture.appearance.view,
-            &state.picture.appearance.view.reach(),
-            &state.picture.runtime.frame_params,
-            state.picture.appearance.camera,
-            None,
-            0.0,
-        );
+        let scene = {
+            let window = state.picture.appearance.view.reach();
+            panes::lattice::compose_scene(&mut state.picture, &window, None, 0, 0.0)
+        };
         pane_labels(&scene, &state.picture.appearance.view, 1.0)
             .pieces()
             .iter()
@@ -609,16 +603,10 @@ fn a_name_and_the_marker_under_it_add_up_to_one_mark() {
             67,
             1.0,
         ));
-        let scene = harmonigraph_scene::derive_scene(
-            &state.picture.runtime.tracker,
-            &state.picture.runtime.tuning,
-            &state.picture.appearance.view,
-            &state.picture.appearance.view.reach(),
-            &state.picture.runtime.frame_params,
-            state.picture.appearance.camera,
-            None,
-            4.0,
-        );
+        let scene = {
+            let window = state.picture.appearance.view.reach();
+            panes::lattice::compose_scene(&mut state.picture, &window, None, 0, 4.0)
+        };
         let batch = pane_labels(&scene, &state.picture.appearance.view, 1.0);
         let named: Vec<(glam::Vec3, f32)> = batch
             .labels()
@@ -680,16 +668,10 @@ fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egu
         60,
         1.0,
     ));
-    let scene = harmonigraph_scene::derive_scene(
-        &state.picture.runtime.tracker,
-        &state.picture.runtime.tuning,
-        &state.picture.appearance.view,
-        &state.picture.appearance.view.reach(),
-        &state.picture.runtime.frame_params,
-        state.picture.appearance.camera,
-        None,
-        0.0,
-    );
+    let scene = {
+        let window = state.picture.appearance.view.reach();
+        panes::lattice::compose_scene(&mut state.picture, &window, None, 0, 0.0)
+    };
 
     let batch = pane_labels(&scene, &state.picture.appearance.view, ppp);
     batch.pieces().iter().map(|p| (p.font_size, p.ink)).collect()
@@ -940,16 +922,10 @@ fn the_cents_readout_sits_right_under_the_note_name() {
         60,
         1.0,
     ));
-    let scene = harmonigraph_scene::derive_scene(
-        &state.picture.runtime.tracker,
-        &state.picture.runtime.tuning,
-        &state.picture.appearance.view,
-        &state.picture.appearance.view.reach(),
-        &state.picture.runtime.frame_params,
-        state.picture.appearance.camera,
-        None,
-        0.0,
-    );
+    let scene = {
+        let window = state.picture.appearance.view.reach();
+        panes::lattice::compose_scene(&mut state.picture, &window, None, 0, 0.0)
+    };
 
     let batch = pane_labels(&scene, &state.picture.appearance.view, 1.0);
 
@@ -1035,16 +1011,10 @@ fn every_label_names_its_own_node_in_the_panes_own_space() {
             1.0,
         ));
     }
-    let scene = harmonigraph_scene::derive_scene(
-        &state.picture.runtime.tracker,
-        &state.picture.runtime.tuning,
-        &state.picture.appearance.view,
-        &state.picture.appearance.view.reach(),
-        &state.picture.runtime.frame_params,
-        state.picture.appearance.camera,
-        None,
-        0.0,
-    );
+    let scene = {
+        let window = state.picture.appearance.view.reach();
+        panes::lattice::compose_scene(&mut state.picture, &window, None, 0, 0.0)
+    };
 
     // The pane, and the same pane sitting at the window's corner: what the
     // callback is handed has to be the same picture either way.
@@ -1140,16 +1110,10 @@ fn a_names_drawn_marks_go_into_its_own_nodes_run() {
         61,
         1.0,
     ));
-    let scene = harmonigraph_scene::derive_scene(
-        &state.picture.runtime.tracker,
-        &state.picture.runtime.tuning,
-        &state.picture.appearance.view,
-        &state.picture.appearance.view.reach(),
-        &state.picture.runtime.frame_params,
-        state.picture.appearance.camera,
-        None,
-        0.0,
-    );
+    let scene = {
+        let window = state.picture.appearance.view.reach();
+        panes::lattice::compose_scene(&mut state.picture, &window, None, 0, 0.0)
+    };
 
     let labels = lattice_labels_in(PANE, &scene, &state);
     assert!(!labels.labels.is_empty(), "a held C sharp has to be named somewhere");
@@ -1193,16 +1157,10 @@ fn lattice_names_reconstruct_both_axes_the_camera_moves() {
         61,
         1.0,
     ));
-    let scene = harmonigraph_scene::derive_scene(
-        &state.picture.runtime.tracker,
-        &state.picture.runtime.tuning,
-        &state.picture.appearance.view,
-        &state.picture.appearance.view.reach(),
-        &state.picture.runtime.frame_params,
-        state.picture.appearance.camera,
-        None,
-        0.0,
-    );
+    let scene = {
+        let window = state.picture.appearance.view.reach();
+        panes::lattice::compose_scene(&mut state.picture, &window, None, 0, 0.0)
+    };
     let labels = lattice_labels_in(PANE, &scene, &state);
     assert!(!labels.glyphs.is_empty(), "the held C sharp must reach the lattice callback");
     assert_eq!(

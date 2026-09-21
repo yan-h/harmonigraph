@@ -519,7 +519,7 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         return;
     };
     use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
-    use harmonigraph_scene::{derive_scene, Camera, FrameParams, ViewConfig};
+    use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
 
     const SIZE: [u32; 2] = [256, 256];
 
@@ -542,7 +542,7 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         };
         let frame = FrameParams { fade_time: 0.0, ..FrameParams::default() };
         let tuning = Tuning::default();
-        let mut scene = derive_scene(
+        animated_snapshot(
             &tracker,
             &tuning,
             &view,
@@ -555,16 +555,7 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
             Camera::default(),
             None,
             0.5,
-        );
-        harmonigraph_scene::NodeMotion::default().step(
-            &mut scene,
-            &tracker,
-            &tuning,
-            &view,
-            &view.envelope(&frame),
-            0.5,
-        );
-        scene
+        )
     };
 
     // The composed derivation and motion passes must supply the masks.
