@@ -388,12 +388,10 @@ pub(super) fn spawn_render(
         // Written under a name of this run's own, and moved onto `out`
         // only once it has succeeded.
         //
-        // Killing the renderer does not kill the ffmpeg it is piping to —
-        // that is a grandchild, and it outlives the kill by however long
-        // finalizing takes. Sharing one output path with it is how a
-        // cancelled render corrupts the video that replaces it. A path per
-        // run means the straggler writes somewhere nobody is reading, and
-        // the file at `out` is only ever produced whole, by rename.
+        // A failed or cancelled run never replaces a finished video. Each
+        // run also owns its partial path: on platforms without process-group
+        // cancellation, an encoder descendant may still be finalizing while
+        // its replacement starts. Only a successful run publishes by rename.
         let partial = take_path.with_extension(format!("rendering-{generation}.mp4"));
         // A "Re-render take" carries the current look as a appearance document; write
         // it beside the take and pass --appearance so post-record settings
