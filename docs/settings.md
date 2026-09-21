@@ -37,6 +37,9 @@ With the spectrum on the left or right,
 folding shrinks the editor window while keeping the other panes and the surviving region at their current sizes.
 Host size limits can force the open panes to share the remaining space.
 Top/bottom orientations and an Analyzer stacked above or below another pane fold within the existing pane size.
+Restoring both regions brings back their previous split at the original spectrum position.
+Changing the spectrum position while folded does not lose the width owed to the editor window.
+Reset layout returns the space held by pane and region folds together.
 These folds are saved with the editor layout and do not change the Video preview or exported composition.
 Frameless mode hides their controls;
 press Tab to show them again.

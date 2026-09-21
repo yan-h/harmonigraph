@@ -607,29 +607,22 @@ fn a_fold_blob_predating_the_recorded_window_still_loads() {
     assert_ne!(stale, saved, "the strip must have removed something");
 
     let loaded: Folds = ron::from_str(&stale).expect("a blob without the field still loads");
-    assert_eq!(loaded.0.len(), folds.0.len(), "every entry survives");
-    assert!(loaded.0.iter().all(|fold| fold.window == 0.0), "no history to recover");
+    assert_eq!(loaded.panes.len(), folds.panes.len(), "every entry survives");
+    assert_eq!(loaded.window, 0.0, "no history to recover");
 }
 
-/// A blob written while an entry still named a surface, and while a fraction
-/// was what one held instead of a width, loads with both keys ignored.
-///
-/// This is the whole cost of retiring either field, and it is why retiring
-/// them was affordable: `UiPersist` is one RON document, so a blob these
-/// entries could not parse would cost the saved layout entire and not just its
-/// folds. Serde passes over a key it does not know, so what is lost is the
-/// value and never the entry — a fold recorded before the layout was points
-/// comes back with no width to seed from, and opens at the rail width its
-/// fraction in the tree says.
+/// Retired or unknown entry keys are ignored without dropping the entry.
+/// This uses the current outer shape; actual older workspace saves default
+/// the renamed layout_folds section instead.
 #[test]
-fn a_fold_blob_still_carrying_the_retired_keys_loads_without_them() {
-    let older = "([(surface:0,node:1,side:Right,width:487.0,window:1000.0),\
+fn unknown_fold_entry_keys_do_not_discard_the_entry() {
+    let older = "(panes:[(surface:0,node:1,side:Right,width:487.0,window:1000.0),\
                    (surface:0,node:5,fraction:0.35)])";
     let loaded: Folds = ron::from_str(older).expect("an older blob still loads");
-    assert_eq!(loaded.0.len(), 2, "both entries survive the keys they carry");
-    assert_eq!(loaded.0[0].node, 1);
-    assert!((loaded.0[0].width - 487.0).abs() < 0.01, "what it does still hold is read");
-    assert_eq!(loaded.0[1].width, 0.0, "and a fraction seeds nothing");
+    assert_eq!(loaded.panes.len(), 2, "both entries survive the keys they carry");
+    assert_eq!(loaded.panes[0].node, 1);
+    assert!((loaded.panes[0].width - 487.0).abs() < 0.01, "what it does still hold is read");
+    assert_eq!(loaded.panes[1].width, 0.0, "and a fraction seeds nothing");
 }
 
 /// [`Folds`] is persisted and [`Dial`] is not, so a project reopened with a
@@ -1354,16 +1347,8 @@ fn a_hold_waits_for_the_window_it_asked_for_and_not_the_other_way() {
     }
 }
 
-/// What a fold banks as the window it was taken at is the window the PANE was
-/// last open in — never the narrower one an unfold happens to be landing in.
-///
-/// `Fold::window` is the ceiling a later unfold may ask the host for, and it is
-/// the only record of that ceiling to survive a persist blob ([`Dial::widest`]
-/// is runtime-only). An unfold's landing frame creates entries too, wherever a
-/// pair that was folded whole becomes folded on one side — and priced against
-/// the window the unfold STARTED in, every such landing ratchets the ceiling
-/// down, so a pane reopened in a later session comes back short and takes the
-/// difference out of its neighbour instead of out of the window.
+/// Opening one pane in a folded pair creates a new fold entry. The shared
+/// persisted ceiling must survive that transition, independently of entries.
 #[test]
 fn an_unfold_landing_does_not_ratchet_down_the_ceiling_a_fold_banked() {
     let mut dock = dock();
@@ -1380,12 +1365,8 @@ fn an_unfold_landing_does_not_ratchet_down_the_ceiling_a_fold_banked() {
     let narrow = window.size;
     collapse(&mut dock, Tab::Lattice, false);
     window.settle(&mut folds, &mut dock);
-    let pair = folds.0.iter().find(|fold| fold.node == PICTURES.0).expect("the pair holds a side");
-    assert!(
-        pair.window > narrow + 1.0,
-        "the pair banked {}, the window the unfold started in ({narrow})",
-        pair.window,
-    );
+    assert!(folds.panes.iter().any(|fold| fold.node == PICTURES.0));
+    assert!(folds.window > narrow + 1.0, "the shared ceiling shrank to {}", folds.window);
 }
 
 /// A folded subtree divides its rail span by how many rails each side

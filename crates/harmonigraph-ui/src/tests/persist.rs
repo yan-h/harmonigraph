@@ -14,6 +14,26 @@ fn set_console_collapsed(state: &mut SharedState, collapsed: bool) {
 }
 
 #[test]
+fn retired_fold_bookkeeping_does_not_discard_layout_or_appearance() {
+    let mut state = fresh();
+    state.picture.appearance.camera.yaw = 1.23;
+    let saved = state.save_persist();
+    let old = saved.replace(
+        "layout_folds:(panes:[],region_widths:(0.0,0.0),window:0.0)",
+        "folds:([(node:0,width:320.0,window:1000.0)])",
+    );
+    assert_ne!(old, saved, "the fixture must replace the named fold section");
+    let mut restored = fresh();
+    assert!(restored.load_persist(&old));
+    assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
+    assert_eq!(
+        ron::to_string(&restored.workspace.dock).unwrap(),
+        ron::to_string(&state.workspace.dock).unwrap()
+    );
+    assert!(restored.workspace.folds.is_empty());
+}
+
+#[test]
 fn retired_cloud_sampling_preserves_editor_and_recorded_appearance() {
     let mut state = fresh();
     state.picture.appearance.camera.distance = 18.0;
@@ -1051,7 +1071,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
     const KEYS: &[&str] = &[
         "version",
         "dock",
-        "folds",
+        "layout_folds",
         "analyzer_regions",
         "display_page",
         "appearance",
@@ -1123,7 +1143,7 @@ fn workspace_edits_do_not_change_recorded_appearance() {
     let appearance = state.picture.appearance.serialize();
     let editor = state.save_persist();
     state.workspace.dock = egui_dock::DockState::new(vec![crate::panes::Tab::Console]);
-    state.workspace.folds = ron::from_str("([(node:0,width:320.0,window:1000.0)])").unwrap();
+    state.workspace.folds = ron::from_str("(panes:[(node:0,width:320.0)],window:1000.0)").unwrap();
     state.workspace.interaction.display_page = crate::panes::display::DisplayPage::System;
     state.workspace.interaction.ui_scale = 1.25;
     state.workspace.interaction.fps_cap = Some(30.0);
