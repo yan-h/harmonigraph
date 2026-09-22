@@ -207,7 +207,6 @@ pub fn channel() -> (Recorder, Capture) {
         record_epoch: 0,
         record_pass: 1,
         closed_epoch: 0,
-        last_configuration: None,
         producer,
         audio,
         with_audio: with_audio.clone(),
