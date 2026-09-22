@@ -55,6 +55,10 @@ pub unsafe fn create_view_class<V: ViewImpl>() -> &'static AnyClass {
             sel!(viewWillMoveToWindow:),
             view_will_move_to_window::<V> as extern "C-unwind" fn(_, _, _) -> _,
         );
+        class.add_method(
+            sel!(viewDidMoveToWindow),
+            view_did_move_to_window::<V> as extern "C-unwind" fn(_, _),
+        );
         class.add_method(sel!(hitTest:), hit_test::<V> as extern "C-unwind" fn(_, _, _) -> _);
         class.add_method(
             sel!(updateTrackingAreas:),
@@ -64,10 +68,7 @@ pub unsafe fn create_view_class<V: ViewImpl>() -> &'static AnyClass {
             sel!(resetCursorRects),
             reset_cursor_rects::<V> as extern "C-unwind" fn(_, _),
         );
-        class.add_method(
-            sel!(cursorUpdate:),
-            cursor_update::<V> as extern "C-unwind" fn(_, _, _),
-        );
+        class.add_method(sel!(cursorUpdate:), cursor_update::<V> as extern "C-unwind" fn(_, _, _));
 
         class.add_method(sel!(mouseMoved:), mouse_moved::<V> as extern "C-unwind" fn(_, _, _) -> _);
         class.add_method(
@@ -199,6 +200,10 @@ extern "C-unwind" fn view_will_move_to_window<V: ViewImpl>(
     this: &View<V>, _self: Sel, new_window: Option<&NSWindow>,
 ) {
     V::view_will_move_to_window(this.inner_ref(), new_window);
+}
+
+extern "C-unwind" fn view_did_move_to_window<V: ViewImpl>(this: &View<V>, _self: Sel) {
+    V::view_did_move_to_window(this.inner_ref());
 }
 
 extern "C-unwind" fn update_tracking_areas<V: ViewImpl>(this: &View<V>, _self: Sel, _: &AnyObject) {

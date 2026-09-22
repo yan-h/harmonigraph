@@ -72,11 +72,10 @@ pub(crate) struct BaseviewView {
     notification_center_observer: Cell<Option<NotificationCenterObserver>>,
     occlusion_observer: Cell<Option<NotificationCenterObserver>>,
 
-    /// Occlusion as this view last saw it, so a notification repeating the
-    /// current state is dropped rather than acted on. Starts visible, which
-    /// is what a window a view is being added to almost always is, and costs
-    /// only a missed no-op event if it isn't.
-    window_visible: Cell<bool>,
+    /// Visibility last delivered for the current window attachment. `None`
+    /// means the view is detached or its new window has not been sampled yet.
+    window_visible: Cell<Option<bool>>,
+    occlusion_ready: Cell<bool>,
 
     keyboard_state: KeyboardState,
 
@@ -108,7 +107,8 @@ impl BaseviewView {
             window_handler: None.into(),
             notification_center_observer: None.into(),
             occlusion_observer: None.into(),
-            window_visible: true.into(),
+            window_visible: None.into(),
+            occlusion_ready: false.into(),
             parenting,
 
             #[cfg(feature = "opengl")]
@@ -168,6 +168,14 @@ impl BaseviewView {
                 view,
                 Event::Window(WindowEvent::Resized(Self::fetch_view_size(view.view))),
             );
+
+            // The first viewDidMoveToWindow ran during parenting, before the
+            // handler existed. Sample only now, after its initial size event;
+            // an occluded first window must be remembered before its reveal.
+            view.occlusion_ready.set(true);
+            if let Some(window) = view.view.window() {
+                Self::report_window_occlusion(view, &window, false);
+            }
         });
 
         (view, state)
@@ -430,18 +438,21 @@ impl BaseviewView {
             return;
         }
 
+        Self::report_window_occlusion(this, &window, true);
+    }
+
+    fn report_window_occlusion(this: ViewRef<Self>, window: &NSWindow, paint_visible: bool) {
         let visible = window.occlusionState().contains(NSWindowOcclusionState::Visible);
-        // A notification that reports the state we are already in costs a
-        // whole off-cadence frame below, so it stops here. macOS posts this on
-        // change, but "change" is the WINDOW's, and the notification is
-        // delivered to every observer of it — nothing promises the state read
-        // back differs from the last one this view saw.
-        if this.window_visible.replace(visible) == visible {
+        // A repeated sample costs a whole off-cadence frame below, so it
+        // stops here. Notifications are per window, not per embedded view;
+        // attachment also samples once even if the new window has the same
+        // visibility as the old one.
+        if this.window_visible.replace(Some(visible)) == Some(visible) {
             return;
         }
         Self::trigger_deferrable_event(this, Event::Window(WindowEvent::Occluded(!visible)));
 
-        if visible {
+        if visible && paint_visible {
             // Re-exposed, and what is on screen is the drawable from before
             // the window was hidden — the compositor keeps showing it until
             // something presents over it, and nothing can present while the
@@ -597,6 +608,25 @@ impl ViewImpl for BaseviewView {
             let superclass = msg_send![this.view, superclass];
 
             let () = msg_send![super(this.view, superclass), viewWillMoveToWindow: new_window];
+        }
+    }
+
+    fn view_did_move_to_window(this: ViewRef<Self>) {
+        // viewWillMoveToWindow still sees the old `view.window()`. Invalidate
+        // before the superclass can post any notification for the new one.
+        this.window_visible.set(None);
+        unsafe {
+            let superclass = msg_send![this.view, superclass];
+            let () = msg_send![super(this.view, superclass), viewDidMoveToWindow];
+        }
+
+        // Once AppKit has attached the view, sample the new window even if
+        // both windows report the same visibility.
+        if !this.occlusion_ready.get() {
+            return;
+        }
+        if let Some(window) = this.view.window() {
+            Self::report_window_occlusion(this, &window, true);
         }
     }
 
