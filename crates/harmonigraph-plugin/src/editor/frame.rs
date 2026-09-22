@@ -73,7 +73,7 @@ pub(super) fn frame(
     // `shell_ms` comes last because it measures everything above it.
     shared.ui.picture.instruments.timings = harmonigraph_perf::ShellTimings {
         tess_ms: queue.tess_ms(),
-        egui_gpu_ms: queue.egui_gpu_ms(),
+        draw_gpu_ms: queue.draw_gpu_ms(),
         acquire_ms: queue.acquire_ms(),
         tick_ms: queue.tick_ms(),
         render_ms: queue.render_ms(),

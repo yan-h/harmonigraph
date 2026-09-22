@@ -26,7 +26,7 @@ interleaved, the two agree to 1%.
 Bitwig was drawing the live plugin on the same GPU throughout, so medians are inflated by some common amount and the ratios are the evidence.
 Timestamp minimums are often zero and mean nothing.
 
-**Every stamp is the END of a pass.** A tile-based GPU runs a later pass's vertex stage ahead of an earlier pass's fragments,
+**The original probe used END-of-pass stamps.** A tile-based GPU runs a later pass's vertex stage ahead of an earlier pass's fragments,
 so a beginning-of-pass stamp after `prepare` landed before the light field's fragment work and billed it to the paint pass.
 End stamps are better and still not a clean split:
 the stamp between `prepare` and `paint` is an independent one-texel pass that nothing orders against its neighbours,
@@ -34,6 +34,65 @@ and the tone pass below — encoded in `prepare` — reads out under `paint`.
 **The total interval is the figure to trust**, and the split is a hint.
 The later history-span probe reports its median directly;
 adding separate medians need not produce the median total.
+
+### Overlay timer bracket check (2026-09-21)
+
+Issue #1028 asked why the overlay reported `0.0 ui` while a long-span spectrogram was GPU-bound.
+The probe now records both boundaries of its opening 1x1 pass,
+preparation boundary,
+actual spectrogram paint pass and trailing 1x1 pass in one command buffer.
+That compares the old paint-begin to tail-begin bracket with opening-begin to paint-end,
+the interval now used by the overlay.
+The opening-end to paint-end interval is a second control for the start boundary.
+Zero samples fail the probe,
+and reversed pairs are counted before durations are clamped for display.
+
+On macOS 27.0 (26A428),
+Apple M1 Pro with Metal and wgpu 29.0.4,
+the ignored probe drew 1416×1798 pixels at 2 px/pt,
+with 1024 slabs of 3828 buckets filling the pane.
+It interleaved 12 case/span combinations over 10 warmup and 60 measured frames each,
+using 10 s and 600 s histories with `PROBE_BLUR_TIME_STEP=0`.
+The full interval reacts to the density-source growth in `blur only`,
+and separately to Watercolor's heavier paint relative to `blur only` at the same span.
+
+| Case | Span | Source px | New median ms | New p10–p90 ms | Old median ms | Old reversed pairs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Plain | 10 s | none | 0.789 | 0.705–1.927 | 0.036 | 6/60 |
+| Plain | 600 s | none | 0.870 | 0.714–2.039 | 0.084 | 9/60 |
+| Blur only | 10 s | 167×549 | 0.926 | 0.775–1.980 | 0.000 | 31/60 |
+| Blur only | 600 s | 1416×549 | 2.737 | 1.770–3.668 | 0.021 | 7/60 |
+| Watercolor defaults | 10 s | 167×549 | 1.704 | 1.144–2.592 | 0.000 | 31/60 |
+| Watercolor defaults | 600 s | 1416×549 | 2.913 | 2.139–3.841 | 0.021 | 5/60 |
+
+The `new` interval runs from opening-begin to paint-end.
+All eight timestamp slots were nonzero,
+and the new pair had no reversals in any of the 12 cases.
+The old bracket reversed in up to 31 of 60 frames in this table,
+which explains why saturating subtraction made GPU work appear to cost zero.
+One raw `blur only` 10 s example has paint-begin tick 429753183075500 after tail-begin tick 429753183018500,
+while opening-begin tick 429753182689750 precedes paint-end tick 429753183469791.
+The independent opening-end control was earlier than paint-end throughout,
+but in this run its median interval was 0.37 ms shorter than opening-begin to paint-end for 600 s blur.
+That independent pass is not a reliable split boundary.
+
+The 10 s Watercolor case adds 0.78 ms to the new median against `blur only` at the same source size,
+so paint work changes the interval separately from long-span preparation.
+The earlier 60-frame run recorded higher absolute medians under different shared-machine load:
+1.396 ms plain,
+3.640 ms long-span blur and 4.457 ms long-span Watercolor.
+The case ordering persisted;
+these absolute readings are not stable enough to make a speedup claim.
+
+These are GPU intervals on a held render target,
+not end-to-end DAW frame times.
+The diagnostic probe waits for completion;
+the production timer keeps one asynchronous readback and uses nonblocking polls.
+The overlay's `draw` interval covers callback passes encoded into egui's command buffer and the final composite,
+including the lattice's narrower `3d` interval.
+Queue-staged uploads and any callback-owned command buffers submitted ahead of it are outside the interval.
+The independent opening 1x1 pass is empirically validated for this GPU and workload,
+not a cross-adapter synchronization guarantee.
 
 ## Readings on Apple M1 Pro (14-core) / Metal
 

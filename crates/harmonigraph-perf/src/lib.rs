@@ -102,12 +102,13 @@ pub struct ShellTimings {
     /// shapes, and this covers turning those shapes into triangles afterwards.
     /// A cost can be entirely in one and invisible in the other.
     pub tess_ms: f32,
-    /// Milliseconds the GPU spent on egui's own render pass.
+    /// Milliseconds of GPU drawing from callback preparation through egui's
+    /// final composite. Excludes queue uploads and any separate command
+    /// buffers returned by paint callbacks.
     ///
-    /// Disjoint from the lattice's `gpu_ms`, which brackets only its own
-    /// passes: between them they cover the frame's GPU work, and the two were
-    /// separated because the lattice turned out to be the cheap half.
-    pub egui_gpu_ms: f32,
+    /// The lattice's `gpu_ms` is a narrower reading inside this interval,
+    /// shown separately to help attribute 3D cost. Do not add the two.
+    pub draw_gpu_ms: f32,
     /// Milliseconds the shell spent on its own per-frame work before the UI
     /// ran — draining the event rings and reconciling the take.
     ///
@@ -162,8 +163,8 @@ pub struct FrameCosts {
     pub cpu_ms: f32,
     /// Turning the resulting shapes into triangles.
     pub tess_ms: f32,
-    /// GPU time for egui's own pass: everything 2D.
-    pub egui_gpu_ms: f32,
+    /// GPU elapsed time from callback preparation through egui composition.
+    pub draw_gpu_ms: f32,
     /// GPU time for the lattice's passes: the 3D scene and its bloom chain.
     /// Carries the `GPU_TIME_UNSUPPORTED` / `PENDING` sentinels.
     pub lattice_gpu_ms: f32,
@@ -361,9 +362,9 @@ pub enum Stage {
     Encode,
     /// Finish, submit and present.
     Submit,
-    /// GPU milliseconds for egui's own render pass: the 2D UI, which the
-    /// lattice's timer does not cover.
-    EguiGpu,
+    /// GPU milliseconds for callback preparation and egui composition;
+    /// includes the lattice's narrower GPU interval.
+    DrawGpu,
     /// GPU milliseconds for the lattice's own passes — the 3D scene and its
     /// bloom chain. Only takes a sample on the frames a readback lands.
     Gpu,
@@ -389,14 +390,14 @@ impl Stage {
         const fn covered(s: Stage) {
             match s {
                 Frame | Tick | Egui | Shell | Ui | Render | Tess | Texture | BufUp | Ubuf
-                | Prepare | Poll | Write | Scene | Around | Acquire | Encode | Submit | EguiGpu
+                | Prepare | Poll | Write | Scene | Around | Acquire | Encode | Submit | DrawGpu
                 | Gpu => (),
             }
         }
         covered(Gpu);
         [
             Frame, Tick, Egui, Shell, Ui, Render, Tess, Texture, BufUp, Ubuf, Prepare, Poll, Write,
-            Scene, Around, Acquire, Encode, Submit, EguiGpu, Gpu,
+            Scene, Around, Acquire, Encode, Submit, DrawGpu, Gpu,
         ]
         .len()
     };
@@ -421,7 +422,7 @@ pub struct StageInfo {
     stage: Stage,
     /// How deep the breakdown indents it.
     pub depth: u8,
-    /// What the row is called. `egui gpu` is the one stage whose label never
+    /// What the row is called. `draw gpu` is the one stage whose label never
     /// reaches the screen: only its number does, inside `gpu`'s row.
     pub label: &'static str,
     /// Whether the breakdown prints a row of its own for it, at `depth`.
@@ -455,7 +456,7 @@ const fn measured(
 /// Three of them, for three different reasons. `frame` heads BOTH lists, so
 /// the breakdown cannot own it, and only `record` knows whether a frame had a
 /// predecessor to measure an interval against. The GPU pair share one printed
-/// line, so `egui gpu`'s label and depth are never drawn, only its number.
+/// line, so `draw gpu`'s label and depth are never drawn, only its number.
 /// And `gpu` is fed by hand because its sentinel decides more than a value:
 /// the same reading is what sets `gpu_supported` and `have_gpu`, and two of
 /// its three answers are no sample at all — none of which a
@@ -518,7 +519,7 @@ pub const STAGES: [StageInfo; Stage::COUNT] = [
     // than inside any of them, so nesting either under `tick` would be a lie
     // about what contains what. They share one printed line, which is `gpu`'s,
     // so it is `gpu`'s depth that the overlay reads.
-    by_hand(Stage::EguiGpu, 0, "egui gpu", Some(|c| c.egui_gpu_ms)),
+    by_hand(Stage::DrawGpu, 0, "draw gpu", Some(|c| c.draw_gpu_ms)),
     by_hand(Stage::Gpu, 0, "gpu", None),
 ];
 
@@ -646,7 +647,7 @@ impl FrameCosts {
             shell_ms: shell.shell_ms,
             cpu_ms,
             tess_ms: shell.tess_ms,
-            egui_gpu_ms: shell.egui_gpu_ms,
+            draw_gpu_ms: shell.draw_gpu_ms,
             lattice_gpu_ms: ms(&lattice.gpu_ms),
             prepare_ms: ms(&lattice.prepare_ms),
             poll_ms: ms(&lattice.poll_ms),

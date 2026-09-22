@@ -134,7 +134,7 @@ pub struct Queue<'a> {
     frame_interval: &'a mut Option<f64>,
     display_max_fps: Option<f64>,
     tess_ms: f32,
-    egui_gpu_ms: f32,
+    draw_gpu_ms: f32,
     acquire_ms: f32,
     tick_ms: f32,
     render_ms: f32,
@@ -156,7 +156,7 @@ impl<'a> Queue<'a> {
         frame_interval: &'a mut Option<f64>,
         display_max_fps: Option<f64>,
         tess_ms: f32,
-        egui_gpu_ms: f32,
+        draw_gpu_ms: f32,
         acquire_ms: f32,
         tick_ms: f32,
         render_ms: f32,
@@ -178,7 +178,7 @@ impl<'a> Queue<'a> {
             frame_interval,
             display_max_fps,
             tess_ms,
-            egui_gpu_ms,
+            draw_gpu_ms,
             acquire_ms,
             tick_ms,
             render_ms,
@@ -252,14 +252,15 @@ impl<'a> Queue<'a> {
         self.acquire_ms
     }
 
-    /// Milliseconds the GPU spent on egui's own render pass a few frames ago,
+    /// Milliseconds the GPU spent from callback preparation through egui's
+    /// composite a few frames ago,
     /// or 0 where the device can't measure it.
     ///
-    /// This is the 2D UI — dock, panels, text, the spectrogram quad, every
-    /// roll ribbon. A wgpu paint callback's own passes are not in it, so a
-    /// lattice timer and this one measure disjoint halves of the frame.
-    pub fn egui_gpu_ms(&self) -> f32 {
-        self.egui_gpu_ms
+    /// The lattice's 3D time is included here and also shown separately in
+    /// the overlay. Queue uploads and callback-owned command buffers are
+    /// outside this bracket.
+    pub fn draw_gpu_ms(&self) -> f32 {
+        self.draw_gpu_ms
     }
 
     /// Milliseconds the PREVIOUS frame spent tessellating egui's shapes.
@@ -377,9 +378,9 @@ where
     /// ever be handed the last one. One frame stale, like every other
     /// after-the-fact measurement here.
     tess_ms: f32,
-    /// Likewise for egui's own render pass, which lags further still — the
-    /// timestamps have to come back from the GPU.
-    egui_gpu_ms: f32,
+    /// Likewise for GPU drawing, which lags further still — the timestamps
+    /// have to come back from the GPU.
+    draw_gpu_ms: f32,
     /// Likewise for the surface wait.
     acquire_ms: f32,
     /// The whole previous callback, end to end.
@@ -468,7 +469,7 @@ where
             &mut key_capture,
             &mut frame_interval,
             window.display_max_fps(),
-            // No frame has been measured yet: tess, egui gpu, acquire, tick,
+            // No frame has been measured yet: tess, draw gpu, acquire, tick,
             // render, upload, ubuf, texture, encode, submit, then the two
             // geometry counts.
             0.0,
@@ -536,7 +537,7 @@ where
             retry_after: None,
             key_capture,
             tess_ms: 0.0,
-            egui_gpu_ms: 0.0,
+            draw_gpu_ms: 0.0,
             acquire_ms: 0.0,
             tick_ms: 0.0,
             render_ms: 0.0,
@@ -873,7 +874,7 @@ where
             &mut frame_interval,
             window.display_max_fps(),
             self.tess_ms,
-            self.egui_gpu_ms,
+            self.draw_gpu_ms,
             self.acquire_ms,
             self.tick_ms,
             self.render_ms,
@@ -984,7 +985,7 @@ where
             (self.refused_presents, self.retry_after) =
                 after_render(presented, self.refused_presents, now);
             self.tess_ms = self.renderer.last_tess_ms();
-            self.egui_gpu_ms = self.renderer.last_gpu_ms();
+            self.draw_gpu_ms = self.renderer.last_gpu_ms();
             self.acquire_ms = self.renderer.last_acquire_ms();
             self.upload_ms = self.renderer.last_upload_ms();
             self.ubuf_ms = self.renderer.last_ubuf_ms();

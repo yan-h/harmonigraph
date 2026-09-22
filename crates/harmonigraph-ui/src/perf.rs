@@ -87,9 +87,9 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
             gpu.depth,
             gpu.label,
             {
-                // Both passes on one line, at the depth the table gives them: the
-                // top level, because they run alongside the CPU stages rather than
-                // inside any of them.
+                // The 3D time is a subset of the draw interval, shown on one
+                // line so the reader can attribute GPU cost without adding the
+                // two readings together.
                 //
                 // Means only. Two peaks as well would be four numbers on one row,
                 // and the row would stop being readable long before it became more
@@ -101,7 +101,7 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
                 } else {
                     "—".to_owned()
                 };
-                format!("{:.1} ui · {lattice} 3d", perf.window(Stage::EguiGpu).shown_mean)
+                format!("{:.1} draw · {lattice} 3d", perf.window(Stage::DrawGpu).shown_mean)
             },
             None,
         ));
@@ -476,7 +476,7 @@ mod tests {
                 (2, "wait"),
                 (2, "encode"),
                 (2, "submit"),
-                // The GPU pair share this one line, so `egui gpu`'s own label
+                // The GPU pair share this one line, so `draw gpu`'s own label
                 // and depth never reach the screen.
                 (0, "gpu"),
                 (0, "verts"),
@@ -538,7 +538,7 @@ mod tests {
             acquire_ms: 10.0,
             encode_ms: 11.0,
             submit_ms: 12.0,
-            egui_gpu_ms: 20.0,
+            draw_gpu_ms: 40.0,
             lattice_gpu_ms: 30.0,
             render_ms: 60.0,
             tick_ms: 100.0,
@@ -596,9 +596,8 @@ mod tests {
             ("wait", "10.0"),
             ("encode", "11.0"),
             ("submit", "12.0"),
-            // The one row carrying two stages' numbers: egui's pass and the
-            // lattice's, in that order.
-            ("gpu", "20.0 ui · 30.0 3d"),
+            // The 3D figure is a narrower part of the draw interval.
+            ("gpu", "40.0 draw · 30.0 3d"),
             ("verts", "5k in 7 prims"),
             ("roll", "13 notes"),
             // The two caches, in the order the labels name them.
@@ -670,7 +669,7 @@ mod tests {
                 shell_ms: 1.0,
                 cpu_ms: 2.0,
                 tess_ms: 3.0,
-                egui_gpu_ms: 4.0,
+                draw_gpu_ms: 6.0,
                 lattice_gpu_ms: 5.0,
                 acquire_ms: 6.0,
                 tick_ms: 7.0,

@@ -424,7 +424,7 @@ The fallback counters count refolds/full uploads but not bytes copied, delta cou
 record bytes, slots, allocation count, and executed callback count per surface when evaluating SG4/SG5. For GPU timing, first prove a bracket responds to multiplied work and closes after a real dependency, using asynchronous readback and a validated timestamp mechanism.
 Do not replace working beginning-of-pass timestamps with advertised end timestamps without checking actual values.
 Coordinate measurement methods with #642, but validate the egui timer independently:
-`EguiGpuTimer` in the vendored renderer and lattice `GpuTimer` in `render/src/lib.rs` are different owners and query sets.
+`DrawGpuTimer` in the vendored renderer and lattice `GpuTimer` in `render/src/lib.rs` are different owners and query sets.
 Landing the lattice bracket change does not establish the spectrogram/egui bracket's validity.
 
 **Larger alternatives, conditional:** prefilter a level grid or prefix sums for pitch reads;
