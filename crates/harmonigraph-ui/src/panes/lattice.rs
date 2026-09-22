@@ -50,13 +50,18 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
     if response.double_clicked()
         && !state.runtime.lattice_maps.as_ref().is_some_and(|m| m.editing())
     {
-        // Reset orbit/zoom, but keep the chosen projection: that's a view
-        // preference, not a navigation state. Home is the ORIGIN of the
-        // lattice, so the window's center goes back with the camera —
+        // Reset orbit/zoom, but keep the chosen projection and Cabinet depth
+        // settings: those are view preferences, not navigation state.
+        // Home is the ORIGIN of the lattice, so the window's center goes
+        // back with the camera —
         // otherwise a double-click on a scrolled view resets the camera into
         // the middle of wherever it had scrolled to, which is not a reset.
-        state.appearance.camera =
-            Camera { projection: state.appearance.camera.projection, ..Default::default() };
+        state.appearance.camera = Camera {
+            projection: state.appearance.camera.projection,
+            cabinet_angle: state.appearance.camera.cabinet_angle,
+            cabinet_scale: state.appearance.camera.cabinet_scale,
+            ..Default::default()
+        };
         state.appearance.view.center_threes = 0;
         state.appearance.view.center_fives = 0;
     }

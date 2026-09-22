@@ -54,6 +54,53 @@ fn zoom_gesture_over_lattice_zooms_the_camera() {
     assert!(after < start, "zoom-gesture wheel should zoom in ({start} -> {after})");
 }
 
+/// Navigation goes home on a double-click, while the projection and Cabinet
+/// drafting choices remain available even when another projection is active.
+#[test]
+fn double_click_resets_lattice_navigation_but_keeps_drafting_choices() {
+    for projection in PROJECTIONS {
+        let mut state = fresh();
+        let mut h = DockHarness::new();
+        let at = egui::pos2(150.0, 150.0); // Inside the default dock's Lattice leaf.
+        h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+        h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+
+        let camera = &mut state.picture.appearance.camera;
+        camera.projection = projection;
+        camera.cabinet_angle = 30f32.to_radians();
+        camera.cabinet_scale = 0.8;
+        camera.target = glam::vec3(0.25, -0.25, 0.0);
+        camera.yaw = 0.9;
+        camera.pitch = 0.5;
+        camera.distance = 8.0;
+        let view = &mut state.picture.appearance.view;
+        view.center_threes = 3;
+        view.center_fives = -2;
+        view.center_sevens = 1;
+
+        h.frame(&mut state, vec![press(at, true)]);
+        h.frame(&mut state, vec![press(at, false)]);
+        assert_eq!(
+            state.picture.appearance.camera.distance, 8.0,
+            "the first click must not reset {projection:?} navigation"
+        );
+        h.frame(&mut state, vec![press(at, true)]);
+        h.frame(&mut state, vec![press(at, false)]);
+
+        let camera = state.picture.appearance.camera;
+        let home = harmonigraph_scene::Camera::default();
+        assert_eq!(camera.projection, projection);
+        assert_eq!(camera.cabinet_angle, 30f32.to_radians());
+        assert_eq!(camera.cabinet_scale, 0.8);
+        assert_eq!(camera.target, home.target);
+        assert_eq!(camera.yaw, home.yaw);
+        assert_eq!(camera.pitch, home.pitch);
+        assert_eq!(camera.distance, home.distance);
+        let view = &state.picture.appearance.view;
+        assert_eq!((view.center_threes, view.center_fives, view.center_sevens), (0, 0, 1));
+    }
+}
+
 /// A wheel notch during a drag on the lattice is one gesture, not a stale drag.
 ///
 /// `end_stranded_drag` reads a wheel as a hand that is not on a button, and the
