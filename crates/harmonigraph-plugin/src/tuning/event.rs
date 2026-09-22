@@ -124,6 +124,13 @@ impl Event {
         }
     }
 
+    /// Start a reverse scan of one source's same-sample prefix. Only finite
+    /// tuning expressions initialize onsets; addressing is shared with output.
+    pub fn initial_tuning(self) -> Option<InitialTuning> {
+        let Self::Expression { kind: 2, value, .. } = self else { return None };
+        value.is_finite().then_some(InitialTuning { expression: self, value, seen: [0; 16] })
+    }
+
     pub fn matches(self, id: i32, channel: u8, key: u8) -> bool {
         match self {
             Self::Note { id: i, port, channel: c, key: k, .. }
@@ -136,6 +143,28 @@ impl Event {
             Self::Midi { port: 0, data, .. } => data[0] & 15 == channel && data[1] == key,
             _ => false,
         }
+    }
+}
+
+/// A wildcard can initialize several keys, but only the newest identity at
+/// each channel/key. This stack-local scan marks replacements before matching,
+/// so an expression naming an obsolete id cannot reach through its replacement.
+/// Expressions before an onset cannot initialize it; repeated expressions
+/// overwrite every addressed onset with their latest value.
+pub struct InitialTuning {
+    expression: Event,
+    value: f64,
+    seen: [u128; 16],
+}
+
+impl InitialTuning {
+    pub fn bind(&mut self, event: Event) -> Option<f64> {
+        let (id, channel, key, _) = event.attack()?;
+        let seen = &mut self.seen[usize::from(channel)];
+        let bit = 1u128 << key;
+        let replaced = *seen & bit != 0;
+        *seen |= bit;
+        (!replaced && self.expression.matches(id, channel, key)).then_some(self.value)
     }
 }
 
