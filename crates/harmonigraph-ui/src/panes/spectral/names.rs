@@ -3222,7 +3222,7 @@ mod tests {
             state.runtime.tuning = equal;
             state.runtime.tracker.handle_event(on(1.0, midi as u8));
             state.runtime.tracker.handle_event(off(2.0, midi as u8));
-            assert_eq!(said(&labels_in(&state, 5.0, BIG)), [name.clone()]);
+            assert_eq!(said(&labels_in(&state, 5.0, BIG)).as_slice(), std::slice::from_ref(&name));
             name
         };
 
