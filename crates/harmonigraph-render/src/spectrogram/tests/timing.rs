@@ -101,6 +101,10 @@ struct Case {
     /// Light field, paint, and submit-to-completion, in ms.
     samples: [Vec<f64>; 3],
     gpu_total: Vec<f64>,
+    gpu_from_open_begin: Vec<f64>,
+    gpu_old_bracket: Vec<f64>,
+    reversed_total: usize,
+    reversed_old: usize,
     cpu_prepare: Vec<f64>,
 }
 
@@ -184,12 +188,12 @@ fn cloud_costs_by_style_and_dial() {
     let set = device.create_query_set(&wgpu::QuerySetDescriptor {
         label: Some("timing_probe"),
         ty: wgpu::QueryType::Timestamp,
-        count: 3,
+        count: 8,
     });
     let buffer = |label, usage| {
         device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
-            size: 24,
+            size: 64,
             usage,
             mapped_at_creation: false,
         })
@@ -216,11 +220,10 @@ fn cloud_costs_by_style_and_dial() {
     // Held across frames, as a swapchain's is: allocating 33 MB per frame would
     // be the larger half of what a wall clock read.
     let pane_view = target("timing_pane", size);
-    // Every stamp is the END of a pass's fragment stage. A tile-based GPU runs
-    // a later pass's vertex stage ahead of an earlier pass's fragments, so a
-    // beginning-of-pass stamp lands before the work it is meant to follow;
-    // fragment stages alone finish in order.
-    let pass_ending_at =
+    // Paired begin/end samples compare the production timer's old bracket
+    // (paint begin -> independent tail begin) with the proposed full bracket
+    // (opening pass end -> paint end) on the same GPU submissions.
+    let stamped_pass =
         |encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, index: u32| {
             encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -237,8 +240,8 @@ fn cloud_costs_by_style_and_dial() {
                     depth_stencil_attachment: None,
                     timestamp_writes: Some(wgpu::RenderPassTimestampWrites {
                         query_set: &set,
-                        beginning_of_pass_write_index: None,
-                        end_of_pass_write_index: Some(index),
+                        beginning_of_pass_write_index: Some(index),
+                        end_of_pass_write_index: Some(index + 1),
                     }),
                     occlusion_query_set: None,
                     multiview_mask: None,
@@ -281,6 +284,10 @@ fn cloud_costs_by_style_and_dial() {
                 resources,
                 samples: Default::default(),
                 gpu_total: Vec::new(),
+                gpu_from_open_begin: Vec::new(),
+                gpu_old_bracket: Vec::new(),
+                reversed_total: 0,
+                reversed_old: 0,
                 cpu_prepare: Vec::new(),
             }
         })
@@ -297,7 +304,12 @@ fn cloud_costs_by_style_and_dial() {
                 resources,
                 samples,
                 gpu_total,
+                gpu_from_open_begin,
+                gpu_old_bracket,
+                reversed_total,
+                reversed_old,
                 cpu_prepare,
+                name,
                 history_seconds,
                 fill,
                 ..
@@ -337,13 +349,13 @@ fn cloud_costs_by_style_and_dial() {
                 }
             });
             let mut encoder = device.create_command_encoder(&Default::default());
-            drop(pass_ending_at(&mut encoder, &stamp_view, 0));
+            drop(stamped_pass(&mut encoder, &stamp_view, 0));
             let prepare_start = std::time::Instant::now();
             let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
             let prepare_ms = prepare_start.elapsed().as_secs_f64() * 1000.0;
-            drop(pass_ending_at(&mut encoder, &stamp_view, 1));
+            drop(stamped_pass(&mut encoder, &stamp_view, 2));
             {
-                let mut pass = pass_ending_at(&mut encoder, &pane_view, 2);
+                let mut pass = stamped_pass(&mut encoder, &pane_view, 4);
                 cb.paint(
                     egui::PaintCallbackInfo {
                         viewport: rect,
@@ -355,8 +367,9 @@ fn cloud_costs_by_style_and_dial() {
                     resources,
                 );
             }
-            encoder.resolve_query_set(&set, 0..3, &resolve, 0);
-            encoder.copy_buffer_to_buffer(&resolve, 0, &staging, 0, 24);
+            drop(stamped_pass(&mut encoder, &stamp_view, 6));
+            encoder.resolve_query_set(&set, 0..8, &resolve, 0);
+            encoder.copy_buffer_to_buffer(&resolve, 0, &staging, 0, 64);
             let start = std::time::Instant::now();
             queue.submit(bufs.into_iter().chain([encoder.finish()]));
             let slice = staging.slice(..);
@@ -367,12 +380,26 @@ fn cloud_costs_by_style_and_dial() {
                 bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range()).to_vec();
             staging.unmap();
             if frame >= 10 {
+                assert!(
+                    ticks.iter().all(|&tick| tick > 0),
+                    "Metal returned a zero timestamp: {ticks:?}"
+                );
+                if ticks[5] < ticks[0] || ticks[5] < ticks[1] {
+                    eprintln!("reversed full interval {name} {history_seconds}s: {ticks:?}");
+                }
+                if ticks[6] < ticks[4] && *reversed_old == 0 {
+                    eprintln!("first old-bracket reversal {name} {history_seconds}s: {ticks:?}");
+                }
+                *reversed_total += usize::from(ticks[5] < ticks[0]);
+                *reversed_old += usize::from(ticks[6] < ticks[4]);
                 let ms =
                     |a: usize, b: usize| ticks[b].saturating_sub(ticks[a]) as f64 * period / 1.0e6;
-                samples[0].push(ms(0, 1));
-                samples[1].push(ms(1, 2));
+                samples[0].push(ms(1, 3));
+                samples[1].push(ms(3, 5));
                 samples[2].push(wall_ms);
-                gpu_total.push(ms(0, 2));
+                gpu_total.push(ms(1, 5));
+                gpu_from_open_begin.push(ms(0, 5));
+                gpu_old_bracket.push(ms(4, 6));
                 cpu_prepare.push(prepare_ms);
             }
         }
@@ -382,14 +409,17 @@ fn cloud_costs_by_style_and_dial() {
     // total: independent timestamp passes can overlap on a tile-based GPU.
     // Split minima can be zero and do not establish an uncontended cost.
     eprintln!(
-        "{:<38} {:>5} {:>8}  {:>15}  {:>15}  {:>15}  {:>10}  {:>10}  source px",
+        "{:<38} {:>5} {:>8}  {:>15}  {:>15}  {:>15}  {:>10}  {:>10}  {:>10}  {:>10}  {:>10}  source px",
         "case",
         "fill",
         "span s",
         "light med/min",
         "paint med/min",
         "wall med/min",
-        "GPU med",
+        "end/full",
+        "begin/full",
+        "old med",
+        "rev new/old",
         "CPU prep"
     );
     for case in &mut cases {
@@ -398,15 +428,33 @@ fn cloud_costs_by_style_and_dial() {
             format!("{:>7.2}/{:>7.2}", samples[samples.len() / 2], samples[0])
         });
         case.gpu_total.sort_by(f64::total_cmp);
+        case.gpu_from_open_begin.sort_by(f64::total_cmp);
+        case.gpu_old_bracket.sort_by(f64::total_cmp);
         case.cpu_prepare.sort_by(f64::total_cmp);
         let source = case.cb.atmosphere.map(|a| atmosphere::source_size(size, ppp, a));
         eprintln!(
-            "{:<38} {:>5.2} {:>8.1}  {light}  {paint}  {wall}  {:>10.3}  {:>10.3}  {source:?}",
+            "{:<38} {:>5.2} {:>8.1}  {light}  {paint}  {wall}  {:>10.3}  {:>10.3}  {:>10.3}  {:>4}/{:<4}  {:>10.3}  {source:?}",
             case.name,
             case.fill,
             case.history_seconds,
             case.gpu_total[case.gpu_total.len() / 2],
+            case.gpu_from_open_begin[case.gpu_from_open_begin.len() / 2],
+            case.gpu_old_bracket[case.gpu_old_bracket.len() / 2],
+            case.reversed_total,
+            case.reversed_old,
             case.cpu_prepare[case.cpu_prepare.len() / 2]
+        );
+        let spread = |samples: &[f64]| {
+            let at = |fraction: usize| samples[(samples.len() - 1) * fraction / 100];
+            format!("{:.3}/{:.3}/{:.3}/{:.3}/{:.3}", at(0), at(10), at(50), at(90), at(100))
+        };
+        eprintln!(
+            "  {} {:.1}s GPU min/p10/med/p90/max begin/full={} end/full={} old={}",
+            case.name,
+            case.history_seconds,
+            spread(&case.gpu_from_open_begin),
+            spread(&case.gpu_total),
+            spread(&case.gpu_old_bracket)
         );
     }
 }
