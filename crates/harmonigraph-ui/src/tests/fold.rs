@@ -103,7 +103,17 @@ fn resetting_layout_restores_open_sections_after_traversal() {
 }
 
 fn click_label(h: &mut DockHarness, state: &mut SharedState, label: &str) {
-    let output = h.frame(state, vec![]);
+    let mut output = h.frame(state, vec![]);
+    if label == "Layout"
+        && !output.shapes.iter().any(|s| {
+            matches!(&s.shape,
+                egui::Shape::Text(t) if t.galley.text() == label
+            )
+        })
+    {
+        click_label(h, state, panes::tab_title(&state.workspace.layout.settings_tab));
+        output = h.frame(state, vec![]);
+    }
     let at = output
         .shapes
         .iter()
@@ -619,4 +629,71 @@ fn a_discarded_pass_does_not_charge_an_internal_fold_twice() {
     region_click(&mut h, &mut state, 1);
     h.settle_folds(&mut state);
     near(h.screen.size(), original);
+}
+
+#[test]
+fn section_and_region_chevrons_share_visible_hover_feedback() {
+    let mut state = fresh();
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let section = state.workspace.layout_runtime.rects[Section::Analyzer as usize];
+    let section_cell =
+        egui::Rect::from_min_size(section.min, egui::Vec2::splat(theme::tab_bar_height(1.0)));
+    let region_cell = h.ctx.read_response(egui::Id::new(("analyzer region fold", 0))).unwrap().rect;
+    for cell in [section_cell, region_cell] {
+        let out = h.frame(&mut state, vec![egui::Event::PointerMoved(cell.center())]);
+        assert!(
+            out.shapes.iter().any(|cs| matches!(&cs.shape,
+                egui::Shape::Rect(r) if r.rect.contains(cell.center()) && (r.rect.height() - theme::row_height(1.0)).abs() < 0.5
+                    && (r.rect.center().y - cell.center().y).abs() < 0.5
+                    && r.corner_radius == egui::CornerRadius::same(theme::control_radius(1.0))
+                    && r.fill == theme::widget_hover()
+            )),
+            "no hover fill at {cell:?}"
+        );
+        assert!(
+            out.shapes.iter().any(|cs| matches!(&cs.shape,
+                egui::Shape::Path(p) if p.points.len() == 3
+                    && cell.contains_rect(egui::Rect::from_points(&p.points))
+                    && p.stroke.color == egui::epaint::ColorMode::Solid(theme::text())
+            )),
+            "no bright chevron at {cell:?}"
+        );
+    }
+}
+
+#[test]
+fn a_folded_analyzer_keeps_one_header_row_and_its_spiral_choice() {
+    for scale in [1.0, 1.5] {
+        let mut state = fresh();
+        let mut h = DockHarness::scaled(egui::vec2(1000.0, 800.0) * scale, scale, &mut state);
+        h.settle(&mut state);
+        region_click(&mut h, &mut state, 0);
+        h.settle_folds(&mut state);
+        region_click(&mut h, &mut state, 1);
+        h.settle_folds(&mut state);
+        let out = h.frame(&mut state, vec![]);
+        let section = state.workspace.layout_runtime.rects[Section::Analyzer as usize];
+        let body = pane_body(&state, &panes::Tab::Spectral).unwrap();
+        assert!((body.top() - section.top() - theme::tab_bar_height(scale)).abs() < 0.5);
+        let find = |out: &egui::FullOutput, name: &str| {
+            out.shapes.iter().find_map(|cs| match &cs.shape {
+                egui::Shape::Text(t)
+                    if t.galley.text() == name
+                        && t.pos.x >= section.left()
+                        && t.pos.x < section.right() =>
+                {
+                    Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
+                }
+                _ => None,
+            })
+        };
+        assert!(find(&out, "Spiral").is_none(), "fixture did not reach the dropdown");
+        let picker = find(&out, "Analyzer").expect("current view dropdown");
+        click_at(&mut h, &mut state, picker);
+        let menu = h.frame(&mut state, vec![]);
+        let spiral = find(&menu, "Spiral").expect("Spiral in dropdown");
+        click_at(&mut h, &mut state, spiral);
+        assert_eq!(state.workspace.layout.analyzer_tab, panes::Tab::Spiral);
+    }
 }

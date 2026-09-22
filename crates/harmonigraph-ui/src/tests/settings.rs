@@ -110,7 +110,7 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
         SettingsPane::Page(DisplayPage::System),
         SettingsPane::Tab(panes::Tab::Video),
     ] {
-        let moved = wheel_over_settings_pane(pane, 300.0);
+        let moved = wheel_over_settings_pane(pane, 200.0);
         assert!(moved < -8.0, "{pane:?} did not scroll to the wheel (content moved {moved})");
     }
 }
@@ -929,8 +929,8 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
         },
     );
 
-    // Back over the settings pane, wheel, and see whether anything moves.
-    let settings = egui::pos2(860.0, 130.0);
+    // Wheel over the settings gutter, clear of controls that consume scroll.
+    let settings = egui::pos2(995.0, 130.0);
     frame(&mut state, vec![egui::Event::PointerMoved(settings)]);
     let before = frame(&mut state, vec![]);
     frame(

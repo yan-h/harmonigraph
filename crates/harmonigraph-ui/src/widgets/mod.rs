@@ -14,6 +14,7 @@
 //! which file it is in.
 
 mod bar;
+mod fold;
 mod gradient;
 mod layer;
 mod mesh;
@@ -27,11 +28,13 @@ mod rows;
 mod stack;
 mod value;
 
+pub(crate) use fold::paint_fold;
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
 pub use layer::LayerStrip;
 pub use octave::OctaveStrip;
 pub use range::RangeBar;
 pub use rows::{button_row, choice_row, option_label, record_button, row_field, toggle_switch};
+pub(crate) use rows::{choice_buttons, option_width, preset_row, selected_combo};
 pub use stack::StackBar;
 pub use value::{progress_bar, ValueBar};
 
