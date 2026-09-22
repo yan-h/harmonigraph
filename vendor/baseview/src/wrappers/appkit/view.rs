@@ -117,6 +117,7 @@ pub trait ViewImpl: Sized {
     fn view_did_change_backing_properties(this: ViewRef<Self>);
     fn hit_test(this: ViewRef<'_, Self>, point: NSPoint) -> Option<&NSView>;
     fn view_will_move_to_window(this: ViewRef<Self>, new_window: Option<&NSWindow>);
+    fn view_did_move_to_window(this: ViewRef<Self>);
     fn update_tracking_areas(this: ViewRef<Self>);
     fn reset_cursor_rects(this: ViewRef<Self>);
     fn cursor_update(this: ViewRef<Self>, event: &NSEvent);
