@@ -124,29 +124,11 @@ impl Event {
         }
     }
 
-    /// Select an initial expression's onset from one source's retained
-    /// same-sample prefix, newest first. Expressions before an onset cannot
-    /// initialize it; repeated expressions overwrite the same target. A later
-    /// same-key attack retires the old identity even if this expression names it.
-    pub fn initial_tuning_target(
-        self,
-        preceding: impl Iterator<Item = (usize, Self)> + Clone,
-    ) -> Option<(usize, f64)> {
+    /// Start a reverse scan of one source's same-sample prefix. Only finite
+    /// tuning expressions initialize onsets; addressing is shared with output.
+    pub fn initial_tuning(self) -> Option<InitialTuning> {
         let Self::Expression { kind: 2, value, .. } = self else { return None };
-        if !value.is_finite() {
-            return None;
-        }
-        let (position, onset) = preceding.clone().find(|(_, event)| {
-            event.attack().is_some_and(|(id, channel, key, _)| self.matches(id, channel, key))
-        })?;
-        let (_, channel, key, _) = onset.attack()?;
-        if preceding
-            .take_while(|(index, _)| *index != position)
-            .any(|(_, event)| event.attack().is_some_and(|(_, c, k, _)| (c, k) == (channel, key)))
-        {
-            return None;
-        }
-        Some((position, value))
+        value.is_finite().then_some(InitialTuning { expression: self, value, seen: [0; 16] })
     }
 
     pub fn matches(self, id: i32, channel: u8, key: u8) -> bool {
@@ -161,6 +143,28 @@ impl Event {
             Self::Midi { port: 0, data, .. } => data[0] & 15 == channel && data[1] == key,
             _ => false,
         }
+    }
+}
+
+/// A wildcard can initialize several keys, but only the newest identity at
+/// each channel/key. This stack-local scan marks replacements before matching,
+/// so an expression naming an obsolete id cannot reach through its replacement.
+/// Expressions before an onset cannot initialize it; repeated expressions
+/// overwrite every addressed onset with their latest value.
+pub struct InitialTuning {
+    expression: Event,
+    value: f64,
+    seen: [u128; 16],
+}
+
+impl InitialTuning {
+    pub fn bind(&mut self, event: Event) -> Option<f64> {
+        let (id, channel, key, _) = event.attack()?;
+        let seen = &mut self.seen[usize::from(channel)];
+        let bit = 1u128 << key;
+        let replaced = *seen & bit != 0;
+        *seen |= bit;
+        (!replaced && self.expression.matches(id, channel, key)).then_some(self.value)
     }
 }
 

@@ -408,18 +408,17 @@ impl Tune {
     /// note starts from, not a change to it. Only the tail of the line can
     /// hold an onset at the same time, so this scan is bounded by one cohort.
     fn bind_initial_tuning(&mut self, due: i64, event: Event) {
-        let preceding = (0..self.line.len())
-            .rev()
-            .filter_map(|offset| {
-                let position = self.line.position(offset)?;
-                Some((position, self.line.at(position)?))
-            })
-            .take_while(|(_, pending)| pending.due == due)
-            .map(|(position, pending)| (position, pending.event));
-        if let Some((position, value)) = event.initial_tuning_target(preceding) {
+        let Some(mut tuning) = event.initial_tuning() else { return };
+        for offset in (0..self.line.len()).rev() {
+            let position = self.line.position(offset).unwrap();
             let mut pending = self.line.at(position).unwrap();
-            pending.player = value;
-            self.line.set(position, pending);
+            if pending.due != due {
+                break;
+            }
+            if let Some(value) = tuning.bind(pending.event) {
+                pending.player = value;
+                self.line.set(position, pending);
+            }
         }
     }
 

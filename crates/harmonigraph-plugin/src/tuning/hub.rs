@@ -636,18 +636,16 @@ impl Hub {
     /// Bind in each source's input order, before the musical sort moves
     /// expressions ahead of onsets. The derived value follows its onset serial.
     fn retain(batch: &mut Vec<Record>, record: Record) {
-        let preceding = batch
-            .iter()
-            .enumerate()
-            .rev()
-            .take_while(|(_, other)| {
+        if let Some(mut tuning) = record.event.initial_tuning() {
+            for other in batch.iter_mut().rev().take_while(|other| {
                 other.source == record.source
                     && other.sample == record.sample
                     && other.epoch == record.epoch
-            })
-            .map(|(position, other)| (position, other.event));
-        if let Some((position, value)) = record.event.initial_tuning_target(preceding) {
-            batch[position].player = value;
+            }) {
+                if let Some(value) = tuning.bind(other.event) {
+                    other.player = value;
+                }
+            }
         }
         batch.push(record);
     }
