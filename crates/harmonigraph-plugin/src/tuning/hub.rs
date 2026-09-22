@@ -50,6 +50,7 @@ struct Record {
     serial: u64,
     epoch: u64,
     event: Event,
+    player: f64,
 }
 
 impl Record {
@@ -540,7 +541,7 @@ impl Hub {
                 self.sequencer.map = attack.playback.map;
                 self.sequencer.config = timed_config.into();
                 for position in index..end {
-                    self.apply(position, index, end, timed_config);
+                    self.apply(position, timed_config);
                 }
             } else {
                 // Outside retained/known configuration, which is routine rather
@@ -568,7 +569,7 @@ impl Hub {
                     self.sequencer.config = config.into();
                 }
                 for position in index..end {
-                    self.apply(position, index, end, config);
+                    self.apply(position, config);
                 }
                 self.sequencer.engine = restore;
             }
@@ -587,14 +588,18 @@ impl Hub {
         while self.batch.len() < BATCH_EVENTS {
             let Some(capture) = self.tune.take_direct() else { break };
             if capture.epoch == direct_epoch {
-                self.batch.push(Record {
-                    retune: capture.retune,
-                    source: DIRECT,
-                    sample: capture.sample,
-                    serial: capture.serial,
-                    epoch: capture.epoch,
-                    event: capture.event,
-                });
+                Self::retain(
+                    &mut self.batch,
+                    Record {
+                        retune: capture.retune,
+                        source: DIRECT,
+                        sample: capture.sample,
+                        serial: capture.serial,
+                        epoch: capture.epoch,
+                        event: capture.event,
+                        player: 0.0,
+                    },
+                );
             }
         }
         let epoch = self.epoch;
@@ -612,22 +617,45 @@ impl Hub {
                 if capture.epoch != epoch {
                     continue;
                 }
-                self.batch.push(Record {
-                    retune: capture.retune,
-                    source: slot as u8,
-                    sample: capture.sample,
-                    serial: capture.serial,
-                    epoch: capture.epoch,
-                    event: capture.event,
-                });
+                Self::retain(
+                    &mut self.batch,
+                    Record {
+                        retune: capture.retune,
+                        source: slot as u8,
+                        sample: capture.sample,
+                        serial: capture.serial,
+                        epoch: capture.epoch,
+                        event: capture.event,
+                        player: 0.0,
+                    },
+                );
             }
         }
+    }
+
+    /// Bind in each source's input order, before the musical sort moves
+    /// expressions ahead of onsets. The derived value follows its onset serial.
+    fn retain(batch: &mut Vec<Record>, record: Record) {
+        let preceding = batch
+            .iter()
+            .enumerate()
+            .rev()
+            .take_while(|(_, other)| {
+                other.source == record.source
+                    && other.sample == record.sample
+                    && other.epoch == record.epoch
+            })
+            .map(|(position, other)| (position, other.event));
+        if let Some((position, value)) = record.event.initial_tuning_target(preceding) {
+            batch[position].player = value;
+        }
+        batch.push(record);
     }
 
     /// One record, in order: its effect on the policy's context, its decision
     /// if it is an onset, and its place in the schedule the display and the
     /// take draw.
-    fn apply(&mut self, position: usize, group: usize, group_end: usize, config: ResolvedConfig) {
+    fn apply(&mut self, position: usize, config: ResolvedConfig) {
         let record = self.batch[position];
         let source = usize::from(record.source);
         let scheduled = record.sample.saturating_add(self.rows[source].delay);
@@ -641,8 +669,7 @@ impl Hub {
                 return;
             }
         }
-        let assignment =
-            record.onset().then(|| self.assign(record, group, group_end, config)).flatten();
+        let assignment = record.onset().then(|| self.assign(record, config)).flatten();
         // A channel termination is one controller that ends every voice on its
         // channel. The instrument performs those endings, so the schedule owes
         // them as note-offs rather than as one opaque controller.
@@ -695,13 +722,7 @@ impl Hub {
     /// One onset, one decision. Everything the policy sees was folded in by an
     /// earlier record in this same pass, which is what makes a chord spread
     /// across three tracks one chord rather than three independent guesses.
-    fn assign(
-        &mut self,
-        record: Record,
-        group: usize,
-        group_end: usize,
-        config: ResolvedConfig,
-    ) -> Option<Assigned> {
+    fn assign(&mut self, record: Record, config: ResolvedConfig) -> Option<Assigned> {
         let (_, channel, key, _) = record.event.attack()?;
         let source = usize::from(record.source);
         // A same-key onset takes over the cell admission already found for
@@ -726,7 +747,7 @@ impl Hub {
         // displaced voice would still be there at HELD weight — a second
         // full-weight copy of the very pitch being scored.
         self.forget_replaced(record.source, channel, key);
-        let player = self.initial_tuning(record, group, group_end);
+        let player = record.player;
         let channel_pitch = self.rows[source].state.channel_pitch(channel);
         // Captures remain visible with Retune off. Only a still-current,
         // enabled arrival may make a decision or enter the musical context.
@@ -832,23 +853,6 @@ impl Hub {
             self.status |= session::POLICY;
         }
         Some(Assigned { correction, node, decision, player, channel_pitch, configuration: config })
-    }
-
-    /// A per-note pitch expression at its own note's sample is the value that
-    /// note starts from. The whole group is in hand, so this is a scan of one
-    /// cohort rather than a stash that has to be retired.
-    fn initial_tuning(&self, record: Record, group: usize, group_end: usize) -> f64 {
-        let Some((id, channel, key, _)) = record.event.attack() else { return 0.0 };
-        for other in &self.batch[group..group_end] {
-            if other.source != record.source {
-                continue;
-            }
-            let Event::Expression { kind: 2, value, .. } = other.event else { continue };
-            if other.event.matches(id, channel, key) && value.is_finite() {
-                return value;
-            }
-        }
-        0.0
     }
 
     fn reply(&mut self, record: Record, correction: i64) {
@@ -1175,4 +1179,4 @@ pub struct TestContext {
     pub context: Vec<policy::ContextPitch>,
 }
 
-const _: () = assert!(std::mem::size_of::<Record>() <= 88);
+const _: () = assert!(std::mem::size_of::<Record>() <= 96);
