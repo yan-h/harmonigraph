@@ -730,6 +730,66 @@ fn initial_expression_order_and_identity_match_in_both_production_routes() {
     }
 }
 
+/// One broadcast expression initializes every addressed key, including when
+/// Retune is disabled and the host receives the original wildcard unchanged.
+#[test]
+fn a_same_sample_wildcard_initializes_each_addressed_onset() {
+    let _scope = crate::test_scope::enter();
+    for (id, channel, key, players) in [
+        (-1, 0, -1, [0.5, 0.5]),
+        (-1, -1, 60, [0.5, 0.0]),
+        (8, -1, -1, [0.0, 0.5]),
+        (-1, 1, -1, [0.0, 0.0]),
+    ] {
+        let (mut hub, mut capture) = Device::recorded_hub();
+        hub.activate();
+        let mut tune = Device::new(true);
+        tune.activate();
+        tune.shared().set_retune(false);
+        let Input::Expression(mut broadcast) = expression(id, 0.5, 0) else { unreachable!() };
+        broadcast.port_index = 0;
+        broadcast.channel = channel;
+        broadcast.key = key;
+        let mut pair = Pair { hub, tune, raw: 0 };
+        pair.step(vec![
+            note(7, 0, 60, 0, true),
+            note(8, 0, 64, 0, true),
+            Input::Expression(broadcast),
+        ]);
+        let output = pair.idle();
+        assert_eq!(output.len(), 3, "two notes and the uncorrected broadcast");
+        assert!(matches!(
+            output[2].1,
+            Event::Expression { id: out_id, port: 0, channel: out_channel, key: out_key, value: 0.5, .. }
+                if (out_id, out_channel, out_key) == (id, channel, key)
+        ));
+        let published: Vec<_> = capture
+            .display_events()
+            .into_iter()
+            .filter_map(|record| match record {
+                harmonigraph_take::CanonicalRecord::Delta(delta)
+                    if matches!(delta.event.kind, harmonigraph_take::NoteKind::On { .. }) =>
+                {
+                    Some(delta)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(published.len(), 2);
+        for (key, player) in [60, 64].into_iter().zip(players) {
+            let voice = inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, key)).unwrap();
+            assert_eq!(voice.player_tuning, player, "addressed key {key}");
+            let expected = i64::from(key) * 100_000_000 + (player * 100_000_000.0).round() as i64;
+            assert_eq!(voice.onset_pitch_microcents, expected);
+            assert_eq!(voice.pitch_microcents, expected);
+            assert_eq!(
+                published.iter().find(|delta| delta.event.note == key).unwrap().pitch_microcents,
+                Some(expected)
+            );
+        }
+    }
+}
+
 /// A full ring drops that note from the Hub's context, so it sounds
 /// uncorrected and counts as a miss. The ring is what overflows; the note is
 /// not held back and nothing latches.
