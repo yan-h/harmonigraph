@@ -124,6 +124,31 @@ impl Event {
         }
     }
 
+    /// Select an initial expression's onset from one source's retained
+    /// same-sample prefix, newest first. Expressions before an onset cannot
+    /// initialize it; repeated expressions overwrite the same target. A later
+    /// same-key attack retires the old identity even if this expression names it.
+    pub fn initial_tuning_target(
+        self,
+        preceding: impl Iterator<Item = (usize, Self)> + Clone,
+    ) -> Option<(usize, f64)> {
+        let Self::Expression { kind: 2, value, .. } = self else { return None };
+        if !value.is_finite() {
+            return None;
+        }
+        let (position, onset) = preceding.clone().find(|(_, event)| {
+            event.attack().is_some_and(|(id, channel, key, _)| self.matches(id, channel, key))
+        })?;
+        let (_, channel, key, _) = onset.attack()?;
+        if preceding
+            .take_while(|(index, _)| *index != position)
+            .any(|(_, event)| event.attack().is_some_and(|(_, c, k, _)| (c, k) == (channel, key)))
+        {
+            return None;
+        }
+        Some((position, value))
+    }
+
     pub fn matches(self, id: i32, channel: u8, key: u8) -> bool {
         match self {
             Self::Note { id: i, port, channel: c, key: k, .. }

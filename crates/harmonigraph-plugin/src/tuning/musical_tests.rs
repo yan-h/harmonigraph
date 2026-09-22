@@ -360,11 +360,56 @@ fn production_a_released_note_never_outvotes_a_held_one() {
 #[test]
 fn production_tune_preserves_player_pitch_and_freezes_only_the_adaptive_correction() {
     let _scope = crate::test_scope::enter();
+    let (recorder, mut capture) = harmonigraph_record::testing::channel();
+    crate::configuration::inject_recorder(recorder);
     let mut phrase = Phrase::new();
-    phrase.step([vec![note(7, 0, 57, 0, true), expression(7, 0.25, 0)], vec![], vec![]], [0, 1, 2]);
+    capture.arm();
+    phrase.step(
+        [
+            vec![note(7, 0, 57, 0, true), expression(7, 0.25, 0), expression(7, 0.5, 0)],
+            vec![],
+            vec![],
+        ],
+        [0, 1, 2],
+    );
     let output = phrase.idle();
     let onset = phrase.voice(0, 57, 0);
     let correction = onset.frozen_offset_microcents;
+    let input_pitch = 5_750_000_000;
+    let expected = harmonigraph_core::policy::assign_new_note(
+        onset.assignment.unwrap().into(),
+        &[],
+        &Default::default(),
+        harmonigraph_core::policy::OrderedOnset { pitch: input_pitch },
+        &mut Default::default(),
+    )
+    .unwrap()
+    .assignment;
+    assert_eq!(correction, expected.correction_microcents());
+    assert_eq!(onset.attack_node, expected.node());
+    assert_eq!(onset.player_tuning, 0.5);
+    assert_eq!(onset.onset_pitch_microcents, input_pitch + correction);
+    assert_eq!(onset.pitch_microcents, onset.onset_pitch_microcents);
+    assert_eq!(phrase.sources[0].shared().last_input.load(Ordering::Relaxed), input_pitch);
+    assert_eq!(
+        phrase.sources[0].shared().last_output.load(Ordering::Relaxed),
+        onset.pitch_microcents
+    );
+    for records in [capture.display_events(), capture.drain_canonical()] {
+        let published = records
+            .into_iter()
+            .find_map(|record| match record {
+                harmonigraph_take::CanonicalRecord::Delta(delta)
+                    if matches!(delta.event.kind, harmonigraph_take::NoteKind::On { .. }) =>
+                {
+                    Some(delta)
+                }
+                _ => None,
+            })
+            .expect("both display and take receive the assigned onset");
+        assert_eq!(published.pitch_microcents, Some(onset.pitch_microcents));
+        assert_eq!(published.assignment, VoiceBaseline::metadata(&onset).map(Into::into));
+    }
     assert_ne!(correction, 0, "an adaptive choice was made for this attack");
     let emitted = output[0]
         .iter()
@@ -373,9 +418,9 @@ fn production_tune_preserves_player_pitch_and_freezes_only_the_adaptive_correcti
             _ => None,
         })
         .expect("the onset states its tuning");
-    assert!((emitted - (0.25 + correction as f64 / 100_000_000.0)).abs() < 1e-9);
+    assert!((emitted - (0.5 + correction as f64 / 100_000_000.0)).abs() < 1e-9);
     // A later expression moves the emitted pitch and not the frozen choice.
-    phrase.step([vec![expression(7, 0.5, 0)], vec![], vec![]], [0, 1, 2]);
+    phrase.step([vec![expression(7, 0.75, 0)], vec![], vec![]], [0, 1, 2]);
     let output = phrase.idle();
     let moved = output[0]
         .iter()
@@ -384,12 +429,41 @@ fn production_tune_preserves_player_pitch_and_freezes_only_the_adaptive_correcti
             _ => None,
         })
         .expect("the later expression is forwarded with the correction added");
-    assert!((moved - (0.5 + correction as f64 / 100_000_000.0)).abs() < 1e-9);
+    assert!((moved - (0.75 + correction as f64 / 100_000_000.0)).abs() < 1e-9);
     let after = phrase.voice(0, 57, 0);
     assert_eq!(after.frozen_offset_microcents, correction);
     assert_eq!(after.onset_pitch_microcents, onset.onset_pitch_microcents);
     assert_ne!(after.pitch_microcents, onset.pitch_microcents, "what sounds did move");
     phrase.release_all();
+}
+
+/// Identical note ids in different rows still belong to independent sources.
+#[test]
+fn initial_expressions_stay_with_their_source_before_musical_sorting() {
+    let _scope = crate::test_scope::enter();
+    let mut phrase = Phrase::new();
+    let players = [0.125, 0.25, 0.5];
+    phrase.step(
+        std::array::from_fn(|i| {
+            vec![note(7, 0, 57, 0, true), expression(7, -0.25, 0), expression(7, players[i], 0)]
+        }),
+        [2, 0, 1],
+    );
+    let output = phrase.idle();
+    for i in 0..3 {
+        let voice = phrase.voice(i, 57, 0);
+        let input = 5_700_000_000 + (players[i] * 100_000_000.0).round() as i64;
+        assert_eq!(voice.player_tuning, players[i]);
+        assert_eq!(voice.onset_pitch_microcents, input + voice.frozen_offset_microcents);
+        assert_eq!(voice.pitch_microcents, voice.onset_pitch_microcents);
+        assert!(
+            (tuning_of(&output[i]).unwrap()
+                - (players[i] + voice.frozen_offset_microcents as f64 / 1e8))
+                .abs()
+                < 1e-9
+        );
+    }
+    assert_eq!(phrase.misses(), 0);
 }
 
 #[test]
