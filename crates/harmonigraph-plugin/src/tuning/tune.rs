@@ -408,29 +408,18 @@ impl Tune {
     /// note starts from, not a change to it. Only the tail of the line can
     /// hold an onset at the same time, so this scan is bounded by one cohort.
     fn bind_initial_tuning(&mut self, due: i64, event: Event) {
-        let Event::Expression { kind: 2, id, channel, key, value, .. } = event else {
-            return;
-        };
-        if !value.is_finite() {
-            return;
-        }
-        for offset in (0..self.line.len()).rev() {
-            let Some(position) = self.line.position(offset) else { break };
-            let Some(mut pending) = self.line.at(position) else { break };
-            if pending.due != due {
-                break;
-            }
-            let Some((voice, voice_channel, voice_key, _)) = pending.event.attack() else {
-                continue;
-            };
-            let addressed = (id == -1 || voice == -1 || id == voice)
-                && (channel == -1 || channel == i16::from(voice_channel))
-                && (key == -1 || key == i16::from(voice_key));
-            if addressed {
-                pending.player = value;
-                self.line.set(position, pending);
-                return;
-            }
+        let preceding = (0..self.line.len())
+            .rev()
+            .filter_map(|offset| {
+                let position = self.line.position(offset)?;
+                Some((position, self.line.at(position)?))
+            })
+            .take_while(|(_, pending)| pending.due == due)
+            .map(|(position, pending)| (position, pending.event));
+        if let Some((position, value)) = event.initial_tuning_target(preceding) {
+            let mut pending = self.line.at(position).unwrap();
+            pending.player = value;
+            self.line.set(position, pending);
         }
     }
 
