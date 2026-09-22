@@ -78,7 +78,6 @@ pub fn interleaved_reservation(free_slots: usize, samples: usize, channels: usiz
 /// allocating. Converted to a `harmonigraph_take::Record` on the writer thread.
 #[derive(Clone, Copy)]
 pub enum Entry {
-    Configuration(harmonigraph_take::ConfigurationRecord),
     ConfigurationAt {
         address: RecordAddress,
         config: harmonigraph_take::ConfigurationRecord,
@@ -255,7 +254,6 @@ pub struct Recorder {
     record_epoch: u64,
     record_pass: u32,
     closed_epoch: u64,
-    last_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
     producer: rtrb::Producer<Entry>,
     /// Interleaved input samples, when the take is recording audio too.
     audio: rtrb::Producer<f32>,
@@ -455,7 +453,6 @@ impl Recorder {
         let action = self.advance(Observation::Armed(armed));
         if action == Action::Arm {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
-            self.last_configuration = None;
             self.audio_started = false;
             self.latches.clear();
         }
@@ -570,7 +567,6 @@ impl Recorder {
                 self.fence.fail();
             }
             self.push(Entry::NewPass);
-            self.last_configuration = None;
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.audio_started = false;
         }
@@ -691,20 +687,6 @@ impl Recorder {
         if epoch != 0 && epoch > self.fence.configuration_closed.load(Ordering::Acquire) {
             self.push(Entry::ConfigurationEpochComplete(epoch));
             self.fence.configuration_closed.store(epoch, Ordering::Release);
-        }
-    }
-
-    /// Preserve each effective resolved boundary, independently of UI cadence.
-    pub fn configuration(
-        &mut self,
-        t: f64,
-        resolved: harmonigraph_core::configuration::ResolvedConfig,
-    ) {
-        if self.last_configuration != Some(resolved) {
-            self.push(Entry::Configuration(harmonigraph_take::ConfigurationRecord::new(
-                t, resolved,
-            )));
-            self.last_configuration = Some(resolved);
         }
     }
 

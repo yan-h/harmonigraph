@@ -156,7 +156,6 @@ pub fn channel() -> (Recorder, Control) {
             record_epoch: 0,
             record_pass: 1,
             closed_epoch: 0,
-            last_configuration: None,
             producer,
             dropped: dropped.clone(),
             last_params: [f32::NAN; ParamKey::ALL.len()],
@@ -1183,7 +1182,6 @@ fn drain_with_boundaries(
         }
         let writer = &mut pass.writer;
         let result = match entry {
-            Entry::Configuration(config) => writer.configuration(config),
             Entry::Note { t, source, channel, note, kind } => {
                 writer.note(NoteEvent { time: t, source, channel, note, kind }.into())
             }

@@ -118,7 +118,6 @@ impl Bench {
                 record_epoch: 0,
                 record_pass: 1,
                 closed_epoch: 0,
-                last_configuration: None,
                 producer,
                 audio,
                 with_audio: Arc::new(AtomicBool::new(false)),
@@ -185,9 +184,6 @@ impl Bench {
                 }
                 Entry::Param { t, key, value } => format!("param {key}={value} @{t}"),
                 Entry::AudioStart(t) => format!("audio-start @{t}"),
-                Entry::Configuration(config) => {
-                    format!("configuration {} @{}", config.revision, config.t)
-                }
                 Entry::NewPass => "new-pass".to_owned(),
                 Entry::ConfigurationAt { .. }
                 | Entry::ConfigurationPassComplete(_)
@@ -434,19 +430,14 @@ fn stopped_continuity_edges_emit_only_the_accepted_blocks() {
             assert_eq!(b.rec.observe_transport(t, false, duration * 2.0), accepted);
             if accepted {
                 b.rec.params(t, [0.5; ParamKey::ALL.len()]);
-                b.rec.configuration(
-                    t,
-                    harmonigraph_core::configuration::ConfigReducer::default().resolved(),
-                );
                 b.rec.mark_audio_start(t);
                 b.rec.audio(&mut std::iter::repeat_n(0.25, frames * 4), frames * 4);
             }
             let entries: Vec<_> = std::iter::from_fn(|| b.entries.pop().ok()).collect();
-            assert_eq!(entries.len(), if accepted { ParamKey::ALL.len() + 3 } else { 0 });
+            assert_eq!(entries.len(), if accepted { ParamKey::ALL.len() + 2 } else { 0 });
             if accepted {
                 assert!(entries.iter().all(|entry| match entry {
                     Entry::Param { t: time, .. } | Entry::AudioStart(time) => *time == t,
-                    Entry::Configuration(config) => config.t == t,
                     Entry::AudioSamples(n) => *n == frames * 4,
                     _ => false,
                 }));
@@ -1251,38 +1242,6 @@ fn params_record_only_changes_and_a_wrap_rewrites_every_one() {
         "the new pass, then a full set for it: {after:?}"
     );
     assert_eq!(after[0], "new-pass");
-}
-
-#[test]
-fn resolved_boundaries_keep_sample_times_and_restart_each_take_pass() {
-    let mut b = Bench::new();
-    b.arm();
-    let mut reducer = harmonigraph_core::configuration::ConfigReducer::default();
-    let first = reducer.resolved();
-    b.rec.configuration(0.0, first);
-    b.rec.configuration(0.5, first);
-    reducer.apply(harmonigraph_core::configuration::ConfigMutation::Edit(
-        harmonigraph_core::configuration::ConfigEdit::axis(1, 696_000_000),
-    ));
-    let second = reducer.resolved();
-    b.rec.configuration(31.0 / 48000.0, second);
-    for (time, expected) in [(0.0, first), (31.0 / 48000.0, second)] {
-        let Entry::Configuration(record) = b.entries.pop().unwrap() else {
-            panic!("configuration record");
-        };
-        assert_eq!(record.t, time);
-        assert_eq!(record.resolved(), expected);
-    }
-    assert!(b.entries.pop().is_err());
-    assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
-    assert!(b.rec.observe_transport(2.0, true, 64.0 / 48_000.0));
-    assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
-    assert!(matches!(b.entries.pop().unwrap(), Entry::NewPass));
-    b.rec.configuration(0.0, second);
-    assert!(
-        matches!(b.entries.pop().unwrap(), Entry::Configuration(_)),
-        "a new empty pass must carry its initial configuration"
-    );
 }
 
 /// The reserved samples actually reach the ring.
