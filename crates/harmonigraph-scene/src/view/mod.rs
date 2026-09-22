@@ -840,9 +840,9 @@ pub struct ViewConfig {
     /// sounding slice.
     ///
     /// Distinct from [`bloom_strength`](Self::bloom_strength) in what it
-    /// measures: the bloom thresholds a finished PICTURE, so only the bright
-    /// end of the gradient blooms and it is one number over every picture the
-    /// plugin draws. This is a layer of the lattice's nodes, drawn from the
+    /// measures: bloom thresholds a finished picture, so only its bright end
+    /// blooms. This strength belongs to the lattice and spiral; MIDI ribbons
+    /// have their own bloom. Glow is a layer of the lattice's nodes, drawn from the
     /// same octave colours their discs are.
     pub glow_reach: f32,
     /// Experimental glow texture and breathing, shared by editor and exports.
