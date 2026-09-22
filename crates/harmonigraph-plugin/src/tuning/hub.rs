@@ -265,6 +265,7 @@ pub struct Hub {
     id: u64,
     ends: Option<Box<[Option<HubEnds>; TUNERS]>>,
     epoch: u64,
+    reset_generation: u64,
     rows: Box<[Row]>,
     batch: Vec<Record>,
     pending: Vec<Published>,
@@ -291,6 +292,7 @@ impl Hub {
             id: 0,
             ends: None,
             epoch: 0,
+            reset_generation: 0,
             rows: (0..=TUNERS).map(|_| Row::default()).collect::<Vec<_>>().into_boxed_slice(),
             batch: Vec::with_capacity(BATCH_EVENTS),
             pending: Vec::with_capacity(BATCH_EVENTS),
@@ -369,11 +371,13 @@ impl Hub {
         self.sequencer.expire(callback.steady_time, self.rate);
     }
 
-    /// One atomic load of the epoch. A different value is the cut: a Tune came
-    /// or went, or somebody pressed Reset, and every row's voices are ending.
+    /// Epoch changes end voices; Reset completions independently clear memory.
     fn adopt(&mut self) {
         let session = session::session();
         let sample = self.callback.map_or(0, |callback| callback.steady_time);
+        // Read completion BEFORE the epoch: observing a Reset must also see
+        // its preceding cut, so voices are released before memory is cleared.
+        let reset_generation = session.reset_generation();
         let epoch = session.epoch();
         if epoch != self.epoch {
             for source in 0..=TUNERS {
@@ -381,14 +385,7 @@ impl Hub {
                 self.rows[source].state.clear();
                 self.rows[source].repair = publication::Lanes::both(true);
             }
-            // Every epoch change ends every voice. What it does to released
-            // memory is the only thing that depends on which change it was —
-            // and the question is what has happened since the epoch this Hub
-            // was running under, not what the newest bump happens to be. A
-            // Reset with an attach behind it is still a Reset.
-            if session.is_reset(self.epoch)
-                || session.is_stop(self.epoch) && self.sequencer.config.policy.reset_stop
-            {
+            if session.is_stop(self.epoch) && self.sequencer.config.policy.reset_stop {
                 self.sequencer.memory.clear();
                 self.sequencer.last_release = None;
             }
@@ -399,6 +396,13 @@ impl Hub {
             self.pending.clear();
             self.status = 0;
             self.epoch = epoch;
+        }
+        // A Reset may complete after we adopted its epoch. Check its own
+        // generation every callback, including when membership has not changed.
+        if reset_generation != self.reset_generation {
+            self.sequencer.memory.clear();
+            self.sequencer.last_release = None;
+            self.reset_generation = reset_generation;
         }
         for slot in 0..TUNERS {
             let row = session.row(slot as u8);
@@ -1128,6 +1132,10 @@ impl Hub {
             .voices()
             .find(|voice| voice.channel == channel && voice.note == key)
             .copied()
+    }
+    #[cfg(test)]
+    pub fn test_epoch(&self) -> u64 {
+        self.epoch
     }
     #[cfg(test)]
     pub fn test_held(&self, source: u8) -> usize {

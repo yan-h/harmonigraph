@@ -10,6 +10,17 @@ use std::sync::{Mutex, OnceLock};
 
 use super::{event::Event, CAPTURE_RING, REPLY_RING, TUNERS};
 
+#[cfg(test)]
+thread_local! {
+    /// Suspend an actual Reset callback between its two publications.
+    static RESET_PAUSE: std::cell::RefCell<Option<std::sync::Arc<std::sync::Barrier>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub fn test_pause_reset(gate: std::sync::Arc<std::sync::Barrier>) {
+    RESET_PAUSE.with_borrow_mut(|pause| *pause = Some(gate));
+}
+
 /// Status bits. Every one of them is cosmetic: a fault shows in the editor and
 /// in `HG-TUNING`, and never stops a note. An unassigned note sounds at its
 /// raw pitch, which is the whole of what a fault costs here.
@@ -148,10 +159,10 @@ pub struct Session {
     /// Bumped by every attach, detach and explicit Reset. A Tune that adopts a
     /// new value cuts; that is the entire lifecycle protocol.
     epoch: AtomicU64,
-    /// The epoch an explicit Reset produced, and the epoch a transport Stop
-    /// produced. Every epoch change is the same cut; these two say which one
-    /// it was, because only they decide what happens to released memory.
-    reset_epoch: AtomicU64,
+    /// Completed explicit Resets, observed independently of the voice-cut
+    /// epoch: a Hub may adopt the cut before its producer completes.
+    reset_generation: AtomicU64,
+    /// Only the Hub's own Tune publishes Stop, before that Hub adopts.
     stop_epoch: AtomicU64,
     next: AtomicU64,
     rows: [Row; TUNERS],
@@ -166,7 +177,7 @@ pub fn session() -> &'static Session {
         hub: AtomicU64::new(0),
         hubs: AtomicUsize::new(0),
         epoch: AtomicU64::new(1),
-        reset_epoch: AtomicU64::new(0),
+        reset_generation: AtomicU64::new(0),
         stop_epoch: AtomicU64::new(0),
         next: AtomicU64::new(0),
         rows: std::array::from_fn(|_| Row::new()),
@@ -187,16 +198,10 @@ impl Session {
     pub fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::Acquire)
     }
-    /// True when an explicit Reset happened after `adopted`, as opposed to a
-    /// membership change. Both cut; only this one clears musical memory.
-    ///
-    /// The question is "has one happened since I last looked", never "is the
-    /// newest bump a Reset". Keying it on the latest epoch is a key too
-    /// narrow to hold the answer: a Reset and an attach landing between two
-    /// Hub callbacks would classify as the attach, and the memory the Reset
-    /// was pressed to clear would survive it.
-    pub fn is_reset(&self, adopted: u64) -> bool {
-        self.reset_epoch.load(Ordering::Acquire) > adopted
+    /// A completion counter rather than an epoch-valued reason: concurrent
+    /// Reset producers may finish out of epoch order, but cannot regress this.
+    pub fn reset_generation(&self) -> u64 {
+        self.reset_generation.load(Ordering::Acquire)
     }
     pub fn is_stop(&self, adopted: u64) -> bool {
         self.stop_epoch.load(Ordering::Acquire) > adopted
@@ -209,8 +214,13 @@ impl Session {
     }
     /// Explicit Reset. Every paired Tune cuts and the Hub clears its context.
     pub fn reset(&self) {
-        let epoch = self.bump();
-        self.reset_epoch.store(epoch, Ordering::Release);
+        self.bump();
+        #[cfg(test)]
+        if let Some(gate) = RESET_PAUSE.with_borrow_mut(Option::take) {
+            gate.wait();
+            gate.wait();
+        }
+        self.reset_generation.fetch_add(1, Ordering::AcqRel);
     }
     /// A cut that changes no membership: a host format change, or a host reset
     /// on one instance. It is still every track's cut, because the Hub holds
