@@ -580,10 +580,32 @@ pub(super) fn plan(
     // Read once for the whole pass, so every name on the pane is chosen out of
     // one window even if a lattice pane redraws between two of them.
     let shown = state.shown();
-    let naming = |pitch: f32, names: &mut HashMap<PitchClass, (NoteName, f64)>| {
+    let view = &state.appearance.view;
+    let tuning = &state.runtime.tuning;
+    let reach = view.reach();
+    // Adaptive pitches keep the exact-name memo busy. The lattice's pitches
+    // depend only on the window and tuning, both fixed for this pass: compute
+    // them once, lazily so an empty roll allocates nothing here.
+    let mut reach_nodes = None;
+    let mut shown_nodes = None;
+    let prepare = |window: &DrawnWindow| {
+        window.positions().map(|pos| (pos, tuning.pitch_class(pos))).collect::<Vec<_>>()
+    };
+    let mut naming = |pitch: f32, names: &mut HashMap<PitchClass, (NoteName, f64)>| {
         let class = PitchClass::from_cents(pitch.rem_euclid(12.0) * 100.0);
         *names.entry(class).or_insert_with(|| {
-            let name = note_name(&state.appearance.view, &shown, &state.runtime.tuning, pitch);
+            let nodes = reach_nodes.get_or_insert_with(|| prepare(&reach));
+            let node = naming_node_from(nodes.iter().copied(), view, tuning, class).or_else(|| {
+                if shown == reach {
+                    return None;
+                }
+                let nodes = shown_nodes.get_or_insert_with(|| prepare(&shown));
+                naming_node_from(nodes.iter().copied(), view, tuning, class)
+            });
+            let name = match node {
+                Some(pos) => crate::panes::display_note_name(pos, view.tempered()),
+                None => equal_tempered_name(pitch),
+            };
             (name, room(&name))
         })
     };
@@ -1223,14 +1245,24 @@ fn naming_node(
     tuning: &Tuning,
     pc: PitchClass,
 ) -> Option<LatticePos> {
-    window.positions().filter(|&pos| tuning.matches(pc, tuning.pitch_class(pos))).min_by_key(
-        |&pos| {
+    naming_node_from(window.positions().map(|pos| (pos, tuning.pitch_class(pos))), view, tuning, pc)
+}
+
+fn naming_node_from(
+    nodes: impl Iterator<Item = (LatticePos, PitchClass)>,
+    view: &ViewConfig,
+    tuning: &Tuning,
+    pc: PitchClass,
+) -> Option<LatticePos> {
+    nodes
+        .filter(|&(_, pitch)| tuning.matches(pc, pitch))
+        .min_by_key(|&(pos, pitch)| {
             (
-                pc.distance_to(tuning.pitch_class(pos)),
+                pc.distance_to(pitch),
                 spelling_cost(crate::panes::display_note_name(pos, view.tempered()), pos),
             )
-        },
-    )
+        })
+        .map(|(pos, _)| pos)
 }
 
 /// How hard a spelling is to read, worst first: comma marks, then
@@ -2977,6 +3009,19 @@ mod tests {
             crate::panes::display_note_name(far, view.tempered()).to_string(),
             "the picture is drawing this node and the name ignored it",
         );
+        // Exercise the roll's prepared lookup too: it must populate the
+        // distinct shown window when the naming reach has no match.
+        let mut state = state(24.0, 10.0);
+        state.appearance.view = view;
+        state.runtime.tuning = just;
+        state.surfaces.drawn = Some(window);
+        state.runtime.tracker.handle_event(on(1.0, 60));
+        state.runtime.tracker.handle_event(tuning(1.01, 60, midi - 60.0));
+        state.runtime.tracker.handle_event(off(2.0, 60));
+        assert_eq!(
+            said(&labels_in(&state, 5.0, BIG)),
+            [crate::panes::display_note_name(far, state.appearance.view.tempered()).to_string()],
+        );
     }
 
     /// The tritone is a genuine tie — six fifths up spells F♯, six down spells
@@ -3170,7 +3215,16 @@ mod tests {
     fn a_collapsed_tuning_names_a_pitch_plainly_rather_than_from_the_corner() {
         let view = harmonigraph_scene::ViewConfig::default();
         let equal = harmonigraph_core::Tuning::default();
-        let name = |midi| note_name(&view, &view.reach(), &equal, midi).to_string();
+        let name = |midi| {
+            let name = note_name(&view, &view.reach(), &equal, midi).to_string();
+            let mut state = state(24.0, 10.0);
+            state.appearance.view = view.clone();
+            state.runtime.tuning = equal;
+            state.runtime.tracker.handle_event(on(1.0, midi as u8));
+            state.runtime.tracker.handle_event(off(2.0, midi as u8));
+            assert_eq!(said(&labels_in(&state, 5.0, BIG)), [name.clone()]);
+            name
+        };
 
         assert_eq!(name(60.0), "C", "the origin, not a remote spelling of it");
         assert_eq!(name(67.0), "G", "a fifth up");
@@ -3178,6 +3232,7 @@ mod tests {
         // Four fifths up spells E; one just third up spells E-, and in this
         // tuning they are the same pitch. The plain letter wins.
         assert_eq!(name(64.0), "E");
+        assert_eq!(name(66.0), "F\u{266F}", "the prepared lookup keeps the spelling tiebreak");
     }
 
     /// A name carrying a septimal mark measures WIDER than its accidental
