@@ -581,11 +581,8 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64,
             ),
         );
     }
-    // The LATTICE's bloom, on the dots. One setting for every picture rather
-    // than a bar of its own here: the lattice's nodes, the roll's ribbons and
-    // these dots are the same notes in the same colors, and a light one of them
-    // has that the others do not is a difference between them that says
-    // nothing. Through the renderer's own bound for the same reason.
+    // The spiral's dots follow lattice bloom: both draw the same MIDI notes as
+    // colored points. The spectrogram's ribbons have their own bloom setting.
     //
     // Unconditionally, including on the frames with no strength and nothing
     // sounding. The callback declines those itself without allocating, and it

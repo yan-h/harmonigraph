@@ -1,4 +1,4 @@
-//! Shared lighting effects, followed by the lattice's own glow and shadows.
+//! Bloom for each picture, followed by the lattice's own glow and shadows.
 
 use super::section;
 use crate::widgets::{choice_row, ValueBar};
@@ -11,11 +11,19 @@ use harmonigraph_scene::{
 
 pub(super) fn lighting_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     section(ui, "Bloom");
-    ValueBar::new(&mut appearance.view.bloom_strength, 0.0..=1.5, "Bloom amount")
+    ValueBar::new(&mut appearance.view.bloom_strength, 0.0..=2.0, "Lattice bloom")
         .unit(1.0, "×")
         .show(ui)
         .on_hover_text(
-            "Soft halos around bright MIDI notes in the Lattice, Analyzer and Spiral. \
+            "Soft halos around bright MIDI notes in the Lattice and Spiral. \
+                 0 turns bloom off; \
+                 1× is the reference strength.",
+        );
+    ValueBar::new(&mut appearance.spectrum.atmosphere.note_glow, 0.0..=2.0, "Spectrogram bloom")
+        .unit(1.0, "×")
+        .show(ui)
+        .on_hover_text(
+            "Soft halos around MIDI ribbons in the spectrogram. \
                  0 turns bloom off; \
                  1× is the reference strength.",
         );

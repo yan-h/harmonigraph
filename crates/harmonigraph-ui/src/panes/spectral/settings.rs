@@ -295,10 +295,6 @@ pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureSt
                 "Opacity of MIDI ribbon colors over the spectrogram. \
                  Their dark surrounds keep their full strength.",
             );
-        ValueBar::new(&mut cfg.atmosphere.note_glow, 0.0..=1.0, "Ribbon glow")
-            .percent()
-            .show(ui)
-            .on_hover_text("Additional glow around note ribbons. Adjust their shadows under Display → Lighting → Shadows.");
         edge_bar(
             ui,
             (&mut cfg.roll_lead, &mut cfg.roll_lead_fade),
