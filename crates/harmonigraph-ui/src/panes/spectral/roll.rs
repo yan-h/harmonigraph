@@ -294,9 +294,7 @@ pub(super) fn draw_roll(
     let detached_region = egui::Rect::from_two_pos(axes.at(0.0, near), axes.at(1.0, options.split));
     let dir = |v: egui::Vec2| [v.x, v.y];
     let axes = RollAxes { pitch_dir: dir(axes.dir_pitch()), depth_dir: dir(axes.dir_depth()) };
-    let bloom = harmonigraph_render::bloom_strength(
-        state.appearance.view.bloom_strength + state.appearance.spectrum.atmosphere.note_glow,
-    );
+    let bloom = harmonigraph_render::bloom_strength(state.appearance.spectrum.atmosphere.note_glow);
     let pane = crate::panes::lattice::pane_id(options.surface);
     let shadow_surface = crate::text::spectral_shadow_surface(options.surface);
     let clipped_start = notes.len();

@@ -804,10 +804,9 @@ pub struct ViewConfig {
     /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
     /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
     pub render_scale: f32,
-    /// Bloom post-process: how much blurred brightness gets added back
-    /// as a halo around bright notes. 0 disables the chain entirely — the
-    /// composite is then exactly the plain scene, so there is deliberately
-    /// no separate on/off toggle.
+    /// Lattice and spiral bloom: how much blurred brightness gets added back
+    /// as a halo around bright notes. The spectrogram's MIDI ribbons use
+    /// [`crate::SpectralAtmosphere::note_glow`] instead. 0 disables this bloom chain.
     pub bloom_strength: f32,
     /// The node halo: how far past a node's outermost drawn edge its light
     /// spreads, in the quad UV units the layer sizes are in. 0 turns it off —
@@ -841,9 +840,9 @@ pub struct ViewConfig {
     /// sounding slice.
     ///
     /// Distinct from [`bloom_strength`](Self::bloom_strength) in what it
-    /// measures: the bloom thresholds a finished PICTURE, so only the bright
-    /// end of the gradient blooms and it is one number over every picture the
-    /// plugin draws. This is a layer of the lattice's nodes, drawn from the
+    /// measures: bloom thresholds a finished picture, so only its bright end
+    /// blooms. This strength belongs to the lattice and spiral; MIDI ribbons
+    /// have their own bloom. Glow is a layer of the lattice's nodes, drawn from the
     /// same octave colours their discs are.
     pub glow_reach: f32,
     /// Experimental glow texture and breathing, shared by editor and exports.
@@ -1499,7 +1498,7 @@ impl ViewConfig {
         // clamps remain wider defensive boundaries for callers that do not
         // load an AppearanceDocument through this sanitizer.
         self.render_scale = finite_or(self.render_scale, fresh.render_scale).clamp(0.5, 2.0);
-        self.bloom_strength = finite_or(self.bloom_strength, fresh.bloom_strength).clamp(0.0, 1.5);
+        self.bloom_strength = finite_or(self.bloom_strength, fresh.bloom_strength).clamp(0.0, 2.0);
 
         // The resting marker's three lengths. The arm and its taper are a
         // reach-and-fade PAIR, held the way every such pair here is — the fade

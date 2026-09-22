@@ -510,7 +510,7 @@ fn the_picker_draws_the_page_it_holds_and_only_that_page() {
         (DisplayPage::Lattice, "Gap"),
         (DisplayPage::Analyzer, "Spectrum level range"),
         (DisplayPage::Spectrogram, "Texture mix"),
-        (DisplayPage::Lighting, "Bloom amount"),
+        (DisplayPage::Lighting, "Lattice bloom"),
         (DisplayPage::System, "Lattice resolution"),
     ];
     for (page, needle) in CASES {

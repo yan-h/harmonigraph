@@ -237,8 +237,8 @@ fn scenarios() -> Vec<Scenario> {
             SettingsPane::Page(DisplayPage::Colors) => 2,
             SettingsPane::Page(DisplayPage::Lattice) => 17,
             SettingsPane::Page(DisplayPage::Analyzer) => 7,
-            SettingsPane::Page(DisplayPage::Spectrogram) => 19,
-            SettingsPane::Page(DisplayPage::Lighting) => 22,
+            SettingsPane::Page(DisplayPage::Spectrogram) => 18,
+            SettingsPane::Page(DisplayPage::Lighting) => 23,
             SettingsPane::Page(DisplayPage::System) => 3,
             SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console) => 0,
             _ => panic!("add the new settings page's range scenario"),
@@ -261,7 +261,7 @@ fn scenarios() -> Vec<Scenario> {
     cases.push(Scenario {
         pane: SettingsPane::Page(DisplayPage::Spectrogram),
         wash: true,
-        visits: 21,
+        visits: 20,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
@@ -353,6 +353,13 @@ fn check(edge: Edge) {
         if scenario.pane == SettingsPane::Tab(panes::Tab::Tuning) {
             assert!(saw("Pitch flexibility"));
             assert_eq!(saw("Fifth") && saw("Half-life"), scenario.expanded);
+        }
+        if scenario.pane == SettingsPane::Page(DisplayPage::Lighting) {
+            for label in ["Lattice bloom", "Spectrogram bloom"] {
+                let bloom = visits.iter().find(|visit| visit.label == label).unwrap();
+                assert_eq!(bloom.range, 0.0..=2.0);
+            }
+            assert!(!saw("Bloom amount") && !saw("Ribbon glow"));
         }
         for visit in visits {
             if visit.label == "Contour levels" {

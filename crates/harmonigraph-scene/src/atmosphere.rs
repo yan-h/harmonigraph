@@ -211,6 +211,8 @@ pub struct SpectralAtmosphere {
     pub contours: f32,
     pub contour_softness: f32,
     pub analyzer_softness: f32,
+    /// Bloom strength for the spectrogram's MIDI ribbons, independent of
+    /// lattice and spiral bloom. The saved key remains `note_glow`.
     pub note_glow: f32,
     /// Blend from original to displaced levels before Contours and the palette.
     /// Zero disables the texture; zero refraction is also exactly neutral.
@@ -312,7 +314,9 @@ impl Default for SpectralAtmosphere {
             contours: 7.0,
             contour_softness: 0.15,
             analyzer_softness: 0.5,
-            note_glow: 0.5,
+            // Previously added to the shared bloom default (0.633_927_7).
+            // Keep the fresh ribbon picture when its bloom becomes independent.
+            note_glow: 1.133_927_7,
             cloud_depth: 1.0,
             cloud_speed: 1.0,
             // The visible direction of the former drift's steady component.
@@ -370,7 +374,7 @@ impl SpectralAtmosphere {
             CONTOUR_SOFTNESS_MAX,
         );
         self.analyzer_softness = clamp(self.analyzer_softness, fresh.analyzer_softness, 0.0, 1.0);
-        self.note_glow = clamp(self.note_glow, fresh.note_glow, 0.0, 1.0);
+        self.note_glow = clamp(self.note_glow, fresh.note_glow, 0.0, 2.0);
         self.cloud_depth = clamp(self.cloud_depth, fresh.cloud_depth, 0.0, 1.0);
         self.cloud_speed =
             clamp(self.cloud_speed, fresh.cloud_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
