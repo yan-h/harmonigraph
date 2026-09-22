@@ -9,8 +9,14 @@ pub(crate) fn paint_fold(ui: &egui::Ui, response: &Response, cell: Rect, directi
     let painter = ui.painter_at(cell);
     let scale = theme::ui_scale(ui.ctx());
     let radius = egui::CornerRadius::same(theme::control_radius(scale));
+    // The header's hit cell is taller than its controls. Keep that forgiving
+    // target, but center the visible button on the same row as its neighbours.
+    let button = Rect::from_center_size(
+        cell.center(),
+        Vec2::splat(theme::row_height(scale)).min(cell.size()),
+    );
     painter.rect_filled(
-        cell,
+        button,
         radius,
         if response.is_pointer_button_down_on() {
             theme::accent_active()
@@ -22,7 +28,7 @@ pub(crate) fn paint_fold(ui: &egui::Ui, response: &Response, cell: Rect, directi
     );
     if hot {
         painter.rect_stroke(
-            cell,
+            button,
             radius,
             egui::Stroke::new(1.0, theme::accent_edge()),
             egui::StrokeKind::Inside,

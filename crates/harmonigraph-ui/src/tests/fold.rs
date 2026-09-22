@@ -644,7 +644,10 @@ fn section_and_region_chevrons_share_visible_hover_feedback() {
         let out = h.frame(&mut state, vec![egui::Event::PointerMoved(cell.center())]);
         assert!(
             out.shapes.iter().any(|cs| matches!(&cs.shape,
-                egui::Shape::Rect(r) if r.rect.contains(cell.center()) && (r.rect.width() - cell.width()).abs() < 1.0 && r.fill == theme::widget_hover()
+                egui::Shape::Rect(r) if r.rect.contains(cell.center()) && (r.rect.height() - theme::row_height(1.0)).abs() < 0.5
+                    && (r.rect.center().y - cell.center().y).abs() < 0.5
+                    && r.corner_radius == egui::CornerRadius::same(theme::control_radius(1.0))
+                    && r.fill == theme::widget_hover()
             )),
             "no hover fill at {cell:?}"
         );
