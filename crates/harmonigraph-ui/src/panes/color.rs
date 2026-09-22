@@ -4,7 +4,7 @@
 
 use super::section;
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{button_row, GradientPreview, RangeBar, SpectrumBar, SpreadBar};
+use crate::widgets::{GradientPreview, RangeBar, SpectrumBar, SpreadBar};
 use crate::AppearanceDocument;
 use harmonigraph_scene::ViewConfig;
 
@@ -103,14 +103,14 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
     // on a picture the spectrogram has never opened on, and the bars carry no
     // text entry to dial it back with.
     let home = crate::SpectrumConfig::default().spectrogram_gradient;
-    button_row(ui, |ui| {
-        ui.label("Palette").on_hover_text(
-            "Starting palettes for audio levels. \
-                 Selecting one replaces the color controls below; you can adjust them afterward.",
-        );
+    let labels: Vec<_> = SpectrogramPreset::ALL.iter().map(|preset| preset.label()).collect();
+    crate::widgets::preset_row(ui, "Palette", &labels, |ui, menu| {
         for preset in SpectrogramPreset::ALL {
             if ui.button(preset.label()).on_hover_text(preset.hint()).clicked() {
                 cfg.spectrogram_gradient = preset.gradient();
+                if menu {
+                    ui.close();
+                }
             }
         }
     });

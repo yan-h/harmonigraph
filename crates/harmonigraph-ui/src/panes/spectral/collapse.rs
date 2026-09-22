@@ -233,35 +233,11 @@ fn control(
     } else {
         rect.center()
     };
-    // A restore rail is tab chrome; only its arrow cell takes the section's
-    // button fill. Over the picture, the small open controls use the ordinary
-    // widget fill so they remain visible against black without a new accent.
     if rail {
-        painter.rect_filled(rect, egui::CornerRadius::ZERO, theme::panel());
+        painter.rect_filled(rect, egui::CornerRadius::ZERO, theme::well());
     }
     let button = if rail { Rect::from_center_size(center, Vec2::splat(size)) } else { rect };
-    let hovered = response.hovered() || response.has_focus();
-    painter.rect_filled(
-        button,
-        egui::CornerRadius::ZERO,
-        if hovered {
-            theme::surface_faint()
-        } else if rail {
-            theme::well()
-        } else {
-            theme::widget()
-        },
-    );
-    let cross = egui::vec2(-direction.y, direction.x);
-    painter.add(egui::Shape::convex_polygon(
-        vec![
-            center - direction * 4.0 + cross * 4.0,
-            center + direction * 4.0,
-            center - direction * 4.0 - cross * 4.0,
-        ],
-        if hovered { theme::text() } else { theme::text_dim() },
-        egui::Stroke::NONE,
-    ));
+    crate::widgets::paint_fold(ui, &response, button, direction);
     if rail {
         let galley = painter.layout_no_wrap(
             name.to_owned(),

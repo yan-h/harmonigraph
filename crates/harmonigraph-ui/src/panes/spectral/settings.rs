@@ -10,7 +10,7 @@ use harmonigraph_scene::{
 use crate::config::BALLISTICS_MAX;
 use crate::panes::{edge_bar, section};
 use crate::params::{AnalysisInput, ParamBackend};
-use crate::widgets::{button_row, choice_row, option_label, RangeBar, ValueBar};
+use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::PictureState;
 
 /// A MIDI note as the frequency an analyzer would label it: whole hertz down
@@ -151,43 +151,26 @@ fn analysis_settings(
             params.set_analysis_input(input);
         }
     }
-    button_row(ui, |ui| {
-        ui.label("Frequency resolution");
-        for (window, label) in [
-            (SpectrumWindow::Fast, "Fast"),
-            (SpectrumWindow::Balanced, "Balanced"),
-            (SpectrumWindow::Precise, "Precise"),
-        ] {
-            ui.selectable_value(&mut cfg.window, window, label).on_hover_text(format!(
-                "{} samples: {}",
-                window.samples(),
-                match window {
-                    SpectrumWindow::Fast => "snappy response, coarse bass pitch",
-                    SpectrumWindow::Balanced => "the default tradeoff",
-                    SpectrumWindow::Precise => "sharp bass pitch, slower response",
-                },
-            ));
-        }
-    });
-    // Beside the window rather than folded into it: the window trades time
-    // against pitch, this trades cost and contrast against the estimate's own
-    // noise, and no single row of buttons can name both.
-    button_row(ui, |ui| {
-        ui.label("Spectrum averaging");
-        for (tapers, label) in
-            [(SpectrumTapers::One, "1"), (SpectrumTapers::Three, "3"), (SpectrumTapers::Five, "5")]
-        {
-            ui.selectable_value(&mut cfg.tapers, tapers, label).on_hover_text(match tapers {
-                SpectrumTapers::One => "Sharpest frequency detail, with the most flicker and speckle. Lowest processing cost.",
-                SpectrumTapers::Three => {
-                    "Average three tapers of the same audio for less speckle, with softer frequency detail and higher processing cost."
-                }
-                SpectrumTapers::Five => {
-                    "Average five tapers for the steadiest levels, with the softest frequency detail and highest processing cost."
-                }
-            });
-        }
-    });
+    let windows = [
+        (SpectrumWindow::Fast, "Fast", "snappy response, coarse bass pitch"),
+        (SpectrumWindow::Balanced, "Balanced", "the default tradeoff"),
+        (SpectrumWindow::Precise, "Precise", "sharp bass pitch, slower response"),
+    ];
+    let hints: Vec<_> = windows
+        .iter()
+        .map(|(window, _, hint)| format!("{} samples: {hint}", window.samples()))
+        .collect();
+    let options: Vec<_> = windows
+        .iter()
+        .zip(&hints)
+        .map(|(&(window, label, _), hint)| (window, label, hint.as_str()))
+        .collect();
+    choice_row(ui, "Frequency resolution", &mut cfg.window, &options);
+    choice_row(ui, "Spectrum averaging", &mut cfg.tapers, &[
+        (SpectrumTapers::One, "1", "Sharpest frequency detail, with the most flicker and speckle. Lowest processing cost."),
+        (SpectrumTapers::Three, "3", "Average three tapers of the same audio for less speckle, with softer frequency detail and higher processing cost."),
+        (SpectrumTapers::Five, "5", "Average five tapers for the steadiest levels, with the softest frequency detail and highest processing cost."),
+    ]);
 
     section(ui, "Level mapping");
     // Both ends of the height scale on one control, like the pitch range: the
@@ -206,20 +189,11 @@ fn analysis_settings(
                  Lower the upper end to enlarge quiet signals. \
                  Audio colors have their own Level color range on Colors.",
     );
-    button_row(ui, |ui| {
-        ui.label("Tilt (dB/oct)").on_hover_text(
-            "Reference slope in decibels per octave. \
-                 0 shows raw power; -3 makes pink noise appear flat; more negative values lift high frequencies further. \
-                 Affects every audio view.",
-        );
-        // Five signed numbers side by side, so `option_label` sets them in
-        // monospace: a proportional face gives "0.0" and "-1.5" different
-        // widths and leaves the row visibly uneven, where digits of one width
-        // make it a scale.
-        for step in crate::TILT_STEPS {
-            ui.selectable_value(&mut cfg.tilt, step, option_label(&format!("{step:.1}")));
-        }
-    });
+    let labels: Vec<_> = crate::TILT_STEPS.iter().map(|step| format!("{step:.1}")).collect();
+    let options: Vec<_> = crate::TILT_STEPS.iter().zip(&labels).map(|(&step, label)|
+        (step, label.as_str(), "Reference slope in dB/oct. 0 shows raw power; -3 makes pink noise appear flat; more negative values lift high frequencies. Affects every audio view.")
+    ).collect();
+    choice_row(ui, "Tilt (dB/oct)", &mut cfg.tilt, &options);
     section(ui, "Live response");
     // Two bars and not one, because a spectrum's two directions are different
     // events: a partial arriving is worth seeing when it happens, and the same

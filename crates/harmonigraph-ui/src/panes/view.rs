@@ -50,26 +50,11 @@ pub(super) fn view_pane(
     // Projection: perspective converges with depth; orthographic keeps
     // equal intervals at equal screen offsets everywhere (isometric-style
     // reading — depth shows only through the node size cue and occlusion).
-    button_row(ui, |ui| {
-        ui.label("Projection");
-        for (proj, label) in [
-            (Projection::Perspective, "Perspective"),
-            (Projection::Orthographic, "Orthographic"),
-            (Projection::Cabinet, "Cabinet"),
-        ] {
-            ui.selectable_value(&mut appearance.camera.projection, proj, label).on_hover_text(
-                match proj {
-                    Projection::Perspective => "Depth converges and shrinks, like a real camera",
-                    Projection::Orthographic => {
-                        "Uniform scale at every depth; parallel lines stay parallel"
-                    }
-                    Projection::Cabinet => {
-                        "Fifths and thirds stay face-on; seventh layers are offset diagonally. Drag to pan; orbit is disabled."
-                    }
-                },
-            );
-        }
-    });
+    choice_row(ui, "Projection", &mut appearance.camera.projection, &[
+        (Projection::Perspective, "Perspective", "Depth converges and shrinks, like a real camera"),
+        (Projection::Orthographic, "Orthographic", "Uniform scale at every depth; parallel lines stay parallel"),
+        (Projection::Cabinet, "Cabinet", "Fifths and thirds stay face-on; seventh layers are offset diagonally. Drag to pan; orbit is disabled."),
+    ]);
     if appearance.camera.projection == Projection::Cabinet {
         // Cabinet's two drafting knobs: where the sevens axis points on
         // screen, and how long a seventh-step draws relative to a
@@ -136,12 +121,20 @@ pub(super) fn view_pane(
         }
 
         // One-click reading angles: built-ins plus user-saved presets.
-        button_row(ui, |ui| {
-            ui.label("Angle");
+        let labels: Vec<String> = ["Flat", "Isometric"]
+            .iter()
+            .map(|s| s.to_string())
+            .chain(interaction.camera_presets.iter().map(|p| p.name.clone()))
+            .collect();
+        let labels: Vec<_> = labels.iter().map(String::as_str).collect();
+        crate::widgets::preset_row(ui, "Angle", &labels, |ui, menu| {
             if ui.button("Flat").on_hover_text("Face the fifths/thirds sheet straight on").clicked()
             {
                 appearance.camera.yaw = 0.0;
                 appearance.camera.pitch = 0.0;
+                if menu {
+                    ui.close();
+                }
             }
             if ui
                 .button("Isometric")
@@ -150,6 +143,9 @@ pub(super) fn view_pane(
             {
                 appearance.camera.yaw = std::f32::consts::FRAC_PI_4;
                 appearance.camera.pitch = (1.0 / 2f32.sqrt()).atan();
+                if menu {
+                    ui.close();
+                }
             }
             let mut delete = None;
             for (i, preset) in interaction.camera_presets.iter().enumerate() {
@@ -159,6 +155,9 @@ pub(super) fn view_pane(
                 if response.clicked() {
                     appearance.camera.yaw = preset.yaw;
                     appearance.camera.pitch = preset.pitch;
+                    if menu {
+                        ui.close();
+                    }
                 }
                 response.context_menu(|ui| {
                     if ui.button("Delete").clicked() {

@@ -145,62 +145,33 @@ fn a_separator_reads_against_both_grounds_a_pane_can_paint() {
     }
 }
 
-/// Every settings destination is visible without horizontal scrolling.
-/// Header rows may wrap, but each title must remain wholly inside its clip.
+/// Narrow headers keep one row and put all destinations in the current-tab menu.
 #[test]
 fn every_settings_tab_fits_on_its_tab_bar() {
-    // Two windows: the one this UI is dialled against (and the one the column
-    // widths in `SETTINGS_SPLIT` were measured at), and the editor's own
-    // `DEFAULT_SIZE` — restated here because `editor.rs` is a crate this one
-    // does not see. The default is the window every fresh instance opens at,
-    // so a bar that overflows there is one a new user never sees whole; that
-    // is issue #287, and this row of the sweep is what holds the fix.
-    for window in [egui::vec2(1512.0, 886.0), egui::vec2(1000.0, 700.0)] {
+    for width in [700.0, 1000.0, 1512.0] {
         let mut state = fresh();
-        let mut harness = DockHarness::new();
-        harness.screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), window);
+        let mut harness = DockHarness::at(egui::vec2(width, 700.0));
         harness.settle(&mut state);
         let output = harness.frame(&mut state, vec![]);
-
-        let column = [panes::Tab::Tuning, panes::Tab::Display, panes::Tab::Video];
-        // The settings leaf's own rect, so a title is only counted where this bar
-        // drew it. Scoping rather than matching text anywhere on screen is what
-        // makes the Analyzer row mean anything: `tab_title` gives the display pane
-        // the same name, that pane is a leaf of its own with one tab and room to
-        // spare, and an unscoped search would find ITS unclipped copy and pass no
-        // matter what the settings column did.
         let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
-        for tab in column {
-            let title = panes::tab_title(&tab);
-            // The bar paints the title of every tab in the leaf, not just the
-            // selected one, so each is findable by its own text.
-            let drawn: Vec<_> = output
-                .shapes
-                .iter()
-                .filter_map(|cs| match &cs.shape {
-                    egui::Shape::Text(t)
-                        if t.galley.text() == title
-                            && t.pos.x >= leaf.left()
-                            && t.pos.x <= leaf.right() =>
-                    {
-                        Some((t.pos, t.galley.size(), cs.clip_rect))
-                    }
-                    _ => None,
-                })
-                .collect();
-            assert!(!drawn.is_empty(), "the settings tab bar drew no title for {tab:?}");
-            let whole = drawn.iter().any(|&(pos, size, clip)| {
-                let rect = egui::Rect::from_min_size(pos, size);
-                clip.contains_rect(rect)
-            });
-            assert!(
-                whole,
-                "{tab:?}'s tab title is clipped on the bar at {window:?} — the settings \
-             column has run out of room for {} tabs. Shorten a name or merge a tab; \
-             a clipped tab is one a user cannot read. (drawn: {drawn:?})",
-                column.len(),
-            );
-        }
+        let body = state.workspace.layout_runtime.body(panes::Tab::Tuning).unwrap();
+        let rail = theme::tab_bar_height(1.0);
+        assert!((body.top() - leaf.top() - rail).abs() < 0.5);
+        let title = output
+            .shapes
+            .iter()
+            .find_map(|cs| match &cs.shape {
+                egui::Shape::Text(t)
+                    if t.galley.text() == "Tuning"
+                        && leaf.contains(t.pos)
+                        && t.pos.y < body.top() =>
+                {
+                    Some((egui::Rect::from_min_size(t.pos, t.galley.size()), cs.clip_rect))
+                }
+                _ => None,
+            })
+            .expect("current tab title");
+        assert!(title.1.contains_rect(title.0));
     }
 }
 

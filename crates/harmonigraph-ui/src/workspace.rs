@@ -411,14 +411,12 @@ fn section_ui(
     if folded {
         if rail > 0.0 {
             let response = pane.interact(rect, pane.id().with("unfold"), egui::Sense::click());
-            let color = if response.hovered() { theme::surface_faint() } else { theme::well() };
-            pane.painter().rect_filled(rect, 0.0, color);
-            pane.painter().text(
-                rect.min + vec2(rail * 0.5, rail * 0.5),
-                egui::Align2::CENTER_CENTER,
-                if vertical_rail { "›" } else { "⌄" },
-                egui::TextStyle::Button.resolve(pane.style()),
-                theme::text(),
+            pane.painter().rect_filled(rect, 0.0, theme::well());
+            crate::widgets::paint_fold(
+                &pane,
+                &response,
+                Rect::from_min_size(rect.min, Vec2::splat(rail)),
+                if vertical_rail { Vec2::X } else { Vec2::Y },
             );
             let galley = pane.painter().layout_no_wrap(
                 title.into(),
@@ -452,16 +450,24 @@ fn section_ui(
         let header_rect = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + rail));
         let mut header =
             pane.new_child(egui::UiBuilder::new().id_salt("header").max_rect(header_rect));
+        header.set_clip_rect(header_rect.intersect(pane.clip_rect()));
         header.spacing_mut().item_spacing.x = 2.0;
-        header.horizontal_wrapped(|ui| {
-            if ui
-                .add_sized(
-                    vec2(rail, rail),
-                    egui::Button::new(if vertical_rail { "‹" } else { "⌃" }).frame(false),
+        header.horizontal(|ui| {
+            let (cell, response) = ui.allocate_exact_size(Vec2::splat(rail), egui::Sense::click());
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    ui.is_enabled(),
+                    format!("Collapse {title}"),
                 )
-                .on_hover_text("Fold section")
-                .clicked()
-            {
+            });
+            crate::widgets::paint_fold(
+                ui,
+                &response,
+                cell,
+                if vertical_rail { -Vec2::X } else { -Vec2::Y },
+            );
+            if response.on_hover_text(format!("Collapse {title}")).clicked() {
                 layout.folded[index] = true;
             }
             let tabs: &[Tab] = match section {
@@ -469,23 +475,42 @@ fn section_ui(
                 Section::Analyzer => &[Tab::Spectral, Tab::Spiral],
                 Section::Settings => &[Tab::Tuning, Tab::Display, Tab::Video, Tab::Console],
             };
-            for &choice in tabs {
-                if ui.selectable_label(choice == tab, crate::panes::tab_title(&choice)).clicked() {
-                    layout.select(choice);
+            let options: Vec<_> =
+                tabs.iter().map(|&choice| (choice, crate::panes::tab_title(&choice), "")).collect();
+            let mut selected = tab;
+            let width = options
+                .iter()
+                .map(|(_, label, _)| crate::widgets::option_width(ui, label))
+                .sum::<f32>()
+                + ui.spacing().item_spacing.x * options.len() as f32
+                + if section == Section::Settings {
+                    crate::widgets::option_width(ui, "Layout")
+                } else {
+                    0.0
+                };
+            if section == Section::Settings && width > ui.available_width() {
+                egui::ComboBox::from_id_salt("section tabs")
+                    .selected_text(crate::panes::tab_title(&tab))
+                    .width(ui.available_width())
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        for &(choice, label, _) in &options {
+                            ui.selectable_value(&mut selected, choice, label);
+                        }
+                        ui.separator();
+                        layout_menu(ui, layout);
+                    });
+            } else {
+                crate::widgets::choice_buttons(ui, "section tabs", &mut selected, &options);
+                if section == Section::Settings {
+                    layout_menu(ui, layout);
                 }
             }
-            if section == Section::Settings {
-                ui.menu_button("Layout", |ui| {
-                    ui.label("Analyzer position");
-                    for (value, label) in [(Position::Right, "Right"), (Position::Below, "Below")] {
-                        if ui.selectable_value(&mut layout.position, value, label).clicked() {
-                            ui.close();
-                        }
-                    }
-                });
+            if selected != tab {
+                layout.select(selected);
             }
         });
-        top = header.min_rect().bottom().max(top + rail);
+        top += rail;
     }
     let body = Rect::from_min_max(pos2(rect.left(), top), rect.max);
     if !body.is_positive() {
@@ -509,6 +534,17 @@ fn section_ui(
             });
     }
     Some((tab, body))
+}
+
+fn layout_menu(ui: &mut egui::Ui, layout: &mut Layout) {
+    ui.menu_button("Layout", |ui| {
+        ui.label("Analyzer position");
+        for (value, label) in [(Position::Right, "Right"), (Position::Below, "Below")] {
+            if ui.selectable_value(&mut layout.position, value, label).clicked() {
+                ui.close();
+            }
+        }
+    });
 }
 
 fn dividers(ui: &egui::Ui, layout: &mut Layout, runtime: &mut Runtime, drawn: &Layout, scale: f32) {

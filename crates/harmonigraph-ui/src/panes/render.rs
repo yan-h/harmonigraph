@@ -16,7 +16,7 @@
 use egui::Sense;
 
 use super::section;
-use crate::widgets::{button_row, choice_row, option_label, record_button};
+use crate::widgets::{button_row, choice_row, record_button};
 use crate::{theme, LatticeSide, Layout, Pane, PictureState, RenderFrame};
 
 /// The surface this preview's panes draw on. Every copy of a pane holds
@@ -325,21 +325,21 @@ fn preview_scale(width: f32, config: &crate::RenderConfig) -> f32 {
 /// `RenderFrame` and the resolution beside it.
 fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
     section(ui, "Frame");
-    // A `button_row` rather than a `choice_row`: the selection is a PAIR of
-    // numbers, not one enum value, so there is nothing for choice_row's
-    // `selectable_value` to compare against.
-    button_row(ui, |ui| {
-        ui.label("Aspect ratio")
-            .on_hover_text("Shape of the exported video. Output size sets its pixel dimensions.");
-        let f = &mut state.appearance.render.frame;
-        for (w, h) in [(16u32, 9u32), (9, 16), (1, 1), (4, 5), (21, 9)] {
-            let on = f.aspect_w == w && f.aspect_h == h;
-            if ui.selectable_label(on, option_label(&format!("{w}:{h}"))).clicked() {
-                f.aspect_w = w;
-                f.aspect_h = h;
-            }
-        }
-    });
+    let f = &mut state.appearance.render.frame;
+    let mut aspect = (f.aspect_w, f.aspect_h);
+    choice_row(
+        ui,
+        "Aspect ratio",
+        &mut aspect,
+        &[
+            ((16, 9), "16:9", "Landscape"),
+            ((9, 16), "9:16", "Portrait"),
+            ((1, 1), "1:1", "Square"),
+            ((4, 5), "4:5", "Portrait"),
+            ((21, 9), "21:9", "Ultrawide"),
+        ],
+    );
+    (f.aspect_w, f.aspect_h) = aspect;
     // The SHORT edge, not a named format: "1080p" means nothing to a 9:16
     // frame, where 1080 is the width. Aspect decides the shape and this
     // decides only how big, so each option shows the pixels it lands on and

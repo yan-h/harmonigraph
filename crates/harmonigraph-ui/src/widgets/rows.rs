@@ -204,34 +204,32 @@ pub fn row_field<'t>(ui: &Ui, text: &'t mut String) -> TextEdit<'t> {
     ))
 }
 
-/// A horizontal row of controls in a settings column, wrapping onto further
-/// lines when the column is too narrow to hold it.
-///
-/// Height is not its business: a row starts at `interact_size.y` and grows
-/// under the first widget taller than that, and nothing in a settings pane is
-/// taller than that — the theme's `interact_size` is [`theme::ROW_HEIGHT`] and
-/// every control here is sized by it or, where egui's floor does not reach
-/// ([`row_field`], [`toggle_switch`], [`record_button`]), asks for it. So the
-/// row is a row high because the things in it are, and a bare label centers on
-/// the button beside it without help. A control that overshot would take the
-/// row with it and leave everything shorter in it sitting above the line.
-///
-/// The single row helper, deliberately: a settings pane is a column whose width
-/// the dock hands it, and a row that cannot wrap runs its last buttons out past
-/// the pane edge where they can be neither read nor clicked. A non-wrapping
-/// variant is only ever the wrong choice here, and having one to reach for is
-/// what left the panes disagreeing about whether their buttons wrap at all —
-/// Projection and Tilt overran a narrow column while Style and Palette wrapped.
-///
-/// Wrapping settles the harder half too, and not obviously: `horizontal_wrapped`
-/// sets the row's wrap mode, so each BUTTON's own label wraps onto a second line
-/// rather than extending past its frame. A single button too wide for the column
-/// (Orthographic, at any column narrow enough) has nowhere to wrap TO, and would
-/// otherwise overrun the pane whatever the row did — and take every control
-/// under it along, since egui's `Region::expand_to_include_rect` unions
-/// `max_rect` as well as `min_rect`.
+/// A row of actions or mixed controls. These can wrap because they have no
+/// selected value to summarize. Mutually exclusive options use `choice_row`
+/// instead, which switches to a dropdown when the buttons would wrap.
 pub fn button_row<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.horizontal_wrapped(add).inner
+}
+
+/// Presets are actions rather than an enum: edited values may match none of
+/// them. When narrow, keep them in a named menu without claiming a selection.
+pub(crate) fn preset_row(
+    ui: &mut Ui,
+    name: &str,
+    labels: &[&str],
+    add: impl FnOnce(&mut Ui, bool),
+) {
+    let width = option_width(ui, name)
+        + labels.iter().map(|label| option_width(ui, label)).sum::<f32>()
+        + ui.spacing().item_spacing.x * labels.len() as f32;
+    if width <= ui.available_width() {
+        ui.horizontal(|ui| {
+            ui.label(name);
+            add(ui, false);
+        });
+    } else {
+        ui.menu_button(format!("{name}…"), |ui| add(ui, true));
+    }
 }
 
 /// A selectable option's label, set in MONOSPACE when the label is a bare
@@ -262,52 +260,110 @@ pub fn option_label(label: &str) -> egui::RichText {
     }
 }
 
-/// A labelled row of mutually-exclusive choices for `value`: the standard
-/// shape of every enum setting in the settings panes.
-///
-/// Each option is `(value, label, hover hint)`; an empty hint means no
-/// tooltip. Adding a variant to a style enum is then one line here rather
-/// than another copy of the label/loop/`selectable_value` scaffolding.
-///
-/// Number labels come out monospace — see [`option_label`], which the rows
-/// built by hand out of `selectable_value` call for themselves.
-///
-/// A row is live or grayed as a WHOLE, and from an `add_enabled_ui` at the
-/// call site rather than anything in here: an option that would do nothing is
-/// a property of the section's state, not of the option, and a row whose
-/// options disagree about it has no honest label to put on the row. That the
-/// gate is outside is also what keeps the row wrapping — the scope
-/// `add_enabled_ui` opens is a nested layout, and a nested layout inside
-/// `button_row`'s `horizontal_wrapped` does not wrap, so a gate reached for
-/// per option in here would run the row off the pane and take the section's
-/// separators past the edge with it
-/// (`no_settings_pane_overruns_a_narrow_column`).
-///
-/// The body is `Ui::selectable_value`'s: a `Button::selectable` and a click
-/// test. The hint shows in both states (egui splits the two), since a grayed
-/// option's tooltip is exactly where "and here is what would switch it on"
-/// belongs.
+/// Natural width of a selectable option, using the same font and padding as
+/// the button. Width decisions are recomputed from this frame's theme.
+pub(crate) fn option_width(ui: &Ui, label: &str) -> f32 {
+    let galley = egui::WidgetText::from(option_label(label)).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        TextStyle::Button,
+    );
+    (galley.size().x + 2.0 * ui.spacing().button_padding.x).max(ui.spacing().interact_size.x)
+}
+
+/// A single-line choice group. Narrow groups become a current-value dropdown,
+/// keeping every option reachable without changing the surrounding row height.
+pub(crate) fn choice_buttons<T: Copy + PartialEq>(
+    ui: &mut Ui,
+    id: &str,
+    value: &mut T,
+    options: &[(T, &str, &str)],
+) {
+    let width = options.iter().map(|(_, label, _)| option_width(ui, label)).sum::<f32>()
+        + ui.spacing().item_spacing.x * options.len().saturating_sub(1) as f32;
+    if width <= ui.available_width() {
+        ui.horizontal(|ui| {
+            for &(choice, label, hint) in options {
+                let response = ui.selectable_value(value, choice, option_label(label));
+                if !hint.is_empty() {
+                    response.on_hover_text(hint).on_disabled_hover_text(hint);
+                }
+            }
+        });
+    } else {
+        choice_menu(ui, id, value, options);
+    }
+}
+
+fn choice_menu<T: Copy + PartialEq>(
+    ui: &mut Ui,
+    id: &str,
+    value: &mut T,
+    options: &[(T, &str, &str)],
+) {
+    let label = options
+        .iter()
+        .find(|(choice, _, _)| *choice == *value)
+        .map_or("Custom", |(_, label, _)| *label);
+    let title = label.to_owned();
+    egui::ComboBox::from_id_salt((id, ui.next_auto_id()))
+        .selected_text(option_label(&title))
+        .width(ui.available_width())
+        .truncate()
+        .show_ui(ui, |ui| {
+            for &(choice, label, hint) in options {
+                let response = ui.selectable_value(value, choice, option_label(label));
+                if !hint.is_empty() {
+                    response.on_hover_text(hint).on_disabled_hover_text(hint);
+                }
+            }
+        })
+        .response
+        .on_hover_text(title);
+}
+
+/// A named setting with buttons when they fit, otherwise one dropdown bearing
+/// the current value, beside its label when there is room and below it otherwise.
+/// Arbitrary action rows continue
+/// to use `button_row`; they have no selected value to summarize.
 pub fn choice_row<T: Copy + PartialEq>(
     ui: &mut Ui,
     name: &str,
     value: &mut T,
     options: &[(T, &str, &str)],
 ) {
-    button_row(ui, |ui| {
-        ui.label(name);
-        for &(choice, label, hint) in options {
-            let mut response =
-                ui.add(egui::Button::selectable(*value == choice, option_label(label)));
-            if response.clicked() && *value != choice {
-                *value = choice;
-                response.mark_changed();
-            }
-            if !hint.is_empty() {
-                response = response.on_hover_text(hint);
-                response.on_disabled_hover_text(hint);
-            }
+    let label_width = ui
+        .painter()
+        .layout_no_wrap(name.to_owned(), TextStyle::Body.resolve(ui.style()), theme::text())
+        .size()
+        .x;
+    let width = label_width
+        + options.iter().map(|(_, label, _)| option_width(ui, label)).sum::<f32>()
+        + ui.spacing().item_spacing.x * options.len() as f32;
+    if width <= ui.available_width() {
+        ui.horizontal(|ui| {
+            ui.label(name);
+            choice_buttons(ui, name, value, options);
+        });
+    } else {
+        let selected_width = options
+            .iter()
+            .map(|(_, label, _)| option_width(ui, label))
+            .reduce(f32::max)
+            .unwrap_or(0.0)
+            + ui.spacing().icon_width
+            + ui.spacing().icon_spacing;
+        if label_width + ui.spacing().item_spacing.x + selected_width <= ui.available_width() {
+            ui.horizontal(|ui| {
+                ui.label(name);
+                choice_menu(ui, name, value, options);
+            });
+        } else {
+            ui.label(name);
+            choice_menu(ui, name, value, options);
         }
-    });
+    }
 }
 
 #[cfg(test)]

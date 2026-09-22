@@ -784,8 +784,12 @@ fn map_controls(
     let view = state.runtime.lattice_maps.as_ref().expect("just stored");
     section(ui, "Note retuning");
     let mut mode = view.playback.engine;
-    ui.horizontal_wrapped(|ui| {
-        for (value, name, hint) in [
+    let before = mode;
+    crate::widgets::choice_buttons(
+        ui,
+        "retuning engine",
+        &mut mode,
+        &[
             (
                 TuningEngine::Off,
                 "Pass through",
@@ -801,12 +805,11 @@ fn map_controls(
                 "Lattice Map",
                 "Tune new notes using the selected saved lattice map.",
             ),
-        ] {
-            if ui.selectable_value(&mut mode, value, name).on_hover_text(hint).changed() {
-                params.edit_lattice_map(MapEdit::Engine(mode));
-            }
-        }
-    });
+        ],
+    );
+    if mode != before {
+        params.edit_lattice_map(MapEdit::Engine(mode));
+    }
     if view.pending {
         ui.weak("Map state pending audio adoption");
     }

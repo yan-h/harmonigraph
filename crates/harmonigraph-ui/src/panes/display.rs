@@ -101,15 +101,33 @@ pub(super) fn display_pane(
 /// another enum setting. The hairline under the whole strip ties its names
 /// together, and the accent stroke ties the active name to that boundary.
 ///
-/// The row still wraps when the column is too narrow to hold every name. A
-/// page is reached by clicking its name and by nothing else, so a name past the
-/// pane edge is a page with no way into it: horizontal scrolling is off in the
-/// dock (see [`Viewer::scroll_bars`](super::Viewer)).
+/// Narrow columns use a current-page dropdown so navigation stays one row high.
 fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
     let selected = *page;
     let scale = theme::ui_scale(ui.ctx());
     let font = egui::TextStyle::Button.resolve(ui.style());
-    let row = ui.horizontal_wrapped(|ui| {
+    let width = DisplayPage::ALL
+        .iter()
+        .map(|choice| {
+            ui.painter().layout_no_wrap(choice.title().into(), font.clone(), theme::text()).size().x
+                + 12.0 * scale
+        })
+        .sum::<f32>()
+        + ui.spacing().item_spacing.x * (DisplayPage::ALL.len() - 1) as f32;
+    if width > ui.available_width() {
+        egui::ComboBox::from_id_salt("display page")
+            .selected_text(page.title())
+            .width(ui.available_width())
+            .truncate()
+            .show_ui(ui, |ui| {
+                for choice in DisplayPage::ALL {
+                    ui.selectable_value(page, choice, choice.title());
+                }
+            });
+        ui.add_space(ui.spacing().item_spacing.y);
+        return;
+    }
+    let row = ui.horizontal(|ui| {
         let mut tabs = Vec::with_capacity(DisplayPage::ALL.len());
         for choice in DisplayPage::ALL {
             let title = choice.title();
@@ -153,20 +171,11 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
         }
     }
 
-    // Each wrapped line is a strip of its own. One boundary under the whole
-    // block leaves an active page on any earlier line floating between rows.
-    let mut boundaries: Vec<(egui::Rangef, f32)> = Vec::new();
-    for (_, _, rect, _) in &row.inner {
-        match boundaries.last_mut() {
-            Some((range, bottom)) if (*bottom - rect.bottom()).abs() < 0.5 => {
-                range.max = rect.right();
-            }
-            _ => boundaries.push((rect.x_range(), rect.bottom())),
-        }
-    }
-    for (range, bottom) in boundaries {
-        ui.painter().hline(range, bottom, egui::Stroke::new(1.0, theme::hairline()));
-    }
+    ui.painter().hline(
+        row.response.rect.x_range(),
+        row.response.rect.bottom(),
+        egui::Stroke::new(1.0, theme::hairline()),
+    );
 
     for (choice, response, rect, galley) in row.inner {
         let active = choice == *page;
@@ -216,7 +225,7 @@ mod tests {
     #[test]
     fn the_page_picker_does_not_read_as_an_option_row() {
         let mut page = DisplayPage::Analyzer;
-        let shapes = crate::tests::probe::painted_full(egui::vec2(400.0, 100.0), |ui| {
+        let shapes = crate::tests::probe::painted_full(egui::vec2(600.0, 100.0), |ui| {
             page_picker(ui, &mut page)
         })
         .shapes;
@@ -257,7 +266,7 @@ mod tests {
     #[test]
     fn selecting_a_page_does_not_bold_its_label() {
         let mut page = DisplayPage::Analyzer;
-        let shapes = crate::tests::probe::painted_full(egui::vec2(400.0, 100.0), |ui| {
+        let shapes = crate::tests::probe::painted_full(egui::vec2(600.0, 100.0), |ui| {
             page_picker(ui, &mut page)
         })
         .shapes;
@@ -276,50 +285,21 @@ mod tests {
         assert_eq!(font("Analyzer"), font("Colors"));
     }
 
-    /// Every wrapped line is a complete navigation strip, so its selected
-    /// page replaces the boundary directly beneath that line.
     #[test]
-    fn a_wrapped_picker_keeps_the_active_stroke_on_its_row_boundary() {
+    fn a_narrow_picker_shows_only_the_current_page() {
         let mut page = DisplayPage::Colors;
         let shapes = crate::tests::probe::painted_full(egui::vec2(120.0, 160.0), |ui| {
             page_picker(ui, &mut page)
         })
         .shapes;
-        let lines: Vec<_> = shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::LineSegment { points, stroke } => Some((*points, *stroke)),
-                _ => None,
-            })
-            .collect();
-        let active = lines
-            .iter()
-            .find(|(_, stroke)| stroke.color == theme::accent())
-            .expect("the active page has no accent underline");
-        let boundaries: Vec<_> =
-            lines.iter().filter(|(_, stroke)| stroke.color == theme::hairline()).collect();
         let labels: Vec<_> = shapes
             .iter()
             .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => Some((text.galley.text(), text.pos.y)),
+                egui::Shape::Text(text) => Some(text.galley.text()),
                 _ => None,
             })
             .collect();
-        let selected_label_y = labels
-            .iter()
-            .find_map(|(title, y)| (*title == "Colors").then_some(*y))
-            .expect("the picker drew no Colors label");
-        let last_label_y = labels.iter().map(|(_, y)| *y).reduce(f32::max).unwrap();
-        assert!(selected_label_y < last_label_y, "the fixture selected a page on the final row");
-        let active_y = active.0[0].y;
-        assert!(
-            boundaries.iter().any(|(points, _)| {
-                (points[0].y - active_y).abs() < 0.01
-                    && points[0].x <= active.0[0].x
-                    && points[1].x >= active.0[1].x
-            }),
-            "the active stroke is detached from its row boundary",
-        );
+        assert_eq!(labels, ["Colors"]);
     }
 
     /// The navigation boundary has enough breathing room to remain distinct
@@ -329,7 +309,7 @@ mod tests {
         let mut page = DisplayPage::Colors;
         let mut content_top = 0.0;
         let mut row_gap = 0.0;
-        let shapes = crate::tests::probe::painted_full(egui::vec2(400.0, 100.0), |ui| {
+        let shapes = crate::tests::probe::painted_full(egui::vec2(600.0, 100.0), |ui| {
             row_gap = ui.spacing().item_spacing.y;
             page_picker(ui, &mut page);
             content_top = ui.cursor().top();
@@ -358,7 +338,7 @@ mod tests {
     #[test]
     fn hovering_a_page_highlights_it_without_bolding_it() {
         let ctx = crate::tests::probe::themed();
-        let size = egui::vec2(400.0, 100.0);
+        let size = egui::vec2(600.0, 100.0);
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
         let mut page = DisplayPage::Analyzer;
         let mut draw = |events| {

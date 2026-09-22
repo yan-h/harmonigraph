@@ -1889,6 +1889,22 @@ fn the_display_page_in_the_picker_survives_an_editor_reopen() {
     let out = window.frame(&mut state, vec![]);
     assert!(!drawn(&out, leaf, "Show spectrogram"), "the tab opens on Lattice, not Spectrogram");
 
+    // The narrow page picker exposes its destinations through a dropdown.
+    let picker = out
+        .shapes
+        .iter()
+        .find_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) if t.galley.text() == "Lattice" && leaf.contains(t.pos) => {
+                Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
+            }
+            _ => None,
+        })
+        .expect("current page dropdown");
+    window.frame(&mut state, vec![egui::Event::PointerMoved(picker)]);
+    window.frame(&mut state, vec![press(picker, true)]);
+    window.frame(&mut state, vec![press(picker, false)]);
+    let out = window.frame(&mut state, vec![]);
+
     // The Spectrogram name on the picker, found where it was painted and clicked
     // for real.
     let target = out
