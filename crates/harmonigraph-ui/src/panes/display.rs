@@ -115,15 +115,18 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
         .sum::<f32>()
         + ui.spacing().item_spacing.x * (DisplayPage::ALL.len() - 1) as f32;
     if width > ui.available_width() {
-        egui::ComboBox::from_id_salt("display page")
-            .selected_text(page.title())
-            .width(ui.available_width())
-            .truncate()
-            .show_ui(ui, |ui| {
+        crate::widgets::selected_combo(
+            ui,
+            egui::ComboBox::from_id_salt("display page")
+                .selected_text(page.title())
+                .width(ui.available_width())
+                .truncate(),
+            |ui| {
                 for choice in DisplayPage::ALL {
                     ui.selectable_value(page, choice, choice.title());
                 }
-            });
+            },
+        );
         ui.add_space(ui.spacing().item_spacing.y);
         return;
     }

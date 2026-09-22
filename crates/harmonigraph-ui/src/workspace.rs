@@ -447,7 +447,10 @@ fn section_ui(
     }
     let mut top = rect.top();
     if rail > 0.0 {
-        let header_rect = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + rail));
+        // Align the header controls' right edge with the settings content gutter.
+        let gutter = theme::pane_inner_margin(theme::ui_scale(ui.ctx()));
+        let header_rect =
+            Rect::from_min_max(rect.min, pos2(rect.right() - gutter, rect.top() + rail));
         let mut header =
             pane.new_child(egui::UiBuilder::new().id_salt("header").max_rect(header_rect));
         header.set_clip_rect(header_rect.intersect(pane.clip_rect()));
@@ -489,17 +492,20 @@ fn section_ui(
                     0.0
                 };
             if section == Section::Settings && width > ui.available_width() {
-                egui::ComboBox::from_id_salt("section tabs")
-                    .selected_text(crate::panes::tab_title(&tab))
-                    .width(ui.available_width())
-                    .truncate()
-                    .show_ui(ui, |ui| {
+                crate::widgets::selected_combo(
+                    ui,
+                    egui::ComboBox::from_id_salt("section tabs")
+                        .selected_text(crate::panes::tab_title(&tab))
+                        .width(ui.available_width())
+                        .truncate(),
+                    |ui| {
                         for &(choice, label, _) in &options {
                             ui.selectable_value(&mut selected, choice, label);
                         }
                         ui.separator();
                         layout_menu(ui, layout);
-                    });
+                    },
+                );
             } else {
                 crate::widgets::choice_buttons(ui, "section tabs", &mut selected, &options);
                 if section == Section::Settings {

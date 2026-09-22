@@ -307,20 +307,52 @@ fn choice_menu<T: Copy + PartialEq>(
         .find(|(choice, _, _)| *choice == *value)
         .map_or("Custom", |(_, label, _)| *label);
     let title = label.to_owned();
-    egui::ComboBox::from_id_salt((id, ui.next_auto_id()))
+    let combo = egui::ComboBox::from_id_salt((id, ui.next_auto_id()))
         .selected_text(option_label(&title))
         .width(ui.available_width())
-        .truncate()
-        .show_ui(ui, |ui| {
-            for &(choice, label, hint) in options {
-                let response = ui.selectable_value(value, choice, option_label(label));
-                if !hint.is_empty() {
-                    response.on_hover_text(hint).on_disabled_hover_text(hint);
-                }
+        .truncate();
+    selected_combo(ui, combo, |ui| {
+        for &(choice, label, hint) in options {
+            let response = ui.selectable_value(value, choice, option_label(label));
+            if !hint.is_empty() {
+                response.on_hover_text(hint).on_disabled_hover_text(hint);
             }
-        })
-        .response
-        .on_hover_text(title);
+        }
+    })
+    .response
+    .on_hover_text(title);
+}
+
+/// A closed value dropdown represents the selected choice just like a selected
+/// button. Restore ordinary widget colors inside its popup so the other choices
+/// and action menus retain their own states.
+pub(crate) fn selected_combo<R>(
+    ui: &mut Ui,
+    combo: egui::ComboBox,
+    contents: impl FnOnce(&mut Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let original = ui.visuals().widgets.clone();
+    ui.scope(|ui| {
+        let selection = ui.visuals().selection;
+        let widgets = &mut ui.visuals_mut().widgets;
+        for visual in [
+            &mut widgets.noninteractive,
+            &mut widgets.inactive,
+            &mut widgets.hovered,
+            &mut widgets.active,
+            &mut widgets.open,
+        ] {
+            visual.bg_fill = selection.bg_fill;
+            visual.weak_bg_fill = selection.bg_fill;
+            visual.fg_stroke = selection.stroke;
+        }
+        combo
+            .popup_style(egui::style::StyleModifier::from(move |style: &mut egui::Style| {
+                style.visuals.widgets = original.clone();
+            }))
+            .show_ui(ui, contents)
+    })
+    .inner
 }
 
 /// A named setting with buttons when they fit, otherwise one dropdown bearing

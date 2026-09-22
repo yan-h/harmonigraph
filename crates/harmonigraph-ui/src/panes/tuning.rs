@@ -479,17 +479,19 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     );
     theme::reserve_scroll_gutter(ui);
     egui::ScrollArea::horizontal().id_salt("adaptive-axes-scroll").show(ui, |ui| {
-        egui::ComboBox::from_id_salt("adaptive-axes")
-            .selected_text(match p.axes {
+        crate::widgets::selected_combo(
+            ui,
+            egui::ComboBox::from_id_salt("adaptive-axes").selected_text(match p.axes {
                 1 => "Fifths",
                 2 => "Fifths + thirds",
                 _ => "Fifths + thirds + sevenths",
-            })
-            .show_ui(ui, |ui| {
+            }),
+            |ui| {
                 ui.selectable_value(&mut p.axes, 1, "Fifths");
                 ui.selectable_value(&mut p.axes, 2, "Fifths + thirds");
                 ui.selectable_value(&mut p.axes, 3, "Fifths + thirds + sevenths");
-            });
+            },
+        );
     });
     let context = ui.collapsing("Context", |ui| {
         p.half_life_ms = adaptive_value(
@@ -832,15 +834,18 @@ fn map_controls(
         .find(|(id, _)| *id == selected)
         .map(|(_, name)| &**name)
         .unwrap_or("unavailable");
-    egui::ComboBox::from_id_salt("saved-lattice-map")
-        .selected_text(format!("{} · {name}", selected + 1))
-        .show_ui(ui, |ui| {
+    crate::widgets::selected_combo(
+        ui,
+        egui::ComboBox::from_id_salt("saved-lattice-map")
+            .selected_text(format!("{} · {name}", selected + 1)),
+        |ui| {
             for (id, name) in view.names.iter() {
                 if ui.selectable_label(selected == *id, format!("{} · {name}", id + 1)).clicked() {
                     params.edit_lattice_map(MapEdit::Select(*id));
                 }
             }
-        });
+        },
+    );
     if view.playback.map.is_none() {
         ui.colored_label(theme::armed(), "Map unavailable: new attacks pass through.");
     }
