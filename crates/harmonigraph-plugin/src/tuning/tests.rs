@@ -737,6 +737,7 @@ fn a_tune_attaching_cuts_every_track_already_playing() {
         cut.iter().any(|(_, event)| event.release()),
         "the attach cut the voice the first Tune was holding: {cut:?}"
     );
+    assert!(inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0, "attach retains released voices");
     drop(joining);
 }
 
@@ -896,6 +897,122 @@ fn a_reset_with_an_attach_behind_it_still_clears_released_memory() {
         "the attach behind the Reset did not reclassify it: {after:?}"
     );
     drop(joining);
+}
+
+/// Each producer owns a real exported Tune on its callback thread. The barrier
+/// suspends Session::reset after its cut, before its memory-reset publication.
+/// Retain the barrier here so its last Arc is never freed in an audio callback.
+struct ResetProducer {
+    gate: std::sync::Arc<std::sync::Barrier>,
+    start: Option<std::sync::mpsc::SyncSender<i64>>,
+    done: std::sync::mpsc::Receiver<()>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    paused: bool,
+}
+impl ResetProducer {
+    fn new() -> Self {
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let pause = gate.clone();
+        let (start, receive) = std::sync::mpsc::sync_channel(0);
+        let (completed, done) = std::sync::mpsc::sync_channel(0);
+        let thread = std::thread::spawn(move || {
+            let mut tune = Device::new(true);
+            tune.activate();
+            completed.send(()).unwrap();
+            let Ok(raw) = receive.recv() else { return };
+            tune.shared().request_reset();
+            session::test_pause_reset(pause);
+            tune.run(raw, vec![], None);
+            completed.send(()).unwrap();
+            // Keep membership stable until the fixture has observed completion.
+            let _ = receive.recv();
+        });
+        done.recv().unwrap();
+        Self { gate, start: Some(start), done, thread: Some(thread), paused: false }
+    }
+    fn pause(&mut self, raw: i64) {
+        self.start.as_ref().unwrap().send(raw).unwrap();
+        self.gate.wait();
+        self.paused = true;
+    }
+    fn finish(&mut self) {
+        self.gate.wait();
+        self.paused = false;
+        self.done.recv().unwrap();
+    }
+}
+impl Drop for ResetProducer {
+    fn drop(&mut self) {
+        if self.paused {
+            self.gate.wait();
+            let _ = self.done.recv();
+        }
+        self.start.take();
+        let result = self.thread.take().unwrap().join();
+        if !std::thread::panicking() {
+            result.unwrap();
+        }
+    }
+}
+
+fn seed_released_memory(pair: &mut Pair) {
+    pair.step(vec![note(1, 0, 60, 0, true), note(2, 0, 64, 1, true)]);
+    pair.idle();
+    pair.step(vec![note(1, 0, 60, 0, false), note(2, 0, 64, 1, false)]);
+    pair.idle();
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0);
+    assert!(inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0);
+}
+
+#[test]
+fn a_reset_completed_after_hub_adoption_still_clears_released_memory() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    let mut producer = ResetProducer::new();
+    seed_released_memory(&mut pair);
+    producer.pause(pair.raw);
+    let cut_epoch = session::session().epoch();
+    pair.idle();
+    assert!(inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0, "cut alone retains memory");
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_epoch()), cut_epoch);
+    producer.finish();
+    assert_eq!(session::session().epoch(), cut_epoch, "completion adds no second voice cut");
+    pair.idle();
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_memory()), 0);
+    // This completion is consumed once: subsequent ordinary membership cuts
+    // retain newly released memory, rather than reapplying the old Reset.
+    seed_released_memory(&mut pair);
+    drop(producer);
+    pair.idle();
+    assert!(inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0);
+}
+
+#[test]
+fn reset_producers_completing_out_of_order_each_clear_released_memory() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    let mut older = ResetProducer::new();
+    let mut newer = ResetProducer::new();
+    seed_released_memory(&mut pair);
+    older.pause(pair.raw);
+    newer.pause(pair.raw);
+    pair.idle();
+    assert!(inspect_hub(&pair.hub, |hub| hub.test_memory()) > 0);
+    newer.finish();
+    pair.idle();
+    assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_memory()), 0);
+    seed_released_memory(&mut pair);
+    let cut_epoch = session::session().epoch();
+    older.finish();
+    assert_eq!(session::session().epoch(), cut_epoch);
+    pair.idle();
+    assert_eq!(
+        inspect_hub(&pair.hub, |hub| hub.test_memory()),
+        0,
+        "the older producer completing last cannot regress or hide the reset reason"
+    );
+    drop(older);
+    drop(newer);
 }
 
 /// The two publication lanes stay independent, and the display shows what the
