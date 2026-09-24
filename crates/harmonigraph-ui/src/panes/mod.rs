@@ -606,7 +606,7 @@ fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response 
     let job = egui::text::LayoutJob::single_section(
         title.to_uppercase(),
         egui::TextFormat {
-            font_id: egui::TextStyle::Heading.resolve(ui.style()),
+            font_id: egui::TextStyle::Small.resolve(ui.style()),
             extra_letter_spacing: HEADING_TRACKING * scale,
             color: crate::theme::text_dim(),
             ..Default::default()

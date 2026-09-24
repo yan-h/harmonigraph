@@ -407,9 +407,9 @@ fn style_at(scale: f32) -> egui::Style {
     // `Default` that meant to be a struct literal, and it is right.
     let mut style = egui::Style {
         text_styles: [
-            // Section headings: small capitals, spaced and dimmed where they
-            // are drawn (`panes::section_header`).
-            (TextStyle::Heading, FontId::proportional(11.0)),
+            // egui's own titles (a window's). Section headings are Small type,
+            // in spaced capitals (`panes::section_header`).
+            (TextStyle::Heading, FontId::proportional(13.5)),
             (TextStyle::Body, FontId::proportional(13.5)),
             (TextStyle::Button, FontId::proportional(13.5)),
             (TextStyle::Small, FontId::proportional(11.0)),

@@ -87,8 +87,9 @@ pub(crate) fn mark_spaced(ui: &Ui) {
 }
 
 /// Room over a group in a column, bringing the row gap up to [`GROUP_GAP`] —
-/// unless the cursor is at the top of `ui`, or where [`mark_spaced`] said the
-/// room is already there.
+/// unless the cursor is where [`mark_spaced`] said the room is already there.
+/// The top of a child ui is no exception: an `add_enabled_ui` block starts one
+/// wherever it stands in its section.
 /// Nothing in a row, where space would run sideways; a grid lays its cells out
 /// in rows, so nothing there either.
 pub(crate) fn group_space(ui: &mut Ui) {
@@ -97,7 +98,7 @@ pub(crate) fn group_space(ui: &mut Ui) {
     }
     let at = ui.cursor().min;
     let marked = ui.data(|d| d.get_temp::<egui::Pos2>(spaced_id()));
-    if at.y <= ui.max_rect().top() + 0.5 || marked.is_some_and(|m| m.distance(at) < 0.5) {
+    if marked.is_some_and(|m| m.distance(at) < 0.5) {
         return;
     }
     ui.add_space(extra(ui));
