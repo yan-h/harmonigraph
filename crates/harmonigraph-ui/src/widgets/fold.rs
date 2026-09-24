@@ -5,6 +5,17 @@ use egui::{Rect, Response, Vec2};
 
 use crate::theme;
 
+/// A pane's fold button — a workspace section's or an analyzer region's — as
+/// a square with a double chevron pointing the way the pane's edge will move
+/// when it is clicked: toward the edge on an open pane, out of the rail on a
+/// folded one.
+///
+/// Double, where a settings heading's is single, because the two say
+/// different things: a heading's chevron is the STATE of its section (at the
+/// name while folded, down while open), which is how disclosure carets read
+/// everywhere, while this one is the ACTION, which is how a sidebar toggle
+/// reads. One glyph for both made an open pane's arrow and an open section's
+/// look like they disagreed.
 pub(crate) fn paint_fold(ui: &egui::Ui, response: &Response, cell: Rect, direction: Vec2) {
     let hot = response.hovered() || response.has_focus();
     let painter = ui.painter_at(cell);
@@ -29,12 +40,20 @@ pub(crate) fn paint_fold(ui: &egui::Ui, response: &Response, cell: Rect, directi
             theme::widget()
         },
     );
-    paint_chevron(&painter, cell.center(), direction, hot, scale);
+    for step in [-1.0, 1.0] {
+        paint_chevron(
+            &painter,
+            cell.center() + direction * step * 2.0 * scale,
+            direction,
+            hot,
+            scale,
+        );
+    }
 }
 
-/// The fold mark every fold in the editor draws — a workspace section's
-/// button, an analyzer region's, a settings heading and a subsection alike —
-/// centred on `center` and pointing along `direction`, brighter while `hot`.
+/// The fold mark every fold in the editor draws — once on a settings heading
+/// or subsection, twice on a pane's [`paint_fold`] button — centred on
+/// `center` and pointing along `direction`, brighter while `hot`.
 pub(crate) fn paint_chevron(
     painter: &egui::Painter,
     center: egui::Pos2,

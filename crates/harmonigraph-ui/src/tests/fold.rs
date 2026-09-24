@@ -707,14 +707,20 @@ fn section_and_region_chevrons_share_visible_hover_feedback() {
             )),
             "no unoutlined hover fill at {cell:?}"
         );
-        assert!(
-            out.shapes.iter().any(|cs| matches!(&cs.shape,
-                egui::Shape::Path(p) if p.points.len() == 3
-                    && cell.contains_rect(egui::Rect::from_points(&p.points))
-                    && p.stroke.color == egui::epaint::ColorMode::Solid(theme::text())
-            )),
-            "no bright chevron at {cell:?}"
-        );
+        // Two: a pane's fold is a double chevron, where a settings heading's
+        // single one says something else (see `paint_fold`).
+        let bright = out
+            .shapes
+            .iter()
+            .filter(|cs| {
+                matches!(&cs.shape,
+                    egui::Shape::Path(p) if p.points.len() == 3
+                        && cell.contains_rect(egui::Rect::from_points(&p.points))
+                        && p.stroke.color == egui::epaint::ColorMode::Solid(theme::text())
+                )
+            })
+            .count();
+        assert_eq!(bright, 2, "not a bright double chevron at {cell:?}");
     }
 }
 
