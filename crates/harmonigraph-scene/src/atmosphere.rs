@@ -212,7 +212,7 @@ pub struct SpectralAtmosphere {
     pub contour_softness: f32,
     pub analyzer_softness: f32,
     /// Bloom strength for the spectrogram's MIDI ribbons, independent of
-    /// lattice and spiral bloom. The saved key remains `note_glow`.
+    /// the lattice and Spiral blooms. The saved key remains `note_glow`.
     pub note_glow: f32,
     /// Blend from original to displaced levels before Contours and the palette.
     /// Zero disables the texture; zero refraction is also exactly neutral.

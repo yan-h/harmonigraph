@@ -4,7 +4,7 @@
 //! [`super::nodes`], the colors everything is painted with [`super::color`],
 //! the render/workspace knobs [`super::system`].
 //!
-//! Part of [`super::display`] rather than of [`super::tuning`], though view
+//! Part of the Lattice page ([`super::pages`]) rather than of [`super::tuning`], though view
 //! and tuning answer halves of one question — where the nodes sit in pitch,
 //! and which of them you are looking at. That kinship is real about the
 //! CONTENT and no help on a label, which shows one word: these are twelve
@@ -159,12 +159,14 @@ pub(super) fn view_pane(
                             ui.close();
                         }
                     }
-                    response.context_menu(|ui| {
-                        if ui.button("Delete").clicked() {
-                            delete = Some(i);
-                            ui.close();
-                        }
-                    });
+                    egui::Popup::context_menu(&response)
+                        .style(crate::widgets::menu_style(ui.ctx()))
+                        .show(|ui| {
+                            if ui.button("Delete").clicked() {
+                                delete = Some(i);
+                                ui.close();
+                            }
+                        });
                 }
                 if let Some(i) = delete {
                     interaction.camera_presets.remove(i);

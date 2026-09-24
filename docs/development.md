@@ -196,12 +196,16 @@ Lattice,
 Analyzer (or Spiral),
 and Settings.
 Settings contains Tuning,
-Display,
-Video and Console destinations.
-Display › Analyzer's Dock setting places Analyzer to the right of Lattice or below it,
+Lattice,
+Analyzer,
+Colors,
+Video,
+System and Console tabs;
+those that do not fit the column move into a trailing overflow menu.
+The Analyzer tab's Dock setting places Analyzer to the right of Lattice or below it,
 beside Spectrum edge;
 each arrangement remembers its own sizes.
-Right-clicking Lattice or Analyzer offers links to their Display pages,
+Right-clicking Lattice or Analyzer offers a link to its settings tab,
 so each setting still has one home.
 Dividers resize adjacent visible sections without allowing rearrangement.
 

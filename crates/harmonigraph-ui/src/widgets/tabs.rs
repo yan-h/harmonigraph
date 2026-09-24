@@ -17,7 +17,9 @@ use crate::theme;
 /// The overflow button shows three dots while the selected tab is on the strip.
 /// When the selected tab is one of the hidden ones, the button carries its name
 /// and the selected fill instead, so the current destination is always
-/// labelled and nothing on the strip shifts to make room for it.
+/// labelled and nothing on the strip shifts to make room for it. Where not even
+/// one tab fits beside it, that button is the whole strip, its name truncated
+/// to the room: one dropdown, the same one as at every other width.
 pub(crate) fn tab_strip<T: Copy + PartialEq>(
     ui: &mut Ui,
     id: &str,
@@ -29,25 +31,6 @@ pub(crate) fn tab_strip<T: Copy + PartialEq>(
     let shown = strip_fit(&widths, ui.spacing().item_spacing.x, ui.available_width(), |shown| {
         overflow_width(ui, selected.filter(|&at| at >= shown).map(|at| options[at].1))
     });
-    if shown == 0 {
-        // Not one tab fits beside the overflow button, so the button is all
-        // there is: the current tab's name in a dropdown the width of the
-        // room, truncated rather than overrunning the strip.
-        let current = selected.map_or("", |at| options[at].1);
-        super::selected_combo(
-            ui,
-            egui::ComboBox::from_id_salt(id)
-                .selected_text(option_label(current))
-                .width(ui.available_width())
-                .truncate(),
-            |ui| {
-                for &(choice, label) in options {
-                    ui.selectable_value(value, choice, option_label(label));
-                }
-            },
-        );
-        return;
-    }
     ui.horizontal(|ui| {
         for &(choice, label) in &options[..shown] {
             ui.selectable_value(value, choice, option_label(label));
@@ -89,6 +72,7 @@ fn overflow<T: Copy + PartialEq>(ui: &mut Ui, id: &str, value: &mut T, hidden: &
     let button = match current {
         Some(label) => {
             egui::Button::selectable(true, (option_label(label), Atom::custom(icon, size)))
+                .truncate()
         }
         None => egui::Button::selectable(false, Atom::custom(icon, size))
             .min_size(Vec2::splat(ui.spacing().interact_size.y)),
@@ -104,13 +88,20 @@ fn overflow<T: Copy + PartialEq>(ui: &mut Ui, id: &str, value: &mut T, hidden: &
         }
     }
     let response = response.response.on_hover_text("More tabs");
-    egui::Popup::menu(&response).id(ui.make_persistent_id((id, "overflow menu"))).show(|ui| {
-        for &(choice, label) in hidden {
-            if ui.selectable_label(*value == choice, option_label(label)).clicked() {
-                *value = choice;
+    let width = response.rect.width();
+    egui::Popup::menu(&response)
+        .id(ui.make_persistent_id((id, "overflow menu")))
+        .style(super::menu_style(ui.ctx()))
+        .show(|ui| {
+            // Never narrower than the button that opened it, as a dropdown's
+            // list is never narrower than the dropdown.
+            ui.set_min_width(width);
+            for &(choice, label) in hidden {
+                if ui.selectable_label(*value == choice, option_label(label)).clicked() {
+                    *value = choice;
+                }
             }
-        }
-    });
+        });
 }
 
 /// Three dots across the middle: the "more" glyph, painted rather than typed
@@ -139,7 +130,7 @@ fn paint_chevron(ui: &Ui, rect: Rect, color: egui::Color32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{strip_fit, tab_strip};
+    use super::{option_width, overflow_width, strip_fit, tab_strip};
 
     const TABS: [(u8, &str); 4] = [(0, "Tuning"), (1, "Lattice"), (2, "Analyzer"), (3, "Colors")];
 
@@ -179,6 +170,86 @@ mod tests {
         let (labels, dots) = drawn(150.0, 3);
         assert_eq!(labels.last().map(String::as_str), Some("Colors"), "{labels:?}");
         assert_eq!(dots, 0, "the named overflow button still drew dots");
+    }
+
+    /// Where not one tab fits, the strip is the named overflow button alone,
+    /// truncated inside the room rather than overrunning it.
+    #[test]
+    fn a_strip_with_room_for_no_tab_is_the_named_overflow_button() {
+        let width = 40.0;
+        let mut value = 2;
+        let shapes = crate::tests::probe::painted_full(egui::vec2(width, 60.0), |ui| {
+            tab_strip(ui, "tabs", &mut value, &TABS)
+        })
+        .shapes;
+        let texts: Vec<_> = shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(text) => {
+                    Some((text.galley.text().to_owned(), text.visual_bounding_rect()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts.len(), 1, "{texts:?}");
+        assert_eq!(texts[0].0, "Analyzer");
+        assert!(texts[0].1.right() <= width, "the name overran the strip: {texts:?}");
+        assert!(!shapes.iter().any(|cs| matches!(cs.shape, egui::Shape::Circle(_))));
+    }
+
+    /// A menu first opened over a short hidden tab still fits a longer one
+    /// that joins it later. egui keeps a popup's size from one opening to the
+    /// next, so a label free to wrap would stay inside the first width.
+    #[test]
+    fn the_overflow_menu_grows_to_fit_a_longer_hidden_tab() {
+        const TABS: [(u8, &str); 4] = [(0, "Tuning"), (1, "Lattice"), (2, "Analyzer"), (3, "Ab")];
+        let ctx = crate::tests::probe::themed();
+        let mut value = 0;
+        let mut frame = |width: f32, events: Vec<egui::Event>| {
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 60.0));
+            let screen = egui::vec2(600.0, 300.0);
+            crate::tests::probe::events_into(&ctx, screen, rect, events, |ui| {
+                tab_strip(ui, "tabs", &mut value, &TABS)
+            })
+            .shapes
+        };
+        // Room for all but the last tab, then for all but the last two.
+        let mut room = [0.0; 2];
+        crate::tests::probe::frame_full(&ctx, egui::vec2(600.0, 300.0), |ui| {
+            let widths: Vec<f32> = TABS.iter().map(|(_, l)| option_width(ui, l)).collect();
+            let gap = ui.spacing().item_spacing.x;
+            let dots = overflow_width(ui, None);
+            let run = |count: usize| widths[..count].iter().sum::<f32>() + gap * count as f32;
+            room = [run(3) + dots + 1.0, run(2) + dots + 1.0];
+        });
+        let mut open = |width: f32| {
+            egui::Popup::close_all(&ctx);
+            let shapes = frame(width, vec![]);
+            let dots: Vec<_> = shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Circle(circle) => Some(circle.center),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(dots.len(), 3, "no overflow button at {width}");
+            let at = dots[1];
+            frame(width, vec![egui::Event::PointerMoved(at)]);
+            frame(width, vec![crate::tests::probe::press(at, true)]);
+            frame(width, vec![crate::tests::probe::press(at, false)]);
+            frame(width, vec![])
+        };
+        open(room[0]);
+        let rows: Vec<_> = open(room[1])
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Analyzer" => {
+                    Some(text.galley.rows.len())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rows, [1], "the reopened menu wrapped its longer entry");
     }
 
     #[test]

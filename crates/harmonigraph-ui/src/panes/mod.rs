@@ -140,8 +140,11 @@ impl Tab {
     /// pane that slips past one of them draws with a scroll area around it or a
     /// border of chrome inside it, neither of which fails anything: it just
     /// looks wrong, in a way nobody thinks to attribute to a missing arm.
+    ///
+    /// Every tab outside the Settings column is a picture, so this is read off
+    /// the section strips rather than listed again.
     pub(crate) fn is_picture(&self) -> bool {
-        matches!(self, Tab::Lattice | Tab::Spectral | Tab::Spiral)
+        crate::workspace::Section::of(*self) != crate::workspace::Section::Settings
     }
 }
 
@@ -207,6 +210,10 @@ impl Viewer<'_> {
         // Before the body draws anything — see [`pane_content_right`].
         let right = ui.max_rect().right();
         ui.data_mut(|d| d.insert_temp(pane_content_right(), right));
+        // A picture draws no sections, so it has no folds to hand down.
+        if tab.is_picture() {
+            return self.body(ui, tab);
+        }
         // Before the body too — see [`SectionFolds`].
         let folds = SectionFolds {
             page: tab_title(tab),
@@ -214,12 +221,7 @@ impl Viewer<'_> {
         };
         ui.data_mut(|d| d.insert_temp(SectionFolds::id(), folds));
         self.body(ui, tab);
-        let folds = ui.data_mut(|d| {
-            let folds = d.get_temp::<SectionFolds>(SectionFolds::id());
-            d.remove::<SectionFolds>(SectionFolds::id());
-            folds
-        });
-        if let Some(folds) = folds {
+        if let Some(folds) = ui.data_mut(|d| d.remove_temp::<SectionFolds>(SectionFolds::id())) {
             self.interaction.folded_sections = folds.folded;
         }
     }
@@ -522,7 +524,7 @@ pub(super) fn section_separator(ui: &mut egui::Ui) {
 ///
 /// Keys are "page/section" by title, so the same heading on two pages folds
 /// separately and a blob names what it folds in words.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct SectionFolds {
     page: &'static str,
     folded: std::collections::BTreeSet<String>,
@@ -531,6 +533,14 @@ struct SectionFolds {
 impl SectionFolds {
     fn id() -> egui::Id {
         egui::Id::new("section-folds")
+    }
+
+    /// `f` over the set in place, or `None` outside a [`Viewer`] body. In place
+    /// because every section of every drawn tab reads it every frame, and a
+    /// `get_temp` would clone the whole set each time.
+    fn with<R>(ui: &egui::Ui, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
+        let key = egui::util::id_type_map::RawKey::new::<Self>(Self::id());
+        ui.data_mut(|d| d.get_temp_raw_mut(key)?.downcast_mut::<Self>().map(f))
     }
 }
 
@@ -547,26 +557,43 @@ pub(super) fn section<R>(
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<R> {
     section_separator(ui);
-    let mut folds = ui.data(|d| d.get_temp::<SectionFolds>(SectionFolds::id()));
-    let key = folds.as_ref().map(|folds| format!("{}/{title}", folds.page));
-    let open = !key.as_ref().zip(folds.as_ref()).is_some_and(|(k, f)| f.folded.contains(k));
-    let open = open ^ section_header(ui, title, open).clicked();
-    if let (Some(folds), Some(key)) = (&mut folds, key) {
-        let changed = if open { folds.folded.remove(&key) } else { folds.folded.insert(key) };
-        if changed {
-            ui.data_mut(|d| d.insert_temp(SectionFolds::id(), folds.clone()));
+    let (key, folded) = SectionFolds::with(ui, |folds| {
+        let key = format!("{}/{title}", folds.page);
+        let folded = folds.folded.contains(&key);
+        (key, folded)
+    })
+    .unzip();
+    let open = !folded.unwrap_or(false);
+    let clicked = section_header(ui, title, open).clicked();
+    // Outside a [`Viewer`] body there is nowhere to keep a fold, so the header
+    // stays put rather than hiding its body for the one frame of the click.
+    let open = match key {
+        Some(key) if clicked => {
+            SectionFolds::with(ui, |folds| {
+                if open {
+                    folds.folded.insert(key);
+                } else {
+                    folds.folded.remove(&key);
+                }
+            });
+            !open
         }
-    }
+        _ => open,
+    };
     open.then(|| body(ui))
 }
 
 /// The heading row of a [`section`]: the name, and a chevron that points down
 /// while the section is open and at the name while it is folded.
 fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response {
+    let scale = crate::theme::ui_scale(ui.ctx());
+    // The chevron's own room at the right end, so a truncated name stops short
+    // of it rather than running under it.
+    let chevron = 14.0 * scale;
     let galley = egui::WidgetText::from(egui::RichText::new(title).heading()).into_galley(
         ui,
         Some(egui::TextWrapMode::Truncate),
-        ui.available_width(),
+        (ui.available_width() - chevron).max(0.0),
         egui::TextStyle::Heading,
     );
     let (rect, response) = ui.allocate_exact_size(
@@ -579,7 +606,6 @@ fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response 
     let hot = response.hovered() || response.has_focus();
     let color = ui.visuals().text_color();
     ui.painter().galley(rect.left_top(), galley, color);
-    let scale = crate::theme::ui_scale(ui.ctx());
     let center = egui::pos2(rect.right() - 5.0 * scale, rect.center().y);
     // The fold buttons' chevron: down while open, pointing back at the name
     // while folded.
