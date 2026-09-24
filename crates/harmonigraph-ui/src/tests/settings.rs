@@ -1717,3 +1717,120 @@ fn no_settings_tab_repeats_a_section_heading() {
         }
     }
 }
+
+/// Every section heading on every settings tab sits `GROUP_GAP` from the rule
+/// over it and from the first thing drawn under it, measured ink to ink on
+/// what the frame actually painted — whatever kind of row that first thing is.
+///
+/// It holds only while every row kind keeps its box where its ink is: text
+/// through `widgets::label`, fold headers and switches trimmed to their
+/// capitals, bars and buttons their fill. A settings line drawn with a bare
+/// `ui.label` sits its leading lower and fails here, which is what this is
+/// for. The tolerance is the ascenders and brackets that stand a point above
+/// a line's capitals.
+#[test]
+fn every_section_heading_stands_one_gap_from_its_neighbours() {
+    fn ink_tops(shape: &egui::Shape, out: &mut Vec<(egui::Rect, f32)>) {
+        let visible = |c: egui::Color32| c.a() > 0;
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| ink_tops(s, out)),
+            egui::Shape::Text(t) if !t.galley.is_empty() => {
+                let ink = t.galley.mesh_bounds.translate(t.pos.to_vec2());
+                out.push((ink, ink.top()));
+            }
+            egui::Shape::Rect(r) if visible(r.fill) || visible(r.stroke.color) => {
+                out.push((r.rect, r.rect.top()))
+            }
+            egui::Shape::LineSegment { points, stroke } if visible(stroke.color) => {
+                let r = egui::Rect::from_two_pos(points[0], points[1]);
+                out.push((r, r.top()));
+            }
+            egui::Shape::Path(p) if !p.points.is_empty() => {
+                let r = egui::Rect::from_points(&p.points);
+                out.push((r, r.top()));
+            }
+            egui::Shape::Circle(c) if visible(c.fill) => {
+                let r = egui::Rect::from_center_size(c.center, egui::Vec2::splat(2.0 * c.radius));
+                out.push((r, r.top()));
+            }
+            egui::Shape::Mesh(m) if !m.vertices.is_empty() => {
+                let r = m.calc_bounds();
+                out.push((r, r.top()));
+            }
+            _ => {}
+        }
+    }
+
+    let gap = crate::widgets::GROUP_GAP;
+    let mut misses = Vec::new();
+    let mut checked = 0;
+    for &tab in workspace::Section::Settings.tabs() {
+        let mut state = fresh();
+        state.workspace.layout.select(tab);
+        let mut window = DockHarness::at(egui::vec2(1000.0, 8000.0));
+        window.settle(&mut state);
+        let out = window.frame(&mut state, vec![]);
+        let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
+        let mut inks = Vec::new();
+        for cs in &out.shapes {
+            ink_tops(&cs.shape, &mut inks);
+        }
+        inks.retain(|(rect, _)| leaf.intersects(*rect) && rect.top() > leaf.top());
+        let rule = h_rule_color(&window);
+        for cs in &out.shapes {
+            let egui::Shape::Text(t) = &cs.shape else { continue };
+            let spaced = t.galley.job.sections.iter().all(|s| s.format.extra_letter_spacing > 0.0);
+            if !spaced || !leaf.contains(t.pos) {
+                continue;
+            }
+            let (Some(row), name) = (t.galley.rows.first(), t.galley.text()) else { continue };
+            let Some(glyph) = row.glyphs.first() else { continue };
+            let baseline = t.pos.y + row.pos.y + glyph.pos.y;
+            let caps = t.pos.y + t.galley.mesh_bounds.top();
+            // Over: the nearest rule above, when there is one (the first
+            // section of a tab has none).
+            let over = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::LineSegment { points, stroke }
+                        if stroke.color == rule
+                            && points[0].y == points[1].y
+                            && points[0].y < caps
+                            && leaf.contains(points[0]) =>
+                    {
+                        Some(points[0].y)
+                    }
+                    _ => None,
+                })
+                .fold(f32::MIN, f32::max);
+            if over > caps - 3.0 * gap {
+                let measured = caps - over;
+                if (measured - gap).abs() > 1.0 {
+                    misses.push(format!("{tab:?} {name}: {measured:.1}pt from the rule over it"));
+                }
+            }
+            // Under: the highest ink below the baseline that is not the
+            // heading's own chevron beside it.
+            let under = inks
+                .iter()
+                .filter(|(rect, top)| *top > baseline + 0.5 && rect.left() >= leaf.left())
+                .map(|(_, top)| *top)
+                .fold(f32::MAX, f32::min);
+            if under < baseline + 3.0 * gap {
+                let measured = under - baseline;
+                if (measured - gap).abs() > 1.5 {
+                    misses.push(format!("{tab:?} {name}: {measured:.1}pt to what is under it"));
+                }
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked >= 20, "only {checked} headings measured; are they still letter-spaced?");
+    assert!(misses.is_empty(), "headings off their gap:\n{}", misses.join("\n"));
+}
+
+/// The colour a section rule is stroked in.
+fn h_rule_color(window: &DockHarness) -> egui::Color32 {
+    window.ctx.style_of(egui::Theme::Dark).visuals.widgets.noninteractive.bg_stroke.color
+}
