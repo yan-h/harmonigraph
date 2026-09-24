@@ -179,6 +179,23 @@ fn right_clicking_a_picture_opens_its_settings_page() {
     }
 }
 
+/// A second right-click on the same picture moves its open menu rather than
+/// closing it.
+#[test]
+fn right_clicking_again_moves_the_open_menu() {
+    let mut state = fresh();
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let first = h.spectral_grab_at(&state, 0.8);
+    let second = h.spectral_grab_at(&state, 0.6) + egui::vec2(40.0, 0.0);
+    right_click(&mut h, &mut state, first);
+    let before = texts(&h.frame(&mut state, vec![]), "Analyzer settings");
+    right_click(&mut h, &mut state, second);
+    let after = texts(&h.frame(&mut state, vec![]), "Analyzer settings");
+    assert_eq!((before.len(), after.len()), (1, 1), "the menu closed");
+    assert!(((after[0].min - before[0].min) - (second - first)).length() < 1.0);
+}
+
 #[test]
 fn the_position_picker_restores_each_arrangements_sizes() {
     let mut state = fresh();
