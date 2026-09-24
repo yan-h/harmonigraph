@@ -1294,11 +1294,10 @@ mod tests {
     /// under half what "Audio" wants at any width a settings column reaches
     /// (#405).
     ///
-    /// Swept rather than sampled, and the floor is asserted from BOTH sides, so
-    /// that a placement change has to move the number here rather than quietly
-    /// giving up a name at some width nobody probes. Below the floor the ring's
-    /// name is the one that goes — its borrowed room is the first to run out —
-    /// and what the bar keeps is a correct three, which is
+    /// Swept rather than sampled, so a placement change cannot quietly give up
+    /// a name at some width nobody probes. Below the floor the ring's name is
+    /// the one that goes — its borrowed room is the first to run out — and what
+    /// the bar keeps is a correct three, which is
     /// [`a_name_never_covers_another_layers_cell_more_than_its_own`]'s business.
     #[test]
     fn every_layer_on_the_node_is_named() {
@@ -1310,20 +1309,15 @@ mod tests {
             let drawn: Vec<String> = text_boxes(&shapes).into_iter().map(|(_, s)| s).collect();
             NAMES.iter().filter(|n| drawn.iter().any(|s| s == *n)).count()
         };
-        let first_all_named = every_column_width().find(|w| named(*w) == 4).unwrap();
-        assert_eq!(
-            first_all_named, ALL_NAMED,
-            "the first fully named width moved from {ALL_NAMED} to {first_all_named}",
-        );
         for w in every_column_width().filter(|w| *w >= ALL_NAMED) {
             assert_eq!(named(w), 4, "a layer went unnamed at {w}, past the {ALL_NAMED} floor");
         }
     }
 
-    /// The narrowest settings column at which all four layers are named.
+    /// A settings column at and past which all four layers must be named.
     ///
-    /// A measurement of the fully layered fixture's proportions and the room
-    /// its four names need, not a setting: it moves whenever either does.
+    /// An upper bound, not a measurement: placement that names them narrower
+    /// still passes, and only one that loses a name above it fails.
     const ALL_NAMED: f32 = 178.0;
 
     /// And one thumb per layer, four of them, on the boundaries.

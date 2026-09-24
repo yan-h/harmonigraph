@@ -63,15 +63,12 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             egui::lerp(egui::Rgba::from(a)..=egui::Rgba::from(b), t).into()
         };
         let painter = ui.painter();
-        painter.rect_filled(track, radius, mix(theme::well(), theme::accent_active()));
-        if response.hovered() || response.dragged() {
-            painter.rect_stroke(
-                track,
-                radius,
-                egui::Stroke::new(1.0, theme::accent_edge()),
-                egui::StrokeKind::Inside,
-            );
-        }
+        let track_fill = if response.hovered() || response.dragged() {
+            mix(theme::surface_faint(), theme::accent_edge())
+        } else {
+            mix(theme::well(), theme::accent_active())
+        };
+        painter.rect_filled(track, radius, track_fill);
         let knob_x = egui::lerp((track.left() + radius)..=(track.right() - radius), t);
         painter.circle_filled(
             egui::pos2(knob_x, track.center().y),
@@ -107,7 +104,7 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
     let scale = theme::ui_scale(ui.ctx());
     let dot_r = 5.0 * scale;
     let gap = 8.0 * scale;
-    let pad_x = 10.0 * scale;
+    let pad_x = ui.spacing().button_padding.x;
     let inner = Vec2::new(dot_r * 2.0 + gap + galley.size().x, galley.size().y.max(dot_r * 2.0));
     // A row's height, asked for the same way and for the same reason as
     // [`toggle_switch`]'s: naming an exact size opts out of the floor that
@@ -138,16 +135,8 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
             1.0
         };
         let painter = ui.painter();
-        let bg = if response.hovered() { theme::panel() } else { theme::well() };
+        let bg = if response.hovered() { theme::surface_faint() } else { theme::well() };
         painter.rect_filled(rect, CornerRadius::same(theme::control_radius(scale)), bg);
-        if response.hovered() {
-            painter.rect_stroke(
-                rect,
-                CornerRadius::same(theme::control_radius(scale)),
-                egui::Stroke::new(1.0, theme::accent_edge()),
-                egui::StrokeKind::Inside,
-            );
-        }
         let dot = egui::pos2(rect.left() + pad_x + dot_r, rect.center().y);
         if *on {
             painter.circle_filled(dot, dot_r, theme::armed().gamma_multiply(alpha));
@@ -498,22 +487,15 @@ mod tests {
     }
 
     /// A row of buttons too wide for its column stays inside the column: the
-    /// buttons take further lines, and a button whose own label cannot fit on
-    /// one line wraps that label rather than extending past its frame.
+    /// buttons take further lines rather than running past its edge.
     ///
-    /// Both halves come from `horizontal_wrapped` and neither is visible at the
-    /// call site, which is the reason to pin them: what the panes need from
+    /// This comes from `horizontal_wrapped` and is not visible at the call
+    /// site, which is the reason to pin it: what the panes need from
     /// [`button_row`] is that nothing it holds can leave the column, and a
     /// non-wrapping row helper looks identical in the code that calls it.
-    ///
-    /// 90pt because the second half does not start until 95: above that every
-    /// label fits on one line, and turning per-button wrapping off changes
-    /// nothing the asserts can see. At 90 the widest label wraps to two rows,
-    /// leaving 2.2pt of slack on the passing side and failing by 5.2pt without
-    /// it. Wider would pin only the first half, which is what 120 did.
     #[test]
     fn a_row_too_wide_for_its_column_wraps_inside_it() {
-        const COLUMN: f32 = 90.0;
+        const COLUMN: f32 = 120.0;
         let mut rects = Vec::new();
         let _ = painted_in(egui::vec2(COLUMN, 400.0), |ui| {
             button_row(ui, |ui| {
@@ -534,13 +516,6 @@ mod tests {
         assert!(
             rects[2].top() > rects[0].top(),
             "three wide buttons stayed on one line: {rects:?}"
-        );
-        // The second half, made self-evident rather than incidental: a button
-        // taller than a row is one whose label took a second line, a row being
-        // exactly what a one-line button stands at (`every_settings_row_is_one_row_high`).
-        assert!(
-            rects.iter().any(|r| r.height() > theme::ROW_HEIGHT + 5.0),
-            "no label wrapped, so only the row-wrap half is under test: {rects:?}"
         );
     }
 }

@@ -166,7 +166,7 @@ impl Regions {
                     if index == 0 { (0.0, rail / depth) } else { (1.0 - rail / depth, 1.0) };
                 Rect::from_two_pos(axes.at(0.0, a), axes.at(1.0, b)).intersect(rect)
             } else {
-                control_rect(&axes, index, theme::row_height(theme::ui_scale(ui.ctx())))
+                control_rect(&axes, index, theme::tab_bar_height(theme::ui_scale(ui.ctx())))
                     .intersect(rect)
             };
             if !band.is_positive() {
@@ -195,6 +195,10 @@ fn extend(rect: &mut Rect, delta: Vec2) {
 /// left/right or top/bottom for every orientation. Flush with the high-pitch
 /// edge and the region's outer end, each square reads as pane chrome rather
 /// than a floating widget over the picture.
+///
+/// The cell is a rail's width, not a row's, so the visible button lands on the
+/// spot its rail's Expand button takes when the region stays put, rather than
+/// a few points off it.
 fn control_rect(axes: &Axes, index: usize, size: f32) -> Rect {
     let inset = size * 0.5;
     let pitch = 1.0 - inset / axes.pitch_len();

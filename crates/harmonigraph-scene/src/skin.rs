@@ -47,7 +47,7 @@ pub struct Skin {
     pub accent_fill_drag: [u8; 3],
     /// Pressed/active widget fill.
     pub accent_active: [u8; 3],
-    /// Hover/focus stroke color.
+    /// Hover accent: a lit divider, a hovered switch track.
     pub accent_edge: [u8; 3],
     /// Armed-mode indicator (learn mode): amber, distinct from both the
     /// accent and the warning red.
