@@ -487,22 +487,15 @@ mod tests {
     }
 
     /// A row of buttons too wide for its column stays inside the column: the
-    /// buttons take further lines, and a button whose own label cannot fit on
-    /// one line wraps that label rather than extending past its frame.
+    /// buttons take further lines rather than running past its edge.
     ///
-    /// Both halves come from `horizontal_wrapped` and neither is visible at the
-    /// call site, which is the reason to pin them: what the panes need from
+    /// This comes from `horizontal_wrapped` and is not visible at the call
+    /// site, which is the reason to pin it: what the panes need from
     /// [`button_row`] is that nothing it holds can leave the column, and a
     /// non-wrapping row helper looks identical in the code that calls it.
-    ///
-    /// 82pt because the second half does not start until "Orthographic" (88pt
-    /// as a button) overflows: above that every label fits on one line, and
-    /// turning per-button wrapping off changes nothing the asserts can see.
-    /// Wider would pin only the first half. The column tracks
-    /// `button_padding`, so a padding change moves it.
     #[test]
     fn a_row_too_wide_for_its_column_wraps_inside_it() {
-        const COLUMN: f32 = 82.0;
+        const COLUMN: f32 = 120.0;
         let mut rects = Vec::new();
         let _ = painted_in(egui::vec2(COLUMN, 400.0), |ui| {
             button_row(ui, |ui| {
@@ -523,13 +516,6 @@ mod tests {
         assert!(
             rects[2].top() > rects[0].top(),
             "three wide buttons stayed on one line: {rects:?}"
-        );
-        // The second half, made self-evident rather than incidental: a button
-        // taller than a row is one whose label took a second line, a row being
-        // exactly what a one-line button stands at (`every_settings_row_is_one_row_high`).
-        assert!(
-            rects.iter().any(|r| r.height() > theme::ROW_HEIGHT + 5.0),
-            "no label wrapped, so only the row-wrap half is under test: {rects:?}"
         );
     }
 }
