@@ -506,13 +506,15 @@ pub(super) fn edge_bar(
 /// Called by [`section`] and by nothing else — a rule over a heading is what
 /// a section is, so the two travel together.
 ///
-/// The breathing room is all in the rule's own spacing, split evenly either
-/// side of the line, because a folded heading sits between two of these: any
-/// space added above the rule alone lands under the heading before it and
-/// nowhere over it, and a folded section reads as sitting high.
+/// The rule is the row gap plus a point either side of the line, and no more:
+/// the heading row under it is already a row high around type that is not,
+/// which is all the setting-off a section needs in a column kept tight. Any
+/// room it does take is split evenly, because a folded heading sits between
+/// two of these — space added above the rule alone lands under the heading
+/// before it and nowhere over it, and a folded section reads as sitting high.
 pub(super) fn section_separator(ui: &mut egui::Ui) {
     if ui.cursor().top() > ui.max_rect().top() + 0.5 {
-        ui.add(egui::Separator::default().spacing(8.0 * crate::theme::ui_scale(ui.ctx())));
+        ui.add(egui::Separator::default().spacing(2.0 * crate::theme::ui_scale(ui.ctx())));
     }
 }
 

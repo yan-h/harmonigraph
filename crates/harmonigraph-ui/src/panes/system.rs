@@ -74,15 +74,17 @@ pub(super) fn system_pane(
                 (Some(144.0), "144", "For a high-refresh display."),
             ],
         );
-        ui.checkbox(&mut appearance.view.show_perf, "Performance overlay").on_hover_text(
-            "A draggable HUD: frame rate, worst recent frame, memory, and the \
+        crate::widgets::checkbox(ui, &mut appearance.view.show_perf, "Performance overlay")
+            .on_hover_text(
+                "A draggable HUD: frame rate, worst recent frame, memory, and the \
              voice/node workload.",
-        );
-        if appearance.view.show_perf {
-            ui.checkbox(&mut appearance.view.show_perf_detail, "Frame breakdown").on_hover_text(
-                "Expands the overlay into every stage of the frame, to see which \
-                 one is costing you.",
             );
+        if appearance.view.show_perf {
+            crate::widgets::checkbox(ui, &mut appearance.view.show_perf_detail, "Frame breakdown")
+                .on_hover_text(
+                    "Expands the overlay into every stage of the frame, to see which \
+                 one is costing you.",
+                );
         }
     });
 
@@ -101,7 +103,7 @@ pub(super) fn system_pane(
             .on_hover_text(
                 "Size of interface text, controls and tab bars. 100% is the reference size. Picture scale and exported videos are unaffected.",
             );
-        ui.checkbox(&mut appearance.view.frameless, "Hide tab bars (Tab)").on_hover_text(
+        crate::widgets::checkbox(ui, &mut appearance.view.frameless, "Hide tab bars (Tab)").on_hover_text(
             "Hide dock tab bars for a continuous picture. Press Tab to toggle while not editing text.",
         );
         button_row(ui, |ui| {

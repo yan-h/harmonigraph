@@ -237,7 +237,7 @@ fn analysis_settings(
 pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureState) {
     let cfg = &mut state.appearance.spectrum;
     section(ui, "Spectrogram", |ui| {
-        ui.checkbox(&mut cfg.show_spectrogram, "Show spectrogram").on_hover_text(
+        crate::widgets::checkbox(ui, &mut cfg.show_spectrogram, "Show spectrogram").on_hover_text(
             "Show audio levels as a frequency-versus-time heatmap. \
                      Uses the shared History duration and the Audio level colors on Colors.",
         );
@@ -272,7 +272,7 @@ pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureSt
         });
     });
     section(ui, "MIDI ribbons", |ui| {
-        ui.checkbox(&mut cfg.show_roll, "Show MIDI ribbons").on_hover_text(
+        crate::widgets::checkbox(ui, &mut cfg.show_roll, "Show MIDI ribbons").on_hover_text(
             "Show played MIDI notes as ribbons over the shared time axis. \
              Their colors come from MIDI note colors on Colors.",
         );
@@ -318,11 +318,11 @@ pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureSt
             .on_hover_text(
                 "Time for a released extension to fade where it detached from the history boundary. 0 ms removes it immediately.",
             );
-            ui.checkbox(&mut cfg.note_names, "Show note names").on_hover_text(
+            crate::widgets::checkbox(ui, &mut cfg.note_names, "Show note names").on_hover_text(
                 "Label MIDI ribbons using the lattice tuning and spelling. Crowded labels wait for space.",
             );
             ui.add_enabled_ui(cfg.note_names && cfg.show_roll, |ui| {
-                ui.checkbox(&mut cfg.note_names_travel, "Labels follow note onset").on_hover_text(
+                crate::widgets::checkbox(ui, &mut cfg.note_names_travel, "Labels follow note onset").on_hover_text(
                     "Place labels at the start of each note so they travel with its onset. \
                      Turn off to keep labels at the newest edge.",
                 );

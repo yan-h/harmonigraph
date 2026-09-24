@@ -36,7 +36,9 @@ pub use layer::LayerStrip;
 pub(crate) use menu::menu_style;
 pub use octave::OctaveStrip;
 pub use range::RangeBar;
-pub use rows::{button_row, choice_row, option_label, record_button, row_field, toggle_switch};
+pub use rows::{
+    button_row, checkbox, choice_row, option_label, record_button, row_field, toggle_switch,
+};
 pub(crate) use rows::{choice_buttons, preset_row, selected_combo};
 pub use stack::StackBar;
 pub(crate) use tabs::tab_strip;

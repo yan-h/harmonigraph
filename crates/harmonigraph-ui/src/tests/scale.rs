@@ -143,7 +143,8 @@ fn a_tab_bar_tracks_the_scale_and_still_fits_the_collapse_arrow() {
 
 /// The controls a settings row is built from: egui's own `button` (the
 /// momentary presets — Just, 12-TET, Reset layout), its `selectable_value`
-/// (every [`choice_row`](crate::widgets::choice_row)), its `checkbox` and its
+/// (every [`choice_row`](crate::widgets::choice_row)), our
+/// [`checkbox`](crate::widgets::checkbox) around its own, its
 /// `TextEdit` (the camera preset's name), then the two of ours that allocate
 /// their own geometry.
 #[derive(Clone, Copy, Debug)]
@@ -225,7 +226,7 @@ fn control_row(
                         let response = match kind {
                             Control::Button => ui.button(label),
                             Control::Selectable => ui.selectable_value(&mut selected, i, label),
-                            Control::Checkbox => ui.checkbox(&mut flag, label),
+                            Control::Checkbox => crate::widgets::checkbox(ui, &mut flag, label),
                             // The Tuning pane's preset-name field, at the width it
                             // asks for there.
                             Control::Field => {
@@ -286,6 +287,11 @@ fn pointing_at_a_control_leaves_the_row_where_it_is() {
 /// column of rows rather than as a stack that changes gauge wherever a button
 /// or a text field appears.
 ///
+/// Except the checkbox, which is its line of text: its box is the one control
+/// that cannot fill a row, and a row it cannot fill left a gap round it that
+/// no other control has (see [`crate::widgets::checkbox`]). In a column its
+/// row is that line; beside other controls it takes theirs.
+///
 /// The ROW is what is pinned to the number, and the controls only to not
 /// exceeding it, because those are two different questions and only the first
 /// is what a reader sees. A control shorter than its row is inset in it — the
@@ -324,13 +330,31 @@ fn every_settings_row_is_one_row_high() {
                 "a row of {kind:?} at scale {scale} stands {}pt high, not {want}pt",
                 row.height(),
             );
-            for rect in controls {
+            for rect in &controls {
                 assert!(
                     rect.height() <= want + 0.01,
                     "a {kind:?} at scale {scale} stands {}pt high and takes its {want}pt row \
                      up with it",
                     rect.height(),
                 );
+            }
+            // A checkbox is its line of text, not a whole row — see
+            // `widgets::checkbox` for why that one control is the exception.
+            // The row above is a `horizontal`, which floors itself at a row
+            // whatever it holds, so the checkbox's own rect is what says so.
+            if let Control::Checkbox = kind {
+                let mut line = 0.0;
+                let _ = super::probe::themed_scaled(scale).run_ui(Default::default(), |ui| {
+                    line = ui.text_style_height(&egui::TextStyle::Button);
+                });
+                // Within a point: egui lands an allocation on whole points.
+                for rect in &controls {
+                    assert!(
+                        (rect.height() - line).abs() < 1.0,
+                        "a checkbox at scale {scale} stands {}pt high, not its {line}pt line",
+                        rect.height(),
+                    );
+                }
             }
         }
     }

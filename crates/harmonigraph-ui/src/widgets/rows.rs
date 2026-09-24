@@ -1,5 +1,6 @@
-//! The controls that are not bars: the two switches a mode is engaged from, and
-//! the three helpers a settings pane lays a row of buttons out with.
+//! The controls that are not bars: the checkbox, the two switches a mode is
+//! engaged from, and the three helpers a settings pane lays a row of buttons
+//! out with.
 
 use egui::{CornerRadius, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
@@ -7,6 +8,37 @@ use crate::theme;
 
 /// Track size of a [`toggle_switch`] pill.
 const SWITCH_SIZE: Vec2 = Vec2::new(26.0, 15.0);
+
+/// Side of a [`checkbox`]'s box, and of the check mark inside it.
+const CHECKBOX_BOX: f32 = 16.0;
+const CHECKBOX_CHECK: f32 = 9.0;
+
+/// A settings checkbox: egui's, in a row as tall as its line of text rather
+/// than a whole [`ROW_HEIGHT`](theme::ROW_HEIGHT), with a box that nearly fills
+/// it.
+///
+/// Every other control fills its row edge to edge, so the row gap is the gap
+/// a reader sees between them. egui's box is 14 points, and in a 20-point row
+/// it stands 3 points in from each edge — two checkboxes in a row read 10
+/// points apart where two bars read 4, the column's loosest joint. Here the
+/// row is the line (17 at the design size) and the box 16, so the joint is the
+/// row gap plus a point.
+///
+/// Its own rows are therefore shorter than a row, the one control whose are:
+/// the evenness a pane is meant to have is in what it draws, not in its
+/// bookkeeping. A checkbox in a `Grid` beside full-height controls takes its
+/// row's height from them as before.
+pub fn checkbox(ui: &mut Ui, checked: &mut bool, label: impl Into<egui::WidgetText>) -> Response {
+    let scale = theme::ui_scale(ui.ctx());
+    ui.scope(|ui| {
+        let spacing = ui.spacing_mut();
+        spacing.interact_size.y = 0.0;
+        spacing.icon_width = CHECKBOX_BOX * scale;
+        spacing.icon_width_inner = CHECKBOX_CHECK * scale;
+        ui.checkbox(checked, label)
+    })
+    .inner
+}
 
 /// A labeled sliding-knob switch for boolean *modes* (Meantone, Learn).
 /// Buttons with a `selected` fill read exactly like the momentary preset

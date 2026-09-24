@@ -531,9 +531,9 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                 "s",
                 "Forget the context after this long with nothing held. 0: never.",
             );
-            ui.checkbox(&mut p.reset_stop, "Reset context on stop")
+            crate::widgets::checkbox(ui, &mut p.reset_stop, "Reset context on stop")
                 .on_hover_text("Forget the context when the transport stops.");
-            ui.checkbox(&mut p.reset_loop, "Reset context on loop / seek")
+            crate::widgets::checkbox(ui, &mut p.reset_loop, "Reset context on loop / seek")
                 .on_hover_text("Forget the context when playback jumps.");
         });
         context.header_response.on_hover_text(
@@ -622,16 +622,14 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
                 });
             });
             let mut retune = row.retune;
-            if ui
-                .checkbox(&mut retune, "")
+            if crate::widgets::checkbox(ui, &mut retune, "")
                 .on_hover_text("Tune new notes with the selected engine")
                 .changed()
             {
                 params.edit_tuning_instance(row.id, InstanceEdit::Retune(retune));
             }
             let mut show = row.show;
-            if ui
-                .checkbox(&mut show, "")
+            if crate::widgets::checkbox(ui, &mut show, "")
                 .on_hover_text("Show this instance's output notes")
                 .changed()
             {
@@ -824,7 +822,7 @@ fn map_controls(
         if state.runtime.learn_active {
             ui.colored_label(theme::armed(), "Learn is suspended in Lattice Map.");
         }
-        ui.checkbox(&mut state.appearance.view.show_map_indicators, "Show map indicators")
+        crate::widgets::checkbox(ui, &mut state.appearance.view.show_map_indicators, "Show map indicators")
             .on_hover_text(
                 "Show the selected map's assignment rings and MIDI note labels on the lattice. This \
                  does not change the map or its tuning.",
@@ -914,7 +912,7 @@ fn map_controls(
                 "Audition shape · Map selection paused; offset automation remains live",
             );
             let mut editing = view.edit_shape;
-            if ui.checkbox(&mut editing, "Edit shape · click destination on lattice").changed() {
+            if crate::widgets::checkbox(ui, &mut editing, "Edit shape · click destination on lattice").changed() {
                 params.edit_lattice_map(MapEdit::EditShape(editing));
             }
             if ui.add_enabled(view.can_undo, egui::Button::new("Undo map edit")).clicked() {
