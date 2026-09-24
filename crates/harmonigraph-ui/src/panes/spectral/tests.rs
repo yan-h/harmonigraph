@@ -2762,7 +2762,9 @@ fn the_settings_pane_paints_at_either_extreme_of_the_pitch_range() {
         // A settings column rather than a picture: narrow and tall, and the
         // pane takes the whole of it.
         let column = egui::vec2(320.0, 700.0);
-        let output = painted_full(column, |ui| spectrum_settings_pane(ui, &mut state, &Defaults));
+        let output = painted_full(column, |ui| {
+            spectrum_settings_pane(ui, &mut state, &mut Default::default(), &Defaults)
+        });
         assert!(!output.shapes.is_empty(), "{low}..{high} drew nothing");
     }
 }

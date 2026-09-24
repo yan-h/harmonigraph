@@ -102,32 +102,98 @@ fn resetting_layout_restores_open_sections_after_traversal() {
     assert_eq!(state.workspace.layout.position, Position::Right);
 }
 
-fn click_label(h: &mut DockHarness, state: &mut SharedState, label: &str) {
-    let mut output = h.frame(state, vec![]);
-    if label == "Layout"
-        && !output.shapes.iter().any(|s| {
-            matches!(&s.shape,
-                egui::Shape::Text(t) if t.galley.text() == label
-            )
-        })
-    {
-        click_label(h, state, panes::tab_title(&state.workspace.layout.settings_tab));
-        output = h.frame(state, vec![]);
-    }
-    let at = output
+fn click_settled(h: &mut DockHarness, state: &mut SharedState, at: egui::Pos2) {
+    click_at(h, state, at);
+    h.settle_folds(state);
+}
+
+fn texts(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
+    output
         .shapes
         .iter()
-        .find_map(|shape| match &shape.shape {
+        .filter_map(|shape| match &shape.shape {
             egui::Shape::Text(text) if text.galley.text() == label => {
-                Some(egui::Rect::from_min_size(text.pos, text.galley.size()).center())
+                Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
             }
             _ => None,
         })
-        .unwrap_or_else(|| panic!("no {label:?} control"));
+        .collect()
+}
+
+/// Dock the analyzer from its row on the Analyzer settings page.
+fn dock(h: &mut DockHarness, state: &mut SharedState, position: Position) {
+    state.workspace.interaction.display_page = panes::display::DisplayPage::Analyzer;
+    state.workspace.layout.select(panes::Tab::Display);
+    let output = h.frame(state, vec![]);
+    let row = texts(&output, "Dock").first().copied().expect("no Dock row");
+    let label = if position == Position::Right { "Right" } else { "Below" };
+    let at = texts(&output, label)
+        .into_iter()
+        .find(|rect| (rect.center().y - row.center().y).abs() < 4.0)
+        .unwrap_or_else(|| panic!("no {label:?} beside Dock"))
+        .center();
+    click_settled(h, state, at);
+    assert_eq!(state.workspace.layout.position, position);
+}
+
+fn right_click(h: &mut DockHarness, state: &mut SharedState, at: egui::Pos2) {
+    let button = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Secondary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
     h.frame(state, vec![egui::Event::PointerMoved(at)]);
-    h.frame(state, vec![press(at, true)]);
-    h.frame(state, vec![press(at, false)]);
-    h.settle_folds(state);
+    h.frame(state, vec![button(true)]);
+    h.frame(state, vec![button(false)]);
+}
+
+#[test]
+fn right_clicking_a_picture_opens_its_settings_page() {
+    use panes::display::DisplayPage;
+    let mut state = fresh();
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    h.collapse_click(&mut state, panes::Tab::Tuning);
+    let cases = [
+        (panes::Tab::Lattice, "Lattice settings", DisplayPage::Lattice),
+        (panes::Tab::Spectral, "Analyzer settings", DisplayPage::Analyzer),
+        (panes::Tab::Spectral, "Spectrogram settings", DisplayPage::Spectrogram),
+    ];
+    for (picture, item, page) in cases {
+        let at = if picture == panes::Tab::Spectral {
+            h.spectral_grab(&state)
+        } else {
+            state.workspace.layout_runtime.rects[Section::Lattice as usize].center()
+        };
+        right_click(&mut h, &mut state, at);
+        let output = h.frame(&mut state, vec![]);
+        let entry = texts(&output, item).first().copied().unwrap_or_else(|| panic!("no {item:?}"));
+        click_settled(&mut h, &mut state, entry.center());
+        assert!(!state.workspace.layout.folded[Section::Settings as usize], "{item}");
+        assert_eq!(state.workspace.layout.settings_tab, panes::Tab::Display, "{item}");
+        assert_eq!(state.workspace.interaction.display_page, page, "{item}");
+        // Back to where the next case starts: another tab, and closed again.
+        state.workspace.layout.select(panes::Tab::Tuning);
+        h.collapse_click(&mut state, panes::Tab::Tuning);
+    }
+}
+
+/// A second right-click on the same picture moves its open menu rather than
+/// closing it.
+#[test]
+fn right_clicking_again_moves_the_open_menu() {
+    let mut state = fresh();
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let first = h.spectral_grab_at(&state, 0.8);
+    let second = h.spectral_grab_at(&state, 0.6) + egui::vec2(40.0, 0.0);
+    right_click(&mut h, &mut state, first);
+    let before = texts(&h.frame(&mut state, vec![]), "Analyzer settings");
+    right_click(&mut h, &mut state, second);
+    let after = texts(&h.frame(&mut state, vec![]), "Analyzer settings");
+    assert_eq!((before.len(), after.len()), (1, 1), "the menu closed");
+    assert!(((after[0].min - before[0].min) - (second - first)).length() < 1.0);
 }
 
 #[test]
@@ -137,20 +203,16 @@ fn the_position_picker_restores_each_arrangements_sizes() {
     h.settle(&mut state);
     let right = state.workspace.layout_runtime.rects;
     let window = h.screen.size();
-    click_label(&mut h, &mut state, "Layout");
-    click_label(&mut h, &mut state, "Below");
-    assert_eq!(state.workspace.layout.position, Position::Below);
+    dock(&mut h, &mut state, Position::Below);
     let below = state.workspace.layout_runtime.rects;
     assert!(below[1].top() > below[0].bottom());
     near(egui::vec2(below[0].width(), below[1].width()), egui::Vec2::splat(below[0].width()));
-    click_label(&mut h, &mut state, "Layout");
-    click_label(&mut h, &mut state, "Right");
+    dock(&mut h, &mut state, Position::Right);
     near(h.screen.size(), window);
     for (now, was) in state.workspace.layout_runtime.rects.iter().zip(right) {
         near(now.size(), was.size());
     }
-    click_label(&mut h, &mut state, "Layout");
-    click_label(&mut h, &mut state, "Below");
+    dock(&mut h, &mut state, Position::Below);
     for (now, was) in state.workspace.layout_runtime.rects.iter().zip(below) {
         near(now.size(), was.size());
     }
@@ -570,22 +632,19 @@ fn internal_fold_width_belongs_to_the_arrangement_that_removed_it() {
         let original = h.screen.size();
         let right = state.workspace.layout_runtime.rects;
         if closed_in == Position::Below {
-            click_label(&mut h, &mut state, "Layout");
-            click_label(&mut h, &mut state, "Below");
+            dock(&mut h, &mut state, Position::Below);
         }
         region_click(&mut h, &mut state, 1);
         h.settle_folds(&mut state);
-        click_label(&mut h, &mut state, "Layout");
-        click_label(
+        dock(
             &mut h,
             &mut state,
-            if closed_in == Position::Right { "Below" } else { "Right" },
+            if closed_in == Position::Right { Position::Below } else { Position::Right },
         );
         region_click(&mut h, &mut state, 1);
         h.settle_folds(&mut state);
         if closed_in == Position::Right {
-            click_label(&mut h, &mut state, "Layout");
-            click_label(&mut h, &mut state, "Right");
+            dock(&mut h, &mut state, Position::Right);
         }
         near(h.screen.size(), original);
         for (now, before) in state.workspace.layout_runtime.rects.iter().zip(right) {
