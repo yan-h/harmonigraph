@@ -3147,3 +3147,28 @@ fn the_live_time_axis_keeps_a_nonzero_geometry_window() {
         }
     }
 }
+
+/// A skin colors the chrome and nothing in the picture: the pane paints the
+/// same shapes, rulings and off-scale band included, whichever skin is in
+/// force. Text arrives as paint callbacks, compared by identity rather than
+/// content, so those are left out.
+#[test]
+fn the_picture_paints_the_same_in_every_skin() {
+    use harmonigraph_scene::skin::{set_active_skin, skins};
+    let paint = |index| {
+        set_active_skin(index);
+        let shapes = paint_tone(reference_pane(), SpectrumConfig::default());
+        shapes.into_iter().filter(|s| !matches!(s, egui::Shape::Callback(_))).collect::<Vec<_>>()
+    };
+    let default = paint(0);
+    assert!(
+        default.iter().any(
+            |s| matches!(s, egui::Shape::LineSegment { stroke, .. } if is_ruling(stroke.color))
+        ),
+        "the fixture has to reach the rulings for this to say anything",
+    );
+    for (index, entry) in skins().iter().enumerate().skip(1) {
+        assert!(paint(index) == default, "{} changed the picture", entry.id);
+    }
+    set_active_skin(0);
+}

@@ -249,7 +249,10 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // would be behind on is the one being dragged, where every intermediate
     // size shows. `reset_style` takes the rebuilt one from the context, which
     // `set_ui_scale` has already put there.
-    if theme::set_ui_scale(ui.ctx(), state.workspace.interaction.ui_scale) {
+    // The skin first: every color accessor reads it, and a scale change
+    // rebuilds the style from it.
+    let reskinned = theme::set_skin(ui.ctx(), &state.workspace.interaction.skin);
+    if theme::set_ui_scale(ui.ctx(), state.workspace.interaction.ui_scale) || reskinned {
         ui.reset_style();
     }
     // Read back rather than reused: `set_ui_scale` clamps, and the dock has to

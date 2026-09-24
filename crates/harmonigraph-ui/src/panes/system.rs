@@ -103,6 +103,17 @@ pub(super) fn system_pane(
             .on_hover_text(
                 "Size of interface text, controls and tab bars. 100% is the reference size. Picture scale and exported videos are unaffected.",
             );
+        // Colors the panel and nothing in the picture, which keeps fixed colors
+        // of its own (`harmonigraph_scene::skin::PICTURE`), so this cannot
+        // change what an export looks like either.
+        let skins = harmonigraph_scene::skin::skins();
+        let options: Vec<(usize, &str, &str)> =
+            skins.iter().enumerate().map(|(i, entry)| (i, entry.name, "")).collect();
+        let mut chosen = harmonigraph_scene::skin::skin_index(&interaction.skin).unwrap_or(0);
+        choice_row(ui, "Skin", &mut chosen, &options);
+        if skins[chosen].id != interaction.skin {
+            interaction.skin = skins[chosen].id.to_owned();
+        }
         crate::widgets::checkbox(ui, &mut appearance.view.frameless, "Hide tab bars (Tab)").on_hover_text(
             "Hide dock tab bars for a continuous picture. Press Tab to toggle while not editing text.",
         );

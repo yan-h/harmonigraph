@@ -368,6 +368,36 @@ pub fn apply_theme(ctx: &egui::Context) {
     // rather than following the host/system preference.
     ctx.set_theme(egui::ThemePreference::Dark);
     ctx.set_style_of(egui::Theme::Dark, style_at(ui_scale(ctx)));
+    // Recorded so [`set_skin`] rebuilds only when the skin it is told differs
+    // from the one this style was built in, which on a thread shared with
+    // another editor need not be the default.
+    ctx.data_mut(|d| d.insert_temp(skin_id(), skin::active_skin_index()));
+}
+
+/// Where [`apply_theme`] and [`set_skin`] leave the index of the skin the
+/// context's style was built in.
+fn skin_id() -> egui::Id {
+    egui::Id::new("skin")
+}
+
+/// Put the skin saved as `id` in force for this frame: make it this thread's
+/// active skin (what every color accessor reads), and rebuild the context's
+/// style if it was built in another. Reports whether the style moved, the
+/// same cue [`set_ui_scale`] gives. An unknown id is the default.
+///
+/// Called every frame, before [`set_ui_scale`], which builds its style from
+/// whatever skin is active. Cheap when nothing changed: one lookup among a
+/// handful of ids.
+pub fn set_skin(ctx: &egui::Context, id: &str) -> bool {
+    let index = skin::skin_index(id).unwrap_or(0);
+    skin::set_active_skin(index);
+    let built = ctx.data(|d| d.get_temp::<usize>(skin_id())).unwrap_or(0);
+    if built == index {
+        return false;
+    }
+    ctx.data_mut(|d| d.insert_temp(skin_id(), index));
+    ctx.set_style_of(egui::Theme::Dark, style_at(ui_scale(ctx)));
+    true
 }
 
 /// The theme's style at a given [chrome scale](ui_scale).
