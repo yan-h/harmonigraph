@@ -1,29 +1,32 @@
 # Settings guide
 
-Open **Display** for picture and interface settings.
+The Settings column's tabs run from the pictures to the editor:
 **Tuning** sets intervals and temperaments;
 under CLAP it also configures adaptive tuning and each connected Tune instance.
+**Lattice** and **Analyzer** hold everything their pictures draw, down to light and shadow.
+**Colors** holds the tables every picture shares.
 **Video** records takes, frames the exported Lattice and Analyzer, chooses the spectrogram timeline and render trigger, and starts or reruns export.
+**System** holds rendering cost and the editor's own interface.
 
-| Display page | What you will find |
+| Tab | What you will find |
 | --- | --- |
-| Lattice | Camera and seventh layers; note-layer sizes; shared octave layout; melody/bass marks; audio ring; note animation; labels and idle crosses. |
-| Analyzer | Orientation and shared frequency range; live spectrum fill/outline; audio input, frequency resolution and averaging; level mapping, tilt and live response; shared history; MIDI ribbons. |
-| Spectrogram | Heatmap visibility; pitch/time softness and wide blur mix; level contours; Mosaic or Watercolor texture. |
+| Lattice | Camera and seventh layers; note-layer sizes; shared octave layout; melody/bass marks; audio ring; note animation; labels and idle crosses; bloom, glow, glow texture and breathing; shadows for lattice shapes and lattice text. |
+| Analyzer | Dock and spectrum edge; shared frequency range; live spectrum fill/outline; audio input, frequency resolution and averaging; level mapping, tilt and live response; spectrogram visibility and shared history; MIDI ribbons and their bloom; pitch/time softness and wide blur mix; level contours; Mosaic or Watercolor texture; shadows for Analyzer/Spiral notes and labels. |
 | Colors | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. |
-| Lighting | Shared MIDI bloom; lattice glow, texture and breathing; shadows for lattice shapes, lattice text, Analyzer/Spiral notes, and Analyzer/Spiral labels. |
 | System | Lattice resolution and spectrogram time sampling; editor frame limit and performance overlay; interface scale, tab-bar visibility and layout reset. |
 
-Display opens on Lattice in a fresh workspace.
-Each page keeps a single owner for its controls;
+Settings opens on Tuning in a fresh workspace.
+Tabs that do not fit the column move, from the right, into a trailing overflow menu.
+Every section heading folds its section, and folds are remembered.
+Right-clicking the Lattice or Analyzer picture offers a link to its settings tab.
+Each tab keeps a single owner for its controls;
 shared settings name their scope in the help text.
-The separate Spectrogram page keeps its texture controls out of the path to basic analysis and ribbon settings.
 
 ## Layout and folding
 
 The editor has three sections: Lattice, Analyzer, and Settings.
 Analyzer and Spiral are alternative tabs in the same section.
-The Settings header's **Layout** menu places the Analyzer **Right** of or **Below** the Lattice;
+The Analyzer tab's **Dock** setting places the Analyzer **Right** of or **Below** the Lattice;
 each arrangement remembers its own divider sizes.
 Settings stays to the right of the pictures.
 
@@ -38,7 +41,7 @@ Host minimum sizes or refused resize requests can make the open panes share the 
 
 Drag the separators to resize visible sections.
 Tabs and sections cannot be dragged into arbitrary arrangements.
-**Display → System → Reset layout** restores the default arrangement and unfolds everything.
+**System → Reset layout** restores the default arrangement and unfolds everything.
 
 ## Folding the Analyzer
 

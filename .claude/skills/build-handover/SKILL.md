@@ -80,9 +80,8 @@ a Claude branch has its `worktree-` prefix stripped, while a Codex branch keeps 
 The result is exactly the argument `./load-plugin.sh <branch>` takes.
 It is stamped at compile time by `crates/harmonigraph-perf/build.rs`.
 The overlay carrying it ships OFF, so reading the tag takes one tick first:
-**Display tab → System page → Performance → Performance overlay**.
-System is a PAGE behind the Display tab's picker, not a tab of its own —
-a session that tells Yan to open a System pane is naming something the dock does not have.
+**System tab → Performance → Performance overlay**.
+System is a tab of the Settings column, and may sit in that strip's overflow menu when the column is narrow.
 It opens in the editor's bottom-left corner and is DRAGGED from there, so wherever it was last left is where it is —
 no session can say which corner to look in.
 
