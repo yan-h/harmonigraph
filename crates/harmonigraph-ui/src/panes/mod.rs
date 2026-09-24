@@ -570,6 +570,7 @@ pub(super) fn section<R>(
     .unzip();
     let open = !folded.unwrap_or(false);
     let clicked = section_header(ui, title, open).clicked();
+    crate::widgets::mark_spaced(ui);
     // Outside a [`Viewer`] body there is nowhere to keep a fold, so the header
     // stays put rather than hiding its body for the one frame of the click.
     let open = match key {
@@ -671,11 +672,15 @@ fn fold_header(
 /// Its fold stays in egui memory rather than [`SectionFolds`] — a subsection
 /// holds detail opened for the moment, and springs shut when the editor
 /// reopens. Returns the header, for a hover.
+///
+/// It takes [`group_space`](crate::widgets::group_space) over and under it,
+/// except directly under a section heading, whose own gap already holds.
 pub(super) fn subsection<R>(
     ui: &mut egui::Ui,
     title: &str,
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::Response {
+    crate::widgets::group_space(ui);
     let id = ui.make_persistent_id(title);
     let mut fold =
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
@@ -688,5 +693,9 @@ pub(super) fn subsection<R>(
         fold.toggle(ui);
     }
     fold.show_body_indented(&header, ui, body);
+    // The same room under the fold, header and body both, as over it: the
+    // fold is one group, set off from the rows around it.
+    crate::widgets::group_space(ui);
+    crate::widgets::mark_spaced(ui);
     header
 }
