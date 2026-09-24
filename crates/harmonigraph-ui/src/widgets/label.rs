@@ -49,11 +49,17 @@ fn cap_height(ui: &Ui, font: egui::FontId) -> f32 {
 /// Standing alone in a column it is a [group](group_space): [`GROUP_GAP`] from
 /// whatever is over and under it. In a row beside a control it takes no room,
 /// and egui centres its capitals on the control rather than its line box.
+///
+/// The room under it is inside its own box rather than space added after it.
+/// egui steps a row gap past a child ui as well as past the last row in it, so
+/// room added after a line that ends an `add_enabled_ui` block or an open
+/// subsection would stand a row gap too far from what follows the block.
 pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
     group_space(ui);
+    let under = if ui.layout().is_vertical() { extra(ui) } else { 0.0 };
     let galley = text.into().into_galley(ui, None, ui.available_width(), egui::TextStyle::Body);
     let (top, bottom) = cap_trim(ui, &galley);
-    let size = egui::vec2(galley.size().x, galley.size().y - top - bottom);
+    let size = egui::vec2(galley.size().x, galley.size().y - top - bottom + under);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), galley.text())
@@ -61,7 +67,9 @@ pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
     if ui.is_rect_visible(rect.expand2(egui::vec2(0.0, top.max(bottom)))) {
         ui.painter().galley(rect.min - egui::vec2(0.0, top), galley, ui.visuals().text_color());
     }
-    group_end(ui);
+    if under > 0.0 {
+        mark_spaced(ui);
+    }
     response
 }
 
@@ -87,31 +95,37 @@ pub(crate) fn mark_spaced(ui: &Ui) {
 }
 
 /// Room over a group in a column, bringing the row gap up to [`GROUP_GAP`] —
-/// unless the cursor is where [`mark_spaced`] said the room is already there.
-/// The top of a child ui is no exception: an `add_enabled_ui` block starts one
-/// wherever it stands in its section.
-/// Nothing in a row, where space would run sideways; a grid lays its cells out
-/// in rows, so nothing there either.
+/// unless [`spaced`] says the room is already there. The top of a child ui is
+/// no exception: an `add_enabled_ui` block starts one wherever it stands in
+/// its section. Nothing in a row, where space would run sideways; a grid lays
+/// its cells out in rows, so nothing there either.
 pub(crate) fn group_space(ui: &mut Ui) {
-    if !ui.layout().is_vertical() {
-        return;
+    if ui.layout().is_vertical() && !spaced(ui) {
+        ui.add_space(extra(ui));
     }
-    let at = ui.cursor().min;
-    let marked = ui.data(|d| d.get_temp::<egui::Pos2>(spaced_id()));
-    if marked.is_some_and(|m| m.distance(at) < 0.5) {
-        return;
-    }
-    ui.add_space(extra(ui));
 }
 
-/// Room under a group in a column, the same as [`group_space`] put over it,
-/// marked so that a group right after it does not add its own on top.
+/// Room under a group that is not a [`label`] (a fold), the same as
+/// [`group_space`] put over it, marked so that a group right after it does not
+/// add its own on top. Nothing when the group ended with a label, which
+/// carries its own.
 pub(crate) fn group_end(ui: &mut Ui) {
     if !ui.layout().is_vertical() {
         return;
     }
-    ui.add_space(extra(ui));
+    if !spaced(ui) {
+        ui.add_space(extra(ui));
+    }
     mark_spaced(ui);
+}
+
+/// Whether [`mark_spaced`] left its mark on the line the cursor stands on, at
+/// or inside its left edge — inside, when the mark was left at the foot of an
+/// indented child: a line ending an open subsection's body.
+fn spaced(ui: &Ui) -> bool {
+    let at = ui.cursor().min;
+    let mark = ui.data(|d| d.get_temp::<egui::Pos2>(spaced_id()));
+    mark.is_some_and(|m| (m.y - at.y).abs() < 0.5 && m.x > at.x - 0.5)
 }
 
 /// What a group adds to the row gap to stand [`GROUP_GAP`] off.
@@ -122,4 +136,57 @@ fn extra(ui: &Ui) -> f32 {
 /// [`label`] in the weak text colour, for `ui.weak`.
 pub fn weak(ui: &mut Ui, text: impl Into<egui::RichText>) -> Response {
     label(ui, text.into().weak())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{label, GROUP_GAP};
+
+    type Wrap = fn(&mut egui::Ui, &mut dyn FnMut(&mut egui::Ui));
+
+    /// Where a pane puts a line of text: a column, the end of a child scope
+    /// (`add_enabled_ui`), the end of an indented body (an open subsection).
+    const PLACES: [(&str, Wrap); 3] = [
+        ("column", |ui, add| add(ui)),
+        ("scope", |ui, add| {
+            ui.scope(|ui| add(ui));
+        }),
+        ("indent", |ui, add| {
+            ui.indent("body", |ui| add(ui));
+        }),
+    ];
+
+    /// A line of text, placed by `wrap`, then `after`: how far the top of what
+    /// `after` drew stands from the line's baseline.
+    fn gap_after(wrap: Wrap, after: fn(&mut egui::Ui) -> egui::Rect) -> f32 {
+        let mut gap = 0.0;
+        let ctx = crate::tests::probe::themed();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            // In a row a line takes no room under it, so its box is its caps.
+            let caps = ui.horizontal(|ui| label(ui, "Line").rect.height()).inner;
+            let mut top = 0.0;
+            wrap(ui, &mut |ui| top = label(ui, "Line").rect.top());
+            gap = after(ui).top() - (top + caps);
+        });
+        gap
+    }
+
+    /// Wherever a line of text ends, what comes next in the column stands
+    /// one gap under it — a bar, or another line — not a row gap further for
+    /// having crossed out of a child ui.
+    #[test]
+    fn a_line_of_text_stands_one_gap_over_whatever_follows_it() {
+        let bar: fn(&mut egui::Ui) -> egui::Rect =
+            |ui| ui.allocate_exact_size(egui::vec2(100.0, 20.0), egui::Sense::hover()).0;
+        let line: fn(&mut egui::Ui) -> egui::Rect = |ui| label(ui, "Next").rect;
+        for (place, wrap) in PLACES {
+            for (next, after) in [("bar", bar), ("line", line)] {
+                let gap = gap_after(wrap, after);
+                assert!(
+                    (gap - GROUP_GAP).abs() < 0.5,
+                    "{place}: a {next} stands {gap}pt under the line, not {GROUP_GAP}pt",
+                );
+            }
+        }
+    }
 }
