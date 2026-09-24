@@ -864,7 +864,7 @@ fn map_controls(
         if view.playback.map.is_none() {
             crate::widgets::label(ui, egui::RichText::new("Map unavailable: new attacks pass through.").color(theme::armed()));
         }
-        ui.horizontal_wrapped(|ui| {
+        crate::widgets::button_row(ui, |ui| {
             if ui.button("Audition working copy").clicked() {
                 params.edit_lattice_map(MapEdit::Audition);
             }
@@ -953,7 +953,7 @@ fn map_controls(
                 if ui.button("Rename").clicked() { params.edit_lattice_map(MapEdit::Rename(selected, renamed.clone())); }
             });
             ui.data_mut(|data| data.insert_temp(key, renamed));
-            ui.horizontal(|ui| {
+            crate::widgets::button_row(ui, |ui| {
                 if ui.button("Move earlier in list").clicked() { params.edit_lattice_map(MapEdit::MoveEarlier(selected)); }
                 if ui.button("Delete saved map").on_hover_text("Automation for this identity will pass through without correction. The identity is never reused.").clicked() { params.edit_lattice_map(MapEdit::Delete(selected)); }
             });

@@ -263,6 +263,14 @@ pub(crate) fn pane_inner_margin(scale: f32) -> f32 {
     PANE_INNER_MARGIN * scale
 }
 
+/// The gap between two buttons side by side, at this scale: the tab bar's
+/// margin around a row-high control, so a pane header's tabs and a settings
+/// row's buttons stand the same distance apart. Narrower than
+/// `item_spacing.x`, which also separates a label from the controls it names.
+pub(crate) fn button_gap(scale: f32) -> f32 {
+    (TAB_BAR_HEIGHT - ROW_HEIGHT) * 0.5 * scale
+}
+
 /// Whole-point pane inset, shared with the floating scroll bar gutter.
 pub(crate) fn dock_pane_margin(scale: f32) -> i8 {
     pane_inner_margin(scale) as i8

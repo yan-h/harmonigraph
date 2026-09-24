@@ -2,10 +2,9 @@
 //! blob says so where a user can read it.
 
 use crate::theme;
-use crate::widgets::button_row;
 
 pub(super) fn console_pane(ui: &mut egui::Ui, runtime: &mut crate::VisualRuntime) {
-    button_row(ui, |ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(format!("{} held", runtime.tracker.held_count()));
         if ui.button("Clear").clicked() {
             runtime.console.clear();
