@@ -43,11 +43,25 @@ pub(crate) fn span_readout(seconds: f32) -> String {
 pub(crate) fn spectrum_settings_pane(
     ui: &mut egui::Ui,
     state: &mut PictureState,
+    dock: &mut crate::workspace::Position,
     params: &dyn ParamBackend,
 ) {
+    use crate::workspace::Position;
     use crate::SpectralOrientation;
 
     ui.heading("View");
+    // Beside the side the spectrum sits on, because the two together decide
+    // the analyzer's shape. The dock is the editor window's arrangement only;
+    // a video's layout is set on the Video tab.
+    choice_row(
+        ui,
+        "Dock",
+        dock,
+        &[
+            (Position::Right, "Right", "Analyzer to the right of the lattice"),
+            (Position::Below, "Below", "Analyzer below the lattice"),
+        ],
+    );
     let cfg = &mut state.appearance.spectrum;
     // Named for the side the now-line is on, which is where the spectrum sits
     // and where a note arrives — so the setting says where to LOOK rather than
@@ -75,7 +89,7 @@ pub(crate) fn spectrum_settings_pane(
         };
         (side, label, hint)
     });
-    choice_row(ui, "Spectrum position", &mut cfg.orientation, &sides);
+    choice_row(ui, "Spectrum edge", &mut cfg.orientation, &sides);
     // One control for both ends, because the two ends are one thing: the
     // window onto the analyzer's axis. Dragged in MIDI note (which is what
     // makes it a log-frequency zoom) and read out in Hz.
@@ -559,7 +573,7 @@ mod tests {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 1600.0));
         ctx.run_ui(
             egui::RawInput { screen_rect: Some(screen), events, ..Default::default() },
-            |ui| spectrum_settings_pane(ui, state, backend),
+            |ui| spectrum_settings_pane(ui, state, &mut Default::default(), backend),
         )
     }
 

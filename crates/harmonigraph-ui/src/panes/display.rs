@@ -81,7 +81,7 @@ pub(super) fn display_pane(
     match page {
         DisplayPage::Colors => color_pane(ui, &mut state.appearance, params),
         DisplayPage::Lattice => lattice_page(ui, state, interaction, params),
-        DisplayPage::Analyzer => spectrum_settings_pane(ui, state, params),
+        DisplayPage::Analyzer => spectrum_settings_pane(ui, state, &mut interaction.dock, params),
         DisplayPage::Spectrogram => spectrogram_settings_pane(ui, state),
         DisplayPage::Lighting => lighting_pane(ui, &mut state.appearance),
         DisplayPage::System => system_pane(ui, &mut state.appearance, interaction),

@@ -198,8 +198,11 @@ and Settings.
 Settings contains Tuning,
 Display,
 Video and Console destinations.
-Its Layout menu places Analyzer to the right of Lattice or below it;
+Display › Analyzer's Dock setting places Analyzer to the right of Lattice or below it,
+beside Spectrum edge;
 each arrangement remembers its own sizes.
+Right-clicking Lattice or Analyzer offers links to their Display pages,
+so each setting still has one home.
 Dividers resize adjacent visible sections without allowing rearrangement.
 
 Folding requests a smaller outer window while retaining the other picture's dimensions.

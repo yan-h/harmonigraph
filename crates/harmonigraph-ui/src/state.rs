@@ -255,6 +255,13 @@ pub struct Interaction {
     /// reads it and the offline renderer never draws the HUD.
     pub perf_pos: Option<egui::Pos2>,
     pub(crate) reset_layout: bool,
+    /// Where the Analyzer section is docked, copied from the workspace layout
+    /// before the panes draw and back after. Runtime only: the layout persists
+    /// it; this copy lets the Analyzer settings page set it.
+    pub(crate) dock: workspace::Position,
+    /// A Display page a picture's right-click menu asked for, which the
+    /// workspace opens after the sections draw.
+    pub(crate) open_settings: Option<panes::display::DisplayPage>,
 }
 
 /// Fixed section layout and editor interaction, separate from the picture.
@@ -697,6 +704,8 @@ impl Default for Interaction {
             ui_scale: default_ui_scale(),
             perf_pos: None,
             reset_layout: false,
+            dock: workspace::Position::default(),
+            open_settings: None,
         }
     }
 }
