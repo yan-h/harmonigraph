@@ -585,7 +585,12 @@ pub(super) fn section<R>(
         }
         _ => open,
     };
-    open.then(|| body(ui))
+    // The heading's own padding is all that parts it from its first row: the
+    // row gap is taken back, so the name sits against what it names.
+    open.then(|| {
+        ui.add_space(-ui.spacing().item_spacing.y);
+        body(ui)
+    })
 }
 
 /// Extra space between the letters of a [`section`] heading, at scale 1.
