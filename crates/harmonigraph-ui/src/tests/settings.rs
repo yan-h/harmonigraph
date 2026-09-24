@@ -1680,9 +1680,9 @@ fn shadow_falloff_only_appears_for_contour_shadows() {
 /// "Tab/Heading", so two headings of one name on one tab would fold together.
 ///
 /// Headings are told from the rest of the text by their letter spacing, the one
-/// thing nothing else in the panel sets (their face is the Small one), and the window is
-/// tall enough that every tab's whole list is laid out at once. Sections a
-/// fresh state hides (Note retuning, and Record outside a host) are not seen.
+/// thing nothing else in the panel sets, and the window is tall enough that
+/// every tab's whole list is laid out at once. Sections a fresh state hides
+/// (Note retuning, and Record outside a host) are not seen.
 #[test]
 fn no_settings_tab_repeats_a_section_heading() {
     for &tab in workspace::Section::Settings.tabs() {

@@ -7,7 +7,7 @@ use crate::skin::{contrast, skins, DEFAULT_SKIN};
 /// text on the pane; a bar's name sits on its fill where the fill runs under
 /// it; and the fill has to read against its own empty track. How visible the
 /// empty track is against the pane is left to taste: the chosen schemes run
-/// from 1.06 to 1.33 there, and the default's is 1.08.
+/// from 1.06 to 1.33 there, and the original's is 1.08.
 #[test]
 fn every_skin_is_legible() {
     for entry in skins() {

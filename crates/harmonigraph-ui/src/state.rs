@@ -548,7 +548,7 @@ impl SharedState {
         if harmonigraph_scene::skin::skin_index(&persist.skin).is_some() {
             self.workspace.interaction.skin = persist.skin;
         } else {
-            self.log(format!("skin \"{}\" no longer exists; using Default", persist.skin));
+            self.log(format!("skin \"{}\" no longer exists; using the default", persist.skin));
             self.workspace.interaction.skin = default_skin();
         }
         // A hand-edited NaN is dropped rather than honoured, on the grounds

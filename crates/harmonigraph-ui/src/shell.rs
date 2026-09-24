@@ -188,9 +188,9 @@ mod tests {
     fn a_skin_that_no_longer_exists_opens_as_default_and_says_so() {
         let ctx = egui::Context::default();
         let mut state = fresh();
-        state.workspace.interaction.skin = "tinta".to_owned();
+        state.workspace.interaction.skin = "original".to_owned();
         state.workspace.interaction.ui_scale = 1.25;
-        let saved = close(&state).replace("\"tinta\"", "\"retired\"");
+        let saved = close(&state).replace("\"original\"", "\"retired\"");
         let mut reopened = fresh();
         Opening { ctx: &ctx, state: &mut reopened, persist: Some(&saved) }.open();
         assert_eq!(reopened.workspace.interaction.skin, harmonigraph_scene::skin::DEFAULT_SKIN);
@@ -206,14 +206,14 @@ mod tests {
         let ctx = egui::Context::default();
         let mut state = fresh();
         state.workspace.interaction.ui_scale = 1.25;
-        state.workspace.interaction.skin = "tinta".to_owned();
+        state.workspace.interaction.skin = "original".to_owned();
         state.workspace.layout.position = crate::workspace::Position::Below;
         state.workspace.layout.folded[0] = true;
         let saved = close(&state);
         let mut reopened = fresh();
         Opening { ctx: &ctx, state: &mut reopened, persist: Some(&saved) }.open();
         assert_eq!(reopened.workspace.interaction.ui_scale, 1.25);
-        assert_eq!(reopened.workspace.interaction.skin, "tinta");
+        assert_eq!(reopened.workspace.interaction.skin, "original");
         assert_eq!(reopened.workspace.layout.position, crate::workspace::Position::Below);
         assert!(reopened.workspace.layout.folded[0]);
         assert_eq!(reopened.workspace.min_window_size, MIN_WINDOW_SIZE);
