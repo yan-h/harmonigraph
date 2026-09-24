@@ -1,4 +1,5 @@
-//! Shared fold chrome for workspace sections and analyzer regions.
+//! Shared fold chrome: workspace sections, analyzer regions and settings
+//! headings.
 
 use egui::{Rect, Response, Vec2};
 
@@ -28,7 +29,19 @@ pub(crate) fn paint_fold(ui: &egui::Ui, response: &Response, cell: Rect, directi
             theme::widget()
         },
     );
-    let center = cell.center();
+    paint_chevron(&painter, cell.center(), direction, hot, scale);
+}
+
+/// The fold mark every fold in the editor draws — a workspace section's
+/// button, an analyzer region's, a settings heading and a subsection alike —
+/// centred on `center` and pointing along `direction`, brighter while `hot`.
+pub(crate) fn paint_chevron(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    direction: Vec2,
+    hot: bool,
+    scale: f32,
+) {
     let cross = egui::vec2(-direction.y, direction.x);
     painter.add(egui::Shape::line(
         vec![
@@ -38,4 +51,13 @@ pub(crate) fn paint_fold(ui: &egui::Ui, response: &Response, cell: Rect, directi
         ],
         egui::Stroke::new(1.5 * scale, if hot { theme::text() } else { theme::text_dim() }),
     ));
+}
+
+/// [`paint_chevron`] as an `egui::CollapsingHeader` icon, in place of egui's
+/// filled triangle: pointing at the name while folded, turning down as the
+/// header opens.
+pub(crate) fn fold_icon(ui: &mut egui::Ui, openness: f32, response: &Response) {
+    let hot = response.hovered() || response.has_focus();
+    let direction = egui::emath::Rot2::from_angle(openness * std::f32::consts::FRAC_PI_2) * Vec2::X;
+    paint_chevron(ui.painter(), response.rect.center(), direction, hot, theme::ui_scale(ui.ctx()));
 }
