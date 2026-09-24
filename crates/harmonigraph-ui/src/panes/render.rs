@@ -603,7 +603,7 @@ fn record_controls(
         // four. The value is kept either way, so switching away and back does not
         // lose it.
         if state.appearance.render.trigger == crate::RenderTrigger::AtBar {
-            button_row(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
                 crate::widgets::label(ui, "Stop at bar").on_hover_text(
                     "Counted as the host's arranger counts: bar 1 is the song's start. \
                      Recording must reach this bar from before it — arming with the playhead \

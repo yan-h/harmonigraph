@@ -586,7 +586,15 @@ pub(super) fn section<R>(
         }
         _ => open,
     };
-    open.then(|| body(ui))
+    let out = open.then(|| body(ui));
+    // An open body's last row stands off the rule under it as the heading's
+    // capitals stand off the rule over them, so the rule sits between two
+    // sections rather than on the end of one. Folded, the heading's own pad
+    // already does this.
+    if open {
+        crate::widgets::group_end(ui);
+    }
+    out
 }
 
 /// Extra space between the letters of a [`section`] heading, at scale 1.

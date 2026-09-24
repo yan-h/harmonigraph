@@ -224,11 +224,23 @@ pub fn row_field<'t>(ui: &Ui, text: &'t mut String) -> TextEdit<'t> {
     ))
 }
 
-/// A row of actions or mixed controls. These can wrap because they have no
-/// selected value to summarize. Mutually exclusive options use `choice_row`
-/// instead, which switches to a dropdown when the buttons would wrap.
+/// A row of actions. These can wrap because they have no selected value to
+/// summarize. Mutually exclusive options use `choice_row` instead, which
+/// switches to a dropdown when the buttons would wrap.
+///
+/// Its controls stand [`theme::button_gap`] apart, as a pane header's tabs do,
+/// so a row that starts with a label wants a plain `horizontal_wrapped`.
 pub fn button_row<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    ui.horizontal_wrapped(add).inner
+    ui.horizontal_wrapped(|ui| {
+        tighten(ui);
+        add(ui)
+    })
+    .inner
+}
+
+/// Set the horizontal gap between this `Ui`'s next widgets to the button gap.
+fn tighten(ui: &mut Ui) {
+    ui.spacing_mut().item_spacing.x = theme::button_gap(theme::ui_scale(ui.ctx()));
 }
 
 /// Presets are actions rather than an enum: edited values may match none of
@@ -239,12 +251,15 @@ pub(crate) fn preset_row(
     labels: &[&str],
     add: impl FnOnce(&mut Ui, bool),
 ) {
+    let gap = theme::button_gap(theme::ui_scale(ui.ctx()));
     let width = option_width(ui, name)
         + labels.iter().map(|label| option_width(ui, label)).sum::<f32>()
-        + ui.spacing().item_spacing.x * labels.len() as f32;
+        + ui.spacing().item_spacing.x
+        + gap * labels.len().saturating_sub(1) as f32;
     if width <= ui.available_width() {
         ui.horizontal(|ui| {
             crate::widgets::label(ui, name);
+            tighten(ui);
             add(ui, false);
         });
     } else {
@@ -302,10 +317,10 @@ pub(crate) fn choice_buttons<T: Copy + PartialEq>(
     value: &mut T,
     options: &[(T, &str, &str)],
 ) {
-    let width = options.iter().map(|(_, label, _)| option_width(ui, label)).sum::<f32>()
-        + ui.spacing().item_spacing.x * options.len().saturating_sub(1) as f32;
+    let width = choice_buttons_width(ui, options);
     if width <= ui.available_width() {
         ui.horizontal(|ui| {
+            tighten(ui);
             for &(choice, label, hint) in options {
                 let response = ui.selectable_value(value, choice, option_label(label));
                 if !hint.is_empty() {
@@ -316,6 +331,12 @@ pub(crate) fn choice_buttons<T: Copy + PartialEq>(
     } else {
         choice_menu(ui, id, value, options);
     }
+}
+
+/// Natural width of `options` laid out as buttons by [`choice_buttons`].
+fn choice_buttons_width<T>(ui: &Ui, options: &[(T, &str, &str)]) -> f32 {
+    options.iter().map(|(_, label, _)| option_width(ui, label)).sum::<f32>()
+        + theme::button_gap(theme::ui_scale(ui.ctx())) * options.len().saturating_sub(1) as f32
 }
 
 fn choice_menu<T: Copy + PartialEq>(
@@ -395,9 +416,7 @@ pub fn choice_row<T: Copy + PartialEq>(
         .layout_no_wrap(name.to_owned(), TextStyle::Body.resolve(ui.style()), theme::text())
         .size()
         .x;
-    let width = label_width
-        + options.iter().map(|(_, label, _)| option_width(ui, label)).sum::<f32>()
-        + ui.spacing().item_spacing.x * options.len() as f32;
+    let width = label_width + ui.spacing().item_spacing.x + choice_buttons_width(ui, options);
     if width <= ui.available_width() {
         ui.horizontal(|ui| {
             crate::widgets::label(ui, name);

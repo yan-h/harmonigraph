@@ -487,8 +487,7 @@ fn section_ui(
         header.set_clip_rect(header_rect.intersect(pane.clip_rect()));
         // One gap throughout the header: the fold cell's own margin around its
         // button, which is also its gap to the pane edge and to the first tab.
-        let margin = ((rail - theme::row_height(scale)) * 0.5).max(0.0);
-        header.spacing_mut().item_spacing.x = margin;
+        header.spacing_mut().item_spacing.x = theme::button_gap(scale);
         header.horizontal(|ui| {
             // The cell's margin already stands between the button and the first
             // tab, so no spacing is added after it.
