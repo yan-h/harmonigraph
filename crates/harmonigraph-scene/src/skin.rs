@@ -1,7 +1,12 @@
 //! The skin: one struct owning every color the CHROME draws, so a look is
 //! defined in exactly one place. `harmonigraph-ui::theme` converts the bytes
-//! into egui colors for the panel chrome; the scene reaches them through
-//! [`picture_color`], the ground it is composited over.
+//! into egui colors for the panel chrome.
+//!
+//! The PICTURE's own colors are deliberately not in it: the ground, rulings,
+//! axis numbers, note names and the off-scale band are the `PICTURE*`
+//! constants below. They land in every exported frame, and the offline
+//! renderer is never told which skin the editor wears, so a skinnable picture
+//! color would make a video disagree with the editor it was set up in.
 //!
 //! Only one built-in skin exists so far (the original dark look). Adding a
 //! skin = another `Skin` value plus a way to select it (a `set_skin`
@@ -24,8 +29,6 @@ pub struct Skin {
     pub panel: [u8; 3],
     /// Recessed areas: console scrollback, tab bar, meters.
     pub well: [u8; 3],
-    /// The ground every PICTURE pane is bedded on (see [`picture_color`]).
-    pub picture: [u8; 3],
     /// Subtly raised surface between panel and widget: hovered tabs,
     /// faint striping.
     pub surface_faint: [u8; 3],
@@ -74,7 +77,6 @@ impl Default for Skin {
         Skin {
             panel: [24, 25, 29],
             well: [15, 16, 19],
-            picture: [0, 0, 0],
             surface_faint: [46, 48, 57],
             hairline: [64, 67, 77],
             widget: [62, 66, 77],
@@ -112,7 +114,26 @@ pub fn ground_color(rgb: (u8, u8, u8)) -> Vec4 {
     Vec4::new(f32::from(rgb.0) / 255.0, f32::from(rgb.1) / 255.0, f32::from(rgb.2) / 255.0, 1.0)
 }
 
-/// The active skin's `picture`: the ground every PICTURE pane paints its own
+// ---- Picture colors ----------------------------------------------------------
+// Fixed rather than skinned (see the module doc). Tuned against the black
+// ground they are drawn on, not against the chrome; the values are the ones
+// the default skin's chrome roles carried when these were split off, so the
+// split moved no pixel.
+
+/// The ground every PICTURE pane is bedded on (see [`picture_color`]).
+pub const PICTURE: [u8; 3] = [0, 0, 0];
+/// Rulings drawn across a picture: the analyzer's frequency and level grid,
+/// the spectrum/roll handover, the spiral's seam and pitch-class rays. Each
+/// site fades it further.
+pub const PICTURE_RULING: [u8; 3] = [64, 67, 77];
+/// The analyzer's axis numbers.
+pub const PICTURE_MARKING: [u8; 3] = [172, 177, 188];
+/// Note names drawn in a picture, outlined in [`PICTURE`].
+pub const PICTURE_NAME: [u8; 3] = [228, 230, 234];
+/// The band behind a sounding note the scale does not contain.
+pub const PICTURE_OFF_SCALE: [u8; 3] = [236, 142, 132];
+
+/// [`PICTURE`] as the renderer wants it: the ground every PICTURE pane paints its own
 /// rect with — the spectral pane, the spiral, the render preview, and the
 /// lattice — and so the default ground a lattice pass is composited over.
 ///
@@ -128,9 +149,9 @@ pub fn ground_color(rgb: (u8, u8, u8)) -> Vec4 {
 /// `Layout`'s default `background` is this same colour, so a margin or a gap
 /// in an export reads as the panes' own ground; an export stands the lattice
 /// on the layout's colour rather than on this one, because a pane paints the
-/// ground its shell hands it rather than the skin's
+/// ground its shell hands it rather than this one
 /// (`the_pane_paints_the_shells_ground_rather_than_the_skins`).
 pub fn picture_color() -> Vec4 {
-    let [r, g, b] = active_skin().picture;
+    let [r, g, b] = PICTURE;
     ground_color((r, g, b))
 }

@@ -56,7 +56,7 @@ pub struct Layout {
 fn default_background() -> (u8, u8, u8) {
     // The panes' own ground, so a margin or a gap reads as more of the
     // picture's black rather than as a mat of another colour around it.
-    let [r, g, b] = harmonigraph_scene::skin::active_skin().picture;
+    let [r, g, b] = harmonigraph_scene::skin::PICTURE;
     (r, g, b)
 }
 

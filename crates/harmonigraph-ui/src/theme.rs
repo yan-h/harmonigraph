@@ -4,7 +4,7 @@
 //! rounding, spacing, strokes, hover behavior, and the egui/dock plumbing.
 
 use egui::{Color32, CornerRadius, FontId, Stroke, TextStyle, Vec2};
-use harmonigraph_scene::skin::active_skin;
+use harmonigraph_scene::skin::{self, active_skin};
 
 // ---- Palette accessors ----------------------------------------------------
 // All colors come from the active Skin (harmonigraph_scene::skin), the single
@@ -21,11 +21,6 @@ pub fn panel() -> Color32 {
 /// Recessed areas: console scrollback, text edits, plot backgrounds.
 pub fn well() -> Color32 {
     c(active_skin().well)
-}
-/// The ground a picture pane is bedded on (see
-/// `harmonigraph_scene::skin::picture_color`).
-pub fn picture() -> Color32 {
-    c(active_skin().picture)
 }
 /// Subtly raised surface between panel and widget (hovered tabs, faint
 /// striping).
@@ -90,6 +85,33 @@ pub fn warning_text() -> Color32 {
 /// Background band behind warning rows.
 pub fn warning_bg() -> Color32 {
     c(active_skin().warning_bg)
+}
+
+// ---- Picture colors -------------------------------------------------------
+// What a picture pane draws INSIDE the picture, and so what an export shows.
+// Fixed rather than skinned (see `harmonigraph_scene::skin`): reach for these,
+// not the chrome roles above, for anything the offline renderer also draws.
+
+/// The ground a picture pane is bedded on (see
+/// `harmonigraph_scene::skin::picture_color`).
+pub fn picture() -> Color32 {
+    c(skin::PICTURE)
+}
+/// Rulings across a picture: the analyzer's grid, the spiral's seam and rays.
+pub fn picture_ruling() -> Color32 {
+    c(skin::PICTURE_RULING)
+}
+/// The analyzer's axis numbers.
+pub fn picture_marking() -> Color32 {
+    c(skin::PICTURE_MARKING)
+}
+/// Note names drawn in a picture.
+pub fn picture_name() -> Color32 {
+    c(skin::PICTURE_NAME)
+}
+/// The band behind a sounding note outside the scale.
+pub fn picture_off_scale() -> Color32 {
+    c(skin::PICTURE_OFF_SCALE)
 }
 
 /// The one corner radius every framed control wears — buttons, checkboxes,

@@ -78,7 +78,7 @@ const SEGMENT_PT: f32 = 1.5;
 const MIN_STEPS: f32 = 96.0;
 
 /// How faint the twelve pitch-class rays are drawn against
-/// [`theme::hairline`](crate::theme::hairline): C first, the other eleven
+/// [`theme::picture_ruling`](crate::theme::picture_ruling): C first, the other eleven
 /// second.
 ///
 /// The same two-weight shape as the Spectral pane's frequency rulings, and for
@@ -89,7 +89,7 @@ const MIN_STEPS: f32 = 96.0;
 const RAY_FADE: (f32, f32) = (0.8, 0.32);
 
 /// How faint the seam between one turn and the next is drawn against
-/// [`theme::hairline`](crate::theme::hairline), and how wide.
+/// [`theme::picture_ruling`](crate::theme::picture_ruling), and how wide.
 ///
 /// Fainter than either ray, and it has to be: there is one seam per octave
 /// boundary and each is a whole turn long, so what is a hairline on a ray is
@@ -803,7 +803,7 @@ fn seam(painter: &egui::Painter, spiral: &Spiral) {
         .collect();
     painter.add(egui::Shape::line(
         points,
-        egui::Stroke::new(SEAM.1, crate::theme::hairline().gamma_multiply(SEAM.0)),
+        egui::Stroke::new(SEAM.1, crate::theme::picture_ruling().gamma_multiply(SEAM.0)),
     ));
 }
 
@@ -822,7 +822,7 @@ fn rays(painter: &egui::Painter, spiral: &Spiral) {
         let dir = spiral.ray(pc as f32);
         painter.line_segment(
             [spiral.centre + dir * r_in, spiral.centre + dir * r_out],
-            egui::Stroke::new(1.0, crate::theme::hairline().gamma_multiply(fade)),
+            egui::Stroke::new(1.0, crate::theme::picture_ruling().gamma_multiply(fade)),
         );
     }
 }
@@ -969,7 +969,7 @@ fn names(
             spiral.rim(voice.pitch),
             name,
             crate::marks::NameInk {
-                fill: crate::theme::text().gamma_multiply(voice.strength),
+                fill: crate::theme::picture_name().gamma_multiply(voice.strength),
                 outline: crate::theme::picture().gamma_multiply(voice.strength),
             },
             crate::marks::NameSize { scale, magnify },

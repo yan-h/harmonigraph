@@ -476,7 +476,7 @@ impl TextBatch {
     /// Both colors' ALPHA is the label's strength, and each is worth it in
     /// full: a shadow at half covers half, exactly as the fill does, so fading
     /// the pair together fades one thing. Fading only the fill leaves the
-    /// shadow behind, and the shadow is the letter's own shape in the skin's
+    /// shadow behind, and the shadow is the letter's own shape in the picture's
     /// knockout color.
     ///
     /// egui does the work that decides what the pixels are — shaping,

@@ -80,7 +80,7 @@ pub(crate) fn level_label(db: f32) -> String {
     db.to_string()
 }
 
-/// How faint a ruling is drawn against [`theme::hairline`], the pane's
+/// How faint a ruling is drawn against [`theme::picture_ruling`], the pane's
 /// quietest line already: the marks that anchor a ladder first, the steps
 /// between them second.
 ///
@@ -342,7 +342,7 @@ pub(crate) fn spectral_pane(
             let fade = if ruling.decade { RULING_FADE.0 } else { RULING_FADE.1 } * 0.4;
             painter.line_segment(
                 [axes.at(ruling.t, 0.0), axes.at(ruling.t, split)],
-                egui::Stroke::new(1.0, theme::hairline().gamma_multiply(fade)),
+                egui::Stroke::new(1.0, theme::picture_ruling().gamma_multiply(fade)),
             );
         }
         // The volume grid, clean across the pitch axis — every ruling the full
@@ -356,7 +356,7 @@ pub(crate) fn spectral_pane(
             let fade = if level.numbered { RULING_FADE.0 } else { RULING_FADE.1 } * 0.4;
             painter.line_segment(
                 axes.across_pitch(level_d(level.level)),
-                egui::Stroke::new(1.0, theme::hairline().gamma_multiply(fade)),
+                egui::Stroke::new(1.0, theme::picture_ruling().gamma_multiply(fade)),
             );
         }
     }
@@ -468,7 +468,11 @@ pub(crate) fn spectral_pane(
             }
             let t = scale.t_of(voice.pitch);
             let band = egui::Rect::from_two_pos(axes.at(t - half, 0.0), axes.at(t + half, split));
-            painter.rect_filled(band, 0.0, theme::warning_text().gamma_multiply(0.3 * strength));
+            painter.rect_filled(
+                band,
+                0.0,
+                theme::picture_off_scale().gamma_multiply(0.3 * strength),
+            );
         }
     }
 
@@ -514,7 +518,7 @@ pub(crate) fn spectral_pane(
         let fade = 0.6;
         painter.line_segment(
             axes.across_pitch(split),
-            egui::Stroke::new(1.0, theme::hairline().gamma_multiply(fade)),
+            egui::Stroke::new(1.0, theme::picture_ruling().gamma_multiply(fade)),
         );
     }
 
@@ -543,7 +547,7 @@ pub(crate) fn spectral_pane(
             align,
             label,
             marking_font.clone(),
-            theme::text_dim(),
+            theme::picture_marking(),
             theme::picture(),
         );
     }
@@ -578,7 +582,7 @@ pub(crate) fn spectral_pane(
             align,
             label,
             marking_font.clone(),
-            theme::text_dim(),
+            theme::picture_marking(),
             theme::picture(),
         );
     }

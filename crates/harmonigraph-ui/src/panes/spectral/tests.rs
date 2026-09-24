@@ -2182,7 +2182,7 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
         // pitch axis.
         let hairline = out.shapes.iter().position(|s| {
             matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
-                if stroke.color == theme::hairline().gamma_multiply(0.6))
+                if stroke.color == theme::picture_ruling().gamma_multiply(0.6))
         });
         let hairline = hairline.expect("expected a now-line in the frame");
         (callbacks.len(), callbacks.iter().filter(|&&c| c < hairline).count())
@@ -2232,7 +2232,7 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
             });
         }
         let out = painted_pane(WIDE, &mut state, 0.05);
-        let want = theme::warning_text().gamma_multiply(0.3);
+        let want = theme::picture_off_scale().gamma_multiply(0.3);
         out.shapes
             .into_iter()
             .filter(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == want))
@@ -2298,7 +2298,7 @@ fn a_note_lit_on_the_lattice_is_not_flagged_off_it() {
             kind: NoteEventKind::Tuning { semitones: cents / 100.0 },
         });
         let out = painted_pane(WIDE, &mut state, 0.05);
-        let want = theme::warning_text().gamma_multiply(0.3);
+        let want = theme::picture_off_scale().gamma_multiply(0.3);
         out.shapes
             .into_iter()
             .filter(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == want))
@@ -2659,8 +2659,8 @@ fn only_the_decade_boundaries_take_the_stronger_ink() {
 /// drawn in.
 fn is_ruling(color: egui::Color32) -> bool {
     [1.0, 0.4].into_iter().any(|fade| {
-        color == theme::hairline().gamma_multiply(RULING_FADE.0 * fade)
-            || color == theme::hairline().gamma_multiply(RULING_FADE.1 * fade)
+        color == theme::picture_ruling().gamma_multiply(RULING_FADE.0 * fade)
+            || color == theme::picture_ruling().gamma_multiply(RULING_FADE.1 * fade)
     })
 }
 
@@ -2687,7 +2687,7 @@ struct PaintedRuling {
 /// and the shape indices of the spectrum's own slabs.
 fn painted_rulings(rect: egui::Rect, mut cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
     cfg.atmosphere.analyzer_softness = 1.0;
-    let strong = theme::hairline().gamma_multiply(RULING_FADE.0 * 0.4);
+    let strong = theme::picture_ruling().gamma_multiply(RULING_FADE.0 * 0.4);
     let axes = Axes::new(rect, &cfg);
     let (mut rulings, mut slabs) = (Vec::new(), Vec::new());
     for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
@@ -2709,7 +2709,7 @@ fn painted_rulings(rect: egui::Rect, mut cfg: SpectrumConfig) -> (Vec<PaintedRul
 /// it as one opaque text callback.
 fn painted_levels(rect: egui::Rect, mut cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
     cfg.atmosphere.analyzer_softness = 1.0;
-    let strong = theme::hairline().gamma_multiply(RULING_FADE.0 * 0.4);
+    let strong = theme::picture_ruling().gamma_multiply(RULING_FADE.0 * 0.4);
     let axes = Axes::new(rect, &cfg);
     let (mut levels, mut slabs) = (Vec::new(), Vec::new());
     for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
