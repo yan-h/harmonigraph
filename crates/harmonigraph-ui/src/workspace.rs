@@ -589,12 +589,14 @@ fn settings_link(ui: &egui::Ui, rect: Rect, tab: Tab, open: &mut Option<DisplayP
     // egui's menu look, but with the section tabs' button padding rather than
     // its tighter one, the header's margin rather than its wider one, and no
     // outline. The corners are concentric with the highlight's, so the margin
-    // holds its width around them too.
+    // holds its width around them too. Items touch: only one is ever
+    // highlighted, so a gap between them would only be blank space.
     .style(move |style: &mut egui::Style| {
         let padding = style.spacing.button_padding;
         egui::containers::menu::menu_style(style);
         style.spacing.button_padding = padding;
         style.spacing.menu_margin = egui::Margin::same(margin as i8);
+        style.spacing.item_spacing.y = 0.0;
         let inner = style.visuals.widgets.hovered.corner_radius.nw;
         style.visuals.menu_corner_radius = egui::CornerRadius::same(inner.saturating_add(margin));
         style.visuals.window_stroke = egui::Stroke::NONE;
