@@ -311,11 +311,8 @@ pub(crate) fn reserve_scroll_gutter(ui: &mut egui::Ui) {
 
 // ---- Fonts -----------------------------------------------------------------
 
-/// The named family headings resolve to (Atkinson Bold first).
-pub const HEADING_FAMILY: &str = "heading";
-
-/// Install the product fonts: Atkinson Hyperlegible for proportional text
-/// (with its Bold in a dedicated heading family), Iosevka Fixed for
+/// Install the product fonts: Atkinson Hyperlegible for proportional text,
+/// Iosevka Fixed for
 /// monospace — chosen for its narrow numerals in ValueBars and readouts,
 /// and used by the console. All OFL; license texts ship next to the TTFs
 /// in `fonts/`. egui's bundled faces remain as fallbacks.
@@ -327,10 +324,6 @@ pub(crate) fn install_fonts(ctx: &egui::Context) {
         (
             "AtkinsonHyperlegible",
             &include_bytes!("../fonts/atkinsonhyperlegible/AtkinsonHyperlegible-Regular.ttf")[..],
-        ),
-        (
-            "AtkinsonHyperlegibleBold",
-            &include_bytes!("../fonts/atkinsonhyperlegible/AtkinsonHyperlegible-Bold.ttf")[..],
         ),
         ("IosevkaFixed", &include_bytes!("../fonts/iosevka/IosevkaFixed-Regular.ttf")[..]),
     ] {
@@ -345,11 +338,6 @@ pub(crate) fn install_fonts(ctx: &egui::Context) {
         // Per-glyph fallback for symbols Atkinson lacks — notably the music
         // accidentals (Iosevka's subset keeps U+266D-266F).
         proportional.push("IosevkaFixed".to_owned());
-        // Headings: the Bold face first, then the regular proportional stack
-        // as fallback for any glyph Bold lacks.
-        let mut heading = proportional.clone();
-        heading.insert(0, "AtkinsonHyperlegibleBold".to_owned());
-        fonts.families.insert(FontFamily::Name(HEADING_FAMILY.into()), heading);
     }
     if let Some(monospace) = fonts.families.get_mut(&FontFamily::Monospace) {
         monospace.insert(0, "IosevkaFixed".to_owned());
@@ -419,8 +407,9 @@ fn style_at(scale: f32) -> egui::Style {
     // `Default` that meant to be a struct literal, and it is right.
     let mut style = egui::Style {
         text_styles: [
-            // Headings differentiate by WEIGHT (Atkinson Bold), not size.
-            (TextStyle::Heading, FontId::new(13.5, egui::FontFamily::Name(HEADING_FAMILY.into()))),
+            // Section headings: small capitals, spaced and dimmed where they
+            // are drawn (`panes::section_header`).
+            (TextStyle::Heading, FontId::proportional(11.0)),
             (TextStyle::Body, FontId::proportional(13.5)),
             (TextStyle::Button, FontId::proportional(13.5)),
             (TextStyle::Small, FontId::proportional(11.0)),

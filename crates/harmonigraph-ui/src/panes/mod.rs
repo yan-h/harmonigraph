@@ -550,9 +550,9 @@ impl SectionFolds {
     }
 }
 
-/// A section of a settings pane: a thin rule, then the group's name in the
-/// heading (bold) face as a header that folds the section away, and `body`
-/// below it while it is open.
+/// A section of a settings pane: a thin rule, then the group's name as a
+/// [heading](section_header) that folds the section away, and `body` below it
+/// while it is open.
 ///
 /// The whole header row is the target, and its chevron leads the name where
 /// a [`subsection`]'s does, so every fold in a pane is found in one column.
@@ -588,22 +588,41 @@ pub(super) fn section<R>(
     open.then(|| body(ui))
 }
 
+/// Extra space between the letters of a [`section`] heading, at scale 1.
+/// Capitals set solid read as a block; a little air makes them a label.
+const HEADING_TRACKING: f32 = 1.2;
+
+/// Space above and below a [`section`] heading's text, at scale 1. Less than a
+/// control row gives its text: the small capitals are a label over the rows,
+/// not a row, and the rules around them already set the section off.
+const HEADING_PAD: f32 = 2.0;
+
 /// The heading row of a [`section`]: a chevron that points at the name while
-/// the section is folded and down while it is open, then the name.
+/// the section is folded and down while it is open, then the name in small,
+/// spaced, dim capitals — told from the rows under it by size, case and colour
+/// at once, where the bold it replaced differed from them by weight alone.
 ///
-/// Laid out as egui lays out a [`subsection`]'s header — one row high, the
-/// chevron centred in the first `indent` and the name after it — so a
-/// subsection's chevron and name sit exactly under its section's.
+/// Laid out as egui lays out a [`subsection`]'s header — the chevron centred
+/// in the first `indent` and the name after it — so a subsection's chevron
+/// and name sit exactly under its section's. The row is its text plus
+/// [`HEADING_PAD`] rather than a full control row high.
 fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response {
     let indent = ui.spacing().indent;
-    let galley = egui::WidgetText::from(egui::RichText::new(title).heading()).into_galley(
-        ui,
-        Some(egui::TextWrapMode::Truncate),
-        (ui.available_width() - indent).max(0.0),
-        egui::TextStyle::Heading,
+    let scale = crate::theme::ui_scale(ui.ctx());
+    let mut job = egui::text::LayoutJob::single_section(
+        title.to_uppercase(),
+        egui::TextFormat {
+            font_id: egui::TextStyle::Heading.resolve(ui.style()),
+            extra_letter_spacing: HEADING_TRACKING * scale,
+            color: crate::theme::text_dim(),
+            ..Default::default()
+        },
     );
+    job.wrap =
+        egui::text::TextWrapping::truncate_at_width((ui.available_width() - indent).max(0.0));
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), galley.size().y.max(ui.spacing().interact_size.y)),
+        egui::vec2(ui.available_width(), galley.size().y + 2.0 * HEADING_PAD * scale),
         egui::Sense::click(),
     );
     response.widget_info(|| {
@@ -611,7 +630,7 @@ fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response 
     });
     let hot = response.hovered() || response.has_focus();
     let text = egui::pos2(rect.left() + indent, rect.center().y - galley.size().y / 2.0);
-    ui.painter().galley(text, galley, ui.visuals().text_color());
+    ui.painter().galley(text, galley, crate::theme::text_dim());
     crate::widgets::paint_chevron(
         ui.painter(),
         egui::pos2(rect.left() + indent / 2.0, rect.center().y),

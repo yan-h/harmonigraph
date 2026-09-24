@@ -288,7 +288,7 @@ fn text_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
 fn the_video_pane_does_not_start_with_a_rule() {
     // Which section leads, per shell: a host can record takes, so Record
     // leads; the standalone cannot, so `record_controls` returns early.
-    for (supported, leads) in [(true, "Record"), (false, "Frame")] {
+    for (supported, leads) in [(true, "RECORD"), (false, "FRAME")] {
         let (shapes, rule) = video_pane_shapes(supported);
         let heading = text_y(&shapes, leads)
             .unwrap_or_else(|| panic!("the Video pane drew no {leads:?} heading"));
@@ -331,7 +331,7 @@ fn a_folded_heading_sits_centred_between_its_rules() {
         .shapes
         .iter()
         .find_map(|cs| match &cs.shape {
-            egui::Shape::Text(t) if t.galley.text() == "Audio analysis" && leaf.contains(t.pos) => {
+            egui::Shape::Text(t) if t.galley.text() == "AUDIO ANALYSIS" && leaf.contains(t.pos) => {
                 Some(egui::Rect::from_min_size(t.pos, t.galley.size()))
             }
             _ => None,
@@ -388,7 +388,7 @@ fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
     // Shared by both shells: the section, the row, and the choice on it. The
     // standalone has no transport to record with and still renders, so this is
     // the one thing in Render it can act on.
-    for row in ["Render", "Video history", "Whole video"] {
+    for row in ["RENDER", "Video history", "Whole video"] {
         for supported in [true, false] {
             let (shapes, _) = video_pane_shapes(supported);
             assert!(
@@ -1152,7 +1152,7 @@ fn a_transient_tuning_status_does_not_move_the_adaptive_controls() {
                 "the pending fixture never drew the transient status",
             );
         }
-        one_text_y(&output.shapes, "Adaptive tuning")
+        one_text_y(&output.shapes, "ADAPTIVE TUNING")
     };
 
     let (settled, pending) = (adaptive_y(false), adaptive_y(true));
@@ -1609,7 +1609,7 @@ fn audio_ring_settings_hide_with_the_layer() {
 
     for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
         let hidden = audio_section_shapes(reading, 0.0);
-        assert_eq!(text_ys(&hidden, "Audio ring").len(), 1, "the section lost its heading");
+        assert_eq!(text_ys(&hidden, "AUDIO RING").len(), 1, "the section lost its heading");
         for setting in [
             "Ring display",
             "Ring threshold",
@@ -1679,7 +1679,8 @@ fn shadow_falloff_only_appears_for_contour_shadows() {
 /// No settings tab draws two sections under one heading. A fold is saved as
 /// "Tab/Heading", so two headings of one name on one tab would fold together.
 ///
-/// Headings are told from the rest of the text by their face, and the window is
+/// Headings are told from the rest of the text by their letter spacing, the one
+/// thing nothing else in the panel sets (their face is the Small one), and the window is
 /// tall enough that every tab's whole list is laid out at once. Sections a
 /// fresh state hides (Note retuning, and Record outside a host) are not seen.
 #[test]
@@ -1690,13 +1691,17 @@ fn no_settings_tab_repeats_a_section_heading() {
         let mut window = DockHarness::at(egui::vec2(1000.0, 8000.0));
         window.settle(&mut state);
         let out = window.frame(&mut state, vec![]);
-        let heading = egui::TextStyle::Heading.resolve(&window.ctx.global_style());
         let mut titles: Vec<String> = out
             .shapes
             .iter()
             .filter_map(|cs| match &cs.shape {
                 egui::Shape::Text(text)
-                    if text.galley.job.sections.iter().all(|s| s.format.font_id == heading) =>
+                    if text
+                        .galley
+                        .job
+                        .sections
+                        .iter()
+                        .all(|s| s.format.extra_letter_spacing > 0.0) =>
                 {
                     Some(text.galley.text().to_owned())
                 }
@@ -1708,7 +1713,7 @@ fn no_settings_tab_repeats_a_section_heading() {
         titles.dedup();
         assert_eq!(titles.len(), drawn, "{tab:?} repeats a heading: {titles:?}");
         if !matches!(tab, panes::Tab::Console) {
-            assert!(drawn >= 2, "{tab:?} drew {drawn} headings; is the face still Heading?");
+            assert!(drawn >= 2, "{tab:?} drew {drawn} headings; are they still letter-spaced?");
         }
     }
 }
