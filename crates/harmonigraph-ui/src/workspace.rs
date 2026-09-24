@@ -577,7 +577,7 @@ fn settings_link(ui: &egui::Ui, rect: Rect, tab: Tab, open: &mut Option<DisplayP
         ui.input(|input| input.pointer.secondary_clicked()) && ui.rect_contains_pointer(rect);
     // The header's own gap between a button and the edge around it.
     let scale = theme::ui_scale(ui.ctx());
-    let margin = ((theme::tab_bar_height(scale) - theme::row_height(scale)) * 0.5).round() as i8;
+    let margin = ((theme::tab_bar_height(scale) - theme::row_height(scale)) * 0.5).round() as u8;
     egui::Popup::new(
         ui.id().with("settings link"),
         ui.ctx().clone(),
@@ -588,12 +588,15 @@ fn settings_link(ui: &egui::Ui, rect: Rect, tab: Tab, open: &mut Option<DisplayP
     .layout(egui::Layout::top_down_justified(egui::Align::Min))
     // egui's menu look, but with the section tabs' button padding rather than
     // its tighter one, the header's margin rather than its wider one, and no
-    // outline.
+    // outline. The corners are concentric with the highlight's, so the margin
+    // holds its width around them too.
     .style(move |style: &mut egui::Style| {
         let padding = style.spacing.button_padding;
         egui::containers::menu::menu_style(style);
         style.spacing.button_padding = padding;
-        style.spacing.menu_margin = egui::Margin::same(margin);
+        style.spacing.menu_margin = egui::Margin::same(margin as i8);
+        let inner = style.visuals.widgets.hovered.corner_radius.nw;
+        style.visuals.menu_corner_radius = egui::CornerRadius::same(inner.saturating_add(margin));
         style.visuals.window_stroke = egui::Stroke::NONE;
     })
     .gap(0.0)
