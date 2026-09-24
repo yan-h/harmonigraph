@@ -1052,7 +1052,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "version",
         "layout",
         "analyzer_regions",
-        "display_page",
+        "folded_sections",
         "appearance",
         "camera_presets",
         "fps_cap",
@@ -1123,7 +1123,7 @@ fn workspace_edits_do_not_change_recorded_appearance() {
     let editor = state.save_persist();
     state.workspace.layout = workspace::Layout::solo(crate::panes::Tab::Console);
     state.workspace.layout.right.lattice = 320.0;
-    state.workspace.interaction.display_page = crate::panes::display::DisplayPage::System;
+    state.workspace.interaction.folded_sections.insert("System/Performance".into());
     state.workspace.interaction.ui_scale = 1.25;
     state.workspace.interaction.fps_cap = Some(30.0);
     assert_ne!(state.save_persist(), editor);
@@ -1857,23 +1857,22 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     assert_eq!(editor.picture.appearance.camera.yaw, 1.23);
 }
 
-/// The Display page picked in the editor survives the window closing and
-/// reopening.
+/// A settings section folded in the editor stays folded across the window
+/// closing and reopening.
 ///
 /// The plugin builds a brand-new egui `Context` for every window it opens, so a
-/// choice kept in egui memory springs back to the default with the window — the
-/// same class of trap as the stale `TextureHandle`
-/// (`PictureState::release_context_resources`). The page lives in `UiPersist`
-/// instead, and this holds the whole path: a REAL click on the picker in the
-/// dock, `save_persist`, then a fresh `Context` and `load_persist`. Both halves
-/// are load-bearing — writing the field by hand would pass with the click never
-/// wired to it, and asserting inside one `Context` would pass with the state
-/// memory-backed, which is the live bug this exists to catch.
+/// fold kept in egui memory springs open again with the window — the same class
+/// of trap as the stale `TextureHandle`
+/// (`PictureState::release_context_resources`). The folds live in `UiPersist`
+/// instead, and this holds the whole path: a REAL click on a section header in
+/// the dock, `save_persist`, then a fresh `Context` and `load_persist`. Both
+/// halves are load-bearing — writing the field by hand would pass with the
+/// click never wired to it, and asserting inside one `Context` would pass with
+/// the state memory-backed, which is the live bug this exists to catch.
 #[test]
-fn the_display_page_in_the_picker_survives_an_editor_reopen() {
+fn a_folded_section_survives_an_editor_reopen() {
     use super::harness::{press, DockHarness};
 
-    // The Spectrogram page's visibility control, scoped to the settings leaf.
     let drawn = |out: &egui::FullOutput, leaf: egui::Rect, needle: &str| {
         out.shapes.iter().any(|cs| match &cs.shape {
             egui::Shape::Text(t) => t.galley.text() == needle && leaf.contains(t.pos),
@@ -1882,32 +1881,15 @@ fn the_display_page_in_the_picker_survives_an_editor_reopen() {
     };
 
     let mut state = fresh();
-    state.workspace.layout.select(panes::Tab::Display);
+    state.workspace.layout.select(panes::Tab::AnalyzerSettings);
     let mut window = DockHarness::new();
     window.settle(&mut state);
     let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
     let out = window.frame(&mut state, vec![]);
-    assert!(!drawn(&out, leaf, "Show spectrogram"), "the tab opens on Lattice, not Spectrogram");
+    assert!(drawn(&out, leaf, "Show spectrogram"), "the section opens unfolded");
 
-    // The narrow page picker exposes its destinations through a dropdown.
-    let picker = out
-        .shapes
-        .iter()
-        .find_map(|cs| match &cs.shape {
-            egui::Shape::Text(t) if t.galley.text() == "Lattice" && leaf.contains(t.pos) => {
-                Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
-            }
-            _ => None,
-        })
-        .expect("current page dropdown");
-    window.frame(&mut state, vec![egui::Event::PointerMoved(picker)]);
-    window.frame(&mut state, vec![press(picker, true)]);
-    window.frame(&mut state, vec![press(picker, false)]);
-    let out = window.frame(&mut state, vec![]);
-
-    // The Spectrogram name on the picker, found where it was painted and clicked
-    // for real.
-    let target = out
+    // The Spectrogram heading, found where it was painted and clicked for real.
+    let header = out
         .shapes
         .iter()
         .find_map(|cs| match &cs.shape {
@@ -1916,20 +1898,17 @@ fn the_display_page_in_the_picker_survives_an_editor_reopen() {
             }
             _ => None,
         })
-        .expect("the Display pane drew no Spectrogram picker label");
-    window.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
-    window.frame(&mut state, vec![egui::Event::PointerMoved(target), press(target, true)]);
-    window.frame(&mut state, vec![press(target, false)]);
+        .expect("the Analyzer page drew no Spectrogram heading");
+    window.frame(&mut state, vec![egui::Event::PointerMoved(header)]);
+    window.frame(&mut state, vec![egui::Event::PointerMoved(header), press(header, true)]);
+    window.frame(&mut state, vec![press(header, false)]);
     let out = window.frame(&mut state, vec![]);
-    assert_eq!(
-        state.workspace.interaction.display_page,
-        panes::display::DisplayPage::Spectrogram,
-        "the click did not reach the persisted field",
-    );
     assert!(
-        drawn(&out, leaf, "Show spectrogram"),
-        "the click did not switch to the Spectrogram page"
+        state.workspace.interaction.folded_sections.contains("Analyzer/Spectrogram"),
+        "the click did not reach the persisted field: {:?}",
+        state.workspace.interaction.folded_sections,
     );
+    assert!(!drawn(&out, leaf, "Show spectrogram"), "the click did not fold the section");
     let saved = state.save_persist();
 
     // The window closes and reopens: a FRESH `Context`, and the state the
@@ -1940,16 +1919,36 @@ fn the_display_page_in_the_picker_survives_an_editor_reopen() {
     fresh_window.settle(&mut reopened);
     let out = fresh_window.frame(&mut reopened, vec![]);
     let leaf = reopened.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
+    assert!(drawn(&out, leaf, "Spectrogram"), "the folded section keeps its heading");
     assert!(
-        drawn(&out, leaf, "Show spectrogram"),
-        "the page reverted across the reopen — is its state in egui memory?",
+        !drawn(&out, leaf, "Show spectrogram"),
+        "the fold sprang open across the reopen — is its state in egui memory?",
     );
-    // And one page is ONE page: the Lattice body it was switched away from is
-    // gone rather than still stacked above.
-    assert!(
-        !drawn(&out, leaf, "Projection"),
-        "the Lattice page is still drawn under the Spectrogram page",
-    );
+    // A fold is per section: the one above it is still open.
+    assert!(drawn(&out, leaf, "Live response"), "folding one section folded another");
+}
+
+/// Folding View, the Analyzer page's first section, folds View alone. The
+/// analysis sections once drew inside its body, so they vanished with it.
+#[test]
+fn folding_the_analyzer_view_leaves_the_sections_below_it() {
+    let mut state = fresh();
+    state.workspace.layout.select(panes::Tab::AnalyzerSettings);
+    state.workspace.interaction.folded_sections.insert("Analyzer/View".to_owned());
+    let mut window = super::harness::DockHarness::new();
+    window.settle(&mut state);
+    let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
+    let out = window.frame(&mut state, vec![]);
+    let drawn = |needle: &str| {
+        out.shapes.iter().any(|cs| match &cs.shape {
+            egui::Shape::Text(t) => t.galley.text() == needle && leaf.contains(t.pos),
+            _ => false,
+        })
+    };
+    assert!(!drawn("Spectrum outline"), "the View section did not fold");
+    for heading in ["Audio analysis", "Level mapping", "Live response"] {
+        assert!(drawn(heading), "folding View took {heading} with it");
+    }
 }
 
 /// Split a serialized struct into its top-level `key:value` pairs, as
@@ -2279,22 +2278,21 @@ fn retired_playhead_refuses_the_entire_editor_and_appearance_document() {
     assert!(AppearanceDocument::parse(&dropped).is_err());
 }
 
-/// A workspace last closed on the retired Analysis page is refused whole and
-/// reports why. `DisplayPage` is persisted beside the dock, so removing a page
-/// is the same enum-variant break as removing a dock tab: serde cannot build a
-/// partial `UiPersist`, and the version floor is not reached.
+/// A workspace last closed on the retired Display tab is refused whole and
+/// reports why. The selected settings tab is persisted in the layout, so
+/// removing a tab is an enum-variant break: serde cannot build a partial
+/// `UiPersist`, and the version floor is not reached.
 #[test]
-fn a_saved_picker_naming_the_retired_analysis_page_is_refused_whole() {
+fn a_saved_layout_naming_the_retired_display_tab_is_refused_whole() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
-    state.workspace.interaction.display_page = crate::panes::display::DisplayPage::Analyzer;
     let saved = state.save_persist();
-    let dropped = saved.replace("display_page:Analyzer", "display_page:Analysis");
+    let dropped = saved.replace("settings_tab:Tuning", "settings_tab:Display");
     assert_ne!(dropped, saved, "the splice must land for this to test anything");
 
     let mut restored = fresh();
     let before = restored.save_persist();
-    assert!(!restored.load_persist(&dropped), "a picker naming Analysis is not applied");
+    assert!(!restored.load_persist(&dropped), "a layout naming Display is not applied");
     assert!(!collapsed(&restored, panes::Tab::Console), "the refusal opens its report");
     set_console_collapsed(&mut restored, true);
     assert_eq!(

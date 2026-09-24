@@ -293,7 +293,7 @@ impl SpectrogramPreset {
 pub(crate) const BALLISTICS_MAX: f32 = 0.5;
 
 /// Everything the Spectral pane's display is configured by, edited in the
-/// Display tab's Analyzer section and persisted with the UI state.
+/// Analyzer settings tab and persisted with the UI state.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SpectrumConfig {

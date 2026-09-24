@@ -227,52 +227,13 @@ pub(super) const PROJECTIONS: [harmonigraph_scene::Projection; 3] = [
     harmonigraph_scene::Projection::Orthographic,
 ];
 
-pub(super) use crate::panes::display::DisplayPage;
-
-/// One pane of the settings column as a sweep drives it: a tab of its own, or
-/// one of the Display tab's pages, reached through Display's dispatch with that
-/// page SELECTED — so every per-page count (short bars, gradient previews)
-/// counts one page's, and each body is measured at the column's full width.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum SettingsPane {
-    Tab(panes::Tab),
-    Page(DisplayPage),
-}
-
-impl SettingsPane {
-    /// The tab that carries this pane — with the page that shows it selected,
-    /// which for a `Page` is the whole difference between measuring the pane
-    /// and measuring whichever page was showing.
-    pub(super) fn install(self, state: &mut SharedState) -> panes::Tab {
-        match self {
-            SettingsPane::Tab(tab) => tab,
-            SettingsPane::Page(page) => {
-                state.workspace.interaction.display_page = page;
-                panes::Tab::Display
-            }
-        }
-    }
-}
-
-/// Every settings pane, and the tabs that share the column with them.
-pub(super) const SETTINGS_PANES: [SettingsPane; 9] = [
-    SettingsPane::Tab(panes::Tab::Tuning),
-    SettingsPane::Page(DisplayPage::Colors),
-    SettingsPane::Page(DisplayPage::Lattice),
-    SettingsPane::Page(DisplayPage::Analyzer),
-    SettingsPane::Page(DisplayPage::Spectrogram),
-    SettingsPane::Page(DisplayPage::Lighting),
-    SettingsPane::Page(DisplayPage::System),
-    SettingsPane::Tab(panes::Tab::Video),
-    SettingsPane::Tab(panes::Tab::Console),
-];
+/// Every settings tab, in the column's own order.
+pub(super) const SETTINGS_PANES: &[panes::Tab] = crate::workspace::Section::Settings.tabs();
 
 /// One settings pane whose content box is `width` points wide, as the shapes it
 /// emitted. Driven through [`panes::Viewer`] rather than the dock, so a sweep
 /// over widths costs one pane each instead of a whole window, and the width
-/// under test is the pane's own rather than a window size minus chrome. A
-/// [`SettingsPane::Page`] goes through the Display tab's own dispatch with that
-/// page selected, so its body is measured under the real picker row.
+/// under test is the pane's own rather than a window size minus chrome.
 ///
 /// The dock's nesting IS reproduced, though, because the one thing it does that
 /// a bare `Ui` does not is the thing these tests are about: the workspace clips the
@@ -287,7 +248,7 @@ pub(super) const SETTINGS_PANES: [SettingsPane; 9] = [
 /// flight — so the Video tab draws the record button, the Options field, and
 /// the progress bar a real session has.
 pub(super) fn settings_pane_at_width(
-    pane: SettingsPane,
+    pane: panes::Tab,
     width: f32,
     projection: harmonigraph_scene::Projection,
 ) -> Vec<egui::epaint::ClippedShape> {
@@ -302,7 +263,7 @@ pub(super) fn settings_pane_at_width(
         yaw: 0.0,
         pitch: 0.0,
     });
-    let tab = pane.install(&mut state);
+    let tab = pane;
     tab_body(&mut state, tab, width, PANE_HEIGHT).shapes
 }
 
@@ -360,8 +321,8 @@ pub(super) fn tab_body_on(
 /// The projections worth drawing `pane` at: all of them for the Lattice page,
 /// whose Camera section depends on it (see [`PROJECTIONS`]), and the default
 /// alone for the panes that draw the same thing either way.
-pub(super) fn projections_for(pane: SettingsPane) -> &'static [harmonigraph_scene::Projection] {
-    if pane == SettingsPane::Page(DisplayPage::Lattice) {
+pub(super) fn projections_for(pane: panes::Tab) -> &'static [harmonigraph_scene::Projection] {
+    if pane == panes::Tab::LatticeSettings {
         &PROJECTIONS
     } else {
         &PROJECTIONS[..1]

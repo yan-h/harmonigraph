@@ -285,103 +285,103 @@ pub(super) fn tuning_pane(
     params: &dyn ParamBackend,
     now: f64,
 ) {
-    // A plain heading rather than `section`: this is the top of the pane, and
-    // the leading rule `section` draws would be a line under nothing. Matches
-    // the Display tab's pages, which open the same way under their picker.
-    ui.heading("Lattice tuning");
-    ui.weak("Set the pitch of each lattice step. 100 cents (¢) equals one semitone.");
-    // Tuning sliders. A comma that is tempered out derives one of these axes
-    // (meantone the major third, marvel the harmonic seventh), so that axis's
-    // bar shows the derived value and is where the mode is released.
-    for &key in ParamKey::TUNING.iter().filter(|&&key| key != ParamKey::Tolerance) {
-        match comma_deriving(key, &state.appearance.view) {
-            Some(comma) => tempered_bar(ui, state, params, comma),
-            None => {
-                param_bar(ui, params, key).on_hover_text(tuning_hint(key));
+    section(ui, "Lattice tuning", |ui| {
+        ui.weak("Set the pitch of each lattice step. 100 cents (¢) equals one semitone.");
+        // Tuning sliders. A comma that is tempered out derives one of these axes
+        // (meantone the major third, marvel the harmonic seventh), so that axis's
+        // bar shows the derived value and is where the mode is released.
+        for &key in ParamKey::TUNING.iter().filter(|&&key| key != ParamKey::Tolerance) {
+            match comma_deriving(key, &state.appearance.view) {
+                Some(comma) => tempered_bar(ui, state, params, comma),
+                None => {
+                    param_bar(ui, params, key).on_hover_text(tuning_hint(key));
+                }
             }
         }
-    }
 
-    button_row(ui, |ui| {
-        if ui
-            .button("Just")
-            .on_hover_text(
-                "Pure ratios on every axis — 3:2, 5:4, 7:4 — and both \
-                 temperaments released.",
-            )
-            .clicked()
-        {
-            state.runtime.edit_tuning(
-                &mut state.appearance,
-                params,
-                ConfigEdit {
-                    axes: [
-                        None,
-                        Some(tuning::microcents(tuning::THREE_JUST)),
-                        Some(tuning::microcents(tuning::FIVE_JUST)),
-                        Some(tuning::microcents(tuning::SEVEN_JUST)),
-                        None,
-                    ],
-                    tempered: [Some(false); 2],
-                    ..Default::default()
-                },
-            );
-        }
-        if ui
-            .button("12-TET")
-            .on_hover_text(
-                "Equal-tempered steps — 700, 400, 1000 cents. Matches a plain \
-                 MIDI keyboard.",
-            )
-            .clicked()
-        {
-            state.runtime.edit_tuning(
-                &mut state.appearance,
-                params,
-                ConfigEdit {
-                    axes: [
-                        None,
-                        Some(tuning::microcents(tuning::THREE_12TET)),
-                        Some(tuning::microcents(tuning::FIVE_12TET)),
-                        Some(tuning::microcents(tuning::SEVEN_12TET)),
-                        None,
-                    ],
-                    ..Default::default()
-                },
-            );
-        }
-        // v1's tuning-learn mode: while engaged, the tuning re-learns
-        // instantly whenever the set of held notes changes (see root_ui).
-        let mut learn_active = state.runtime.learn_active;
-        let learn = crate::widgets::toggle_switch(ui, &mut learn_active, "Learn")
-            .on_hover_text(
-                "While active, set the tuning from the held notes whenever they change. While a source has Retune on, only the C offset and the keyboard are learned: the lattice axes are what it is retuned to.",
-            );
-        if learn.changed() {
-            state.runtime.edit_tuning(
-                &mut state.appearance,
-                params,
-                ConfigEdit { learning: Some(learn_active), ..Default::default() },
-            );
-        }
-        if state.runtime.learn_active {
-            // Pulsing armed ring so the engaged mode can't be missed.
-            ui.painter().rect_stroke(
-                learn.rect.expand(2.0),
-                egui::CornerRadius::same(6),
-                egui::Stroke::new(2.0, theme::armed().gamma_multiply(learn_pulse(now))),
-                egui::StrokeKind::Outside,
-            );
-        }
+        button_row(ui, |ui| {
+            if ui
+                .button("Just")
+                .on_hover_text(
+                    "Pure ratios on every axis — 3:2, 5:4, 7:4 — and both \
+                     temperaments released.",
+                )
+                .clicked()
+            {
+                state.runtime.edit_tuning(
+                    &mut state.appearance,
+                    params,
+                    ConfigEdit {
+                        axes: [
+                            None,
+                            Some(tuning::microcents(tuning::THREE_JUST)),
+                            Some(tuning::microcents(tuning::FIVE_JUST)),
+                            Some(tuning::microcents(tuning::SEVEN_JUST)),
+                            None,
+                        ],
+                        tempered: [Some(false); 2],
+                        ..Default::default()
+                    },
+                );
+            }
+            if ui
+                .button("12-TET")
+                .on_hover_text(
+                    "Equal-tempered steps — 700, 400, 1000 cents. Matches a plain \
+                     MIDI keyboard.",
+                )
+                .clicked()
+            {
+                state.runtime.edit_tuning(
+                    &mut state.appearance,
+                    params,
+                    ConfigEdit {
+                        axes: [
+                            None,
+                            Some(tuning::microcents(tuning::THREE_12TET)),
+                            Some(tuning::microcents(tuning::FIVE_12TET)),
+                            Some(tuning::microcents(tuning::SEVEN_12TET)),
+                            None,
+                        ],
+                        ..Default::default()
+                    },
+                );
+            }
+            // v1's tuning-learn mode: while engaged, the tuning re-learns
+            // instantly whenever the set of held notes changes (see root_ui).
+            let mut learn_active = state.runtime.learn_active;
+            let learn = crate::widgets::toggle_switch(ui, &mut learn_active, "Learn")
+                .on_hover_text(
+                    "While active, set the tuning from the held notes whenever they change. While a source has Retune on, only the C offset and the keyboard are learned: the lattice axes are what it is retuned to.",
+                );
+            if learn.changed() {
+                state.runtime.edit_tuning(
+                    &mut state.appearance,
+                    params,
+                    ConfigEdit { learning: Some(learn_active), ..Default::default() },
+                );
+            }
+            if state.runtime.learn_active {
+                // Pulsing armed ring so the engaged mode can't be missed.
+                ui.painter().rect_stroke(
+                    learn.rect.expand(2.0),
+                    egui::CornerRadius::same(6),
+                    egui::Stroke::new(2.0, theme::armed().gamma_multiply(learn_pulse(now))),
+                    egui::StrokeKind::Outside,
+                );
+            }
+        });
     });
-    section(ui, "Note matching");
-    param_bar(ui, params, ParamKey::Tolerance).on_hover_text(tuning_hint(ParamKey::Tolerance));
+    section(ui, "Note matching", |ui| {
+        param_bar(ui, params, ParamKey::Tolerance).on_hover_text(tuning_hint(ParamKey::Tolerance));
+    });
 
     // Which commas the lattice tempers out: the same question as the bars
     // above (what IS this tuning), but the answer is a set of identities
     // rather than three numbers, so it gets its own heading.
-    section(ui, "Temperaments");
-    comma_controls(ui, state, params);
+    section(ui, "Temperaments", |ui| comma_controls(ui, state, params));
+    // Under the section rather than in it, so a folded Temperaments cannot hide
+    // a fault — and with it the pending line below, which a notice suppresses.
     let configuration_notice = if state.runtime.configuration_status & 3 != 0 {
         ui.colored_label(
             theme::armed(),
@@ -402,19 +402,20 @@ pub(super) fn tuning_pane(
     if mode == harmonigraph_core::lattice_map::TuningEngine::Adaptive {
         adaptive_controls(ui, state, params);
     }
-    section(ui, "Instances");
-    instance_controls(ui, params);
+    section(ui, "Instances", |ui| {
+        instance_controls(ui, params);
 
-    // After every control: `configuration_pending` can come and go between
-    // consecutive frames while a drag submits policy edits and the audio
-    // thread adopts them. A conditional row above Adaptive tuning moves the
-    // bar still held under the pointer, making the gesture feed back into its
-    // own value and the whole section alternate between two positions. The
-    // persistent fault notices stay prominent above the controls; unlike this
-    // ordinary pending transition, they do not alternate within the gesture.
-    if !configuration_notice && state.runtime.configuration_pending {
-        ui.weak("Tuning change pending audio adoption");
-    }
+        // After every control: `configuration_pending` can come and go between
+        // consecutive frames while a drag submits policy edits and the audio
+        // thread adopts them. A conditional row above Adaptive tuning moves the
+        // bar still held under the pointer, making the gesture feed back into its
+        // own value and the whole section alternate between two positions. The
+        // persistent fault notices stay prominent above the controls; unlike this
+        // ordinary pending transition, they do not alternate within the gesture.
+        if !configuration_notice && state.runtime.configuration_pending {
+            ui.weak("Tuning change pending audio adoption");
+        }
+    });
 
     // Hovering a lattice node deliberately reports NOTHING here. Growing a
     // "Hovered: (t, f, s) = pitch" line whenever the pointer is over a node
@@ -464,87 +465,88 @@ fn fifths(steps: i32) -> String {
 }
 
 fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
-    section(ui, "Adaptive tuning");
-    keyboard_controls(ui, state, params);
-    let mut p = state.runtime.adaptive_policy;
-    let before = p;
-    p.pitch_flexibility = adaptive_value(
-        ui, p.pitch_flexibility.into(), 1..=100, 1.0, "Pitch flexibility", "¢",
-        "Cents of displacement beyond accumulated drift that cost one point. The exponential penalty rises increasingly quickly; a note stays unsnapped when its harmonic benefit cannot cover that cost.",
-    ) as u16;
-    p.radius =
-        adaptive_value(ui, p.radius.into(), 1..=5, 1.0, "Search radius", " steps", "Candidate distance along each enabled lattice axis. Larger radii consider more tuning alternatives and cost more processing.").max(1) as u8;
-    ui.label("Search axes").on_hover_text(
-        "Lattice axes the adaptive tuner may use when looking for a note's candidate pitches.",
-    );
-    theme::reserve_scroll_gutter(ui);
-    egui::ScrollArea::horizontal().id_salt("adaptive-axes-scroll").show(ui, |ui| {
-        crate::widgets::selected_combo(
-            ui,
-            egui::ComboBox::from_id_salt("adaptive-axes").selected_text(match p.axes {
-                1 => "Fifths",
-                2 => "Fifths + thirds",
-                _ => "Fifths + thirds + sevenths",
-            }),
-            |ui| {
-                ui.selectable_value(&mut p.axes, 1, "Fifths");
-                ui.selectable_value(&mut p.axes, 2, "Fifths + thirds");
-                ui.selectable_value(&mut p.axes, 3, "Fifths + thirds + sevenths");
-            },
-        );
-    });
-    let context = ui.collapsing("Context", |ui| {
-        p.half_life_ms = adaptive_value(
-            ui,
-            p.half_life_ms.into(),
-            0..=20_000,
-            1000.0,
-            "Half-life",
-            "s",
-            "A note struck this long before the newest counts half. 0: no decay.",
+    section(ui, "Adaptive tuning", |ui| {
+        keyboard_controls(ui, state, params);
+        let mut p = state.runtime.adaptive_policy;
+        let before = p;
+        p.pitch_flexibility = adaptive_value(
+            ui, p.pitch_flexibility.into(), 1..=100, 1.0, "Pitch flexibility", "¢",
+            "Cents of displacement beyond accumulated drift that cost one point. The exponential penalty rises increasingly quickly; a note stays unsnapped when its harmonic benefit cannot cover that cost.",
         ) as u16;
-        p.register = adaptive_value(
-            ui,
-            p.register.into(),
-            10..=1000,
-            1000.0,
-            "Weight per octave",
-            "",
-            "Each octave between two notes multiplies the vote by this. 1: ignore register.",
-        ) as u16;
-        p.tolerance = adaptive_value(
-            ui,
-            p.tolerance,
-            0..=20_000_000,
-            1_000_000.0,
-            "Same-note tolerance",
-            "¢",
-            "Onsets this close in pitch count as one note.",
+        p.radius =
+            adaptive_value(ui, p.radius.into(), 1..=5, 1.0, "Search radius", " steps", "Candidate distance along each enabled lattice axis. Larger radii consider more tuning alternatives and cost more processing.").max(1) as u8;
+        ui.label("Search axes").on_hover_text(
+            "Lattice axes the adaptive tuner may use when looking for a note's candidate pitches.",
         );
-        p.silence_ms = adaptive_value(
-            ui,
-            p.silence_ms,
-            0..=120_000,
-            1000.0,
-            "Silence reset",
-            "s",
-            "Forget the context after this long with nothing held. 0: never.",
+        theme::reserve_scroll_gutter(ui);
+        egui::ScrollArea::horizontal().id_salt("adaptive-axes-scroll").show(ui, |ui| {
+            crate::widgets::selected_combo(
+                ui,
+                egui::ComboBox::from_id_salt("adaptive-axes").selected_text(match p.axes {
+                    1 => "Fifths",
+                    2 => "Fifths + thirds",
+                    _ => "Fifths + thirds + sevenths",
+                }),
+                |ui| {
+                    ui.selectable_value(&mut p.axes, 1, "Fifths");
+                    ui.selectable_value(&mut p.axes, 2, "Fifths + thirds");
+                    ui.selectable_value(&mut p.axes, 3, "Fifths + thirds + sevenths");
+                },
+            );
+        });
+        let context = ui.collapsing("Context", |ui| {
+            p.half_life_ms = adaptive_value(
+                ui,
+                p.half_life_ms.into(),
+                0..=20_000,
+                1000.0,
+                "Half-life",
+                "s",
+                "A note struck this long before the newest counts half. 0: no decay.",
+            ) as u16;
+            p.register = adaptive_value(
+                ui,
+                p.register.into(),
+                10..=1000,
+                1000.0,
+                "Weight per octave",
+                "",
+                "Each octave between two notes multiplies the vote by this. 1: ignore register.",
+            ) as u16;
+            p.tolerance = adaptive_value(
+                ui,
+                p.tolerance,
+                0..=20_000_000,
+                1_000_000.0,
+                "Same-note tolerance",
+                "¢",
+                "Onsets this close in pitch count as one note.",
+            );
+            p.silence_ms = adaptive_value(
+                ui,
+                p.silence_ms,
+                0..=120_000,
+                1000.0,
+                "Silence reset",
+                "s",
+                "Forget the context after this long with nothing held. 0: never.",
+            );
+            ui.checkbox(&mut p.reset_stop, "Reset context on stop")
+                .on_hover_text("Forget the context when the transport stops.");
+            ui.checkbox(&mut p.reset_loop, "Reset context on loop / seek")
+                .on_hover_text("Forget the context when playback jumps.");
+        });
+        context.header_response.on_hover_text(
+            "New notes follow the moving context; sounding notes keep their correction.",
         );
-        ui.checkbox(&mut p.reset_stop, "Reset context on stop")
-            .on_hover_text("Forget the context when the transport stops.");
-        ui.checkbox(&mut p.reset_loop, "Reset context on loop / seek")
-            .on_hover_text("Forget the context when playback jumps.");
+        if p != before {
+            state.runtime.edit_tuning(
+                &mut state.appearance,
+                params,
+                ConfigEdit { policy: Some(p.sanitize()), ..Default::default() },
+            );
+        }
     });
-    context.header_response.on_hover_text(
-        "New notes follow the moving context; sounding notes keep their correction.",
-    );
-    if p != before {
-        state.runtime.edit_tuning(
-            &mut state.appearance,
-            params,
-            ConfigEdit { policy: Some(p.sanitize()), ..Default::default() },
-        );
-    }
 }
 
 fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
@@ -784,198 +786,201 @@ fn map_controls(
     // editor want the same view.
     state.runtime.lattice_maps = Some(view);
     let view = state.runtime.lattice_maps.as_ref().expect("just stored");
-    section(ui, "Note retuning");
-    let mut mode = view.playback.engine;
-    let before = mode;
-    crate::widgets::choice_buttons(
-        ui,
-        "retuning engine",
-        &mut mode,
-        &[
-            (
-                TuningEngine::Off,
-                "Pass through",
-                "Leave incoming note pitches unchanged. Lattice display tuning still applies.",
-            ),
-            (
-                TuningEngine::Adaptive,
-                "Adaptive",
-                "Choose tuning for new notes from the musical context.",
-            ),
-            (
-                TuningEngine::LatticeMap,
-                "Lattice Map",
-                "Tune new notes using the selected saved lattice map.",
-            ),
-        ],
-    );
-    if mode != before {
-        params.edit_lattice_map(MapEdit::Engine(mode));
-    }
-    if view.pending {
-        ui.weak("Map state pending audio adoption");
-    }
-    if mode != TuningEngine::LatticeMap {
-        return mode;
-    }
-    ui.weak("Map changes affect new attacks. Held notes keep their onset tuning.");
-    if state.runtime.learn_active {
-        ui.colored_label(theme::armed(), "Learn is suspended in Lattice Map.");
-    }
-    ui.checkbox(&mut state.appearance.view.show_map_indicators, "Show map indicators")
-        .on_hover_text(
-            "Show the selected map's assignment rings and MIDI note labels on the lattice. This \
-             does not change the map or its tuning.",
+    section(ui, "Note retuning", |ui| {
+        let mut mode = view.playback.engine;
+        let before = mode;
+        crate::widgets::choice_buttons(
+            ui,
+            "retuning engine",
+            &mut mode,
+            &[
+                (
+                    TuningEngine::Off,
+                    "Pass through",
+                    "Leave incoming note pitches unchanged. Lattice display tuning still applies.",
+                ),
+                (
+                    TuningEngine::Adaptive,
+                    "Adaptive",
+                    "Choose tuning for new notes from the musical context.",
+                ),
+                (
+                    TuningEngine::LatticeMap,
+                    "Lattice Map",
+                    "Tune new notes using the selected saved lattice map.",
+                ),
+            ],
         );
-    let selected = view.playback.selected;
-    let name = view
-        .names
-        .iter()
-        .find(|(id, _)| *id == selected)
-        .map(|(_, name)| &**name)
-        .unwrap_or("unavailable");
-    crate::widgets::selected_combo(
-        ui,
-        egui::ComboBox::from_id_salt("saved-lattice-map")
-            .selected_text(format!("{} · {name}", selected + 1)),
-        |ui| {
-            for (id, name) in view.names.iter() {
-                if ui.selectable_label(selected == *id, format!("{} · {name}", id + 1)).clicked() {
-                    params.edit_lattice_map(MapEdit::Select(*id));
+        if mode != before {
+            params.edit_lattice_map(MapEdit::Engine(mode));
+        }
+        if view.pending {
+            ui.weak("Map state pending audio adoption");
+        }
+        if mode != TuningEngine::LatticeMap {
+            return mode;
+        }
+        ui.weak("Map changes affect new attacks. Held notes keep their onset tuning.");
+        if state.runtime.learn_active {
+            ui.colored_label(theme::armed(), "Learn is suspended in Lattice Map.");
+        }
+        ui.checkbox(&mut state.appearance.view.show_map_indicators, "Show map indicators")
+            .on_hover_text(
+                "Show the selected map's assignment rings and MIDI note labels on the lattice. This \
+                 does not change the map or its tuning.",
+            );
+        let selected = view.playback.selected;
+        let name = view
+            .names
+            .iter()
+            .find(|(id, _)| *id == selected)
+            .map(|(_, name)| &**name)
+            .unwrap_or("unavailable");
+        crate::widgets::selected_combo(
+            ui,
+            egui::ComboBox::from_id_salt("saved-lattice-map")
+                .selected_text(format!("{} · {name}", selected + 1)),
+            |ui| {
+                for (id, name) in view.names.iter() {
+                    if ui.selectable_label(selected == *id, format!("{} · {name}", id + 1)).clicked() {
+                        params.edit_lattice_map(MapEdit::Select(*id));
+                    }
                 }
+            },
+        );
+        if view.playback.map.is_none() {
+            ui.colored_label(theme::armed(), "Map unavailable: new attacks pass through.");
+        }
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Audition working copy").clicked() {
+                params.edit_lattice_map(MapEdit::Audition);
             }
-        },
-    );
-    if view.playback.map.is_none() {
-        ui.colored_label(theme::armed(), "Map unavailable: new attacks pass through.");
-    }
-    ui.horizontal_wrapped(|ui| {
-        if ui.button("Audition working copy").clicked() {
-            params.edit_lattice_map(MapEdit::Audition);
-        }
-        if ui
-            .add_enabled(view.playback.audition, egui::Button::new("Return to arrangement"))
-            .clicked()
-        {
-            params.edit_lattice_map(MapEdit::Return);
-        }
-    });
-    ui.weak("Automate Fine for single steps and Coarse for steps of 10. Their ranges stay fixed; the two lanes add together.");
-    let mut fine = view.offsets.fine;
-    let mut extension = view.offsets.extension;
-    egui::Grid::new("map-offsets").show(ui, |ui| {
-        for heading in ["Axis", "Fine", "Coarse", "Total"] {
-            ui.weak(heading);
-        }
-        ui.end_row();
-        for (label, fine, extension, axis) in [
-            ("Fifths", &mut fine.threes, &mut extension.threes, MapAxis::Fifths),
-            ("Thirds", &mut fine.fives, &mut extension.fives, MapAxis::Thirds),
-            ("Harmonic sevenths", &mut fine.sevens, &mut extension.sevens, MapAxis::Sevenths),
-        ] {
-            ui.label(label);
-            for (lane, value, scale) in [
-                (MapOffsetLane::Fine, &mut *fine, 1),
-                (MapOffsetLane::Extension, &mut *extension, EXTENSION_STEP),
-            ] {
-                let response = ui.add(
-                    egui::DragValue::new(value)
-                        .range(-OFFSET_LIMIT..=OFFSET_LIMIT)
-                        .speed(0.1)
-                        .custom_formatter(move |value, _| {
-                            format!("{:.0}", value * f64::from(scale))
-                        })
-                        .custom_parser(move |text| {
-                            let value: i32 = text.trim().parse().ok()?;
-                            (value % scale == 0).then_some(f64::from(value / scale))
-                        }),
-                );
-                let one_shot =
-                    response.changed() && !response.dragged() && !response.drag_stopped();
-                if response.drag_started() || one_shot {
-                    params.edit_lattice_map(MapEdit::BeginOffset(axis, lane));
-                }
-                if response.changed() {
-                    params.edit_lattice_map(MapEdit::Offset(axis, lane, *value));
-                }
-                if response.drag_stopped() || one_shot {
-                    params.edit_lattice_map(MapEdit::EndOffset(axis, lane));
-                }
+            if ui
+                .add_enabled(view.playback.audition, egui::Button::new("Return to arrangement"))
+                .clicked()
+            {
+                params.edit_lattice_map(MapEdit::Return);
             }
-            ui.label((*fine + EXTENSION_STEP * *extension).to_string());
+        });
+        ui.weak("Automate Fine for single steps and Coarse for steps of 10. Their ranges stay fixed; the two lanes add together.");
+        let mut fine = view.offsets.fine;
+        let mut extension = view.offsets.extension;
+        egui::Grid::new("map-offsets").show(ui, |ui| {
+            for heading in ["Axis", "Fine", "Coarse", "Total"] {
+                ui.weak(heading);
+            }
             ui.end_row();
-        }
-    });
-    if view.playback.audition {
-        ui.colored_label(
-            theme::armed(),
-            "Audition shape · Map selection paused; offset automation remains live",
-        );
-        let mut editing = view.edit_shape;
-        if ui.checkbox(&mut editing, "Edit shape · click destination on lattice").changed() {
-            params.edit_lattice_map(MapEdit::EditShape(editing));
-        }
-        if ui.add_enabled(view.can_undo, egui::Button::new("Undo map edit")).clicked() {
-            params.edit_lattice_map(MapEdit::Undo);
-        }
-        let key = ui.id().with("capture-map-name");
-        let mut name =
-            ui.data(|data| data.get_temp::<String>(key)).unwrap_or_else(|| "Passage".into());
-        ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut name).desired_width(140.0));
-            if ui.add_enabled(!view.full, egui::Button::new("Capture new map")).clicked() {
-                params.edit_lattice_map(MapEdit::Capture(name.clone()));
+            for (label, fine, extension, axis) in [
+                ("Fifths", &mut fine.threes, &mut extension.threes, MapAxis::Fifths),
+                ("Thirds", &mut fine.fives, &mut extension.fives, MapAxis::Thirds),
+                ("Harmonic sevenths", &mut fine.sevens, &mut extension.sevens, MapAxis::Sevenths),
+            ] {
+                ui.label(label);
+                for (lane, value, scale) in [
+                    (MapOffsetLane::Fine, &mut *fine, 1),
+                    (MapOffsetLane::Extension, &mut *extension, EXTENSION_STEP),
+                ] {
+                    let response = ui.add(
+                        egui::DragValue::new(value)
+                            .range(-OFFSET_LIMIT..=OFFSET_LIMIT)
+                            .speed(0.1)
+                            .custom_formatter(move |value, _| {
+                                format!("{:.0}", value * f64::from(scale))
+                            })
+                            .custom_parser(move |text| {
+                                let value: i32 = text.trim().parse().ok()?;
+                                (value % scale == 0).then_some(f64::from(value / scale))
+                            }),
+                    );
+                    let one_shot =
+                        response.changed() && !response.dragged() && !response.drag_stopped();
+                    if response.drag_started() || one_shot {
+                        params.edit_lattice_map(MapEdit::BeginOffset(axis, lane));
+                    }
+                    if response.changed() {
+                        params.edit_lattice_map(MapEdit::Offset(axis, lane, *value));
+                    }
+                    if response.drag_stopped() || one_shot {
+                        params.edit_lattice_map(MapEdit::EndOffset(axis, lane));
+                    }
+                }
+                ui.label((*fine + EXTENSION_STEP * *extension).to_string());
+                ui.end_row();
             }
         });
-        ui.data_mut(|data| data.insert_temp(key, name));
-        ui.weak("Capture saves shape only. Map selection leaves the three offsets unchanged.");
-        if view.full {
-            ui.colored_label(theme::armed(), "All 128 stable map identities have been used.");
-        }
-    }
-    egui::CollapsingHeader::new("Manage selected saved map").show(ui, |ui| {
-        let key = ui.id().with(("rename-map", selected));
-        let mut renamed = ui.data(|data| data.get_temp::<String>(key)).unwrap_or_else(|| name.into());
-        ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut renamed).desired_width(140.0));
-            if ui.button("Rename").clicked() { params.edit_lattice_map(MapEdit::Rename(selected, renamed.clone())); }
-        });
-        ui.data_mut(|data| data.insert_temp(key, renamed));
-        ui.horizontal(|ui| {
-            if ui.button("Move earlier in list").clicked() { params.edit_lattice_map(MapEdit::MoveEarlier(selected)); }
-            if ui.button("Delete saved map").on_hover_text("Automation for this identity will pass through without correction. The identity is never reused.").clicked() { params.edit_lattice_map(MapEdit::Delete(selected)); }
-        });
-    });
-    egui::CollapsingHeader::new("Assignments and sounding intervals").show(ui, |ui| {
-        if let Some(map) = view.playback.map {
-            for (midi, name) in MIDI_LABELS.iter().enumerate() {
-                let p = map.node(midi as i64);
-                ui.monospace(format!(
-                    "{name:2} · {:+.2}¢ · ({}, {}, {})",
-                    map.correction(midi as i64, state.runtime.tuning) as f64 / 1e6,
-                    p.threes,
-                    p.fives,
-                    p.sevens
-                ));
+        if view.playback.audition {
+            ui.colored_label(
+                theme::armed(),
+                "Audition shape · Map selection paused; offset automation remains live",
+            );
+            let mut editing = view.edit_shape;
+            if ui.checkbox(&mut editing, "Edit shape · click destination on lattice").changed() {
+                params.edit_lattice_map(MapEdit::EditShape(editing));
+            }
+            if ui.add_enabled(view.can_undo, egui::Button::new("Undo map edit")).clicked() {
+                params.edit_lattice_map(MapEdit::Undo);
+            }
+            let key = ui.id().with("capture-map-name");
+            let mut name =
+                ui.data(|data| data.get_temp::<String>(key)).unwrap_or_else(|| "Passage".into());
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut name).desired_width(140.0));
+                if ui.add_enabled(!view.full, egui::Button::new("Capture new map")).clicked() {
+                    params.edit_lattice_map(MapEdit::Capture(name.clone()));
+                }
+            });
+            ui.data_mut(|data| data.insert_temp(key, name));
+            ui.weak("Capture saves shape only. Map selection leaves the three offsets unchanged.");
+            if view.full {
+                ui.colored_label(theme::armed(), "All 128 stable map identities have been used.");
             }
         }
-        let mut voices: Vec<_> = state
-            .runtime
-            .tracker
-            .voices()
-            .filter(|v| v.state == harmonigraph_core::VoiceState::Held)
-            .collect();
-        voices.sort_by(|a, b| a.pitch.total_cmp(&b.pitch));
-        if let Some(lowest) = voices.first() {
-            for voice in &voices[1..] {
-                ui.label(format!(
-                    "{}–{} · {:.2}¢",
-                    MIDI_LABELS[lowest.note as usize % 12],
-                    MIDI_LABELS[voice.note as usize % 12],
-                    (voice.pitch - lowest.pitch) * 100.0
-                ));
+        egui::CollapsingHeader::new("Manage selected saved map").show(ui, |ui| {
+            let key = ui.id().with(("rename-map", selected));
+            let mut renamed = ui.data(|data| data.get_temp::<String>(key)).unwrap_or_else(|| name.into());
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut renamed).desired_width(140.0));
+                if ui.button("Rename").clicked() { params.edit_lattice_map(MapEdit::Rename(selected, renamed.clone())); }
+            });
+            ui.data_mut(|data| data.insert_temp(key, renamed));
+            ui.horizontal(|ui| {
+                if ui.button("Move earlier in list").clicked() { params.edit_lattice_map(MapEdit::MoveEarlier(selected)); }
+                if ui.button("Delete saved map").on_hover_text("Automation for this identity will pass through without correction. The identity is never reused.").clicked() { params.edit_lattice_map(MapEdit::Delete(selected)); }
+            });
+        });
+        egui::CollapsingHeader::new("Assignments and sounding intervals").show(ui, |ui| {
+            if let Some(map) = view.playback.map {
+                for (midi, name) in MIDI_LABELS.iter().enumerate() {
+                    let p = map.node(midi as i64);
+                    ui.monospace(format!(
+                        "{name:2} · {:+.2}¢ · ({}, {}, {})",
+                        map.correction(midi as i64, state.runtime.tuning) as f64 / 1e6,
+                        p.threes,
+                        p.fives,
+                        p.sevens
+                    ));
+                }
             }
-        }
-    });
-    mode
+            let mut voices: Vec<_> = state
+                .runtime
+                .tracker
+                .voices()
+                .filter(|v| v.state == harmonigraph_core::VoiceState::Held)
+                .collect();
+            voices.sort_by(|a, b| a.pitch.total_cmp(&b.pitch));
+            if let Some(lowest) = voices.first() {
+                for voice in &voices[1..] {
+                    ui.label(format!(
+                        "{}–{} · {:.2}¢",
+                        MIDI_LABELS[lowest.note as usize % 12],
+                        MIDI_LABELS[voice.note as usize % 12],
+                        (voice.pitch - lowest.pitch) * 100.0
+                    ));
+                }
+            }
+        });
+        mode
+    })
+    // A folded section changes nothing, so the engine stands as it was.
+    .unwrap_or(view.playback.engine)
 }

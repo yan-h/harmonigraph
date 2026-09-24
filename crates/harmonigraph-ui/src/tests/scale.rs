@@ -12,10 +12,10 @@ const PANE_WIDTH: f32 = 400.0;
 /// as the shapes it emitted. The same nesting as
 /// [`settings_pane_at_width`] — the dock's clip outside the pane's content box
 /// — at a fixed width, because here it is the scale that varies.
-fn settings_pane_at_scale(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::ClippedShape> {
+fn settings_pane_at_scale(pane: panes::Tab, scale: f32) -> Vec<egui::epaint::ClippedShape> {
     let mut state = fresh();
     state.workspace.interaction.ui_scale = scale;
-    let tab = pane.install(&mut state);
+    let tab = pane;
     let ctx = super::probe::themed_scaled(scale);
     tab_body_on(&ctx, &mut state, tab, PANE_WIDTH, PANE_HEIGHT, 0.0).shapes
 }
@@ -47,11 +47,7 @@ fn tallest_text(shapes: &[egui::epaint::ClippedShape]) -> f32 {
 /// control.
 #[test]
 fn the_ui_scale_shrinks_the_panel_chrome() {
-    for pane in [
-        SettingsPane::Tab(panes::Tab::Tuning),
-        SettingsPane::Page(DisplayPage::System),
-        SettingsPane::Page(DisplayPage::Lattice),
-    ] {
+    for pane in [panes::Tab::Tuning, panes::Tab::System, panes::Tab::LatticeSettings] {
         let (full, small) = (settings_pane_at_scale(pane, 1.0), settings_pane_at_scale(pane, 0.7));
 
         let (tall, short) = (tallest_text(&full), tallest_text(&small));
@@ -353,13 +349,11 @@ fn every_settings_row_is_one_row_high() {
 #[test]
 fn every_bar_has_its_declared_height() {
     for pane in [
-        SettingsPane::Tab(panes::Tab::Tuning),
-        SettingsPane::Page(DisplayPage::Colors),
-        SettingsPane::Page(DisplayPage::Lattice),
-        SettingsPane::Page(DisplayPage::Analyzer),
-        SettingsPane::Page(DisplayPage::Spectrogram),
-        SettingsPane::Page(DisplayPage::System),
-        SettingsPane::Page(DisplayPage::Lighting),
+        panes::Tab::Tuning,
+        panes::Tab::Colors,
+        panes::Tab::LatticeSettings,
+        panes::Tab::AnalyzerSettings,
+        panes::Tab::System,
     ] {
         for step in 0..=16u8 {
             let scale = 0.7 + 0.05 * f32::from(step);

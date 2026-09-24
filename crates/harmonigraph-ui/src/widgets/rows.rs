@@ -217,7 +217,9 @@ pub(crate) fn preset_row(
             add(ui, false);
         });
     } else {
-        ui.menu_button(format!("{name}…"), |ui| add(ui, true));
+        egui::containers::menu::MenuButton::new(format!("{name}…"))
+            .config(egui::containers::menu::MenuConfig::new().style(super::menu_style(ui.ctx())))
+            .ui(ui, |ui| add(ui, true));
     }
 }
 
@@ -314,13 +316,15 @@ fn choice_menu<T: Copy + PartialEq>(
 
 /// A closed value dropdown represents the selected choice just like a selected
 /// button. Restore ordinary widget colors inside its popup so the other choices
-/// and action menus retain their own states.
+/// and action menus retain their own states, and give the popup the look every
+/// other menu wears.
 pub(crate) fn selected_combo<R>(
     ui: &mut Ui,
     combo: egui::ComboBox,
     contents: impl FnOnce(&mut Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
     let original = ui.visuals().widgets.clone();
+    let menu = super::menu_style(ui.ctx());
     ui.scope(|ui| {
         let selection = ui.visuals().selection;
         let widgets = &mut ui.visuals_mut().widgets;
@@ -338,6 +342,7 @@ pub(crate) fn selected_combo<R>(
         combo
             .popup_style(egui::style::StyleModifier::from(move |style: &mut egui::Style| {
                 style.visuals.widgets = original.clone();
+                menu.apply(style);
             }))
             .show_ui(ui, contents)
     })

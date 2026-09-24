@@ -12,7 +12,7 @@ fn opening_analyzer_settings_does_not_change_loaded_values() {
     assert!(state.load_persist(&state.save_persist()));
     assert_eq!(state.picture.appearance.spectrum.tilt, -1.5);
     let before = ron::to_string(&state.picture.appearance.spectrum).unwrap();
-    let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
+    let tab = panes::Tab::AnalyzerSettings;
     state.workspace.layout.select(tab);
     let mut harness = DockHarness::at(egui::vec2(1000.0, 1600.0));
     let output = harness.frame(&mut state, vec![]);
@@ -33,12 +33,11 @@ fn opening_analyzer_settings_does_not_change_loaded_values() {
 /// out of the clip rect and the custom bars paint past it, so every
 /// position-of-the-ink metric reports movement that isn't there (and misses
 /// movement that is). The y of a string drawn in both frames cannot lie.
-fn wheel_over_settings_pane(pane: SettingsPane, screen_h: f32) -> f32 {
+fn wheel_over_settings_pane(pane: panes::Tab, screen_h: f32) -> f32 {
     let mut state = fresh();
     // The settings leaf opens on Tuning; every other settings pane is a tab
-    // behind it (a Page is the Display tab with that page selected).
-    let tab = pane.install(&mut state);
-    state.workspace.layout.select(tab);
+    // behind it.
+    state.workspace.layout.select(pane);
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
     // The top-right leaf (right of the 0.72 split, above the 0.55 one), from
     // under its tab bar down. Only shapes clipped to this are the pane's.
@@ -89,8 +88,6 @@ fn wheel_over_settings_pane(pane: SettingsPane, screen_h: f32) -> f32 {
 /// the pane. All of them reach the wheel through the `ScrollArea` the workspace
 /// wraps each tab body in, which is what leaves the bar the pane's right margin
 /// to stand in (see [`nothing_is_drawn_under_a_settings_pane_scroll_bar`]).
-/// Display is swept once per page, each selected in turn: a page's content plus
-/// the picker row over it is what overflows.
 ///
 /// The two readout panes build an area of their own and are not swept here: the
 /// Console sticks to the bottom, where a wheel DOWN is a no-op, so it answers
@@ -101,14 +98,12 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
     // A short window, so that every one of them overflows — including the
     // System page, the shortest list of the set.
     for pane in [
-        SettingsPane::Tab(panes::Tab::Tuning),
-        SettingsPane::Page(DisplayPage::Colors),
-        SettingsPane::Page(DisplayPage::Lattice),
-        SettingsPane::Page(DisplayPage::Analyzer),
-        SettingsPane::Page(DisplayPage::Spectrogram),
-        SettingsPane::Page(DisplayPage::Lighting),
-        SettingsPane::Page(DisplayPage::System),
-        SettingsPane::Tab(panes::Tab::Video),
+        panes::Tab::Tuning,
+        panes::Tab::Colors,
+        panes::Tab::LatticeSettings,
+        panes::Tab::AnalyzerSettings,
+        panes::Tab::System,
+        panes::Tab::Video,
     ] {
         let moved = wheel_over_settings_pane(pane, 200.0);
         assert!(moved < -8.0, "{pane:?} did not scroll to the wheel (content moved {moved})");
@@ -139,16 +134,20 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
 #[test]
 fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     let shapes: Vec<egui::Shape> = settings_pane_at_width(
-        SettingsPane::Page(DisplayPage::Lattice),
+        panes::Tab::LatticeSettings,
         320.0,
         harmonigraph_scene::Projection::default(),
     )
     .into_iter()
     .map(|cs| cs.shape)
     .collect();
+    // The one RISING preview: the glow's and the shadows' falloffs on the same
+    // page all descend.
     let paths = crate::widgets::curve_paths(&shapes);
-    assert_eq!(paths.len(), 1, "the Lattice page drew {} curve previews", paths.len());
-    let points = &paths[0];
+    let rising: Vec<_> =
+        paths.iter().filter(|path| path.first().unwrap().y > path.last().unwrap().y).collect();
+    assert_eq!(rising.len(), 1, "the Lattice page drew {} rising curve previews", rising.len());
+    let points = rising[0];
     assert!(points.len() > 8, "the Fade curve bar drew {} preview points", points.len());
 
     // A unit-length arrival, which is the whole curve: the shape lives in the
@@ -188,7 +187,7 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
 #[test]
 fn the_glow_curve_bar_draws_the_curve_the_scene_receives() {
     let shapes: Vec<egui::Shape> = settings_pane_at_width(
-        SettingsPane::Page(DisplayPage::Lighting),
+        panes::Tab::LatticeSettings,
         320.0,
         harmonigraph_scene::Projection::default(),
     )
@@ -198,17 +197,18 @@ fn the_glow_curve_bar_draws_the_curve_the_scene_receives() {
     let paths = crate::widgets::curve_paths(&shapes);
     let mut descending: Vec<&Vec<egui::Pos2>> =
         paths.iter().filter(|path| path.first().unwrap().y < path.last().unwrap().y).collect();
-    // The glow's and the enabled Distance falloffs. Disabled Gaussian bars
-    // are dimmed out of curve_paths' identifying color. Count rather than
-    // silently selecting past an unexpected curve.
+    // The glow's and the enabled Distance falloffs of the lattice's own two
+    // shadow groups. Disabled Gaussian bars are dimmed out of curve_paths'
+    // identifying color. Count rather than silently selecting past an
+    // unexpected curve.
+    let shadow = harmonigraph_scene::ShadowSettings::default();
     assert_eq!(
         descending.len(),
-        1 + harmonigraph_scene::ShadowSettings::default()
-            .groups()
+        1 + [shadow.lattice_geometry, shadow.lattice_text]
             .iter()
             .filter(|style| style.kernel.is_distance())
             .count(),
-        "the Lighting page drew {} descending curves",
+        "the Lattice page drew {} descending curves",
         descending.len()
     );
     // The topmost is the glow's: its section stands above the Shadows on the
@@ -420,7 +420,7 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
 #[test]
 fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
     for width in [400.0f32, 240.0, 160.0, 120.0, 100.0, 80.0] {
-        for pane in SETTINGS_PANES {
+        for &pane in SETTINGS_PANES {
             for &projection in projections_for(pane) {
                 let widths = bar_track_widths(&settings_pane_at_width(pane, width, projection));
                 // One bar per gradient is deliberately shorter: the spectrum
@@ -452,7 +452,7 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
                          (all of {widths:?})"
                     );
                 }
-                let want = if pane == SettingsPane::Page(DisplayPage::Colors) { 2 } else { 0 };
+                let want = if pane == panes::Tab::Colors { 2 } else { 0 };
                 assert_eq!(
                     short, want,
                     "{pane:?}/{projection:?} at {width}pt drew {short} short bars, not {want} \
@@ -476,7 +476,7 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
     // every bar at once; a control coming, going or greying is not what it is
     // asking about.
     let bars = bar_track_widths(&settings_pane_at_width(
-        SettingsPane::Page(DisplayPage::Lattice),
+        panes::Tab::LatticeSettings,
         400.0,
         PROJECTIONS[0],
     ))
@@ -484,53 +484,37 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
     assert!(bars >= 12, "only found {bars} bar tracks on the Lattice page; has the paint changed?");
 }
 
-/// The page the picker holds is the body the tab draws, and it is the only body
-/// the tab draws.
+/// Each settings tab draws its own body, and only that body: a string only
+/// that tab draws is there, and each other tab's is not.
 ///
-/// Two halves, and both are load-bearing. A page wired to a neighbour's arm
-/// draws the wrong body under the right name, which nothing else here would
-/// notice: the sweeps ask each body for properties — a bar is the column's
-/// width, a bar is one row high, the pane scrolls — that hold whatever the body
-/// contains, so two pages could trade bodies with the suite green. And a match
-/// that fell through to drawing several would leave the picker looking like a
-/// scroll-to rather than a switch, which is exactly the arrangement pages
-/// replaced.
-///
-/// A text out of each BODY rather than the picker label over it. All four
-/// names are drawn whichever page is up — that is what the picker is — so they
-/// say nothing about which body was reached. Each needle is a string only its
-/// own page draws: "Name size" would be the natural one for the Lattice page
-/// and is not, the Analyzer's piano-roll group having a bar of that name too,
-/// nor would a bare "Live release", which the Glow section and the analyzer both
-/// draw. "Gap" is the Lattice page's own.
+/// A tab wired to a neighbour's arm draws the wrong body under the right name,
+/// which nothing else here would notice: the sweeps ask each body for
+/// properties — a bar is the column's width, a bar is one row high, the pane
+/// scrolls — that hold whatever the body contains, so two tabs could trade
+/// bodies with the suite green. The needles also pin where the old Lighting
+/// page's settings went: the lattice's glow with the Lattice, the ribbons'
+/// bloom with the Analyzer.
 #[test]
-fn the_picker_draws_the_page_it_holds_and_only_that_page() {
-    const CASES: [(DisplayPage, &str); 6] = [
-        (DisplayPage::Colors, "Pitch color range"),
-        (DisplayPage::Lattice, "Gap"),
-        (DisplayPage::Analyzer, "Spectrum level range"),
-        (DisplayPage::Spectrogram, "Texture mix"),
-        (DisplayPage::Lighting, "Lattice bloom"),
-        (DisplayPage::System, "Lattice resolution"),
+fn each_settings_tab_draws_its_own_body_and_only_that() {
+    const CASES: [(panes::Tab, &str); 4] = [
+        (panes::Tab::Colors, "Pitch color range"),
+        (panes::Tab::LatticeSettings, "Glow reach"),
+        (panes::Tab::AnalyzerSettings, "Ribbon bloom"),
+        (panes::Tab::System, "Lattice resolution"),
     ];
-    for (page, needle) in CASES {
+    for (tab, needle) in CASES {
         let mut state = fresh();
-        state.workspace.interaction.display_page = page;
-        let shapes = tab_body(&mut state, panes::Tab::Display, 400.0, PANE_HEIGHT).shapes;
+        let shapes = tab_body(&mut state, tab, 400.0, PANE_HEIGHT).shapes;
         let drawn = |text: &str| {
             shapes.iter().any(|cs| match &cs.shape {
                 egui::Shape::Text(t) => t.galley.text() == text,
                 _ => false,
             })
         };
-        assert!(drawn(needle), "{page:?} drew no {needle:?} — it is showing another page's body");
+        assert!(drawn(needle), "{tab:?} drew no {needle:?} — it is showing another tab's body");
         for (other, stranger) in CASES {
-            if other != page {
-                assert!(
-                    !drawn(stranger),
-                    "{page:?} drew {stranger:?}, which is {other:?}'s — the picker \
-                     is showing more than the page it holds",
-                );
+            if other != tab {
+                assert!(!drawn(stranger), "{tab:?} drew {stranger:?}, which is {other:?}'s");
             }
         }
     }
@@ -554,8 +538,7 @@ fn the_picker_draws_the_page_it_holds_and_only_that_page() {
 #[test]
 fn every_gradient_group_previews_itself_above_its_bars() {
     const WIDTH: f32 = 400.0;
-    let shapes =
-        settings_pane_at_width(SettingsPane::Page(DisplayPage::Colors), WIDTH, PROJECTIONS[0]);
+    let shapes = settings_pane_at_width(panes::Tab::Colors, WIDTH, PROJECTIONS[0]);
     // A preview is a full-column band of color: a spectrum's circle is the
     // track's width and a fade ramp is a row high, so the pair of measurements
     // tells all three apart.
@@ -632,8 +615,7 @@ fn every_gradient_group_previews_itself_above_its_bars() {
 #[test]
 fn the_render_bar_fills_to_the_share_of_frames_done() {
     const WIDTH: f32 = 400.0;
-    let shapes =
-        settings_pane_at_width(SettingsPane::Tab(panes::Tab::Video), WIDTH, PROJECTIONS[0]);
+    let shapes = settings_pane_at_width(panes::Tab::Video, WIDTH, PROJECTIONS[0]);
     let share = FIXTURE_RENDER.fraction().expect("the fixture render knows its total");
     // A polygon rather than a rect: a fill is the part of its track left of
     // the frontier (`filled_part`), so what is measured is the reach of the
@@ -740,7 +722,8 @@ fn no_settings_pane_overruns_a_narrow_column() {
         // box on each side.
         let body_right = edge + crate::theme::PANE_INNER_MARGIN;
         let panes = SETTINGS_PANES
-            .into_iter()
+            .iter()
+            .copied()
             .flat_map(|pane| projections_for(pane).iter().map(move |&p| (pane, p)));
         for (pane, projection) in panes {
             let shapes = settings_pane_at_width(pane, width, projection);
@@ -865,12 +848,12 @@ enum Grab {
 /// told along the way.
 fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>) {
     let mut state = fresh();
-    // The Analyzer settings, on the Display tab's Analyzer page.
-    let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
+    // The Analyzer settings.
+    let tab = panes::Tab::AnalyzerSettings;
     state.workspace.layout.select(tab);
     // Tall enough that the Analyzer's first bars are inside the settings leaf:
-    // the page opens under the picker row, and a bar this fixture presses on
-    // outside the leaf is a press on the pane below.
+    // a bar this fixture presses on outside the leaf is a press on the pane
+    // below.
     let screen_h = 360.0;
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
     let body = egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h));
@@ -973,10 +956,10 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
 #[test]
 fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     let mut state = fresh();
-    // The Analyzer settings on the Display tab.
-    let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
+    // The Analyzer settings.
+    let tab = panes::Tab::AnalyzerSettings;
     state.workspace.layout.select(tab);
-    // Tall enough that Release is actually on screen below the picker,
+    // Tall enough that Release is actually on screen below the view,
     // analysis and level-mapping controls; a clipped bar cannot start this drag.
     let screen_h = 1800.0;
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
@@ -1047,7 +1030,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
 /// preview shrank towards a sliver instead of the controls staying reachable.
 #[test]
 fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
-    let moved = wheel_over_settings_pane(SettingsPane::Tab(panes::Tab::Video), 330.0);
+    let moved = wheel_over_settings_pane(panes::Tab::Video, 330.0);
     assert!(moved < -8.0, "the Video pane did not scroll to the wheel (content moved {moved})");
 }
 
@@ -1065,8 +1048,7 @@ fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
 /// that every row has to make room for.
 #[test]
 fn the_commas_section_lays_its_rows_out_as_a_table() {
-    let shapes =
-        settings_pane_at_width(SettingsPane::Tab(panes::Tab::Tuning), 423.0, PROJECTIONS[0]);
+    let shapes = settings_pane_at_width(panes::Tab::Tuning, 423.0, PROJECTIONS[0]);
     let find = |needle: &str| {
         shapes.iter().find_map(|cs| match &cs.shape {
             egui::Shape::Text(t) if t.galley.text() == needle => Some(t.pos),
@@ -1152,11 +1134,11 @@ const SCALES: [f32; 5] = [0.7, 0.9, 1.0, 1.1, 1.5];
 /// Both readout panes list what has come in, and an empty one has nothing to
 /// scroll, so the fixture gives the Console lines and the Notes pane voices.
 fn scrolling_settings_pane(
-    pane: SettingsPane,
+    pane: panes::Tab,
     scale: f32,
 ) -> (Vec<egui::epaint::ClippedShape>, egui::Rect) {
     let mut state = fresh();
-    let tab = pane.install(&mut state);
+    let tab = pane;
     state.workspace.layout = workspace::Layout::solo(tab);
     // The same shell [`settings_pane_at_width`] draws for, so the Video pane
     // brings its record row and its progress bar — the two controls
@@ -1232,7 +1214,7 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
             bar <= margin + 0.01,
             "at {scale} a {bar}pt bar does not fit the {margin}pt gutter"
         );
-        for pane in SETTINGS_PANES {
+        for &pane in SETTINGS_PANES {
             let (shapes, body) = scrolling_settings_pane(pane, scale);
             // The pane's own shapes are the ones clipped to the tab BODY. The dock's
             // chrome — the leaf fill, the body border, the tab bar and its rule — is
@@ -1274,7 +1256,7 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
             // scrolls, whose area IS the body. The Console scrolls in an area of
             // its own — the Clear row above it must not scroll — so its lane
             // stands one content margin further in.
-            let own_area = matches!(pane, SettingsPane::Tab(panes::Tab::Console));
+            let own_area = matches!(pane, panes::Tab::Console);
             let edge = body.right() - if own_area { margin } else { 0.0 };
             assert!(
                 (right - edge).abs() < 0.5,
@@ -1425,7 +1407,7 @@ fn audio_section_shapes(
     // look and free to grow, and a ring refused for room greys every bar that
     // sizes it, which reads here as a gate that never opens.
     state.picture.appearance.view.ring_inner = 0.3;
-    let tab = SettingsPane::Page(DisplayPage::Lattice).install(&mut state);
+    let tab = panes::Tab::LatticeSettings;
     tab_body(&mut state, tab, 320.0, PANE_HEIGHT).shapes
 }
 
@@ -1476,7 +1458,7 @@ fn history_stays_editable_without_midi_ribbons() {
         let mut state = fresh();
         state.picture.appearance.spectrum.show_roll = show_roll;
         state.picture.appearance.spectrum.show_spectrogram = true;
-        let tab = SettingsPane::Page(DisplayPage::Spectrogram).install(&mut state);
+        let tab = panes::Tab::AnalyzerSettings;
         let shapes = tab_body(&mut state, tab, 420.0, PANE_HEIGHT).shapes;
         ["History duration", "Ribbon width", "Ribbon opacity", "Extension release"]
             .map(|name| track_color(&shapes, one_text_y(&shapes, name)))
@@ -1612,13 +1594,16 @@ fn audio_ring_settings_hide_with_the_layer() {
 fn shadow_falloff_only_appears_for_contour_shadows() {
     use harmonigraph_scene::ShadowKernel;
 
+    // Both pages that hold shadow groups, two groups each.
     let shapes = |kernel| {
         let mut state = fresh();
         for style in state.picture.appearance.view.shadow.groups_mut() {
             style.kernel = kernel;
         }
-        let tab = SettingsPane::Page(DisplayPage::Lighting).install(&mut state);
-        tab_body(&mut state, tab, 420.0, PANE_HEIGHT).shapes
+        [panes::Tab::LatticeSettings, panes::Tab::AnalyzerSettings]
+            .into_iter()
+            .flat_map(|tab| tab_body(&mut state, tab, 420.0, PANE_HEIGHT).shapes)
+            .collect::<Vec<_>>()
     };
 
     let blurred = shapes(ShadowKernel::Gaussian);
@@ -1632,4 +1617,41 @@ fn shadow_falloff_only_appears_for_contour_shadows() {
         "a Contour shadow group has no falloff control",
     );
     assert_eq!(text_ys(&contour, "Shadow width").len(), 4, "Contour lost common shadow controls",);
+}
+
+/// No settings tab draws two sections under one heading. A fold is saved as
+/// "Tab/Heading", so two headings of one name on one tab would fold together.
+///
+/// Headings are told from the rest of the text by their face, and the window is
+/// tall enough that every tab's whole list is laid out at once. Sections a
+/// fresh state hides (Note retuning, and Record outside a host) are not seen.
+#[test]
+fn no_settings_tab_repeats_a_section_heading() {
+    for &tab in workspace::Section::Settings.tabs() {
+        let mut state = fresh();
+        state.workspace.layout.select(tab);
+        let mut window = DockHarness::at(egui::vec2(1000.0, 8000.0));
+        window.settle(&mut state);
+        let out = window.frame(&mut state, vec![]);
+        let heading = egui::TextStyle::Heading.resolve(&window.ctx.global_style());
+        let mut titles: Vec<String> = out
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(text)
+                    if text.galley.job.sections.iter().all(|s| s.format.font_id == heading) =>
+                {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        let drawn = titles.len();
+        titles.sort();
+        titles.dedup();
+        assert_eq!(titles.len(), drawn, "{tab:?} repeats a heading: {titles:?}");
+        if !matches!(tab, panes::Tab::Console) {
+            assert!(drawn >= 2, "{tab:?} drew {drawn} headings; is the face still Heading?");
+        }
+    }
 }

@@ -8,7 +8,7 @@
 //! ordering/minimum spans and gestures are outside this guard, as are renderer
 //! clamps and semantic unit mappings.
 
-use super::harness::{DisplayPage, SettingsPane, SETTINGS_PANES};
+use super::harness::SETTINGS_PANES;
 use super::probe::{fresh, themed};
 use crate::widgets::range_probe::collect;
 use crate::*;
@@ -45,7 +45,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     };
     let a = &mut saved.picture.appearance;
     macro_rules! poison { ($owner:expr; $($field:ident),+ $(,)?) => { $( $owner.$field = v; )+ }; }
-    poison!(a.view; render_scale, bloom_strength, sevens_size, label_scale,
+    poison!(a.view; render_scale, bloom_strength, spiral_bloom, sevens_size, label_scale,
         octave_center, octave_extra_size, octave_extra_blend, mark_delay, fade_shape,
         spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
         spectral_width, spectral_ring_range, spectral_ring_width, ring_gap,
@@ -206,7 +206,7 @@ fn backend(edge: Edge, meantone: bool, marvel: bool) -> Backend {
 
 #[derive(Clone, Copy, Debug)]
 struct Scenario {
-    pane: SettingsPane,
+    pane: panes::Tab,
     expanded: bool,
     projection: Projection,
     enabled: bool,
@@ -231,24 +231,27 @@ fn scenarios() -> Vec<Scenario> {
         visits: 0,
     };
     let mut cases = Vec::new();
-    for pane in SETTINGS_PANES {
+    for &pane in SETTINGS_PANES {
         let visits = match pane {
-            SettingsPane::Tab(panes::Tab::Tuning) => 7,
-            SettingsPane::Page(DisplayPage::Colors) => 2,
-            SettingsPane::Page(DisplayPage::Lattice) => 17,
-            SettingsPane::Page(DisplayPage::Analyzer) => 7,
-            SettingsPane::Page(DisplayPage::Spectrogram) => 18,
-            SettingsPane::Page(DisplayPage::Lighting) => 23,
-            SettingsPane::Page(DisplayPage::System) => 3,
-            SettingsPane::Tab(panes::Tab::Video | panes::Tab::Console) => 0,
+            panes::Tab::Tuning => 7,
+            panes::Tab::Colors => 2,
+            // The picture, then bloom, glow and its texture (14), then two
+            // shadow groups of two bars each.
+            panes::Tab::LatticeSettings => 17 + 14 + 4,
+            // Analyzer and spectrogram, the ribbons' bloom, the Spiral's bloom,
+            // two shadow groups.
+            panes::Tab::AnalyzerSettings => 7 + 18 + 1 + 1 + 4,
+            panes::Tab::System => 3,
+            panes::Tab::Video | panes::Tab::Console => 0,
             _ => panic!("add the new settings page's range scenario"),
         };
         cases.push(Scenario { pane, visits, ..base });
         // Exercise the conditional groups too: labels, fringe, marks, audio
-        // reading, sevens, roll/note names, glow and Contour shadow falloff.
+        // reading, sevens, roll/note names, glow and Contour shadow falloff
+        // (one bar in each of a page's two groups).
         let visits = match pane {
-            SettingsPane::Page(DisplayPage::Lattice) => visits + 6,
-            SettingsPane::Page(DisplayPage::Lighting) => visits + 4,
+            panes::Tab::LatticeSettings => visits + 6 + 2,
+            panes::Tab::AnalyzerSettings => visits + 2,
             _ => visits,
         };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
@@ -259,17 +262,17 @@ fn scenarios() -> Vec<Scenario> {
     // state selects the scales, so without this the five are drawn by no case
     // here at all.
     cases.push(Scenario {
-        pane: SettingsPane::Page(DisplayPage::Spectrogram),
+        pane: panes::Tab::AnalyzerSettings,
         wash: true,
-        visits: 20,
+        visits: 7 + 20 + 1 + 1 + 4,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
         cases.push(Scenario {
-            pane: SettingsPane::Page(DisplayPage::Lattice),
+            pane: panes::Tab::LatticeSettings,
             projection,
             enabled: true,
-            visits: 23,
+            visits: 23 + 14 + 6,
             ..base
         });
     }
@@ -310,7 +313,7 @@ fn check(edge: Edge) {
         }
         state.workspace.interaction.take.supported = scenario.enabled;
         state.workspace.interaction.take.last_ready = scenario.enabled;
-        let mut tab = scenario.pane.install(&mut state);
+        let mut tab = scenario.pane;
         let ctx = themed();
         // Observe the first load frame once, before any discarded egui pass
         // could mutate a value and make a later pass look normalized.
@@ -338,7 +341,7 @@ fn check(edge: Edge) {
         });
         assert_eq!(visits.len(), scenario.visits, "{edge:?} {scenario:?}: {visits:?}");
         let saw = |label: &str| visits.iter().any(|visit| visit.label == label);
-        if scenario.pane == SettingsPane::Page(DisplayPage::Lattice) {
+        if scenario.pane == panes::Tab::LatticeSettings {
             match scenario.projection {
                 Projection::Cabinet => {
                     assert!(saw("Depth angle") && saw("Depth step scale"));
@@ -350,15 +353,18 @@ fn check(edge: Edge) {
                 }
             }
         }
-        if scenario.pane == SettingsPane::Tab(panes::Tab::Tuning) {
+        if scenario.pane == panes::Tab::Tuning {
             assert!(saw("Pitch flexibility"));
             assert_eq!(saw("Fifth") && saw("Half-life"), scenario.expanded);
         }
-        if scenario.pane == SettingsPane::Page(DisplayPage::Lighting) {
-            for label in ["Lattice bloom", "Spectrogram bloom"] {
-                let bloom = visits.iter().find(|visit| visit.label == label).unwrap();
-                assert_eq!(bloom.range, 0.0..=2.0);
-            }
+        let blooms: &[&str] = match scenario.pane {
+            panes::Tab::LatticeSettings => &["Bloom"],
+            panes::Tab::AnalyzerSettings => &["Ribbon bloom", "Spiral bloom"],
+            _ => &[],
+        };
+        for &label in blooms {
+            let bloom = visits.iter().find(|visit| visit.label == label).unwrap();
+            assert_eq!(bloom.range, 0.0..=2.0);
             assert!(!saw("Bloom amount") && !saw("Ribbon glow"));
         }
         for visit in visits {

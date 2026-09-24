@@ -264,7 +264,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // meet with no chrome between them — clean for captures). The pane
     // separators keep their regular width, so the spacing between windows
     // matches framed mode. No tab bar also means no way to click back to
-    // the System page (which holds the checkbox) if it's hidden, so Tab
+    // the System tab (which holds the checkbox) if it's hidden, so Tab
     // works from anywhere. It toggles rather than only restoring, so the
     // chrome comes and goes on one key while a take is set up — the
     // checkbox is then just where the feature is documented.

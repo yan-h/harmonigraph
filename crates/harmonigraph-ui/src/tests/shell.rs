@@ -26,7 +26,7 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
 /// would share their body state — scrolling one pane scrolls the other.
 /// Variant-keyed ids are what leave a name free to be repeated, and the dock
 /// still trades on that freedom across surfaces: the Spectral pane wears
-/// "Analyzer", the same word as the Display page that holds its settings,
+/// "Analyzer", the same word as the settings tab that holds its knobs,
 /// because the display and its knobs are one feature.
 #[test]
 fn every_tab_has_its_own_id_whatever_its_title_says() {
@@ -35,7 +35,10 @@ fn every_tab_has_its_own_id_whatever_its_title_says() {
     let tabs = [
         panes::Tab::Lattice,
         panes::Tab::Tuning,
-        panes::Tab::Display,
+        panes::Tab::LatticeSettings,
+        panes::Tab::AnalyzerSettings,
+        panes::Tab::Colors,
+        panes::Tab::System,
         panes::Tab::Console,
         panes::Tab::Spectral,
         panes::Tab::Spiral,
@@ -51,9 +54,9 @@ fn every_tab_has_its_own_id_whatever_its_title_says() {
     // The sharing the variant-keyed id keeps safe is real, not hypothetical.
     assert_eq!(
         panes::tab_title(&panes::Tab::Spectral),
-        panes::display::DisplayPage::Analyzer.title(),
-        "the Spectral pane and the Display page holding its settings are \
-         meant to share the Analyzer name",
+        panes::tab_title(&panes::Tab::AnalyzerSettings),
+        "the Spectral pane and the tab holding its settings are meant to \
+         share the Analyzer name",
     );
 
     let ids: Vec<egui::Id> = tabs.iter().map(|&tab| viewer.id(&tab)).collect();
@@ -83,7 +86,7 @@ fn the_picture_panes_do_not_scroll() {
     // VERTICALLY only: a both-axes area gives the body unbounded width, and the
     // panes that fill the space then never report vertical overflow, so the
     // wheel can't scroll them. Horizontal off; vertical on.
-    for tab in [panes::Tab::Tuning, panes::Tab::Display, panes::Tab::Video] {
+    for &tab in workspace::Section::Settings.tabs() {
         assert_eq!(viewer.scroll_bars(&tab), [false, true], "{tab:?} cannot scroll vertically");
     }
 }

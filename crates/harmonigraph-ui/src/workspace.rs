@@ -5,7 +5,6 @@
 use egui::{pos2, vec2, Rect, Vec2};
 use serde::{Deserialize, Serialize};
 
-use crate::panes::display::DisplayPage;
 use crate::panes::{Tab, Viewer};
 use crate::theme;
 
@@ -26,12 +25,33 @@ pub(crate) enum Section {
 impl Section {
     const ALL: [Self; 3] = [Self::Lattice, Self::Analyzer, Self::Settings];
 
-    pub(crate) fn of(tab: Tab) -> Self {
-        match tab {
-            Tab::Lattice => Self::Lattice,
-            Tab::Spectral | Tab::Spiral => Self::Analyzer,
-            _ => Self::Settings,
+    /// The section's tabs, in strip order. The Settings tabs run from the
+    /// pictures' own settings to the editor's, so the ones a narrow column
+    /// folds into its overflow menu first are the ones visited least.
+    pub(crate) const fn tabs(self) -> &'static [Tab] {
+        match self {
+            Self::Lattice => &[Tab::Lattice],
+            Self::Analyzer => &[Tab::Spectral, Tab::Spiral],
+            Self::Settings => &[
+                Tab::Tuning,
+                Tab::LatticeSettings,
+                Tab::AnalyzerSettings,
+                Tab::Colors,
+                Tab::Video,
+                Tab::System,
+                Tab::Console,
+            ],
         }
+    }
+
+    /// The section whose strip lists `tab`. Read off [`Self::tabs`] rather
+    /// than matched a second time, so a new tab cannot be put on one strip and
+    /// filed under another section by a catch-all arm.
+    pub(crate) fn of(tab: Tab) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|section| section.tabs().contains(&tab))
+            .expect("every tab is on exactly one section's strip")
     }
 }
 
@@ -364,10 +384,9 @@ pub(crate) fn show(
     }
     layout.position = viewer.interaction.dock;
     let open = viewer.interaction.open_settings.take();
-    if let Some(page) = open.filter(|_| !repeated) {
-        layout.select(Tab::Display);
+    if let Some(tab) = open.filter(|_| !repeated) {
+        layout.select(tab);
         layout.folded[Section::Settings as usize] = false;
-        viewer.interaction.display_page = page;
     }
     dividers(ui, layout, runtime, &drawn, scale);
     let reset = std::mem::take(&mut viewer.interaction.reset_layout);
@@ -492,35 +511,13 @@ fn section_ui(
             if response.on_hover_text(format!("Collapse {title}")).clicked() {
                 layout.folded[index] = true;
             }
-            let tabs: &[Tab] = match section {
-                Section::Lattice => &[Tab::Lattice],
-                Section::Analyzer => &[Tab::Spectral, Tab::Spiral],
-                Section::Settings => &[Tab::Tuning, Tab::Display, Tab::Video, Tab::Console],
-            };
-            let options: Vec<_> =
-                tabs.iter().map(|&choice| (choice, crate::panes::tab_title(&choice), "")).collect();
-            let mut selected = tab;
-            let width = options
+            let options: Vec<_> = section
+                .tabs()
                 .iter()
-                .map(|(_, label, _)| crate::widgets::option_width(ui, label))
-                .sum::<f32>()
-                + ui.spacing().item_spacing.x * (options.len() - 1) as f32;
-            if section == Section::Settings && width > ui.available_width() {
-                crate::widgets::selected_combo(
-                    ui,
-                    egui::ComboBox::from_id_salt("section tabs")
-                        .selected_text(crate::panes::tab_title(&tab))
-                        .width(ui.available_width())
-                        .truncate(),
-                    |ui| {
-                        for &(choice, label, _) in &options {
-                            ui.selectable_value(&mut selected, choice, label);
-                        }
-                    },
-                );
-            } else {
-                crate::widgets::choice_buttons(ui, "section tabs", &mut selected, &options);
-            }
+                .map(|&choice| (choice, crate::panes::tab_title(&choice)))
+                .collect();
+            let mut selected = tab;
+            crate::widgets::tab_strip(ui, "section tabs", &mut selected, &options);
             if selected != tab {
                 layout.select(selected);
             }
@@ -555,7 +552,7 @@ fn section_ui(
 }
 
 /// A right-click anywhere on a picture section, header included, offers the
-/// Display pages that set it up. It links to those pages rather than holding
+/// settings page that sets it up. It links to those pages rather than holding
 /// controls of its own, so every setting keeps exactly one home.
 ///
 /// Read from raw input rather than from a response: the analyzer senses drag
@@ -563,21 +560,14 @@ fn section_ui(
 /// response over or under the picture could see it without taking its drags or
 /// its fold buttons' clicks. `rect_contains_pointer` still yields to a popup
 /// or overlay covering the section.
-fn settings_link(ui: &egui::Ui, rect: Rect, tab: Tab, open: &mut Option<DisplayPage>) {
-    let pages: &[(DisplayPage, &str)] = match tab {
-        Tab::Lattice => &[(DisplayPage::Lattice, "Lattice settings")],
-        Tab::Spectral => &[
-            (DisplayPage::Analyzer, "Analyzer settings"),
-            (DisplayPage::Spectrogram, "Spectrogram settings"),
-        ],
-        Tab::Spiral => &[(DisplayPage::Analyzer, "Analyzer settings")],
+fn settings_link(ui: &egui::Ui, rect: Rect, tab: Tab, open: &mut Option<Tab>) {
+    let pages: &[(Tab, &str)] = match tab {
+        Tab::Lattice => &[(Tab::LatticeSettings, "Lattice settings")],
+        Tab::Spectral | Tab::Spiral => &[(Tab::AnalyzerSettings, "Analyzer settings")],
         _ => return,
     };
     let clicked =
         ui.input(|input| input.pointer.secondary_clicked()) && ui.rect_contains_pointer(rect);
-    // The header's own gap between a button and the edge around it.
-    let scale = theme::ui_scale(ui.ctx());
-    let margin = ((theme::tab_bar_height(scale) - theme::row_height(scale)) * 0.5).round() as u8;
     egui::Popup::new(
         ui.id().with("settings link"),
         ui.ctx().clone(),
@@ -586,21 +576,7 @@ fn settings_link(ui: &egui::Ui, rect: Rect, tab: Tab, open: &mut Option<DisplayP
     )
     .kind(egui::PopupKind::Menu)
     .layout(egui::Layout::top_down_justified(egui::Align::Min))
-    // egui's menu look, but with the section tabs' button padding rather than
-    // its tighter one, the header's margin rather than its wider one, and no
-    // outline. The corners are concentric with the highlight's, so the margin
-    // holds its width around them too. Items touch: only one is ever
-    // highlighted, so a gap between them would only be blank space.
-    .style(move |style: &mut egui::Style| {
-        let padding = style.spacing.button_padding;
-        egui::containers::menu::menu_style(style);
-        style.spacing.button_padding = padding;
-        style.spacing.menu_margin = egui::Margin::same(margin as i8);
-        style.spacing.item_spacing.y = 0.0;
-        let inner = style.visuals.widgets.hovered.corner_radius.nw;
-        style.visuals.menu_corner_radius = egui::CornerRadius::same(inner.saturating_add(margin));
-        style.visuals.window_stroke = egui::Stroke::NONE;
-    })
+    .style(crate::widgets::menu_style(ui.ctx()))
     .gap(0.0)
     .open_memory(clicked.then_some(egui::SetOpenCommand::Bool(true)))
     // A right-click while this menu is already open moves it to the pointer.

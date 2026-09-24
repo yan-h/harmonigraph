@@ -106,6 +106,7 @@ fn poisoned_view() -> ViewConfig {
         show_perf_detail: base.show_perf_detail,
         render_scale: nan,
         bloom_strength: nan,
+        spiral_bloom: nan,
         glow_reach: nan,
         atmosphere: AtmosphereSettings {
             enabled: true,

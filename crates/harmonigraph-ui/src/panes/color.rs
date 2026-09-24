@@ -1,6 +1,6 @@
 //! MIDI pitch and audio-level gradients. Each table is shared by every pane
 //! that draws its source: MIDI notes use pitch; analyzed audio uses level.
-//! Bloom and shadows live on the Lighting page.
+//! Bloom and shadows live on each picture's own page.
 
 use super::section;
 use crate::params::{ParamBackend, ParamKey};
@@ -14,30 +14,32 @@ pub(super) fn color_pane(
     appearance: &mut AppearanceDocument,
     params: &dyn ParamBackend,
 ) {
-    ui.heading("MIDI note colors");
-    // The gradient above the range because it is the coarser of the two: it
-    // says what the colors ARE, the range says which pitches they are spread
-    // over. Both feed the one table every pitch-colored shape reads, so a
-    // change here repaints the discs, the octave glyphs, the trail and the
-    // piano roll together.
-    spectrum_group(ui, &mut appearance.view);
-    super::param_range_bar(
-        ui,
-        params,
-        (ParamKey::DarkestPitch, ParamKey::BrightestPitch),
-        0.0..=120.0,
-        crate::COLOR_RANGE_MIN_SPAN,
-        "Pitch color range",
-        super::pitch_readout,
-    )
-    .on_hover_text(
-        "Pitches assigned the first and last gradient colors. \
-                 Pitches outside this range keep the nearest end color. \
-                 Drag an end to resize, or the middle to shift both.",
-    );
-    section(ui, "Audio level colors");
-    ui.weak("Shared by the audio views. Lattice rings use Idle ring brightness and gray at the quiet end.");
-    spectrogram_gradient_group(ui, &mut appearance.spectrum);
+    section(ui, "MIDI note colors", |ui| {
+        // The gradient above the range because it is the coarser of the two: it
+        // says what the colors ARE, the range says which pitches they are spread
+        // over. Both feed the one table every pitch-colored shape reads, so a
+        // change here repaints the discs, the octave glyphs, the trail and the
+        // piano roll together.
+        spectrum_group(ui, &mut appearance.view);
+        super::param_range_bar(
+            ui,
+            params,
+            (ParamKey::DarkestPitch, ParamKey::BrightestPitch),
+            0.0..=120.0,
+            crate::COLOR_RANGE_MIN_SPAN,
+            "Pitch color range",
+            super::pitch_readout,
+        )
+        .on_hover_text(
+            "Pitches assigned the first and last gradient colors. \
+                     Pitches outside this range keep the nearest end color. \
+                     Drag an end to resize, or the middle to shift both.",
+        );
+    });
+    section(ui, "Audio level colors", |ui| {
+        ui.weak("Shared by the audio views. Lattice rings use Idle ring brightness and gray at the quiet end.");
+        spectrogram_gradient_group(ui, &mut appearance.spectrum);
+    });
 }
 
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
