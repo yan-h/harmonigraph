@@ -420,13 +420,13 @@ fn every_bar_has_its_declared_height() {
 fn a_chosen_skin_is_the_style_the_chrome_draws_with() {
     use harmonigraph_scene::skin::{skin_index, skins, DEFAULT_SKIN};
     let ctx = crate::tests::probe::themed();
-    let [r, g, b] = skins()[skin_index("tinta").unwrap()].skin.panel;
-    assert!(crate::theme::set_skin(&ctx, "tinta"));
+    let [r, g, b] = skins()[skin_index("original").unwrap()].skin.panel;
+    assert!(crate::theme::set_skin(&ctx, "original"));
     assert_eq!(
         ctx.style_of(egui::Theme::Dark).visuals.panel_fill,
         egui::Color32::from_rgb(r, g, b)
     );
-    assert!(!crate::theme::set_skin(&ctx, "tinta"), "an unchanged skin rebuilds nothing");
+    assert!(!crate::theme::set_skin(&ctx, "original"), "an unchanged skin rebuilds nothing");
     assert!(crate::theme::set_skin(&ctx, DEFAULT_SKIN));
     assert_eq!(ctx.style_of(egui::Theme::Dark).visuals.panel_fill, crate::theme::panel());
 }

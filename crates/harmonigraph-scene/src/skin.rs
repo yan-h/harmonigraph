@@ -8,8 +8,9 @@
 //! renderer is never told which skin the editor wears, so a skinnable picture
 //! color would make a video disagree with the editor it was set up in.
 //!
-//! The selectable skins are [`skins`]: the original dark look first, then
-//! base16 schemes run through [`Skin::from_base16`]. Which one is in force is
+//! The selectable skins are [`skins`]: [`DEFAULT_SKIN`] first, then the
+//! original dark look, then the other base16 schemes run through
+//! [`Skin::from_base16`]. Which one is in force is
 //! PER THREAD ([`set_active_skin`]) rather than process-wide, because a host
 //! can load several plugin instances into one process and each editor wears
 //! its own; each sets its skin at the top of its frame, and frames do not
@@ -64,8 +65,8 @@ pub struct Skin {
     pub warning_bg: [u8; 3],
 }
 
-impl Default for Skin {
-    /// The dark look. Backgrounds (`panel`/`well`) stay at the original deep
+impl Skin {
+    /// The original dark look, the default before Tinta. Backgrounds (`panel`/`well`) stay at the original deep
     /// values — the instrument reads as dark on purpose — but the whole
     /// foreground/structure band above them was collapsed into a near-
     /// invisible cluster (widget vs panel 1.24, hairline 1.22, slider fill
@@ -76,7 +77,7 @@ impl Default for Skin {
     /// through `text_dim`) rises from ~5.5:1 to ~8:1. Idle nodes and the
     /// resting markers brighten to match. See git history for the pre-pass
     /// values.
-    fn default() -> Self {
+    pub fn original() -> Self {
         Skin {
             panel: [24, 25, 29],
             well: [15, 16, 19],
@@ -178,10 +179,10 @@ pub struct SkinEntry {
     pub skin: Skin,
 }
 
-/// The id of [`Skin::default`], first in [`skins`].
-pub const DEFAULT_SKIN: &str = "default";
+/// The id of the skin a fresh install opens in, first in [`skins`].
+pub const DEFAULT_SKIN: &str = "tinta";
 
-/// Base16 schemes offered beside the default: id, name, `base00`..`base0F`.
+/// Base16 schemes, [`DEFAULT_SKIN`] among them: id, name, `base00`..`base0F`.
 /// Values from tinted-theming/schemes (`base16/<id>.yaml`); the eight were
 /// picked from the whole dark set drawn on a mock of the settings pane.
 const BASE16: [(&str, &str, [u32; 16]); 8] = [
@@ -255,13 +256,12 @@ const BASE16: [(&str, &str, [u32; 16]); 8] = [
 pub fn skins() -> &'static [SkinEntry] {
     static SKINS: OnceLock<Vec<SkinEntry>> = OnceLock::new();
     SKINS.get_or_init(|| {
-        std::iter::once(SkinEntry { id: DEFAULT_SKIN, name: "Default", skin: Skin::default() })
-            .chain(BASE16.iter().map(|&(id, name, slots)| SkinEntry {
-                id,
-                name,
-                skin: Skin::from_base16(slots),
-            }))
-            .collect()
+        let (default, rest): (Vec<_>, Vec<_>) = BASE16
+            .iter()
+            .map(|&(id, name, slots)| SkinEntry { id, name, skin: Skin::from_base16(slots) })
+            .partition(|entry| entry.id == DEFAULT_SKIN);
+        let original = SkinEntry { id: "original", name: "Original", skin: Skin::original() };
+        default.into_iter().chain([original]).chain(rest).collect()
     })
 }
 
@@ -286,7 +286,7 @@ pub fn active_skin_index() -> usize {
     ACTIVE.get()
 }
 
-/// The skin in force on this thread; [`Skin::default`] until one is set.
+/// The skin in force on this thread; [`DEFAULT_SKIN`]'s until one is set.
 pub fn active_skin() -> &'static Skin {
     &skins()[ACTIVE.get()].skin
 }
@@ -305,7 +305,7 @@ pub fn ground_color(rgb: (u8, u8, u8)) -> Vec4 {
 // ---- Picture colors ----------------------------------------------------------
 // Fixed rather than skinned (see the module doc). Tuned against the black
 // ground they are drawn on, not against the chrome; the values are the ones
-// the default skin's chrome roles carried when these were split off, so the
+// the original skin's chrome roles carried when these were split off, so the
 // split moved no pixel.
 
 /// The ground every PICTURE pane is bedded on (see [`picture_color`]).
