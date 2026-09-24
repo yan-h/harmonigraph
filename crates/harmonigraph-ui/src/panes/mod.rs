@@ -594,12 +594,9 @@ pub(super) fn section<R>(
 const HEADING_TRACKING: f32 = 1.2;
 
 /// How far a [`section`] heading's capitals sit from the rule over them and
-/// from the first thing under them, ink to ink, at scale 1.
-///
-/// Ink to ink holds because every kind of row under a heading has its box
-/// where its ink is: a bar or a button is its fill, and text is laid out by
-/// [`widgets::label`](crate::widgets::label), trimmed to its capitals.
-const HEADING_GAP: f32 = 9.0;
+/// from the first thing under them, ink to ink: the gap every group in a
+/// column keeps, so a heading is spaced as a line of text is.
+const HEADING_GAP: f32 = crate::widgets::GROUP_GAP;
 
 /// The heading row of a [`section`]: its name in small, spaced, dim capitals
 /// — told from the rows under it by size, case and colour at once, where the
@@ -673,8 +670,9 @@ fn fold_header(
 /// holds detail opened for the moment, and springs shut when the editor
 /// reopens. Returns the header, for a hover.
 ///
-/// It takes [`group_space`](crate::widgets::group_space) over and under it,
-/// except directly under a section heading, whose own gap already holds.
+/// It is a [group](crate::widgets::group_space), [`GROUP_GAP`](crate::widgets::GROUP_GAP)
+/// from the rows over and under it, except directly under a section heading,
+/// whose own gap already holds.
 pub(super) fn subsection<R>(
     ui: &mut egui::Ui,
     title: &str,
@@ -693,9 +691,7 @@ pub(super) fn subsection<R>(
         fold.toggle(ui);
     }
     fold.show_body_indented(&header, ui, body);
-    // The same room under the fold, header and body both, as over it: the
-    // fold is one group, set off from the rows around it.
-    crate::widgets::group_space(ui);
-    crate::widgets::mark_spaced(ui);
+    // The fold, header and body both, is one group.
+    crate::widgets::group_end(ui);
     header
 }

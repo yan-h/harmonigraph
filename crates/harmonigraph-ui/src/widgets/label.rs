@@ -46,10 +46,9 @@ fn cap_height(ui: &Ui, font: egui::FontId) -> f32 {
 /// A label whose box is its capitals to its last baseline (see the module
 /// docs). Wraps as `ui.label` does, and answers hovers for a tooltip.
 ///
-/// Standing alone in a column it takes [`group_space`] over it: a line of text
-/// names or explains what comes after it, so it sits nearer that than the row
-/// before it. In a row beside a control it takes none, and egui centres its
-/// capitals on the control rather than its line box.
+/// Standing alone in a column it is a [group](group_space): [`GROUP_GAP`] from
+/// whatever is over and under it. In a row beside a control it takes no room,
+/// and egui centres its capitals on the control rather than its line box.
 pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
     group_space(ui);
     let galley = text.into().into_galley(ui, None, ui.available_width(), egui::TextStyle::Body);
@@ -62,30 +61,34 @@ pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
     if ui.is_rect_visible(rect.expand2(egui::vec2(0.0, top.max(bottom)))) {
         ui.painter().galley(rect.min - egui::vec2(0.0, top), galley, ui.visuals().text_color());
     }
+    group_end(ui);
     response
 }
 
-/// Extra room over a line of text or a fold header that stands alone in a
-/// column, at scale 1, on top of the row gap. Every box sits where its ink is
-/// (see the module docs), so the row gap alone puts a heading-less line of
-/// text as near the bar over it as two bars are to each other, which reads
-/// cramped; this is the proximity a label is owed instead.
-const GROUP_SPACE: f32 = 3.0;
+/// How far a line of text or a fold standing alone in a column sits from
+/// whatever is over and under it, ink to ink, at scale 1 — and a section
+/// heading from its rule and its first row.
+///
+/// Every box sits where its ink is (see the module docs), so the row gap alone
+/// would put a line of text as near a bar as two bars sit to each other, which
+/// reads cramped. Bars and buttons keep the row gap between themselves.
+pub(crate) const GROUP_GAP: f32 = 9.0;
 
 fn spaced_id() -> egui::Id {
     egui::Id::new("group-spaced")
 }
 
 /// Record that the cursor where `ui` stands already has all the room over the
-/// next thing it should: a section heading's gap, or the space after a fold.
+/// next thing it should: a section heading's gap, or a [`group_end`].
 /// A [`group_space`] asked for right here adds nothing.
 pub(crate) fn mark_spaced(ui: &Ui) {
     let at = ui.cursor().min;
     ui.data_mut(|d| d.insert_temp(spaced_id(), at));
 }
 
-/// [`GROUP_SPACE`] before the next thing in a column, unless the cursor is at
-/// the top of `ui` or where [`mark_spaced`] said the room is already there.
+/// Room over a group in a column, bringing the row gap up to [`GROUP_GAP`] —
+/// unless the cursor is at the top of `ui`, or where [`mark_spaced`] said the
+/// room is already there.
 /// Nothing in a row, where space would run sideways; a grid lays its cells out
 /// in rows, so nothing there either.
 pub(crate) fn group_space(ui: &mut Ui) {
@@ -97,7 +100,22 @@ pub(crate) fn group_space(ui: &mut Ui) {
     if at.y <= ui.max_rect().top() + 0.5 || marked.is_some_and(|m| m.distance(at) < 0.5) {
         return;
     }
-    ui.add_space(GROUP_SPACE * crate::theme::ui_scale(ui.ctx()));
+    ui.add_space(extra(ui));
+}
+
+/// Room under a group in a column, the same as [`group_space`] put over it,
+/// marked so that a group right after it does not add its own on top.
+pub(crate) fn group_end(ui: &mut Ui) {
+    if !ui.layout().is_vertical() {
+        return;
+    }
+    ui.add_space(extra(ui));
+    mark_spaced(ui);
+}
+
+/// What a group adds to the row gap to stand [`GROUP_GAP`] off.
+fn extra(ui: &Ui) -> f32 {
+    (GROUP_GAP * crate::theme::ui_scale(ui.ctx()) - ui.spacing().item_spacing.y).max(0.0)
 }
 
 /// [`label`] in the weak text colour, for `ui.weak`.

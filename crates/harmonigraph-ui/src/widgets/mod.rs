@@ -33,7 +33,7 @@ mod value;
 
 pub(crate) use fold::{paint_chevron, paint_fold};
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
-pub(crate) use label::{cap_trim, group_space, mark_spaced};
+pub(crate) use label::{cap_trim, group_end, group_space, mark_spaced, GROUP_GAP};
 pub use label::{label, weak};
 pub use layer::LayerStrip;
 pub(crate) use menu::menu_style;
