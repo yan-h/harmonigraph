@@ -206,7 +206,9 @@ fn comma_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn Para
     // with a scroll bar drawn across its feet is the alternative.
     theme::reserve_scroll_gutter(ui);
     egui::ScrollArea::horizontal().show(ui, |ui| {
-        egui::Grid::new("commas").num_columns(2).show(ui, |ui| {
+        // No row floor: the switches bring their rows to a full row themselves,
+        // and the column names are a line of text, not a row of controls.
+        egui::Grid::new("commas").num_columns(2).min_row_height(0.0).show(ui, |ui| {
             for heading in ["Temper", "Auto"] {
                 ui.label(egui::RichText::new(heading).color(theme::text_dim()));
             }
@@ -442,7 +444,6 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
         let [third, seventh] = tuning::fifth_generated_steps(p.keyboard[0]).map(fifths);
         ui.weak(format!("From the fifth: third is {third}, seventh is {seventh}."));
     })
-    .header_response
     .on_hover_text(
         "Tuning of the incoming keyboard. A key may only become a lattice node this keyboard would play at the pitch the key \
          sent; when no key matches, all local nodes compete. A note stays unsnapped when \
@@ -536,7 +537,7 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             crate::widgets::checkbox(ui, &mut p.reset_loop, "Reset context on loop / seek")
                 .on_hover_text("Forget the context when playback jumps.");
         });
-        context.header_response.on_hover_text(
+        context.on_hover_text(
             "New notes follow the moving context; sounding notes keep their correction.",
         );
         if p != before {

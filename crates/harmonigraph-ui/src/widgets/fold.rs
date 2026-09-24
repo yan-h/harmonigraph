@@ -71,12 +71,3 @@ pub(crate) fn paint_chevron(
         egui::Stroke::new(1.5 * scale, if hot { theme::text() } else { theme::text_dim() }),
     ));
 }
-
-/// [`paint_chevron`] as an `egui::CollapsingHeader` icon, in place of egui's
-/// filled triangle: pointing at the name while folded, turning down as the
-/// header opens.
-pub(crate) fn fold_icon(ui: &mut egui::Ui, openness: f32, response: &Response) {
-    let hot = response.hovered() || response.has_focus();
-    let direction = egui::emath::Rot2::from_angle(openness * std::f32::consts::FRAC_PI_2) * Vec2::X;
-    paint_chevron(ui.painter(), response.rect.center(), direction, hot, theme::ui_scale(ui.ctx()));
-}

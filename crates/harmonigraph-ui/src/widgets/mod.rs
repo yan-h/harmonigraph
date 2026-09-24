@@ -30,7 +30,7 @@ mod stack;
 mod tabs;
 mod value;
 
-pub(crate) use fold::{fold_icon, paint_chevron, paint_fold};
+pub(crate) use fold::{paint_chevron, paint_fold};
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
 pub use layer::LayerStrip;
 pub(crate) use menu::menu_style;

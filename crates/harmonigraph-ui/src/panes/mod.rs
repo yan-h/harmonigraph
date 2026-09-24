@@ -602,19 +602,12 @@ const HEADING_TRACKING: f32 = 1.2;
 /// not a row, and the rules around them already set the section off.
 const HEADING_PAD: f32 = 2.0;
 
-/// The heading row of a [`section`]: a chevron that points at the name while
-/// the section is folded and down while it is open, then the name in small,
-/// spaced, dim capitals — told from the rows under it by size, case and colour
-/// at once, where the bold it replaced differed from them by weight alone.
-///
-/// Laid out as egui lays out a [`subsection`]'s header — the chevron centred
-/// in the first `indent` and the name after it — so a subsection's chevron
-/// and name sit exactly under its section's. The row is its text plus
-/// [`HEADING_PAD`] rather than a full control row high.
+/// The heading row of a [`section`]: its name in small, spaced, dim capitals
+/// — told from the rows under it by size, case and colour at once, where the
+/// bold it replaced differed from them by weight alone.
 fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response {
-    let indent = ui.spacing().indent;
     let scale = crate::theme::ui_scale(ui.ctx());
-    let mut job = egui::text::LayoutJob::single_section(
+    let job = egui::text::LayoutJob::single_section(
         title.to_uppercase(),
         egui::TextFormat {
             font_id: egui::TextStyle::Heading.resolve(ui.style()),
@@ -623,11 +616,29 @@ fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response 
             ..Default::default()
         },
     );
+    fold_header(ui, job, title, open, HEADING_PAD * scale)
+}
+
+/// A fold's header row: a chevron that points at the name while folded and
+/// down while open, centred in the first `indent`, then the name after it —
+/// so a subsection's chevron and name sit exactly under its section's.
+///
+/// The row is the text plus `pad` above and below, with no control-row floor:
+/// a header is a line of text, and a 20pt row around it would leave its type
+/// sitting lower in its row than a bar's fill sits in its own.
+fn fold_header(
+    ui: &mut egui::Ui,
+    mut job: egui::text::LayoutJob,
+    title: &str,
+    open: bool,
+    pad: f32,
+) -> egui::Response {
+    let indent = ui.spacing().indent;
     job.wrap =
         egui::text::TextWrapping::truncate_at_width((ui.available_width() - indent).max(0.0));
     let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), galley.size().y + 2.0 * HEADING_PAD * scale),
+        egui::vec2(ui.available_width(), galley.size().y + 2.0 * pad),
         egui::Sense::click(),
     );
     response.widget_info(|| {
@@ -635,7 +646,7 @@ fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response 
     });
     let hot = response.hovered() || response.has_focus();
     let text = egui::pos2(rect.left() + indent, rect.center().y - galley.size().y / 2.0);
-    ui.painter().galley(text, galley, crate::theme::text_dim());
+    ui.painter().galley(text, galley, crate::theme::text());
     crate::widgets::paint_chevron(
         ui.painter(),
         egui::pos2(rect.left() + indent / 2.0, rect.center().y),
@@ -646,17 +657,29 @@ fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response 
     response
 }
 
-/// A fold inside a section, closed until opened: egui's collapsing header,
-/// body indented under it, with the [`section`] header's chevron in place of
-/// egui's triangle so the two levels read as one kind of control.
+/// A fold inside a section, closed until opened: a [`fold_header`] in the
+/// body face, and the body indented under it — the [`section`] header's
+/// chevron and row, so the two levels read as one kind of control.
 ///
 /// Its fold stays in egui memory rather than [`SectionFolds`] — a subsection
 /// holds detail opened for the moment, and springs shut when the editor
-/// reopens.
+/// reopens. Returns the header, for a hover.
 pub(super) fn subsection<R>(
     ui: &mut egui::Ui,
     title: &str,
     body: impl FnOnce(&mut egui::Ui) -> R,
-) -> egui::CollapsingResponse<R> {
-    egui::CollapsingHeader::new(title).icon(crate::widgets::fold_icon).show(ui, body)
+) -> egui::Response {
+    let id = ui.make_persistent_id(title);
+    let mut fold =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    let job = egui::text::LayoutJob::single_section(
+        title.to_owned(),
+        egui::TextFormat::simple(egui::TextStyle::Button.resolve(ui.style()), crate::theme::text()),
+    );
+    let header = fold_header(ui, job, title, fold.is_open(), ui.spacing().button_padding.y);
+    if header.clicked() {
+        fold.toggle(ui);
+    }
+    fold.show_body_indented(&header, ui, body);
+    header
 }
