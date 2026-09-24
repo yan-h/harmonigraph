@@ -413,3 +413,20 @@ fn every_bar_has_its_declared_height() {
         }
     }
 }
+
+/// Picking a skin rebuilds the chrome's style in it; the same skin again
+/// rebuilds nothing, and going back restores the default's.
+#[test]
+fn a_chosen_skin_is_the_style_the_chrome_draws_with() {
+    use harmonigraph_scene::skin::{skin_index, skins, DEFAULT_SKIN};
+    let ctx = crate::tests::probe::themed();
+    let [r, g, b] = skins()[skin_index("tinta").unwrap()].skin.panel;
+    assert!(crate::theme::set_skin(&ctx, "tinta"));
+    assert_eq!(
+        ctx.style_of(egui::Theme::Dark).visuals.panel_fill,
+        egui::Color32::from_rgb(r, g, b)
+    );
+    assert!(!crate::theme::set_skin(&ctx, "tinta"), "an unchanged skin rebuilds nothing");
+    assert!(crate::theme::set_skin(&ctx, DEFAULT_SKIN));
+    assert_eq!(ctx.style_of(egui::Theme::Dark).visuals.panel_fill, crate::theme::panel());
+}

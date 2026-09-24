@@ -244,6 +244,16 @@ pub struct Interaction {
     /// only thing that reads it, and the offline renderer never reaches
     /// there.
     pub ui_scale: f32,
+    /// Which of [`harmonigraph_scene::skin::skins`] the chrome wears, by id.
+    /// Persisted. Here beside `ui_scale` for the same reason: it colors the
+    /// panel, never the picture (whose colors are fixed, see
+    /// `harmonigraph_scene::skin::PICTURE`), so a render cannot depend on it.
+    ///
+    /// An id rather than an enum so that retiring a skin sends a blob that
+    /// chose it back to the default instead of failing the whole parse (the
+    /// dropped-variant case in the `persistence-contract` skill); the load
+    /// says so on the console.
+    pub skin: String,
     /// Where the performance overlay's top-left corner sits, in editor
     /// points. Persisted; `None` until the HUD is dragged, which is the only
     /// thing that ever writes it (see [`crate::perf::draw_overlay`]).
@@ -471,6 +481,7 @@ impl SharedState {
             camera_presets: self.workspace.interaction.camera_presets.clone(),
             fps_cap: self.workspace.interaction.fps_cap,
             ui_scale: self.workspace.interaction.ui_scale,
+            skin: self.workspace.interaction.skin.clone(),
             perf_pos: self.workspace.interaction.perf_pos,
         })
         .unwrap_or_default()
@@ -532,6 +543,14 @@ impl SharedState {
         // would take a hand-edited 5.0 down to the top of the range while
         // the bar went on saying 500%.
         self.workspace.interaction.ui_scale = crate::theme::sane_ui_scale(persist.ui_scale);
+        // Repaired here for the reason the scale is: the picker must read out
+        // the skin the chrome is actually drawn in.
+        if harmonigraph_scene::skin::skin_index(&persist.skin).is_some() {
+            self.workspace.interaction.skin = persist.skin;
+        } else {
+            self.log(format!("skin \"{}\" no longer exists; using Default", persist.skin));
+            self.workspace.interaction.skin = default_skin();
+        }
         // A hand-edited NaN is dropped rather than honoured, on the grounds
         // the spiral framing above is repaired on: it positions drawn
         // geometry, and NaN geometry is a panic inside egui's tessellator. A
@@ -560,6 +579,11 @@ impl SharedState {
 /// of nothing.
 fn default_ui_scale() -> f32 {
     1.0
+}
+
+/// The skin a blob without one loads as, and a fresh install opens in.
+fn default_skin() -> String {
+    harmonigraph_scene::skin::DEFAULT_SKIN.to_owned()
 }
 
 /// The current [`UiPersist`] layout version, and the FLOOR under it. Bumped
@@ -647,6 +671,8 @@ pub(crate) struct UiPersist {
     pub(crate) fps_cap: Option<f32>,
     /// Chrome defaults to the design size, shared with Interaction.
     pub(crate) ui_scale: f32,
+    /// See [`Interaction::skin`].
+    pub(crate) skin: String,
     /// Where the performance overlay was dragged to; a blob without one opens
     /// it where an undragged HUD opens. See [`Interaction::perf_pos`].
     pub(crate) perf_pos: Option<egui::Pos2>,
@@ -663,6 +689,7 @@ impl Default for UiPersist {
             camera_presets: Vec::new(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
+            skin: default_skin(),
             perf_pos: None,
         }
     }
@@ -705,6 +732,7 @@ impl Default for Interaction {
             folded_sections: Default::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
+            skin: default_skin(),
             perf_pos: None,
             reset_layout: false,
             dock: workspace::Position::default(),

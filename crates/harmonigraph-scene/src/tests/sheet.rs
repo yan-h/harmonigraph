@@ -644,7 +644,7 @@ fn the_scene_carries_the_ground_the_pane_stands_on() {
         &plain_frame(),
         0.0,
     );
-    let [r, g, b] = crate::skin::active_skin().picture;
+    let [r, g, b] = crate::skin::PICTURE;
     assert_eq!(scene.background, crate::skin::ground_color((r, g, b)));
     assert_eq!(scene.background.w, 1.0, "opaque, or it would not cover");
 }

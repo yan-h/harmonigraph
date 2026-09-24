@@ -4,7 +4,7 @@
 //! rounding, spacing, strokes, hover behavior, and the egui/dock plumbing.
 
 use egui::{Color32, CornerRadius, FontId, Stroke, TextStyle, Vec2};
-use harmonigraph_scene::skin::active_skin;
+use harmonigraph_scene::skin::{self, active_skin};
 
 // ---- Palette accessors ----------------------------------------------------
 // All colors come from the active Skin (harmonigraph_scene::skin), the single
@@ -21,11 +21,6 @@ pub fn panel() -> Color32 {
 /// Recessed areas: console scrollback, text edits, plot backgrounds.
 pub fn well() -> Color32 {
     c(active_skin().well)
-}
-/// The ground a picture pane is bedded on (see
-/// `harmonigraph_scene::skin::picture_color`).
-pub fn picture() -> Color32 {
-    c(active_skin().picture)
 }
 /// Subtly raised surface between panel and widget (hovered tabs, faint
 /// striping).
@@ -90,6 +85,33 @@ pub fn warning_text() -> Color32 {
 /// Background band behind warning rows.
 pub fn warning_bg() -> Color32 {
     c(active_skin().warning_bg)
+}
+
+// ---- Picture colors -------------------------------------------------------
+// What a picture pane draws INSIDE the picture, and so what an export shows.
+// Fixed rather than skinned (see `harmonigraph_scene::skin`): reach for these,
+// not the chrome roles above, for anything the offline renderer also draws.
+
+/// The ground a picture pane is bedded on (see
+/// `harmonigraph_scene::skin::picture_color`).
+pub fn picture() -> Color32 {
+    c(skin::PICTURE)
+}
+/// Rulings across a picture: the analyzer's grid, the spiral's seam and rays.
+pub fn picture_ruling() -> Color32 {
+    c(skin::PICTURE_RULING)
+}
+/// The analyzer's axis numbers.
+pub fn picture_marking() -> Color32 {
+    c(skin::PICTURE_MARKING)
+}
+/// Note names drawn in a picture.
+pub fn picture_name() -> Color32 {
+    c(skin::PICTURE_NAME)
+}
+/// The band behind a sounding note outside the scale.
+pub fn picture_off_scale() -> Color32 {
+    c(skin::PICTURE_OFF_SCALE)
 }
 
 /// The one corner radius every framed control wears — buttons, checkboxes,
@@ -346,6 +368,36 @@ pub fn apply_theme(ctx: &egui::Context) {
     // rather than following the host/system preference.
     ctx.set_theme(egui::ThemePreference::Dark);
     ctx.set_style_of(egui::Theme::Dark, style_at(ui_scale(ctx)));
+    // Recorded so [`set_skin`] rebuilds only when the skin it is told differs
+    // from the one this style was built in, which on a thread shared with
+    // another editor need not be the default.
+    ctx.data_mut(|d| d.insert_temp(skin_id(), skin::active_skin_index()));
+}
+
+/// Where [`apply_theme`] and [`set_skin`] leave the index of the skin the
+/// context's style was built in.
+fn skin_id() -> egui::Id {
+    egui::Id::new("skin")
+}
+
+/// Put the skin saved as `id` in force for this frame: make it this thread's
+/// active skin (what every color accessor reads), and rebuild the context's
+/// style if it was built in another. Reports whether the style moved, the
+/// same cue [`set_ui_scale`] gives. An unknown id is the default.
+///
+/// Called every frame, before [`set_ui_scale`], which builds its style from
+/// whatever skin is active. Cheap when nothing changed: one lookup among a
+/// handful of ids.
+pub fn set_skin(ctx: &egui::Context, id: &str) -> bool {
+    let index = skin::skin_index(id).unwrap_or(0);
+    skin::set_active_skin(index);
+    let built = ctx.data(|d| d.get_temp::<usize>(skin_id())).unwrap_or(0);
+    if built == index {
+        return false;
+    }
+    ctx.data_mut(|d| d.insert_temp(skin_id(), index));
+    ctx.set_style_of(egui::Theme::Dark, style_at(ui_scale(ctx)));
+    true
 }
 
 /// The theme's style at a given [chrome scale](ui_scale).

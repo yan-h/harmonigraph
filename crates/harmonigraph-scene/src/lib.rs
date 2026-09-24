@@ -843,7 +843,7 @@ pub struct Scene {
     /// zero-width `smoothstep`.
     pub plus_taper_start: f32,
     /// The ground the lattice is drawn onto: the pane fill this pass gets
-    /// composited over, which is the skin's `picture` — the black the lattice
+    /// composited over, which is `skin::PICTURE` — the black the lattice
     /// pane paints its own rect with, as every other picture pane does (see
     /// [`skin::picture_color`]).
     ///

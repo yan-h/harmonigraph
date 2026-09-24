@@ -1370,7 +1370,7 @@ pub(super) fn draw(
             painter,
             label.lead,
             label.name,
-            marks::NameInk { fill: theme::text(), outline: theme::picture() },
+            marks::NameInk { fill: theme::picture_name(), outline: theme::picture() },
             marks::NameSize { scale, magnify },
             // Against the LETTER's ink, not the box's centre — which is the
             // whole of issue #349's fix and the reason `NoteLabel` carries a

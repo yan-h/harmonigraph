@@ -15,4 +15,5 @@ mod plus;
 mod scroll;
 mod shadow;
 mod sheet;
+mod skins;
 mod trail;
