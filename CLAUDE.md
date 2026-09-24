@@ -7,84 +7,63 @@ the rest of the repo explains itself by being read.
 ## Agent guidance has one source
 
 `AGENTS.md` and `GEMINI.md` are symlinks to this file, and `.agents/skills` is a symlink to `.claude/skills`.
-Cross-project skills are installed globally from the personal `agent-config` checkout:
-`~/.claude/skills/<name>` and `~/.agents/skills/<name>` link to its `skills/<name>` directory.
-Project-specific skills stay directly under `.claude/skills`.
-Shared skills follow the installed checkout across projects and worktrees;
-they are not pinned by this repository.
-See [the development setup](docs/development.md#shared-agent-skills) for installation.
-Keep each skill's guidance at that single source rather than copying it per agent;
-copies drift while symlinks make every session read the same contract.
+Cross-project skills are installed globally from the personal `agent-config` checkout ([setup](docs/development.md#shared-agent-skills)).
+Keep each skill's guidance at that single source rather than copying it per agent.
 Tool-specific hooks, permissions and commands stay in each tool's native configuration —
-except where a Claude path holds procedure rather than settings, which any agent can read directly:
-the commands under `.claude/commands/` and the roles they dispatch under `.claude/agents/`.
-
-## Every change runs in an owner-managed worktree and ends in a draft PR
-
-A session that may change tracked files works in its own worktree, never in the main checkout.
-A read-only coordinator may stay in main, but every task it asks to write gets a separate worktree.
-The owner determines the path and the lifecycle:
-
-- **Claude:** `.claude/worktrees/<branch>/`. `EnterWorktree` creates it and
-takes the lock nothing here may take by hand;
-`reclaim-worktrees.sh` prunes and removes it.
-- **Codex app:** the app's managed worktree, under `$CODEX_HOME/worktrees` by
-default or its configured Worktree root.
-Start from the requested committed base, normally `main`, and create the requested branch (`codex/<slug>` by default) before the first edit because a managed worktree begins detached.
-Stay there through commit, push and draft PR, using the app's approval flow for Git metadata and network access.
-Codex owns its cleanup and snapshots, so the Claude reclaimer deliberately leaves it alone.
-
-Keep those ownership domains separate:
-do not point Codex's Worktree root at `.claude/worktrees`.
-A hand-made worktree outside either owner has no automatic cleanup and is not a supported session workspace.
-A write-capable session that finds itself in main leaves whatever is there alone:
-Claude starts over through `EnterWorktree`, while a Codex coordinator sends the edit to a worktree task.
-
-The Claude Companion handoff is not a Codex-managed task:
-Codex inherits the dispatching Claude session's cwd.
-Claude therefore enters its worktree before dispatching, never after;
-`.claude/commands/implement-with-codex.md` makes that its first step.
-
-A completed change is committed, pushed and opened as a **draft** PR with `gh pr create --draft`, documentation and configuration included;
-the handoff says it is open, draft and **not merged**, and nothing merges unless Yan asks.
-That is not the whole handoff —
-a change that touches the picture also owes the build below, and satisfying one of the two is not satisfying both.
+except `.claude/commands/` and `.claude/agents/`, which hold procedure any agent can read directly.
 
 ## Lazy-loaded detail lives in `.claude/skills/`
 
-Procedure that only one kind of task needs goes in a skill rather than here.
+Procedure that only one kind of task needs goes in a skill rather than here, because this file is paid for by every session.
 Every session already carries each skill's description, so reach for the skill itself;
 a summary of one in this file is a second copy to maintain.
+
+## Every change runs in an owner-managed worktree and ends in a draft PR
+
+A session that may change tracked files works in its own worktree, never in the main checkout:
+Claude in `.claude/worktrees/<branch>/` through `EnterWorktree`;
+Codex in its app-managed worktree, creating its `codex/<slug>` branch before the first edit because that worktree begins detached.
+A write-capable session that finds itself in main leaves whatever is there alone.
+The `worktrees` skill has ownership, the Codex handoff and parallel-session planning.
+
+A completed change is committed, pushed and opened as a **draft** PR with `gh pr create --draft`, documentation and configuration included;
+the handoff says it is open, draft and **not merged**, and nothing merges unless Yan asks.
+A change that touches the picture also owes the build below, and satisfying one of the two is not satisfying both.
+
+**Never run `git worktree lock`.** Every releaser recognizes only the harness's own reason format, so a hand-written lock stands until a human clears it (#369).
+
+**The merge audit is Yan's to start, and no session's.** When a batch looks worth `/audit-merges`, say so and stop.
 
 ## Builds go through sccache
 
 `.cargo/config.toml` sets `rustc-wrapper = "sccache"`, so **`sccache` must be on PATH or every build dies with "could not execute process sccache"** (`brew install sccache`).
-To rule it out as the cause of a build failure, `RUSTC_WRAPPER="" cargo build ...` bypasses it.
+`RUSTC_WRAPPER="" cargo build ...` bypasses it to rule it out.
+Each worktree keeps its own `target/`;
+the cache shares compiled dependencies between them.
 
-Each worktree still keeps its own `target/` —
-parallel sessions never serialize on a shared target lock, they only share compiled dependencies.
-That is what the cache is for:
-a release build in a brand-new worktree takes 1m28s instead of 3m36s.
-`sccache --show-stats` reports the hit rate.
+## Pausing = a loadable build exists (sessions build, Yan loads)
 
-## A `.wgsl` edit owes a regenerated Metal corpus
+Before ending ANY turn after changing plugin-affecting code —
+task done, blocked on a question, partial progress —
+leave a fresh release build in YOUR worktree, and do NOT swap the shared DAW slot:
 
-`crates/harmonigraph-metal-assets/assets` holds precompiled Metal libraries keyed on shader hashes,
-so **editing any `.wgsl` invalidates it, and the edit is not finished until the corpus is regenerated in the SAME commit**.
+```
+cargo build --release -p harmonigraph-plugin -p harmonigraph-offline
+```
 
-The `.wgsl` in the title is the common case rather than the whole key, and treating it as the whole key is this repo's own too-narrow-key mistake written in prose.
-The hash is over the **generated MSL** and the compiler options, which carry `hal::BACKEND_VERSION` —
-so a bind-group or pipeline-layout change in Rust, a `vendor/wgpu-hal` bump or a `Cargo.lock` move invalidates the corpus with no `.wgsl` anywhere in the diff.
-The workflow's own `paths:` filter already names the real set (`crates/harmonigraph-render/**`, `Cargo.lock`, `vendor/wgpu-hal/**`, `crates/harmonigraph-offline/**` and more);
-read that, not the title of this section.
-`232d750e..24952475` is the worked example of the gap: 665 insertions across eight `harmonigraph-render` files, zero `.wgsl`, and by the title's rule none of it owed anything.
+**Both packages.** The offline renderer draws through `harmonigraph-ui` and `harmonigraph-render`, so any picture change is a video-export change even when nothing under `crates/harmonigraph-offline/` moved;
+skipping it leaves exports drawn by an old binary with nothing on screen saying so (PR #340).
+Push and open the PR first, then build while CI runs.
+End by telling Yan it's loadable via `./load-plugin.sh <branch>` and naming the overlay tag it will show.
+Skip the build only when nothing plugin-visible changed (docs, backlog, pure-test edits).
+The `build-handover` skill has the loader, the tag and why not `cargo xtask bundle`.
 
-It is also too coarse the other way: a COMMENT-only `.wgsl` edit owes nothing at all, because naga strips comments and the generated MSL is byte-identical.
-`916c2429` is the worked example — it edited a comment in `spectrogram.wgsl` with no asset commit, and the corpus stayed valid.
-So `git log -- crates/harmonigraph-metal-assets/assets` is a cheap check rather than the definition:
-a shader PR absent from that log is a question, not yet a verdict.
+## A shader-affecting edit owes a regenerated Metal corpus in the SAME commit
 
-The definition is the corpus itself, it is a `ci.sh` gate, and it answers locally in about fifteen seconds:
+`crates/harmonigraph-metal-assets/assets` is keyed on the generated MSL and compiler options, not the `.wgsl` text:
+a pipeline-layout change in Rust, a `vendor/wgpu-hal` bump or a `Cargo.lock` move invalidates it with no `.wgsl` in the diff, and a comment-only `.wgsl` edit does not.
+Tests, fmt and clippy all pass against a stale corpus;
+this gate does not, in about fifteen seconds:
 
 ```
 HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render \
@@ -92,114 +71,22 @@ HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render \
   shader_assets::catalog::production_metal_asset_catalog
 ```
 
-`strict` drops the compile-from-source fallback, so a missing library fails the pipeline that wanted it and names its key.
-The catalog is the enumeration of production constructors the corpus is generated FROM, so this covers every library in it rather than whatever the golden frames happen to draw —
-and it is the same test in the same mode the `Metal shader assets` workflow reports as `strict-catalog`.
-
-**Do not grep the fallback notice instead**, however much it looks like the signal:
-
-```
-Harmonigraph: Metal asset <hash> unavailable; compiling from source
-```
-
-That is an `eprintln!`, and libtest replays a test's captured output only when the test FAILS, so a green run swallows it whether the corpus is stale or not.
-`cargo test -p harmonigraph-render golden 2>&1 | grep "compiling from source"` stood in this section as the definition and was silent in BOTH states;
-a whole batch of sessions read that silence as a pass (#947).
-`cargo test -p harmonigraph-render golden -- --nocapture` is what makes it visible, and is worth reading once the gate is already red, because it names every key that run missed where the gate stops at the first.
-
-`cargo test --workspace`, `cargo fmt --all --check` and `cargo clippy` still pass against a stale corpus.
-The gate is in `ci.sh`'s `isolated` group, so `Full CI` fails on one now —
-but `Metal shader assets` still runs what it does not, the offline renderer's own pipelines and the corpus's recorded compiler flags and fallback controls, and still arrives as a separate workflow.
-A branch honestly reported as "Full CI green" can still be `UNSTABLE` and unmergeable;
-read `mergeStateStatus` rather than the one workflow whose name sounds like it covers everything.
-
-Regenerate on the runner, not here:
-
-```
-gh workflow run "Metal shader assets" --ref <branch> -f regenerate=true
-```
-
-then `tools/shader-assets.py import` the `production-metal-assets` artifact.
-`tools/shader-assets.py generate` does work locally and is the slow way to learn that it is the wrong path —
-it rebuilds the renderer eight times over, against the production corpus and then against three deliberately broken variants of it, and on this machine it had produced nothing after twenty minutes.
-PR #918 is the worked example, and it cost a full CI cycle on a diff whose own tests were green the whole time.
-
-## Pausing = a loadable build exists (sessions build, Yan loads)
-
-Bitwig loads exactly ONE plugin build:
-the main checkout's `target/bundled/Harmonigraph.{clap,vst3}`.
-A branch or worktree build is invisible in the DAW until its binary is swapped into that slot.
-With parallel sessions that slot is shared, so sessions do NOT fight over it —
-the model is pull, not push:
-every session builds into its own worktree, and Yan chooses which build goes live.
-
-**Sessions:
-build before you pause;
-do NOT swap the slot.** Before ending ANY turn after changing plugin-affecting code —
-task done, blocked on a question, partial progress —
-leave a fresh release build in YOUR worktree so it is loadable:
-
-```
-cargo build --release -p harmonigraph-plugin -p harmonigraph-offline
-```
-
-**Both packages, and the second one is the easy half to skip.** The offline renderer is not a separate picture:
-it draws through `harmonigraph-ui` and `harmonigraph-render`, the same crates the editor does, so a change to what any pane looks like is a change to what an mp4 looks like even when nothing under `crates/harmonigraph-offline/` is touched.
-Read "did I touch video render?" as "did I touch the picture?" and the answer is yes for almost every change worth loading.
-It is not a second full build either —
-the two share every dependency and the whole UI, so the renderer costs a link on top of a plugin build that is already done.
-
-What skipping it produces is the quiet failure:
-`load-plugin.sh` copies whatever renderer the worktree happens to hold into the one slot the plugin spawns, so the editor gets the new build and exports keep coming out drawn by an old one, with nothing on screen saying so.
-PR #340's lead landed in the editor and was missing from every render for exactly this reason.
-The loader warns when the renderer it is installing predates the branch's HEAD —
-against HEAD rather than against the plugin dylib beside it, which is the tempting comparison and the wrong one, since two artifacts built from one source state are routinely minutes apart.
-The warning is a backstop, not the contract —
-build both.
-
-**Push before you build, not after.** CI reads the pushed commit and never reads `target/`, so the release build and the checks are independent and can overlap.
-Building first serializes them for no reason:
-a 1m28s build followed by a 6-7 minute CI run is eight minutes where pushing first is seven.
-Commit, push, open the draft PR, then build while the checks run —
-the handover message still goes out when the build lands, so nothing about the contract below changes except its cost.
-
-Then end your message telling Yan it's `loadable via ./load-plugin.sh
-<branch>`, and name the tag the overlay will show (see the `build-handover`
-skill).
-Yan assumes a paused session's change is *built and loadable*, not that it is already live in the DAW —
-so the build is the contract, and touching the shared slot yourself would just evict whatever he is currently testing.
-Skip the build only when nothing plugin-visible changed (docs, backlog, pure-test edits).
-
-**Don't use `cargo xtask bundle` from a nested Claude worktree** —
-nice-plug-xtask's `chdir_workspace_root()` takes the *topmost* ancestor with a `Cargo.toml` (`ancestors().filter(has Cargo.toml).last()`), which for a nested worktree is the main repo root, so it silently builds main.
-The bundle looks fresh and contains none of the branch's changes.
-`load-plugin.sh` and `update-plugin.sh` exist to sidestep this.
+`Full CI` green is not mergeable: read `mergeStateStatus`, because `Metal shader assets` reports separately.
+Regenerate on the runner, never locally —
+the `metal-corpus` skill has the command, the import, and why grepping the fallback notice is not a check (#947).
 
 ## House style: formatting is mechanical, and a diff edits what moves
 
-**Formatting is not something to think about.** Run `cargo fmt --all`;
-`rustfmt.toml` holds the settings and `ci.sh` checks them, so the style is decided mechanically and a session spends no attention on it.
-The local pre-push gate is only `cargo fmt --all --check` —
-`ci.sh` itself runs in GitHub Actions, so a push is cheap and the full suite reports back on the PR.
-If the output is ever wrong, change the config rather than hand-formatting around it —
-a `#[rustfmt::skip]` where a hand-built table has to keep its columns, and the tree currently needs none.
+Run `cargo fmt --all`;
+`rustfmt.toml` holds the settings (and why the nightly-only comment-wrapping keys are absent), and `ci.sh` checks them.
+If the output is ever wrong, change the config rather than hand-formatting around it.
+The local pre-push gate is only `cargo fmt --all --check`;
+`ci.sh` runs in GitHub Actions.
 
-The formatter does not touch the `.wgsl` shaders at all, nor any `.md`.
-Markdown prose is laid out one clause per line instead of being wrapped to a width, so a break only falls where the text already had punctuation.
-`.claude/semantic-breaks.py --write` does it and `ci.sh` gates it, so this is another thing not to spend attention on.
+Markdown prose is laid out one clause per line instead of being wrapped to a width;
+`.claude/semantic-breaks.py --write` does it and `ci.sh` gates it.
 
-Nor does it wrap comment prose, and don't go looking for a setting that would.
-`wrap_comments` and `comment_width` exist and would do it, but they are nightly-only, and a nightly-only key in `rustfmt.toml` is DROPPED with a warning rather than applied —
-so on the toolchain `rust-toolchain.toml` pins they do nothing.
-What makes this worth writing down is that they look like they work:
-`--config wrap_comments=true` on the COMMAND LINE bypasses the channel gate and reformats 468 hunks, which is not the path `cargo fmt` or `ci.sh` takes.
-`imports_granularity` and `group_imports` —
-one import per line, grouped std/external/crate, which would be worth having —
-are behind the same gate.
-Buying them means a second pinned toolchain that only rustfmt uses, and `cargo fmt` then being the wrong command to type.
-
-The same reader is the reason a diff edits the lines that move rather than reprinting the file around them.
-Rewriting a file whole to change a few of its lines spends output on every line that did not move and marks the whole file as changed, which is the diff nobody can read past.
+A diff edits the lines that move rather than reprinting the file around them.
 Rewrite whole only where the file is short or most of it is genuinely moving.
 
 ## Two defects that actually ship here: cache keys and fixture reach
@@ -220,16 +107,15 @@ It restarts the thing it guards often enough to hide what the carry-forward path
 `a2e6e01` is a correctness bug that was there all along and only became reachable once the key stopped wiping the evidence every frame.
 A diff that narrows a key owes an answer for what is newly reachable.
 
-**A test reaches a path only if its fixture is big enough to get there.** A fixture too small to reach the new branch passes for the wrong reason and reads as coverage, which is worse than no test —
-a green light with nothing behind it.
+**A test reaches a path only if its fixture is big enough to get there.** A fixture too small to reach the new branch passes for the wrong reason and reads as coverage, which is worse than no test.
 Issue #450 is the worked example:
-four shadow tests, each missing the shape it claims to measure for its own reason, and a disc passing for a cross through all 145. For a path this diff adds, name the test that executes it and check the fixture actually arrives.
+four shadow tests, each missing the shape it claims to measure, and a disc passing for a cross through all 145. For a path this diff adds, name the test that executes it and check the fixture actually arrives.
 
 The count is the other half.
-A committed test is a file the tree maintains from then on, so it earns its place the way a comment does:
+A committed test earns its place the way a comment does:
 one per behavior the task states, sized like the tests already beside it.
 A scratch harness or a one-off probe is verification rather than coverage —
-run it and read it, and commit it only where something reads it again (see the ISSUE rule below).
+run it and read it, and commit it only where something reads it again.
 
 ## Backwards compatibility is not a constraint
 
@@ -241,19 +127,14 @@ and never, on its own, a review finding.
 
 What it does not license is a SILENT break.
 The value on screen must still be the value the file holds, so a change of range or units carries whatever clamp or repair keeps the two agreeing (`ViewConfig::sanitize`, and the `derive_scene` clamps it deliberately leaves to the picture).
-A blob that reads out one number while drawing another is a bug at any compat policy.
 
-The tree carries **no compat shims at all**, and that is now the invariant to hold rather than a state it happens to be in.
-The `legacy_*` fields, the `bare_as_some` reader, both `migrate_legacy` passes, the serde aliases for deleted palettes/orientations/sweep modes, and the `default_*` block whose job was to keep an old blob from being restyled were all removed at once.
-Don't write the next one:
-a rename is a rename, a dropped variant is dropped.
-
-Two mechanisms carry the weight instead:
-a container-level `#[serde(default)]` on every persisted struct, and `UI_PERSIST_VERSION` as a floor that refuses a blob below it whole rather than half-reading it.
-Neither covers a DROPPED ENUM VARIANT, which fails the parse and takes the entire persist, layout and camera with it —
-still fine to do, but say so in the PR body and keep the refusal audible.
-The `persistence-contract` skill holds why the floor cannot cover it and where the rule has exceptions;
-read it before changing a persisted shape.
+The tree carries **no compat shims at all**, and that is the invariant to hold:
+no `legacy_*` fields, migration passes or serde aliases for deleted variants.
+A rename is a rename, a dropped variant is dropped.
+A container-level `#[serde(default)]` on every persisted struct and the `UI_PERSIST_VERSION` floor carry the weight instead;
+neither covers a DROPPED ENUM VARIANT, which fails the whole parse —
+still fine, but say so in the PR body.
+Read the `persistence-contract` skill before changing a persisted shape.
 
 ## What you could not finish goes to an ISSUE, not the backlog
 
@@ -261,66 +142,17 @@ A session that measures a bug and does not fix it is holding the most expensive 
 the list of what the bug is NOT.
 File that with `gh issue create` —
 reproduction, what was eliminated and by what measurement, what was tried and reverted, what is left to try —
-and link the PR the probes are in.
+and link the PR the probes are in (issue #121 is the worked example).
 
-A bug you tripped over rather than went looking for takes the same exit.
-It is an issue, not a hunk in this diff:
-a fix riding in on a branch whose review is about something else gets the least attention of anything in the PR, and it widens the range `/audit-merges` has to reason about.
-The exception is the one that pays for itself —
-the requested behavior cannot work until the bug is fixed —
-and the PR body says so.
+A bug you tripped over rather than went looking for takes the same exit, not a hunk in this diff:
+a fix riding in on an unrelated branch gets the least review attention of anything in the PR.
+The exception is when the requested behavior cannot work until the bug is fixed, and the PR body says so.
 
 `BACKLOG.md` is not the alternative:
-it is gitignored and per-clone, so a worktree session has no copy of it and cannot read or add to one.
-The issue is the only durable channel a session actually has.
-
-Issue #121 is the worked example and the reason this is written down:
-four hypotheses eliminated by instrumentation across a whole session, and the first instinct was to compress that into one backlog line.
-The measurements are what a future session needs;
-the symptom it can see for itself.
-
-## Before running sessions in parallel, check for file overlap
-
-Parallelism buys wall-clock only when the work is disjoint;
-when three sessions converge on `harmonigraph-ui/src/lib.rs` it buys merge-order bugs instead, and `/audit-merges` is what pays for them afterwards.
-Overlapping work is better run in sequence, and variants of a single decision (three takes on one fade) are better as one session producing several builds to compare than as three branches to reconcile.
-
-A Codex coordinator creates a separate top-level app task, and therefore a separate managed worktree, for each mutating stream.
-Subagents inside one task share its worktree;
-use them for read-only exploration or review, not parallel edits.
-
-**The audit itself is Yan's to start, and no session's.** He types `/audit-merges` or `$audit-merges`;
-when a batch looks worth auditing, the most a session does is say so in its reply.
-That covers reading the procedure out of `SKILL.md` and running it by hand, and pointing `merge-auditor` subagents at a range directly —
-both are the same act with the invocation skipped.
-
-The skill carries `disable-model-invocation: true`, so in Claude it is not offered to the model at all.
-Codex ignores that field and reaches a skill by reading its `SKILL.md`, so there the rule is the first paragraph of a file it reads in full, plus this one.
-
-## Never lock an agent-owned worktree by hand
-
-The Claude harness locks its worktree when a session enters it and unlocks it when the session exits, while Codex owns the lifecycle of its managed worktree.
-There is nothing for either session to do here.
-Every Claude releaser —
-both harness exit paths, the startup sweep, and `.claude/reclaim-worktrees.sh` —
-recognizes a lock only by the shape of its reason string:
-
-```
-claude session <name> (pid <n> start <date>)
-```
-
-A reason that does not match that belongs to nobody, and all of them are right to leave it alone rather than guess at whose it is.
-That makes a hand-written lock the one lock here that NOTHING can release:
-it stands until a human runs `git worktree unlock`, and while it stands the worktree is invisible to the reclaim script's prune and remove tiers alike —
-`target/debug` is never pruned out of it and the worktree itself is never removable.
-The instance that produced this rule pinned 2.2G behind a lock that only a human could clear (#369).
-
-So don't run `git worktree lock`.
-If a reason ever does turn up, the string has to carry `(pid $$ start ...)` in exactly the format above, or it never comes back.
+it is gitignored and per-clone, so a worktree session has no copy of it.
 
 ## Claude permissions a worktree session needs go in `.claude/settings.json`
 
-`.claude/settings.local.json` is gitignored, so a fresh worktree never gets a copy and every rule in it is inert exactly where most sessions run —
-a grant that works in the main checkout still prompts on the branch.
-Rules that hold everywhere, the `cargo`/`git`/`gh` workflow, live in the checked-in `.claude/settings.json`;
+`.claude/settings.local.json` is gitignored, so a fresh worktree never gets a copy and its rules are inert exactly where most sessions run.
+Rules that hold everywhere live in the checked-in `.claude/settings.json`;
 per-machine paths and one-off grants stay local.

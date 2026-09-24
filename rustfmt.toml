@@ -10,3 +10,11 @@ use_small_heuristics = "Max"
 # Stable, and the tree already satisfies it -- set so that `x: x` in a struct
 # literal is a thing the formatter settles rather than a thing to notice.
 use_field_init_shorthand = true
+
+# Not set, because they cannot be: wrap_comments, comment_width,
+# imports_granularity and group_imports are nightly-only, and a nightly-only key
+# here is DROPPED with a warning on the pinned stable toolchain rather than
+# applied. They look like they work -- `--config wrap_comments=true` on the
+# command line bypasses the channel gate and reformats 468 hunks -- but that is
+# not the path `cargo fmt` or ci.sh takes. Buying them means a second pinned
+# toolchain that only rustfmt uses, and `cargo fmt` then being the wrong command.

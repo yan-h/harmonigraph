@@ -1,6 +1,6 @@
 ---
 name: build-handover
-description: How to load a branch's build into the DAW and how the build tag identifies it. Use when handing over a build for Yan to look at, comparing more than one build, or when a swap seems not to have taken.
+description: How to load a branch's build into the DAW, how the build tag identifies it, and why sessions push before building and never use cargo xtask bundle. Use when handing over a build for Yan to look at, comparing more than one build, or when a swap seems not to have taken.
 ---
 
 # Loading a build, and knowing which build you loaded
@@ -8,6 +8,27 @@ description: How to load a branch's build into the DAW and how the build tag ide
 The always-loaded contract is in `CLAUDE.md`:
 sessions build before they pause and do NOT swap the shared slot.
 This file is the mechanics.
+
+## Why the slot is pulled, not pushed
+
+Bitwig loads exactly ONE plugin build:
+the main checkout's `target/bundled/Harmonigraph.{clap,vst3}`.
+A branch or worktree build is invisible in the DAW until its binary is swapped into that slot.
+With parallel sessions that slot is shared, so sessions do NOT fight over it:
+every session builds into its own worktree, and Yan chooses which build goes live.
+Yan assumes a paused session's change is *built and loadable*, not that it is already live in the DAW —
+so the build is the contract, and touching the shared slot yourself would just evict whatever he is currently testing.
+
+**Push before you build, not after.** CI reads the pushed commit and never reads `target/`, so the release build and the checks are independent and can overlap.
+Building first serializes them for no reason:
+a 1m28s build followed by a 6-7 minute CI run is eight minutes where pushing first is seven.
+Commit, push, open the draft PR, then build while the checks run —
+the handover message still goes out when the build lands.
+
+**Don't use `cargo xtask bundle` from a nested Claude worktree** —
+nice-plug-xtask's `chdir_workspace_root()` takes the *topmost* ancestor with a `Cargo.toml` (`ancestors().filter(has Cargo.toml).last()`), which for a nested worktree is the main repo root, so it silently builds main.
+The bundle looks fresh and contains none of the branch's changes.
+`load-plugin.sh` and `update-plugin.sh` exist to sidestep this.
 
 ## Yan: load whichever build you want
 
@@ -58,6 +79,8 @@ PR #340's lead is the worked example:
 it was live in the editor within minutes and absent from every mp4 for hours.
 
 Which is why the build line in `CLAUDE.md` names both packages.
+It is not a second full build either —
+the two share every dependency and the whole UI, so the renderer costs a link on top of a plugin build that is already done.
 `load-plugin.sh` warns when the renderer it installs predates the branch's HEAD —
 the same "matches the last commit" test the table applies to the dylib, and NOT a comparison against the plugin beside it, which flags matched pairs as often as mismatched ones —
 and prints the age of the one it is leaving in place when a worktree built no renderer at all.
