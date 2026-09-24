@@ -448,16 +448,20 @@ fn section_ui(
     let mut top = rect.top();
     if rail > 0.0 {
         // Align the header controls' right edge with the settings content gutter.
-        let gutter = theme::pane_inner_margin(theme::ui_scale(ui.ctx()));
+        let scale = theme::ui_scale(ui.ctx());
+        let gutter = theme::pane_inner_margin(scale);
         let header_rect =
             Rect::from_min_max(rect.min, pos2(rect.right() - gutter, rect.top() + rail));
         let mut header =
             pane.new_child(egui::UiBuilder::new().id_salt("header").max_rect(header_rect));
         header.set_clip_rect(header_rect.intersect(pane.clip_rect()));
-        header.spacing_mut().item_spacing.x = 2.0;
+        // One gap throughout the header: the fold cell's own margin around its
+        // button, which is also its gap to the pane edge and to the first tab.
+        let margin = ((rail - theme::row_height(scale)) * 0.5).max(0.0);
+        header.spacing_mut().item_spacing.x = margin;
         header.horizontal(|ui| {
-            // The cell's own margin around its button is the gap on both sides,
-            // so the button sits as far from the first tab as from the pane edge.
+            // The cell's margin already stands between the button and the first
+            // tab, so no spacing is added after it.
             let gap = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, 0.0);
             let (cell, response) = ui.allocate_exact_size(Vec2::splat(rail), egui::Sense::click());
             ui.spacing_mut().item_spacing.x = gap;
