@@ -183,7 +183,7 @@ fn shadow_group(
     lattice: bool,
     style: &mut ShadowStyle,
 ) {
-    ui.label(egui::RichText::new(name).strong()).on_hover_text(casters);
+    crate::widgets::label(ui, egui::RichText::new(name).strong()).on_hover_text(casters);
     choice_row(ui, "Shadow shape", &mut style.kernel, &[
         (ShadowKernel::Distance, "Contour", "Follows the outline of each shape, keeping letters and thin strokes distinct even at large widths."),
         (ShadowKernel::Gaussian, "Blur", "A soft blur of each shape. Thin strokes cast lighter shadows than thick shapes."),

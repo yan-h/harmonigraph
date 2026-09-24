@@ -16,7 +16,10 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
                 .on_hover_text("Enable lattice glow texture and breathing together. Turning this off preserves both effects' settings.");
         });
         if !glow_enabled {
-            ui.weak("Set Glow reach and Glow gain above zero to see these effects.");
+            crate::widgets::weak(
+                ui,
+                "Set Glow reach and Glow gain above zero to see these effects.",
+            );
         }
         if ui
             .small_button("Reset effects")
@@ -26,7 +29,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
             *settings = AtmosphereSettings::default();
         }
         ui.add_enabled_ui(glow_enabled && settings.enabled, |ui| {
-            ui.label(egui::RichText::new("Nebula glow").strong());
+            crate::widgets::label(ui, egui::RichText::new("Nebula glow").strong());
             ValueBar::new(&mut settings.nebula_depth, 0.0..=1.0, "Texture depth")
                 .percent().show(ui).on_hover_text("Cloud texture in the combined lattice glow. 0% restores smooth halos. Colors come from the notes.");
             multiplier(ui, &mut settings.nebula_scale, "Cloud size", NEBULA_SCALE_MIN..=NEBULA_SCALE_MAX)
@@ -34,7 +37,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
             multiplier(ui, &mut settings.nebula_speed, "Cloud speed", NEBULA_SPEED_MIN..=NEBULA_SPEED_MAX)
                 .on_hover_text("1× is a slow drift. 0 freezes the cloud motion.");
 
-            ui.label(egui::RichText::new("Breathing halos").strong());
+            crate::widgets::label(ui, egui::RichText::new("Breathing halos").strong());
             ValueBar::new(&mut settings.breath_amount, 0.0..=1.0, "Breathing depth")
                 .percent().show(ui).on_hover_text("Brightness variation in the existing lattice glow. 0% keeps it steady; 100% allows deep fades. Does not change note brightness directly.");
             multiplier(ui, &mut settings.breath_speed, "Breathing speed", BREATH_SPEED_MIN..=BREATH_SPEED_MAX)

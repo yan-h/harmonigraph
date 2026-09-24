@@ -245,7 +245,7 @@ pub(crate) fn preset_row(
         + ui.spacing().item_spacing.x * labels.len() as f32;
     if width <= ui.available_width() {
         ui.horizontal(|ui| {
-            ui.label(name);
+            crate::widgets::label(ui, name);
             add(ui, false);
         });
     } else {
@@ -401,7 +401,7 @@ pub fn choice_row<T: Copy + PartialEq>(
         + ui.spacing().item_spacing.x * options.len() as f32;
     if width <= ui.available_width() {
         ui.horizontal(|ui| {
-            ui.label(name);
+            crate::widgets::label(ui, name);
             choice_buttons(ui, name, value, options);
         });
     } else {
@@ -414,11 +414,11 @@ pub fn choice_row<T: Copy + PartialEq>(
             + ui.spacing().icon_spacing;
         if label_width + ui.spacing().item_spacing.x + selected_width <= ui.available_width() {
             ui.horizontal(|ui| {
-                ui.label(name);
+                crate::widgets::label(ui, name);
                 choice_menu(ui, name, value, options);
             });
         } else {
-            ui.label(name);
+            crate::widgets::label(ui, name);
             choice_menu(ui, name, value, options);
         }
     }

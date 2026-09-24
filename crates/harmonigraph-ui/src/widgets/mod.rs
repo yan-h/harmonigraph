@@ -16,6 +16,7 @@
 mod bar;
 mod fold;
 mod gradient;
+mod label;
 mod layer;
 mod menu;
 mod mesh;
@@ -32,6 +33,8 @@ mod value;
 
 pub(crate) use fold::{paint_chevron, paint_fold};
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
+pub(crate) use label::cap_trim;
+pub use label::{label, weak};
 pub use layer::LayerStrip;
 pub(crate) use menu::menu_style;
 pub use octave::OctaveStrip;

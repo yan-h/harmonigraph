@@ -585,22 +585,20 @@ pub(super) fn section<R>(
         }
         _ => open,
     };
-    // The heading's own padding is all that parts it from its first row: the
-    // row gap is taken back, so the name sits against what it names.
-    open.then(|| {
-        ui.add_space(-ui.spacing().item_spacing.y);
-        body(ui)
-    })
+    open.then(|| body(ui))
 }
 
 /// Extra space between the letters of a [`section`] heading, at scale 1.
 /// Capitals set solid read as a block; a little air makes them a label.
 const HEADING_TRACKING: f32 = 1.2;
 
-/// Space above and below a [`section`] heading's text, at scale 1. Less than a
-/// control row gives its text: the small capitals are a label over the rows,
-/// not a row, and the rules around them already set the section off.
-const HEADING_PAD: f32 = 2.0;
+/// How far a [`section`] heading's capitals sit from the rule over them and
+/// from the first thing under them, ink to ink, at scale 1.
+///
+/// Ink to ink holds because every kind of row under a heading has its box
+/// where its ink is: a bar or a button is its fill, and text is laid out by
+/// [`widgets::label`](crate::widgets::label), trimmed to its capitals.
+const HEADING_GAP: f32 = 9.0;
 
 /// The heading row of a [`section`]: its name in small, spaced, dim capitals
 /// — told from the rows under it by size, case and colour at once, where the
@@ -616,16 +614,22 @@ fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response 
             ..Default::default()
         },
     );
-    fold_header(ui, job, title, open, HEADING_PAD * scale)
+    // The gap less the row gap, which lies between the heading and whatever
+    // is over or under it. The rule's own point of room each side is not
+    // counted: its line is drawn across the middle of it, so its ink is that
+    // far from either edge anyway.
+    let pad = HEADING_GAP * scale - ui.spacing().item_spacing.y;
+    fold_header(ui, job, title, open, pad)
 }
 
 /// A fold's header row: a chevron that points at the name while folded and
 /// down while open, centred in the first `indent`, then the name after it —
 /// so a subsection's chevron and name sit exactly under its section's.
 ///
-/// The row is the text plus `pad` above and below, with no control-row floor:
-/// a header is a line of text, and a 20pt row around it would leave its type
-/// sitting lower in its row than a bar's fill sits in its own.
+/// The row is the name trimmed to its capitals, as a
+/// [`widgets::label`](crate::widgets::label) is, plus `pad` above and below.
+/// Its target reaches half a row gap further each way, so a subsection with no
+/// pad is still a comfortable click.
 fn fold_header(
     ui: &mut egui::Ui,
     mut job: egui::text::LayoutJob,
@@ -637,15 +641,18 @@ fn fold_header(
     job.wrap =
         egui::text::TextWrapping::truncate_at_width((ui.available_width() - indent).max(0.0));
     let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), galley.size().y + 2.0 * pad),
-        egui::Sense::click(),
+    let (top, bottom) = crate::widgets::cap_trim(ui, &galley);
+    let (rect, row) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), galley.size().y - top - bottom + 2.0 * pad),
+        egui::Sense::hover(),
     );
+    let target = rect.expand2(egui::vec2(0.0, ui.spacing().item_spacing.y / 2.0));
+    let response = ui.interact(target, row.id.with("fold"), egui::Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, ui.is_enabled(), open, title)
     });
     let hot = response.hovered() || response.has_focus();
-    let text = egui::pos2(rect.left() + indent, rect.center().y - galley.size().y / 2.0);
+    let text = egui::pos2(rect.left() + indent, rect.top() + pad - top);
     ui.painter().galley(text, galley, crate::theme::text());
     crate::widgets::paint_chevron(
         ui.painter(),
@@ -676,7 +683,7 @@ pub(super) fn subsection<R>(
         title.to_owned(),
         egui::TextFormat::simple(egui::TextStyle::Button.resolve(ui.style()), crate::theme::text()),
     );
-    let header = fold_header(ui, job, title, fold.is_open(), ui.spacing().button_padding.y);
+    let header = fold_header(ui, job, title, fold.is_open(), 0.0);
     if header.clicked() {
         fold.toggle(ui);
     }

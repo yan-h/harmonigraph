@@ -109,12 +109,15 @@ pub(super) fn view_pane(
             if appearance.camera.projection == Projection::Orthographic {
                 let d = (appearance.camera.target - appearance.camera.eye()).normalize_or_zero();
                 let f = |c: f32| (1.0 - c * c).max(0.0).sqrt();
-                ui.weak(format!(
-                    "Axis scale: thirds {:.2}× · fifths {:.2}× · sevenths {:.2}×",
-                    f(d.x),
-                    f(d.y),
-                    f(d.z),
-                ));
+                crate::widgets::weak(
+                    ui,
+                    format!(
+                        "Axis scale: thirds {:.2}× · fifths {:.2}× · sevenths {:.2}×",
+                        f(d.x),
+                        f(d.y),
+                        f(d.z),
+                    ),
+                );
             }
 
             // One-click reading angles: built-ins plus user-saved presets.

@@ -142,7 +142,8 @@ fn analysis_settings(
     use crate::{SpectrumTapers, SpectrumWindow};
 
     section(ui, "Audio analysis", |ui| {
-        ui.weak(
+        crate::widgets::weak(
+            ui,
             "Shared by the Analyzer, Spiral, spectrogram and lattice audio rings. These settings do not change pass-through audio.",
         );
         if let Some(mut input) = params.analysis_input() {
@@ -241,7 +242,7 @@ pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureSt
             "Show audio levels as a frequency-versus-time heatmap. \
                      Uses the shared History duration and the Audio level colors on Colors.",
         );
-        ui.weak("Frequency range is under View; the audio palette is on Colors.");
+        crate::widgets::weak(ui, "Frequency range is under View; the audio palette is on Colors.");
     });
     section(ui, "History", |ui| {
         ValueBar::new(

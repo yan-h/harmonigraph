@@ -210,7 +210,7 @@ fn comma_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn Para
         // and the column names are a line of text, not a row of controls.
         egui::Grid::new("commas").num_columns(2).min_row_height(0.0).show(ui, |ui| {
             for heading in ["Temper", "Auto"] {
-                ui.label(egui::RichText::new(heading).color(theme::text_dim()));
+                crate::widgets::label(ui, egui::RichText::new(heading).color(theme::text_dim()));
             }
             ui.end_row();
 
@@ -288,7 +288,10 @@ pub(super) fn tuning_pane(
     now: f64,
 ) {
     section(ui, "Lattice tuning", |ui| {
-        ui.weak("Set the pitch of each lattice step. 100 cents (¢) equals one semitone.");
+        crate::widgets::weak(
+            ui,
+            "Set the pitch of each lattice step. 100 cents (¢) equals one semitone.",
+        );
         // Tuning sliders. A comma that is tempered out derives one of these axes
         // (meantone the major third, marvel the harmonic seventh), so that axis's
         // bar shows the derived value and is where the mode is released.
@@ -385,16 +388,13 @@ pub(super) fn tuning_pane(
     // Under the section rather than in it, so a folded Temperaments cannot hide
     // a fault — and with it the pending line below, which a notice suppresses.
     let configuration_notice = if state.runtime.configuration_status & 3 != 0 {
-        ui.colored_label(
-            theme::armed(),
-            "Learning unavailable: configuration or held state is incomplete. Reset to recover.",
-        );
+        crate::widgets::label(ui, egui::RichText::new("Learning unavailable: configuration or held state is incomplete. Reset to recover.").color(theme::armed()));
         true
     } else if state.runtime.configuration_status & 4 != 0 {
-        ui.weak("Tuning applied; host notification was rejected");
+        crate::widgets::weak(ui, "Tuning applied; host notification was rejected");
         true
     } else if state.runtime.configuration_status & 8 != 0 {
-        ui.weak("Tuning change refused: pending command storage is full");
+        crate::widgets::weak(ui, "Tuning change refused: pending command storage is full");
         true
     } else {
         false
@@ -415,7 +415,7 @@ pub(super) fn tuning_pane(
         // persistent fault notices stay prominent above the controls; unlike this
         // ordinary pending transition, they do not alternate within the gesture.
         if !configuration_notice && state.runtime.configuration_pending {
-            ui.weak("Tuning change pending audio adoption");
+            crate::widgets::weak(ui, "Tuning change pending audio adoption");
         }
     });
 
@@ -442,7 +442,7 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             p.keyboard = tuning::fifth_generated(p.keyboard[0]);
         }
         let [third, seventh] = tuning::fifth_generated_steps(p.keyboard[0]).map(fifths);
-        ui.weak(format!("From the fifth: third is {third}, seventh is {seventh}."));
+        crate::widgets::weak(ui, format!("From the fifth: third is {third}, seventh is {seventh}."));
     })
     .on_hover_text(
         "Tuning of the incoming keyboard. A key may only become a lattice node this keyboard would play at the pitch the key \
@@ -476,7 +476,7 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
         ) as u16;
         p.radius =
             adaptive_value(ui, p.radius.into(), 1..=5, 1.0, "Search radius", " steps", "Candidate distance along each enabled lattice axis. Larger radii consider more tuning alternatives and cost more processing.").max(1) as u8;
-        ui.label("Search axes").on_hover_text(
+        crate::widgets::label(ui, "Search axes").on_hover_text(
             "Lattice axes the adaptive tuner may use when looking for a note's candidate pitches.",
         );
         theme::reserve_scroll_gutter(ui);
@@ -584,9 +584,9 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
     }
     let name_width = (ui.available_width() - 120.0).max(45.0);
     egui::Grid::new("tuning-instances").num_columns(3).spacing([8.0, 6.0]).show(ui, |ui| {
-        ui.weak("Instance");
-        ui.weak("Retune");
-        ui.weak("Show");
+        crate::widgets::weak(ui, "Instance");
+        crate::widgets::weak(ui, "Retune");
+        crate::widgets::weak(ui, "Show");
         ui.end_row();
         for row in &instances {
             ui.push_id(row.id, |ui| {
@@ -612,11 +612,12 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
                     } else {
                         format!("{} held · {} out", row.held, row.notes_out)
                     };
-                    ui.small(status).on_hover_text(&row.status);
+                    crate::widgets::label(ui, egui::RichText::new(status).small())
+                        .on_hover_text(&row.status);
                     if row.status != "No faults" {
-                        ui.colored_label(
-                            theme::armed(),
-                            egui::RichText::new("Check status").small(),
+                        crate::widgets::label(
+                            ui,
+                            egui::RichText::new("Check status").small().color(theme::armed()),
                         )
                         .on_hover_text(&row.status);
                     }
@@ -654,26 +655,37 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
                 {
                     params.edit_tuning_instance(row.id, InstanceEdit::Name(name));
                 }
-                ui.label(&row.status);
-                ui.small(format!(
-                    "{} notes in · {} out · {} missed corrections",
-                    row.notes_in, row.notes_out, row.misses
-                ));
-                if let Some((input, output)) = row.last_pitch {
-                    ui.small(format!(
-                        "Last attack: {} → {}",
-                        monitor_pitch(input),
-                        monitor_pitch(output)
+                crate::widgets::label(ui, &row.status);
+                crate::widgets::label(
+                    ui,
+                    egui::RichText::new(format!(
+                        "{} notes in · {} out · {} missed corrections",
+                        row.notes_in, row.notes_out, row.misses
                     ))
+                    .small(),
+                );
+                if let Some((input, output)) = row.last_pitch {
+                    crate::widgets::label(
+                        ui,
+                        egui::RichText::new(format!(
+                            "Last attack: {} → {}",
+                            monitor_pitch(input),
+                            monitor_pitch(output)
+                        ))
+                        .small(),
+                    )
                     .on_hover_text("Note pitch and per-note expression, before channel pitch bend");
-                    ui.small(format!("Correction: {:+.1}¢", output - input));
+                    crate::widgets::label(
+                        ui,
+                        egui::RichText::new(format!("Correction: {:+.1}¢", output - input)).small(),
+                    );
                 }
-                ui.label(&row.delay_text);
+                crate::widgets::label(ui, &row.delay_text);
                 if row.max_delay > 1 {
                     let id = ui.id().with("delay-draft");
                     let mut delay = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(row.delay);
                     ui.horizontal(|ui| {
-                        ui.label("Buffers of delay");
+                        crate::widgets::label(ui, "Buffers of delay");
                         let response =
                             ui.add(egui::DragValue::new(&mut delay).range(1..=row.max_delay));
                         // Commit one completed drag, preserving the draft between frames.
@@ -694,7 +706,7 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
                         }
                     });
                 } else {
-                    ui.weak("Harmonigraph's own input needs one buffer.");
+                    crate::widgets::weak(ui, "Harmonigraph's own input needs one buffer.");
                 }
             });
         });
@@ -704,7 +716,7 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
             let id = ui.id().with("all-delay-draft");
             let mut delay = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(tuner.delay);
             ui.horizontal(|ui| {
-                ui.label("Buffers");
+                crate::widgets::label(ui, "Buffers");
                 ui.add(egui::DragValue::new(&mut delay).range(1..=tuner.max_delay));
                 if ui.button("Apply to all tuners").clicked() {
                     for row in &instances {
@@ -715,10 +727,11 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
                 }
             });
             ui.data_mut(|data| data.insert_temp(id, delay));
-            ui.weak(
+            crate::widgets::weak(
+                ui,
                 "Each tuner reports its own latency. Individual overrides are in Instance details.",
             );
-            ui.weak("Harmonigraph's own input stays at one buffer.");
+            crate::widgets::weak(ui, "Harmonigraph's own input stays at one buffer.");
         });
     }
     if ui
@@ -728,7 +741,8 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
     {
         params.edit_tuning_instance(instances[0].id, InstanceEdit::Reset);
     }
-    ui.weak(
+    crate::widgets::weak(
+        ui,
         "Retune off: pass notes through without influencing tuning. Show only affects the picture.",
     );
     ui.separator();
@@ -814,14 +828,14 @@ fn map_controls(
             params.edit_lattice_map(MapEdit::Engine(mode));
         }
         if view.pending {
-            ui.weak("Map state pending audio adoption");
+            crate::widgets::weak(ui, "Map state pending audio adoption");
         }
         if mode != TuningEngine::LatticeMap {
             return mode;
         }
-        ui.weak("Map changes affect new attacks. Held notes keep their onset tuning.");
+        crate::widgets::weak(ui, "Map changes affect new attacks. Held notes keep their onset tuning.");
         if state.runtime.learn_active {
-            ui.colored_label(theme::armed(), "Learn is suspended in Lattice Map.");
+            crate::widgets::label(ui, egui::RichText::new("Learn is suspended in Lattice Map.").color(theme::armed()));
         }
         crate::widgets::checkbox(ui, &mut state.appearance.view.show_map_indicators, "Show map indicators")
             .on_hover_text(
@@ -848,7 +862,7 @@ fn map_controls(
             },
         );
         if view.playback.map.is_none() {
-            ui.colored_label(theme::armed(), "Map unavailable: new attacks pass through.");
+            crate::widgets::label(ui, egui::RichText::new("Map unavailable: new attacks pass through.").color(theme::armed()));
         }
         ui.horizontal_wrapped(|ui| {
             if ui.button("Audition working copy").clicked() {
@@ -861,12 +875,12 @@ fn map_controls(
                 params.edit_lattice_map(MapEdit::Return);
             }
         });
-        ui.weak("Automate Fine for single steps and Coarse for steps of 10. Their ranges stay fixed; the two lanes add together.");
+        crate::widgets::weak(ui, "Automate Fine for single steps and Coarse for steps of 10. Their ranges stay fixed; the two lanes add together.");
         let mut fine = view.offsets.fine;
         let mut extension = view.offsets.extension;
         egui::Grid::new("map-offsets").show(ui, |ui| {
             for heading in ["Axis", "Fine", "Coarse", "Total"] {
-                ui.weak(heading);
+                crate::widgets::weak(ui, heading);
             }
             ui.end_row();
             for (label, fine, extension, axis) in [
@@ -874,7 +888,7 @@ fn map_controls(
                 ("Thirds", &mut fine.fives, &mut extension.fives, MapAxis::Thirds),
                 ("Harmonic sevenths", &mut fine.sevens, &mut extension.sevens, MapAxis::Sevenths),
             ] {
-                ui.label(label);
+                crate::widgets::label(ui, label);
                 for (lane, value, scale) in [
                     (MapOffsetLane::Fine, &mut *fine, 1),
                     (MapOffsetLane::Extension, &mut *extension, EXTENSION_STEP),
@@ -903,15 +917,12 @@ fn map_controls(
                         params.edit_lattice_map(MapEdit::EndOffset(axis, lane));
                     }
                 }
-                ui.label((*fine + EXTENSION_STEP * *extension).to_string());
+                crate::widgets::label(ui, (*fine + EXTENSION_STEP * *extension).to_string());
                 ui.end_row();
             }
         });
         if view.playback.audition {
-            ui.colored_label(
-                theme::armed(),
-                "Audition shape · Map selection paused; offset automation remains live",
-            );
+            crate::widgets::label(ui, egui::RichText::new("Audition shape · Map selection paused; offset automation remains live").color(theme::armed()));
             let mut editing = view.edit_shape;
             if crate::widgets::checkbox(ui, &mut editing, "Edit shape · click destination on lattice").changed() {
                 params.edit_lattice_map(MapEdit::EditShape(editing));
@@ -929,9 +940,9 @@ fn map_controls(
                 }
             });
             ui.data_mut(|data| data.insert_temp(key, name));
-            ui.weak("Capture saves shape only. Map selection leaves the three offsets unchanged.");
+            crate::widgets::weak(ui, "Capture saves shape only. Map selection leaves the three offsets unchanged.");
             if view.full {
-                ui.colored_label(theme::armed(), "All 128 stable map identities have been used.");
+                crate::widgets::label(ui, egui::RichText::new("All 128 stable map identities have been used.").color(theme::armed()));
             }
         }
         subsection(ui, "Manage selected saved map", |ui| {
@@ -969,7 +980,7 @@ fn map_controls(
             voices.sort_by(|a, b| a.pitch.total_cmp(&b.pitch));
             if let Some(lowest) = voices.first() {
                 for voice in &voices[1..] {
-                    ui.label(format!(
+                    crate::widgets::label(ui, format!(
                         "{}–{} · {:.2}¢",
                         MIDI_LABELS[lowest.note as usize % 12],
                         MIDI_LABELS[voice.note as usize % 12],
