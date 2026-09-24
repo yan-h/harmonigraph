@@ -103,7 +103,16 @@ They copy the executable into the shared bundle slot and re-sign it ad hoc for A
 ./load-plugin.sh              # interactive worktree menu
 ./load-plugin.sh --list       # show builds without loading one
 ./load-plugin.sh <branch>     # a unique branch substring is enough
+
+# Bring a pushed PR (e.g. from a cloud session) into a local worktree and build it.
+./build-pr.sh 1079            # rerun after new pushes to fast-forward and rebuild
+./build-pr.sh 1079 1081       # several PRs in one go
+./build-pr.sh --load 1079     # build and load in one step
 ```
+
+A cloud session builds on a remote machine and pushes only the branch,
+so its PR has no build `load-plugin.sh` can see until `build-pr.sh` makes one locally.
+It checks the branch out under `.claude/worktrees/`, where `.claude/reclaim-worktrees.sh` cleans it up like any session's.
 
 `update-plugin.sh` builds;
 `load-plugin.sh` only copies.
