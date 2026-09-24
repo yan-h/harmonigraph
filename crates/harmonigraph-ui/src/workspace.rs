@@ -456,7 +456,11 @@ fn section_ui(
         header.set_clip_rect(header_rect.intersect(pane.clip_rect()));
         header.spacing_mut().item_spacing.x = 2.0;
         header.horizontal(|ui| {
+            // The cell's own margin around its button is the gap on both sides,
+            // so the button sits as far from the first tab as from the pane edge.
+            let gap = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, 0.0);
             let (cell, response) = ui.allocate_exact_size(Vec2::splat(rail), egui::Sense::click());
+            ui.spacing_mut().item_spacing.x = gap;
             response.widget_info(|| {
                 egui::WidgetInfo::labeled(
                     egui::WidgetType::Button,
