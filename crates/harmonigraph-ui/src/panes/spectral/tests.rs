@@ -3149,9 +3149,11 @@ fn the_live_time_axis_keeps_a_nonzero_geometry_window() {
 }
 
 /// A skin colors the chrome and nothing in the picture: the pane paints the
-/// same shapes, rulings and off-scale band included, whichever skin is in
-/// force. Text arrives as paint callbacks, compared by identity rather than
-/// content, so those are left out.
+/// same shapes, rulings included, whichever skin is in force. Text arrives as
+/// paint callbacks, compared by identity rather than content, so those are
+/// left out. The fixture sounds no note, so the off-scale band is not reached
+/// here; `an_off_lattice_note_gets_a_band_down_the_spectrum` pins its color to
+/// the fixed `picture_off_scale` instead.
 #[test]
 fn the_picture_paints_the_same_in_every_skin() {
     use harmonigraph_scene::skin::{set_active_skin, skins};

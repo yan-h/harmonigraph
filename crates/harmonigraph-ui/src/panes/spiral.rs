@@ -917,7 +917,7 @@ fn dots(
 /// analyzer's [`note_name`](super::spectral::names::note_name), so a note is
 /// called the same thing here, on the roll, and at the node it lit up.
 ///
-/// Set in [`theme::text`](crate::theme::text) rather than the note's colour,
+/// Set in [`theme::picture_name`](crate::theme::picture_name) rather than the note's colour,
 /// which the dot already carries: half the pitch ramp is dark, and a name is
 /// wanted legible more than it is wanted colour-coded.
 fn names(
