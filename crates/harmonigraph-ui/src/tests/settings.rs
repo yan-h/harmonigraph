@@ -310,6 +310,63 @@ fn the_video_pane_does_not_start_with_a_rule() {
     }
 }
 
+/// A folded section's heading sits midway between the rule over it and the
+/// rule that opens the next section, with its chevron ahead of the name.
+///
+/// The space that sets a section off from the one above once went in above
+/// the rule alone, which is the same space landing UNDER a folded heading and
+/// nowhere over it. "Audio analysis" because a section with one below it is
+/// the only kind with a rule on both sides to measure between.
+#[test]
+fn a_folded_heading_sits_centred_between_its_rules() {
+    let mut state = fresh();
+    state.workspace.layout.select(panes::Tab::AnalyzerSettings);
+    state.workspace.interaction.folded_sections.insert("Analyzer/Audio analysis".to_owned());
+    let mut h = DockHarness::at(egui::vec2(1000.0, 1600.0));
+    h.settle(&mut state);
+    let out = h.frame(&mut state, vec![]);
+    let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
+    let rule = h.ctx.style_of(egui::Theme::Dark).visuals.widgets.noninteractive.bg_stroke.color;
+    let heading = out
+        .shapes
+        .iter()
+        .find_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) if t.galley.text() == "Audio analysis" && leaf.contains(t.pos) => {
+                Some(egui::Rect::from_min_size(t.pos, t.galley.size()))
+            }
+            _ => None,
+        })
+        .expect("the Analyzer page drew no Audio analysis heading");
+    let rules: Vec<f32> = out
+        .shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::LineSegment { points, stroke }
+                if stroke.color == rule
+                    && points[0].y == points[1].y
+                    && leaf.contains(points[0]) =>
+            {
+                Some(points[0].y)
+            }
+            _ => None,
+        })
+        .collect();
+    let above = rules.iter().copied().filter(|&y| y < heading.top()).fold(f32::MIN, f32::max);
+    let below = rules.iter().copied().filter(|&y| y > heading.bottom()).fold(f32::MAX, f32::min);
+    assert!(above > f32::MIN && below < f32::MAX, "no rule on both sides of {heading:?}");
+    let (over, under) = (heading.top() - above, below - heading.bottom());
+    assert!((over - under).abs() < 1.0, "{over}pt over the folded heading, {under}pt under it");
+    assert!(
+        out.shapes.iter().any(|cs| matches!(&cs.shape,
+            egui::Shape::Path(p) if p.points.len() == 3 && {
+                let mark = egui::Rect::from_points(&p.points);
+                mark.right() < heading.left() && (mark.center().y - heading.center().y).abs() < 1.0
+            }
+        )),
+        "no chevron ahead of the folded heading"
+    );
+}
+
 /// The standalone keeps the one render control it can act on, and neither shell
 /// grows a row the other should not have.
 ///

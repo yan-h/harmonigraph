@@ -22,7 +22,7 @@ use harmonigraph_scene::{NoteNames, ViewConfig};
 pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut PictureState) {
     section(ui, "Note labels", |ui| {
         names_row(ui, &mut state.appearance.view);
-        ui.checkbox(&mut state.appearance.view.show_cents, "Show pitch in cents")
+        crate::widgets::checkbox(ui, &mut state.appearance.view.show_cents, "Show pitch in cents")
             .on_hover_text("Each node's pitch class in cents, under its name.");
         ValueBar::new(&mut state.appearance.view.label_scale, crate::SCALE_BAR_RANGE, "Label scale")
             .unit(1.0, "×")

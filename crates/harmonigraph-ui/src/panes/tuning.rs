@@ -10,7 +10,7 @@
 
 use super::learn_pulse;
 use super::param_bar;
-use super::section;
+use super::{section, subsection};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, PictureState};
@@ -430,7 +430,7 @@ pub(super) fn tuning_pane(
 fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
     let mut p = state.runtime.adaptive_policy;
     let before = p;
-    ui.collapsing("Keyboard", |ui| {
+    subsection(ui, "Keyboard", |ui| {
         for (value, label) in p.keyboard.iter_mut().zip(["Fifth", "Third", "Seventh"]) {
             *value =
                 adaptive_value(ui, *value as u32, 0..=1_200_000_000, 1_000_000.0, label, "¢", "")
@@ -494,7 +494,7 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                 },
             );
         });
-        let context = ui.collapsing("Context", |ui| {
+        let context = subsection(ui, "Context", |ui| {
             p.half_life_ms = adaptive_value(
                 ui,
                 p.half_life_ms.into(),
@@ -531,9 +531,9 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                 "s",
                 "Forget the context after this long with nothing held. 0: never.",
             );
-            ui.checkbox(&mut p.reset_stop, "Reset context on stop")
+            crate::widgets::checkbox(ui, &mut p.reset_stop, "Reset context on stop")
                 .on_hover_text("Forget the context when the transport stops.");
-            ui.checkbox(&mut p.reset_loop, "Reset context on loop / seek")
+            crate::widgets::checkbox(ui, &mut p.reset_loop, "Reset context on loop / seek")
                 .on_hover_text("Forget the context when playback jumps.");
         });
         context.header_response.on_hover_text(
@@ -622,16 +622,14 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
                 });
             });
             let mut retune = row.retune;
-            if ui
-                .checkbox(&mut retune, "")
+            if crate::widgets::checkbox(ui, &mut retune, "")
                 .on_hover_text("Tune new notes with the selected engine")
                 .changed()
             {
                 params.edit_tuning_instance(row.id, InstanceEdit::Retune(retune));
             }
             let mut show = row.show;
-            if ui
-                .checkbox(&mut show, "")
+            if crate::widgets::checkbox(ui, &mut show, "")
                 .on_hover_text("Show this instance's output notes")
                 .changed()
             {
@@ -643,7 +641,7 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
     ui.data_mut(|data| data.insert_temp(selection, selected));
     if let Some(row) = instances.iter().find(|row| row.id == selected) {
         ui.push_id(row.id, |ui| {
-            ui.collapsing("Instance details", |ui| {
+            subsection(ui, "Instance details", |ui| {
                 let mut name = row.name.clone();
                 if ui
                     .add(
@@ -701,7 +699,7 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
         });
     }
     if let Some(tuner) = instances.iter().find(|row| !row.is_hub) {
-        ui.collapsing("Tuning delay", |ui| {
+        subsection(ui, "Tuning delay", |ui| {
             let id = ui.id().with("all-delay-draft");
             let mut delay = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(tuner.delay);
             ui.horizontal(|ui| {
@@ -824,7 +822,7 @@ fn map_controls(
         if state.runtime.learn_active {
             ui.colored_label(theme::armed(), "Learn is suspended in Lattice Map.");
         }
-        ui.checkbox(&mut state.appearance.view.show_map_indicators, "Show map indicators")
+        crate::widgets::checkbox(ui, &mut state.appearance.view.show_map_indicators, "Show map indicators")
             .on_hover_text(
                 "Show the selected map's assignment rings and MIDI note labels on the lattice. This \
                  does not change the map or its tuning.",
@@ -914,7 +912,7 @@ fn map_controls(
                 "Audition shape · Map selection paused; offset automation remains live",
             );
             let mut editing = view.edit_shape;
-            if ui.checkbox(&mut editing, "Edit shape · click destination on lattice").changed() {
+            if crate::widgets::checkbox(ui, &mut editing, "Edit shape · click destination on lattice").changed() {
                 params.edit_lattice_map(MapEdit::EditShape(editing));
             }
             if ui.add_enabled(view.can_undo, egui::Button::new("Undo map edit")).clicked() {
@@ -935,7 +933,7 @@ fn map_controls(
                 ui.colored_label(theme::armed(), "All 128 stable map identities have been used.");
             }
         }
-        egui::CollapsingHeader::new("Manage selected saved map").show(ui, |ui| {
+        subsection(ui, "Manage selected saved map", |ui| {
             let key = ui.id().with(("rename-map", selected));
             let mut renamed = ui.data(|data| data.get_temp::<String>(key)).unwrap_or_else(|| name.into());
             ui.horizontal(|ui| {
@@ -948,7 +946,7 @@ fn map_controls(
                 if ui.button("Delete saved map").on_hover_text("Automation for this identity will pass through without correction. The identity is never reused.").clicked() { params.edit_lattice_map(MapEdit::Delete(selected)); }
             });
         });
-        egui::CollapsingHeader::new("Assignments and sounding intervals").show(ui, |ui| {
+        subsection(ui, "Assignments and sounding intervals", |ui| {
             if let Some(map) = view.playback.map {
                 for (midi, name) in MIDI_LABELS.iter().enumerate() {
                     let p = map.node(midi as i64);

@@ -505,10 +505,16 @@ pub(super) fn edge_bar(
 ///
 /// Called by [`section`] and by nothing else — a rule over a heading is what
 /// a section is, so the two travel together.
+///
+/// The rule is the row gap plus a point either side of the line, and no more:
+/// the heading row under it is already a row high around type that is not,
+/// which is all the setting-off a section needs in a column kept tight. Any
+/// room it does take is split evenly, because a folded heading sits between
+/// two of these — space added above the rule alone lands under the heading
+/// before it and nowhere over it, and a folded section reads as sitting high.
 pub(super) fn section_separator(ui: &mut egui::Ui) {
     if ui.cursor().top() > ui.max_rect().top() + 0.5 {
-        ui.add_space(4.0);
-        ui.separator();
+        ui.add(egui::Separator::default().spacing(2.0 * crate::theme::ui_scale(ui.ctx())));
     }
 }
 
@@ -544,13 +550,12 @@ impl SectionFolds {
     }
 }
 
-/// A section of a settings pane: a little breathing room, a thin rule, then the
-/// group's name in the heading (bold) face as a header that folds the section
-/// away, and `body` below it while it is open.
+/// A section of a settings pane: a thin rule, then the group's name in the
+/// heading (bold) face as a header that folds the section away, and `body`
+/// below it while it is open.
 ///
-/// The whole header row is the target rather than a small triangle beside the
-/// name, and its chevron sits at the row's right end, so the name keeps its
-/// place on the pane's left edge with the controls under it.
+/// The whole header row is the target, and its chevron leads the name where
+/// a [`subsection`]'s does, so every fold in a pane is found in one column.
 pub(super) fn section<R>(
     ui: &mut egui::Ui,
     title: &str,
@@ -583,45 +588,51 @@ pub(super) fn section<R>(
     open.then(|| body(ui))
 }
 
-/// The heading row of a [`section`]: the name, and a chevron that points down
-/// while the section is open and at the name while it is folded.
+/// The heading row of a [`section`]: a chevron that points at the name while
+/// the section is folded and down while it is open, then the name.
+///
+/// Laid out as egui lays out a [`subsection`]'s header — one row high, the
+/// chevron centred in the first `indent` and the name after it — so a
+/// subsection's chevron and name sit exactly under its section's.
 fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response {
-    let scale = crate::theme::ui_scale(ui.ctx());
-    // The chevron's own room at the right end, so a truncated name stops short
-    // of it rather than running under it.
-    let chevron = 14.0 * scale;
+    let indent = ui.spacing().indent;
     let galley = egui::WidgetText::from(egui::RichText::new(title).heading()).into_galley(
         ui,
         Some(egui::TextWrapMode::Truncate),
-        (ui.available_width() - chevron).max(0.0),
+        (ui.available_width() - indent).max(0.0),
         egui::TextStyle::Heading,
     );
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), galley.size().y),
+        egui::vec2(ui.available_width(), galley.size().y.max(ui.spacing().interact_size.y)),
         egui::Sense::click(),
     );
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, ui.is_enabled(), open, title)
     });
     let hot = response.hovered() || response.has_focus();
-    let color = ui.visuals().text_color();
-    ui.painter().galley(rect.left_top(), galley, color);
-    let center = egui::pos2(rect.right() - 5.0 * scale, rect.center().y);
-    // The fold buttons' chevron: down while open, pointing back at the name
-    // while folded.
-    let (along, across) =
-        if open { (egui::Vec2::Y, egui::Vec2::X) } else { (-egui::Vec2::X, egui::Vec2::Y) };
-    let points = vec![
-        center - along * 2.0 * scale + across * 4.0 * scale,
-        center + along * 2.0 * scale,
-        center - along * 2.0 * scale - across * 4.0 * scale,
-    ];
-    ui.painter().add(egui::Shape::line(
-        points,
-        egui::Stroke::new(
-            1.5 * scale,
-            if hot { crate::theme::text() } else { crate::theme::text_dim() },
-        ),
-    ));
+    let text = egui::pos2(rect.left() + indent, rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(text, galley, ui.visuals().text_color());
+    crate::widgets::paint_chevron(
+        ui.painter(),
+        egui::pos2(rect.left() + indent / 2.0, rect.center().y),
+        if open { egui::Vec2::Y } else { egui::Vec2::X },
+        hot,
+        crate::theme::ui_scale(ui.ctx()),
+    );
     response
+}
+
+/// A fold inside a section, closed until opened: egui's collapsing header,
+/// body indented under it, with the [`section`] header's chevron in place of
+/// egui's triangle so the two levels read as one kind of control.
+///
+/// Its fold stays in egui memory rather than [`SectionFolds`] — a subsection
+/// holds detail opened for the moment, and springs shut when the editor
+/// reopens.
+pub(super) fn subsection<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::CollapsingResponse<R> {
+    egui::CollapsingHeader::new(title).icon(crate::widgets::fold_icon).show(ui, body)
 }
