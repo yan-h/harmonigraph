@@ -407,7 +407,7 @@ fn style_at(scale: f32) -> egui::Style {
     // padding rounds up to 2; the design size is the roomiest at 1.28.
     // `every_settings_row_is_one_row_high` sweeps the range and is what says so
     // after a change to either.
-    style.spacing.button_padding = Vec2::new(9.0, 1.0);
+    style.spacing.button_padding = Vec2::new(5.0, 1.0);
     style.spacing.interact_size = Vec2::new(36.0, ROW_HEIGHT);
     style.spacing.slider_width = 160.0;
     style.spacing.slider_rail_height = 4.0;

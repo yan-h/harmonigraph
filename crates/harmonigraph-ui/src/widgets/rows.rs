@@ -104,7 +104,7 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
     let scale = theme::ui_scale(ui.ctx());
     let dot_r = 5.0 * scale;
     let gap = 8.0 * scale;
-    let pad_x = 10.0 * scale;
+    let pad_x = ui.spacing().button_padding.x;
     let inner = Vec2::new(dot_r * 2.0 + gap + galley.size().x, galley.size().y.max(dot_r * 2.0));
     // A row's height, asked for the same way and for the same reason as
     // [`toggle_switch`]'s: naming an exact size opts out of the floor that
@@ -495,14 +495,14 @@ mod tests {
     /// [`button_row`] is that nothing it holds can leave the column, and a
     /// non-wrapping row helper looks identical in the code that calls it.
     ///
-    /// 90pt because the second half does not start until 95: above that every
-    /// label fits on one line, and turning per-button wrapping off changes
-    /// nothing the asserts can see. At 90 the widest label wraps to two rows,
-    /// leaving 2.2pt of slack on the passing side and failing by 5.2pt without
-    /// it. Wider would pin only the first half, which is what 120 did.
+    /// 82pt because the second half does not start until "Orthographic" (88pt
+    /// as a button) overflows: above that every label fits on one line, and
+    /// turning per-button wrapping off changes nothing the asserts can see.
+    /// Wider would pin only the first half. The column tracks
+    /// `button_padding`, so a padding change moves it.
     #[test]
     fn a_row_too_wide_for_its_column_wraps_inside_it() {
-        const COLUMN: f32 = 90.0;
+        const COLUMN: f32 = 82.0;
         let mut rects = Vec::new();
         let _ = painted_in(egui::vec2(COLUMN, 400.0), |ui| {
             button_row(ui, |ui| {
