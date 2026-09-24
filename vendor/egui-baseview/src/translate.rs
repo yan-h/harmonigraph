@@ -7,6 +7,34 @@ pub(crate) fn translate_mouse_button(button: baseview::MouseButton) -> Option<eg
     }
 }
 
+/// egui's modifiers from the set a baseview event carries, every field of them.
+///
+/// An event's set is the OS's own reading of what is held at that event, so each
+/// one corrects whatever came before it. Toggling a field per modifier key, as
+/// this crate used to, only hears about a key while the view has the keyboard: a
+/// Cmd or Ctrl let go after Cmd-Tab, Cmd-Space, Ctrl-arrow or a Cmd-click on the
+/// host has its key-up delivered somewhere else, and with mouse events writing
+/// only Alt, Shift and `command`, that field stayed held. egui reads Cmd OR Ctrl
+/// on a wheel as a zoom, so the one stale field turned every wheel into a zoom:
+/// every `ScrollArea` stopped, while a picture reading `zoom_delta` went on
+/// responding.
+///
+/// On macOS `command` is Cmd and Ctrl is only `ctrl`; the mouse path used to
+/// report Ctrl as `command` there. Upstream egui-baseview 0.7 has this shape.
+pub(crate) fn translate_modifiers(modifiers: keyboard_types::Modifiers) -> egui::Modifiers {
+    use keyboard_types::Modifiers as M;
+    let ctrl = modifiers.contains(M::CONTROL);
+    let meta = modifiers.contains(M::META);
+    let mac = cfg!(target_os = "macos");
+    egui::Modifiers {
+        alt: modifiers.contains(M::ALT),
+        ctrl,
+        shift: modifiers.contains(M::SHIFT),
+        mac_cmd: mac && meta,
+        command: if mac { meta } else { ctrl },
+    }
+}
+
 pub(crate) fn translate_virtual_key(key: &keyboard_types::Key) -> Option<egui::Key> {
     use egui::Key;
     use keyboard_types::Key as K;
@@ -114,5 +142,31 @@ pub(crate) fn translate_cursor_icon(cursor: egui::CursorIcon) -> baseview::Mouse
         egui::CursorIcon::ResizeRow => baseview::MouseCursor::RowResize,
         egui::CursorIcon::ZoomIn => baseview::MouseCursor::ZoomIn,
         egui::CursorIcon::ZoomOut => baseview::MouseCursor::ZoomOut,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use keyboard_types::Modifiers as M;
+
+    /// An event with nothing held puts EVERY modifier up, including the Cmd and
+    /// Ctrl that mouse events used to leave alone — the two a key-up delivered
+    /// to another window left held, and the two egui reads as a zoom on the
+    /// wheel. And Ctrl alone is not a Cmd on macOS, where the mouse path used to
+    /// report it as one.
+    #[test]
+    fn an_event_reports_exactly_the_modifiers_it_carries() {
+        assert_eq!(translate_modifiers(M::empty()), egui::Modifiers::NONE);
+        assert!(!translate_modifiers(M::empty()).matches_any(egui::Modifiers::COMMAND));
+
+        let mac = cfg!(target_os = "macos");
+        let ctrl = translate_modifiers(M::CONTROL);
+        assert!(ctrl.ctrl);
+        assert_eq!(ctrl.command, !mac);
+
+        let meta = translate_modifiers(M::META);
+        assert!(!meta.ctrl);
+        assert_eq!((meta.mac_cmd, meta.command), (mac, mac));
     }
 }

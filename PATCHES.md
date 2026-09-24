@@ -279,6 +279,14 @@ Measured on Metal:
 constructing the lattice resources took 2.58 s cold and 49 ms warm;
 reusing their compiled handles took 1.4 µs in the headless reopen test.
 The first open of a newly loaded instance still compiles, and hot-reload builds retain their existing rebuild behavior.
+- **Patch 16** (`src/translate.rs`, `src/window.rs`): take every modifier from the event that carries them.
+Mouse events wrote only Alt, Shift and `command` (from Ctrl, even on macOS), and Cmd and Ctrl were otherwise toggled per modifier key, which reaches the view only while it has the keyboard.
+A Cmd or Ctrl let go after Cmd-Tab, Cmd-Space, Ctrl-arrow or a Cmd-click on the host has its key-up delivered elsewhere, so `mac_cmd` or `ctrl` stayed held until the next whole press inside the editor.
+egui reads either as the zoom modifier on a wheel, so every wheel became a zoom:
+every settings `ScrollArea` stopped, while the pictures, which also read `zoom_delta`, went on zooming.
+That is the symptom of #501's stranded drag with no drag at all, so `end_stranded_drag` had nothing to end and the Console stayed silent.
+Mouse and key events now both replace all five fields with the event's own set, Cmd as `mac_cmd` and `command` on macOS;
+upstream egui-baseview 0.7 already has this shape.
 - **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package.
 The egui 0.36 publication trigger is met and investigated;
 the current recommendation is to retain the product stack.

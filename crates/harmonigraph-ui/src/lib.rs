@@ -97,6 +97,11 @@ use params::ParamBackend;
 /// silently stops the wheel in every settings pane at once, and stays that way
 /// until something clears it.
 ///
+/// It is not the only way to that symptom. A wheel egui reads as a zoom — Cmd
+/// or Ctrl held, or only believed held — never reaches a `ScrollArea` either,
+/// while the pictures go on zooming from `zoom_delta`; the shell's half of that
+/// is egui-baseview Patch 16 in `PATCHES.md`.
+///
 /// A stale drag is easy to come by in a plugin window. egui ends a drag on the
 /// button release, and deliberately keeps one alive when the pointer merely
 /// leaves the viewport ("when dragging a slider and the mouse leaves the
