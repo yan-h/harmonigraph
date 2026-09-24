@@ -550,9 +550,9 @@ impl SectionFolds {
     }
 }
 
-/// A section of a settings pane: a thin rule, then the group's name in the
-/// heading (bold) face as a header that folds the section away, and `body`
-/// below it while it is open.
+/// A section of a settings pane: a thin rule, then the group's name as a
+/// [heading](section_header) that folds the section away, and `body` below it
+/// while it is open.
 ///
 /// The whole header row is the target, and its chevron leads the name where
 /// a [`subsection`]'s does, so every fold in a pane is found in one column.
@@ -570,6 +570,7 @@ pub(super) fn section<R>(
     .unzip();
     let open = !folded.unwrap_or(false);
     let clicked = section_header(ui, title, open).clicked();
+    crate::widgets::mark_spaced(ui);
     // Outside a [`Viewer`] body there is nowhere to keep a fold, so the header
     // stays put rather than hiding its body for the one frame of the click.
     let open = match key {
@@ -588,30 +589,69 @@ pub(super) fn section<R>(
     open.then(|| body(ui))
 }
 
-/// The heading row of a [`section`]: a chevron that points at the name while
-/// the section is folded and down while it is open, then the name.
-///
-/// Laid out as egui lays out a [`subsection`]'s header — one row high, the
-/// chevron centred in the first `indent` and the name after it — so a
-/// subsection's chevron and name sit exactly under its section's.
+/// Extra space between the letters of a [`section`] heading, at scale 1.
+/// Capitals set solid read as a block; a little air makes them a label.
+const HEADING_TRACKING: f32 = 1.2;
+
+/// How far a [`section`] heading's capitals sit from the rule over them and
+/// from the first thing under them, ink to ink: the gap every group in a
+/// column keeps, so a heading is spaced as a line of text is.
+const HEADING_GAP: f32 = crate::widgets::GROUP_GAP;
+
+/// The heading row of a [`section`]: its name in small, spaced, dim capitals
+/// — told from the rows under it by size, case and colour at once, where the
+/// bold it replaced differed from them by weight alone.
 fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response {
+    let scale = crate::theme::ui_scale(ui.ctx());
+    let job = egui::text::LayoutJob::single_section(
+        title.to_uppercase(),
+        egui::TextFormat {
+            font_id: egui::TextStyle::Small.resolve(ui.style()),
+            extra_letter_spacing: HEADING_TRACKING * scale,
+            color: crate::theme::text_dim(),
+            ..Default::default()
+        },
+    );
+    // The gap less the row gap, which lies between the heading and whatever
+    // is over or under it. The rule's own point of room each side is not
+    // counted: its line is drawn across the middle of it, so its ink is that
+    // far from either edge anyway.
+    let pad = HEADING_GAP * scale - ui.spacing().item_spacing.y;
+    fold_header(ui, job, title, open, pad)
+}
+
+/// A fold's header row: a chevron that points at the name while folded and
+/// down while open, centred in the first `indent`, then the name after it —
+/// so a subsection's chevron and name sit exactly under its section's.
+///
+/// The row is the name trimmed to its capitals, as a
+/// [`widgets::label`](crate::widgets::label) is, plus `pad` above and below.
+/// Its target reaches half a row gap further each way, so a subsection with no
+/// pad is still a comfortable click.
+fn fold_header(
+    ui: &mut egui::Ui,
+    mut job: egui::text::LayoutJob,
+    title: &str,
+    open: bool,
+    pad: f32,
+) -> egui::Response {
     let indent = ui.spacing().indent;
-    let galley = egui::WidgetText::from(egui::RichText::new(title).heading()).into_galley(
-        ui,
-        Some(egui::TextWrapMode::Truncate),
-        (ui.available_width() - indent).max(0.0),
-        egui::TextStyle::Heading,
+    job.wrap =
+        egui::text::TextWrapping::truncate_at_width((ui.available_width() - indent).max(0.0));
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    let (top, bottom) = crate::widgets::cap_trim(ui, &galley);
+    let (rect, row) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), galley.size().y - top - bottom + 2.0 * pad),
+        egui::Sense::hover(),
     );
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), galley.size().y.max(ui.spacing().interact_size.y)),
-        egui::Sense::click(),
-    );
+    let target = rect.expand2(egui::vec2(0.0, ui.spacing().item_spacing.y / 2.0));
+    let response = ui.interact(target, row.id.with("fold"), egui::Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, ui.is_enabled(), open, title)
     });
     let hot = response.hovered() || response.has_focus();
-    let text = egui::pos2(rect.left() + indent, rect.center().y - galley.size().y / 2.0);
-    ui.painter().galley(text, galley, ui.visuals().text_color());
+    let text = egui::pos2(rect.left() + indent, rect.top() + pad - top);
+    ui.painter().galley(text, galley, crate::theme::text());
     crate::widgets::paint_chevron(
         ui.painter(),
         egui::pos2(rect.left() + indent / 2.0, rect.center().y),
@@ -622,17 +662,36 @@ fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response 
     response
 }
 
-/// A fold inside a section, closed until opened: egui's collapsing header,
-/// body indented under it, with the [`section`] header's chevron in place of
-/// egui's triangle so the two levels read as one kind of control.
+/// A fold inside a section, closed until opened: a [`fold_header`] in the
+/// body face, and the body indented under it — the [`section`] header's
+/// chevron and row, so the two levels read as one kind of control.
 ///
 /// Its fold stays in egui memory rather than [`SectionFolds`] — a subsection
 /// holds detail opened for the moment, and springs shut when the editor
-/// reopens.
+/// reopens. Returns the header, for a hover.
+///
+/// It is a [group](crate::widgets::group_space), [`GROUP_GAP`](crate::widgets::GROUP_GAP)
+/// from the rows over and under it, except directly under a section heading,
+/// whose own gap already holds.
 pub(super) fn subsection<R>(
     ui: &mut egui::Ui,
     title: &str,
     body: impl FnOnce(&mut egui::Ui) -> R,
-) -> egui::CollapsingResponse<R> {
-    egui::CollapsingHeader::new(title).icon(crate::widgets::fold_icon).show(ui, body)
+) -> egui::Response {
+    crate::widgets::group_space(ui);
+    let id = ui.make_persistent_id(title);
+    let mut fold =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    let job = egui::text::LayoutJob::single_section(
+        title.to_owned(),
+        egui::TextFormat::simple(egui::TextStyle::Button.resolve(ui.style()), crate::theme::text()),
+    );
+    let header = fold_header(ui, job, title, fold.is_open(), 0.0);
+    if header.clicked() {
+        fold.toggle(ui);
+    }
+    fold.show_body_indented(&header, ui, body);
+    // The fold, header and body both, is one group.
+    crate::widgets::group_end(ui);
+    header
 }

@@ -62,18 +62,17 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let scale = theme::ui_scale(ui.ctx());
     let switch = SWITCH_SIZE * scale;
     let gap = 6.0 * scale;
-    // A row's height, though the pill itself is shorter than one. Asked for
-    // here rather than inherited, because `allocate_exact_size` means exactly:
-    // the `interact_size` floor that brings egui's own controls up to the row
-    // never applies to a widget that names its own size, so a switch that asked
-    // only for its pill would be the short row in every pane it appears in —
-    // and in the Commas table, which is a `Grid` taking each row's height from
-    // the cells in it, a short row all the way down.
-    let desired = Vec2::new(
-        switch.x + gap + galley.size().x,
-        theme::row_height(scale).max(switch.y).max(galley.size().y),
-    );
-    let (rect, mut response) = ui.allocate_exact_size(desired, Sense::click());
+    // As tall as the pill, not a row: every box in a column sits where its ink
+    // is (see `widgets::label`), so a switch reads the row gap from a bar the
+    // way a bar does. The label is trimmed to its capitals to fit, and the
+    // target reaches half a row gap further each way, so it is still a row's
+    // worth of click.
+    let (top, bottom) = super::cap_trim(ui, &galley);
+    let caps = galley.size().y - top - bottom;
+    let desired = Vec2::new(switch.x + gap + galley.size().x, switch.y.max(caps));
+    let (rect, row) = ui.allocate_exact_size(desired, Sense::hover());
+    let target = rect.expand2(Vec2::new(0.0, ui.spacing().item_spacing.y / 2.0));
+    let mut response = ui.interact(target, row.id.with("switch"), Sense::click());
     if response.clicked() {
         *on = !*on;
         response.mark_changed();
@@ -108,7 +107,7 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             theme::text(),
         );
         painter.galley(
-            egui::pos2(track.right() + gap, rect.center().y - galley.size().y / 2.0),
+            egui::pos2(track.right() + gap, rect.center().y - top - caps / 2.0),
             galley,
             theme::text(),
         );
@@ -245,7 +244,7 @@ pub(crate) fn preset_row(
         + ui.spacing().item_spacing.x * labels.len() as f32;
     if width <= ui.available_width() {
         ui.horizontal(|ui| {
-            ui.label(name);
+            crate::widgets::label(ui, name);
             add(ui, false);
         });
     } else {
@@ -401,7 +400,7 @@ pub fn choice_row<T: Copy + PartialEq>(
         + ui.spacing().item_spacing.x * options.len() as f32;
     if width <= ui.available_width() {
         ui.horizontal(|ui| {
-            ui.label(name);
+            crate::widgets::label(ui, name);
             choice_buttons(ui, name, value, options);
         });
     } else {
@@ -414,11 +413,11 @@ pub fn choice_row<T: Copy + PartialEq>(
             + ui.spacing().icon_spacing;
         if label_width + ui.spacing().item_spacing.x + selected_width <= ui.available_width() {
             ui.horizontal(|ui| {
-                ui.label(name);
+                crate::widgets::label(ui, name);
                 choice_menu(ui, name, value, options);
             });
         } else {
-            ui.label(name);
+            crate::widgets::label(ui, name);
             choice_menu(ui, name, value, options);
         }
     }

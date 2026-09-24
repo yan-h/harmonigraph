@@ -37,7 +37,7 @@ pub(super) fn color_pane(
         );
     });
     section(ui, "Audio level colors", |ui| {
-        ui.weak("Shared by the audio views. Lattice rings use Idle ring brightness and gray at the quiet end.");
+        crate::widgets::weak(ui, "Shared by the audio views. Lattice rings use Idle ring brightness and gray at the quiet end.");
         spectrogram_gradient_group(ui, &mut appearance.spectrum);
     });
 }

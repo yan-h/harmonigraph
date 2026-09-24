@@ -1894,7 +1894,7 @@ fn a_folded_section_survives_an_editor_reopen() {
         .shapes
         .iter()
         .find_map(|cs| match &cs.shape {
-            egui::Shape::Text(t) if t.galley.text() == "Spectrogram" && leaf.contains(t.pos) => {
+            egui::Shape::Text(t) if t.galley.text() == "SPECTROGRAM" && leaf.contains(t.pos) => {
                 Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
             }
             _ => None,
@@ -1920,13 +1920,13 @@ fn a_folded_section_survives_an_editor_reopen() {
     fresh_window.settle(&mut reopened);
     let out = fresh_window.frame(&mut reopened, vec![]);
     let leaf = reopened.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
-    assert!(drawn(&out, leaf, "Spectrogram"), "the folded section keeps its heading");
+    assert!(drawn(&out, leaf, "SPECTROGRAM"), "the folded section keeps its heading");
     assert!(
         !drawn(&out, leaf, "Show spectrogram"),
         "the fold sprang open across the reopen — is its state in egui memory?",
     );
     // A fold is per section: the one above it is still open.
-    assert!(drawn(&out, leaf, "Live response"), "folding one section folded another");
+    assert!(drawn(&out, leaf, "LIVE RESPONSE"), "folding one section folded another");
 }
 
 /// Folding View, the Analyzer page's first section, folds View alone. The
@@ -1947,7 +1947,7 @@ fn folding_the_analyzer_view_leaves_the_sections_below_it() {
         })
     };
     assert!(!drawn("Spectrum outline"), "the View section did not fold");
-    for heading in ["Audio analysis", "Level mapping", "Live response"] {
+    for heading in ["AUDIO ANALYSIS", "LEVEL MAPPING", "LIVE RESPONSE"] {
         assert!(drawn(heading), "folding View took {heading} with it");
     }
 }

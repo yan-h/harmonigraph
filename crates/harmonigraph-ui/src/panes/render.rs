@@ -48,7 +48,8 @@ pub(crate) fn render_pane(
     render_controls(ui, state, interaction);
 
     section(ui, "Preview", |ui| {
-        ui.weak(
+        crate::widgets::weak(
+            ui,
             "Drag pictures to an edge · Shift-drag pictures to navigate · Scroll or pinch to zoom · Drag dividers to resize",
         );
         let frame = state.appearance.render.frame;
@@ -567,7 +568,7 @@ fn record_controls(
             "Record notes, automation, the current look and the selected audio input for video export. Press again to finish, or choose an automatic ending below. Finishing starts the video render.",
         );
         if !interaction.take.status.is_empty() {
-            ui.weak(&interaction.take.status);
+            crate::widgets::weak(ui, &interaction.take.status);
         }
         // When a take finishes and turns into a video.
         choice_row(
@@ -603,7 +604,7 @@ fn record_controls(
         // lose it.
         if state.appearance.render.trigger == crate::RenderTrigger::AtBar {
             button_row(ui, |ui| {
-                ui.label("Stop at bar").on_hover_text(
+                crate::widgets::label(ui, "Stop at bar").on_hover_text(
                     "Counted as the host's arranger counts: bar 1 is the song's start. \
                      Recording must reach this bar from before it — arming with the playhead \
                      already past it records until you turn Record take off.",
