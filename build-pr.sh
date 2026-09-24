@@ -69,6 +69,14 @@ build_one() {
       git -C "$MAIN" worktree add --quiet "$wt" -b "$branch" --track "$remote"
     fi
     echo "    new worktree $wt"
+    # Seed the build with main's artifacts. `cp -c` is an APFS clone: ~3s and no
+    # disk for 7G. sccache already serves the deps, but not build scripts, proc
+    # macros or links; with this a fresh build went 1m26s -> 42s. Cargo's own
+    # fingerprints decide what is stale, so a stale copy only costs rebuilds.
+    if [[ -d "$MAIN/target/release" ]]; then
+      mkdir -p "$wt/target"
+      cp -c -R -p "$MAIN/target/release" "$wt/target/" || rm -rf "$wt/target/release"
+    fi
   fi
 
   if [[ -n "$(git -C "$wt" status --porcelain --untracked-files=no)" ]]; then
