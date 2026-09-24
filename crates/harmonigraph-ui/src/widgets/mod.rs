@@ -17,6 +17,7 @@ mod bar;
 mod fold;
 mod gradient;
 mod layer;
+mod menu;
 mod mesh;
 mod octave;
 #[cfg(test)]
@@ -32,6 +33,7 @@ mod value;
 pub(crate) use fold::paint_fold;
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
 pub use layer::LayerStrip;
+pub(crate) use menu::menu_style;
 pub use octave::OctaveStrip;
 pub use range::RangeBar;
 pub use rows::{button_row, choice_row, option_label, record_button, row_field, toggle_switch};

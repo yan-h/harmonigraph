@@ -159,12 +159,14 @@ pub(super) fn view_pane(
                             ui.close();
                         }
                     }
-                    response.context_menu(|ui| {
-                        if ui.button("Delete").clicked() {
-                            delete = Some(i);
-                            ui.close();
-                        }
-                    });
+                    egui::Popup::context_menu(&response)
+                        .style(crate::widgets::menu_style(ui.ctx()))
+                        .show(|ui| {
+                            if ui.button("Delete").clicked() {
+                                delete = Some(i);
+                                ui.close();
+                            }
+                        });
                 }
                 if let Some(i) = delete {
                     interaction.camera_presets.remove(i);
