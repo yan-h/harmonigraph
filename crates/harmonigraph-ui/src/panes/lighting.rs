@@ -1,6 +1,7 @@
 //! Light and shadow for each picture: the lattice's bloom, glow and shadows on
-//! the Lattice page, and the Analyzer and Spiral shadows on the Analyzer page.
-//! The spectrogram's own bloom sits with the MIDI ribbons it lights.
+//! the Lattice page, and the Spiral's bloom and the Analyzer and Spiral shadows
+//! on the Analyzer page. The spectrogram's own bloom sits with the MIDI ribbons
+//! it lights.
 
 use super::section;
 use crate::widgets::{choice_row, ValueBar};
@@ -37,9 +38,19 @@ pub(super) fn lattice_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDoc
     });
 }
 
-/// The Analyzer page's shadows, which fall in the Analyzer and the Spiral
-/// alike.
-pub(super) fn analyzer_shadows(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
+/// The Analyzer page's lighting: the Spiral's bloom, then the shadows, which
+/// fall in the Analyzer and the Spiral alike.
+pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
+    section(ui, "Spiral", |ui| {
+        ValueBar::new(&mut appearance.view.spiral_bloom, 0.0..=2.0, "Spiral bloom")
+            .unit(1.0, "×")
+            .show(ui)
+            .on_hover_text(
+                "Soft halos around bright MIDI notes in the Spiral. \
+                 0 turns bloom off; \
+                 1× is the reference strength.",
+            );
+    });
     let shadow = &mut appearance.view.shadow;
     section(ui, "Shadows", |ui| {
         shadow_group(
@@ -59,7 +70,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
-                "Soft halos around bright MIDI notes in the Lattice and Spiral. \
+                "Soft halos around bright MIDI notes in the Lattice. \
                      0 turns bloom off; \
                      1× is the reference strength.",
             );

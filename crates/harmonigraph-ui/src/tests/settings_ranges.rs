@@ -45,7 +45,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     };
     let a = &mut saved.picture.appearance;
     macro_rules! poison { ($owner:expr; $($field:ident),+ $(,)?) => { $( $owner.$field = v; )+ }; }
-    poison!(a.view; render_scale, bloom_strength, sevens_size, label_scale,
+    poison!(a.view; render_scale, bloom_strength, spiral_bloom, sevens_size, label_scale,
         octave_center, octave_extra_size, octave_extra_blend, mark_delay, fade_shape,
         spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
         spectral_width, spectral_ring_range, spectral_ring_width, ring_gap,
@@ -238,8 +238,9 @@ fn scenarios() -> Vec<Scenario> {
             // The picture, then bloom, glow and its texture (14), then two
             // shadow groups of two bars each.
             panes::Tab::LatticeSettings => 17 + 14 + 4,
-            // Analyzer and spectrogram, the ribbons' bloom, two shadow groups.
-            panes::Tab::AnalyzerSettings => 7 + 18 + 1 + 4,
+            // Analyzer and spectrogram, the ribbons' bloom, the Spiral's bloom,
+            // two shadow groups.
+            panes::Tab::AnalyzerSettings => 7 + 18 + 1 + 1 + 4,
             panes::Tab::System => 3,
             panes::Tab::Video | panes::Tab::Console => 0,
             _ => panic!("add the new settings page's range scenario"),
@@ -263,7 +264,7 @@ fn scenarios() -> Vec<Scenario> {
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         wash: true,
-        visits: 7 + 20 + 1 + 4,
+        visits: 7 + 20 + 1 + 1 + 4,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
@@ -356,12 +357,12 @@ fn check(edge: Edge) {
             assert!(saw("Pitch flexibility"));
             assert_eq!(saw("Fifth") && saw("Half-life"), scenario.expanded);
         }
-        let bloom = match scenario.pane {
-            panes::Tab::LatticeSettings => Some("Bloom"),
-            panes::Tab::AnalyzerSettings => Some("Ribbon bloom"),
-            _ => None,
+        let blooms: &[&str] = match scenario.pane {
+            panes::Tab::LatticeSettings => &["Bloom"],
+            panes::Tab::AnalyzerSettings => &["Ribbon bloom", "Spiral bloom"],
+            _ => &[],
         };
-        if let Some(label) = bloom {
+        for &label in blooms {
             let bloom = visits.iter().find(|visit| visit.label == label).unwrap();
             assert_eq!(bloom.range, 0.0..=2.0);
             assert!(!saw("Bloom amount") && !saw("Ribbon glow"));

@@ -581,15 +581,14 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64,
             ),
         );
     }
-    // The spiral's dots follow lattice bloom: both draw the same MIDI notes as
-    // colored points. The spectrogram's ribbons have their own bloom setting.
+    // The spiral's own bloom, on its dots.
     //
     // Unconditionally, including on the frames with no strength and nothing
     // sounding. The callback declines those itself without allocating, and it
     // is the only thing that can: its sweep retires a chain on the clock of
     // these calls, so a gate here aged the disc's own chain out after two
     // silent seconds and rebuilt it inside the frame the next note arrived in.
-    let bloom = harmonigraph_render::bloom_strength(state.appearance.view.bloom_strength);
+    let bloom = harmonigraph_render::bloom_strength(state.appearance.view.spiral_bloom);
     painter.add(harmonigraph_render::glow_paint_callback(
         rect,
         marks,
@@ -1475,7 +1474,7 @@ mod tests {
     fn the_halo_is_asked_for_on_every_frame_the_disc_draws() {
         let callbacks = |bloom: f32, sounding: bool| {
             let mut state = fresh();
-            state.appearance.view.bloom_strength = bloom;
+            state.appearance.view.spiral_bloom = bloom;
             if sounding {
                 state.runtime.tracker.handle_event(NoteEvent::on(
                     0.0,

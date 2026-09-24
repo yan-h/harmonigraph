@@ -7,7 +7,7 @@
 //! shared by every picture, and keep a tab of their own.
 
 use super::labels::labels_pane;
-use super::lighting::{analyzer_shadows, lattice_lighting};
+use super::lighting::{analyzer_lighting, lattice_lighting};
 use super::nodes::nodes_pane;
 use super::plus::plus_pane;
 use super::spectral::{spectrogram_settings_pane, spectrum_settings_pane};
@@ -33,8 +33,8 @@ pub(super) fn lattice_settings_pane(
 }
 
 /// The Analyzer page: the analyzer's layout and the audio analysis every audio
-/// view shares, then the spectrogram drawn inside it, then the shadows the
-/// Analyzer and Spiral cast.
+/// view shares, then the spectrogram drawn inside it, then the Spiral's bloom
+/// and the shadows the Analyzer and Spiral cast.
 pub(super) fn analyzer_settings_pane(
     ui: &mut egui::Ui,
     state: &mut PictureState,
@@ -43,5 +43,5 @@ pub(super) fn analyzer_settings_pane(
 ) {
     spectrum_settings_pane(ui, state, &mut interaction.dock, params);
     spectrogram_settings_pane(ui, state);
-    analyzer_shadows(ui, &mut state.appearance);
+    analyzer_lighting(ui, &mut state.appearance);
 }
