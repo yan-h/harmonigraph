@@ -379,21 +379,24 @@ pub(super) fn tuning_pane(
     // Which commas the lattice tempers out: the same question as the bars
     // above (what IS this tuning), but the answer is a set of identities
     // rather than three numbers, so it gets its own heading.
-    // Whether a fault notice below stands, whether or not its section is open.
-    let configuration_notice = state.runtime.configuration_status & 0b1111 != 0;
-    section(ui, "Temperaments", |ui| {
-        comma_controls(ui, state, params);
-        if state.runtime.configuration_status & 3 != 0 {
-            ui.colored_label(
-                theme::armed(),
-                "Learning unavailable: configuration or held state is incomplete. Reset to recover.",
-            );
-        } else if state.runtime.configuration_status & 4 != 0 {
-            ui.weak("Tuning applied; host notification was rejected");
-        } else if state.runtime.configuration_status & 8 != 0 {
-            ui.weak("Tuning change refused: pending command storage is full");
-        }
-    });
+    section(ui, "Temperaments", |ui| comma_controls(ui, state, params));
+    // Under the section rather than in it, so a folded Temperaments cannot hide
+    // a fault — and with it the pending line below, which a notice suppresses.
+    let configuration_notice = if state.runtime.configuration_status & 3 != 0 {
+        ui.colored_label(
+            theme::armed(),
+            "Learning unavailable: configuration or held state is incomplete. Reset to recover.",
+        );
+        true
+    } else if state.runtime.configuration_status & 4 != 0 {
+        ui.weak("Tuning applied; host notification was rejected");
+        true
+    } else if state.runtime.configuration_status & 8 != 0 {
+        ui.weak("Tuning change refused: pending command storage is full");
+        true
+    } else {
+        false
+    };
 
     let mode = map_controls(ui, state, params);
     if mode == harmonigraph_core::lattice_map::TuningEngine::Adaptive {

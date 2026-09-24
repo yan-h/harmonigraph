@@ -127,9 +127,10 @@ pub(crate) fn spectrum_settings_pane(
         ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Spectrum outline").percent().show(ui).on_hover_text(
             "Opacity of the white spectrum outline. Independent of Spectrum fill softness; 0% hides it.",
         );
-
-        analysis_settings(ui, cfg, params);
     });
+    // Beside View rather than inside it: these are sections of their own, and
+    // folding View must not fold them too.
+    analysis_settings(ui, &mut state.appearance.spectrum, params);
 }
 
 /// Measurement controls shared by every audio view, within the Analyzer page.
@@ -333,15 +334,15 @@ pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureSt
                          1× is the reference size; labels also grow when you zoom in on frequency.",
                     );
             });
+            ValueBar::new(&mut cfg.atmosphere.note_glow, 0.0..=2.0, "Ribbon bloom")
+                .unit(1.0, "×")
+                .show(ui)
+                .on_hover_text(
+                    "Soft halos around MIDI ribbons in the spectrogram. \
+                     0 turns bloom off; \
+                     1× is the reference strength.",
+                );
         });
-        ValueBar::new(&mut cfg.atmosphere.note_glow, 0.0..=2.0, "Ribbon bloom")
-            .unit(1.0, "×")
-            .show(ui)
-            .on_hover_text(
-                "Soft halos around MIDI ribbons in the spectrogram. \
-                 0 turns bloom off; \
-                 1× is the reference strength.",
-            );
     });
     let atmosphere = &mut cfg.atmosphere;
     section(ui, "Softness", |ui| {

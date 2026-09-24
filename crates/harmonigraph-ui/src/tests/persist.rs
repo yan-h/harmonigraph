@@ -1928,6 +1928,29 @@ fn a_folded_section_survives_an_editor_reopen() {
     assert!(drawn(&out, leaf, "Live response"), "folding one section folded another");
 }
 
+/// Folding View, the Analyzer page's first section, folds View alone. The
+/// analysis sections once drew inside its body, so they vanished with it.
+#[test]
+fn folding_the_analyzer_view_leaves_the_sections_below_it() {
+    let mut state = fresh();
+    state.workspace.layout.select(panes::Tab::AnalyzerSettings);
+    state.workspace.interaction.folded_sections.insert("Analyzer/View".to_owned());
+    let mut window = super::harness::DockHarness::new();
+    window.settle(&mut state);
+    let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
+    let out = window.frame(&mut state, vec![]);
+    let drawn = |needle: &str| {
+        out.shapes.iter().any(|cs| match &cs.shape {
+            egui::Shape::Text(t) => t.galley.text() == needle && leaf.contains(t.pos),
+            _ => false,
+        })
+    };
+    assert!(!drawn("Spectrum outline"), "the View section did not fold");
+    for heading in ["Audio analysis", "Level mapping", "Live response"] {
+        assert!(drawn(heading), "folding View took {heading} with it");
+    }
+}
+
 /// Split a serialized struct into its top-level `key:value` pairs, as
 /// `(key, whole pair)`. Depth-aware, so `pitch_gradient:(...)` stays one pair
 /// rather than splitting on the commas inside it — which is equally what lets
