@@ -620,11 +620,11 @@ where
         )
     }
 
-    /// Update the pressed key modifiers when a mouse event has sent a new set of modifiers.
+    /// Replace the pressed key modifiers with the set an event has sent, all of
+    /// them — see `translate_modifiers` for why a partial update leaves the
+    /// wheel dead.
     fn update_modifiers(&mut self, modifiers: &Modifiers) {
-        self.egui_input.modifiers.alt = !(*modifiers & Modifiers::ALT).is_empty();
-        self.egui_input.modifiers.shift = !(*modifiers & Modifiers::SHIFT).is_empty();
-        self.egui_input.modifiers.command = !(*modifiers & Modifiers::CONTROL).is_empty();
+        self.egui_input.modifiers = crate::translate::translate_modifiers(*modifiers);
     }
 }
 
@@ -1153,31 +1153,12 @@ where
                 _ => {}
             },
             baseview::Event::Keyboard(event) => {
-                use keyboard_types::Code;
+                // The set the event carries rather than a toggle per modifier
+                // key, as for mouse events: a key-up that went to another
+                // window is corrected by the next event of either kind.
+                self.update_modifiers(&event.modifiers);
 
                 let pressed = event.state == keyboard_types::KeyState::Down;
-
-                match event.code {
-                    Code::ShiftLeft | Code::ShiftRight => self.egui_input.modifiers.shift = pressed,
-                    Code::ControlLeft | Code::ControlRight => {
-                        self.egui_input.modifiers.ctrl = pressed;
-
-                        #[cfg(not(target_os = "macos"))]
-                        {
-                            self.egui_input.modifiers.command = pressed;
-                        }
-                    }
-                    Code::AltLeft | Code::AltRight => self.egui_input.modifiers.alt = pressed,
-                    Code::MetaLeft | Code::MetaRight => {
-                        #[cfg(target_os = "macos")]
-                        {
-                            self.egui_input.modifiers.mac_cmd = pressed;
-                            self.egui_input.modifiers.command = pressed;
-                        }
-                        // prevent `rustfmt` from breaking this
-                    }
-                    _ => (),
-                }
 
                 if let Some(key) = crate::translate::translate_virtual_key(&event.key) {
                     self.egui_input.events.push(egui::Event::Key {
