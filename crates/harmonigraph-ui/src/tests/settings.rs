@@ -1618,3 +1618,40 @@ fn shadow_falloff_only_appears_for_contour_shadows() {
     );
     assert_eq!(text_ys(&contour, "Shadow width").len(), 4, "Contour lost common shadow controls",);
 }
+
+/// No settings tab draws two sections under one heading. A fold is saved as
+/// "Tab/Heading", so two headings of one name on one tab would fold together.
+///
+/// Headings are told from the rest of the text by their face, and the window is
+/// tall enough that every tab's whole list is laid out at once. Sections a
+/// fresh state hides (Note retuning, and Record outside a host) are not seen.
+#[test]
+fn no_settings_tab_repeats_a_section_heading() {
+    for &tab in workspace::Section::Settings.tabs() {
+        let mut state = fresh();
+        state.workspace.layout.select(tab);
+        let mut window = DockHarness::at(egui::vec2(1000.0, 8000.0));
+        window.settle(&mut state);
+        let out = window.frame(&mut state, vec![]);
+        let heading = egui::TextStyle::Heading.resolve(&window.ctx.global_style());
+        let mut titles: Vec<String> = out
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(text)
+                    if text.galley.job.sections.iter().all(|s| s.format.font_id == heading) =>
+                {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        let drawn = titles.len();
+        titles.sort();
+        titles.dedup();
+        assert_eq!(titles.len(), drawn, "{tab:?} repeats a heading: {titles:?}");
+        if !matches!(tab, panes::Tab::Console) {
+            assert!(drawn >= 2, "{tab:?} drew {drawn} headings; is the face still Heading?");
+        }
+    }
+}

@@ -140,8 +140,11 @@ impl Tab {
     /// pane that slips past one of them draws with a scroll area around it or a
     /// border of chrome inside it, neither of which fails anything: it just
     /// looks wrong, in a way nobody thinks to attribute to a missing arm.
+    ///
+    /// Every tab outside the Settings column is a picture, so this is read off
+    /// the section strips rather than listed again.
     pub(crate) fn is_picture(&self) -> bool {
-        matches!(self, Tab::Lattice | Tab::Spectral | Tab::Spiral)
+        crate::workspace::Section::of(*self) != crate::workspace::Section::Settings
     }
 }
 

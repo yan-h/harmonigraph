@@ -44,12 +44,14 @@ impl Section {
         }
     }
 
+    /// The section whose strip lists `tab`. Read off [`Self::tabs`] rather
+    /// than matched a second time, so a new tab cannot be put on one strip and
+    /// filed under another section by a catch-all arm.
     pub(crate) fn of(tab: Tab) -> Self {
-        match tab {
-            Tab::Lattice => Self::Lattice,
-            Tab::Spectral | Tab::Spiral => Self::Analyzer,
-            _ => Self::Settings,
-        }
+        Self::ALL
+            .into_iter()
+            .find(|section| section.tabs().contains(&tab))
+            .expect("every tab is on exactly one section's strip")
     }
 }
 
