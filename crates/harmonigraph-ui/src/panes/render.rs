@@ -47,98 +47,99 @@ pub(crate) fn render_pane(
     frame_controls(ui, state);
     render_controls(ui, state, interaction);
 
-    section(ui, "Preview");
-    ui.weak(
-        "Drag pictures to an edge · Shift-drag pictures to navigate · Scroll or pinch to zoom · Drag dividers to resize",
-    );
-    let frame = state.appearance.render.frame;
-    let avail = ui.available_size();
-    if avail.x < 20.0 {
-        return;
-    }
-    // The preview takes whatever the controls left it — but never less than
-    // PREVIEW_MIN_HEIGHT. Without that floor it absorbed exactly the slack, so
-    // the pane's content measured the same height as the pane no matter how
-    // short the pane got: the dock's `ScrollArea` saw nothing sticking out and
-    // the wheel had nothing to grab, which made Video the one settings pane
-    // that would not scroll. Now a squeezed pane overflows instead, and the
-    // controls stay reachable by scrolling rather than the preview shrinking
-    // to a sliver.
-    let scale = crate::theme::ui_scale(ui.ctx());
-    let size = egui::vec2(avail.x, avail.y.max(PREVIEW_MIN_HEIGHT * scale));
-    let (outer, _) = ui.allocate_exact_size(size, Sense::hover());
-    let aspect = frame.aspect_w.max(1) as f32 / frame.aspect_h.max(1) as f32;
-    // Inset before letterboxing: `letterbox` fits the box exactly on one axis,
-    // so without this the frame's boundary chrome would have nowhere to go on
-    // two sides. Shrinks on a small preview rather than eating it.
-    let pad = (FRAME_CHROME_PAD * scale).min(size.min_elem() * 0.15);
-    let box_rect = letterbox(outer.shrink(pad), aspect);
-    // Compose with the SAME Layout the offline renderer resolves.
-    let layout = Layout::split(frame.lattice, frame.split);
-
-    // Make the render frame obvious against the pane. The letterbox padding
-    // takes the panel color, so it reads as inert chrome rather than part of
-    // the shot; the aspect box takes the render's OWN frame background — the
-    // color the offline renderer shows in its margins and inter-pane gaps — so
-    // the box is exactly the pixels the video will contain. Painting the
-    // padding and the pane fills both `picture()` leaves no way to tell where
-    // the frame ends.
-    let bg = layout.background;
-    ui.painter().rect_filled(outer, 0.0, theme::panel());
-    ui.painter().rect_filled(box_rect, 0.0, egui::Color32::from_rgb(bg.0, bg.1, bg.2));
-    frame_chrome(ui, box_rect, pad);
-
-    let placements = layout.resolve(box_rect.size());
-    for (pane, rect) in &placements {
-        let rect = rect.translate(box_rect.min.to_vec2());
-        match pane {
-            Pane::Spectral => {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                // Its text sizes itself off the rect it is given, so drawing
-                // the pane small draws its type small, as the render will.
-                // Shadows instead use screen points. Scale their widths for
-                // this drawing only, including the reach used by roll culling.
-                let shadow = state.appearance.view.shadow;
-                state.appearance.view.shadow =
-                    preview_shadows(shadow, box_rect.width(), &state.appearance.render);
-                super::spectral::spectral_pane(
-                    &mut child,
-                    state,
-                    now,
-                    PREVIEW_SURFACE,
-                    preview_scale(box_rect.width(), &state.appearance.render),
-                    super::spectral::Navigation::Preview,
-                );
-                state.appearance.view.shadow = shadow;
-            }
-            // Unreachable, and here for the match rather than for the picture:
-            // this preview composes `Layout::split`, which places the lattice
-            // and the Analyzer and nothing else, so the Video panel cannot
-            // preview a spiral at all. Spiral remains an editor pane.
-            //
-            // Drawn rather than left as a `todo!()` so that whatever reaches
-            // here if `Layout::split` ever grows a spiral gets the pane instead
-            // of a panic inside the host.
-            Pane::Spiral => {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                super::spiral::spiral_pane(&mut child, state, now, PREVIEW_SURFACE);
-            }
-            Pane::Lattice => preview_lattice(ui, rect, state, now),
+    section(ui, "Preview", |ui| {
+        ui.weak(
+            "Drag pictures to an edge · Shift-drag pictures to navigate · Scroll or pinch to zoom · Drag dividers to resize",
+        );
+        let frame = state.appearance.render.frame;
+        let avail = ui.available_size();
+        if avail.x < 20.0 {
+            return;
         }
-    }
+        // The preview takes whatever the controls left it — but never less than
+        // PREVIEW_MIN_HEIGHT. Without that floor it absorbed exactly the slack, so
+        // the pane's content measured the same height as the pane no matter how
+        // short the pane got: the dock's `ScrollArea` saw nothing sticking out and
+        // the wheel had nothing to grab, which made Video the one settings pane
+        // that would not scroll. Now a squeezed pane overflows instead, and the
+        // controls stay reachable by scrolling rather than the preview shrinking
+        // to a sliver.
+        let scale = crate::theme::ui_scale(ui.ctx());
+        let size = egui::vec2(avail.x, avail.y.max(PREVIEW_MIN_HEIGHT * scale));
+        let (outer, _) = ui.allocate_exact_size(size, Sense::hover());
+        let aspect = frame.aspect_w.max(1) as f32 / frame.aspect_h.max(1) as f32;
+        // Inset before letterboxing: `letterbox` fits the box exactly on one axis,
+        // so without this the frame's boundary chrome would have nowhere to go on
+        // two sides. Shrinks on a small preview rather than eating it.
+        let pad = (FRAME_CHROME_PAD * scale).min(size.min_elem() * 0.15);
+        let box_rect = letterbox(outer.shrink(pad), aspect);
+        // Compose with the SAME Layout the offline renderer resolves.
+        let layout = Layout::split(frame.lattice, frame.split);
 
-    // The seam between panes, exactly as the render bakes it.
-    let translated: Vec<_> =
-        placements.iter().map(|(p, r)| (*p, r.translate(box_rect.min.to_vec2()))).collect();
-    layout.paint_dividers(ui.painter(), &translated);
-    let appearance = &mut state.appearance;
-    preview_layout_controls(
-        ui,
-        box_rect,
-        &mut appearance.render.frame,
-        &mut appearance.camera,
-        &mut appearance.view,
-    );
+        // Make the render frame obvious against the pane. The letterbox padding
+        // takes the panel color, so it reads as inert chrome rather than part of
+        // the shot; the aspect box takes the render's OWN frame background — the
+        // color the offline renderer shows in its margins and inter-pane gaps — so
+        // the box is exactly the pixels the video will contain. Painting the
+        // padding and the pane fills both `picture()` leaves no way to tell where
+        // the frame ends.
+        let bg = layout.background;
+        ui.painter().rect_filled(outer, 0.0, theme::panel());
+        ui.painter().rect_filled(box_rect, 0.0, egui::Color32::from_rgb(bg.0, bg.1, bg.2));
+        frame_chrome(ui, box_rect, pad);
+
+        let placements = layout.resolve(box_rect.size());
+        for (pane, rect) in &placements {
+            let rect = rect.translate(box_rect.min.to_vec2());
+            match pane {
+                Pane::Spectral => {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    // Its text sizes itself off the rect it is given, so drawing
+                    // the pane small draws its type small, as the render will.
+                    // Shadows instead use screen points. Scale their widths for
+                    // this drawing only, including the reach used by roll culling.
+                    let shadow = state.appearance.view.shadow;
+                    state.appearance.view.shadow =
+                        preview_shadows(shadow, box_rect.width(), &state.appearance.render);
+                    super::spectral::spectral_pane(
+                        &mut child,
+                        state,
+                        now,
+                        PREVIEW_SURFACE,
+                        preview_scale(box_rect.width(), &state.appearance.render),
+                        super::spectral::Navigation::Preview,
+                    );
+                    state.appearance.view.shadow = shadow;
+                }
+                // Unreachable, and here for the match rather than for the picture:
+                // this preview composes `Layout::split`, which places the lattice
+                // and the Analyzer and nothing else, so the Video panel cannot
+                // preview a spiral at all. Spiral remains an editor pane.
+                //
+                // Drawn rather than left as a `todo!()` so that whatever reaches
+                // here if `Layout::split` ever grows a spiral gets the pane instead
+                // of a panic inside the host.
+                Pane::Spiral => {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    super::spiral::spiral_pane(&mut child, state, now, PREVIEW_SURFACE);
+                }
+                Pane::Lattice => preview_lattice(ui, rect, state, now),
+            }
+        }
+
+        // The seam between panes, exactly as the render bakes it.
+        let translated: Vec<_> =
+            placements.iter().map(|(p, r)| (*p, r.translate(box_rect.min.to_vec2()))).collect();
+        layout.paint_dividers(ui.painter(), &translated);
+        let appearance = &mut state.appearance;
+        preview_layout_controls(
+            ui,
+            box_rect,
+            &mut appearance.render.frame,
+            &mut appearance.camera,
+            &mut appearance.view,
+        );
+    });
 }
 
 /// Interaction chrome lives over the preview only; exports keep the plain seam.
@@ -324,40 +325,45 @@ fn preview_scale(width: f32, config: &crate::RenderConfig) -> f32 {
 /// Aspect ratio and resolution — editing the persisted
 /// `RenderFrame` and the resolution beside it.
 fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
-    section(ui, "Frame");
-    let f = &mut state.appearance.render.frame;
-    let mut aspect = (f.aspect_w, f.aspect_h);
-    choice_row(
-        ui,
-        "Aspect ratio",
-        &mut aspect,
-        &[
-            ((16, 9), "16:9", "Landscape"),
-            ((9, 16), "9:16", "Portrait"),
-            ((1, 1), "1:1", "Square"),
-            ((4, 5), "4:5", "Portrait"),
-            ((21, 9), "21:9", "Ultrawide"),
-        ],
-    );
-    (f.aspect_w, f.aspect_h) = aspect;
-    // The SHORT edge, not a named format: "1080p" means nothing to a 9:16
-    // frame, where 1080 is the width. Aspect decides the shape and this
-    // decides only how big, so each option shows the pixels it lands on and
-    // the pair is what the plugin passes as `--size`.
-    //
-    // 720 is on the list rather than only the three sizes worth delivering
-    // because it is a real draft setting for a render measured in minutes.
-    let frame = state.appearance.render.frame;
-    let sizes: Vec<(u32, String, String)> = [720u32, 1080, 1440, 2160]
-        .iter()
-        .map(|&short| {
-            let [w, h] = frame.pixels(short);
-            (short, format!("{w} × {h}"), format!("{w} × {h} pixels; {short} px on the short edge"))
-        })
-        .collect();
-    let options: Vec<(u32, &str, &str)> =
-        sizes.iter().map(|(v, label, hint)| (*v, label.as_str(), hint.as_str())).collect();
-    choice_row(ui, "Output size (px)", &mut state.appearance.render.short_edge, &options);
+    section(ui, "Frame", |ui| {
+        let f = &mut state.appearance.render.frame;
+        let mut aspect = (f.aspect_w, f.aspect_h);
+        choice_row(
+            ui,
+            "Aspect ratio",
+            &mut aspect,
+            &[
+                ((16, 9), "16:9", "Landscape"),
+                ((9, 16), "9:16", "Portrait"),
+                ((1, 1), "1:1", "Square"),
+                ((4, 5), "4:5", "Portrait"),
+                ((21, 9), "21:9", "Ultrawide"),
+            ],
+        );
+        (f.aspect_w, f.aspect_h) = aspect;
+        // The SHORT edge, not a named format: "1080p" means nothing to a 9:16
+        // frame, where 1080 is the width. Aspect decides the shape and this
+        // decides only how big, so each option shows the pixels it lands on and
+        // the pair is what the plugin passes as `--size`.
+        //
+        // 720 is on the list rather than only the three sizes worth delivering
+        // because it is a real draft setting for a render measured in minutes.
+        let frame = state.appearance.render.frame;
+        let sizes: Vec<(u32, String, String)> = [720u32, 1080, 1440, 2160]
+            .iter()
+            .map(|&short| {
+                let [w, h] = frame.pixels(short);
+                (
+                    short,
+                    format!("{w} × {h}"),
+                    format!("{w} × {h} pixels; {short} px on the short edge"),
+                )
+            })
+            .collect();
+        let options: Vec<(u32, &str, &str)> =
+            sizes.iter().map(|(v, label, hint)| (*v, label.as_str(), hint.as_str())).collect();
+        choice_row(ui, "Output size (px)", &mut state.appearance.render.short_edge, &options);
+    });
 }
 
 /// Empty the four things that accumulate, in one press, next to the button
@@ -409,50 +415,51 @@ fn render_controls(
 ) {
     use crate::SpectrogramRender;
 
-    section(ui, "Render");
-    // Scrolling names the span it scrolls, so the choice beside it reads as the
-    // alternative to that number without the Analyzer page open.
-    let scrolling = format!(
-        "Scrolling ({})",
-        super::spectral::settings::span_readout(state.appearance.spectrum.roll_seconds)
-    );
-    choice_row(
-        ui,
-        "Video history",
-        &mut state.appearance.render.spectrogram,
-        &[
-            (
-                SpectrogramRender::Scrolling,
-                &scrolling,
-                "Bake the live scrolling spectrogram, exactly as previewed here. It shows the History duration set on the Analyzer page.",
-            ),
-            (
-                SpectrogramRender::WholeVideo,
-                "Whole video",
-                "Scroll slowly enough that the whole video fits: by its last frame, the MIDI ribbons and spectrogram reach back to its first. Up to 10 minutes. The preview here keeps showing the History duration.",
-            ),
-        ],
-    );
-    if !interaction.take.supported {
-        return;
-    }
-
-    // Re-render the last take with the frame you've dialed in since recording.
-    // The take carries only a record-time snapshot, so this is how a reframed
-    // preview reaches the video without recording again.
-    if interaction.take.last_ready {
-        ui.add_space(2.0);
-        if ui
-            .button("Re-render take")
-            .on_hover_text(
-                "Render the last take using the current appearance and video settings. Saves the video beside the take. If a render is running, it is replaced by this one.",
-            )
-            .clicked()
-        {
-            interaction.take.render_now = true;
+    section(ui, "Render", |ui| {
+        // Scrolling names the span it scrolls, so the choice beside it reads as the
+        // alternative to that number without the Analyzer page open.
+        let scrolling = format!(
+            "Scrolling ({})",
+            super::spectral::settings::span_readout(state.appearance.spectrum.roll_seconds)
+        );
+        choice_row(
+            ui,
+            "Video history",
+            &mut state.appearance.render.spectrogram,
+            &[
+                (
+                    SpectrogramRender::Scrolling,
+                    &scrolling,
+                    "Bake the live scrolling spectrogram, exactly as previewed here. It shows the History duration set on the Analyzer page.",
+                ),
+                (
+                    SpectrogramRender::WholeVideo,
+                    "Whole video",
+                    "Scroll slowly enough that the whole video fits: by its last frame, the MIDI ribbons and spectrogram reach back to its first. Up to 10 minutes. The preview here keeps showing the History duration.",
+                ),
+            ],
+        );
+        if !interaction.take.supported {
+            return;
         }
-    }
-    render_progress(ui, interaction);
+
+        // Re-render the last take with the frame you've dialed in since recording.
+        // The take carries only a record-time snapshot, so this is how a reframed
+        // preview reaches the video without recording again.
+        if interaction.take.last_ready {
+            ui.add_space(2.0);
+            if ui
+                .button("Re-render take")
+                .on_hover_text(
+                    "Render the last take using the current appearance and video settings. Saves the video beside the take. If a render is running, it is replaced by this one.",
+                )
+                .clicked()
+            {
+                interaction.take.render_now = true;
+            }
+        }
+        render_progress(ui, interaction);
+    });
 }
 
 /// The marks that say "this rectangle is the video frame", drawn entirely
@@ -554,62 +561,63 @@ fn record_controls(
     if !interaction.take.supported {
         return;
     }
-    section(ui, "Record");
-    let rolling = interaction.take.rolling;
-    record_button(ui, &mut interaction.take.recording, rolling, "Record take").on_hover_text(
-        "Record notes, automation, the current look and the selected audio input for video export. Press again to finish, or choose an automatic ending below. Finishing starts the video render.",
-    );
-    if !interaction.take.status.is_empty() {
-        ui.weak(&interaction.take.status);
-    }
-    // When a take finishes and turns into a video.
-    choice_row(
-        ui,
-        "Finish recording",
-        &mut state.appearance.render.trigger,
-        &[
-            (
-                crate::RenderTrigger::OnDisarm,
-                "Manually",
-                "Finish recording and start rendering when you turn Record take off.",
-            ),
-            (
-                crate::RenderTrigger::OnTransportStop,
-                "Transport stop",
-                "Finish recording and render when the host transport stops or jumps backward after recording has begun.",
-            ),
-            (
-                crate::RenderTrigger::AtLoopEnd,
-                "Loop end",
-                "Record one loop, then render when playback wraps to its start. Enable looping in the host; without a wrap, recording continues until you turn Record take off.",
-            ),
-            (
-                crate::RenderTrigger::AtBar,
-                "At bar",
-                "Finish recording and render when the transport plays through the bar below. The one that works during an audio export, which never loops and never reports itself playing.",
-            ),
-        ],
-    );
-    // Only under the trigger that reads it — a bar shown beside three triggers
-    // that ignore it is a dial that appears to do nothing three times out of
-    // four. The value is kept either way, so switching away and back does not
-    // lose it.
-    if state.appearance.render.trigger == crate::RenderTrigger::AtBar {
-        button_row(ui, |ui| {
-            ui.label("Stop at bar").on_hover_text(
-                "Counted as the host's arranger counts: bar 1 is the song's start. \
-                 Recording must reach this bar from before it — arming with the playhead \
-                 already past it records until you turn Record take off.",
-            );
-            ui.add(
-                egui::DragValue::new(&mut state.appearance.render.stop_bar)
-                    .range(crate::STOP_BAR_RANGE.0..=crate::STOP_BAR_RANGE.1)
-                    .speed(0.25),
-            );
-        });
-    }
+    section(ui, "Record", |ui| {
+        let rolling = interaction.take.rolling;
+        record_button(ui, &mut interaction.take.recording, rolling, "Record take").on_hover_text(
+            "Record notes, automation, the current look and the selected audio input for video export. Press again to finish, or choose an automatic ending below. Finishing starts the video render.",
+        );
+        if !interaction.take.status.is_empty() {
+            ui.weak(&interaction.take.status);
+        }
+        // When a take finishes and turns into a video.
+        choice_row(
+            ui,
+            "Finish recording",
+            &mut state.appearance.render.trigger,
+            &[
+                (
+                    crate::RenderTrigger::OnDisarm,
+                    "Manually",
+                    "Finish recording and start rendering when you turn Record take off.",
+                ),
+                (
+                    crate::RenderTrigger::OnTransportStop,
+                    "Transport stop",
+                    "Finish recording and render when the host transport stops or jumps backward after recording has begun.",
+                ),
+                (
+                    crate::RenderTrigger::AtLoopEnd,
+                    "Loop end",
+                    "Record one loop, then render when playback wraps to its start. Enable looping in the host; without a wrap, recording continues until you turn Record take off.",
+                ),
+                (
+                    crate::RenderTrigger::AtBar,
+                    "At bar",
+                    "Finish recording and render when the transport plays through the bar below. The one that works during an audio export, which never loops and never reports itself playing.",
+                ),
+            ],
+        );
+        // Only under the trigger that reads it — a bar shown beside three triggers
+        // that ignore it is a dial that appears to do nothing three times out of
+        // four. The value is kept either way, so switching away and back does not
+        // lose it.
+        if state.appearance.render.trigger == crate::RenderTrigger::AtBar {
+            button_row(ui, |ui| {
+                ui.label("Stop at bar").on_hover_text(
+                    "Counted as the host's arranger counts: bar 1 is the song's start. \
+                     Recording must reach this bar from before it — arming with the playhead \
+                     already past it records until you turn Record take off.",
+                );
+                ui.add(
+                    egui::DragValue::new(&mut state.appearance.render.stop_bar)
+                        .range(crate::STOP_BAR_RANGE.0..=crate::STOP_BAR_RANGE.1)
+                        .speed(0.25),
+                );
+            });
+        }
 
-    clear_everything(ui, state);
+        clear_everything(ui, state);
+    });
 }
 
 /// How far the background render has got, while one is running — and the way

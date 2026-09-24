@@ -412,7 +412,7 @@ impl Spiral {
     ///
     /// The names' [`band`](Self::band) is the one thing not magnified. It is
     /// measured in points because it holds TYPE, and the type it holds is set at
-    /// the size the Display tab dialled it to (see [`NAME_PT`]) — a name grown
+    /// the size the Analyzer settings dialled it to (see [`NAME_PT`]) — a name grown
     /// eight times over would be a word across the pane. So a magnified disc
     /// carries the same names at the same size, standing off the rim by the same
     /// air. The band still comes off the FIT's radius, since reserving room is

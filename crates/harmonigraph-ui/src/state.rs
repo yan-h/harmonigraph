@@ -203,15 +203,16 @@ pub struct Interaction {
     /// Take recording and video export, which the Video pane and the shell
     /// pass between them — see [`TakeState`].
     pub take: TakeState,
-    /// Which of the Display tab's pages is showing (persisted).
+    /// Which settings sections are folded, as "page/section" titles
+    /// (persisted).
     ///
     /// Here rather than in egui `Context` memory, and the home is load-bearing:
     /// the plugin builds a brand new `Context` every time the editor window
     /// opens (the trap [`PictureState::release_context_resources`] sets out), so
-    /// a choice kept in memory springs back to Colors with every reopen. The
-    /// picker writes clicks straight here and reads the body to draw off the
-    /// same field, so there is one source of truth for it.
-    pub display_page: panes::display::DisplayPage,
+    /// a fold kept in memory springs open with every reopen. Each section's
+    /// header reads and writes it through the hand-off
+    /// [`panes::section`] describes.
+    pub folded_sections: std::collections::BTreeSet<String>,
     /// Upper bound on how often the UI is drawn, in frames per second;
     /// `None` leaves it uncapped (as fast as the display can present).
     /// Persisted.
@@ -259,9 +260,9 @@ pub struct Interaction {
     /// before the panes draw and back after. Runtime only: the layout persists
     /// it; this copy lets the Analyzer settings page set it.
     pub(crate) dock: workspace::Position,
-    /// A Display page a picture's right-click menu asked for, which the
+    /// A settings tab a picture's right-click menu asked for, which the
     /// workspace opens after the sections draw.
-    pub(crate) open_settings: Option<panes::display::DisplayPage>,
+    pub(crate) open_settings: Option<panes::Tab>,
 }
 
 /// Fixed section layout and editor interaction, separate from the picture.
@@ -465,7 +466,7 @@ impl SharedState {
             version: UI_PERSIST_VERSION,
             layout: self.workspace.layout.clone(),
             analyzer_regions: self.workspace.interaction.analyzer_regions.clone(),
-            display_page: self.workspace.interaction.display_page,
+            folded_sections: self.workspace.interaction.folded_sections.clone(),
             appearance: self.picture.appearance.clone(),
             camera_presets: self.workspace.interaction.camera_presets.clone(),
             fps_cap: self.workspace.interaction.fps_cap,
@@ -519,7 +520,7 @@ impl SharedState {
         self.workspace.layout.sanitize();
         self.workspace.layout_runtime = workspace::Runtime::default();
         self.workspace.window_size_change = egui::Vec2::ZERO;
-        self.workspace.interaction.display_page = persist.display_page;
+        self.workspace.interaction.folded_sections = persist.folded_sections;
         self.picture.install_appearance(appearance);
         self.workspace.interaction.camera_presets = persist.camera_presets;
         for preset in &mut self.workspace.interaction.camera_presets {
@@ -637,7 +638,9 @@ pub(crate) struct UiPersist {
     pub(crate) version: u32,
     pub(crate) layout: workspace::Layout,
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
-    pub(crate) display_page: panes::display::DisplayPage,
+    /// See [`Interaction::folded_sections`]; a blob without it opens every
+    /// section.
+    pub(crate) folded_sections: std::collections::BTreeSet<String>,
     pub(crate) appearance: crate::AppearanceDocument,
     pub(crate) camera_presets: Vec<CameraPreset>,
     /// A missing cap reads as uncapped.
@@ -655,7 +658,7 @@ impl Default for UiPersist {
             version: 0,
             layout: workspace::Layout::default(),
             analyzer_regions: Default::default(),
-            display_page: panes::display::DisplayPage::default(),
+            folded_sections: Default::default(),
             appearance: crate::AppearanceDocument::default(),
             camera_presets: Vec::new(),
             fps_cap: None,
@@ -699,7 +702,7 @@ impl Default for Interaction {
             camera_presets: Vec::new(),
             preset_name: String::new(),
             take: TakeState::default(),
-            display_page: panes::display::DisplayPage::default(),
+            folded_sections: Default::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
             perf_pos: None,

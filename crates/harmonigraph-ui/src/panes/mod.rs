@@ -1,4 +1,4 @@
-//! Dock panes and their shared controls. Display pages are dispatched by [`display`].
+//! Dock panes and their shared controls. The picture settings pages are composed in [`pages`].
 
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{RangeBar, ValueBar};
@@ -6,7 +6,6 @@ use crate::PictureState;
 
 pub mod color;
 pub mod console;
-pub mod display;
 pub mod plus;
 // Not a pane either — the node glow's own clock, run by the Lattice pane over
 // the scene it has just derived.
@@ -17,6 +16,7 @@ mod lattice_atmosphere;
 pub mod lighting;
 pub(crate) mod node_motion;
 pub mod nodes;
+pub mod pages;
 /// The offline video frame, composed live so you can preview and adjust it
 /// before rendering. The "Video" tab.
 pub mod render;
@@ -29,11 +29,13 @@ pub mod system;
 pub mod tuning;
 pub mod view;
 
+use color::color_pane;
 use console::console_pane;
-use display::display_pane;
 use lattice::lattice_pane;
+use pages::{analyzer_settings_pane, lattice_settings_pane};
 use render::render_pane;
 use spiral::spiral_pane;
+use system::system_pane;
 use tuning::tuning_pane;
 
 /// The surface every docked tab draws on. One id serves all of them because the
@@ -106,8 +108,16 @@ pub enum Tab {
     /// Where the lattice's nodes sit in pitch: the prime bars, and the commas
     /// it tempers out.
     Tuning,
-    /// Picture, shared analysis and workspace settings behind the [`display`] picker.
-    Display,
+    /// Everything the Lattice picture draws and how it is lit. Titled
+    /// "Lattice", after the picture it sets up.
+    LatticeSettings,
+    /// The Analyzer and Spiral pictures, the spectrogram in the Analyzer, and
+    /// the analysis they share. Titled "Analyzer".
+    AnalyzerSettings,
+    /// Note and level colors, shared by every picture.
+    Colors,
+    /// Rendering cost and the editor's own interface.
+    System,
     Console,
     /// The Spectral display: FFT curve, voices, and piano roll. Titled
     /// "Analyzer".
@@ -169,12 +179,15 @@ pub fn tab_title(tab: &Tab) -> &'static str {
     match tab {
         Tab::Lattice => "Lattice",
         Tab::Tuning => "Tuning",
-        Tab::Display => "Display",
+        // Deliberately the same names as the pictures they set up: a picture
+        // and its settings are one feature on two surfaces, so each pair reads
+        // as "the analyzer, and its knobs" rather than as two things to tell
+        // apart.
+        Tab::LatticeSettings => "Lattice",
+        Tab::AnalyzerSettings => "Analyzer",
+        Tab::Colors => "Colors",
+        Tab::System => "System",
         Tab::Console => "Console",
-        // Deliberately the same name as the Display tab's Analyzer page: the
-        // display and the settings for it are one feature, and they sit on
-        // different surfaces, so the pair reads as "the analyzer, and its
-        // knobs" rather than as two things to tell apart.
         Tab::Spectral => "Analyzer",
         Tab::Spiral => "Spiral",
         Tab::Video => "Video",
@@ -194,6 +207,24 @@ impl Viewer<'_> {
         // Before the body draws anything — see [`pane_content_right`].
         let right = ui.max_rect().right();
         ui.data_mut(|d| d.insert_temp(pane_content_right(), right));
+        // Before the body too — see [`SectionFolds`].
+        let folds = SectionFolds {
+            page: tab_title(tab),
+            folded: std::mem::take(&mut self.interaction.folded_sections),
+        };
+        ui.data_mut(|d| d.insert_temp(SectionFolds::id(), folds));
+        self.body(ui, tab);
+        let folds = ui.data_mut(|d| {
+            let folds = d.get_temp::<SectionFolds>(SectionFolds::id());
+            d.remove::<SectionFolds>(SectionFolds::id());
+            folds
+        });
+        if let Some(folds) = folds {
+            self.interaction.folded_sections = folds.folded;
+        }
+    }
+
+    fn body(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
             Tab::Lattice => {
                 self.state.runtime.lattice_maps = self.params.lattice_maps();
@@ -204,7 +235,14 @@ impl Viewer<'_> {
                 }
             }
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
-            Tab::Display => display_pane(ui, self.state, self.interaction, self.params),
+            Tab::LatticeSettings => {
+                lattice_settings_pane(ui, self.state, self.interaction, self.params)
+            }
+            Tab::AnalyzerSettings => {
+                analyzer_settings_pane(ui, self.state, self.interaction, self.params)
+            }
+            Tab::Colors => color_pane(ui, &mut self.state.appearance, self.params),
+            Tab::System => system_pane(ui, &mut self.state.appearance, self.interaction),
             Tab::Console => console_pane(ui, &mut self.state.runtime),
             Tab::Spectral => {
                 // The docked analyzer, and the reason the hold is applied HERE
@@ -447,16 +485,13 @@ pub(super) fn edge_bar(
 
 /// The rule that separates a section from the one above it, so the FIRST
 /// section in a pane has nothing to separate from and takes a bare heading.
-/// The Display pages write that case out by hand — each is built from section
-/// functions in a fixed order, so the one that leads knows it does and draws a
-/// plain `ui.heading` instead.
 ///
-/// A pane whose first section depends on the shell cannot know: the Video
-/// pane leads with Record under a host and with Frame in the standalone,
-/// which has no transport to record. The CURSOR is what answers it without
-/// asking the caller — it starts at the top of the ui and only moves down
-/// once something is laid out, so still being there means this heading is
-/// the pane's first.
+/// The pane cannot always say which section leads: the Video pane leads with
+/// Record under a host and with Frame in the standalone, which has no transport
+/// to record, and a page built from other panes' sections leads with whichever
+/// it puts first. The CURSOR is what answers it without asking the caller — it
+/// starts at the top of the ui and only moves down once something is laid out,
+/// so still being there means this heading is the pane's first.
 ///
 /// `min_rect` is the tempting reading of "has anything been drawn" and it
 /// is the wrong one here: the workspace wraps settings bodies in a `ScrollArea`
@@ -466,7 +501,7 @@ pub(super) fn edge_bar(
 /// the two apart — which is why `the_video_pane_does_not_start_with_a_rule`
 /// goes through the real dock.
 ///
-/// Called by [`section`] and by nothing else — a rule under a heading is what
+/// Called by [`section`] and by nothing else — a rule over a heading is what
 /// a section is, so the two travel together.
 pub(super) fn section_separator(ui: &mut egui::Ui) {
     if ui.cursor().top() > ui.max_rect().top() + 0.5 {
@@ -475,10 +510,92 @@ pub(super) fn section_separator(ui: &mut egui::Ui) {
     }
 }
 
-/// A section header inside a settings pane: a little breathing room, a thin
-/// rule, then the group's name in the heading (bold) face — so each block
-/// of related controls is easy to pick out at a glance.
-pub(super) fn section(ui: &mut egui::Ui, title: &str) {
+/// Which settings sections are folded, handed from [`Viewer`]'s `ui` to every
+/// [`section`] its body draws and back.
+///
+/// The set lives in [`Interaction`](crate::Interaction), persisted, because
+/// the plugin builds a brand new egui `Context` every time the editor opens:
+/// a fold kept in egui memory would spring open with every reopen. But a
+/// section is drawn from deep inside functions that are handed a `Ui` and the
+/// settings they draw and nothing else, so the set rides in the `Ui`'s data
+/// for the length of one tab's body instead of down every signature.
+///
+/// Keys are "page/section" by title, so the same heading on two pages folds
+/// separately and a blob names what it folds in words.
+#[derive(Clone)]
+struct SectionFolds {
+    page: &'static str,
+    folded: std::collections::BTreeSet<String>,
+}
+
+impl SectionFolds {
+    fn id() -> egui::Id {
+        egui::Id::new("section-folds")
+    }
+}
+
+/// A section of a settings pane: a little breathing room, a thin rule, then the
+/// group's name in the heading (bold) face as a header that folds the section
+/// away, and `body` below it while it is open.
+///
+/// The whole header row is the target rather than a small triangle beside the
+/// name, and its chevron sits at the row's right end, so the name keeps its
+/// place on the pane's left edge with the controls under it.
+pub(super) fn section<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
     section_separator(ui);
-    ui.heading(title);
+    let mut folds = ui.data(|d| d.get_temp::<SectionFolds>(SectionFolds::id()));
+    let key = folds.as_ref().map(|folds| format!("{}/{title}", folds.page));
+    let open = !key.as_ref().zip(folds.as_ref()).is_some_and(|(k, f)| f.folded.contains(k));
+    let open = open ^ section_header(ui, title, open).clicked();
+    if let (Some(folds), Some(key)) = (&mut folds, key) {
+        let changed = if open { folds.folded.remove(&key) } else { folds.folded.insert(key) };
+        if changed {
+            ui.data_mut(|d| d.insert_temp(SectionFolds::id(), folds.clone()));
+        }
+    }
+    open.then(|| body(ui))
+}
+
+/// The heading row of a [`section`]: the name, and a chevron that points down
+/// while the section is open and at the name while it is folded.
+fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response {
+    let galley = egui::WidgetText::from(egui::RichText::new(title).heading()).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        ui.available_width(),
+        egui::TextStyle::Heading,
+    );
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), galley.size().y),
+        egui::Sense::click(),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, ui.is_enabled(), open, title)
+    });
+    let hot = response.hovered() || response.has_focus();
+    let color = ui.visuals().text_color();
+    ui.painter().galley(rect.left_top(), galley, color);
+    let scale = crate::theme::ui_scale(ui.ctx());
+    let center = egui::pos2(rect.right() - 5.0 * scale, rect.center().y);
+    // The fold buttons' chevron: down while open, pointing back at the name
+    // while folded.
+    let (along, across) =
+        if open { (egui::Vec2::Y, egui::Vec2::X) } else { (-egui::Vec2::X, egui::Vec2::Y) };
+    let points = vec![
+        center - along * 2.0 * scale + across * 4.0 * scale,
+        center + along * 2.0 * scale,
+        center - along * 2.0 * scale - across * 4.0 * scale,
+    ];
+    ui.painter().add(egui::Shape::line(
+        points,
+        egui::Stroke::new(
+            1.5 * scale,
+            if hot { crate::theme::text() } else { crate::theme::text_dim() },
+        ),
+    ));
+    response
 }

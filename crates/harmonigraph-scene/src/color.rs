@@ -697,7 +697,7 @@ pub const HUE_CIRCLE_N: usize = 96;
 /// key is the two knobs the circle depends on rather than a whole gradient, and
 /// a bar's track hands it a FIXED reference pair (`TRACK_LIGHTNESS`, in
 /// `harmonigraph-ui`'s `widgets`) rather than the gradient's own: two bars open
-/// at once — the two gradient groups on the Display tab's Colors page, which
+/// at once — the two gradient groups on the Colors tab, which
 /// stand one above the other and so are both on screen together — therefore
 /// share the one entry, and no drag of any knob moves this table at all. A second caller
 /// wanting a pair of its own is what would make this want [`LUT_SLOTS`]-style

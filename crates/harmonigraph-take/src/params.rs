@@ -70,7 +70,7 @@ impl ParamKey {
     pub const TUNING: [ParamKey; 5] =
         [ParamKey::COffset, ParamKey::Three, ParamKey::Five, ParamKey::Seven, ParamKey::Tolerance];
 
-    /// Pitch->color gradient endpoints (the Color range on Display's Colors
+    /// Pitch->color gradient endpoints (the Color range on the Colors
     /// page).
     pub const COLOR: [ParamKey; 2] = [ParamKey::DarkestPitch, ParamKey::BrightestPitch];
 

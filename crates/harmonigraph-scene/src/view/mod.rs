@@ -784,7 +784,7 @@ pub struct ViewConfig {
     /// renderer never draws it, keeping its frames deterministic.
     ///
     /// Off by default: the HUD is a development instrument, and it sits over
-    /// the picture the plugin exists to draw. The Display tab's System page,
+    /// the picture the plugin exists to draw. The System tab,
     /// under Performance, is where it gets switched on.
     ///
     /// It was ON in the DAW when the 2026-09-07 look was captured, and stayed

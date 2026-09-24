@@ -1,4 +1,4 @@
-//! The At rest section of the Display tab's Lattice page: what the lattice
+//! The At rest section of the Lattice settings page: what the lattice
 //! draws when nothing is playing — how bright that picture is, and the cross
 //! standing at each node position that makes up most of it.
 //!
@@ -57,84 +57,85 @@ use harmonigraph_scene::{ViewConfig, PLUS_SIZE_MAX};
 /// The resting picture, last on the page: the lattice's own structure, under
 /// everything drawn on top of it.
 pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
-    section(ui, "Idle lattice");
-    // First, because it is the one setting here that reaches past this
-    // section: the rings it moves belong to the note, and every other bar
-    // under this heading is the marker field's.
-    //
-    // No off position, and none is missing: each ring has a width bar, so
-    // every setting of THIS one draws something. The bottom of it is black
-    // rather than nothing, which against the panel reads as holes punched
-    // through the lattice: a picture worth being able to reach, and worth
-    // reaching by dragging rather than by falling off the end.
-    ValueBar::new(&mut appearance.view.lattice_ground, 0.0..=100.0, "Idle ring brightness")
-        .unit(1.0, "%")
-        // L*, the units the gradients' own Brightness is authored in, so a
-        // ground and a gradient can be compared by their numbers. Whole
-        // points: the axis is 100 wide and a tenth of one is under a
-        // quantization step of the grey it names.
-        .integer()
-        .show(ui)
+    section(ui, "Idle lattice", |ui| {
+        // First, because it is the one setting here that reaches past this
+        // section: the rings it moves belong to the note, and every other bar
+        // under this heading is the marker field's.
+        //
+        // No off position, and none is missing: each ring has a width bar, so
+        // every setting of THIS one draws something. The bottom of it is black
+        // rather than nothing, which against the panel reads as holes punched
+        // through the lattice: a picture worth being able to reach, and worth
+        // reaching by dragging rather than by falling off the end.
+        ValueBar::new(&mut appearance.view.lattice_ground, 0.0..=100.0, "Idle ring brightness")
+            .unit(1.0, "%")
+            // L*, the units the gradients' own Brightness is authored in, so a
+            // ground and a gradient can be compared by their numbers. Whole
+            // points: the axis is 100 wide and a tenth of one is under a
+            // quantization step of the grey it names.
+            .integer()
+            .show(ui)
+            .on_hover_text(
+                "Brightness of silent audio and MIDI rings: 0% is black, 100% is white. \
+                     Lower values let active notes and their glow stand out.",
+            );
+        // Second, and on the same axis, so the pair is dialled by comparing two
+        // numbers. Together they are the whole resting picture; apart they are the
+        // one thing a person navigates by held above the one that is only ever
+        // backdrop.
+        //
+        // No off position, for the bar above's reason: Arm length at 0 is the
+        // marker field's own switch, and every setting of this one draws.
+        ValueBar::new(&mut appearance.view.marker_ink, 0.0..=100.0, "Idle label/cross brightness")
+            .unit(1.0, "%")
+            // Whole points on the same L* axis as Ground, and that IS the point of
+            // the units: two bars a person is meant to read against each other
+            // have to be counted in the same thing.
+            .integer()
+            .show(ui)
+            .on_hover_text(
+                "Brightness of idle note labels and crosses: 0% is black, 100% is white. \
+                     Raise above Idle ring brightness to keep the lattice easy to navigate.",
+            );
+        // Length first, then thickness, in the order the shape is built: an arm
+        // reaches, and then it has a width. Both are in the same quad UV a node's
+        // ring radii are dialled in, so this pair and Inner on the Layers bar are
+        // readings on ONE axis — a marker that fits inside the middle a node's
+        // rings stand around can be read off the numbers rather than by eye.
+        edge_bar(
+            ui,
+            (&mut appearance.view.plus_arm, &mut appearance.view.plus_taper),
+            PLUS_SIZE_MAX,
+            "Cross length",
+            {
+                let fresh = ViewConfig::default();
+                (fresh.plus_arm, fresh.plus_taper)
+            },
+            |v| format!("{:.1}%", v * 100.0),
+        )
         .on_hover_text(
-            "Brightness of silent audio and MIDI rings: 0% is black, 100% is white. \
-                 Lower values let active notes and their glow stand out.",
+            "Cross-arm length from the center, as a percentage of the node radius. \
+                     Solid to the inner handle, faded out by the outer handle. \
+                     0% hides crosses. \
+                     Double-click resets.",
         );
-    // Second, and on the same axis, so the pair is dialled by comparing two
-    // numbers. Together they are the whole resting picture; apart they are the
-    // one thing a person navigates by held above the one that is only ever
-    // backdrop.
-    //
-    // No off position, for the bar above's reason: Arm length at 0 is the
-    // marker field's own switch, and every setting of this one draws.
-    ValueBar::new(&mut appearance.view.marker_ink, 0.0..=100.0, "Idle label/cross brightness")
-        .unit(1.0, "%")
-        // Whole points on the same L* axis as Ground, and that IS the point of
-        // the units: two bars a person is meant to read against each other
-        // have to be counted in the same thing.
-        .integer()
-        .show(ui)
-        .on_hover_text(
-            "Brightness of idle note labels and crosses: 0% is black, 100% is white. \
-                 Raise above Idle ring brightness to keep the lattice easy to navigate.",
-        );
-    // Length first, then thickness, in the order the shape is built: an arm
-    // reaches, and then it has a width. Both are in the same quad UV a node's
-    // ring radii are dialled in, so this pair and Inner on the Layers bar are
-    // readings on ONE axis — a marker that fits inside the middle a node's
-    // rings stand around can be read off the numbers rather than by eye.
-    edge_bar(
-        ui,
-        (&mut appearance.view.plus_arm, &mut appearance.view.plus_taper),
-        PLUS_SIZE_MAX,
-        "Cross length",
-        {
-            let fresh = ViewConfig::default();
-            (fresh.plus_arm, fresh.plus_taper)
-        },
-        |v| format!("{:.1}%", v * 100.0),
-    )
-    .on_hover_text(
-        "Cross-arm length from the center, as a percentage of the node radius. \
-                 Solid to the inner handle, faded out by the outer handle. \
-                 0% hides crosses. \
-                 Double-click resets.",
-    );
-    // A length of its own rather than a share of the arm above it. Tied to the
-    // arm the marker would have one proportion at every size, and this bar is
-    // exactly the freedom that buys: a long hairline crossing, or a short thick
-    // one, off the same two numbers.
-    //
-    // No off position, and it needs none: an arm with no thickness is still cut
-    // with the screen-constant band every edge here carries, so the bottom of
-    // this bar is the thinnest cross the screen can draw. What takes the field
-    // away is the bar above.
-    ValueBar::new(&mut appearance.view.plus_width, 0.0..=PLUS_SIZE_MAX, "Cross width")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "Full width of each cross arm, as a percentage of the node radius. \
-                 0% is a hairline; \
-                 Cross length at 0% hides crosses. \
-                 Named nodes do not draw crosses.",
-        );
+        // A length of its own rather than a share of the arm above it. Tied to the
+        // arm the marker would have one proportion at every size, and this bar is
+        // exactly the freedom that buys: a long hairline crossing, or a short thick
+        // one, off the same two numbers.
+        //
+        // No off position, and it needs none: an arm with no thickness is still cut
+        // with the screen-constant band every edge here carries, so the bottom of
+        // this bar is the thinnest cross the screen can draw. What takes the field
+        // away is the bar above.
+        ValueBar::new(&mut appearance.view.plus_width, 0.0..=PLUS_SIZE_MAX, "Cross width")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "Full width of each cross arm, as a percentage of the node radius. \
+                     0% is a hairline; \
+                     Cross length at 0% hides crosses. \
+                     Named nodes do not draw crosses.",
+            );
+    });
 }

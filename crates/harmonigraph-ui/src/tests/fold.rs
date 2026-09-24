@@ -122,8 +122,7 @@ fn texts(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
 
 /// Dock the analyzer from its row on the Analyzer settings page.
 fn dock(h: &mut DockHarness, state: &mut SharedState, position: Position) {
-    state.workspace.interaction.display_page = panes::display::DisplayPage::Analyzer;
-    state.workspace.layout.select(panes::Tab::Display);
+    state.workspace.layout.select(panes::Tab::AnalyzerSettings);
     let output = h.frame(state, vec![]);
     let row = texts(&output, "Dock").first().copied().expect("no Dock row");
     let label = if position == Position::Right { "Right" } else { "Below" };
@@ -150,15 +149,13 @@ fn right_click(h: &mut DockHarness, state: &mut SharedState, at: egui::Pos2) {
 
 #[test]
 fn right_clicking_a_picture_opens_its_settings_page() {
-    use panes::display::DisplayPage;
     let mut state = fresh();
     let mut h = DockHarness::new();
     h.settle(&mut state);
     h.collapse_click(&mut state, panes::Tab::Tuning);
     let cases = [
-        (panes::Tab::Lattice, "Lattice settings", DisplayPage::Lattice),
-        (panes::Tab::Spectral, "Analyzer settings", DisplayPage::Analyzer),
-        (panes::Tab::Spectral, "Spectrogram settings", DisplayPage::Spectrogram),
+        (panes::Tab::Lattice, "Lattice settings", panes::Tab::LatticeSettings),
+        (panes::Tab::Spectral, "Analyzer settings", panes::Tab::AnalyzerSettings),
     ];
     for (picture, item, page) in cases {
         let at = if picture == panes::Tab::Spectral {
@@ -171,8 +168,7 @@ fn right_clicking_a_picture_opens_its_settings_page() {
         let entry = texts(&output, item).first().copied().unwrap_or_else(|| panic!("no {item:?}"));
         click_settled(&mut h, &mut state, entry.center());
         assert!(!state.workspace.layout.folded[Section::Settings as usize], "{item}");
-        assert_eq!(state.workspace.layout.settings_tab, panes::Tab::Display, "{item}");
-        assert_eq!(state.workspace.interaction.display_page, page, "{item}");
+        assert_eq!(state.workspace.layout.settings_tab, page, "{item}");
         // Back to where the next case starts: another tab, and closed again.
         state.workspace.layout.select(panes::Tab::Tuning);
         h.collapse_click(&mut state, panes::Tab::Tuning);
@@ -748,6 +744,8 @@ fn a_folded_analyzer_keeps_one_header_row_and_its_spiral_choice() {
                 _ => None,
             })
         };
+        // Too narrow for even one tab beside the overflow button, so the strip
+        // is one dropdown carrying the current view's name.
         assert!(find(&out, "Spiral").is_none(), "fixture did not reach the dropdown");
         let picker = find(&out, "Analyzer").expect("current view dropdown");
         click_at(&mut h, &mut state, picker);

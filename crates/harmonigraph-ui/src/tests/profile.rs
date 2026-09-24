@@ -348,8 +348,8 @@ fn profile_settings_panes() {
     let ctx = super::probe::themed();
 
     println!("\n-- one settings pane at 300 points wide, ms per frame --");
-    for pane in SETTINGS_PANES {
-        let tab = pane.install(&mut state);
+    for &pane in SETTINGS_PANES {
+        let tab = pane;
         let mut samples = Vec::new();
         let mut shapes = 0;
         for i in 0..200 {
