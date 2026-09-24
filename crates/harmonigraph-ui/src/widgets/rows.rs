@@ -63,15 +63,12 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             egui::lerp(egui::Rgba::from(a)..=egui::Rgba::from(b), t).into()
         };
         let painter = ui.painter();
-        painter.rect_filled(track, radius, mix(theme::well(), theme::accent_active()));
-        if response.hovered() || response.dragged() {
-            painter.rect_stroke(
-                track,
-                radius,
-                egui::Stroke::new(1.0, theme::accent_edge()),
-                egui::StrokeKind::Inside,
-            );
-        }
+        let track_fill = if response.hovered() || response.dragged() {
+            mix(theme::surface_faint(), theme::accent_edge())
+        } else {
+            mix(theme::well(), theme::accent_active())
+        };
+        painter.rect_filled(track, radius, track_fill);
         let knob_x = egui::lerp((track.left() + radius)..=(track.right() - radius), t);
         painter.circle_filled(
             egui::pos2(knob_x, track.center().y),
@@ -138,16 +135,8 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
             1.0
         };
         let painter = ui.painter();
-        let bg = if response.hovered() { theme::panel() } else { theme::well() };
+        let bg = if response.hovered() { theme::surface_faint() } else { theme::well() };
         painter.rect_filled(rect, CornerRadius::same(theme::control_radius(scale)), bg);
-        if response.hovered() {
-            painter.rect_stroke(
-                rect,
-                CornerRadius::same(theme::control_radius(scale)),
-                egui::Stroke::new(1.0, theme::accent_edge()),
-                egui::StrokeKind::Inside,
-            );
-        }
         let dot = egui::pos2(rect.left() + pad_x + dot_r, rect.center().y);
         if *on {
             painter.circle_filled(dot, dot_r, theme::armed().gamma_multiply(alpha));

@@ -648,8 +648,9 @@ fn section_and_region_chevrons_share_visible_hover_feedback() {
                     && (r.rect.center().y - cell.center().y).abs() < 0.5
                     && r.corner_radius == egui::CornerRadius::same(theme::control_radius(1.0))
                     && r.fill == theme::widget_hover()
+                    && r.stroke.width == 0.0
             )),
-            "no hover fill at {cell:?}"
+            "no unoutlined hover fill at {cell:?}"
         );
         assert!(
             out.shapes.iter().any(|cs| matches!(&cs.shape,
@@ -695,5 +696,45 @@ fn a_folded_analyzer_keeps_one_header_row_and_its_spiral_choice() {
         let spiral = find(&menu, "Spiral").expect("Spiral in dropdown");
         click_at(&mut h, &mut state, spiral);
         assert_eq!(state.workspace.layout.analyzer_tab, panes::Tab::Spiral);
+    }
+}
+
+/// Where a region's outer edge survives its fold, Expand appears exactly where
+/// Collapse was. The other region's rail rides the shrinking window edge.
+#[test]
+fn a_region_expand_button_takes_the_place_of_its_collapse_button() {
+    for (orientation, index) in [(SpectralOrientation::Right, 1), (SpectralOrientation::Left, 0)] {
+        let mut state = fresh();
+        state.picture.appearance.spectrum.orientation = orientation;
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        let window = h.screen.width();
+        let id = egui::Id::new(("analyzer region fold", index));
+        let button = |h: &mut DockHarness, state: &mut SharedState| {
+            let cell = h.ctx.read_response(id).expect("region control is drawn").rect;
+            // The clicked control keeps focus, so it may still draw hot.
+            h.frame(state, vec![egui::Event::PointerGone])
+                .shapes
+                .iter()
+                .find_map(|cs| match &cs.shape {
+                    egui::Shape::Rect(r)
+                        if cell.contains_rect(r.rect)
+                            && [theme::widget(), theme::widget_hover()].contains(&r.fill)
+                            && (r.rect.height() - theme::row_height(1.0)).abs() < 0.5 =>
+                    {
+                        Some(r.rect)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{orientation:?} drew no button in {cell:?}"))
+        };
+        let collapse = button(&mut h, &mut state);
+        region_click(&mut h, &mut state, index);
+        h.settle_folds(&mut state);
+        assert!(state.workspace.interaction.analyzer_regions.collapsed[index]);
+        assert!(h.screen.width() < window - 10.0, "the fold did not resize the window");
+        let expand = button(&mut h, &mut state);
+        near(expand.min.to_vec2(), collapse.min.to_vec2());
+        near(expand.size(), collapse.size());
     }
 }

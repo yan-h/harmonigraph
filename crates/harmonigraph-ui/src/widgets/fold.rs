@@ -15,6 +15,8 @@ pub(crate) fn paint_fold(ui: &egui::Ui, response: &Response, cell: Rect, directi
         cell.center(),
         Vec2::splat(theme::row_height(scale)).min(cell.size()),
     );
+    // An ordinary button's fills, so the square reads against the panel, the
+    // rail and a black picture alike, and hover is carried by fill alone.
     painter.rect_filled(
         button,
         radius,
@@ -23,17 +25,9 @@ pub(crate) fn paint_fold(ui: &egui::Ui, response: &Response, cell: Rect, directi
         } else if hot {
             theme::widget_hover()
         } else {
-            theme::well()
+            theme::widget()
         },
     );
-    if hot {
-        painter.rect_stroke(
-            button,
-            radius,
-            egui::Stroke::new(1.0, theme::accent_edge()),
-            egui::StrokeKind::Inside,
-        );
-    }
     let center = cell.center();
     let cross = egui::vec2(-direction.y, direction.x);
     painter.add(egui::Shape::line(

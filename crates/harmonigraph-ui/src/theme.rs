@@ -44,7 +44,7 @@ pub fn widget() -> Color32 {
 pub fn widget_hover() -> Color32 {
     c(active_skin().widget_hover)
 }
-/// Accent: selections, slider fill, hover strokes.
+/// Accent: selections, slider fill, a dragged divider.
 pub fn accent() -> Color32 {
     c(active_skin().accent)
 }
@@ -75,7 +75,7 @@ pub fn accent_fill_drag() -> Color32 {
 pub fn accent_active() -> Color32 {
     c(active_skin().accent_active)
 }
-/// Hover/focus stroke color.
+/// Hover accent: a lit divider, a hovered switch track.
 pub fn accent_edge() -> Color32 {
     c(active_skin().accent_edge)
 }
@@ -432,9 +432,9 @@ fn style_at(scale: f32) -> egui::Style {
     visuals.window_corner_radius = CornerRadius::same(8);
     visuals.menu_corner_radius = CornerRadius::same(6);
 
-    // Widget states: flat fills, rounded corners, strokes only where they
-    // carry information (hover/focus). Every state is the same SIZE — hover
-    // and press are read off the fill and the border, which cost no space.
+    // Widget states: flat fills, rounded corners, no outlines. Every state is
+    // the same SIZE — hover and press are read off the fill, which costs no
+    // space, and keyboard focus draws as press does.
     //
     // egui's `expansion` is the alternative, a hover swell of a point or two,
     // and it is not free here: it is paid back through a negative outer margin
@@ -459,13 +459,13 @@ fn style_at(scale: f32) -> egui::Style {
 
     w.hovered.bg_fill = widget_hover();
     w.hovered.weak_bg_fill = widget_hover();
-    w.hovered.bg_stroke = Stroke::new(1.0, accent_edge());
+    w.hovered.bg_stroke = Stroke::NONE;
     w.hovered.fg_stroke = Stroke::new(1.2, text());
     w.hovered.corner_radius = WIDGET_RADIUS;
 
     w.active.bg_fill = accent_active();
     w.active.weak_bg_fill = accent_active();
-    w.active.bg_stroke = Stroke::new(1.0, accent());
+    w.active.bg_stroke = Stroke::NONE;
     w.active.fg_stroke = Stroke::new(1.2, Color32::WHITE);
     w.active.corner_radius = WIDGET_RADIUS;
 
