@@ -598,17 +598,17 @@ const HEADING_TRACKING: f32 = 1.2;
 /// column keeps, so a heading is spaced as a line of text is.
 const HEADING_GAP: f32 = crate::widgets::GROUP_GAP;
 
-/// The heading row of a [`section`]: its name in small, spaced, dim capitals
-/// — told from the rows under it by size, case and colour at once, where the
-/// bold it replaced differed from them by weight alone.
+/// The heading row of a [`section`]: its name in spaced capitals at the full
+/// text size, in the primary text colour — told from the dim labels under it
+/// by case, height and brightness at once.
 fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response {
     let scale = crate::theme::ui_scale(ui.ctx());
     let job = egui::text::LayoutJob::single_section(
         title.to_uppercase(),
         egui::TextFormat {
-            font_id: egui::TextStyle::Small.resolve(ui.style()),
+            font_id: egui::TextStyle::Heading.resolve(ui.style()),
             extra_letter_spacing: HEADING_TRACKING * scale,
-            color: crate::theme::text_dim(),
+            color: crate::theme::text(),
             ..Default::default()
         },
     );
