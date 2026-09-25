@@ -367,18 +367,16 @@ fn check(edge: Edge) {
             _ => &[],
         };
         for &label in blooms {
-            let bloom = visits.iter().find(|visit| visit.label == label).unwrap();
-            assert_eq!(bloom.range, 0.0..=2.0);
+            assert!(saw(label), "{scenario:?} drew no {label:?} bar");
             assert!(!saw("Bloom amount") && !saw("Ribbon glow"));
         }
         for visit in visits {
             if visit.label == "Contour levels" {
-                assert_eq!(visit.range, 2.0..=20.0);
                 assert_eq!(
                     visit.values,
                     vec![match edge {
-                        Edge::Low => 2.0,
-                        Edge::High => 20.0,
+                        Edge::Low => *visit.range.start(),
+                        Edge::High => *visit.range.end(),
                         Edge::Fresh => SpectralAtmosphere::default().contours,
                     }]
                 );

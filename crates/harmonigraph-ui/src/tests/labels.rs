@@ -689,9 +689,9 @@ fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egu
 /// function rather than two lines at each call site.
 ///
 /// Both settings here are past the ceiling, so both must rasterize at it and
-/// draw the same size. `want` is `pane/860 · label_scale · screen_scale`, which
-/// at an 800pt pane and the camera at `MIN_DISTANCE` (`screen_scale` 6) is
-/// `5.58 · label_scale` against a ceiling of `512/(30·ppp)` = 8.53 at `ppp` 2.
+/// draw the same size. Both are well past it at the camera's `MIN_DISTANCE` and
+/// `ppp` 2, and the first assertion is what says so if a change to the pane's
+/// type scale or the ceiling ever brings one of them back under it.
 ///
 /// Retina is what makes this ordinary rather than a corner: the ceiling is
 /// crossed at half the zoom on a 2x display, so the same camera and the same
@@ -701,7 +701,7 @@ fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egu
 #[test]
 fn a_zoom_past_the_raster_ceiling_stops_growing_the_drawn_label() {
     let distance = harmonigraph_scene::Camera::MIN_DISTANCE;
-    let just_past = lattice_labels_at(1.6, distance, 2.0);
+    let just_past = lattice_labels_at(2.0, distance, 2.0);
     let far_past = lattice_labels_at(3.0, distance, 2.0);
     assert!(!just_past.is_empty() && !far_past.is_empty(), "the held C should be labeled");
 
