@@ -6,32 +6,25 @@
 //! usually one tab short: a column a few points too narrow hid every
 //! destination behind a dropdown to spare the one that did not fit.
 
-use egui::{Atom, Rect, Response, Ui, Vec2};
+use egui::{Atom, Rect, Ui, Vec2};
 
 use super::rows::{option_label, option_width};
 use crate::theme;
 
-/// Draw `options` as tabs, as many as fit from the left, and the rest behind a
-/// trailing overflow button. The selected tab is underlined at `baseline`, the
-/// bottom edge of the header the strip stands in.
-///
-/// Tabs are text on the header rather than buttons: dim at rest, bright when
-/// hovered or selected, and the selected one underlined in the accent. Filled
-/// they were the same widget as every choice row in the page below, and read
-/// as one more of them.
+/// Draw `options` as selectable buttons, as many as fit from the left, and the
+/// rest behind a trailing overflow button.
 ///
 /// The overflow button shows three dots while the selected tab is on the strip.
 /// When the selected tab is one of the hidden ones, the button carries its name
-/// and the underline instead, so the current destination is always labelled
-/// and nothing on the strip shifts to make room for it. Where not even one tab
-/// fits beside it, that button is the whole strip, its name truncated to the
-/// room: one dropdown, the same one as at every other width.
+/// and the selected fill instead, so the current destination is always
+/// labelled and nothing on the strip shifts to make room for it. Where not even
+/// one tab fits beside it, that button is the whole strip, its name truncated
+/// to the room: one dropdown, the same one as at every other width.
 pub(crate) fn tab_strip<T: Copy + PartialEq>(
     ui: &mut Ui,
     id: &str,
     value: &mut T,
     options: &[(T, &str)],
-    baseline: f32,
 ) {
     let widths: Vec<f32> = options.iter().map(|(_, label)| option_width(ui, label)).collect();
     let selected = options.iter().position(|(choice, _)| *choice == *value);
@@ -40,55 +33,12 @@ pub(crate) fn tab_strip<T: Copy + PartialEq>(
     });
     ui.horizontal(|ui| {
         for &(choice, label) in &options[..shown] {
-            tab(ui, value, choice, label, baseline);
+            ui.selectable_value(value, choice, option_label(label));
         }
         if shown < options.len() {
-            overflow(ui, id, value, &options[shown..], baseline);
+            overflow(ui, id, value, &options[shown..]);
         }
     });
-}
-
-/// One tab: its label, as wide as [`option_width`] measures it so the strip's
-/// fit is the strip drawn, and its underline when selected.
-fn tab<T: Copy + PartialEq>(ui: &mut Ui, value: &mut T, choice: T, label: &str, baseline: f32) {
-    let selected = *value == choice;
-    let galley = egui::WidgetText::from(option_label(label)).into_galley(
-        ui,
-        Some(egui::TextWrapMode::Extend),
-        f32::INFINITY,
-        egui::TextStyle::Button,
-    );
-    let size = Vec2::new(option_width(ui, label), ui.spacing().interact_size.y);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::WidgetType::SelectableLabel,
-            ui.is_enabled(),
-            selected,
-            galley.text(),
-        )
-    });
-    if response.clicked() {
-        *value = choice;
-    }
-    let hot = response.hovered() || response.has_focus();
-    let color = if selected || hot { theme::text() } else { theme::text_dim() };
-    ui.painter().galley(rect.center() - galley.size() * 0.5, galley, color);
-    if selected {
-        underline(ui, &response, baseline);
-    }
-}
-
-/// The selected tab's mark: an accent bar under its label, standing on the
-/// header's bottom edge.
-fn underline(ui: &Ui, response: &Response, baseline: f32) {
-    let scale = theme::ui_scale(ui.ctx());
-    let inset = ui.spacing().button_padding.x * 0.5;
-    let bar = Rect::from_x_y_ranges(
-        (response.rect.left() + inset)..=(response.rect.right() - inset),
-        (baseline - 2.0 * scale)..=baseline,
-    );
-    ui.painter().rect_filled(bar, egui::CornerRadius::same(1), theme::accent());
 }
 
 /// How many leading tabs fit beside the overflow button they would need,
@@ -115,27 +65,18 @@ fn overflow_width(ui: &Ui, label: Option<&str>) -> f32 {
     }
 }
 
-fn overflow<T: Copy + PartialEq>(
-    ui: &mut Ui,
-    id: &str,
-    value: &mut T,
-    hidden: &[(T, &str)],
-    baseline: f32,
-) {
+fn overflow<T: Copy + PartialEq>(ui: &mut Ui, id: &str, value: &mut T, hidden: &[(T, &str)]) {
     let current = hidden.iter().find(|(choice, _)| *choice == *value).map(|&(_, label)| label);
     let icon = ui.make_persistent_id((id, "overflow icon"));
     let size = Vec2::splat(ui.spacing().icon_width);
-    // Frameless, as the tabs are: hover brightens the glyph rather than
-    // filling a button.
     let button = match current {
         Some(label) => {
-            egui::Button::new((option_label(label).color(theme::text()), Atom::custom(icon, size)))
+            egui::Button::selectable(true, (option_label(label), Atom::custom(icon, size)))
                 .truncate()
         }
-        None => egui::Button::new(Atom::custom(icon, size))
+        None => egui::Button::selectable(false, Atom::custom(icon, size))
             .min_size(Vec2::splat(ui.spacing().interact_size.y)),
-    }
-    .frame(false);
+    };
     let response = button.atom_ui(ui);
     if let Some(rect) = response.rect(icon) {
         let hot = response.response.hovered() || response.response.has_focus();
@@ -145,9 +86,6 @@ fn overflow<T: Copy + PartialEq>(
         } else {
             paint_dots(ui, rect, color);
         }
-    }
-    if current.is_some() {
-        underline(ui, &response.response, baseline);
     }
     let response = response.response.on_hover_text("More tabs");
     let width = response.rect.width();
@@ -199,7 +137,7 @@ mod tests {
     fn drawn(width: f32, selected: u8) -> (Vec<String>, usize) {
         let mut value = selected;
         let shapes = crate::tests::probe::painted_full(egui::vec2(width, 60.0), |ui| {
-            tab_strip(ui, "tabs", &mut value, &TABS, 60.0)
+            tab_strip(ui, "tabs", &mut value, &TABS)
         })
         .shapes;
         let labels = shapes
@@ -225,41 +163,6 @@ mod tests {
         assert_eq!(dots, 3, "the hidden tabs have no overflow button");
     }
 
-    /// The selected tab is marked by an accent bar standing on the baseline
-    /// under it, and no tab is filled: a filled tab is the choice-row pill.
-    #[test]
-    fn the_selected_tab_is_underlined_rather_than_filled() {
-        let mut value = 1;
-        let shapes = crate::tests::probe::painted_full(egui::vec2(600.0, 60.0), |ui| {
-            tab_strip(ui, "tabs", &mut value, &TABS, 40.0)
-        })
-        .shapes;
-        let label = |name: &str| {
-            shapes.iter().find_map(|cs| match &cs.shape {
-                egui::Shape::Text(text) if text.galley.text() == name => {
-                    Some(text.visual_bounding_rect())
-                }
-                _ => None,
-            })
-        };
-        let rects: Vec<_> = shapes
-            .iter()
-            .filter_map(|cs| match &cs.shape {
-                egui::Shape::Rect(rect) => Some(rect.clone()),
-                _ => None,
-            })
-            .collect();
-        let [bar] = rects.as_slice() else { panic!("expected one underline: {rects:?}") };
-        assert_eq!(bar.fill, crate::theme::accent());
-        assert_eq!(bar.rect.bottom(), 40.0, "the underline is off the baseline");
-        let lattice = label("Lattice").expect("the selected tab's label");
-        assert!(
-            bar.rect.left() < lattice.center().x && lattice.center().x < bar.rect.right(),
-            "the underline is not under the selected tab: {:?} vs {lattice:?}",
-            bar.rect,
-        );
-    }
-
     /// A selected tab that has overflowed names the overflow button, so the
     /// current destination is always on the strip.
     #[test]
@@ -276,7 +179,7 @@ mod tests {
         let width = 40.0;
         let mut value = 2;
         let shapes = crate::tests::probe::painted_full(egui::vec2(width, 60.0), |ui| {
-            tab_strip(ui, "tabs", &mut value, &TABS, 60.0)
+            tab_strip(ui, "tabs", &mut value, &TABS)
         })
         .shapes;
         let texts: Vec<_> = shapes
@@ -306,7 +209,7 @@ mod tests {
             let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 60.0));
             let screen = egui::vec2(600.0, 300.0);
             crate::tests::probe::events_into(&ctx, screen, rect, events, |ui| {
-                tab_strip(ui, "tabs", &mut value, &TABS, 60.0)
+                tab_strip(ui, "tabs", &mut value, &TABS)
             })
             .shapes
         };

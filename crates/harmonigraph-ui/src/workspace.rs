@@ -521,7 +521,7 @@ fn section_ui(
                 .map(|&choice| (choice, crate::panes::tab_title(&choice)))
                 .collect();
             let mut selected = tab;
-            crate::widgets::tab_strip(ui, "section tabs", &mut selected, &options, band.bottom());
+            crate::widgets::tab_strip(ui, "section tabs", &mut selected, &options);
             if selected != tab {
                 layout.select(selected);
             }
