@@ -174,21 +174,24 @@ pub struct Gradient {
 /// **One curve, because the question is about the range.** "The color barely
 /// moves until the loudest few dB, then turns fast" is a statement about the
 /// LEVEL axis, and each channel either takes part in it or walks its range
-/// evenly. Three independent curves could say more, and cost a selector to
-/// say it with.
+/// evenly.
 ///
-/// **A rational curve, `t / (c·(1 − t) + 1)`**, which Schlick used as his
-/// bias function. It runs through both ends of the range, rises everywhere,
-/// and is smooth everywhere including at the extremes, where a curve forced
-/// through an arbitrary point has to turn a corner. It is also symmetric about
-/// the anti-diagonal, so the one number it has is best stated as the
-/// [`knee`](Self::knee): where the curve crosses that diagonal. A knee at 0.9
-/// means that 90% of the way up the range the channel has covered 10% of its
-/// change.
+/// **A soft knee**, the shape a compressor draws: two straight lines, from the
+/// bottom of the range to the corner (`at`, `share`) and from there to the
+/// top, with the corner rounded. A channel on the curve has covered `share` of
+/// its change by `at` of the range — less the rounding, which keeps the curve
+/// inside the corner rather than through it.
 ///
-/// What the one number cannot do is set WHERE the curve turns and HOW SHARPLY
-/// separately — a stronger bend is also a later one. That is the bargain for
-/// having no corners.
+/// **The rounding is a share of EACH line**, [`ROUNDING`](Self::ROUNDING) of
+/// its length either side of the corner, and that is what keeps the curve
+/// smooth everywhere. Sized off the shorter line instead, as a compressor's
+/// knee usually is, a corner near the edge of the plot has almost no room and
+/// turns as sharply as no rounding at all. The round is a quadratic Bézier
+/// with its control point on the corner, so it leaves each line along the
+/// line and never turns back on itself.
+///
+/// The softness is a constant rather than a knob: with the rounding sized per
+/// line, one value reads well at every corner.
 ///
 /// The ends are fixed — 0 at the bottom of the range, 1 at the top — so a
 /// bend never moves the colors a gradient opens and closes on, and everything
@@ -197,16 +200,17 @@ pub struct Gradient {
 /// between the two ends, which is the value at the centre of the range only
 /// while the curve is straight or switched off for that channel.
 ///
-/// A knee of 0.5 is straight, and [`warp`](Self::warp) returns `t` exactly
-/// there, so a gradient that has never been bent draws bit for bit what it did
-/// before bends existed.
+/// A corner on the diagonal (`share == at`) is straight, and
+/// [`warp`](Self::warp) returns `t` exactly there, so a gradient that has never
+/// been bent draws bit for bit what it did before bends existed.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Bend {
-    /// Where the curve crosses the anti-diagonal, as a fraction of the range
-    /// from the bottom: above 0.5 holds the change back for the top of the
-    /// range, below 0.5 spends it early.
-    pub knee: f32,
+    /// Where along the range the corner stands, 0..1 from the bottom. Kept off
+    /// the very ends, where one of the two lines would have no length.
+    pub at: f32,
+    /// How much of the change the corner stands at, 0..1.
+    pub share: f32,
     /// Whether the hue walks its arc along the curve.
     pub hue: bool,
     /// Whether brightness walks its pair along the curve.
@@ -219,44 +223,74 @@ impl Default for Bend {
     /// Straight, and applying to every channel once it is bent: a drag on the
     /// curve should change the picture without a second step.
     fn default() -> Self {
-        Bend { knee: 0.5, hue: true, lightness: true, chroma: true }
+        Bend { at: 0.5, share: 0.5, hue: true, lightness: true, chroma: true }
     }
 }
 
 impl Bend {
-    /// How close to either end of the range the knee may stand. Past this the
-    /// curve spends nearly all its change inside one entry of the color table.
-    pub const KNEE_LIMITS: (f32, f32) = (0.02, 0.98);
+    /// How close to either end of the range the corner may stand.
+    pub const AT_LIMITS: (f32, f32) = (0.02, 0.98);
+
+    /// How much of each line, measured back from the corner, the round takes.
+    pub const ROUNDING: f64 = 0.4;
 
     /// Held to what the curve is defined for, and finite: the bend is part of
     /// the LUT memo's key through [`Gradient::sanitized`].
     pub fn sanitized(self) -> Bend {
-        let knee = if self.knee.is_finite() { self.knee } else { 0.5 };
-        Bend { knee: knee.clamp(Self::KNEE_LIMITS.0, Self::KNEE_LIMITS.1), ..self }
+        let finite = |v: f32| if v.is_finite() { v } else { 0.5 };
+        Bend {
+            at: finite(self.at).clamp(Self::AT_LIMITS.0, Self::AT_LIMITS.1),
+            share: finite(self.share).clamp(0.0, 1.0),
+            ..self
+        }
     }
 
     /// Whether the curve is the even walk, and [`warp`](Self::warp) the
     /// identity.
     pub fn is_straight(self) -> bool {
-        self.knee == 0.5
+        self.at == self.share
     }
 
     /// How far along its change a channel on the curve is at `t`: 0 at `t` 0,
-    /// 1 at `t` 1, through (`knee`, `1 - knee`) between.
+    /// 1 at `t` 1, and the two lines through the corner outside the round.
     ///
-    /// Sanitizes its own knee rather than trusting it, since
+    /// Sanitizes its own corner rather than trusting it, since
     /// [`Gradient::chroma_at`] reads its gradient raw; the output is always in
     /// 0..=1.
     pub fn warp(self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         let b = self.sanitized();
-        if b.is_straight() {
+        if b.is_straight() || t == 1.0 {
             return t;
         }
-        // The curve through (k, 1 - k): solved from `1 - k = k / (c(1 - k) + 1)`.
-        let k = f64::from(b.knee);
-        let c = (k / (1.0 - k) - 1.0) / (1.0 - k);
-        (t / (c * (1.0 - t) + 1.0)).clamp(0.0, 1.0)
+        let (x, y) = (f64::from(b.at), f64::from(b.share));
+        let r = Self::ROUNDING;
+        let (low, high) = (y / x, (1.0 - y) / (1.0 - x));
+        // Where the round leaves each line.
+        let (x0, x2) = (x * (1.0 - r), x + r * (1.0 - x));
+        let w = if t <= x0 {
+            low * t
+        } else if t >= x2 {
+            y + high * (t - x)
+        } else {
+            let (y0, y2) = (low * x0, y + high * (x2 - x));
+            // Solve the Bézier's x(s) = t for s, in the form that stays stable
+            // as the curve's x-acceleration `a` goes to 0; `b > 0` and `c <= 0`
+            // throughout the round, so the root is real and the denominator
+            // positive.
+            let (a, b, c) = (x0 - 2.0 * x + x2, 2.0 * (x - x0), x0 - t);
+            let s = -2.0 * c / (b + (b * b - 4.0 * a * c).max(0.0).sqrt());
+            (1.0 - s) * (1.0 - s) * y0 + 2.0 * s * (1.0 - s) * y + s * s * y2
+        };
+        w.clamp(0.0, 1.0)
+    }
+
+    /// The same curve reflected in the diagonal, which is its inverse: the
+    /// construction is symmetric in the two axes, so swapping the corner's
+    /// coordinates swaps what goes in and what comes out. Exact wherever the
+    /// swapped corner is inside [`AT_LIMITS`](Self::AT_LIMITS).
+    pub fn inverse(self) -> Bend {
+        Bend { at: self.share, share: self.at, ..self }
     }
 
     /// [`warp`](Self::warp) for a channel that is `on` the curve, and `t`

@@ -46,7 +46,7 @@ fn poisoned_view() -> ViewConfig {
         lightness_ramp: nan,
         chroma: nan,
         chroma_ramp: nan,
-        bend: Bend { knee: nan, ..Bend::default() },
+        bend: Bend { at: nan, share: nan, ..Bend::default() },
     };
     let shadow = ShadowStyle {
         kernel: base.shadow.lattice_geometry.kernel,

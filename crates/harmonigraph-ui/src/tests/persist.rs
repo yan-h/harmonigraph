@@ -852,7 +852,12 @@ fn spectrum_config_round_trips_through_persist() {
         lightness_ramp: 71.5,
         chroma: 0.375,
         chroma_ramp: -0.25,
-        bend: harmonigraph_scene::Bend { knee: 0.9, lightness: false, ..Default::default() },
+        bend: harmonigraph_scene::Bend {
+            at: 0.9,
+            share: 0.15,
+            lightness: false,
+            ..Default::default()
+        },
     };
     let saved = state.save_persist();
 

@@ -7,7 +7,7 @@ use harmonigraph_scene::{Bend, Gradient};
 use super::bar::{bar_radius, bar_width, BAR_TEXT_PAD, HANDLE_INSET};
 use crate::theme;
 
-/// Rows the plot stands, so a knee at 90% of the range is a drag of a few
+/// Rows the plot stands, so a corner at 90% of the range is a drag of a few
 /// points rather than a single one.
 const PLOT_ROWS: f32 = 3.0;
 
@@ -32,19 +32,18 @@ fn plot_area(well: egui::Rect, scale: f32) -> egui::Rect {
 
 /// The gradient's [`Bend`]: a row of on/off buttons naming the channels that
 /// follow the curve, over a plot of the range (across) against how far those
-/// channels have come (up). Drag anywhere on the plot to move the knee;
-/// double-click to straighten it.
+/// channels have come (up). Drag anywhere on the plot to move the knee's
+/// corner; double-click to straighten it.
 ///
-/// The curve has one number, so the handle rides one line: the anti-diagonal,
-/// which the curve is symmetric about. A press anywhere takes the point on
-/// that line nearest the pointer, so the handle stays under the hand along
-/// the one direction it can move.
+/// The handle is the CORNER, where the knee's two straight lines meet, and the
+/// lines are drawn faintly through it: the curve rounds inside the corner
+/// rather than through it, which is what a compressor's knee does too.
 ///
 /// A second picture of the range rather than a mark on the bars above, whose
 /// tracks run along each channel's own VALUE (the hue circle, the `L*` axis)
 /// and not along the range at all.
 ///
-/// The readout says where the knee stands in the range's own units — a note
+/// The readout says where the corner stands in the range's own units — a note
 /// for the pitch gradient, a level for the analyzer's — which is what `axis`
 /// is handed for.
 pub struct BendPlot<'a> {
@@ -60,7 +59,7 @@ impl<'a> BendPlot<'a> {
         BendPlot { gradient, home: Gradient::default(), axis }
     }
 
-    /// The gradient a double-click takes the knee back to.
+    /// The gradient a double-click takes the corner back to.
     pub fn home(mut self, home: Gradient) -> Self {
         self.home = home;
         self
@@ -92,16 +91,17 @@ impl<'a> BendPlot<'a> {
         };
 
         if response.double_clicked() {
-            self.gradient.bend.knee = self.home.sanitized().bend.knee;
+            let home = self.home.sanitized().bend;
+            self.gradient.bend = Bend { at: home.at, share: home.share, ..self.gradient.bend };
             response.mark_changed();
         } else if response.dragged() || response.clicked() {
             if let Some(p) = response.interact_pointer_pos() {
                 let across = (p.x - plot.left()) / plot.width().max(1.0);
                 let up = (plot.bottom() - p.y) / plot.height().max(1.0);
-                // The nearest point on the anti-diagonal, snapped to whole
-                // percentages so the readout is the number held.
-                let knee = ((across + 1.0 - up) * 0.5 * 100.0).round() / 100.0;
-                let next = Bend { knee, ..self.gradient.bend }.sanitized();
+                // Snapped to whole percentages, so the readout is the number held.
+                let snap = |v: f32| (v * 100.0).round() / 100.0;
+                let next =
+                    Bend { at: snap(across), share: snap(up), ..self.gradient.bend }.sanitized();
                 if next != self.gradient.bend {
                     self.gradient.bend = next;
                     response.mark_changed();
@@ -115,15 +115,17 @@ impl<'a> BendPlot<'a> {
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(bar_radius(scale)), theme::well());
         let hairline = Stroke::new(scale, theme::hairline());
+        let dot = pos_of(bend.at, bend.share);
         painter.line_segment([pos_of(0.0, 0.0), pos_of(1.0, 1.0)], hairline);
-        painter.line_segment([pos_of(0.0, 1.0), pos_of(1.0, 0.0)], hairline);
+        painter.line_segment([pos_of(0.0, 0.0), dot], hairline);
+        painter.line_segment([dot, pos_of(1.0, 1.0)], hairline);
 
         // Even steps across the range, and the same up it read back through
-        // the curve's symmetry (its inverse is `1 - warp(1 - w)`), merged.
+        // the curve's inverse, merged.
         let mut ts: Vec<f64> = (0..=CURVE_SEGMENTS)
             .flat_map(|i| {
                 let s = i as f64 / CURVE_SEGMENTS as f64;
-                [s, 1.0 - bend.warp(1.0 - s)]
+                [s, bend.inverse().warp(s)]
             })
             .collect();
         ts.sort_by(f64::total_cmp);
@@ -132,11 +134,10 @@ impl<'a> BendPlot<'a> {
         let live = response.hovered() || response.dragged();
         let ink = if applies { theme::text() } else { theme::text_dim() };
         painter.add(egui::Shape::line(points, Stroke::new(1.5 * scale, ink)));
-        let dot = pos_of(bend.knee, 1.0 - bend.knee);
         let fill = if live { theme::text() } else { theme::text_dim() };
         painter.circle(dot, 4.0 * scale, fill, Stroke::new(scale, theme::panel()));
 
-        let readout = format!("{:.0}% by {}", (1.0 - bend.knee) * 100.0, (self.axis)(bend.knee));
+        let readout = format!("{:.0}% by {}", bend.share * 100.0, (self.axis)(bend.at));
         let text_color = if live { theme::text() } else { theme::text_dim() };
         let galley =
             painter.layout_no_wrap(readout, TextStyle::Monospace.resolve(ui.style()), text_color);
@@ -195,14 +196,13 @@ mod tests {
     }
 
     #[test]
-    fn a_click_moves_the_knee_to_the_nearest_point_on_its_line_and_a_double_click_straightens_it() {
+    fn a_click_moves_the_corner_and_a_double_click_straightens_it() {
         let mut g = Gradient::default();
         g.bend.lightness = false;
-        // Off the anti-diagonal: the knee is where the pointer projects onto it.
-        click(&mut g, (0.95, 0.15), 1);
-        assert_eq!(g.bend, Bend { knee: 0.9, lightness: false, ..Bend::default() });
+        click(&mut g, (0.9, 0.15), 1);
+        assert_eq!(g.bend, Bend { at: 0.9, share: 0.15, lightness: false, ..Bend::default() });
 
-        click(&mut g, (0.95, 0.15), 2);
+        click(&mut g, (0.9, 0.15), 2);
         assert!(g.bend.is_straight(), "a double-click left the curve bent: {:?}", g.bend);
         assert!(!g.bend.lightness, "a double-click switched a channel back on");
     }
