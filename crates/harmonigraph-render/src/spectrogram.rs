@@ -423,9 +423,13 @@ fn create_spectrogram_pipeline(
     extra_layout: Option<&wgpu::BindGroupLayout>,
     fragment: &str,
 ) -> wgpu::RenderPipeline {
+    #[cfg(not(test))]
+    let source = SPECTROGRAM_SRC.into();
+    #[cfg(test)]
+    let source = tests::pipeline_source();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("spectrogram_shader"),
-        source: wgpu::ShaderSource::Wgsl(SPECTROGRAM_SRC.into()),
+        source: wgpu::ShaderSource::Wgsl(source),
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("spectrogram_pipeline_layout"),
@@ -843,7 +847,7 @@ impl CallbackTrait for SpectrogramCallback {
                     // bake because it reads the finished material out of the
                     // same coverage quad, and only when display scale calls for a
                     // reduction — at the fresh size there is no target and the
-                    // composite walks the cells itself.
+                    // composite reads the tile under each pixel itself.
                     if let Some(((tone_view, _), tone_group)) =
                         target.tone.as_ref().zip(target.tone_group.as_ref())
                     {
@@ -1427,11 +1431,13 @@ mod tests {
         use harmonigraph_scene::CloudStyle::{Mosaic, Watercolor};
         let Some((device, queue)) = headless_device() else { return };
         for style in [Mosaic, Watercolor] {
-            for (pixel, tile) in [(0.5, 0), (2.0, 0), (0.5, 40), (2.0, 40)] {
+            for pixel in [0.5, 2.0] {
                 let mut cb = refracted_fixture();
                 let mut resources = CallbackResources::default();
-                resources
-                    .insert(atmosphere::CloudSampling { pixel_points: pixel, tile_cells: tile });
+                resources.insert(atmosphere::CloudSampling {
+                    pixel_points: pixel,
+                    ..Default::default()
+                });
                 {
                     let s = &mut cb.atmosphere.as_mut().unwrap().settings;
                     s.cloud_style = style;
@@ -1451,7 +1457,7 @@ mod tests {
                     assert_eq!(
                         frame_with(&device, &queue, &mut resources, &cb),
                         bare,
-                        "{style:?}, pixel={pixel}, tile={tile}, soft={soft}, contours={contours}"
+                        "{style:?}, pixel={pixel}, soft={soft}, contours={contours}"
                     );
                 }
                 let straight = frame_with(&device, &queue, &mut resources, &cb);
@@ -1471,7 +1477,7 @@ mod tests {
                     .as_ref()
                     .unwrap();
                 assert_eq!(targets.tone_size().is_some(), pixel > 1.0);
-                assert_eq!(targets.tile_texels().is_some(), tile > 0);
+                assert!(targets.tile_texels().is_some());
                 // Intermediate depth must stay on the curved palette too.
                 // Mixing RGB endpoints would cut across this ramp's curve.
                 cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.5;
@@ -1494,7 +1500,7 @@ mod tests {
                     let bare = frame_with(&device, &queue, &mut resources, &cb);
                     assert!(
                         bent.iter().zip(&bare).all(|(a, b)| a.abs_diff(*b) <= 1),
-                        "{style:?} changes flat level {value}: pixel={pixel}, tile={tile}"
+                        "{style:?} changes flat level {value}: pixel={pixel}"
                     );
                     cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
                 }
@@ -1542,17 +1548,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    fn frame_with_sampling(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        cb: &SpectrogramCallback,
-        sampling: atmosphere::CloudSampling,
-    ) -> Vec<u8> {
-        let mut resources = CallbackResources::default();
-        resources.insert(sampling);
-        frame_with(device, queue, &mut resources, cb)
     }
 
     fn cloud_fixture() -> SpectrogramCallback {
@@ -3721,6 +3716,26 @@ fn cs_wrap_probe() {
         );
     }
 
+    thread_local! {
+        /// Set while a test draws the reference [`pipeline_source`] builds.
+        static UNWRAPPED_MOSAIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// The source every spectrogram pipeline is built from: production's, or
+    /// under [`UNWRAPPED_MOSAIC`] the same with the Mosaic's tile read swapped
+    /// for the unwrapped walk the tile was baked from. That walk was the
+    /// composite's own live arm until #1100 measured it costing the textured
+    /// composite 16 to 21% without ever being taken, so the reference lives
+    /// here instead.
+    pub(super) fn pipeline_source() -> std::borrow::Cow<'static, str> {
+        if !UNWRAPPED_MOSAIC.get() {
+            return SPECTROGRAM_SRC.into();
+        }
+        let read = "let tile = textureSampleLevel(cloud_tile_a, tile_sampler, r / f32(cloud.tile_cells), 0.0);\n    var pile: Pile;\n    pile.face = tile.xy;\n    pile.to_centre = tile.zw;";
+        assert_eq!(SPECTROGRAM_SRC.matches(read).count(), 1, "the Mosaic's tile read moved");
+        SPECTROGRAM_SRC.replace(read, "let pile = cloud_domes(r, 0);").into()
+    }
+
     /// The square Mosaic tile remains the live scale field inside its first
     /// period. This is the visual contract behind leaving Mosaic unrotated:
     /// its tile may repeat the field, but may not turn it into a second look.
@@ -3762,12 +3777,9 @@ fn cs_wrap_probe() {
         settings.cloud_depth = 1.0;
         settings.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
         settings.cloud_speed = 0.0;
-        let live = frame_with_sampling(
-            &device,
-            &queue,
-            &cb,
-            atmosphere::CloudSampling { tile_cells: 0, ..Default::default() },
-        );
+        UNWRAPPED_MOSAIC.set(true);
+        let live = fresh_frame(&device, &queue, &cb);
+        UNWRAPPED_MOSAIC.set(false);
         let tiled = fresh_frame(&device, &queue, &cb);
         assert_ne!(live, tiled, "the tile never ran");
 

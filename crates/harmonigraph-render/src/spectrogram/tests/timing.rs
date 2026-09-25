@@ -29,7 +29,8 @@
 //! zero is not one under them; `plain` still is.
 //!
 //! `PROBE_CLOUD_PIXEL` (points per cloud sample), `PROBE_CLOUD_TILE` (the
-//! walk's period in cells, 0 for the live walk) and `PROBE_BLUR_TIME_STEP`
+//! walk's period in cells, never 0 since #1100 retired the composite's live
+//! walk) and `PROBE_BLUR_TIME_STEP`
 //! (slabs per source texel on the light field's time axis, 0 for off), each
 //! defaulting to the production values (0.5 pt, 40 cells and the saved blur
 //! default), apply to EVERY case after its own `turn`, so one run reads the whole table at one setting
