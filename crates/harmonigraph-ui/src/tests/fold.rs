@@ -588,6 +588,18 @@ fn analyzer_region_restore_repays_its_width_after_orientation_changes() {
 
 #[test]
 fn resetting_the_layout_restores_space_held_by_analyzer_regions() {
+    // What a reset window measures when nothing was folded: the default
+    // layout's own width, read off a frame rather than restated here.
+    let unfolded = {
+        let mut state = fresh();
+        state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        state.workspace.reset_layout();
+        h.frame(&mut state, vec![]);
+        h.settle_folds(&mut state);
+        h.screen.width()
+    };
     for fold_lattice_first in [None, Some(true), Some(false)] {
         let mut state = fresh();
         state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
@@ -601,7 +613,7 @@ fn resetting_the_layout_restores_space_held_by_analyzer_regions() {
         if fold_lattice_first == Some(false) {
             h.collapse_click(&mut state, panes::Tab::Lattice);
         }
-        assert!(h.screen.width() < 1000.0);
+        assert!(h.screen.width() < unfolded - 1.0, "the folds held no space to restore");
         let saved = state.save_persist();
         state = fresh();
         assert!(state.load_persist(&saved));
@@ -611,8 +623,8 @@ fn resetting_the_layout_restores_space_held_by_analyzer_regions() {
         h.settle_folds(&mut state);
         assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
         assert!(
-            (h.screen.width() - 996.0).abs() < 1.0,
-            "order {fold_lattice_first:?}: {}",
+            (h.screen.width() - unfolded).abs() < 1.0,
+            "order {fold_lattice_first:?}: {}, not the unfolded {unfolded}",
             h.screen.width()
         );
     }

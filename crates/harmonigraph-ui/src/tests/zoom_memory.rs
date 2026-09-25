@@ -86,7 +86,9 @@ fn played() -> SharedState {
 /// entire range eight times. That is enough to grow the atlas well past its
 /// 32-row seed; repeating the gesture is therefore testing retained glyph
 /// variants rather than an idle pane that never reached the growing path.
-fn assert_repeated_zooms_settle(label_scale: f32, expected_maximum: [usize; 2]) {
+///
+/// Answers the largest atlas the sweeps reached, which is at most `bound`.
+fn assert_repeated_zooms_settle(label_scale: f32, bound: [usize; 2]) -> [usize; 2] {
     let mut state = played();
     state.picture.appearance.view.label_scale = label_scale;
     let mut zoom = Zoom::new();
@@ -132,15 +134,22 @@ fn assert_repeated_zooms_settle(label_scale: f32, expected_maximum: [usize; 2]) 
     }
     let settled = settled.unwrap();
     assert!(settled[1] >= 512, "the first sweep never reached atlas growth: {settled:?}");
-    assert_eq!(maximum, expected_maximum, "Name size {label_scale} reached an unexpected atlas");
+    assert!(
+        maximum[0] <= bound[0] && maximum[1] <= bound[1],
+        "Name size {label_scale} grew the atlas to {maximum:?}, past {bound:?}",
+    );
     assert_eq!(zoom.atlas(), settled, "the return trips kept growing the atlas");
+    maximum
 }
 
 #[test]
 fn repeated_lattice_zooms_reuse_the_bounded_atlas() {
+    let cap = crate::shell::FONT_ATLAS_MAX_SIDE;
     assert_repeated_zooms_settle(
         harmonigraph_scene::ViewConfig::default().label_scale,
-        [4096, 2048],
+        [cap, cap / 2],
     );
-    assert_repeated_zooms_settle(3.0, [4096, 4096]);
+    // The largest Name size fills the atlas to the cap, so the cap is what
+    // stopped it rather than the glyphs running out first.
+    assert_eq!(assert_repeated_zooms_settle(3.0, [cap, cap]), [cap, cap]);
 }

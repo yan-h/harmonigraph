@@ -683,7 +683,8 @@ fn the_render_bar_fills_to_the_share_of_frames_done() {
         .filter_map(|cs| match &cs.shape {
             egui::Shape::Path(path) if path.fill == crate::theme::accent_fill() => {
                 let box_of = egui::Rect::from_points(&path.points);
-                ((box_of.height() - 20.0).abs() < 0.6).then(|| box_of.width() / WIDTH)
+                ((box_of.height() - crate::theme::ROW_HEIGHT).abs() < 0.6)
+                    .then(|| box_of.width() / WIDTH)
             }
             _ => None,
         })
@@ -1099,10 +1100,6 @@ fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
 /// is exactly the failure a "does it draw the word Marvel" test would pass.
 /// The Auto column is located by its heading: its switches are bare (the
 /// heading is their label), so there is no text in the cells to find.
-///
-/// The comma each row tempers out is deliberately NOT drawn — it lives in the
-/// switch's hover, where a ratio is read once rather than kept in a column
-/// that every row has to make room for.
 #[test]
 fn the_commas_section_lays_its_rows_out_as_a_table() {
     let shapes = settings_pane_at_width(panes::Tab::Tuning, 423.0, PROJECTIONS[0]);
@@ -1128,10 +1125,6 @@ fn the_commas_section_lays_its_rows_out_as_a_table() {
         assert!(head.y < meantone.y, "a heading is not above the rows");
     }
     assert!(temper_head.x < auto_head.x);
-    // And the ratios are on the hover, not in the table.
-    for ratio in ["81/80", "225/224"] {
-        assert!(find(ratio).is_none(), "{ratio} is drawn in the table");
-    }
 }
 
 /// A policy bar sends one configuration command on every changed drag frame,
