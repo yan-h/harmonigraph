@@ -130,51 +130,14 @@ float box_distance_trimmed(
     VertexOut in_1,
     float trim
 ) {
-    metal::float2 p = {};
-    metal::float2 w_1 = {};
-    float near = {};
-    float within = {};
-    metal::float2 v = {};
     float slope = in_1.shear;
+    float skew = metal::sqrt(1.0 + (slope * slope));
+    float across = (in_1.local.x - (slope * in_1.local.y)) / skew;
+    float half_across = in_1.half_extent.x / skew;
+    float along = in_1.local.y - (0.5 * trim);
     float half_along = in_1.half_extent.y - (0.5 * trim);
-    float half_pitch = in_1.half_extent.x;
-    metal::float2 end = metal::float2(slope * half_along, half_along);
-    p = in_1.local - ((0.5 * trim) * metal::float2(slope, 1.0));
-    metal::float2 _e20 = p;
-    metal::float2 _e21 = p;
-    float _e24 = p.y;
-    p = (_e24 < 0.0) ? -(_e21) : _e20;
-    metal::float2 _e28 = p;
-    w_1 = _e28 - end;
-    float _e32 = w_1.x;
-    float _e34 = w_1.x;
-    w_1.x = _e32 - metal::clamp(_e34, -(half_pitch), half_pitch);
-    metal::float2 _e38 = w_1;
-    metal::float2 _e39 = w_1;
-    near = metal::dot(_e38, _e39);
-    float _e43 = w_1.y;
-    within = -(_e43);
-    float _e47 = p.x;
-    float _e51 = p.y;
-    float side = (_e47 * end.y) - (_e51 * end.x);
-    metal::float2 _e55 = p;
-    metal::float2 _e56 = p;
-    p = (side < 0.0) ? -(_e56) : _e55;
-    metal::float2 _e61 = p;
-    v = _e61 - metal::float2(half_pitch, 0.0);
-    metal::float2 _e66 = v;
-    metal::float2 _e67 = v;
-    v = _e66 - (end * metal::clamp(metal::dot(_e67, end) / metal::max(metal::dot(end, end), 0.000000000001), -1.0, 1.0));
-    float _e78 = near;
-    metal::float2 _e79 = v;
-    metal::float2 _e80 = v;
-    near = metal::min(_e78, metal::dot(_e79, _e80));
-    float _e83 = within;
-    within = metal::min(_e83, (half_pitch * half_along) - metal::abs(side));
-    float _e88 = near;
-    float _e90 = near;
-    float _e93 = within;
-    return (_e93 > 0.0) ? -(metal::sqrt(_e90)) : metal::sqrt(_e88);
+    metal::float2 q = metal::float2(metal::abs(across) - half_across, metal::abs(along) - half_along);
+    return metal::min(metal::max(q.x, q.y), 0.0) + metal::length(metal::max(q, metal::float2(0.0)));
 }
 
 float box_distance(
