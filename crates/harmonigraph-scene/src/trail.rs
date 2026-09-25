@@ -35,7 +35,7 @@ use crate::view::ViewConfig;
 use crate::NodeInstance;
 
 /// The frame's memories, reduced to what a node needs: which pitch classes
-/// the music has been to.
+/// the music has been to, sorted.
 pub(crate) struct TrailField {
     marks: [PitchClass; NoteHistory::MAX_VISITS],
     len: usize,
@@ -58,15 +58,18 @@ impl TrailField {
         // A memory never fades: the point of the feature is a whole piece's
         // territory rather than a rolling window, so every visit counts the
         // same however long ago it sounded.
-        // History bounds this frame-local scratch at 384 pitch classes (1.5 KiB).
-        // Avoid a per-frame heap allocation while keeping the current
-        // contiguous, visit-ordered scan for each home node.
+        // History bounds this frame-local scratch at 384 pitch classes (1.5 KiB),
+        // which avoids a per-frame heap allocation. Sorted, so each home node
+        // finds its nearest memory in a binary search rather than a scan of
+        // all of them: a just tuning matches almost nothing, and the scan
+        // ran to the end for nearly every node.
         let mut field =
             TrailField { marks: [PitchClass::from_midi_note(0); NoteHistory::MAX_VISITS], len: 0 };
         for visit in history.visits() {
             field.marks[field.len] = visit.pitch_class;
             field.len += 1;
         }
+        field.marks[..field.len].sort_unstable();
         Some(field)
     }
 
@@ -92,15 +95,57 @@ impl TrailField {
             if !node.on_home {
                 continue;
             }
-            for &pitch_class in &self.marks[..self.len] {
-                // Full strength or nothing: a memory has no level of its own
-                // to carry, and two remembered pitches matching one node
-                // under a wide tolerance are the same node visited twice
-                // rather than a stronger memory.
-                if tuning.matches(pitch_class, node_pc) {
-                    node.trail = 1.0;
-                    break;
-                }
+            // Full strength or nothing: a memory has no level of its own
+            // to carry, and two remembered pitches matching one node
+            // under a wide tolerance are the same node visited twice
+            // rather than a stronger memory.
+            if self.remembers(node_pc, tuning) {
+                node.trail = 1.0;
+            }
+        }
+    }
+
+    /// Whether any memory matches `node_pc`. The pitch class nearest round
+    /// the octave is one of the two sorted marks either side of it, the
+    /// ends wrapping to each other, and a match within tolerance is at least
+    /// as near as that one.
+    fn remembers(&self, node_pc: PitchClass, tuning: &Tuning) -> bool {
+        let marks = &self.marks[..self.len];
+        let (Some(&first), Some(&last)) = (marks.first(), marks.last()) else {
+            return false;
+        };
+        let above = marks.partition_point(|&mark| mark < node_pc);
+        let after = marks.get(above).copied().unwrap_or(first);
+        let before = above.checked_sub(1).map_or(last, |i| marks[i]);
+        tuning.matches(after, node_pc) || tuning.matches(before, node_pc)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every node position round the octave, against a brute-force scan of
+    /// the same memories. The mark sets put the nearest memory past each end
+    /// of the sorted list, so both wraps decide some answers, and the wide
+    /// tolerance lets a node sit between two marks and match only one.
+    #[test]
+    fn the_nearest_marks_answer_what_a_scan_of_all_of_them_would() {
+        let tuning = Tuning { tolerance: 15_000_000, ..Tuning::default() };
+        for cents in [&[10.0, 600.0][..], &[600.0, 1190.0], &[5.0, 5.0, 400.0, 420.0, 1199.0]] {
+            let mut field = TrailField {
+                marks: [PitchClass::from_midi_note(0); NoteHistory::MAX_VISITS],
+                len: 0,
+            };
+            for &c in cents {
+                field.marks[field.len] = PitchClass::from_cents(c);
+                field.len += 1;
+            }
+            let scan: Vec<_> = field.marks[..field.len].to_vec();
+            field.marks[..field.len].sort_unstable();
+            for node in (0..1200).map(|c| PitchClass::from_cents(c as f32)) {
+                let expected = scan.iter().any(|&mark| tuning.matches(mark, node));
+                assert_eq!(field.remembers(node, &tuning), expected, "{cents:?} at {node:?}");
             }
         }
     }
