@@ -9,7 +9,7 @@ use harmonigraph_core::canonical::{EventTiming, NoteDelta, SourceBaseline, Voice
 use harmonigraph_core::confirmed::{
     ConfirmedPitch, ConfirmedPitches, PitchProvenance, HELD_PER_SOURCE,
 };
-use harmonigraph_core::{Expression, LatticePos, NoteEvent, NoteEventKind, SourceId, VoiceKey};
+use harmonigraph_core::{LatticePos, NoteEvent, NoteEventKind, SourceId, VoiceKey};
 
 use super::event::Event;
 
@@ -245,31 +245,21 @@ impl State {
                     Some(voice.pitch_microcents),
                 ));
             }
-        } else if let Event::Expression { kind, value, .. } = event {
-            // CLAP's volume, brightness and pressure note expressions.
-            let expression = match kind {
-                0 => Some(Expression::Gain),
-                5 => Some(Expression::Timbre),
-                6 => Some(Expression::Pressure),
-                _ => None,
-            };
-            let accepted = expression.zip(expression.and_then(|e| e.accept(value as f32)));
-            if let Some((expression, value)) = accepted {
-                if let Some(voice) = self
-                    .voices
-                    .iter_mut()
-                    .flatten()
-                    .find(|v| event.matches(v.host_note_id, v.channel, v.note))
-                {
-                    voice.expressions.set(expression, value);
-                    result = Some((
-                        voice.lifetime,
-                        voice.channel,
-                        voice.note,
-                        NoteEventKind::Expression { expression, value },
-                        None,
-                    ));
-                }
+        } else if let Some((expression, value)) = event.expression() {
+            if let Some(voice) = self
+                .voices
+                .iter_mut()
+                .flatten()
+                .find(|v| event.matches(v.host_note_id, v.channel, v.note))
+            {
+                voice.expressions.set(expression, value);
+                result = Some((
+                    voice.lifetime,
+                    voice.channel,
+                    voice.note,
+                    NoteEventKind::Expression { expression, value },
+                    None,
+                ));
             }
         }
         if let Event::Midi { port: 0, data, .. } = event {

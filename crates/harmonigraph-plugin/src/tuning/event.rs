@@ -1,5 +1,6 @@
 //! Fixed performance values. These cannot contain full transport, a host
 //! pointer, or an allocation.
+use harmonigraph_core::Expression;
 use nice_plug::wrapper::clap::configuration::InputValue;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -129,6 +130,19 @@ impl Event {
     pub fn initial_tuning(self) -> Option<InitialTuning> {
         let Self::Expression { kind: 2, value, .. } = self else { return None };
         value.is_finite().then_some(InitialTuning { expression: self, value, seen: [0; 16] })
+    }
+
+    /// The pressure, gain or timbre this carries, by CLAP's volume (0),
+    /// brightness (5) and pressure (6) note expressions, in range.
+    pub fn expression(self) -> Option<(Expression, f32)> {
+        let Self::Expression { kind, value, .. } = self else { return None };
+        let expression = match kind {
+            0 => Expression::Gain,
+            5 => Expression::Timbre,
+            6 => Expression::Pressure,
+            _ => return None,
+        };
+        Some((expression, expression.accept(value as f32)?))
     }
 
     pub fn matches(self, id: i32, channel: u8, key: u8) -> bool {

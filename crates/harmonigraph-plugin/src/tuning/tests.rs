@@ -1240,7 +1240,9 @@ fn the_display_shows_the_schedule_rather_than_the_input() {
 }
 
 /// A paired Tune's pressure reaches the display as an expression on the note
-/// it addresses, in the host's own units, with the tuning route unchanged.
+/// it addresses, in the host's own units — including a starting value sent on
+/// the onset's own sample, which the Hub's same-sample merge must not apply
+/// ahead of the onset it belongs to.
 #[test]
 fn a_tunes_pressure_reaches_the_display_as_an_expression() {
     use harmonigraph_take::{CanonicalRecord, ExpressionKind, NoteKind};
@@ -1250,7 +1252,7 @@ fn a_tunes_pressure_reaches_the_display_as_an_expression() {
     let mut tune = Device::new(true);
     tune.activate();
     let pressure = Input::Expression(clap_event_note_expression {
-        header: header::<clap_event_note_expression>(CLAP_EVENT_NOTE_EXPRESSION, 80),
+        header: header::<clap_event_note_expression>(CLAP_EVENT_NOTE_EXPRESSION, 64),
         expression_id: CLAP_NOTE_EXPRESSION_PRESSURE,
         note_id: 1,
         port_index: -1,

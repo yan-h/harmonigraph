@@ -59,12 +59,16 @@ impl Record {
     }
     /// Merge order inside one sample: every release and controller from every
     /// source applies before any onset, and onsets then run in the musical
-    /// key/channel/source tie-break. Ties inside each half fall back to the
+    /// key/channel/source tie-break. Pressure, gain and timbre come LAST: they
+    /// decide nothing about pitch, and a host states a note's starting value
+    /// at its onset sample, which applied ahead of the onset addresses a voice
+    /// that does not exist yet. Ties inside each rank fall back to the
     /// per-source input order, which copying preserves.
-    fn order(&self) -> (bool, u8, u8, u8, u64) {
+    fn order(&self) -> (u8, u8, u8, u8, u64) {
         match self.event.attack() {
-            Some((_, channel, key, _)) => (true, key, channel, self.source, self.serial),
-            None => (false, 0, 0, self.source, self.serial),
+            Some((_, channel, key, _)) => (1, key, channel, self.source, self.serial),
+            None if self.event.expression().is_some() => (2, 0, 0, self.source, self.serial),
+            None => (0, 0, 0, self.source, self.serial),
         }
     }
 }
